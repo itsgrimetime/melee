@@ -1287,3 +1287,15 @@ def test_mwcc_debug_dll_has_class_scoped_force_phys() -> None:
     assert "g_overrides[k].rclass < 0" in dll_source
     assert "g_overrides[k].rclass == rclass" in dll_source
     assert "[FORCE_PHYS] class=%d" in dll_source
+
+
+def test_mwcc_debug_dll_force_phys_parser_reports_overflow() -> None:
+    dll_source = (MELEE_ROOT / "tools" / "mwcc_debug" / "mwcc_debug.c").read_text()
+
+    assert "#define MAX_OVERRIDES 1024" in dll_source
+    assert "#define MAX_ITER_OVERRIDES 1024" in dll_source
+    assert "g_force_phys_parse_overflow" in dll_source
+    assert "g_force_phys_iter_parse_overflow" in dll_source
+    assert "[FORCE_PHYS] ERROR: override list exceeded parser capacity" in dll_source
+    assert "[FORCE_PHYS_ITER] ERROR: override list exceeded parser capacity" in dll_source
+    assert "MWCC_DEBUG_ENV_BUF_LEN" in dll_source

@@ -25,7 +25,6 @@ from .utils import (
     detect_ghidra_install,
     install_base_dol,
     refresh_report_json,
-    reinstall_repo_melee_agent,
     resolve_melee_agent_module_path,
     run_git,
 )
@@ -273,17 +272,13 @@ class Doctor:
                 from .utils import is_stale_melee_agent_entrypoint
                 entrypoint_results = collect_melee_agent_entrypoint_warnings(_utils.ROOT, Path(melee_agent))
                 if self.fix and any(is_stale_melee_agent_entrypoint(result) for result in entrypoint_results):
-                    repair = reinstall_repo_melee_agent(_utils.ROOT)
-                    if repair.returncode == 0:
-                        self.ok("reinstalled melee-agent editable package for this worktree")
-                        entrypoint_results = collect_melee_agent_entrypoint_warnings(_utils.ROOT, Path(melee_agent))
-                    else:
-                        self.fail(
-                            "failed to reinstall melee-agent editable package",
-                            repair.stderr.strip() or repair.stdout.strip() or
-                            "run: python -m pip install -e tools/melee-agent",
-                        )
+                    self.warn(
+                        "stale melee-agent entrypoint was not auto-reinstalled",
+                        "refresh the global install from the authoritative shared checkout; "
+                        "worktree-doctor --fix will not repoint it from a matcher worktree",
+                    )
                 self.results.extend(entrypoint_results)
+                self.results.extend(_utils.collect_melee_agent_distribution_warnings())
             else:
                 self.warn("melee-agent exists but --help failed", result.stderr.strip() or result.stdout.strip())
         else:

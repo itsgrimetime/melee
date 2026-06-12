@@ -40,3 +40,4 @@ _INLINE_BOUNDARY_CALL_RESULT_RETURNS = {
     "mnDiagram_GetFighterByIndex": "u8",
 }
 
+__all__ = [name for name in globals() if not name.startswith("__")]

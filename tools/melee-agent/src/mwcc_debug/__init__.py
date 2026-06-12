@@ -30,6 +30,7 @@ from .parser import (
     VirtualRegInfo,
     analyze_function,
     parse_pcdump,
+    slice_pcdump_to_function,
 )
 from .scoring import (
     ScoreBreakdown,
@@ -71,5 +72,6 @@ __all__ = [
     "patterns_for_category",
     "score_function",
     "simulate_function",
+    "slice_pcdump_to_function",
     "suggest",
 ]

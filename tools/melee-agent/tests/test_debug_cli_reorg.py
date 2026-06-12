@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import textwrap
+import tomllib
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -3233,6 +3234,78 @@ def test_frame_reservations_cli_text_reports_allocation_trace(tmp_path: Path) ->
     )
 
 
+def test_frame_reservations_missing_function_lists_small_dump_symbols(
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function mnDiagram3_80245BA4
+        Starting function mnDiagram3_80246D40
+        Starting function fn_80246E04
+        Starting function fn_80246E64
+        Starting function fn_80246F0C
+        Starting function mnDiagram3_80246F2C
+        Starting function mnDiagram3_80247008
+        Starting function mnDiagram3_8024714C
+        Starting function fn_802461BC
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "frame-reservations",
+            "-f",
+            "mnDiagram3_HandleInput",
+            str(pcdump),
+            "--no-expected",
+        ],
+    )
+
+    assert result.exit_code == 3
+    assert "function 'mnDiagram3_HandleInput' not found in pcdump" in result.stderr
+    assert "Functions in this dump:" in result.stderr
+    assert "fn_802461BC" in result.stderr
+    assert "semantic alias" in result.stderr
+
+
+def test_suggest_frame_missing_function_lists_small_dump_symbols(
+    tmp_path: Path,
+) -> None:
+    pcdump = tmp_path / "pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function mnDiagram3_80245BA4
+        Starting function mnDiagram3_80246D40
+        Starting function fn_80246E04
+        Starting function fn_80246E64
+        Starting function fn_80246F0C
+        Starting function mnDiagram3_80246F2C
+        Starting function mnDiagram3_80247008
+        Starting function mnDiagram3_8024714C
+        Starting function fn_802461BC
+    """))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "suggest",
+            "frame",
+            "-f",
+            "mnDiagram3_HandleInput",
+            str(pcdump),
+            "--no-expected",
+        ],
+    )
+
+    assert result.exit_code == 3
+    assert "function 'mnDiagram3_HandleInput' not found in pcdump" in result.stderr
+    assert "Functions in this dump:" in result.stderr
+    assert "fn_802461BC" in result.stderr
+    assert "semantic alias" in result.stderr
+
+
 def test_frame_reservations_cli_reports_stack_home_assignments(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5214,6 +5287,170 @@ def test_permuter_bootstrap_injects_transitive_callee_when_direct_is_inline() ->
     )
 
 
+def test_permuter_bootstrap_injects_callee_dependencies_missing_from_base() -> None:
+    source_text = textwrap.dedent(
+        """\
+        typedef struct HSD_GObj HSD_GObj;
+        typedef struct Diagram Diagram;
+
+        void HSD_GObj_SetupProc(HSD_GObj* gobj, void (*proc)(HSD_GObj*), int prio);
+        void* HSD_GObjGetUserData(HSD_GObj* gobj);
+        void mnDiagram_CursorProc(HSD_GObj* gobj)
+        {
+        }
+
+        void mnDiagram_80241730(HSD_GObj* arg0, int arg1, int arg2)
+        {
+            Diagram* data = GET_DIAGRAM(arg0);
+            (void) data;
+        }
+
+        void mnDiagram_802433AC(void)
+        {
+            void** joint_data = mnDiagram_804A0814;
+            HSD_GObj_SetupProc(0, mnDiagram_CursorProc, 0);
+            (void) joint_data;
+        }
+
+        void fn_80000000(HSD_GObj* gobj)
+        {
+            mnDiagram_80241730(gobj, 1, 2);
+            mnDiagram_802433AC();
+        }
+        """
+    )
+    dependency_text = textwrap.dedent(
+        """\
+        #define GET_DIAGRAM(gobj) ((Diagram*) HSD_GObjGetUserData(gobj))
+        extern void* mnDiagram_804A0814[4];
+        """
+    )
+    base_text = textwrap.dedent(
+        """\
+        typedef struct HSD_GObj HSD_GObj;
+        typedef struct Diagram Diagram;
+        void HSD_GObj_SetupProc(HSD_GObj* gobj, void (*proc)(HSD_GObj*), int prio);
+        void* HSD_GObjGetUserData(HSD_GObj* gobj);
+        void mnDiagram_80241730(HSD_GObj* arg0, int arg1, int arg2);
+        void mnDiagram_802433AC(void);
+
+        void fn_80000000(HSD_GObj* gobj)
+        {
+            mnDiagram_80241730(gobj, 1, 2);
+            mnDiagram_802433AC();
+        }
+        """
+    )
+
+    patched, injected = debug_cli._inject_bootstrap_same_tu_inlined_callees(
+        base_text,
+        source_text,
+        "fn_80000000",
+        "<fn_80000000>:\n+000: 38 60 00 01 \tli      r3,1\n",
+        dependency_text=dependency_text,
+    )
+
+    assert injected == ["mnDiagram_80241730", "mnDiagram_802433AC"]
+    assert "#define GET_DIAGRAM(gobj)" in patched
+    assert "extern void* mnDiagram_804A0814[4];" in patched
+    assert "void mnDiagram_CursorProc(HSD_GObj* gobj);" in patched
+    assert patched.index("#define GET_DIAGRAM(gobj)") < patched.index(
+        "inline void mnDiagram_80241730"
+    )
+    assert patched.index("extern void* mnDiagram_804A0814[4];") < patched.index(
+        "inline void mnDiagram_802433AC"
+    )
+    assert patched.index("void mnDiagram_CursorProc(HSD_GObj* gobj);") < patched.index(
+        "inline void mnDiagram_802433AC"
+    )
+
+
+def test_permuter_bootstrap_inline_definition_preserves_preprocessor_preamble() -> None:
+    source = textwrap.dedent(
+        """\
+        #undef __FILE__
+        #define __FILE__ "jobj.h"
+        static void helper(void)
+        {
+        }
+        """
+    )
+
+    result = debug_cli._bootstrap_inline_definition(source)
+
+    assert "inline #undef" not in result
+    assert result.startswith(
+        '#undef __FILE__\n#define __FILE__ "jobj.h"\nstatic inline void helper'
+    )
+
+
+def test_permuter_bootstrap_sanitizes_raw_assert_macros_when_permuter_define_exists() -> None:
+    base_text = textwrap.dedent(
+        """\
+        #pragma _permuter define HSD_ASSERT(line,cond) ((cond)?((void)0):__assert("<stdin>",line,#cond))
+        void __assert(char*, unsigned int, char*);
+        #define __FILE__ "jobj.h"
+        #define HSD_ASSERT(line,cond) \\
+            ((cond)?((void)0):__assert(__FILE__,line,#cond))
+        #undef __FILE__
+        #define __FILE__ "<stdin>"
+
+        void fn_80000000(void* jobj)
+        {
+            HSD_ASSERT(932, jobj);
+        }
+        """
+    )
+
+    sanitized, changed = debug_cli._sanitize_bootstrap_assert_macros(base_text)
+
+    assert changed is True
+    assert "#pragma _permuter define HSD_ASSERT" in sanitized
+    assert "#define HSD_ASSERT" not in sanitized
+    assert "#define __FILE__" not in sanitized
+    assert "#undef __FILE__" not in sanitized
+    assert "HSD_ASSERT(932, jobj);" in sanitized
+
+
+def test_permuter_bootstrap_keeps_raw_assert_macro_without_permuter_define() -> None:
+    base_text = textwrap.dedent(
+        """\
+        #define HSD_ASSERT(line,cond) \\
+            ((cond)?((void)0):__assert(__FILE__,line,#cond))
+
+        void fn_80000000(void* jobj)
+        {
+            HSD_ASSERT(932, jobj);
+        }
+        """
+    )
+
+    sanitized, changed = debug_cli._sanitize_bootstrap_assert_macros(base_text)
+
+    assert changed is False
+    assert sanitized == base_text
+
+
+def test_permuter_bootstrap_dependency_context_reads_angle_local_includes(
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "mndiagram3.c"
+    include_path = melee_root / "src" / "sysdolphin" / "baselib" / "jobj.h"
+    src_path.parent.mkdir(parents=True)
+    include_path.parent.mkdir(parents=True)
+    include_path.write_text("#define JOBJ_MTX_INDEP_SRT (1 << 25)\n")
+    source_text = "#include <baselib/jobj.h>\n\nvoid fn(void) {}\n"
+
+    dependency_text = debug_cli._bootstrap_dependency_context(
+        source_text,
+        source_path=src_path,
+        melee_root=melee_root,
+    )
+
+    assert "#define JOBJ_MTX_INDEP_SRT" in dependency_text
+
+
 def test_debug_permute_bootstrap_injects_same_tu_inlined_callee_body(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5343,7 +5580,19 @@ def test_debug_permute_bootstrap_reports_kept_settings_randomize_funcs_scope(
     (perm_root / "import.py").write_text("")
     destination = perm_root / "nonmatchings" / "fn_80000000"
     destination.mkdir(parents=True)
-    (destination / "settings.toml").write_text("custom = true\n", encoding="utf-8")
+    (destination / "settings.toml").write_text(
+        textwrap.dedent(
+            """\
+            custom = true
+            compiler_command = "/opt/devkitpro/devkitPPC/bin/mwcceppc.exe"
+            assembler_command = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-as -mgekko"
+
+            [weight_overrides]
+            perm_reorder_decls = 77.0
+            """
+        ),
+        encoding="utf-8",
+    )
 
     def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
         argv = [str(part) for part in argv]
@@ -5403,7 +5652,15 @@ def test_debug_permute_bootstrap_reports_kept_settings_randomize_funcs_scope(
         "helper_inline",
     ]
     assert payload["randomize_funcs_status"] == "existing-settings-kept"
-    assert (destination / "settings.toml").read_text(encoding="utf-8") == "custom = true\n"
+    assert payload["settings"]["action"] == "repaired"
+    settings_text = (destination / "settings.toml").read_text(encoding="utf-8")
+    settings = tomllib.loads(settings_text)
+    assert settings["custom"] is True
+    assert settings["func_name"] == "fn_80000000"
+    assert settings["objdump_command"] == "melee-agent debug target dtk-objdump"
+    assert "compiler_command" not in settings
+    assert "assembler_command" not in settings
+    assert settings["weight_overrides"]["perm_reorder_decls"] == 77.0
 
 
 def test_debug_permute_bootstrap_force_rewrites_randomize_funcs_scope(
@@ -5558,7 +5815,10 @@ def test_debug_permute_bootstrap_promotes_fresh_worktree_import(
     assert (destination / "base.c").read_text() == "fresh_token from import\n"
     assert (destination / "compile.sh").exists()
     assert (destination / "target.o").read_bytes() == b"target"
-    assert (destination / "settings.toml").read_text() == "custom = true\n"
+    settings = tomllib.loads((destination / "settings.toml").read_text())
+    assert settings["custom"] is True
+    assert settings["func_name"] == "fn_80000000"
+    assert settings["objdump_command"] == "melee-agent debug target dtk-objdump"
     assert (output_dir / "source.c").read_text() == "candidate output\n"
     assert not (melee_root / "nonmatchings" / "fn_80000000-2").exists()
 
@@ -7065,6 +7325,9 @@ def test_dump_local_force_phys_help_describes_class_filtering() -> None:
     assert "through to the DLL" in normalized
     assert "apply to that" in normalized
     assert "register class" in normalized
+    assert "up to 1024 entries" in normalized
+    assert "application logs are" in normalized
+    assert "written into the pcdump" in normalized
     assert "ignores the class prefix" not in normalized
 
 
@@ -7394,6 +7657,119 @@ def test_dump_local_requested_function_missing_exits_nonzero_and_preserves_dump(
     assert "fn_80000001" in result.stderr
     assert output.exists()
     assert "Starting function fn_80000001" in output.read_text()
+
+
+def test_dump_local_function_scopes_explicit_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(
+        "void fn_80000000(void)\n{\n}\n"
+        "void fn_80000001(void)\n{\n}\n"
+        "void fn_80000002(void)\n{\n}\n"
+    )
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        "pcdump.write_text("
+        "'Starting function fn_80000000\\nfirst\\n'"
+        "'Starting function fn_80000001\\ntarget\\n'"
+        "'Starting function fn_80000002\\nlast\\n'"
+        ")\n"
+    )
+    wibo.chmod(0o755)
+    output = tmp_path / "pcdump.out"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000001",
+            "--output",
+            str(output),
+            "--no-cache-sync",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert output.read_text() == "Starting function fn_80000001\ntarget\n"
+
+
+def test_dump_local_function_scoped_output_keeps_full_cache_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(
+        "void fn_80000000(void)\n{\n}\n"
+        "void fn_80000001(void)\n{\n}\n"
+        "void fn_80000002(void)\n{\n}\n"
+    )
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    full_dump = (
+        "Starting function fn_80000000\nfirst\n"
+        "Starting function fn_80000001\ntarget\n"
+        "Starting function fn_80000002\nlast\n"
+    )
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        f"pcdump.write_text({full_dump!r})\n"
+    )
+    wibo.chmod(0o755)
+    output = tmp_path / "pcdump.out"
+    cache = melee_root / "build" / "mwcc_debug_cache" / "melee" / "mn" / "sample.txt"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000001",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert output.read_text() == "Starting function fn_80000001\ntarget\n"
+    assert cache.read_text() == full_dump
+    assert cache.with_suffix(".hash").exists()
 
 
 def test_dump_local_forced_default_output_uses_managed_scratch_root(
@@ -7875,6 +8251,67 @@ def test_debug_diff_schedule_reports_first_divergence(
     assert "expr=obj->x94" in result.stdout
 
 
+_TEST_DLL_FEATURE_MANIFEST = (
+    "MWCC_DEBUG_FEATURES:v5;"
+    "pcdump-path;"
+    "function-scope-force-phys;"
+    "force-phys-iter;"
+    "force-phys-overflow-error;"
+    "force-iter-first-overflow-error;"
+    "force-remat;"
+    "force-interfere;"
+    "force-schedule;"
+    "force-no-cse"
+)
+
+
+def _write_test_mwcc_debug_dll(path: Path, *, manifest: bool = True) -> None:
+    payload = b"MZ" + (b"\0" * 4094)
+    if manifest:
+        payload += _TEST_DLL_FEATURE_MANIFEST.encode("ascii")
+    path.write_bytes(payload)
+
+
+def _write_legacy_hook_mwcc_debug_dll(path: Path) -> None:
+    legacy_strings = "\0".join([
+        "MWCC_DEBUG_PCDUMP_PATH",
+        "MWCC_DEBUG_FORCE_PHYS_FUNCTION",
+        "MWCC_DEBUG_FORCE_PHYS_ITER",
+        "MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION",
+        "MWCC_DEBUG_FORCE_COALESCE",
+        "MWCC_DEBUG_FORCE_COALESCE_FUNCTION",
+        "[FORCE_COALESCE] alias[%d]: %d -> %d",
+        "[FORCE_COALESCE] scope skip",
+        "MWCC_DEBUG_FORCE_REMAT",
+        "MWCC_DEBUG_FORCE_REMAT_FUNCTION",
+        "[FORCE_REMAT] scope skip",
+        "MWCC_DEBUG_FORCE_INTERFERE",
+        "MWCC_DEBUG_FORCE_INTERFERE_FUNCTION",
+        "[FORCE_INTERFERE] +edge(%d,%d)",
+        "MWCC_DEBUG_FORCE_SCHEDULE",
+        "MWCC_DEBUG_FORCE_SCHEDULE_FUNCTION",
+        "[FORCE_SCHEDULE] scope skip",
+    ])
+    payload = b"MZ" + (b"\0" * 4094) + legacy_strings.encode("ascii")
+    path.write_bytes(payload)
+
+
+def test_debug_dump_doctor_accepts_legacy_hook_dll_without_manifest(
+    tmp_path: Path,
+) -> None:
+    dll = tmp_path / "MWDBG326.dll"
+    _write_legacy_hook_mwcc_debug_dll(dll)
+
+    check = debug_cli._check_mwcc_debug_dll_features(
+        "mwcc_debug DLL features",
+        dll,
+    )
+
+    assert check.ok is True
+    assert "legacy hook strings" in check.detail
+    assert "lacks MWCC_DEBUG_FEATURES" in check.detail
+
+
 def test_debug_dump_doctor_reports_missing_debug_setup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -7907,18 +8344,19 @@ def test_debug_dump_doctor_passes_ready_setup(
 ) -> None:
     compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
     compiler_dir.mkdir(parents=True)
-    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe", "MWDBG326.dll"):
+    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe"):
         (compiler_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(compiler_dir / "MWDBG326.dll")
     tools_dir = tmp_path / "tools" / "mwcc_debug"
     tools_dir.mkdir(parents=True)
     for filename in (
-        "MWDBG326.dll",
         "build_wibo.sh",
         "build_macos.sh",
         "mwcc_debug.c",
         "patch_mwcceppc_for_wibo.py",
     ):
         (tools_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(tools_dir / "MWDBG326.dll")
     ready_time = 1_000_000_000
     os.utime(tools_dir / "mwcc_debug.c", (ready_time, ready_time))
     for dll in (tools_dir / "MWDBG326.dll", compiler_dir / "MWDBG326.dll"):
@@ -7940,29 +8378,69 @@ def test_debug_dump_doctor_passes_ready_setup(
     assert "ready for `melee-agent debug dump local`" in out
 
 
+def test_debug_dump_doctor_reports_deployed_dll_missing_feature_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe"):
+        (compiler_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(compiler_dir / "MWDBG326.dll", manifest=False)
+    tools_dir = tmp_path / "tools" / "mwcc_debug"
+    tools_dir.mkdir(parents=True)
+    for filename in (
+        "build_wibo.sh",
+        "build_macos.sh",
+        "mwcc_debug.c",
+        "patch_mwcceppc_for_wibo.py",
+    ):
+        (tools_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(tools_dir / "MWDBG326.dll", manifest=False)
+    ready_time = 1_000_000_000
+    os.utime(tools_dir / "mwcc_debug.c", (ready_time, ready_time))
+    for dll in (tools_dir / "MWDBG326.dll", compiler_dir / "MWDBG326.dll"):
+        os.utime(dll, (ready_time, ready_time))
+    wibo = tmp_path / "tools" / "mwcc_debug" / "bin" / "wibo"
+    wibo.parent.mkdir(parents=True)
+    wibo.write_text("")
+    wibo.chmod(0o755)
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+
+    result = runner.invoke(app, ["debug", "dump", "doctor"])
+
+    assert result.exit_code == 2
+    out = strip_ansi(result.stdout)
+    assert "FAIL\tmwcc_debug DLL features" in out
+    assert "MWCC_DEBUG_FEATURES" in out
+    assert "melee-agent debug dump setup" in out
+
+
 def test_debug_dump_doctor_reports_stale_dll(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
     compiler_dir.mkdir(parents=True)
-    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe", "MWDBG326.dll"):
+    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe"):
         (compiler_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(compiler_dir / "MWDBG326.dll")
     tools_dir = tmp_path / "tools" / "mwcc_debug"
     tools_dir.mkdir(parents=True)
     for filename in (
-        "MWDBG326.dll",
         "build_wibo.sh",
         "build_macos.sh",
         "patch_mwcceppc_for_wibo.py",
     ):
         (tools_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(tools_dir / "MWDBG326.dll")
     source = tools_dir / "mwcc_debug.c"
     source.write_text("// newer source")
     stale_time = 1_000_000_000
     fresh_time = stale_time + 10
     for path in (tools_dir / "MWDBG326.dll", compiler_dir / "MWDBG326.dll"):
-        path.write_text("old dll")
         path.chmod(0o755)
         os.utime(path, (stale_time, stale_time))
     os.utime(source, (fresh_time, fresh_time))
@@ -8024,6 +8502,15 @@ def test_debug_dump_setup_rebuilds_stale_dll(
     monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
     monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
     monkeypatch.setattr(debug_cli, "_build_local_dll", fake_build)
+    monkeypatch.setattr(
+        debug_cli,
+        "_smoke_mwcc_debug_compiler",
+        lambda *_args, **_kwargs: debug_cli._DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            True,
+            "pcdump smoke produced 1 byte",
+        ),
+    )
     monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["debug", "dump", "setup"])
@@ -8068,6 +8555,15 @@ def test_debug_dump_setup_promotes_import_name_dll_when_build_omits_mwdbg(
 
     monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
     monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_smoke_mwcc_debug_compiler",
+        lambda *_args, **_kwargs: debug_cli._DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            True,
+            "pcdump smoke produced 1 byte",
+        ),
+    )
     monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["debug", "dump", "setup"])
@@ -8078,6 +8574,75 @@ def test_debug_dump_setup_promotes_import_name_dll_when_build_omits_mwdbg(
     assert str(tools_dir / "MWDBG326.dll") in patch_calls[0]
     out = strip_ansi(result.stdout)
     assert "using alternate DLL output" in out
+
+
+def test_debug_dump_setup_aborts_when_deployed_dll_smoke_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc.exe").write_text("stock compiler")
+    tools_dir = tmp_path / "tools" / "mwcc_debug"
+    tools_dir.mkdir(parents=True)
+    dll = tools_dir / "MWDBG326.dll"
+    dll.write_bytes(b"MZ" + b"\0" * 4096)
+    source = tools_dir / "mwcc_debug.c"
+    source.write_text("// source")
+    for filename in ("build_wibo.sh", "build_macos.sh", "patch_mwcceppc_for_wibo.py"):
+        (tools_dir / filename).write_text("")
+    wibo = tools_dir / "bin" / "wibo"
+    wibo.parent.mkdir(parents=True)
+    wibo.write_text("")
+    wibo.chmod(0o755)
+
+    def fake_run(args: list[str], **_kwargs) -> SimpleNamespace:
+        if "--dll" in args:
+            (compiler_dir / "MWDBG326.dll").write_bytes(dll.read_bytes())
+            (compiler_dir / "mwcceppc_debug.exe").write_text("patched compiler")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        debug_cli,
+        "_smoke_mwcc_debug_compiler",
+        lambda *_args, **_kwargs: debug_cli._DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            False,
+            "pcdump.txt missing or empty",
+        ),
+    )
+
+    result = runner.invoke(app, ["debug", "dump", "setup"])
+
+    assert result.exit_code == 7
+    out = strip_ansi(result.stdout + result.stderr)
+    assert "pcdump smoke failed" in out
+    assert "pcdump.txt missing or empty" in out
+
+
+def test_smoke_mwcc_debug_compiler_requires_nonempty_pcdump(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    compiler_dir = tmp_path / "compiler"
+    compiler_dir.mkdir()
+    (compiler_dir / "mwcceppc_debug.exe").write_text("patched compiler")
+    wibo = tmp_path / "wibo"
+    wibo.write_text("")
+    wibo.chmod(0o755)
+
+    def fake_run(_args, **_kwargs) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    check = debug_cli._smoke_mwcc_debug_compiler(wibo, compiler_dir)
+
+    assert check.ok is False
+    assert "missing or empty" in check.detail
 
 
 def test_debug_dump_local_probe_uses_same_tu_build_settings(
@@ -8092,6 +8657,8 @@ def test_debug_dump_local_probe_uses_same_tu_build_settings(
     probe.write_text("void ftCo_8009E7B4(void) {}\n")
     output = tmp_path / "probe.pcdump.txt"
     args_file = tmp_path / "wibo-args.txt"
+    cli_cwd = tmp_path / "tools" / "melee-agent"
+    cli_cwd.mkdir(parents=True)
 
     (tmp_path / "build.ninja").write_text(textwrap.dedent("""\
         build build/GALE01/src/melee/ft/ftdynamics.o: mwcc src/melee/ft/ftdynamics.c
@@ -8133,6 +8700,7 @@ def test_debug_dump_local_probe_uses_same_tu_build_settings(
     monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
     monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
     monkeypatch.setenv("MELEE_TEST_WIBO_ARGS", str(args_file))
+    monkeypatch.chdir(cli_cwd)
 
     result = runner.invoke(
         app,
@@ -8142,7 +8710,7 @@ def test_debug_dump_local_probe_uses_same_tu_build_settings(
             "local",
             str(probe),
             "--unit-source",
-            str(source),
+            "src/melee/ft/ftdynamics.c",
             "--function",
             "ftCo_8009E7B4",
             "--output",
@@ -8158,6 +8726,165 @@ def test_debug_dump_local_probe_uses_same_tu_build_settings(
     assert "build/mwcc_debug_cache/probes/e7b4/probe.c" in args_text
     assert "src/melee/ft/ftdynamics.c" not in args_text
     assert "same-TU probe" in result.stderr
+
+
+def test_debug_dump_local_missing_unit_source_reports_resolution_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    probe = tmp_path / "build" / "mwcc_debug_cache" / "probes" / "e7b4" / "probe.c"
+    probe.parent.mkdir(parents=True)
+    probe.write_text("void ftCo_8009E7B4(void) {}\n")
+    cli_cwd = tmp_path / "tools" / "melee-agent"
+    cli_cwd.mkdir(parents=True)
+    unit_arg = "src/melee/ft/ftdynamics.c"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.chdir(cli_cwd)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(probe),
+            "--unit-source",
+            unit_arg,
+            "--function",
+            "ftCo_8009E7B4",
+        ],
+    )
+
+    out = strip_ansi(result.stderr + result.stdout)
+    assert result.exit_code == 2
+    assert "unit source not found" in out
+    assert unit_arg in out
+    assert "cwd=" in out
+    assert "repo=" in out
+    assert "tried:" in out
+    assert "tools/melee-agent" in out
+    assert "src/melee/ft/ftdynamics.c" in out
+
+
+def _write_force_coalesce_delta_wibo(
+    path: Path,
+    *,
+    forced: bytes,
+    natural: bytes,
+) -> None:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        "pcdump.write_text('Starting function fn_80000000\\n')\n"
+        "obj = Path(sys.argv[sys.argv.index('-o') + 1])\n"
+        f"forced = {forced!r}\n"
+        f"natural = {natural!r}\n"
+        "obj.write_bytes(forced if os.environ.get('MWCC_DEBUG_FORCE_COALESCE') else natural)\n"
+    )
+    path.chmod(0o755)
+
+
+def test_dump_local_force_coalesce_keep_obj_rejects_identical_object(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    _write_force_coalesce_delta_wibo(wibo, forced=b"same-object", natural=b"same-object")
+    keep_obj = tmp_path / "forced.o"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setattr(debug_cli, "_reject_unsafe_force_coalesce", lambda **kwargs: None)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000000",
+            "--force-coalesce",
+            "32=32",
+            "--force-coalesce-fn",
+            "fn_80000000",
+            "--keep-obj",
+            str(keep_obj),
+            "--output",
+            str(tmp_path / "pcdump.out"),
+            "--no-cache-sync",
+        ],
+    )
+
+    assert result.exit_code == 5
+    assert keep_obj.read_bytes() == b"same-object"
+    assert "force-coalesce object delta check failed" in result.stderr
+    assert "byte-identical" in result.stderr
+
+
+def test_dump_local_force_coalesce_keep_obj_accepts_changed_object(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    _write_force_coalesce_delta_wibo(wibo, forced=b"forced-object", natural=b"natural-object")
+    keep_obj = tmp_path / "forced.o"
+    output = tmp_path / "pcdump.out"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setattr(debug_cli, "_reject_unsafe_force_coalesce", lambda **kwargs: None)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000000",
+            "--force-coalesce",
+            "32=32",
+            "--force-coalesce-fn",
+            "fn_80000000",
+            "--keep-obj",
+            str(keep_obj),
+            "--output",
+            str(output),
+            "--no-cache-sync",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert keep_obj.read_bytes() == b"forced-object"
+    assert output.exists()
+    assert "force-coalesce object delta verified" in result.stderr
 
 
 def test_force_coalesce_preflight_rejects_known_unsafe_pair(

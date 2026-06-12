@@ -60,6 +60,7 @@ from .doctor import (  # noqa: E402, F401
 )
 from .utils import (  # noqa: E402, F401
     build_table_typer,
+    collect_melee_agent_distribution_warnings,
     collect_melee_agent_entrypoint_warnings,
     detect_macho_arch,
     entrypoint_uses_worktree_launcher,

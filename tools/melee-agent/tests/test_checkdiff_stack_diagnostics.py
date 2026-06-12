@@ -353,7 +353,7 @@ def test_classify_asm_diff_guides_volatile_and_loop_counter_reg_swaps() -> None:
     assert "loop-counter reuse" in reason_text
 
 
-def test_register_only_diff_demotes_indexed_pointer_shape_hint() -> None:
+def test_register_only_diff_suppresses_indexed_pointer_shape_hint() -> None:
     checkdiff = _load_checkdiff()
     expected = [
         "<fn_80000000>:",
@@ -377,12 +377,64 @@ def test_register_only_diff_demotes_indexed_pointer_shape_hint() -> None:
     classification = checkdiff.classify_asm_diff(expected, current)
 
     assert classification["primary"] == "register-allocation"
-    assert classification["indexed_struct_pointer_materialization"]
+    assert "indexed_struct_pointer_materialization" not in classification
     guidance = classification["register_allocation_guidance"]
     assert guidance["callee_swap_pairs"] == [["r29", "r30"]]
     reason_text = "\n".join(classification["reasons"])
-    assert "indexed pointer-shape hint demoted" in reason_text
+    assert "indexed pointer-shape hint" not in reason_text
     assert "register-allocation guidance" in reason_text
+
+
+def test_inline_boundary_requires_actual_call_multiplicity_delta() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: stmw r21, -0x2c(r1)",
+        "+004: bl fn_A",
+        "+008: bl fn_B",
+        "+00c: bl fn_A",
+        "+010: addi r21, r21, 1",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: stmw r22, -0x28(r1)",
+        "+004: addi r22, r22, 1",
+        "+008: bl fn_A",
+        "+00c: bl fn_B",
+        "+010: bl fn_A",
+        "+014: addi r22, r22, 2",
+        "+018: addi r22, r22, 3",
+        "+01c: addi r22, r22, 4",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] != "inline-boundary-toolchain-artifact"
+    assert "inline_boundary_artifact" not in classification
+    assert not any("current omits that call" in r for r in classification["reasons"])
+
+
+def test_signature_type_mismatch_requires_call_target_multiplicity_delta() -> None:
+    checkdiff = _load_checkdiff()
+    expected = [
+        "<fn_80000000>:",
+        "+000: bl fn_A",
+        "+004: mr r30, r3",
+        "+008: bl fn_B",
+        "+00c: mr r29, r3",
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+000: bl fn_B",
+        "+004: mr r29, r3",
+        "+008: bl fn_A",
+        "+00c: mr r30, r3",
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] != "signature-type-mismatch"
+    assert not any("call shape differs" in r for r in classification["reasons"])
 
 
 def test_classify_asm_diff_labels_register_rotation_backend_ceiling() -> None:

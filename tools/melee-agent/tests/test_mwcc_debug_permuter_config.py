@@ -17,6 +17,7 @@ from src.mwcc_debug.permuter_config import (
     WEIGHT_OVERRIDE_CAPS,
     build_spec,
     parse_existing_overrides,
+    repair_bootstrap_settings_toml,
     render_settings_toml,
 )
 
@@ -194,6 +195,66 @@ def test_parse_existing_overrides_handles_no_section_at_eof() -> None:
         "perm_foo": 10.0,
         "perm_bar": 20.0,
     }
+
+
+def test_repair_bootstrap_settings_replaces_stale_toolchain_preserves_tuning() -> None:
+    text = textwrap.dedent("""\
+        # hand tuned run
+        func_name = "old_name"
+        compiler_type = "mwcc"
+        compiler_command = "/opt/devkitpro/devkitPPC/bin/mwcceppc.exe"
+        assembler_command = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-as -mgekko"
+        asm_prelude_file = "prelude.s"
+        asm_pattern = "legacy"
+        randomize_funcs = ["fn_test", "helper"]
+
+        [weight_overrides]
+        perm_reorder_decls = 77.0
+
+        [custom_section]
+        keep_me = true
+    """)
+
+    repaired = repair_bootstrap_settings_toml(text, "fn_test")
+    parsed = tomllib.loads(repaired.text)
+
+    assert repaired.changed is True
+    assert repaired.randomize_funcs == ["fn_test", "helper"]
+    assert parsed["func_name"] == "fn_test"
+    assert parsed["compiler_type"] == "mwcc"
+    assert parsed["objdump_command"] == DEFAULT_OBJDUMP_COMMAND
+    assert "compiler_command" not in parsed
+    assert "assembler_command" not in parsed
+    assert "asm_prelude_file" not in parsed
+    assert "asm_pattern" not in parsed
+    assert parsed["randomize_funcs"] == ["fn_test", "helper"]
+    assert parsed["weight_overrides"]["perm_reorder_decls"] == 77.0
+    assert parsed["custom_section"]["keep_me"] is True
+
+
+def test_repair_bootstrap_settings_is_stable_for_current_bootstrap_settings() -> None:
+    text = render_settings_toml(
+        build_spec("fn_test", None, randomize_funcs=["fn_test", "helper"])
+    )
+
+    repaired = repair_bootstrap_settings_toml(text, "fn_test")
+
+    assert repaired.changed is False
+    assert repaired.text == text
+    assert repaired.randomize_funcs == ["fn_test", "helper"]
+
+
+def test_repair_bootstrap_settings_injects_objdump_without_clobbering_custom_keys() -> None:
+    text = "custom = true\n"
+
+    repaired = repair_bootstrap_settings_toml(text, "fn_test")
+    parsed = tomllib.loads(repaired.text)
+
+    assert repaired.changed is True
+    assert parsed["func_name"] == "fn_test"
+    assert parsed["compiler_type"] == "mwcc"
+    assert parsed["objdump_command"] == DEFAULT_OBJDUMP_COMMAND
+    assert parsed["custom"] is True
 
 
 def test_all_patterns_have_either_weights_or_skip() -> None:

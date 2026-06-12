@@ -27,6 +27,7 @@ a pure file-rendering helper.
 from __future__ import annotations
 
 import re
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -83,6 +84,15 @@ class SettingsTomlSpec:
     scorer: ScorerConfig | None = None  # optional [scorer] table
 
 
+@dataclass
+class BootstrapSettingsRepair:
+    """Result from repairing an existing bootstrap settings.toml."""
+
+    text: str
+    changed: bool
+    randomize_funcs: list[str] | None
+
+
 class PatternSkippedError(RuntimeError):
     """Raised when the requested pattern has permuter_skip=True and
     the caller didn't pass force=True."""
@@ -94,6 +104,14 @@ def _cap_weight_overrides(overrides: dict[str, float]) -> dict[str, float]:
         if key in capped and capped[key] > max_value:
             capped[key] = max_value
     return capped
+
+
+def _quote_toml_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _render_toml_string_list(values: list[str]) -> str:
+    return "[" + ", ".join(_quote_toml_string(value) for value in values) + "]"
 
 
 def build_spec(
@@ -158,11 +176,9 @@ def render_settings_toml(spec: SettingsTomlSpec) -> str:
     lines.append("")
     lines.append(f'func_name = "{spec.func_name}"')
     if spec.randomize_funcs is not None:
-        quoted_funcs = [
-            '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
-            for name in spec.randomize_funcs
-        ]
-        lines.append(f"randomize_funcs = [{', '.join(quoted_funcs)}]")
+        lines.append(
+            f"randomize_funcs = {_render_toml_string_list(spec.randomize_funcs)}"
+        )
     lines.append(f'compiler_type = "{spec.compiler_type}"')
     lines.append(f'objdump_command = "{spec.objdump_command}"')
 
@@ -236,6 +252,102 @@ def parse_existing_overrides(toml_text: str) -> dict[str, float]:
             except ValueError:
                 continue
     return out
+
+
+_BOOTSTRAP_SETTINGS_CONTROLLED_KEYS = {
+    "func_name",
+    "randomize_funcs",
+    "compiler_type",
+    "objdump_command",
+}
+_BOOTSTRAP_SETTINGS_STALE_TOOLCHAIN_KEYS = {
+    "compiler_command",
+    "assembler_command",
+    "asm_prelude_file",
+    "asm_pattern",
+}
+_TOP_LEVEL_KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z_0-9]*)\s*=")
+
+
+def _existing_randomize_funcs(toml_text: str) -> list[str] | None:
+    try:
+        parsed = tomllib.loads(toml_text)
+    except tomllib.TOMLDecodeError:
+        return None
+    value = parsed.get("randomize_funcs")
+    if not isinstance(value, list):
+        return None
+    if not all(isinstance(item, str) for item in value):
+        return None
+    return list(value)
+
+
+def repair_bootstrap_settings_toml(
+    toml_text: str,
+    func_name: str,
+) -> BootstrapSettingsRepair:
+    """Repair a kept bootstrap settings.toml without clobbering tuning.
+
+    Older permuter imports and hand-maintained dirs often carry hardcoded
+    devkitPPC compiler/assembler/objdump assumptions. Bootstrap should keep
+    user-tuned sections such as [weight_overrides], but the root toolchain
+    keys must match the project-local compile.sh and dtk objdump wrapper.
+    """
+    randomize_funcs = _existing_randomize_funcs(toml_text)
+    lines = toml_text.splitlines(keepends=True)
+
+    table_start = len(lines)
+    for idx, line in enumerate(lines):
+        if re.match(r"^\s*\[", line):
+            table_start = idx
+            break
+
+    root_lines = lines[:table_start]
+    table_lines = lines[table_start:]
+    dropped_keys = (
+        _BOOTSTRAP_SETTINGS_CONTROLLED_KEYS
+        | _BOOTSTRAP_SETTINGS_STALE_TOOLCHAIN_KEYS
+    )
+    preserved_root: list[str] = []
+    for line in root_lines:
+        match = _TOP_LEVEL_KEY_RE.match(line)
+        if match is not None and match.group(1) in dropped_keys:
+            continue
+        preserved_root.append(line)
+
+    canonical_lines = [
+        f"func_name = {_quote_toml_string(func_name)}\n",
+    ]
+    if randomize_funcs is not None:
+        canonical_lines.append(
+            f"randomize_funcs = {_render_toml_string_list(randomize_funcs)}\n"
+        )
+    canonical_lines.extend(
+        [
+            'compiler_type = "mwcc"\n',
+            f"objdump_command = {_quote_toml_string(DEFAULT_OBJDUMP_COMMAND)}\n",
+        ]
+    )
+
+    insert_at = 0
+    while insert_at < len(preserved_root):
+        stripped = preserved_root[insert_at].strip()
+        if stripped and not stripped.startswith("#"):
+            break
+        insert_at += 1
+    repaired_lines = (
+        preserved_root[:insert_at]
+        + canonical_lines
+        + preserved_root[insert_at:]
+        + table_lines
+    )
+    repaired_text = "".join(repaired_lines)
+
+    return BootstrapSettingsRepair(
+        text=repaired_text,
+        changed=repaired_text != toml_text,
+        randomize_funcs=randomize_funcs,
+    )
 
 
 def write_settings_toml(

@@ -223,3 +223,101 @@ def test_directed_from_start_always_escalates():
     assert p.should_escalate(None, ctx) is True
     ctx.byte_history = [7, 6, 5]                          # improving -> plateau would be False
     assert p.should_escalate(None, ctx) is True          # but directed_from_start forces True
+
+
+# --- order-mode branch (order-distance directed search, T4) ---
+
+def _order_objective(order_target, phys_target, roles_n=2):
+    class _RT: pass
+    rt = _RT(); rt.roles = [object()] * roles_n; rt.function = "mnDiagram_OnFrame"
+    return DirectedObjective(
+        search_target=None, role_target=rt, baseline_compile=None,
+        baseline_pcdump_path=None, baseline_source_hash="h", class_id=0,
+        objective_iter_by_original_ig=order_target, proof_force_phys=phys_target,
+        objective_mode="order", order_target_roles=tuple(sorted(order_target)),
+    )
+
+
+def _boom(*a, **k):
+    raise AssertionError("phys-mode machinery must not run in order mode")
+
+
+def _order_pipe():
+    # Every phys-mode collaborator raises if touched: order mode must branch
+    # BEFORE compile/analyze/case/report/coverage (B3).
+    return DirectedScorePipeline(
+        analyze=_boom,
+        compile_from_text=_boom,
+        decisions_of=_boom,
+        classify=_boom,
+    )
+
+
+def test_order_mode_scores_kendall_and_signed_gap_displacement(tmp_path, monkeypatch):
+    from src.search.directed import scorer as scorer_mod
+    from src.search.directed.order_metric import CandidateScore
+
+    def fake_score(cand_pcdump_text, ref_descs, **kw):
+        # ranks match the target exactly, but phys_matched=0: B6 pins that
+        # displacement is the SIGNED-GAP diagnostic (1.0 here), NOT the phys
+        # fraction (which would be 0.0).
+        return CandidateScore(
+            valid=True, invalid_reason=None, ranks_by_role={28: 2, 29: 3},
+            order_distance=0, phys_matched=0, coverage=1.0,
+        )
+    monkeypatch.setattr(scorer_mod, "score_candidate_reanchored", fake_score, raising=False)
+
+    obj = _order_objective({28: 2, 29: 3}, {28: 29, 29: 28})
+    out = _order_pipe().score_directed(_art(tmp_path), DirectedScoringCall(obj, _parent(disp=0.0)))
+    assert out.status == "ok"
+    meta = out.directed_meta
+    assert meta.valid is True
+    assert meta.order_distance == 0
+    assert meta.displacement == pytest.approx(1.0)   # signed-gap, not phys 0/2
+    assert meta.case == "order" and meta.label == "order"
+    assert out.directed_score == pytest.approx(0.0)  # the Kendall scalar
+
+
+def test_order_mode_target_role_lost_is_invalid(tmp_path, monkeypatch):
+    from src.search.directed import scorer as scorer_mod
+    from src.search.directed.order_metric import CandidateScore
+
+    def fake_score(cand_pcdump_text, ref_descs, **kw):
+        return CandidateScore(
+            valid=False, invalid_reason="target_role_lost", ranks_by_role=None,
+            order_distance=None, phys_matched=None, coverage=0.5,
+        )
+    monkeypatch.setattr(scorer_mod, "score_candidate_reanchored", fake_score, raising=False)
+
+    obj = _order_objective({28: 2, 29: 3}, {28: 29, 29: 28})
+    out = _order_pipe().score_directed(_art(tmp_path), DirectedScoringCall(obj, _parent()))
+    assert out.status == "invalid"
+    assert out.directed_meta.invalid_reason == "target_role_lost"
+
+
+def test_order_mode_bypasses_generic_coverage_floor_and_analyze(tmp_path, monkeypatch):
+    # B3: a candidate the generic 0.5 floor would reject (it never runs) is
+    # scored fine when the §3.3 core says valid — and the _boom collaborators
+    # prove analyze/compile/case/coverage machinery is structurally bypassed.
+    from src.search.directed import scorer as scorer_mod
+    from src.search.directed.order_metric import CandidateScore
+
+    def fake_score(cand_pcdump_text, ref_descs, **kw):
+        return CandidateScore(
+            valid=True, invalid_reason=None, ranks_by_role={28: 3, 29: 2},
+            order_distance=1, phys_matched=0, coverage=1.0,
+        )
+    monkeypatch.setattr(scorer_mod, "score_candidate_reanchored", fake_score, raising=False)
+
+    obj = _order_objective({28: 2, 29: 3}, {28: 29, 29: 28})
+    out = _order_pipe().score_directed(_art(tmp_path), DirectedScoringCall(obj, _parent()))
+    assert out.status == "ok"
+    assert out.directed_meta.order_distance == 1
+
+
+def test_phys_mode_unchanged_by_order_branch(tmp_path):
+    # The default phys path must be byte-identical.
+    out = _pipe("B").score_directed(_art(tmp_path), DirectedScoringCall(_objective(), _parent()))
+    assert out.status == "ok"
+    assert out.directed_meta.case == "B"
+    assert hasattr(out.directed_meta, "order_distance")

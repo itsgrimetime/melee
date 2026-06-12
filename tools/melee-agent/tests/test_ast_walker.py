@@ -203,6 +203,19 @@ def test_walk_function_tolerates_pad_stack_macro() -> None:
     assert "y" in names
 
 
+def test_walk_function_tolerates_m2c_field_pointer_type_initializer() -> None:
+    """M2C_FIELD pointer-type arguments create ERROR nodes inside the macro
+    call, but they do not corrupt the surrounding declaration."""
+    src = (
+        "void f(void) {\n"
+        "    int x = M2C_FIELD(sp28, int*, 0xC);\n"
+        "    int y;\n"
+        "}\n"
+    )
+    decls = walk_function(src, "f", path=None)
+    assert [d.name for d in decls] == ["x", "y"]
+
+
 def test_walk_function_raises_on_decl_enclosing_error() -> None:
     """An ERROR node that interrupts a declaration triggers AstWalkError."""
     src = "void f(void) { int = 5; }"  # syntax error inside decl

@@ -405,11 +405,18 @@ def test_setup_can_bootstrap_and_auto_generate_baseline(
     target_yaml = (
         perm_root / "nonmatchings" / function / "simplify_order_target.yaml"
     ).read_text()
-    assert f"baseline_dump: {baseline}" in target_yaml
+    assert "baseline_dump: baseline.pcdump.txt" in target_yaml
+    assert str(baseline) not in target_yaml
     assert "simplify_order_target: [32]" in target_yaml
     assert "force_phys:" in target_yaml
     assert "32: 25" in target_yaml
     assert "41: 30" in target_yaml
+    parsed_settings = tomllib.loads(
+        (perm_root / "nonmatchings" / function / "settings.toml").read_text()
+    )
+    scorer_command = parsed_settings["scorer"]["command"]
+    assert f"--target nonmatchings/{function}/simplify_order_target.yaml" in scorer_command
+    assert str(perm_root) not in scorer_command
 
 
 def test_setup_baseline_missing_function_errors(

@@ -30,6 +30,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -104,6 +105,7 @@ def _find_cwd_repo_root() -> Optional[Path]:
 ROOT = _find_cwd_repo_root() or SCRIPT_DIR.parent  # tools/ is in repo root
 
 REPORT_PATH = ROOT / "build/GALE01/report.json"
+OBJDIFF_CONFIG_PATH = ROOT / "objdiff.json"
 SRC_ROOT = ROOT / "src"
 DEFAULT_BUILD_TIMEOUT_SECONDS = int(os.environ.get("CHECKDIFF_BUILD_TIMEOUT", "300"))
 REPORT_JSON_READ_RETRIES = int(os.environ.get("CHECKDIFF_REPORT_JSON_READ_RETRIES", "5"))
@@ -431,6 +433,65 @@ def _is_relocation_line(line: str) -> bool:
 
 def _strip_relocation_lines(lines: list[str]) -> list[str]:
     return [line for line in lines if not _is_relocation_line(line)]
+
+
+_TRUTH_REGISTER_TOKEN_RE = re.compile(r"\b[rf](?:[0-9]|[12][0-9]|3[01])\b")
+_TRUTH_CR_TOKEN_RE = re.compile(r"\bcr[0-7]\b")
+_TRUTH_QUOTED_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+_TRUTH_SYMBOL_RE = re.compile(
+    r"\b(?:[A-Za-z_][A-Za-z0-9_$]*_)[A-Za-z0-9_$.]*"
+    r"(?:[+-](?:0x)?[0-9A-Fa-f]+)?\b"
+)
+_TRUTH_IMMEDIATE_RE = re.compile(
+    r"(?<![A-Za-z_])[-+]?(?:0x[0-9A-Fa-f]+|\d+)(?![A-Za-z_])"
+)
+
+
+def _normalized_truth_line(line: str) -> str | None:
+    body = _asm_body(line)
+    if not body or body.startswith("<"):
+        return None
+    body = _TRUTH_QUOTED_STRING_RE.sub('"STR"', body)
+    if _is_relocation_line(line):
+        reloc = re.search(r"R_PPC_[A-Za-z0-9_]+", body)
+        return f"RELOC {reloc.group(0) if reloc else 'R_PPC'}"
+    body = re.sub(r"<[^>]*>", "LABEL", body)
+    body = _TRUTH_SYMBOL_RE.sub("SYM", body)
+    body = _TRUTH_REGISTER_TOKEN_RE.sub(lambda m: f"{m.group(0)[0]}N", body)
+    body = _TRUTH_CR_TOKEN_RE.sub("crN", body)
+    body = _TRUTH_IMMEDIATE_RE.sub("IMM", body)
+    return re.sub(r"\s+", " ", body).strip()
+
+
+def normalized_structural_lines(lines: list[str]) -> list[str]:
+    return [
+        normalized
+        for line in lines
+        if (normalized := _normalized_truth_line(line)) is not None
+    ]
+
+
+def normalized_structural_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
+    ref_norm = normalized_structural_lines(ref_lines)
+    our_norm = normalized_structural_lines(our_lines)
+    sm = difflib.SequenceMatcher(None, ref_norm, our_norm, autojunk=False)
+    diff_lines = sum(
+        max(i2 - i1, j2 - j1)
+        for tag, i1, i2, j1, j2 in sm.get_opcodes()
+        if tag != "equal"
+    )
+    if diff_lines == 0:
+        status = "structural-match"
+    elif diff_lines <= 3:
+        status = "near-zero-structural-diff"
+    else:
+        status = "structural-diff"
+    return {
+        "status": status,
+        "normalized_diff_lines": diff_lines,
+        "expected_normalized_lines": len(ref_norm),
+        "current_normalized_lines": len(our_norm),
+    }
 
 
 # Matches the normalized offset prefix produced by get_asm_with_objdump/dtk,
@@ -1010,6 +1071,27 @@ def _call_targets(lines: list[str]) -> list[str]:
     return targets
 
 
+def _missing_call_targets_by_multiplicity(
+    ref_calls: list[str],
+    our_calls: list[str],
+) -> list[str]:
+    remaining = Counter(our_calls)
+    missing: list[str] = []
+    for call in ref_calls:
+        if remaining[call] > 0:
+            remaining[call] -= 1
+        else:
+            missing.append(call)
+    return missing
+
+
+def _call_target_multiplicity_differs(
+    ref_calls: list[str],
+    our_calls: list[str],
+) -> bool:
+    return Counter(ref_calls) != Counter(our_calls)
+
+
 _PHYSICAL_REG_TOKEN_RE = re.compile(r"\b([rf])(?:[0-9]|[12][0-9]|3[01])\b")
 _SELF_RELATIVE_CALL_RE = re.compile(
     r"^(?P<base>[A-Za-z_.$][A-Za-z0-9_.$]*)(?P<delta>[+-]0x[0-9A-Fa-f]+)?$"
@@ -1286,7 +1368,7 @@ def _detect_inline_boundary_artifact(
     ref_calls: list[str],
     our_calls: list[str],
 ) -> Optional[dict]:
-    missing_ref_calls = [call for call in ref_calls if call not in our_calls]
+    missing_ref_calls = _missing_call_targets_by_multiplicity(ref_calls, our_calls)
     if not missing_ref_calls or len(our_lines) <= len(ref_lines):
         return None
 
@@ -2107,9 +2189,15 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
     our_mnemonics = _mnemonics(our_lines)
     ref_calls = _call_targets(ref_lines)
     our_calls = _call_targets(our_lines)
+    structural_truth_gate = normalized_structural_diff(ref_lines, our_lines)
+    normalized_diff_lines = structural_truth_gate["normalized_diff_lines"]
     ref_branch_shape = _branch_shape(ref_lines)
     our_branch_shape = _branch_shape(our_lines)
     branch_shape_differs = ref_branch_shape != our_branch_shape
+    call_shape_differs = (
+        _call_target_multiplicity_differs(ref_calls, our_calls)
+        and not _call_delta_is_self_relative_offset_only(ref_calls, our_calls)
+    )
     inline_boundary_artifact = _detect_inline_boundary_artifact(
         ref_lines,
         our_lines,
@@ -2118,6 +2206,8 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
     )
     indexed_struct_pointer_materialization = (
         detect_indexed_struct_pointer_materialization(ref_lines, our_lines)
+        if normalized_diff_lines > 0
+        else None
     )
     register_allocation_guidance = detect_register_allocation_guidance(
         ref_lines,
@@ -2194,7 +2284,7 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         if ref_mnemonics == our_mnemonics else None
     )
 
-    if ref_calls != our_calls:
+    if call_shape_differs:
         if backend_ceiling:
             reasons.append(
                 "call shape also differs after alignment; inspect prototypes, "
@@ -2283,6 +2373,41 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         elif primary in {"instruction-sequence", "operand-register-or-offset"}:
             primary = "indexed-struct-pointer-materialization"
 
+    stack_layout_evidence = (
+        stack_frame_delta is not None
+        or stack_slot_localizer is not None
+        or primary in {"stack-layout", "stack-slot-layout"}
+    )
+    if normalized_diff_lines == 0:
+        reasons.insert(
+            0,
+            "normalized structural diff is zero after masking registers, "
+            "immediates, labels, and relocation symbols; treat raw banner "
+            "differences as coloring/presentation evidence, not source-shape proof",
+        )
+        if not stack_layout_evidence:
+            if primary not in {"register-allocation", "backend-ceiling"}:
+                primary = "normalized-structural-match"
+    elif normalized_diff_lines <= 3:
+        reasons.insert(
+            0,
+            f"normalized structural diff is near-zero ({normalized_diff_lines} "
+            "line(s)); inspect as a coloring/alignment cascade before changing "
+            "source shape",
+        )
+        if (
+            not stack_layout_evidence
+            and primary in {
+                "instruction-sequence",
+                "signature-type-mismatch",
+                "data-symbol-or-relocation",
+                "inline-boundary-toolchain-artifact",
+                "operand-register-or-offset",
+                "register-allocation",
+            }
+        ):
+            primary = "normalized-structural-near-match"
+
     if not reasons:
         reasons.append("differences require direct inspection")
 
@@ -2341,6 +2466,7 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
             "subclass": backend_ceiling["subclass"],
             "confidence": backend_ceiling["confidence"],
         }
+    result["structural_truth_gate"] = structural_truth_gate
     result["offset_discrepancies"] = offset_discrepancies
     return result
 
@@ -2575,6 +2701,15 @@ def format_summary(
         f"match_percent={pct_text}",
         f"classification={primary}",
     ]
+    truth_gate = classification.get("structural_truth_gate")
+    if isinstance(truth_gate, dict):
+        fields.append(
+            "normalized_diff_lines="
+            f"{truth_gate.get('normalized_diff_lines', 'unknown')}"
+        )
+        status = truth_gate.get("status")
+        if status in {"structural-match", "near-zero-structural-diff"}:
+            fields.append(f"truth={status}")
     pad_probe = classification.get("diagnostic_pad_stack")
     if pad_probe:
         fields.append(f"diagnostic_pad_stack={pad_probe.get('total_pad_stack_bytes')}")
@@ -2740,6 +2875,79 @@ def load_report_json(path=None) -> dict:
                 raise
             time.sleep(REPORT_JSON_READ_RETRY_DELAY_SECONDS)
     return {}
+
+
+def load_objdiff_json(path=None) -> dict:
+    objdiff_path = OBJDIFF_CONFIG_PATH if path is None else path
+    try:
+        return json.loads(Path(objdiff_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _normalize_unit_name(name: str | None) -> str:
+    return (name or "").removeprefix("main/").strip("/")
+
+
+def resolve_objdiff_unit_paths(
+    unit_name: str,
+    objdiff_data: dict | None = None,
+    *,
+    repo_root: Path = ROOT,
+) -> dict | None:
+    """Resolve expected/current object paths from objdiff.json orientation.
+
+    objdiff's ``target_path`` is the expected/reference object and
+    ``base_path`` is the locally rebuilt current object. Keep that orientation
+    explicit so normalized gates do not accidentally self-compare the target
+    tree.
+    """
+    data = objdiff_data if objdiff_data is not None else load_objdiff_json()
+    wanted = _normalize_unit_name(unit_name)
+    for unit in data.get("units", []):
+        if _normalize_unit_name(unit.get("name")) != wanted:
+            continue
+        target_path = unit.get("target_path")
+        base_path = unit.get("base_path")
+        if not target_path or not base_path:
+            return None
+        expected = Path(target_path)
+        current = Path(base_path)
+        if not expected.is_absolute():
+            expected = repo_root / expected
+        if not current.is_absolute():
+            current = repo_root / current
+        return {
+            "expected_path": str(expected),
+            "current_path": str(current),
+            "unit": unit.get("name") or unit_name,
+        }
+    return None
+
+
+def resolve_objdiff_function_paths(
+    func_name: str,
+    *,
+    report_data: dict | None = None,
+    objdiff_data: dict | None = None,
+    repo_root: Path = ROOT,
+) -> dict | None:
+    report = report_data if report_data is not None else load_report_json()
+    unit_name = None
+    for unit in report.get("units", []):
+        for function in unit.get("functions", []):
+            if function.get("name") == func_name:
+                unit_name = _normalize_unit_name(unit.get("name"))
+                break
+        if unit_name is not None:
+            break
+    if unit_name is None:
+        return None
+    return resolve_objdiff_unit_paths(
+        unit_name,
+        objdiff_data,
+        repo_root=repo_root,
+    )
 
 
 def find_unit_for_function(func_name: str) -> Optional[str]:
@@ -3510,6 +3718,11 @@ def main() -> int:
                 sdata2_value_aliases,
             )
         classification = classify_asm_diff(ref_lines, our_lines)
+        objdiff_paths = resolve_objdiff_function_paths(func_name)
+        if objdiff_paths and isinstance(
+            classification.get("structural_truth_gate"), dict
+        ):
+            classification["structural_truth_gate"]["object_paths"] = objdiff_paths
         source_text_for_bridge = None
         if args.pcdump is not None and c_file.is_file():
             try:

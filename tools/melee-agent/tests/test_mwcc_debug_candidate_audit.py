@@ -4,7 +4,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from src.cli import app
 from src.mwcc_debug import candidate_audit
+
+runner = CliRunner()
 
 
 def test_candidate_audit_flags_placeholder_helpers() -> None:
@@ -151,6 +156,138 @@ void f(float delta)
     assert any(r.kind == "manual-abs-sign-flip" for r in report.risks)
 
 
+def test_candidate_audit_rejects_local_use_before_assignment() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef struct HSD_JObj HSD_JObj;
+void f(void)
+{
+    HSD_JObj* jobj;
+    HSD_JObjAddAnimAll(jobj, NULL, NULL, NULL);
+    jobj = HSD_JObjLoadJoint(desc);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.semantic_risk_bucket == "semantic-risk-high"
+    assert report.should_reject is True
+    assert any(
+        r.kind == "use-before-def" and r.name == "jobj"
+        for r in report.risks
+    )
+
+
+def test_candidate_audit_allows_local_after_assignment_or_initializer() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int loaded = make_value();
+    int tmp;
+    tmp = loaded + 1;
+    use(tmp);
+}
+"""
+    )
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(r.kind == "use-before-def" for r in report.risks)
+
+
+def test_candidate_audit_allows_struct_field_hoist_to_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef unsigned char u8;
+typedef struct Diagram {
+    u8 is_name_mode;
+} Diagram;
+void f(Diagram* data)
+{
+    u8 result;
+    result = data->is_name_mode;
+    if (result != 0) {
+        use(result);
+    }
+}
+"""
+    )
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(r.kind == "use-before-def" for r in report.risks)
+
+
+def test_candidate_audit_member_assignment_does_not_define_same_named_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef unsigned char u8;
+typedef struct Diagram {
+    u8 is_name_mode;
+} Diagram;
+void f(Diagram* data)
+{
+    u8 is_name_mode;
+    data->is_name_mode = 1;
+    use(is_name_mode);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.semantic_risk_bucket == "semantic-risk-high"
+    assert report.should_reject is True
+    assert any(
+        r.kind == "use-before-def" and r.name == "is_name_mode"
+        for r in report.risks
+    )
+
+
+def test_candidate_audit_member_read_does_not_read_same_named_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef unsigned char u8;
+typedef struct Diagram {
+    u8 is_name_mode;
+} Diagram;
+void f(Diagram* data)
+{
+    u8 is_name_mode;
+    u8 result = data->is_name_mode;
+    use(result);
+}
+"""
+    )
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(r.kind == "use-before-def" for r in report.risks)
+
+
+def test_candidate_audit_does_not_reject_base_existing_use_before_def() -> None:
+    base = """
+void f(void)
+{
+    int tmp;
+    use(tmp);
+}
+"""
+    candidate = """
+void f(void)
+{
+    int tmp;
+    use(tmp);
+}
+"""
+
+    report = candidate_audit.audit_candidate_source(candidate, base_text=base)
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(r.kind == "use-before-def" for r in report.risks)
+
+
 def test_candidate_audit_buckets_plausible_c_shape() -> None:
     report = candidate_audit.audit_candidate_source(
         "void f(int x)\n{\n    int tmp = x + 1;\n    use(tmp);\n}\n"
@@ -227,6 +364,33 @@ def test_candidate_audit_tree_marks_fetched_outputs(tmp_path: Path) -> None:
     assert (tmp_path / "candidate_audit.json").exists()
     assert (good.parent / "melee-agent-candidate-status.json").exists()
     assert (bad.parent / "melee-agent-candidate-status.json").exists()
+
+
+def test_candidate_audit_cli_prints_tree_summary(tmp_path: Path) -> None:
+    good = tmp_path / "output-1-1" / "source.c"
+    bad = tmp_path / "output-2-1" / "source.c"
+    good.parent.mkdir()
+    bad.parent.mkdir()
+    good.write_text("void f(void) { abs = abs; }\n")
+    bad.write_text("void f(void) { helper_fn(); }\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "candidate-audit",
+            str(tmp_path),
+            "--function",
+            "f",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Candidates: 2" in result.stdout
+    assert "unsafe-candidate: 1" in result.stdout
+    assert "corrupt-candidate: 1" in result.stdout
+    assert "candidate_audit.json" in result.stdout
 
 
 def test_candidate_audit_tree_uses_base_for_prototype_mutations(

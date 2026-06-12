@@ -15,6 +15,10 @@ _FRAME_RE = re.compile(
 _STACK_REF_RE = re.compile(
     r"(?<![@\w+])(?P<offset>-?(?:0x[0-9A-Fa-f]+|\d+))\s*\(\s*r1\s*\)"
 )
+_STACK_ADDRESS_RE = re.compile(
+    r"^\s*r(?!1\b)\d+\s*,\s*r1\s*,\s*"
+    r"(?P<offset>-?(?:0x[0-9A-Fa-f]+|\d+))\s*$"
+)
 _SYMBOLIC_STACK_REF_RE = re.compile(
     r"(?<![@\w])(?P<symbol>(?:@[A-Za-z0-9_]\w*|[A-Za-z_]\w*)"
     r"(?:[+-](?:0x[0-9A-Fa-f]+|\d+))?)\s*\(\s*r1\s*\)"

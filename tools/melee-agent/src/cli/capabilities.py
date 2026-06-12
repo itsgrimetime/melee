@@ -281,9 +281,18 @@ def find_unregistered_apps(repo_root: Path) -> list[str]:
     registered: set[str] = {"capabilities_app"}
     for py in cli_dir.rglob("*.py"):
         text = py.read_text(errors="replace")
+        aliases = {
+            m.group(2): m.group(1)
+            for m in re.finditer(
+                r"from\s+[\w.]+\s+import\s+(\w+_app)\s+as\s+(\w+_app)",
+                text,
+            )
+        }
         for m in re.finditer(r"^(\w+_app)\s*=\s*typer\.Typer\(", text, re.MULTILINE):
             declared.setdefault(m.group(1), py)
-        registered |= set(re.findall(r"add_typer\(\s*(\w+_app)", text))
+        for name in re.findall(r"add_typer\(\s*(\w+_app)", text):
+            registered.add(name)
+            registered.add(aliases.get(name, name))
     return [
         f"{var} ({path.relative_to(repo_root)})"
         for var, path in sorted(declared.items())

@@ -299,6 +299,290 @@ def _sign_risks(masked: str, base_masked: str | None) -> list[SourceRisk]:
     return risks
 
 
+_IDENT_RE = re.compile(r"\b[A-Za-z_]\w*\b")
+_CONTROL_WORDS = {
+    "break",
+    "case",
+    "continue",
+    "default",
+    "do",
+    "else",
+    "for",
+    "goto",
+    "if",
+    "return",
+    "sizeof",
+    "switch",
+    "while",
+}
+
+
+_AGGREGATE_HEAD_RE = re.compile(
+    r"(?s)^(?:typedef\s+)?(?:struct|union|enum)(?:\s+[A-Za-z_]\w*)?\s*$"
+)
+
+
+def _find_matching_brace(text: str, open_index: int) -> int | None:
+    depth = 0
+    for index in range(open_index, len(text)):
+        ch = text[index]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _aggregate_body_ranges(masked: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for match in re.finditer(r"\{", masked):
+        open_index = match.start()
+        head_start = max(
+            masked.rfind(";", 0, open_index),
+            masked.rfind("{", 0, open_index),
+            masked.rfind("}", 0, open_index),
+        ) + 1
+        head = masked[head_start:open_index].strip()
+        if _AGGREGATE_HEAD_RE.match(head) is None:
+            continue
+        close_index = _find_matching_brace(masked, open_index)
+        if close_index is not None:
+            ranges.append((open_index + 1, close_index))
+    return ranges
+
+
+def _offset_in_ranges(offset: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(start <= offset < end for start, end in ranges)
+
+
+def _body_statements(masked: str) -> list[tuple[int, str]]:
+    statements: list[tuple[int, str]] = []
+    depth = 0
+    start: int | None = None
+    for index, ch in enumerate(masked):
+        if ch == "{":
+            if depth >= 1 and start is not None:
+                head = masked[start:index]
+                if head.strip():
+                    statements.append((start, head))
+            depth += 1
+            start = index + 1
+            continue
+        if ch == "}":
+            if depth >= 1 and start is not None:
+                tail = masked[start:index]
+                if tail.strip():
+                    statements.append((start, tail))
+            depth = max(0, depth - 1)
+            start = index + 1 if depth >= 1 else None
+            continue
+        if ch == ";" and depth >= 1 and start is not None:
+            statements.append((start, masked[start:index + 1]))
+            start = index + 1
+    return statements
+
+
+def _split_top_level_commas(text: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for index, ch in enumerate(text):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            parts.append(text[start:index])
+            start = index + 1
+    parts.append(text[start:])
+    return parts
+
+
+def _split_top_level_initializer(text: str) -> tuple[str, str | None]:
+    depth = 0
+    for index, ch in enumerate(text):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch == "=" and depth == 0:
+            return text[:index], text[index + 1:]
+    return text, None
+
+
+def _parse_local_declaration(statement: str) -> list[tuple[str, str | None]]:
+    stripped = statement.strip()
+    if not stripped.endswith(";"):
+        return []
+    first = re.match(r"([A-Za-z_]\w*)\b", stripped)
+    if first is None or first.group(1) in _CONTROL_WORDS:
+        return []
+    if re.match(r"[A-Za-z_]\w*\s*\(", stripped):
+        return []
+
+    match = re.match(
+        r"(?s)^\s*(?:"
+        r"(?:const|volatile|static|register|signed|unsigned|short|long|int|char|float|double|void|"
+        r"s8|u8|s16|u16|s32|u32|s64|u64|f32|f64|bool|BOOL|"
+        r"struct\s+[A-Za-z_]\w*|union\s+[A-Za-z_]\w*|enum\s+[A-Za-z_]\w*|[A-Za-z_]\w*)"
+        r"(?:\s+|\s*\*+))+"
+        r"(?P<decls>.+?)\s*;\s*$",
+        stripped,
+    )
+    if match is None:
+        return []
+
+    decls: list[tuple[str, str | None]] = []
+    for raw_part in _split_top_level_commas(match.group("decls")):
+        declarator, initializer = _split_top_level_initializer(raw_part)
+        if "(" in declarator:
+            continue
+        name_match = re.search(
+            r"\b(?P<name>[A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)*$",
+            declarator.strip(),
+        )
+        if name_match is None:
+            continue
+        decls.append((name_match.group("name"), initializer))
+    return decls
+
+
+def _is_simple_assignment_lhs(text: str, start: int, end: int) -> bool:
+    index = end
+    while index < len(text) and text[index].isspace():
+        index += 1
+    if index >= len(text) or text[index] != "=":
+        return False
+    if index + 1 < len(text) and text[index + 1] == "=":
+        return False
+    return True
+
+
+def _previous_nonspace_index(text: str, before: int) -> int:
+    index = before - 1
+    while index >= 0 and text[index].isspace():
+        index -= 1
+    return index
+
+
+def _is_member_access_identifier(text: str, start: int) -> bool:
+    prev_index = _previous_nonspace_index(text, start)
+    if prev_index < 0:
+        return False
+    if text[prev_index] == ".":
+        return True
+    if text[prev_index] != ">":
+        return False
+    arrow_start = _previous_nonspace_index(text, prev_index)
+    return arrow_start >= 0 and text[arrow_start] == "-"
+
+
+def _local_reads(text: str, known_locals: set[str]) -> list[tuple[str, int]]:
+    reads: list[tuple[str, int]] = []
+    for match in _IDENT_RE.finditer(text):
+        name = match.group(0)
+        if name not in known_locals:
+            continue
+        if _is_member_access_identifier(text, match.start()):
+            continue
+        if _is_simple_assignment_lhs(text, match.start(), match.end()):
+            continue
+        reads.append((name, match.start()))
+    return reads
+
+
+def _simple_assignment_defs(text: str, known_locals: set[str]) -> set[str]:
+    defs: set[str] = set()
+    for match in _IDENT_RE.finditer(text):
+        name = match.group(0)
+        if name not in known_locals:
+            continue
+        if _is_member_access_identifier(text, match.start()):
+            continue
+        if _is_simple_assignment_lhs(text, match.start(), match.end()):
+            defs.add(name)
+    return defs
+
+
+def _raw_use_before_def_risks(masked: str) -> list[SourceRisk]:
+    risks: list[SourceRisk] = []
+    seen: set[str] = set()
+    known_locals: set[str] = set()
+    defined_locals: set[str] = set()
+    aggregate_ranges = _aggregate_body_ranges(masked)
+
+    for start, statement in _body_statements(masked):
+        if _offset_in_ranges(start, aggregate_ranges):
+            continue
+        declarations = _parse_local_declaration(statement)
+        if declarations:
+            for name, initializer in declarations:
+                known_locals.add(name)
+                if initializer is not None:
+                    for read_name, read_offset in _local_reads(initializer, known_locals):
+                        if read_name in defined_locals:
+                            continue
+                        key = f"{read_name}:{start + read_offset}"
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        risks.append(SourceRisk(
+                            severity="reject",
+                            kind="use-before-def",
+                            name=read_name,
+                            excerpt=_line_excerpt(masked, start + read_offset),
+                            semantic_risk_bucket=SEMANTIC_BUCKET_HIGH,
+                            message=(
+                                f"{read_name} is read before any local assignment "
+                                "or initializer in this candidate source"
+                            ),
+                        ))
+                    defined_locals.add(name)
+            continue
+
+        for name, offset in _local_reads(statement, known_locals):
+            if name in defined_locals:
+                continue
+            key = f"{name}:{start + offset}"
+            if key in seen:
+                continue
+            seen.add(key)
+            risks.append(SourceRisk(
+                severity="reject",
+                kind="use-before-def",
+                name=name,
+                excerpt=_line_excerpt(masked, start + offset),
+                semantic_risk_bucket=SEMANTIC_BUCKET_HIGH,
+                message=(
+                    f"{name} is read before any local assignment or initializer "
+                    "in this candidate source"
+                ),
+            ))
+        defined_locals.update(_simple_assignment_defs(statement, known_locals))
+
+    return risks
+
+
+def _use_before_def_risks(masked: str, base_masked: str | None) -> list[SourceRisk]:
+    base_counts: Counter[tuple[str | None, str]] = Counter()
+    if base_masked:
+        base_counts.update(
+            (risk.name, _canonical_expr(risk.excerpt or ""))
+            for risk in _raw_use_before_def_risks(base_masked)
+        )
+
+    risks: list[SourceRisk] = []
+    for risk in _raw_use_before_def_risks(masked):
+        key = (risk.name, _canonical_expr(risk.excerpt or ""))
+        if base_counts[key] > 0:
+            base_counts[key] -= 1
+            continue
+        risks.append(risk)
+    return risks
+
+
 def _top_level_semicolon_decls(masked: str) -> list[tuple[int, str]]:
     decls: list[tuple[int, str]] = []
     depth = 0
@@ -436,6 +720,7 @@ def audit_candidate_source(
     risks.extend(_assignment_risks(masked, base_masked=base_masked))
     risks.extend(_external_prototype_risks(masked, base_masked))
     risks.extend(_sign_risks(masked, base_masked))
+    risks.extend(_use_before_def_risks(masked, base_masked))
 
     if any(r.kind == "placeholder-leak" for r in risks):
         status = "corrupt-candidate"

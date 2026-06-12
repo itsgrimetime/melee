@@ -18,6 +18,17 @@ class DirectedObjective:
     class_id: int
     objective_iter_by_original_ig: dict
     proof_force_phys: dict
+    # --- ORDER-DISTANCE OBJECTIVE (order-distance directed search, Plan A T1) ---
+    # objective_mode selects the scorer branch: "phys" (default, the shipped
+    # phys-match gate signal) or "order" (Kendall vs a forced-ORDER-proven
+    # target vector, exposed for the kill switch + the future order loop).
+    # objective_iter_by_original_ig carries the PROVEN order vector when
+    # objective_mode == "order" (sourced from OrderTarget.order_target).
+    # order_target_roles is the pruned, baseline-self-reanchor-confident
+    # target-role set (§3.3); unscored_roles records honestly-unscored residual.
+    objective_mode: str = "phys"
+    order_target_roles: tuple = ()
+    unscored_roles: tuple = ()
 
 
 @dataclass(frozen=True)

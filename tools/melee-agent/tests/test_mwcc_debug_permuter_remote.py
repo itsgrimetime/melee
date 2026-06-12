@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -1315,7 +1318,7 @@ def test_doctor_target_flags_yaml_local_path_leaks(tmp_path: Path) -> None:
     assert "simplify_order_target.yaml" in leak_check.detail
 
 
-def test_doctor_target_flags_relative_custom_scorer_target(tmp_path: Path) -> None:
+def test_doctor_target_accepts_relative_custom_scorer_target(tmp_path: Path) -> None:
     local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
     local_perm.mkdir(parents=True)
     (local_perm / "compile.sh").write_text("#!/bin/sh\n")
@@ -1341,17 +1344,23 @@ command = "melee-agent debug target score-simplify-order --function fn_80000000 
         local_perm_dir=local_perm,
         runner=lambda argv, **kwargs: pr.CommandResult(
             returncode=0,
-            stdout=_remote_doctor_ok_stdout(),
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-custom-scorer\tok\t/home/coder/decomp-permuter\n"
+                + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent debug target score-simplify-order --help\n"
+                + "remote-scorer-schema\tok\tstrict-polarity scorer schema supported\n"
+                + "remote-scorer-target\tok\t/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml\n"
+            ),
             stderr="",
         ),
     )
 
-    assert not report.ok
+    assert report.ok
     target_check = next(
         check for check in report.checks if check.name == "local scorer target path"
     )
-    assert not target_check.ok
-    assert "relative --target" in target_check.detail
+    assert target_check.ok
+    assert "/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml" in target_check.detail
 
 
 def test_doctor_target_flags_remote_without_custom_scorer_support(tmp_path: Path) -> None:
@@ -1441,6 +1450,76 @@ command = "melee-agent debug target score-simplify-order --function fn_80000000 
     )
     assert not schema_check.ok
     assert "--strict-polarity" in schema_check.detail
+
+
+def test_doctor_target_probes_force_phys_scorer_and_home_local_bin(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        """
+[scorer]
+command = "melee-agent debug target score-force-phys --function fn_80000000 --target nonmatchings/fn_80000000/simplify_order_target.yaml"
+""".strip()
+        + "\n"
+    )
+    calls: list[list[str]] = []
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    def fake_runner(argv: list[str], **_: object) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-custom-scorer\tok\t/home/coder/decomp-permuter\n"
+                + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent debug target score-force-phys --help\n"
+                + "remote-scorer-schema\tok\tforce-phys scorer schema supported\n"
+                + "remote-scorer-target\tok\t/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml\n"
+            ),
+            stderr="",
+        )
+
+    report = pr.doctor_target(target, local_perm_dir=local_perm, runner=fake_runner)
+
+    assert report.ok
+    target_check = next(
+        check for check in report.checks if check.name == "local scorer target path"
+    )
+    assert target_check.ok
+    assert target_check.detail.endswith(
+        "/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml"
+    )
+    remote_script = calls[0][2]
+    assert 'test -x "$HOME/.local/bin/melee-agent"' in remote_script
+    assert "scorer_command=score-force-phys" in remote_script
+    assert '"$scorer_command" --help' in remote_script
+    assert "--breakdown" in remote_script
+
+
+def test_stale_remote_scorer_schema_is_auto_repairable() -> None:
+    report = pr.DoctorReport(
+        target="coder64",
+        checks=[
+            pr.DoctorCheck(
+                "remote scorer schema",
+                False,
+                "stale score-force-phys help; missing --breakdown",
+            ),
+        ],
+    )
+
+    assert pr._preflight_can_be_repaired(report)
 
 
 def test_repair_target_syncs_tooling_permuter_deps_and_function_dir(tmp_path: Path) -> None:
@@ -1645,6 +1724,149 @@ def test_submit_job_builds_rsync_ssh_tmux_and_metadata(tmp_path: Path) -> None:
     ) in remote_script
     assert "metadata.json" in remote_script
     assert "permuter.log" in remote_script
+
+
+def test_submit_job_cleans_remote_run_dir_when_launch_fails_after_rsync(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "melee-agent debug target dtk-objdump"\n'
+    )
+    jobs_dir = tmp_path / "jobs"
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        if argv and argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            return pr.CommandResult(
+                returncode=0,
+                stdout=(
+                    _remote_doctor_ok_stdout()
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                ),
+                stderr="",
+            )
+        if argv and argv[0] == "rsync":
+            return pr.CommandResult(returncode=0, stdout="", stderr="")
+        if argv and argv[0] == "ssh" and "tmux new-session" in argv[2]:
+            raise pr.RemoteJobError(
+                "Command failed (255): ssh coder.coder64 sh -lc '<remote heredoc>'\n"
+                "coder ssh: net/http: TLS handshake timeout\n"
+                + ("remote script text\n" * 200)
+            )
+        if argv and argv[0] == "ssh" and "rm -rf" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="", stderr="")
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=jobs_dir,
+            runner=fake_runner,
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    msg = str(exc.value)
+    assert "JOB NOT STARTED" in msg
+    assert "safe to retry" in msg
+    assert "TLS handshake timeout" in msg
+    assert "remote script text" not in msg
+    assert len(msg) < 1800
+    assert not (jobs_dir / "fn_80000000-coder64-20260525-143012.json").exists()
+    cleanup_calls = [
+        call for call in calls
+        if call[0] == "ssh" and "rm -rf" in call[2]
+    ]
+    assert cleanup_calls
+    assert "fn_80000000-coder64-20260525-143012" in cleanup_calls[0][2]
+
+
+def test_remote_submit_script_fails_when_tmux_session_exits_immediately(
+    tmp_path: Path,
+) -> None:
+    remote_perm_root = tmp_path / "remote-perm"
+    remote_melee_root = tmp_path / "remote-melee"
+    remote_perm_root.mkdir()
+    remote_melee_root.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_tmux = fake_bin / "tmux"
+    fake_tmux.write_text(
+        """#!/bin/sh
+if [ "$1" = "new-session" ]; then
+    exit 0
+fi
+if [ "$1" = "has-session" ]; then
+    exit 1
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    fake_tmux.chmod(0o755)
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root=str(remote_melee_root),
+        remote_perm_root=str(remote_perm_root),
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    job = pr.RemoteJob(
+        job_id="fn_80000000-coder64-20260525-143012",
+        function="fn_80000000",
+        target="coder64",
+        ssh="coder.coder64",
+        remote_perm_dir=str(
+            remote_perm_root
+            / "remote-runs"
+            / "fn_80000000-coder64-20260525-143012"
+            / "nonmatchings"
+            / "fn_80000000"
+        ),
+        remote_run_dir=str(
+            remote_perm_root
+            / "remote-runs"
+            / "fn_80000000-coder64-20260525-143012"
+        ),
+        local_perm_dir="/tmp/local/fn_80000000",
+        tmux_session="melee-perm-fn_80000000-coder64-20260525-143012",
+        threads=64,
+        mode="stock",
+        created_at="2026-05-25T14:30:12",
+    )
+
+    proc = subprocess.run(
+        ["sh", "-lc", pr._remote_submit_script(job, target)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode != 0
+    assert "tmux session exited immediately" in proc.stderr
+    assert "permuter.log missing or empty" in proc.stderr
 
 
 def test_submit_job_repairs_missing_remote_toml_before_start(
@@ -2074,3 +2296,408 @@ def test_submit_job_metadata_conflict_prevents_remote_side_effects(tmp_path: Pat
 
     assert "already exists" in str(exc.value)
     assert calls == []
+
+
+# ── _parse_tmux_session_name ─────────────────────────────────────────────────
+
+
+def test_parse_tmux_session_name_extracts_job_id() -> None:
+    result = pr._parse_tmux_session_name(
+        "melee-perm-fn_80000000-coder64-20260608-120000",
+        "melee-perm-",
+    )
+    assert result == "fn_80000000-coder64-20260608-120000"
+
+
+def test_parse_tmux_session_name_rejects_non_matching_prefix() -> None:
+    result = pr._parse_tmux_session_name("other-fn_80000000", "melee-perm-")
+    assert result is None
+
+
+# ── _job_is_done ─────────────────────────────────────────────────────────────
+
+
+def test_job_is_done_byte_match() -> None:
+    log = pr.RemoteLogStatus(exists=True, match_found=True)
+    should_stop, reason = pr._job_is_done(log)
+    assert should_stop is True
+    assert "byte-matched" in reason
+
+
+def test_job_is_done_descending_not_done() -> None:
+    log = pr.RemoteLogStatus(
+        exists=True,
+        match_found=False,
+        verdict="descending",
+        modified_at=pr.utcnow(),
+    )
+    should_stop, reason = pr._job_is_done(log)
+    assert should_stop is False
+
+
+def test_job_is_done_plateau_stale_enough() -> None:
+    log = pr.RemoteLogStatus(
+        exists=True,
+        match_found=False,
+        verdict="plateau",
+        modified_at=pr.parse_timestamp("2026-06-01T00:00:00"),
+    )
+    should_stop, reason = pr._job_is_done(log, idle_hours_threshold=1.0)
+    assert should_stop is True
+    assert "plateaued" in reason
+
+
+def test_job_is_done_plateau_recent_not_done() -> None:
+    log = pr.RemoteLogStatus(
+        exists=True,
+        match_found=False,
+        verdict="plateau",
+        modified_at=pr.utcnow(),
+    )
+    should_stop, reason = pr._job_is_done(log, idle_hours_threshold=24.0)
+    assert should_stop is False
+
+
+# ── probe_jobs_active ────────────────────────────────────────────────────────
+
+
+def test_probe_jobs_active_maps_active_dead(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls = 0
+
+    def fake_status_job(
+        loaded_job: pr.RemoteJob,
+        *,
+        runner=None,
+        timeout=None,
+    ) -> pr.RemoteStatus:
+        nonlocal calls
+        calls += 1
+        return pr.RemoteStatus(job_id=loaded_job.job_id, state="active" if calls == 1 else "stopped")
+
+    import types
+    original = pr.status_job
+    pr.status_job = fake_status_job
+    try:
+        active_map = pr.probe_jobs_active([job, replace(job, job_id="job2-target-20260101-000000")])
+    finally:
+        pr.status_job = original
+
+    assert active_map[job.job_id] is True
+    assert active_map["job2-target-20260101-000000"] is False
+
+
+# ── prune_dead_jobs ──────────────────────────────────────────────────────────
+
+
+def test_prune_dead_jobs_removes_only_dead_metadata(tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir()
+    job1 = _sample_job(tmp_path)
+    job2 = replace(job1, job_id="job2-target-20260101-000000")
+    pr.write_job(job1, jobs_dir=jobs_dir)
+    pr.write_job(job2, jobs_dir=jobs_dir)
+
+    def fake_probe(jobs, **kwargs):
+        return {job1.job_id: True, job2.job_id: False}
+
+    original = pr.probe_jobs_active
+    pr.probe_jobs_active = fake_probe
+    try:
+        pruned = pr.prune_dead_jobs(
+            [job1, job2], dry_run=False, jobs_dir=jobs_dir,
+        )
+    finally:
+        pr.probe_jobs_active = original
+
+    assert pruned == [job2.job_id]
+    assert (jobs_dir / f"{job1.job_id}.json").exists()
+    assert not (jobs_dir / f"{job2.job_id}.json").exists()
+
+
+def test_prune_dead_jobs_dry_run_does_not_delete(tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir()
+    job = _sample_job(tmp_path)
+    pr.write_job(job, jobs_dir=jobs_dir)
+
+    def fake_probe(jobs, **kwargs):
+        return {job.job_id: False}
+
+    original = pr.probe_jobs_active
+    pr.probe_jobs_active = fake_probe
+    try:
+        pruned = pr.prune_dead_jobs([job], dry_run=True, jobs_dir=jobs_dir)
+    finally:
+        pr.probe_jobs_active = original
+
+    assert pruned == [job.job_id]
+    assert (jobs_dir / f"{job.job_id}.json").exists()
+
+
+# ── remote list CLI ──────────────────────────────────────────────────────────
+
+
+def test_remote_list_cli_shows_active_dead(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_list_jobs(jobs_dir=None):
+        return [job]
+
+    def fake_probe(jobs, **kwargs):
+        return {job.job_id: True}
+
+    monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
+    monkeypatch.setattr(pr, "probe_jobs_active", fake_probe)
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "list"])
+    assert result.exit_code == 0
+    assert "active" in result.stdout
+    assert job.job_id in result.stdout
+
+
+def test_remote_list_cli_active_flag_filters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    job2 = replace(job, job_id="job2-target-20260101-000000", function="fn_80000010")
+
+    def fake_list_jobs(jobs_dir=None):
+        return [job, job2]
+
+    def fake_probe(jobs, **kwargs):
+        return {job.job_id: True, job2.job_id: False}
+
+    monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
+    monkeypatch.setattr(pr, "probe_jobs_active", fake_probe)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "list", "--active"],
+    )
+    assert result.exit_code == 0
+    assert job.job_id in result.stdout
+    assert job2.job_id not in result.stdout
+
+
+def test_remote_list_cli_dead_flag_filters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    job2 = replace(job, job_id="job2-target-20260101-000000", function="fn_80000010")
+
+    def fake_list_jobs(jobs_dir=None):
+        return [job, job2]
+
+    def fake_probe(jobs, **kwargs):
+        return {job.job_id: True, job2.job_id: False}
+
+    monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
+    monkeypatch.setattr(pr, "probe_jobs_active", fake_probe)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "list", "--dead"],
+    )
+    assert result.exit_code == 0
+    assert job.job_id not in result.stdout
+    assert job2.job_id in result.stdout
+
+
+def test_remote_list_cli_active_dead_mutually_exclusive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [])
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "list", "--active", "--dead"],
+    )
+    assert result.exit_code == 2
+    assert "mutually exclusive" in result.stderr
+
+
+def test_remote_list_cli_shows_live_sessions_when_metadata_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = pr.RemoteTarget(
+        name="coder1",
+        ssh="coder1.example",
+        remote_melee_root="/remote/melee",
+        remote_perm_root="/remote/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+    entry = pr.RemotePsEntry(
+        target="coder1",
+        session_name="melee-perm-fn_80000000-coder1-20260611-065847",
+        job_id="fn_80000000-coder1-20260611-065847",
+        function="fn_80000000",
+        best_score="123",
+        iterations="456",
+        age="2h03m",
+        verdict="descending",
+    )
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [])
+    monkeypatch.setattr(pr, "load_targets", lambda config_path: {"coder1": target})
+    monkeypatch.setattr(pr, "remote_ps", lambda targets, timeout=10.0: [entry])
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "list"])
+
+    assert result.exit_code == 0
+    assert "No local remote permuter job metadata found" in result.stdout
+    assert "LIVE REMOTE SESSIONS WITHOUT LOCAL METADATA" in result.stdout
+    assert entry.job_id in result.stdout
+    assert "descending" in result.stdout
+
+
+def test_remote_ps_cli_outputs_live_dashboard(monkeypatch: pytest.MonkeyPatch) -> None:
+    target = pr.RemoteTarget(
+        name="coder1",
+        ssh="coder1.example",
+        remote_melee_root="/remote/melee",
+        remote_perm_root="/remote/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+    entry = pr.RemotePsEntry(
+        target="coder1",
+        session_name="melee-perm-fn_80000000-coder1-20260611-065847",
+        job_id="fn_80000000-coder1-20260611-065847",
+        function="fn_80000000",
+        best_score="123",
+        iterations="456",
+        age="2h03m",
+        verdict="descending",
+    )
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path: {"coder1": target})
+    monkeypatch.setattr(pr, "remote_ps", lambda targets, timeout=15.0: [entry])
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "ps"])
+
+    assert result.exit_code == 0
+    assert entry.job_id in result.stdout
+    assert "descending" in result.stdout
+
+
+# ── remote fetch --all ───────────────────────────────────────────────────────
+
+
+def test_remote_fetch_cli_all_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    fetch_calls: list[pr.RemoteJob] = []
+
+    def fake_fetch_all(jobs, **kwargs):
+        fetch_calls.extend(jobs)
+        return [Path("/tmp/out")]
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job])
+    monkeypatch.setattr(pr, "fetch_all_jobs", fake_fetch_all)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "fetch", "--all"],
+    )
+    assert result.exit_code == 0
+    assert len(fetch_calls) == 1
+    assert fetch_calls[0] == job
+    assert "Fetched" in result.stdout
+
+
+def test_remote_fetch_cli_requires_job_id_or_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "fetch"])
+    assert result.exit_code == 2
+    assert "JOB_ID or --all" in result.stderr
+
+
+# ── remote reap ──────────────────────────────────────────────────────────────
+
+
+def test_remote_reap_cli_dry_run_shows_would_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_reap(targets, jobs, **kwargs):
+        return [
+            pr.ReapAction(
+                job_id=job.job_id,
+                function=job.function,
+                target=job.target,
+                action="would-stop",
+                reason="byte-matched (score 0)",
+            )
+        ]
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {})
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job])
+    monkeypatch.setattr(pr, "remote_reap", fake_reap)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "reap", "--dry-run"],
+    )
+    assert result.exit_code == 0
+    assert "would-stop" in result.stdout
+    assert "byte-matched" in result.stdout
+    assert "dry run" in result.stdout.lower()
+
+
+# ── remote prune ─────────────────────────────────────────────────────────────
+
+
+def test_remote_prune_cli_dry_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_prune(targets, **kwargs):
+        return [
+            pr.PruneAction(
+                target="coder64",
+                remote_dir="/home/coder/decomp-permuter/remote-runs/old-job",
+                action="would-delete",
+                reason="stale (21d old)",
+            )
+        ]
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {})
+    monkeypatch.setattr(pr, "remote_prune", fake_prune)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "prune", "--dry-run"],
+    )
+    assert result.exit_code == 0
+    assert "would-delete" in result.stdout
+    assert "21d" in result.stdout
+    assert "dry run" in result.stdout.lower()
+
+
+# ── _parse_ps_log_tail ───────────────────────────────────────────────────────
+
+
+def test_parse_ps_log_tail_extracts_score_and_verdict() -> None:
+    # All iterations at same best score = plateau (no record improvements)
+    best, iters, verdict, plateau, match = pr._parse_ps_log_tail(
+        "iteration 100, 0 errors, score = 35\r"
+        "iteration 200, 0 errors, score = 35\r"
+        "iteration 300, 0 errors, score = 50\r"
+    )
+    assert best == "35"
+    assert verdict == "plateau"
+    assert plateau is True
+    assert match is False
+
+
+def test_parse_ps_log_tail_detects_match() -> None:
+    best, iters, verdict, plateau, match = pr._parse_ps_log_tail(
+        "iteration 50, 0 errors, score = 0\n"
+    )
+    assert best == "0"
+    assert match is True
+    assert verdict == "match"

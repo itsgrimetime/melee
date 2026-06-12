@@ -710,7 +710,10 @@ def doctor_target(
     objdump_info: ObjdumpCommandInfo | None = None
     if local_perm_dir is not None:
         checks.extend(_doctor_local_perm_dir(local_perm_dir, target=target))
-        scorer_checks, scorer_info = _doctor_local_scorer(local_perm_dir)
+        scorer_checks, scorer_info = _doctor_local_scorer(
+            local_perm_dir,
+            target=target,
+        )
         checks.extend(scorer_checks)
         objdump_checks, objdump_info = _doctor_local_objdump(local_perm_dir, target=target)
         checks.extend(objdump_checks)
@@ -986,9 +989,20 @@ def submit_job(
                 ["ssh", target.ssh, _remote_sh(_remote_submit_script(job, target))],
                 check=True,
             )
-        except Exception:
+        except Exception as exc:
             _remove_job_metadata_best_effort(job_path)
-            raise
+            cleanup_detail = _cleanup_remote_run_dir_best_effort(
+                job,
+                target,
+                runner=runner,
+            )
+            raise RemoteJobError(
+                _format_submit_not_started_error(
+                    job,
+                    exc,
+                    cleanup_detail=cleanup_detail,
+                )
+            ) from exc
         return job
 
 
@@ -1102,8 +1116,109 @@ def _remote_submit_script(job: RemoteJob, target: RemoteTarget) -> str:
                 f'\\"$remote_py\\" ./permuter.py {shlex.quote(perm_rel)} '
                 f'-j {job.threads} > \\"$remote_run_dir/permuter.log\\" 2>&1"'
             ),
+            "sleep 1",
+            'if ! tmux has-session -t "$tmux_session" 2>/dev/null; then',
+            '  echo "tmux session exited immediately: $tmux_session" >&2',
+            '  if test -s "$remote_run_dir/permuter.log"; then',
+            '    echo "last permuter.log lines:" >&2',
+            '    tail -n 80 "$remote_run_dir/permuter.log" >&2 || true',
+            "  else",
+            '    echo "permuter.log missing or empty: $remote_run_dir/permuter.log" >&2',
+            "  fi",
+            "  exit 1",
+            "fi",
         ]
     )
+
+
+def _remote_cleanup_run_dir_script(job: RemoteJob, target: RemoteTarget) -> str:
+    remote_root = target.remote_perm_root.rstrip("/")
+    remote_runs_root = f"{remote_root}/remote-runs"
+    return "\n".join([
+        "set -eu",
+        f"remote_run_dir={shlex.quote(job.remote_run_dir)}",
+        f"remote_runs_root={shlex.quote(remote_runs_root)}",
+        'case "$remote_run_dir" in',
+        '  "$remote_runs_root"/*) rm -rf -- "$remote_run_dir" ;;',
+        '  *) echo "refusing to clean path outside remote-runs: $remote_run_dir" >&2; exit 2 ;;',
+        "esac",
+    ])
+
+
+def _cleanup_remote_run_dir_best_effort(
+    job: RemoteJob,
+    target: RemoteTarget,
+    *,
+    runner: Callable[..., CommandResult],
+) -> str | None:
+    try:
+        result = runner(
+            ["ssh", target.ssh, _remote_sh(_remote_cleanup_run_dir_script(job, target))],
+            check=False,
+        )
+    except Exception as exc:
+        return f"remote run dir cleanup failed: {_compact_submit_failure_detail(exc)}"
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        return f"remote run dir cleanup failed: {_compact_submit_failure_text(detail)}"
+    return None
+
+
+def _compact_submit_failure_text(text: str) -> str:
+    raw = text.strip()
+    if not raw:
+        return "no detail"
+    interesting = []
+    markers = (
+        "error",
+        "failed",
+        "timeout",
+        "timed out",
+        "denied",
+        "not found",
+        "no such",
+        "tmux session exited",
+    )
+    for line in raw.splitlines():
+        lowered = line.lower()
+        if any(marker in lowered for marker in markers):
+            interesting.append(line.strip())
+    lines = interesting[-6:] if interesting else raw.splitlines()[-6:]
+    compact = "\n".join(_truncate_middle(line, 360) for line in lines if line.strip())
+    return compact or _truncate_middle(raw, 720)
+
+
+def _compact_submit_failure_detail(exc: object) -> str:
+    return _compact_submit_failure_text(str(exc))
+
+
+def _truncate_middle(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    keep = max(1, (limit - 15) // 2)
+    return f"{text[:keep]} ... [truncated] ... {text[-keep:]}"
+
+
+def _format_submit_not_started_error(
+    job: RemoteJob,
+    exc: object,
+    *,
+    cleanup_detail: str | None,
+) -> str:
+    cleanup = (
+        f"Remote run dir cleanup warning: {cleanup_detail}"
+        if cleanup_detail
+        else "Best-effort remote run dir cleanup was issued."
+    )
+    return "\n".join([
+        f"JOB NOT STARTED: remote permuter submit failed for {job.job_id}.",
+        "Local job metadata was rolled back; no live tmux session was confirmed.",
+        cleanup,
+        f"Remote run dir: {job.remote_run_dir}",
+        "It is safe to retry the submit after the transient remote error clears.",
+        "Failure detail:",
+        _compact_submit_failure_detail(exc),
+    ])
 
 
 def _remote_sh(script: str) -> str:
@@ -1159,12 +1274,31 @@ def _remote_objdump_doctor_lines(objdump_info: ObjdumpCommandInfo) -> list[str]:
     ]
 
 
+def _scorer_probe_schema(scorer_info: ScorerCommandInfo) -> tuple[str, str, str]:
+    try:
+        argv = shlex.split(scorer_info.command)
+    except ValueError:
+        return "score-simplify-order", "--strict-polarity", "strict-polarity scorer schema supported"
+    command = "score-simplify-order"
+    for index, arg in enumerate(argv[:-1]):
+        if arg == "target" and index > 0 and argv[index - 1] == "debug":
+            command = argv[index + 1]
+            break
+    if command == "score-force-phys":
+        return command, "--breakdown", "force-phys scorer schema supported"
+    return command, "--strict-polarity", "strict-polarity scorer schema supported"
+
+
 def _remote_scorer_doctor_lines(scorer_info: ScorerCommandInfo) -> list[str]:
+    scorer_command, schema_flag, schema_ok_detail = _scorer_probe_schema(scorer_info)
     lines = [
         'if grep -q "class CustomCommandScorer" "$perm_root/src/scorer.py" 2>/dev/null && grep -q "scorer_settings" "$perm_root/src/main.py" 2>/dev/null; then emit remote-custom-scorer ok "$perm_root"; else emit remote-custom-scorer fail "CustomCommandScorer missing in remote decomp-permuter"; fi',
         f"scorer_executable={shlex.quote(scorer_info.executable)}",
-        'if test "${scorer_executable#/}" != "$scorer_executable"; then scorer_resolved="$scorer_executable"; else scorer_resolved="$(command -v "$scorer_executable" 2>/dev/null)"; fi',
-        'if test -n "$scorer_resolved" && test -x "$scorer_resolved"; then scorer_tmp=/tmp/melee-remote-doctor-scorer.$$; (cd "$perm_root" && "$scorer_resolved" debug target score-simplify-order --help) >"$scorer_tmp" 2>&1; scorer_rc=$?; scorer_out=$(head -40 "$scorer_tmp"); if test "$scorer_rc" -eq 0; then emit remote-scorer-command ok "$scorer_resolved debug target score-simplify-order --help"; grep -q -- "--strict-polarity" "$scorer_tmp" && emit remote-scorer-schema ok "strict-polarity scorer schema supported" || emit remote-scorer-schema fail "stale score-simplify-order help; missing --strict-polarity"; else emit remote-scorer-command fail "$scorer_out"; emit remote-scorer-schema fail "score-simplify-order --help failed"; fi; rm -f "$scorer_tmp"; else emit remote-scorer-command fail "$scorer_executable not found or not executable"; emit remote-scorer-schema fail "$scorer_executable not found or not executable"; fi',
+        f"scorer_command={shlex.quote(scorer_command)}",
+        f"scorer_schema_flag={shlex.quote(schema_flag)}",
+        f"scorer_schema_ok_detail={shlex.quote(schema_ok_detail)}",
+        'if test "${scorer_executable#/}" != "$scorer_executable"; then scorer_resolved="$scorer_executable"; elif test "$scorer_executable" = "melee-agent" && test -x "$melee_root/tools/melee-agent/.venv/bin/melee-agent"; then scorer_resolved="$melee_root/tools/melee-agent/.venv/bin/melee-agent"; elif command -v "$scorer_executable" >/dev/null 2>&1; then scorer_resolved="$(command -v "$scorer_executable")"; elif test "$scorer_executable" = "melee-agent" && test -x "$HOME/.local/bin/melee-agent"; then scorer_resolved="$HOME/.local/bin/melee-agent"; else scorer_resolved=""; fi',
+        'if test -n "$scorer_resolved" && test -x "$scorer_resolved"; then scorer_tmp=/tmp/melee-remote-doctor-scorer.$$; (cd "$perm_root" && "$scorer_resolved" debug target "$scorer_command" --help) >"$scorer_tmp" 2>&1; scorer_rc=$?; scorer_out=$(head -40 "$scorer_tmp"); if test "$scorer_rc" -eq 0; then emit remote-scorer-command ok "$scorer_resolved debug target $scorer_command --help"; grep -q -- "$scorer_schema_flag" "$scorer_tmp" && emit remote-scorer-schema ok "$scorer_schema_ok_detail" || emit remote-scorer-schema fail "stale $scorer_command help; missing $scorer_schema_flag"; else emit remote-scorer-command fail "$scorer_out"; emit remote-scorer-schema fail "$scorer_command --help failed"; fi; rm -f "$scorer_tmp"; else emit remote-scorer-command fail "$scorer_executable not found or not executable"; emit remote-scorer-schema fail "$scorer_executable not found or not executable"; fi',
     ]
     if scorer_info.target_path is not None:
         remote_path = scorer_info.target_path
@@ -1211,6 +1345,11 @@ def _staged_remote_perm_dir(
             rewritten = _rewrite_settings_toml_for_remote(text, target=target)
             if rewritten != text:
                 settings_toml.write_text(rewritten)
+        for yaml_path in [*staged.glob("*.yaml"), *staged.glob("*.yml")]:
+            text = yaml_path.read_text()
+            rewritten = _rewrite_target_yaml_for_remote(text, target=target)
+            if rewritten != text:
+                yaml_path.write_text(rewritten)
         yield staged
 
 
@@ -1289,6 +1428,78 @@ def _remote_objdump_command(command: str, target: RemoteTarget | None) -> str:
     return command
 
 
+def _remote_perm_path(path: str, target: RemoteTarget | None) -> str:
+    if target is None:
+        return path
+    if not path:
+        return path
+    if path.startswith(target.remote_perm_root + "/"):
+        return path
+    if path.startswith("/"):
+        parts = Path(path).parts
+        if "nonmatchings" in parts:
+            index = parts.index("nonmatchings")
+            rel = posixpath.join(*parts[index:])
+            return posixpath.join(target.remote_perm_root, rel)
+        return path
+    return posixpath.normpath(posixpath.join(target.remote_perm_root, path))
+
+
+def _rewrite_scorer_command_for_remote(command: str, target: RemoteTarget | None) -> str:
+    if target is None:
+        return command
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return command
+    changed = False
+    for index, arg in enumerate(argv):
+        if arg == "--target" and index + 1 < len(argv):
+            remote_path = _remote_perm_path(argv[index + 1], target)
+            if remote_path != argv[index + 1]:
+                argv[index + 1] = remote_path
+                changed = True
+            break
+        if arg.startswith("--target="):
+            value = arg.split("=", 1)[1]
+            remote_path = _remote_perm_path(value, target) if value.startswith("/") else value
+            if remote_path != value:
+                argv[index] = f"--target={remote_path}"
+                changed = True
+            break
+    return shlex.join(argv) if changed else command
+
+
+def _rewrite_target_yaml_for_remote(
+    text: str,
+    *,
+    target: RemoteTarget | None = None,
+) -> str:
+    if target is None:
+        return text
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        indent = line[: len(line) - len(stripped)]
+        if stripped.startswith("baseline_dump:"):
+            value = stripped.split(":", 1)[1].strip()
+            quote = ""
+            if (
+                len(value) >= 2
+                and value[0] == value[-1]
+                and value[0] in {"'", '"'}
+            ):
+                quote = value[0]
+                value = value[1:-1]
+            remote_path = _remote_perm_path(value, target)
+            rendered = f"{quote}{remote_path}{quote}" if quote else remote_path
+            out.append(f"{indent}baseline_dump: {rendered}")
+        else:
+            out.append(line)
+    suffix = "\n" if text.endswith("\n") else ""
+    return "\n".join(out) + suffix
+
+
 def _rewrite_settings_toml_for_remote(
     text: str,
     *,
@@ -1299,11 +1510,36 @@ def _rewrite_settings_toml_for_remote(
     out: list[str] = []
     found = False
     command = _remote_objdump_command(DEFAULT_OBJDUMP_COMMAND, target)
+    in_scorer = False
     for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_scorer = stripped == "[scorer]"
         match = _OBJDUMP_SETTING_RE.match(line)
         if match is not None:
             out.append(f'{match.group(1)}"{command}"')
             found = True
+        elif (
+            in_scorer
+            and "=" in stripped
+            and stripped.split("=", 1)[0].strip() == "command"
+        ):
+            prefix, sep, raw_value = line.partition("=")
+            value = raw_value.strip()
+            if (
+                sep
+                and len(value) >= 2
+                and value[0] == value[-1]
+                and value[0] in {"'", '"'}
+            ):
+                scorer_command = value[1:-1]
+                rewritten = _rewrite_scorer_command_for_remote(
+                    scorer_command,
+                    target,
+                )
+                out.append(f'{prefix}{sep} "{rewritten}"')
+            else:
+                out.append(line)
         else:
             out.append(line)
     if not found:
@@ -1370,8 +1606,13 @@ def _find_local_path_leaks(
             text = path.read_text()
         except UnicodeDecodeError as exc:
             raise RemoteJobError(f"Unable to inspect remote permuter file {path}: {exc}") from exc
-        if name == "compile.sh" and target is not None:
-            text = _rewrite_compile_sh_for_remote(text)
+        if target is not None:
+            if name == "compile.sh":
+                text = _rewrite_compile_sh_for_remote(text)
+            elif name == "settings.toml":
+                text = _rewrite_settings_toml_for_remote(text, target=target)
+            elif name.endswith((".yaml", ".yml")):
+                text = _rewrite_target_yaml_for_remote(text, target=target)
         for needle in dict.fromkeys(forbidden):
             if needle and needle in text:
                 leaks.append((path, needle))
@@ -1413,7 +1654,11 @@ def _doctor_local_perm_dir(
     return checks
 
 
-def _doctor_local_scorer(local_perm_dir: Path) -> tuple[list[DoctorCheck], ScorerCommandInfo | None]:
+def _doctor_local_scorer(
+    local_perm_dir: Path,
+    *,
+    target: RemoteTarget | None = None,
+) -> tuple[list[DoctorCheck], ScorerCommandInfo | None]:
     settings_path = local_perm_dir / "settings.toml"
     if not settings_path.exists():
         return [], None
@@ -1441,31 +1686,50 @@ def _doctor_local_scorer(local_perm_dir: Path) -> tuple[list[DoctorCheck], Score
     if info.target_path is not None:
         target_path = Path(info.target_path)
         if not target_path.is_absolute():
-            # Relative path resolves from permuter root (e.g.
-            # nonmatchings/<fn>/<file>.yaml). Check if the basename
-            # exists inside the function dir, which is how the file
-            # lands after rsync to the remote.
-            basename = target_path.name
-            inside_perm_dir = local_perm_dir / basename
-            if inside_perm_dir.is_file():
-                checks.append(DoctorCheck("local scorer target path", True, info.target_path))
-            else:
-                # Also try from the perm root for local (non-staged) use
-                from_perm_root = local_perm_dir.parent.parent / info.target_path
-                if from_perm_root.is_file():
+            if target is None:
+                # Local (non-remote) use: a relative --target resolves from the
+                # permuter root (e.g. nonmatchings/<fn>/<file>.yaml). Validate
+                # that the file actually exists locally, checking the basename
+                # inside the function dir (how it lands after rsync to a remote)
+                # then from the perm root for non-staged local runs.
+                basename = target_path.name
+                inside_perm_dir = local_perm_dir / basename
+                if inside_perm_dir.is_file():
                     checks.append(DoctorCheck("local scorer target path", True, info.target_path))
                 else:
-                    checks.append(DoctorCheck(
-                        "local scorer target path",
-                        False,
-                        (
-                            f"relative --target {info.target_path!r}; "
-                            f"not found in permuter dir ({inside_perm_dir}) "
-                            f"or from perm root ({from_perm_root})"
-                        ),
-                    ))
+                    from_perm_root = local_perm_dir.parent.parent / info.target_path
+                    if from_perm_root.is_file():
+                        checks.append(DoctorCheck("local scorer target path", True, info.target_path))
+                    else:
+                        checks.append(DoctorCheck(
+                            "local scorer target path",
+                            False,
+                            (
+                                f"relative --target {info.target_path!r}; "
+                                f"not found in permuter dir ({inside_perm_dir}) "
+                                f"or from perm root ({from_perm_root})"
+                            ),
+                        ))
+            else:
+                remote_path = _remote_perm_path(info.target_path, target)
+                checks.append(DoctorCheck(
+                    "local scorer target path",
+                    True,
+                    remote_path,
+                ))
+                info = ScorerCommandInfo(
+                    command=info.command,
+                    executable=info.executable,
+                    target_path=remote_path,
+                )
         else:
-            checks.append(DoctorCheck("local scorer target path", True, info.target_path))
+            remote_path = _remote_perm_path(info.target_path, target)
+            checks.append(DoctorCheck("local scorer target path", True, remote_path))
+            info = ScorerCommandInfo(
+                command=info.command,
+                executable=info.executable,
+                target_path=remote_path,
+            )
 
     return checks, info
 
@@ -1555,6 +1819,9 @@ def _preflight_can_be_repaired(report: DoctorReport) -> bool:
         "remote Linux wibo",
         "remote melee-agent",
         "remote python3 toml",
+        "remote custom scorer",
+        "remote scorer command",
+        "remote scorer schema",
     }
     return any(
         check.required and not check.ok and check.name in repairable

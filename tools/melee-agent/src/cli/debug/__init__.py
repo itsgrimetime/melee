@@ -41,6 +41,7 @@ from ...mwcc_debug import (
     parse_pcdump,
     score_function,
     simulate_function,
+    slice_pcdump_to_function,
     suggest,
 )
 from ...mwcc_debug import candidate_audit
@@ -1499,6 +1500,300 @@ def _force_vector_probe_payload(
     }
 
 
+def _order_target_forced_dump(
+    *,
+    tu_c: Path,
+    function: str,
+    class_id: int,
+    force_iter_first: list,
+    melee_root: Path,
+) -> tuple[dict, set, str]:
+    """Run ONE forced-ORDER dump of the CURRENT TU bytes and read it back.
+
+    Returns (ranks {ig: 1-based rank}, ig_set, decisions_sha256). The dump is
+    written to an explicit temp path and never touches the shared cache
+    (forced dumps skip cache sync by design; --no-cache-sync doubles down).
+    Caller must hold (or have disabled via CHECKDIFF_NO_LOCK) the repo lock.
+    """
+    import hashlib
+
+    from src.mwcc_debug.colorgraph_parser import find_function, parse_hook_events
+    from src.search.directed.order_metric import colorgraph_ranks
+
+    out_path = (
+        tu_c.parent
+        / f".{function}.order-target.{os.getpid()}.{int(time.time() * 1000)}.pcdump.txt"
+    )
+    ig_csv = ",".join(str(i) for i in force_iter_first)
+    argv = [
+        sys.executable, "-m", "src.cli", "debug", "dump", "local", str(tu_c),
+        "--function", function, "--output", str(out_path), "--no-cache-sync",
+        "--force-iter-first", ig_csv,
+        "--force-iter-first-class", str(class_id),
+        "--force-iter-first-fn", function,
+    ]
+    proc = subprocess.run(
+        argv, cwd=melee_root / "tools" / "melee-agent",
+        capture_output=True, text=True, timeout=600,
+        env=os.environ.copy(),
+    )
+    if proc.returncode != 0 or not out_path.exists():
+        out_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"forced dump failed (rc={proc.returncode}): "
+            f"{(proc.stderr or proc.stdout or '')[-500:]}"
+        )
+    text = out_path.read_text(encoding="utf-8")
+    out_path.unlink(missing_ok=True)
+    ranks = colorgraph_ranks(text, function, class_id=class_id)
+    fev = find_function(parse_hook_events(text), function)
+    matching = [
+        s for s in (fev.colorgraph_sections if fev else [])
+        if s.class_id == class_id
+    ]
+    section = matching[-1] if matching else None
+    decisions = section.decisions if section else []
+    ig_set = {d.ig_idx for d in decisions}
+    sha = hashlib.sha256(
+        "\n".join(
+            f"{d.iter_idx}:{d.ig_idx}:{d.assigned_reg}" for d in decisions
+        ).encode()
+    ).hexdigest()
+    return ranks, ig_set, sha
+
+
+def _collect_order_target_inputs(
+    *,
+    function: str,
+    unit: str,
+    class_id: int,
+    melee_root: Path,
+    checkdiff_timeout: float,
+):
+    """Collect the §4.2 tool outputs for order-target derivation.
+
+    FRESH-EVERYTHING CONTRACT (cache coherence): never auto-resolves the cached
+    pcdump and never runs checkdiff --no-build. Everything is derived from the
+    CURRENT TU bytes at call time: (1) checkdiff WITH a build; (2) a fresh
+    baseline pcdump compiled to an explicit temp path with --no-cache-sync.
+
+    LOCK CONTRACT (B9): wraps the whole run in _acquire_checkdiff_repo_lock
+    and runs children with CHECKDIFF_NO_LOCK=1 (_checkdiff_env_for_locked_child)
+    so they don't deadlock on the same lock file. Under a parent that already
+    holds the lock and exported CHECKDIFF_NO_LOCK=1 (T6 generate.py), the
+    acquisition here no-ops — the established contract.
+
+    MINIMAL <=64 FORCING-SET SEARCH (B1), concrete strategy:
+      (a) greedy drop of already-correct registers (force-phys targets with
+          already_target=True need no forcing);
+      (b) natural-prefix preservation: per-register first-def anchors ordered
+          by expected first-def position, windowed to the first 64;
+      (c) outcome-verified union probe via _run_force_vector_auto_verify
+          (forced dump + integrated checkdiff); singleton/prefix probes are
+          logged evidence only.
+    force_cap_exceeded is True ONLY when len(anchors) > 64 AND the 64-window
+    union does not eliminate the residual.
+
+    Monkeypatched out in unit tests; the live path is exercised at T6's
+    fixture generation and the Plan-C pool census.
+    """
+    import hashlib
+
+    from src.mwcc_debug.order_target_derive import (
+        REGISTER_ONLY_PRIMARIES,
+        DeriveInputs,
+    )
+    from src.mwcc_debug.role_descriptor import Compile, build_descriptors
+    from src.mwcc_debug.role_reanchor import reanchor_descs
+    from src.search.directed.order_metric import colorgraph_ranks
+    from src.search.directed.order_target import FORCE_CAP
+
+    tu_c = melee_root / "src" / f"{unit}.c"
+    child_env = _checkdiff_env_for_locked_child(disable_fingerprint=False)
+
+    with _acquire_checkdiff_repo_lock(melee_root, label="order-target derivation"):
+        # ---- Step 1: FRESH checkdiff (WITH build) --------------------------
+        proc = subprocess.run(
+            [sys.executable, str(melee_root / "tools" / "checkdiff.py"),
+             function, "--format", "json"],
+            capture_output=True, text=True,
+            timeout=max(checkdiff_timeout, 600),  # the build dominates
+            cwd=melee_root, env=child_env,
+        )
+        # rc 0=match, 1=mismatch (both emit JSON); anything else, or an empty
+        # stdout (e.g. "ninja failed:" goes to stderr with rc=1), is a hard
+        # failure — surface it cleanly instead of a raw JSONDecodeError.
+        if proc.returncode not in (0, 1) or not (proc.stdout or "").strip():
+            raise RuntimeError(
+                f"checkdiff failed (rc={proc.returncode}): "
+                f"{(proc.stderr or proc.stdout or '')[-500:]}"
+            )
+        checkdiff_payload = json.loads(proc.stdout)
+        classification = checkdiff_payload.get("classification") or {}
+        checkdiff_primary = (
+            classification.get("primary")
+            if isinstance(classification, dict) else str(classification)
+        ) or "unknown"
+
+        def _inert(**over):
+            base = dict(
+                function=function, unit=unit, class_id=class_id,
+                checkdiff_primary=checkdiff_primary,
+                phys_target={}, phys_conflicts=[],
+                force_iter_first=[], applied_positions={},
+                forced_class_clean=False, forced_ranks={},
+                baseline_ig_set=set(), forced_ig_set=set(),
+                self_reanchored_roles=set(), unscored_roles=[],
+                forced_decisions_sha256=[],
+                baseline_source_sha256=hashlib.sha256(
+                    tu_c.read_bytes()).hexdigest()[:32],
+                baseline_pcdump_sha256="",
+                force_cap_exceeded=False,
+            )
+            base.update(over)
+            return DeriveInputs(**base)
+
+        if checkdiff_primary not in REGISTER_ONLY_PRIMARIES:
+            # Classifier raises on this (hard error, not a routing).
+            return _inert()
+
+        # ---- FRESH baseline pcdump (explicit temp path, never the cache) ---
+        baseline_dump = (
+            tu_c.parent
+            / f".{function}.order-target.baseline.{os.getpid()}.pcdump.txt"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-m", "src.cli", "debug", "dump", "local",
+             str(tu_c), "--function", function,
+             "--output", str(baseline_dump), "--no-cache-sync"],
+            cwd=melee_root / "tools" / "melee-agent",
+            capture_output=True, text=True, timeout=600, env=child_env,
+        )
+        if proc.returncode != 0 or not baseline_dump.exists():
+            baseline_dump.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"baseline dump failed (rc={proc.returncode}): "
+                f"{(proc.stderr or proc.stdout or '')[-500:]}"
+            )
+        pcdump_text = baseline_dump.read_text(encoding="utf-8")
+        baseline_dump.unlink(missing_ok=True)
+
+        # ---- Step 2: phys target + conflicts (from the FRESH artifacts) ----
+        fns = parse_pcdump(pcdump_text)
+        fn = next((f for f in fns if f.name == function), None)
+        if fn is None:
+            raise RuntimeError(f"{function} not found in fresh baseline pcdump")
+        pre_pass = fn.last_precolor_pass()
+        events_fn = find_function(parse_hook_events(pcdump_text), function)
+        target_asm = _checkdiff_asm_lines(checkdiff_payload, "target_asm")
+        current_asm = _checkdiff_asm_lines(checkdiff_payload, "current_asm")
+        vector = _derive_force_phys_from_register_diff_lines(
+            target_asm, current_asm, pre_pass, events_fn,
+        )
+        phys_target = {int(k): int(v) for k, v in vector["force_phys"].items()}
+        phys_conflicts = list(vector["conflicts"])
+        if phys_conflicts:
+            # Spec §4.2 step 2: route BEFORE any forced compile is spent.
+            return _inert(phys_target=phys_target, phys_conflicts=phys_conflicts)
+
+        # ---- Step 3: per-register anchors + minimal <=64 set search (B1) ---
+        mismatched_reg_names: list[str] = []
+        for tgt in vector["targets"]:
+            if tgt.get("already_target") is True:
+                continue
+            name = tgt.get("target_reg_name")
+            if name and name not in mismatched_reg_names:
+                mismatched_reg_names.append(name)
+        if not mismatched_reg_names:
+            return _inert(phys_target=phys_target)
+
+        asm_path = melee_root / "build" / "GALE01" / "asm" / f"{unit}.s"
+        asm_fn = asm_extract_function(asm_path.read_text(), function)
+        prologue_end = asm_parse_prologue_end(asm_fn.instructions)
+        body = asm_fn.instructions[prologue_end:]
+        anchor_rows: list[tuple[int, int]] = []  # (expected_pos, ig_idx)
+        for reg in _parse_match_iter_first_regs(",".join(mismatched_reg_names)):
+            expected_def = asm_find_first_def(
+                body, target_reg=reg.number, reg_kind=reg.kind,
+            )
+            if expected_def is None:
+                continue
+            pos, expected_ist = expected_def
+            match = match_virtual_for_expected_def(
+                expected_ist=expected_ist, expected_position=pos,
+                pre_pass=pre_pass, reg_kind=reg.kind,
+            )
+            if match is not None:
+                anchor_rows.append((pos, match.ig_idx))
+        anchor_rows.sort(key=lambda t: t[0])
+        anchors = list(dict.fromkeys(ig for _pos, ig in anchor_rows))
+
+        window = anchors[:FORCE_CAP]
+        entries = _parse_force_vector(
+            ",".join(f"class{class_id}:ig{ig}:iter-first" for ig in window)
+        )
+        probe = _run_force_vector_auto_verify(
+            src_path=tu_c, function=function, entries=entries,
+            melee_root=melee_root, checkdiff_timeout=checkdiff_timeout,
+            run_diagnostic_probes=True,  # singleton/prefix evidence, logged only
+        )
+        forced_class_clean = (probe.get("union") or {}).get("status") == "match"
+        force_cap_exceeded = (not forced_class_clean) and len(anchors) > FORCE_CAP
+        if force_cap_exceeded:
+            return _inert(
+                phys_target=phys_target, force_iter_first=window,
+                force_cap_exceeded=True,
+            )
+
+        # ---- Steps 4-5: forced readback x2 (positions, ranks, igset, sha) --
+        forced_ranks, forced_ig_set, sha1 = _order_target_forced_dump(
+            tu_c=tu_c, function=function, class_id=class_id,
+            force_iter_first=window, melee_root=melee_root,
+        )
+        applied_positions = {
+            ig: forced_ranks[ig] - 1 for ig in window if ig in forced_ranks
+        }
+        _r2, _s2, sha2 = _order_target_forced_dump(
+            tu_c=tu_c, function=function, class_id=class_id,
+            force_iter_first=window, melee_root=melee_root,
+        )
+
+        # ---- Step 6: baseline self-reanchor over the phys-target roles -----
+        baseline_compile = Compile.from_text(
+            pcdump_text, function, tu_c.read_text(encoding="utf-8")
+        )
+        baseline_descs = build_descriptors(baseline_compile, class_id=class_id)
+        baseline_ig_set = set(
+            colorgraph_ranks(pcdump_text, function, class_id=class_id).keys()
+        )
+        self_ra = reanchor_descs(
+            baseline_descs, baseline_descs, dict(phys_target), class_id=class_id,
+        )
+        self_reanchored_roles = {orig for _new, orig in self_ra.matched.items()}
+        unscored_roles = [
+            {"ig": ig, "reason": status}
+            for ig, status in self_ra.diagnostics.items()
+            if ig in phys_target
+        ]
+
+        return DeriveInputs(
+            function=function, unit=unit, class_id=class_id,
+            checkdiff_primary=checkdiff_primary,
+            phys_target=phys_target, phys_conflicts=phys_conflicts,
+            force_iter_first=window, applied_positions=applied_positions,
+            forced_class_clean=forced_class_clean, forced_ranks=forced_ranks,
+            baseline_ig_set=baseline_ig_set, forced_ig_set=forced_ig_set,
+            self_reanchored_roles=self_reanchored_roles,
+            unscored_roles=unscored_roles,
+            forced_decisions_sha256=[sha1, sha2],
+            baseline_source_sha256=hashlib.sha256(
+                tu_c.read_bytes()).hexdigest()[:32],
+            baseline_pcdump_sha256=hashlib.sha256(
+                pcdump_text.encode()).hexdigest()[:32],
+            force_cap_exceeded=False,
+        )
+
+
 def _run_force_vector_auto_verify(
     *,
     src_path: Path,
@@ -1683,7 +1978,7 @@ from src.cli.debug.retro import retro_app as _retro_app  # noqa: E402
 debug_app.add_typer(_retro_app, name="retro")
 
 
-def _resolve_src_relative(c_file: str) -> str:
+def _resolve_src_relative(c_file: str, *, label: str = "source file") -> str:
     """Resolve a .c file path to one relative to the melee repo root.
 
     Accepts:
@@ -1693,19 +1988,52 @@ def _resolve_src_relative(c_file: str) -> str:
 
     Returns the path with forward slashes (POSIX style — easier for remote PS).
     """
-    p = Path(c_file).resolve()
     repo = DEFAULT_MELEE_ROOT.resolve()
-    try:
-        rel = p.relative_to(repo)
-    except ValueError:
+    raw_path = Path(c_file).expanduser()
+    if raw_path.is_absolute():
+        candidates = [raw_path.resolve()]
+    else:
+        candidates = [
+            (Path.cwd() / raw_path).resolve(),
+            (repo / raw_path).resolve(),
+        ]
+
+    seen: set[Path] = set()
+    first_existing_non_repo: Path | None = None
+    first_existing_wrong_suffix: Path | None = None
+    for p in candidates:
+        if p in seen:
+            continue
+        seen.add(p)
+        if not p.exists():
+            continue
+        try:
+            rel = p.relative_to(repo)
+        except ValueError:
+            if first_existing_non_repo is None:
+                first_existing_non_repo = p
+            continue
+        if p.suffix != ".c":
+            if first_existing_wrong_suffix is None:
+                first_existing_wrong_suffix = p
+            continue
+        return str(rel).replace("\\", "/")
+
+    tried = ", ".join(str(path) for path in seen)
+    cwd = Path.cwd().resolve()
+    if first_existing_non_repo is not None:
         raise typer.BadParameter(
-            f"{c_file} is not inside the melee repo ({repo})"
+            f"{label} is outside the melee repo: {first_existing_non_repo}; "
+            f"cwd={cwd}; repo={repo}; tried: {tried}"
         )
-    if not p.exists():
-        raise typer.BadParameter(f"file not found: {p}")
-    if p.suffix != ".c":
-        raise typer.BadParameter(f"expected .c file, got: {p.name}")
-    return str(rel).replace("\\", "/")
+    if first_existing_wrong_suffix is not None:
+        raise typer.BadParameter(
+            f"{label} must be a .c file, got: {first_existing_wrong_suffix}; "
+            f"cwd={cwd}; repo={repo}; tried: {tried}"
+        )
+    raise typer.BadParameter(
+        f"{label} not found for {c_file!r}; cwd={cwd}; repo={repo}; tried: {tried}"
+    )
 
 
 def _resolve_existing_cli_file(
@@ -1906,6 +2234,24 @@ def pcdump(
                  "the TU. Other functions compile naturally. EXPERIMENTAL.",
         ),
     ] = None,
+    force_remat: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-remat",
+            help="Tier 7: DIAGNOSTIC-ONLY rematerialization operand-slot bias. "
+                 "Format 'class:ig=copy|literal[,...]'. Sets or clears the "
+                 "observed remat alternate operand selector for a chosen IG "
+                 "node after coloring.",
+        ),
+    ] = None,
+    force_remat_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-remat-fn",
+            help="Scope --force-remat to a single function name in the TU. "
+                 "Other functions compile naturally. EXPERIMENTAL.",
+        ),
+    ] = None,
     force_schedule: Annotated[
         Optional[str],
         typer.Option(
@@ -1922,6 +2268,25 @@ def pcdump(
             "--force-schedule-fn",
             help="Scope --force-schedule to a single function name in the TU. "
                  "Other functions compile naturally. EXPERIMENTAL.",
+        ),
+    ] = None,
+    force_no_cse: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-no-cse",
+            help="Tier 8: veto selected IRO CommonSubs replacements. Format "
+                 "'node[=with][,node[=with]]*'; 'iro:' prefixes and 0x hex "
+                 "are accepted and normalized. E.g. 'iro:439=431' skips "
+                 "only the replacement logged as 'Replacing common sub at "
+                 "439 with 431'. DIAGNOSTIC-ONLY.",
+        ),
+    ] = None,
+    force_no_cse_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-no-cse-fn",
+            help="Scope --force-no-cse to a single function name in the TU. "
+                 "Recommended because IRO node IDs are per function/pass.",
         ),
     ] = None,
 ):
@@ -2089,6 +2454,21 @@ def pcdump(
                 force_coalesce_fn,
             )
         )
+    if force_remat:
+        force_remat = _validate_force_remat(force_remat)
+        cmd_parts.append(_cmd_set_env("MWCC_DEBUG_FORCE_REMAT", force_remat))
+    if force_remat_fn:
+        if any(c in force_remat_fn for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-remat-fn must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        cmd_parts.append(
+            _cmd_set_env(
+                "MWCC_DEBUG_FORCE_REMAT_FUNCTION",
+                force_remat_fn,
+            )
+        )
     if force_schedule:
         force_schedule = _validate_force_schedule(force_schedule)
         cmd_parts.append(_cmd_set_env("MWCC_DEBUG_FORCE_SCHEDULE", force_schedule))
@@ -2104,11 +2484,30 @@ def pcdump(
                 force_schedule_fn,
             )
         )
+    if force_no_cse:
+        force_no_cse = _validate_force_no_cse(force_no_cse)
+        cmd_parts.append(_cmd_set_env("MWCC_DEBUG_FORCE_NO_CSE", force_no_cse))
+    if force_no_cse_fn:
+        force_no_cse_fn = _validate_force_no_cse_fn(force_no_cse_fn)
+        cmd_parts.append(
+            _cmd_set_env(
+                "MWCC_DEBUG_FORCE_NO_CSE_FUNCTION",
+                force_no_cse_fn,
+            )
+        )
     cmd_parts.append(
         f"powershell -NoProfile -ExecutionPolicy Bypass "
         f"-File {remote_script} {src_rel}"
     )
     remote_cmd = " && ".join(cmd_parts)
+    remote_any_forced = any([
+        force_phys, force_phys_iter, force_phys_fn,
+        iter_first_value, iter_first_class, force_iter_first_iter, iter_first_fn,
+        force_coalesce, force_coalesce_fn,
+        force_remat, force_remat_fn,
+        force_schedule, force_schedule_fn,
+        force_no_cse, force_no_cse_fn,
+    ])
 
     # SSH on Windows defaults to cmd as the user's login shell typically.
     # We pass a single command string to be invoked there.
@@ -2130,7 +2529,7 @@ def pcdump(
         stdout_dest = sys.stdout.buffer
         out_path_for_msg = "stdout"
         cache_path_used: Optional[Path] = None
-    elif use_cache:
+    elif use_cache and not remote_any_forced:
         # Strip the `src/` prefix and `.c` suffix to get the unit key.
         unit = src_rel
         if unit.startswith("src/"):
@@ -2144,6 +2543,12 @@ def pcdump(
         out_path_for_msg = str(cache_path_used)
     else:
         cache_path_used = None
+        if use_cache and remote_any_forced:
+            output = mwcc_debug_scratch_path(
+                "pcdump_remote_forced",
+                suffix=".txt",
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
         stdout_dest = open(output, "wb")
         out_path_for_msg = str(output)
 
@@ -2188,6 +2593,12 @@ def pcdump(
                 f"(`inspect analyze`, `inspect guide`, "
                 f"`target score-dump`, etc.) will auto-resolve "
                 f"this dump by function name.",
+                file=sys.stderr,
+            )
+        elif use_cache and remote_any_forced:
+            print(
+                "[mwcc_debug] forced run — skipping cache sync to avoid "
+                f"contaminating baseline. Dump at: {out_path_for_msg}",
                 file=sys.stderr,
             )
     else:
@@ -2237,6 +2648,89 @@ def _validate_force_schedule(raw: str, *, option: str = "--force-schedule") -> s
         raise typer.BadParameter(
             f"{option} must not contain quotes, semicolons, whitespace, "
             "or shell metacharacters other than '>'"
+        )
+    return raw
+
+
+def _validate_force_remat(raw: str, *, option: str = "--force-remat") -> str:
+    if any(c in raw for c in '"\'; \t\r\n&|<>^'):
+        raise typer.BadParameter(
+            f"{option} must not contain quotes, semicolons, whitespace, "
+            "or shell metacharacters"
+        )
+    if not re.fullmatch(r"\d+:\d+=(?:copy|literal)(?:,\d+:\d+=(?:copy|literal))*", raw):
+        raise typer.BadParameter(
+            f"{option} expects 'class:ig=copy|literal[,class:ig=copy|literal]*'"
+        )
+    return raw
+
+
+def _parse_force_no_cse_node(raw: str, *, option: str) -> int:
+    token = raw
+    if token.startswith("iro:"):
+        token = token[4:]
+    if not token or token[0] in "+-":
+        raise typer.BadParameter(
+            f"{option} entry {raw!r} is invalid. Expected a non-negative "
+            "IRO node number, optionally prefixed with 'iro:'"
+        )
+    try:
+        value = int(token, 0)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{option} entry {raw!r} is invalid. Expected a decimal or 0x "
+            "hex IRO node number"
+        ) from exc
+    if value < 0:
+        raise typer.BadParameter(f"{option} entry {raw!r} must be non-negative")
+    return value
+
+
+def _validate_force_no_cse(raw: str, *, option: str = "--force-no-cse") -> str:
+    """Normalize force-no-CSE node specs for the DLL."""
+    if not raw:
+        raise typer.BadParameter(
+            f"{option} requires at least one node or node=with entry"
+        )
+    if any(c in raw for c in '"\'; \t\r\n&|<>^'):
+        raise typer.BadParameter(
+            f"{option} must not contain quotes, semicolons, whitespace, "
+            "or shell metacharacters"
+        )
+    out: list[str] = []
+    for entry in raw.split(","):
+        if not entry:
+            raise typer.BadParameter(f"{option} contains an empty entry")
+        if entry.count("=") > 1:
+            raise typer.BadParameter(
+                f"{option} entry {entry!r} is invalid. Expected node or "
+                "node=with"
+            )
+        if "=" in entry:
+            at_raw, with_raw = entry.split("=", 1)
+            at_node = _parse_force_no_cse_node(at_raw, option=option)
+            with_node = _parse_force_no_cse_node(with_raw, option=option)
+            out.append(f"{at_node}={with_node}")
+        else:
+            at_node = _parse_force_no_cse_node(entry, option=option)
+            out.append(str(at_node))
+    return ",".join(out)
+
+
+def _validate_force_no_cse_fn(
+    raw: str,
+    *,
+    option: str = "--force-no-cse-fn",
+) -> str:
+    if any(c in raw for c in '"\'; \t&|<>'):
+        raise typer.BadParameter(
+            f"{option} must not contain quotes, semicolons, whitespace, "
+            "or shell metacharacters"
+        )
+    if len(raw.encode("utf-8")) >= 256:
+        raise typer.BadParameter(
+            f"{option} must fit in mwcc_debug's 255-byte function-name "
+            "scope buffer"
         )
     return raw
 
@@ -4246,6 +4740,8 @@ def frame_reservations(
             current_asm_text=current_text,
         )
     except ValueError as exc:
+        if "not found in pcdump" in str(exc):
+            _abort_frame_function_not_in_dump(function, pcdump_text)
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
 
@@ -5572,6 +6068,8 @@ def suggest_frame_cmd(
             current_asm_text=current_text,
         )
     except ValueError as exc:
+        if "not found in pcdump" in str(exc):
+            _abort_frame_function_not_in_dump(function, pcdump_text)
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
     unit = _find_unit_for_function(function, melee_root)
@@ -6190,7 +6688,11 @@ def _bootstrap_permuter_dir(
 ) -> dict:
     """Bootstrap a decomp-permuter function dir and return action metadata."""
     from ...mwcc_debug.fix_perm_compile import fix_perm_dir
-    from ...mwcc_debug.permuter_config import build_spec, write_settings_toml
+    from ...mwcc_debug.permuter_config import (
+        build_spec,
+        repair_bootstrap_settings_toml,
+        write_settings_toml,
+    )
 
     melee_root = _resolve_bootstrap_melee_root(
         function,
@@ -6300,19 +6802,29 @@ def _bootstrap_permuter_dir(
 
     injected_inline_callees: list[str] = []
     invalidated_base_object = False
+    sanitized_assert_macros = False
     base_path = fn_dir / "base.c"
     if base_path.exists():
         target_asm_text = _read_bootstrap_target_asm(fn_dir, melee_root)
         source_for_inline = requested_source.read_text(encoding="utf-8")
+        dependency_text = _bootstrap_dependency_context(
+            source_for_inline,
+            source_path=requested_source,
+            melee_root=melee_root,
+        )
         patched_base, injected_inline_callees = (
             _inject_bootstrap_same_tu_inlined_callees(
                 base_path.read_text(encoding="utf-8"),
                 source_for_inline,
                 function,
                 target_asm_text,
+                dependency_text=dependency_text,
             )
         )
-        if injected_inline_callees:
+        patched_base, sanitized_assert_macros = (
+            _sanitize_bootstrap_assert_macros(patched_base)
+        )
+        if injected_inline_callees or sanitized_assert_macros:
             base_path.write_text(patched_base, encoding="utf-8")
             stale_base_o = fn_dir / "base.o"
             if stale_base_o.exists():
@@ -6340,8 +6852,19 @@ def _bootstrap_permuter_dir(
         randomize_funcs = recommended_randomize_funcs
         if randomize_funcs is not None:
             randomize_funcs_status = "written"
-    elif recommended_randomize_funcs is not None:
-        randomize_funcs_status = "existing-settings-kept"
+    elif settings_path.exists():
+        repair = repair_bootstrap_settings_toml(
+            settings_path.read_text(encoding="utf-8"),
+            function,
+        )
+        randomize_funcs = repair.randomize_funcs
+        if repair.changed:
+            settings_path.write_text(repair.text, encoding="utf-8")
+            settings_action = "repaired"
+        if randomize_funcs is not None:
+            randomize_funcs_status = "existing"
+        elif recommended_randomize_funcs is not None:
+            randomize_funcs_status = "existing-settings-kept"
 
     return {
         "function": function,
@@ -6360,6 +6883,7 @@ def _bootstrap_permuter_dir(
             "reason": fix_result.reason,
         },
         "injected_inline_callees": injected_inline_callees,
+        "sanitized_assert_macros": sanitized_assert_macros,
         "invalidated_base_object": invalidated_base_object,
         "randomize_funcs": randomize_funcs,
         "recommended_randomize_funcs": recommended_randomize_funcs,
@@ -6376,6 +6900,11 @@ _BOOTSTRAP_TARGET_REL24_RE = re.compile(r"\bR_PPC_REL24\s+([A-Za-z_]\w*)")
 _BOOTSTRAP_TARGET_BL_RE = re.compile(r"\bbl\s+([A-Za-z_]\w*)")
 _BOOTSTRAP_TARGET_B_RE = re.compile(r"\bb\s+([A-Za-z_]\w*)")
 _BOOTSTRAP_INLINE_RE = re.compile(r"^(?:static\s+)?inline\b")
+_BOOTSTRAP_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
+_BOOTSTRAP_INCLUDE_RE = re.compile(
+    r"^[ \t]*#[ \t]*include[ \t]+(?:\"([^\"]+)\"|<([^>]+)>)",
+    re.MULTILINE,
+)
 _BOOTSTRAP_CALL_KEYWORDS = {
     "case",
     "for",
@@ -6384,6 +6913,29 @@ _BOOTSTRAP_CALL_KEYWORDS = {
     "sizeof",
     "switch",
     "while",
+}
+_BOOTSTRAP_IDENTIFIER_KEYWORDS = {
+    *_BOOTSTRAP_CALL_KEYWORDS,
+    "char",
+    "const",
+    "double",
+    "enum",
+    "extern",
+    "float",
+    "inline",
+    "int",
+    "long",
+    "register",
+    "return",
+    "short",
+    "signed",
+    "static",
+    "struct",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
 }
 
 
@@ -6407,6 +6959,65 @@ def _read_bootstrap_target_asm(fn_dir: Path, melee_root: Path) -> str:
         return ""
 
 
+def _bootstrap_resolve_include(
+    include: str,
+    *,
+    including_path: Path,
+    melee_root: Path,
+) -> Path | None:
+    candidates = [
+        including_path.parent / include,
+        melee_root / "src" / "melee" / include,
+        melee_root / "src" / "sysdolphin" / include,
+        melee_root / "src" / include,
+        melee_root / "include" / include,
+        melee_root / include,
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _bootstrap_dependency_context(
+    source_text: str,
+    *,
+    source_path: Path,
+    melee_root: Path,
+) -> str:
+    """Return local include text that injected bootstrap callees may need."""
+    seen: set[Path] = set()
+    parts: list[str] = []
+
+    def visit(text: str, including_path: Path, depth: int) -> None:
+        if depth >= 3:
+            return
+        for match in _BOOTSTRAP_INCLUDE_RE.finditer(text):
+            include = match.group(1) or match.group(2)
+            if not include:
+                continue
+            resolved = _bootstrap_resolve_include(
+                include,
+                including_path=including_path,
+                melee_root=melee_root,
+            )
+            if resolved is None:
+                continue
+            resolved = resolved.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            try:
+                include_text = resolved.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            parts.append(include_text)
+            visit(include_text, resolved, depth + 1)
+
+    visit(source_text, source_path, 0)
+    return "\n\n".join(parts)
+
+
 def _bootstrap_source_calls(function_text: str) -> list[str]:
     calls: list[str] = []
     seen: set[str] = set()
@@ -6417,6 +7028,134 @@ def _bootstrap_source_calls(function_text: str) -> list[str]:
         seen.add(name)
         calls.append(name)
     return calls
+
+
+def _bootstrap_identifier_names(text: str) -> set[str]:
+    return {
+        match.group(0)
+        for match in _BOOTSTRAP_IDENTIFIER_RE.finditer(text)
+        if match.group(0) not in _BOOTSTRAP_IDENTIFIER_KEYWORDS
+    }
+
+
+def _bootstrap_macro_blocks(text: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        match = re.match(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)", line)
+        if match is None:
+            i += 1
+            continue
+        block = [line.rstrip()]
+        while block[-1].endswith("\\") and i + 1 < len(lines):
+            i += 1
+            block.append(lines[i].rstrip())
+        blocks.append((match.group(1), "\n".join(block)))
+        i += 1
+    return blocks
+
+
+def _bootstrap_base_has_macro(text: str, name: str) -> bool:
+    return (
+        re.search(
+            rf"^[ \t]*#[ \t]*define[ \t]+{re.escape(name)}(?:\b|\()",
+            text,
+            re.MULTILINE,
+        )
+        is not None
+    )
+
+
+def _bootstrap_base_has_object_declaration(text: str, name: str) -> bool:
+    return (
+        re.search(
+            rf"^[ \t]*(?:extern[ \t]+)?[^#\n;]*\b{re.escape(name)}\b[^;\n]*;",
+            text,
+            re.MULTILINE,
+        )
+        is not None
+    )
+
+
+def _bootstrap_base_has_function_declaration(text: str, name: str) -> bool:
+    if find_source_function(text, name) is not None:
+        return True
+    return (
+        re.search(
+            rf"^[ \t]*(?:static[ \t]+)?(?:inline[ \t]+)?"
+            rf"[^#;\n{{}}]*\b{re.escape(name)}[ \t]*\([^;{{}}]*\)[ \t]*;",
+            text,
+            re.MULTILINE,
+        )
+        is not None
+    )
+
+
+def _bootstrap_source_function_prototype(source_text: str, span: Any) -> str | None:
+    signature = source_text[span.sig_start : span.body_open].strip()
+    if not signature:
+        return None
+    return signature.rstrip() + ";"
+
+
+def _bootstrap_injected_callee_dependencies(
+    *,
+    base_text: str,
+    source_text: str,
+    dependency_text: str,
+    source_spans: Mapping[str, Any],
+    insert_names: set[str],
+    injected_texts: list[str],
+    function: str,
+) -> list[str]:
+    needed_names: set[str] = set()
+    for text in injected_texts:
+        needed_names.update(_bootstrap_identifier_names(text))
+    if not needed_names:
+        return []
+
+    dependency_context = "\n\n".join(
+        part for part in (source_text, dependency_text) if part
+    )
+    deps: list[str] = []
+
+    for name, block in _bootstrap_macro_blocks(dependency_context):
+        if name not in needed_names:
+            continue
+        if _bootstrap_base_has_macro(base_text, name):
+            continue
+        if any(_bootstrap_base_has_macro(dep, name) for dep in deps):
+            continue
+        deps.append(block)
+
+    for raw_line in dependency_context.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("extern ") or not line.endswith(";"):
+            continue
+        for name in sorted(needed_names):
+            if re.search(rf"\b{re.escape(name)}\b", line) is None:
+                continue
+            if _bootstrap_base_has_object_declaration(base_text, name):
+                continue
+            if any(_bootstrap_base_has_object_declaration(dep, name) for dep in deps):
+                continue
+            deps.append(line)
+            break
+
+    for name, span in sorted(source_spans.items(), key=lambda item: item[1].sig_start):
+        if name == function or name in insert_names or name not in needed_names:
+            continue
+        if _bootstrap_base_has_function_declaration(base_text, name):
+            continue
+        if any(_bootstrap_base_has_function_declaration(dep, name) for dep in deps):
+            continue
+        prototype = _bootstrap_source_function_prototype(source_text, span)
+        if prototype is not None:
+            deps.append(prototype)
+
+    return deps
 
 
 def _bootstrap_target_calls(target_asm_text: str) -> set[str]:
@@ -6437,14 +7176,71 @@ def _bootstrap_target_calls(target_asm_text: str) -> set[str]:
 
 
 def _bootstrap_inline_definition(function_text: str) -> str:
-    leading_len = len(function_text) - len(function_text.lstrip())
-    leading = function_text[:leading_len]
-    body = function_text[leading_len:]
+    lines = function_text.splitlines(keepends=True)
+    body_start = 0
+    while body_start < len(lines):
+        stripped = lines[body_start].strip()
+        if not stripped or stripped.startswith("#"):
+            body_start += 1
+            continue
+        break
+    preamble = "".join(lines[:body_start])
+    definition = "".join(lines[body_start:])
+    if not definition:
+        return function_text
+
+    leading_len = len(definition) - len(definition.lstrip())
+    leading = definition[:leading_len]
+    body = definition[leading_len:]
     if _BOOTSTRAP_INLINE_RE.match(body):
         return function_text
     if body.startswith("static "):
-        return leading + "static inline " + body[len("static "):]
-    return leading + "inline " + body
+        return preamble + leading + "static inline " + body[len("static "):]
+    return preamble + leading + "inline " + body
+
+
+_BOOTSTRAP_PERMUTER_ASSERT_DEFINE_RE = re.compile(
+    r"^[ \t]*#[ \t]*pragma[ \t]+_permuter[ \t]+define[ \t]+HSD_ASSERT(?:\b|\()",
+    re.MULTILINE,
+)
+_BOOTSTRAP_RAW_ASSERT_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*#[ \t]*(?:define|undef)[ \t]+(?:HSD_ASSERT(?:\b|\()|__FILE__\b)"
+)
+
+
+def _sanitize_bootstrap_assert_macros(base_text: str) -> tuple[str, bool]:
+    """Remove raw assert macro directives that conflict with _permuter define.
+
+    decomp-permuter can carry ``#pragma _permuter define HSD_ASSERT`` safely,
+    but a copied C preprocessor ``#define HSD_ASSERT(... #cond)`` later in the
+    base causes PERM expansion to leave a bare stringizing ``#`` token. Only
+    strip the raw directives when the permuter pragma is already present.
+    """
+    if _BOOTSTRAP_PERMUTER_ASSERT_DEFINE_RE.search(base_text) is None:
+        return base_text, False
+
+    lines = base_text.splitlines(keepends=True)
+    kept: list[str] = []
+    changed = False
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        if _BOOTSTRAP_RAW_ASSERT_DIRECTIVE_RE.match(line):
+            changed = True
+            while (
+                line.rstrip("\r\n").rstrip().endswith("\\")
+                and idx + 1 < len(lines)
+            ):
+                idx += 1
+                line = lines[idx]
+            idx += 1
+            continue
+        kept.append(line)
+        idx += 1
+
+    if not changed:
+        return base_text, False
+    return "".join(kept), True
 
 
 def _inject_bootstrap_same_tu_inlined_callees(
@@ -6452,6 +7248,8 @@ def _inject_bootstrap_same_tu_inlined_callees(
     source_text: str,
     function: str,
     target_asm_text: str,
+    *,
+    dependency_text: str = "",
 ) -> tuple[str, list[str]]:
     """Inject same-TU callee definitions when target asm has no call edge."""
     if not target_asm_text.strip():
@@ -6531,7 +7329,17 @@ def _inject_bootstrap_same_tu_inlined_callees(
     if not injected_texts:
         return patched_base, injected
 
-    insertion = "\n\n".join(injected_texts).rstrip() + "\n\n"
+    dependencies = _bootstrap_injected_callee_dependencies(
+        base_text=patched_base,
+        source_text=source_text,
+        dependency_text=dependency_text,
+        source_spans=source_spans,
+        insert_names=insert_names,
+        injected_texts=injected_texts,
+        function=function,
+    )
+    insertion_parts = [*dependencies, *injected_texts]
+    insertion = "\n\n".join(insertion_parts).rstrip() + "\n\n"
     patched = (
         patched_base[: base_function.sig_start]
         + insertion
@@ -6982,7 +7790,23 @@ def remote_list(
         _remote_error(exc)
 
     if not jobs:
-        print("No remote permuter jobs found.")
+        live_entries: list[permuter_remote.RemotePsEntry] = []
+        if not dead:
+            try:
+                live_entries = permuter_remote.remote_ps(
+                    _remote_load_targets(),
+                    timeout=timeout,
+                )
+            except permuter_remote.RemoteConfigError:
+                live_entries = []
+        if live_entries:
+            print("No local remote permuter job metadata found, but live tmux sessions exist.")
+            print("LIVE REMOTE SESSIONS WITHOUT LOCAL METADATA")
+            _print_remote_ps_entries(live_entries)
+            print()
+            print("Use `melee-agent debug permute remote ps` for the live occupancy view.")
+        else:
+            print("No remote permuter jobs found.")
         return
 
     # Probe which are active
@@ -7354,7 +8178,10 @@ def remote_ps(
         print("No active remote permuter sessions found.")
         return
 
-    # Header
+    _print_remote_ps_entries(entries)
+
+
+def _print_remote_ps_entries(entries: list[permuter_remote.RemotePsEntry]) -> None:
     print(f"{'TARGET':<10} {'FUNCTION':<35} {'JOB_ID':<45} {'BEST':>8} {'ITERS':>8} {'AGE':>8} {'VERDICT':<12} FLAGS")
     print("-" * 140)
     for e in entries:
@@ -7722,11 +8549,29 @@ def _abort_function_not_in_dump(function: str, available_names: list[str]) -> No
     raise typer.Exit(3)
 
 
+def _abort_frame_function_not_in_dump(function: str, pcdump_text: str) -> NoReturn:
+    available_names = [fn.name for fn in parse_pcdump(pcdump_text)]
+    _emit_function_not_in_dump(
+        function,
+        available_names,
+        include_available_sample=True,
+        hint=(
+            "Hint: this pcdump does not contain the requested function name. "
+            "If it came from campaign notes or a semantic alias, retry with "
+            "the canonical symbol listed above; otherwise regenerate coverage "
+            "with `debug dump remote <c_file>` or `debug dump local <c_file>` "
+            "after source/cache changes."
+        ),
+    )
+    raise typer.Exit(3)
+
+
 def _emit_function_not_in_dump(
     function: str,
     available_names: list[str],
     *,
     hint: Optional[str] = None,
+    include_available_sample: bool = False,
 ) -> None:
     typer.echo(f"function '{function}' not found in pcdump.", err=True)
     suggestions = _suggest_similar_functions(function, available_names)
@@ -7735,16 +8580,25 @@ def _emit_function_not_in_dump(
         typer.echo("Did you mean one of these?", err=True)
         for s in suggestions:
             typer.echo(f"  - {s}", err=True)
-    else:
-        # No close matches — show a sample
+    if include_available_sample or not suggestions:
         typer.echo("", err=True)
-        sample = available_names[:8]
+        sample_limit = 12
+        sample = available_names[:sample_limit]
         if sample:
-            typer.echo(f"Sample of {len(available_names)} functions in this dump:", err=True)
+            if len(available_names) <= sample_limit:
+                typer.echo("Functions in this dump:", err=True)
+            else:
+                typer.echo(
+                    f"Sample of {len(available_names)} functions in this dump:",
+                    err=True,
+                )
             for s in sample:
                 typer.echo(f"  - {s}", err=True)
-            if len(available_names) > 8:
-                typer.echo(f"  ... +{len(available_names) - 8} more", err=True)
+            if len(available_names) > sample_limit:
+                typer.echo(
+                    f"  ... +{len(available_names) - sample_limit} more",
+                    err=True,
+                )
     typer.echo("", err=True)
     if hint is None:
         hint = (
@@ -8084,6 +8938,49 @@ def _sort_permuter_candidate_paths(
     raise ValueError(
         f"invalid --order {order!r}; expected name, newest, score-desc, or score-asc"
     )
+
+
+@permute_app.command(name="candidate-audit")
+def candidate_audit_summary(
+    root: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory containing permuter output-*/source.c candidates.",
+        ),
+    ],
+    function: Annotated[
+        Optional[str],
+        typer.Option("--function", "-f", help="Function name for status sidecars"),
+    ] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the full candidate_audit.json payload."),
+    ] = False,
+) -> None:
+    """Audit permuter candidates and print a compact status summary."""
+    if not root.is_dir():
+        typer.echo(f"not a directory: {root}", err=True)
+        raise typer.Exit(2)
+
+    summary = candidate_audit.audit_candidate_tree(root, function=function)
+    if as_json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return
+
+    print(f"Candidate audit: {root}")
+    if function:
+        print(f"Function: {function}")
+    print(f"Candidates: {summary['total']}")
+
+    print("By status:")
+    for status, count in summary["by_status"].items():
+        print(f"  {status}: {count}")
+
+    print("By semantic risk:")
+    for bucket, count in summary["by_semantic_risk_bucket"].items():
+        print(f"  {bucket}: {count}")
+
+    print(f"Wrote: {root / 'candidate_audit.json'}")
 
 
 def _canonical_c_for_format_merge(text: str) -> str:
@@ -13390,6 +14287,91 @@ def force_phys_from_diff(
                     )
 
 
+@target_app.command(name="order-target")
+def order_target_cmd(
+    function: Annotated[
+        str, typer.Option("--function", "-f", help="Function to derive (required)."),
+    ],
+    unit: Annotated[
+        Optional[str],
+        typer.Option("--unit", "-u",
+                     help="TU path relative to src/ (e.g. melee/mn/mndiagram). "
+                          "Auto-resolves via report.json if omitted."),
+    ] = None,
+    class_id: Annotated[
+        int, typer.Option("--class-id", help="Register class (0=GPR)."),
+    ] = 0,
+    out: Annotated[
+        Optional[Path],
+        typer.Option("--out",
+                     help="Where to write the OrderTarget YAML on a directed "
+                          "result. Default: docs/superpowers/order-targets/"
+                          "<function>.yaml. No file is written for non-directed "
+                          "routings."),
+    ] = None,
+    checkdiff_timeout: Annotated[
+        float, typer.Option("--checkdiff-timeout", help="Per-checkdiff timeout."),
+    ] = 60.0,
+    json_out: Annotated[
+        bool, typer.Option("--json", help="Emit the full artifact as JSON."),
+    ] = False,
+) -> None:
+    """Derive a proven order-distance target (the §4.2 class partition).
+
+    Runs the pipeline end-to-end and persists an OrderTarget on a `directed`
+    result. Every failure mode is a NAMED routing, not an error; the exit code
+    mirrors routing: 0 directed, 3 unanchorable, 4 not_order_class,
+    5 force_cap_blocked, 6 unstable_target.
+    """
+    from src.mwcc_debug.order_target_derive import derive_order_target
+    from src.search.directed.order_target import (
+        Routing, validate_order_target,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+    resolved_unit = unit or _find_unit_for_function(function, melee_root)
+    if resolved_unit is None:
+        typer.echo(
+            f"function '{function}' not found in report.json; pass --unit.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    inputs = _collect_order_target_inputs(
+        function=function, unit=resolved_unit, class_id=class_id,
+        melee_root=melee_root, checkdiff_timeout=checkdiff_timeout,
+    )
+    target = derive_order_target(inputs)
+
+    if json_out:
+        from dataclasses import asdict
+        print(json.dumps(asdict(target), indent=2, default=list))
+    else:
+        print(f"Function: {target.function}")
+        print(f"Unit:     {target.unit}")
+        print(f"Routing:  {target.routing}")
+        if target.class_evidence:
+            print(f"Evidence: {target.class_evidence}")
+        if target.routing == Routing.DIRECTED.value:
+            print(f"Target roles: {target.target_roles}")
+            print(f"Order vector: {target.order_target}")
+            if target.unscored_roles:
+                print(f"Unscored residual: {target.unscored_roles}")
+
+    if target.routing == Routing.DIRECTED.value:
+        validate_order_target(target)
+        out_path = out or (
+            melee_root / "docs" / "superpowers" / "order-targets"
+            / f"{target.function}.yaml"
+        )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        target.save_yaml(out_path)
+        if not json_out:
+            print(f"Wrote {out_path}")
+
+    raise typer.Exit(target.exit_code())
+
+
 @target_app.command(name="match-iter-first")
 def match_iter_first(
     function: Annotated[
@@ -14247,7 +15229,7 @@ def _render_force_phys_target_yaml(
     *,
     function: str,
     class_id: int,
-    baseline_dump: Path,
+    baseline_dump: Path | str,
     force_phys: Mapping[int, int],
     coalesce_preservation: bool = True,
 ) -> str:
@@ -14264,6 +15246,13 @@ def _render_force_phys_target_yaml(
     if not coalesce_preservation:
         lines.append("coalesce_preservation: false")
     return "\n".join(lines) + "\n"
+
+
+def _portable_path_for_base(path: Path, base: Path) -> Path | str:
+    try:
+        return path.relative_to(base)
+    except ValueError:
+        return path
 
 
 def _build_simplify_order_compile_sh(
@@ -14777,11 +15766,12 @@ def setup_simplify_order_scorer(
         raise typer.Exit(2)
 
     coalesce_preservation = not no_coalesce_preservation
+    baseline_dump_for_spec = _portable_path_for_base(baseline_dump, perm_dir)
     if force_phys_mode:
         spec_yaml = _render_force_phys_target_yaml(
             function=function,
             class_id=class_id,
-            baseline_dump=baseline_dump,
+            baseline_dump=baseline_dump_for_spec,
             force_phys=parsed_force_phys,
             coalesce_preservation=coalesce_preservation,
         )
@@ -14791,7 +15781,7 @@ def setup_simplify_order_scorer(
             simplify_order_target=parsed_targets,
             simplify_order_target_late=parsed_targets_late,
             class_id=class_id,
-            baseline_dump=baseline_dump,
+            baseline_dump=baseline_dump_for_spec,
             force_phys=parsed_force_phys or None,
             coalesce_preservation=coalesce_preservation,
         )
@@ -14814,6 +15804,7 @@ def setup_simplify_order_scorer(
     scorer_command_name = (
         "score-force-phys" if force_phys_mode else "score-simplify-order"
     )
+    scorer_target = _portable_path_for_base(spec_path, perm_root)
     scorer_command = " ".join(
         shlex.quote(s) for s in [
             melee_agent_bin,
@@ -14823,7 +15814,7 @@ def setup_simplify_order_scorer(
             "--function",
             function,
             "--target",
-            str(spec_path),
+            str(scorer_target),
         ]
     )
 
@@ -15396,6 +16387,38 @@ class _DumpSetupCheck:
     detail: str
 
 
+_MWCC_DEBUG_DLL_FEATURE_PREFIX = "MWCC_DEBUG_FEATURES:"
+_MWCC_DEBUG_REQUIRED_DLL_FEATURES = (
+    "pcdump-path",
+    "function-scope-force-phys",
+    "force-phys-iter",
+    "force-phys-overflow-error",
+    "force-iter-first-overflow-error",
+    "force-remat",
+    "force-interfere",
+    "force-schedule",
+    "force-no-cse",
+)
+_MWCC_DEBUG_LEGACY_HOOK_STRINGS = (
+    "MWCC_DEBUG_PCDUMP_PATH",
+    "MWCC_DEBUG_FORCE_PHYS_FUNCTION",
+    "MWCC_DEBUG_FORCE_PHYS_ITER",
+    "MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION",
+    "MWCC_DEBUG_FORCE_COALESCE",
+    "MWCC_DEBUG_FORCE_COALESCE_FUNCTION",
+    "[FORCE_COALESCE]",
+    "MWCC_DEBUG_FORCE_REMAT",
+    "MWCC_DEBUG_FORCE_REMAT_FUNCTION",
+    "[FORCE_REMAT]",
+    "MWCC_DEBUG_FORCE_INTERFERE",
+    "MWCC_DEBUG_FORCE_INTERFERE_FUNCTION",
+    "[FORCE_INTERFERE]",
+    "MWCC_DEBUG_FORCE_SCHEDULE",
+    "MWCC_DEBUG_FORCE_SCHEDULE_FUNCTION",
+    "[FORCE_SCHEDULE]",
+)
+
+
 def _check_path(label: str, path: Path, *, executable: bool = False) -> _DumpSetupCheck:
     if not path.exists():
         return _DumpSetupCheck(label, False, f"missing: {path}")
@@ -15423,6 +16446,154 @@ def _check_dll_is_pe(label: str, path: Path) -> _DumpSetupCheck:
             f"not a PE DLL ({size} bytes, magic={magic!r}): {path} — "
             f"redeploy via `debug dump setup --rebuild-dll`")
     return _DumpSetupCheck(label, True, f"{path} ({size} bytes, MZ)")
+
+
+def _check_mwcc_debug_dll_features(label: str, path: Path) -> _DumpSetupCheck:
+    if not path.exists():
+        return _DumpSetupCheck(label, False, f"missing: {path}")
+    try:
+        text = path.read_bytes().decode("latin-1", errors="ignore")
+    except OSError as exc:
+        return _DumpSetupCheck(label, False, f"unreadable: {path} ({exc})")
+    marker = text.find(_MWCC_DEBUG_DLL_FEATURE_PREFIX)
+    if marker < 0:
+        missing_legacy = [
+            probe
+            for probe in _MWCC_DEBUG_LEGACY_HOOK_STRINGS
+            if probe not in text
+        ]
+        if not missing_legacy:
+            return _DumpSetupCheck(
+                label,
+                True,
+                (
+                    f"{path} (legacy hook strings; lacks "
+                    f"{_MWCC_DEBUG_DLL_FEATURE_PREFIX} manifest, so exact "
+                    "feature version is unknown — rebuild/redeploy when you "
+                    "need newly-added hooks)"
+                ),
+            )
+        return _DumpSetupCheck(
+            label,
+            False,
+            (
+                f"{path} lacks {_MWCC_DEBUG_DLL_FEATURE_PREFIX} manifest; "
+                f"legacy hook probes missing {', '.join(missing_legacy[:4])}"
+                + (
+                    f" (+{len(missing_legacy) - 4} more)"
+                    if len(missing_legacy) > 4
+                    else ""
+                )
+                + "; "
+                "rebuild/redeploy via `debug dump setup --rebuild-dll`"
+            ),
+        )
+    manifest = text[marker: marker + 512]
+    missing = [
+        feature
+        for feature in _MWCC_DEBUG_REQUIRED_DLL_FEATURES
+        if feature not in manifest
+    ]
+    if missing:
+        return _DumpSetupCheck(
+            label,
+            False,
+            (
+                f"{path} feature manifest is missing {', '.join(missing)}; "
+                "rebuild/redeploy via `debug dump setup --rebuild-dll`"
+            ),
+        )
+    version = manifest.split(";", 1)[0]
+    return _DumpSetupCheck(label, True, f"{path} ({version})")
+
+
+def _format_smoke_process_output(result: Any) -> str:
+    output = "\n".join(
+        part.strip()
+        for part in (getattr(result, "stdout", ""), getattr(result, "stderr", ""))
+        if part and part.strip()
+    )
+    if not output:
+        return ""
+    lines = output.splitlines()
+    tail = "\n".join(lines[-8:])
+    return f"; output:\n{tail}"
+
+
+def _smoke_mwcc_debug_compiler(
+    wibo: Path,
+    compiler_dir: Path,
+    *,
+    timeout: float = 30.0,
+) -> _DumpSetupCheck:
+    debug_compiler = compiler_dir / "mwcceppc_debug.exe"
+    if not debug_compiler.exists():
+        return _DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            False,
+            f"missing patched compiler: {debug_compiler}",
+        )
+    with tempfile.TemporaryDirectory(prefix="mwcc-debug-smoke-") as tmp:
+        tmpdir = Path(tmp)
+        source = tmpdir / "smoke_test.c"
+        obj = tmpdir / "smoke_test.o"
+        pcdump = tmpdir / "pcdump.txt"
+        source.write_text("int smoke_test(int x) { return x + 1; }\n")
+        env = os.environ.copy()
+        env["MWCC_DEBUG_PCDUMP_PATH"] = str(pcdump)
+        cmd = [
+            str(wibo),
+            str(debug_compiler),
+            "-c",
+            "-O4,p",
+            "-proc",
+            "gekko",
+            "-enum",
+            "int",
+            "-fp",
+            "hardware",
+            "-o",
+            str(obj),
+            str(source),
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=tmpdir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return _DumpSetupCheck(
+                "mwcc_debug pcdump smoke",
+                False,
+                f"timed out after {timeout:g}s running patched compiler",
+            )
+        if result.returncode != 0:
+            return _DumpSetupCheck(
+                "mwcc_debug pcdump smoke",
+                False,
+                f"patched compiler exited {result.returncode}"
+                f"{_format_smoke_process_output(result)}",
+            )
+        try:
+            size = pcdump.stat().st_size
+        except OSError:
+            size = 0
+        if size <= 0:
+            return _DumpSetupCheck(
+                "mwcc_debug pcdump smoke",
+                False,
+                f"pcdump.txt missing or empty at {pcdump}"
+                f"{_format_smoke_process_output(result)}",
+            )
+        return _DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            True,
+            f"pcdump smoke produced {size} bytes",
+        )
 
 
 def _path_newer_than(left: Path, right: Path) -> bool:
@@ -15494,6 +16665,10 @@ def _local_dump_setup_checks() -> list[_DumpSetupCheck]:
         _check_path("mwcc_debug DLL source", tools_dir / "MWDBG326.dll"),
         _check_path("deployed DLL", compiler_dir / "MWDBG326.dll"),
         _check_dll_is_pe("deployed DLL integrity", compiler_dir / "MWDBG326.dll"),
+        _check_mwcc_debug_dll_features(
+            "mwcc_debug DLL features",
+            compiler_dir / "MWDBG326.dll",
+        ),
         _check_path("mwcc_debug C source", tools_dir / "mwcc_debug.c"),
         _check_mwcc_debug_dll_freshness(tools_dir, compiler_dir),
         _check_path("wibo build script", tools_dir / "build_wibo.sh"),
@@ -15507,6 +16682,115 @@ def _print_local_dump_setup_checks(checks: list[_DumpSetupCheck]) -> None:
     for check in checks:
         status = "PASS" if check.ok else "FAIL"
         print(f"{status}\t{check.label}\t{check.detail}")
+
+
+def _force_object_delta_baseline_env(
+    env: Mapping[str, str],
+    pcdump_name: str,
+) -> dict[str, str]:
+    baseline_env = dict(env)
+    baseline_env.pop("MWCC_DEBUG_FORCE_COALESCE", None)
+    baseline_env.pop("MWCC_DEBUG_FORCE_COALESCE_FUNCTION", None)
+    baseline_env["MWCC_DEBUG_PCDUMP_PATH"] = pcdump_name
+    return baseline_env
+
+
+def _verify_force_coalesce_object_delta(
+    *,
+    args: list[str],
+    env: Mapping[str, str],
+    obj_target: Path,
+    melee_root: Path,
+    scratch_root: Path,
+    timeout: float,
+) -> None:
+    baseline_obj = mwcc_debug_scratch_path(
+        "pcdump_local_force_delta",
+        suffix=".natural.o",
+        root=scratch_root,
+    )
+    baseline_pcdump_name = (
+        f"pcdump_force_delta_{os.getpid()}_{int(time.time() * 1000)}.txt"
+    )
+    baseline_pcdump = melee_root / baseline_pcdump_name
+    baseline_args = [*args]
+    try:
+        output_flag_index = len(baseline_args) - 1 - baseline_args[::-1].index("-o")
+    except ValueError:
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check could not "
+            "locate the compiler -o argument.",
+            err=True,
+        )
+        raise typer.Exit(5)
+    if output_flag_index + 1 >= len(baseline_args):
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check found a "
+            "compiler -o argument without an object path.",
+            err=True,
+        )
+        raise typer.Exit(5)
+    baseline_args[output_flag_index + 1] = str(baseline_obj)
+    baseline_env = _force_object_delta_baseline_env(env, baseline_pcdump_name)
+
+    try:
+        proc = subprocess.run(
+            baseline_args,
+            cwd=melee_root,
+            env=baseline_env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check timed out "
+            f"after {timeout:g}s while compiling the coalesce-off baseline object.",
+            err=True,
+        )
+        raise typer.Exit(5) from exc
+    finally:
+        try:
+            baseline_pcdump.unlink()
+        except OSError:
+            pass
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check could not "
+            f"compile the coalesce-off baseline object (exit {proc.returncode})"
+            + (f": {detail}" if detail else ""),
+            err=True,
+        )
+        raise typer.Exit(5)
+    if not baseline_obj.exists():
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check could not "
+            f"find coalesce-off baseline object at {baseline_obj}.",
+            err=True,
+        )
+        raise typer.Exit(5)
+
+    forced_bytes = obj_target.read_bytes()
+    baseline_bytes = baseline_obj.read_bytes()
+    forced_hash = hashlib.sha256(forced_bytes).hexdigest()[:16]
+    baseline_hash = hashlib.sha256(baseline_bytes).hexdigest()[:16]
+    if forced_bytes == baseline_bytes:
+        typer.echo(
+            "[debug dump local] force-coalesce object delta check failed: "
+            "forced .o is byte-identical to the coalesce-off baseline "
+            f"(sha256={forced_hash}). Hook engagement did not change emitted "
+            "code for this source/pair.",
+            err=True,
+        )
+        raise typer.Exit(5)
+    typer.echo(
+        "[debug dump local] force-coalesce object delta verified: forced .o "
+        f"differs from coalesce-off baseline (forced sha256={forced_hash}, "
+        f"baseline sha256={baseline_hash}).",
+        err=True,
+    )
 
 
 @dump_app.command(name="setup")
@@ -15611,6 +16895,11 @@ def setup_local(
         raise typer.Exit(6)
     print(f"[ok] compiler patched: {debug_compiler}")
     print(f"[ok] DLL deployed:     {compiler_dir / 'MWDBG326.dll'}")
+    smoke = _smoke_mwcc_debug_compiler(wibo, compiler_dir)
+    if not smoke.ok:
+        typer.echo(f"pcdump smoke failed: {smoke.detail}", err=True)
+        raise typer.Exit(7)
+    print(f"[ok] pcdump smoke:    {smoke.detail}")
     print()
     print("Setup complete. Try:")
     print("  melee-agent debug dump local src/melee/mn/mnvibration.c")
@@ -16144,6 +17433,9 @@ def pcdump_local(
                  "Class-scoped entries are passed through to the DLL and only "
                  "apply to that register class. By default "
                  "applies globally — scope with --force-phys-fn. "
+                 "Accepts up to 1024 entries; overflow is a hard pcdump "
+                 "error, not a silent partial apply; application logs are "
+                 "written into the pcdump, not CLI stderr. "
                  "DIAGNOSTIC-ONLY: uses the patched debug compiler and does "
                  "not affect production ninja builds.",
         ),
@@ -16157,7 +17449,9 @@ def pcdump_local(
                  "--force-phys can't target a node by ig_idx (rare, "
                  "but happens for split/spill nodes created post-IG-"
                  "build). E.g. '0:0:31' = class 0 (GPR), iter 0, "
-                 "force to r31. DIAGNOSTIC-ONLY: uses the patched debug "
+                 "force to r31. Accepts up to 1024 entries; application "
+                 "logs are written into the pcdump. DIAGNOSTIC-ONLY: uses "
+                 "the patched debug "
                  "compiler and does not affect production ninja builds.",
         ),
     ] = None,
@@ -16257,7 +17551,9 @@ def pcdump_local(
                  "scope with --force-coalesce-fn. EXPERIMENTAL — forcing "
                  "two interfering virtuals to coalesce produces "
                  "incorrect code. DIAGNOSTIC-ONLY: uses the patched debug "
-                 "compiler and does not affect production ninja builds.",
+                 "compiler and does not affect production ninja builds. "
+                 "When combined with --keep-obj, also compiles a coalesce-off "
+                 "baseline and fails if the forced object is byte-identical.",
         ),
     ] = None,
     force_coalesce_fn: Annotated[
@@ -16272,6 +17568,27 @@ def pcdump_local(
                  "experimental overrides from corrupting earlier or later "
                  "functions. E.g. '--force-coalesce-fn mnVibration_802474C4 "
                  "--force-coalesce 32=87'.",
+        ),
+    ] = None,
+    force_remat: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-remat",
+            help="Tier 7: rematerialization operand-slot bias. Format "
+                 "'class:ig=copy|literal[,...]'. Sets or clears the observed "
+                 "alternate remat operand selector for a chosen IG node after "
+                 "coloring. By default applies globally — scope with "
+                 "--force-remat-fn. DIAGNOSTIC-ONLY: uses the patched debug "
+                 "compiler and does not affect production ninja builds.",
+        ),
+    ] = None,
+    force_remat_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-remat-fn",
+            help="Scope --force-remat to a single function name. Other "
+                 "functions in the same TU compile with their natural "
+                 "rematerialization choices.",
         ),
     ] = None,
     force_schedule: Annotated[
@@ -16297,6 +17614,24 @@ def pcdump_local(
             help="Scope --force-schedule to a single function name. Other "
                  "functions in the same TU compile with their natural "
                  "schedule.",
+        ),
+    ] = None,
+    force_no_cse: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-no-cse",
+            help="Tier 8: veto selected front-end IRO CommonSubs replacements. "
+                 "Format 'node[=with][,node[=with]]*'; 'iro:' prefixes and "
+                 "0x hex are accepted and normalized. By default applies "
+                 "globally — scope with --force-no-cse-fn. DIAGNOSTIC-ONLY.",
+        ),
+    ] = None,
+    force_no_cse_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-no-cse-fn",
+            help="Scope --force-no-cse to a single function name. Other "
+                 "functions in the same TU compile with their natural CSE.",
         ),
     ] = None,
     wibo: Annotated[
@@ -16353,7 +17688,8 @@ def pcdump_local(
             help="Function name to use as the --diff target. When "
                  "omitted, defaults to the value of --force-iter-first-fn / "
                  "--force-select-order-fn / --force-phys-fn / "
-                 "--force-coalesce-fn (in that order) if any is set; "
+                 "--force-coalesce-fn / --force-remat-fn (in that order) "
+                 "if any is set; "
                  "otherwise falls back to the first "
                  "function found in the source file. Use this option "
                  "when working on a non-first function in a multi-function "
@@ -16400,8 +17736,8 @@ def pcdump_local(
     first to patch the compiler and deploy the DLL.
 
     Env-var hooks (--force-phys, --force-iter-first, --force-coalesce,
-    --force-schedule, and their function-scope variants) pass through to
-    the DLL.
+    --force-remat, --force-schedule, --force-no-cse, and their
+    function-scope variants) pass through to the DLL.
 
     Use --keep-obj PATH to preserve the compiled .o for downstream
     inspection (objdiff/checkdiff/etc.). Use --diff to run an integrated
@@ -16410,7 +17746,7 @@ def pcdump_local(
     melee_root = DEFAULT_MELEE_ROOT
     src_rel = _resolve_src_relative(c_file)
     unit_src_rel = (
-        _resolve_src_relative(unit_source)
+        _resolve_src_relative(unit_source, label="unit source")
         if unit_source is not None
         else src_rel
     )
@@ -16565,10 +17901,24 @@ def pcdump_local(
         env["MWCC_DEBUG_FORCE_COALESCE"] = force_coalesce
     if force_coalesce_fn:
         env["MWCC_DEBUG_FORCE_COALESCE_FUNCTION"] = force_coalesce_fn
+    if force_remat:
+        env["MWCC_DEBUG_FORCE_REMAT"] = _validate_force_remat(force_remat)
+    if force_remat_fn:
+        if any(c in force_remat_fn for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-remat-fn must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        env["MWCC_DEBUG_FORCE_REMAT_FUNCTION"] = force_remat_fn
     if force_schedule:
         env["MWCC_DEBUG_FORCE_SCHEDULE"] = _validate_force_schedule(force_schedule)
     if force_schedule_fn:
         env["MWCC_DEBUG_FORCE_SCHEDULE_FUNCTION"] = force_schedule_fn
+    if force_no_cse:
+        env["MWCC_DEBUG_FORCE_NO_CSE"] = _validate_force_no_cse(force_no_cse)
+    if force_no_cse_fn:
+        force_no_cse_fn = _validate_force_no_cse_fn(force_no_cse_fn)
+        env["MWCC_DEBUG_FORCE_NO_CSE_FUNCTION"] = force_no_cse_fn
 
     # Safety guard: --force-coalesce without --force-coalesce-fn on a
     # multi-function TU is a known wibo-hanger. Virtual indices are
@@ -16611,6 +17961,41 @@ def pcdump_local(
                     f"Same per-function-virtual hazard as --force-coalesce. "
                     f"Re-run with `--force-phys-fn <function_name>` to scope. "
                     f"Pass `--force-phys-fn ''` to opt out (NOT RECOMMENDED).",
+                    err=True,
+                )
+                raise typer.Exit(2)
+    if force_remat and force_remat_fn is None:
+        src_path = melee_root / src_rel
+        if src_path.exists():
+            n_fns = _count_function_defs(src_path.read_text())
+            if n_fns >= 2:
+                typer.echo(
+                    f"refusing --force-remat without --force-remat-fn on a "
+                    f"multi-function TU ({src_rel} has ~{n_fns} function "
+                    f"definitions).\n"
+                    f"Virtual indices are per-function; an override aimed at "
+                    f"one function can perturb another function's remat "
+                    f"records.\n"
+                    f"Re-run with `--force-remat-fn <function_name>` to scope. "
+                    f"Pass `--force-remat-fn ''` to opt out (NOT RECOMMENDED).",
+                    err=True,
+                )
+                raise typer.Exit(2)
+    if force_no_cse and force_no_cse_fn is None:
+        src_path = melee_root / src_rel
+        if src_path.exists():
+            n_fns = _count_function_defs(src_path.read_text())
+            if n_fns >= 2:
+                typer.echo(
+                    f"refusing --force-no-cse without --force-no-cse-fn on a "
+                    f"multi-function TU ({src_rel} has ~{n_fns} function "
+                    f"definitions).\n"
+                    f"IRO node IDs are per-function/pass; an override aimed "
+                    f"at one function can skip an unrelated CSE replacement "
+                    f"in another function.\n"
+                    f"Re-run with `--force-no-cse-fn <function_name>` to "
+                    f"scope. Pass `--force-no-cse-fn ''` to opt out "
+                    f"(NOT RECOMMENDED).",
                     err=True,
                 )
                 raise typer.Exit(2)
@@ -16781,9 +18166,17 @@ def pcdump_local(
         typer.echo("compile completed but no pcdump.txt was emitted", err=True)
         raise typer.Exit(4)
 
+    pcdump_text_cache: str | None = None
+
+    def _read_pcdump_text() -> str:
+        nonlocal pcdump_text_cache
+        if pcdump_text_cache is None:
+            pcdump_text_cache = pcdump_path.read_text()
+        return pcdump_text_cache
+
     function_missing_exit_code: int | None = None
     if function:
-        available_names = [fn.name for fn in parse_pcdump(pcdump_path.read_text())]
+        available_names = [fn.name for fn in parse_pcdump(_read_pcdump_text())]
         if function not in available_names:
             _emit_function_not_in_dump(
                 function,
@@ -16797,6 +18190,21 @@ def pcdump_local(
             )
             function_missing_exit_code = 3
 
+    def _user_output_pcdump_text() -> str:
+        text = _read_pcdump_text()
+        if function and function_missing_exit_code is None:
+            scoped = slice_pcdump_to_function(text, function)
+            if scoped:
+                return scoped
+        return text
+
+    def _write_user_output_pcdump(path: Path) -> None:
+        if function and function_missing_exit_code is None:
+            path.write_text(_user_output_pcdump_text())
+            pcdump_path.unlink()
+        else:
+            pcdump_path.rename(path)
+
     # Warn early if --keep-obj was requested but the compiler didn't emit
     # an object (e.g. a forced coalesce hung the wibo process mid-compile).
     if keep_obj is not None and not obj_target.exists():
@@ -16804,6 +18212,20 @@ def pcdump_local(
             f"[debug dump local] --keep-obj requested but no object was produced "
             f"(compile likely failed mid-way). Check pcdump for clues.",
             err=True,
+        )
+    if (
+        force_coalesce
+        and keep_obj is not None
+        and obj_target.exists()
+        and function_missing_exit_code is None
+    ):
+        _verify_force_coalesce_object_delta(
+            args=args,
+            env=env,
+            obj_target=obj_target,
+            melee_root=melee_root,
+            scratch_root=scratch_root,
+            timeout=WATCHDOG_TIMEOUT_S,
         )
 
     # Run objdiff if --diff was requested. The integrated check
@@ -16837,7 +18259,8 @@ def pcdump_local(
                           file=sys.stderr)
                     # Resolve the function name for --diff.
                     # Priority: explicit --function > --force-phys-fn >
-                    # --force-coalesce-fn > --force-schedule-fn >
+                    # --force-coalesce-fn > --force-remat-fn >
+                    # --force-schedule-fn >
                     # first function found in source.
                     src_path = melee_root / src_rel
                     explicit_diff_target = any([
@@ -16846,7 +18269,9 @@ def pcdump_local(
                         force_select_order_fn,
                         force_phys_fn,
                         force_coalesce_fn,
+                        force_remat_fn,
                         force_schedule_fn,
+                        force_no_cse_fn,
                     ])
                     fn_to_diff = (
                         function
@@ -16854,7 +18279,9 @@ def pcdump_local(
                         or force_select_order_fn
                         or force_phys_fn
                         or force_coalesce_fn
+                        or force_remat_fn
                         or force_schedule_fn
+                        or force_no_cse_fn
                         or None
                     )
                     if fn_to_diff is None and src_path.exists():
@@ -16892,7 +18319,9 @@ def pcdump_local(
                                 or force_select_order_fn
                                 or force_phys_fn
                                 or force_coalesce_fn
+                                or force_remat_fn
                                 or force_schedule_fn
+                                or force_no_cse_fn
                                 or force_frame_from_diff
                             )
                         )
@@ -17012,7 +18441,9 @@ def pcdump_local(
         force_iter_first, force_iter_first_fn,
         force_select_order, force_select_order_fn,
         force_coalesce, force_coalesce_fn,
+        force_remat, force_remat_fn,
         force_schedule, force_schedule_fn,
+        force_no_cse, force_no_cse_fn,
         force_frame_from_diff,
     ])
     if any_forced:
@@ -17033,7 +18464,7 @@ def pcdump_local(
 
     # Place output
     if str(output) == "-":
-        print(pcdump_path.read_text())
+        sys.stdout.write(_user_output_pcdump_text())
         pcdump_path.unlink()
         _finish_pcdump_local_run()
         return
@@ -17087,7 +18518,7 @@ def pcdump_local(
                 root=scratch_root,
             )
             output.parent.mkdir(parents=True, exist_ok=True)
-            pcdump_path.rename(output)
+            _write_user_output_pcdump(output)
             os.utime(output, None)
             if cache_skip_reason:
                 print(
@@ -17134,7 +18565,8 @@ def pcdump_local(
     else:
         # --output specified: write there.
         output.parent.mkdir(parents=True, exist_ok=True)
-        pcdump_path.rename(output)
+        full_pcdump_text = _read_pcdump_text()
+        _write_user_output_pcdump(output)
         os.utime(output, None)  # same mtime fix as above
         if skip_cache_sync:
             # Forced run — don't mirror the experimental pcdump into the
@@ -17162,7 +18594,7 @@ def pcdump_local(
             # auto-resolve doesn't read a stale dump.
             try:
                 cache_target.parent.mkdir(parents=True, exist_ok=True)
-                cache_target.write_bytes(output.read_bytes())
+                cache_target.write_text(full_pcdump_text)
                 # Write hash sidecar for the mirrored cache file.
                 try:
                     if compiled_source_digest is not None:
@@ -20659,8 +22091,10 @@ def _select_order_safe_label(value: str) -> str:
 def inspect_tiebreak(
     function: Annotated[str, typer.Option("--function", "-f")],
     pcdump: Annotated[Optional[Path], typer.Option("--pcdump")] = None,
+    register_class: Annotated[str, typer.Option(
+        "--class", help="Register class to analyze: auto, gpr/r/0, or fpr/f/1.")] = "auto",
     ig_targets: Annotated[str, typer.Option(
-        "--ig", help="COLORGRAPH ig_idx values to report, e.g. 88,90.")] = "",
+        "--ig", help="COLORGRAPH ig_idx values to report, e.g. 88,f48,1:48.")] = "",
     what_if: Annotated[str, typer.Option(
         "--what-if", help="Perturbation: 'add-interferer T:N', 'remove-edge "
         "A:B', 'move T:before:M', or 'move T:after:M' (before/after differ by "
@@ -20677,9 +22111,21 @@ def inspect_tiebreak(
     from ...mwcc_debug import tiebreak as tb
 
     pcdump_path = _resolve_pcdump_path(pcdump, function, DEFAULT_MELEE_ROOT)
-    ig = tb.load_gpr_ig(pcdump_path.read_text(), function)
+    try:
+        class_id = _resolve_tiebreak_class(tb, register_class, ig_targets, what_if)
+    except ValueError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2)
+
+    ig = tb.load_ig(
+        pcdump_path.read_text(),
+        function,
+        class_id=class_id,
+        fallback_first=register_class.strip().lower() == "auto" and class_id == 0,
+    )
     if ig is None:
-        typer.secho(f"{function}: no GPR COLORGRAPH section in pcdump",
+        label = _tiebreak_class_label(tb, class_id)
+        typer.secho(f"{function}: no {label} COLORGRAPH section in pcdump",
                     fg="red", err=True)
         raise typer.Exit(2)
     g1 = tb.validate_g1(ig, function)
@@ -20687,7 +22133,9 @@ def inspect_tiebreak(
 
     if json_out:
         import json as _json
-        out = {"function": function, "g1_rate": g1.rate, "g1_total": g1.total,
+        out = {"function": function, "class_id": ig.class_id,
+               "register_class": _tiebreak_class_label(tb, ig.class_id),
+               "g1_rate": g1.rate, "g1_total": g1.total,
                "truncated_nodes": trunc, "mismatches": g1.mismatches}
         if not validate_only and what_if:
             wf = _parse_and_run_tiebreak_whatif(tb, ig, what_if)
@@ -20695,23 +22143,32 @@ def inspect_tiebreak(
         print(_json.dumps(out, indent=2))
         return
 
-    typer.echo(f"tiebreak {function}: G1 {g1.correct}/{g1.total} "
+    prefix = tb.register_prefix(ig.class_id)
+    typer.echo(f"tiebreak {function}: class {ig.class_id} ({prefix}) "
+               f"G1 {g1.correct}/{g1.total} "
                f"({g1.rate*100:.1f}%), {trunc} truncated node(s)")
     if validate_only:
         for ig_i, pred, obs in g1.mismatches[:20]:
-            typer.echo(f"  mismatch ig{ig_i}: pred r{pred} obs r{obs}")
+            typer.echo(
+                f"  mismatch ig{ig_i}: pred {_format_tiebreak_reg(tb, ig, pred)} "
+                f"obs {_format_tiebreak_reg(tb, ig, obs)}"
+            )
         raise typer.Exit(0 if g1.rate == 1.0 else 3)
 
     # report requested nodes' baseline prediction vs observed
     base = tb.predict_assignments(ig)
     for tok in (t.strip() for t in ig_targets.split(",") if t.strip()):
-        n = int(tok.lstrip("rR"))
+        n = _parse_tiebreak_token_for_ig(tb, ig, tok)
+        if n is None:
+            typer.secho(f"could not parse --ig token {tok!r}", fg="red", err=True)
+            raise typer.Exit(2)
         node = ig.nodes.get(n)
         if node is None:
             typer.echo(f"  ig{n}: not in graph")
             continue
-        typer.echo(f"  ig{n}: observed r{node.observed_reg} predicted "
-                   f"r{base.get(n)} degree={node.array_size}"
+        typer.echo(f"  ig{n}: observed {_format_tiebreak_reg(tb, ig, node.observed_reg)} "
+                   f"predicted {_format_tiebreak_reg(tb, ig, base.get(n))} "
+                   f"degree={node.array_size}"
                    f"{' [TRUNCATED]' if node.incomplete else ''}")
 
     if what_if:
@@ -20726,8 +22183,85 @@ def inspect_tiebreak(
             raise typer.Exit(2)
         verb = "FLIPS" if wf.flips else "no change"
         typer.echo(f"  what-if [{wf.description}] on ig{wf.target_ig}: "
-                   f"predicted r{wf.predicted_reg} -> r{wf.perturbed_reg} ({verb})")
+                   f"predicted {_format_tiebreak_reg(tb, ig, wf.predicted_reg)} "
+                   f"-> {_format_tiebreak_reg(tb, ig, wf.perturbed_reg)} ({verb})")
         raise typer.Exit(0)
+
+
+_TIEBREAK_TOKEN_PATTERN = r"(?:[01]:)?[rRfF]?\d+"
+_TIEBREAK_TOKEN_RE = re.compile(rf"^({_TIEBREAK_TOKEN_PATTERN})$")
+_TIEBREAK_PAIR_RE = re.compile(
+    rf"^({_TIEBREAK_TOKEN_PATTERN}):({_TIEBREAK_TOKEN_PATTERN})$"
+)
+_TIEBREAK_MOVE_RE = re.compile(
+    rf"^({_TIEBREAK_TOKEN_PATTERN}):(before|after):({_TIEBREAK_TOKEN_PATTERN})$"
+)
+
+
+def _tiebreak_class_label(tb, class_id: int) -> str:
+    if class_id == 1:
+        return "class-1/FPR"
+    if class_id == 0:
+        return "class-0/GPR"
+    return f"class-{class_id}"
+
+
+def _format_tiebreak_reg(tb, ig, reg: int | None) -> str:
+    if reg is None:
+        return "?"
+    if reg == tb.SPILL:
+        return "spill"
+    return f"{tb.register_prefix(ig.class_id)}{reg}"
+
+
+def _parse_tiebreak_token(tb, token: str, default_class: int) -> tuple[int, int] | None:
+    token = token.strip()
+    if _TIEBREAK_TOKEN_RE.match(token) is None:
+        return None
+    explicit_class: int | None = None
+    if ":" in token:
+        class_part, token = token.split(":", 1)
+        try:
+            explicit_class = tb.parse_register_class(class_part)
+        except ValueError:
+            return None
+    prefix_class: int | None = None
+    if token[:1].lower() in {"r", "f"}:
+        prefix_class = 1 if token[0].lower() == "f" else 0
+        token = token[1:]
+    if explicit_class is not None and prefix_class is not None and explicit_class != prefix_class:
+        return None
+    class_id = explicit_class if explicit_class is not None else (
+        prefix_class if prefix_class is not None else default_class
+    )
+    return class_id, int(token)
+
+
+def _parse_tiebreak_token_for_ig(tb, ig, token: str) -> int | None:
+    parsed = _parse_tiebreak_token(tb, token, ig.class_id)
+    if parsed is None:
+        return None
+    class_id, idx = parsed
+    return idx if class_id == ig.class_id else None
+
+
+def _infer_tiebreak_class(tb, ig_targets: str, what_if: str) -> int:
+    inferred = 0
+    for token in re.findall(_TIEBREAK_TOKEN_PATTERN, ",".join([ig_targets, what_if])):
+        parsed = _parse_tiebreak_token(tb, token, inferred)
+        if parsed is None:
+            continue
+        class_id, _idx = parsed
+        if class_id == 1:
+            inferred = 1
+    return inferred
+
+
+def _resolve_tiebreak_class(tb, register_class: str, ig_targets: str, what_if: str) -> int:
+    value = register_class.strip().lower()
+    if value in {"", "auto"}:
+        return _infer_tiebreak_class(tb, ig_targets, what_if)
+    return tb.parse_register_class(value)
 
 
 def _parse_and_run_tiebreak_whatif(tb, ig, spec_str):
@@ -20739,25 +22273,92 @@ def _parse_and_run_tiebreak_whatif(tb, ig, spec_str):
     arg = parts[1] if len(parts) > 1 else ""
     try:
         if kind == "add-interferer":
-            t, n = (int(x.lstrip("rR")) for x in arg.split(":"))
+            m = _TIEBREAK_PAIR_RE.match(arg)
+            if m is None:
+                return None
+            t = _parse_tiebreak_token_for_ig(tb, ig, m.group(1))
+            n = _parse_tiebreak_token_for_ig(tb, ig, m.group(2))
+            if t is None or n is None:
+                return None
             return tb.what_if(ig, t, add_interferers={n})
         if kind == "remove-edge":
-            a, b = (int(x.lstrip("rR")) for x in arg.split(":"))
+            m = _TIEBREAK_PAIR_RE.match(arg)
+            if m is None:
+                return None
+            a = _parse_tiebreak_token_for_ig(tb, ig, m.group(1))
+            b = _parse_tiebreak_token_for_ig(tb, ig, m.group(2))
+            if a is None or b is None:
+                return None
             return tb.what_if(ig, a, remove_edges={frozenset((a, b))})
         if kind == "move":
             # "move T:before:M" / "move T:after:M". The middle token is
             # semantic — before and after differ by one select slot and can
             # yield different registers; reject anything else loudly.
-            t, where, m = arg.split(":")
+            match = _TIEBREAK_MOVE_RE.match(arg)
+            if match is None:
+                return None
+            t = _parse_tiebreak_token_for_ig(tb, ig, match.group(1))
+            where = match.group(2)
+            m = _parse_tiebreak_token_for_ig(tb, ig, match.group(3))
+            if t is None or m is None:
+                return None
             if where == "before":
-                return tb.what_if(ig, int(t), move_before=int(m))
+                return tb.what_if(ig, t, move_before=m)
             if where == "after":
-                return tb.what_if(ig, int(t), move_after=int(m))
+                return tb.what_if(ig, t, move_after=m)
             return None
     except (ValueError, KeyError):
         return None
     return None
 
+
+
+@inspect_app.command(name="explain-diff")
+def inspect_explain_diff(
+    function_or_path: Annotated[
+        str,
+        typer.Argument(
+            help="Function name (auto-runs checkdiff) or path to a checkdiff JSON file.",
+        ),
+    ],
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit structured diagnosis as JSON."),
+    ] = False,
+):
+    """Unified diff diagnosis: read checkdiff JSON (or auto-generate it for a
+    function) and produce a structured, ranked list of recommendations with
+    specific source-level actions and estimated costs."""
+    import json
+    from pathlib import Path
+    from ...mwcc_debug.explain_diff import (
+        parse_checkdiff_json, run_checkdiff, format_diagnosis, produce_diagnosis,
+    )
+
+    # Determine whether the argument is a file path or a function name
+    function = None
+    if os.path.isfile(function_or_path):
+        data = parse_checkdiff_json(function_or_path)
+        if data:
+            function = data.get("function")
+    else:
+        function = function_or_path
+        melee_root = Path.cwd()
+        data = run_checkdiff(function, str(melee_root))
+
+    if data is None:
+        typer.echo(
+            f"Error: could not load checkdiff data for {function_or_path}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if json_out:
+        diagnosis = produce_diagnosis(data, function)
+        typer.echo(json.dumps(diagnosis, indent=2))
+    else:
+        text = format_diagnosis(data, function)
+        typer.echo(text)
 
 @inspect_app.command(name="explain-virtual")
 def inspect_explain_virtual(

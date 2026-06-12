@@ -125,6 +125,22 @@ def test_production_create_cli_dispatches_to_top_level_module(monkeypatch):
     assert calls[0][2:] == (False, True)
 
 
+def test_save_scratch_token_uses_configured_lock_file(tmp_path, monkeypatch):
+    import json
+
+    import src.cli.scratch as scratch
+
+    tokens = tmp_path / "scratch_tokens.json"
+    lock = tmp_path / "scratch_tokens.lock"
+    monkeypatch.setattr(scratch, "DECOMP_SCRATCH_TOKENS_FILE", str(tokens))
+    monkeypatch.setattr(scratch, "_TOKENS_LOCK_FILE", lock)
+
+    scratch._save_scratch_token("Krp0x", "tok")
+
+    assert json.loads(tokens.read_text()) == {"Krp0x": "tok"}
+    assert lock.exists()
+
+
 def test_production_update_cli_dispatches_to_top_level_module(monkeypatch):
     from typer.testing import CliRunner
 
