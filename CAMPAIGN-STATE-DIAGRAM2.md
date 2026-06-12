@@ -922,6 +922,124 @@ Entry-window survey (M1 playbook):
 - Commits: doc-only. Source untouched (probe reverted same-session);
   baseline 97.46 (Δ3, hunks 5) re-verified; protected fns 100/100/98.67.
 
+## Iteration 8: whole-function web-split census — ALL named suppliers live where result is DEAD (driver 8, 2026-06-11)
+
+THE ONE QUESTION: can two zero-cost, census-compatible edges be attached to
+the merged result web from ANYWHERE on its whole-function range via du-chain
+web-splits (making the S1 merge band-faithful, result ≥33, Δ0)? ANSWER:
+**NO — the named supplier classes (x46/x47 arm chains, var_r5 pairs, d2) live
+ENTIRELY in regions where result is DEAD; the only result-overlapping copies
+(x46/x47/x48 in the 0xC0 arm) are already single-use webs that ALREADY count
+AND are byte-identical to the target. Every one of result's 22 non-phys
+interferers is unsplittable. The +2 cannot come from a source-visible web
+split.** Stopped at the STEP-2 gate (no candidate survives → name what the
+target census shows that ours lacks). 0 builds, 0 new dumps (reused
+iteration-4/5 dumps). Match stays **97.46%**.
+
+### HEADLINE 1 — the range survey (result live/dead map + supplier verdict)
+
+result = r99 (def B4 `mr r99,r3`). All 14 uses mapped to blocks (from
+`/tmp/pc_baseline.txt` pre-coloring IR, lines 11923-13093):
+
+| result-LIVE region | blocks | result reads | result-DEAD region | blocks |
+|--------------------|--------|--------------|--------------------|--------|
+| entry gates | B4–B38 | B4(0x20), B18(0xC0), B38(0xC00) | **0x20 arm** | B5–B17 (returns) |
+| 0xC0 arm head | B18–B31 | B31(0x40 sub-gate) | **0xC0 tail** | B32–B37 (returns) |
+| bottom body | B79–B178 | B81/93/105/121 (name btns), B138/150/162/178 (fighter btns) | **0xC00 arm** | B39–B78 (returns) |
+
+result's last use = `rlwinm r188,r99,…` (B178, the final `result & 8` test).
+Crucially result is **NOT re-read inside any returning arm** (0x20, 0xC0-tail,
+0xC00) → result is DEAD throughout those arm bodies.
+
+Named du-chain split candidates (igs from the IR), with edge-delta to result:
+
+| Candidate | web igs (region) | overlaps result? | split adds edge? |
+|-----------|------------------|------------------|------------------|
+| x46 | ig107 (0x20=DEAD), ig114 (0xC0=LIVE) | only ig114 (already counted) | NO — ig114 is single-use, already split per-use; ig107 in dead region |
+| x47 | ig109 (0x20=DEAD), ig116 (0xC0=LIVE) | only ig116 (already counted) | NO — same |
+| x48 | ig36 (0x20=DEAD), ig118 (0xC0=LIVE), ig58/41 (0xC00=DEAD) | only ig118 (already counted) | NO — same |
+| var_r5 | ig59,35 (0xC00 pair1=DEAD), ig58,40 (0xC00 pair2=DEAD) | **none** | NO — entire web in result-dead 0xC00 arm |
+| d2 | ig33 (0xC00=DEAD) | **none** (ig33 ∉ result.intf, verified) | NO — result-dead region |
+
+Verified against result's interferer list (the 33): x46/x47/x48 0xC0-copies
+(114/116/118) ARE present (already counted); var_r5 (59/35/58/40) and d2 (33)
+are ABSENT (result dead where they live). The 0xC0-arm copies cannot be
+split further — each is one def + one use (lbz → stb), already minimal; and
+the target colors all three r30 byte-identically to ours (diff +0b4-+0d0 is
+pure offset drift from the upstream reload, not a coloring difference).
+
+### HEADLINE 2 — census gate: every result-interferer is unsplittable
+
+All 22 non-phys interferers of result classified (no candidate survives):
+- **result-derived gate temps** (102,112,121,135,137,143,150,167,173,180):
+  each is a single `rlwinm` of result — no du-chain, nothing to split.
+- **single-use loads** (42,113,114,116,118,134): one def + one use, already
+  the minimal web.
+- **callee-saves / entry temps** (32 gobj, 101 mn_addr, 61 buttons-base):
+  single def/use span, no internal split point.
+- **var_r28 (34)**: entry-zero; its only bottom redef (`li r34,1`) is in the
+  **0xC00 arm (result-DEAD, B47)** — a split piece there would not overlap
+  result.
+- **data webs (39 entry, 57 bottom)**: these ARE what the S1 merge fuses;
+  splitting them = NOT merging = the 97.5 baseline (no Δ0). The merge itself
+  costs result exactly these 2 edges (data-pair fusion 39+57→1, −1; reload
+  sda21 temp dies, −1) → 33→31.
+
+⟹ The +2 the band-faithful merge needs cannot come from any source-visible
+web split. RANGE-SURVEY VERDICT: the named class is exhausted, measured.
+
+### What the target census SHOWS that ours lacks (the STEP-2 "elsewhere")
+
+The target reaches result=r31 (front band, read at +0e4 `rlwinm. r0,r31,…`)
+WITH no reload (its bottom body reuses entry-data in r30; diff +234 target
+`lbz r0,72(r30)` vs ours `lwz r3,sda21; lwz r30,44(r3)`). So the target's
+result IS ≥33 under a merged/no-reload data web. Yet:
+- Target frame = `stwu r1,-80` + `stmw r27` = **5 callee-saves (r27-r31)**,
+  byte-identical to ours. The target has NO 6th long-lived web.
+- Every result-live region is byte-identical in webs (0xC0 arm same r30
+  chain; bottom-body data in r30 same; entry trio same modulo R3 addi order).
+
+⟹ The target's 2 extra result-edges are **NOT callee-save webs and NOT in any
+register-class web we can see** — they are byte-invisible AND register-
+invisible. The only object on result's range that is neither a GPR web nor
+visible in our codegen is the **PAD_STACK(40) frame object**: a stack-homed
+local in the original whose live range overlaps result would add IG
+interference edges (address-taken/spilled locals DO appear as colored IG
+nodes with interferers) while emitting no GPR-visible instruction beyond its
+frame slot. This is the same "40-byte frame object territory" iteration-6/7
+flagged — now SHARPENED by elimination: the +2 is provably not any
+register-web split (all 22 enumerated, none splittable), so it must be the
+frame object's edges. The discovery target for driver 9: which 40-byte
+original local (array/struct/address-taken) has a live range spanning the
+entry→bottom result region, such that declaring it (a) restores the 2 lost
+result-edges under the merge AND (b) supplies the PAD_STACK(40) semantically.
+This unifies the two open residuals (S1 band-faithfulness + the unexplained
+PAD_STACK) into ONE object — the first time the campaign has tied them.
+
+Caveat (never-claim): "register-invisible" is an observation about THIS
+function's GPR COLORGRAPH (gpr class=0); a stack/fpr/address-taken object is
+exactly the residual class the dump does not surface as a splittable GPR web.
+The original compiled from C, so the object exists; not yet identified.
+
+### Iteration-8 ledger
+
+- Dump/forced runs: 0 of ≤2 (reused `/tmp/pc_baseline.txt`,
+  `/tmp/pc_x48newvar.txt` from driver 4/5 — no new dump needed). Builds: 0
+  of ≤2 (no target-supported candidate emerged; building byte-breaking forms
+  is waste per doctrine).
+- Commits: doc-only (this section). Source untouched; baseline 97.46
+  (Δ3, hunks 5) verified before and after; protected fns 100/100/98.67.
+- For driver 9: the web-split supplier class is now EXHAUSTED by census
+  (all 22 result-interferers unsplittable; named candidates in result-dead
+  regions). The S1 merge's missing +2 and the PAD_STACK(40) are the SAME
+  object — a 40-byte original local whose live range overlaps result's
+  entry→bottom span. Attack: identify the object (struct/array/address-taken
+  local in the entry or spanning region) that both reserves 40 bytes AND adds
+  ≥2 result-overlapping IG edges; gate it under the S1 merge (must keep
+  result ≥33 → r31 front, reload gone → Δ1, entry trio intact). Do NOT
+  revisit: register-web splits on this function (exhausted), entry-window u64
+  suppliers (dead, iter-7), x48/spanning-web (displaces result, iter-3b/5).
+
 ## DOC-FEEDBACK (methodology observations, iteration 2)
 
 1. **Precise-alignment-first should be doctrine.** Iteration-1 spent a
