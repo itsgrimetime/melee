@@ -18,7 +18,7 @@ Complete all 9 functions in `src/melee/mn/mndiagram3.c` to 100%.
 | mnDiagram3_80246F2C | 0xDC | **100%** | matched (PROTECTED) |
 | **mnDiagram3_80247008** | 0x144 (324B) | **100%** | MATCHED (iteration 3, data linking f66cc758a) |
 | **mnDiagram3_8024714C** | 0x378 (888B) | **90.23%** | OPEN — coloring-dominated (iter-4: decl-order axis exhausted). See Map 2 + Iteration 4. |
-| mnDiagram3_80245BA4 | 0x618 (1560B) | **93.74%** | OPEN — ladder ran iteration 6 (90.53→93.74, Δ2, structure landed). See Map 3 + Iteration 6 residual. |
+| mnDiagram3_80245BA4 | 0x618 (1560B) | **94.07%** | OPEN — iteration 7 (93.74→94.07, Δ2); assoc-order+conversion-node+frame-pad LANDED; S9 float wall = confirmed coloring ceiling (statement+decl axes exhausted). See Map 3 + Iteration 7 residual. |
 | fn_802461BC | 0xB84 (2948B) | 98.42% | OPEN — big-body register endgame, do LAST |
 
 Driver 1 mapped 80247008 + 8024714C (this iteration). NO builds beyond baseline diffs (3 checkdiff runs total: 1 build + reused diffs).
@@ -285,6 +285,35 @@ Catalogue items checked and **already correct** (no action): prototype-visibilit
 7. **GPR relabel residual**: r16/r18/r19/r20-class high-part/walker permutation — downstream; plus the exhaustive `decl-orders --strategy all` pass (23 function-top locals + block scopes) NOT YET RUN — the 714C protocol says run it once on the settled substrate.
 
 **Next-driver opening move**: S9 statement-order + the decl-orders pass (both cheap), then the association-order spelling, then S8 type experiments. The function is no longer Δ-blocked or pressure-blocked; it is in last-mile territory (assoc-order + copies + floats + frame).
+
+---
+
+## Iteration 7 (driver 3) — 80245BA4 ladder, 93.74 → 94.07
+
+**Result: 93.74 → 94.07** (+0.33) | Δ2 (held) | real register-only diffs 45 → ~5 (rest = Δ2-shift reloc cascade, false-flag) | 3 commits, all 11/11 protected checks, .data/.sdata 100 held. The S9 float wall is now the SINGLE dominant residual (confirmed coloring ceiling, both decl-order and statement-order exhausted).
+
+### Rung ledger (mechanism checks)
+
+1. **Rung 1 (S9 float statement-order): NEGATIVE — BYTE-INERT.** Reordering the float-assignment block (lines 102-110: row_spacing/divider/neg_spacing/max_* in every contiguous permutation) produced a BYTE-IDENTICAL diff (match flat 93.74). MWCC reorders independent stores freely; the {f30↔f31}+{f27↔f29} swap is a coloring decision, NOT statement-reachable. The S9 hint's "fsubs/lfd-magic/lfs-divider/fneg" target order is unreachable because the f64-magic constant has NO source statement (conjured by `(f32)i`) — its preamble materialization order vs `divider` (line 105) is IRO-scheduled by loop-body first-occurrence (divider used line 119 before magic line 137), not source-reachable. **Confirms the 714C iter-4 verdict carries to this substrate.**
+2. `5b1f4260e` **Rung 2 (address-association) + Rung 3 (S8 conversion-node), COMMITTED TOGETHER**: 93.74→94.07.
+   - **Rung 2 (+0.22, the named state-file lever):** two-statement table form — DELETE the `u16* stat_table` intermediate, write `table = (u16*)(base + ((int)stat_type << 1)); table += 0x36;`. Forces the `base+idx` add to bind FIRST: `slwi r0,r31,1` (was `slwi r3`) + `add r16,r24,r0` (base+idx) now byte-match target's `slwi r0`/`add r20,r24,r0`. **CAVEAT — the +108 OVER-FOLDS**: with `table` loop-invariant single-use, MWCC folds `+0x36` into the lhz displacement → `lhz 108(r16)`, DROPPING target's standalone `addi r20,r20,108`+`lhz 0(r20)` (−1 instr, locally short). The self-increment two-statement form (the census candidate) AND the direct one-expression form BOTH over-fold identically — TESTED 3 spellings (`table=stat_table;table+=0x36`, direct, `(u16*)base+stat_type`). The committed-+108 form (baseline `stat_table+0x36`, +int-icon = 93.85) has association WRONG `(idx+108)+base` but lhz 0 committed. **The target wants BOTH base+idx-first AND +108-committed — NOT co-reachable: forcing base+idx-first (2 statements) lets the 2nd statement's +108 fold; one-expression reassociates to idx+108-first. This is a register-life wall (base+idx must color to a callee-save that gets +108 added IN PLACE — the 714C lhzu-class condition).** Picked the higher-scoring base+idx form (94.07 > 93.85). The over-fold is locally −1 instr but globally compensated by Rung 3's +1 copy → net Δ2.
+   - **Rung 3 (+0.11, S8 conversion-node):** `int icon_id` (was `u16`) at the icons-block readback defeats the icon_id→r17 copy coalesce — adds `mr r18,r0` (the persistent-copy node) and RECOVERS the over-fold's dropped instruction (Δ3→Δ2). Does NOT fully reach target's `lhz r3,0; addis r0,r3,0; addi r17,r3,0` (load-volatile + two copies) because the icon_id LOAD is entangled with the table over-fold (`lhz r0,108(r16)`). `u32 check = icon_id` (census candidate) and `r17=icon_id` after the branch BOTH inert/worse (check coalesces; reorder −0.03). **S8 is gated on the +108 commit — same wall as Rung 2.**
+3. `84d54e728` **Close-out frame: drop PAD_STACK(8)**, match FLAT 94.07. MWCC's NATURAL frame is 248B (no pad); target is 240B. The PAD_STACK(8) was pure over-reservation on top of the natural 248. Removing it: frame 256→248 (uniform local shift +16→+8 vs target). **The residual 8B is a low-frame compiler temp DOWNSTREAM of the float/over-fold codegen (the stack-object idiom does NOT apply — locals pack identically to target, just 8B higher base); it should drop to 240 when the float wall resolves. Removed non-shippable PAD_STACK; correct per doctrine.**
+
+### Rung 4 (2 lbz dests) + Close-out decl-orders: BOTH NEGATIVE
+- **2 lbz dests** (saved_selection→r4/scroll_offset→r3 target, inverted ours): operand swap `offset+scroll` → `add r3,r4,r3` form changes but dests STILL swapped + −0.02; decl swap `offset`-first → loads reorder but dests still wrong + load-order now wrong, −0.03. **Pure coloring tiebreak, not operand/decl reachable.**
+- **`decl-orders --strategy all` (the 714C close-out protocol, on the settled substrate): NO ordering improves ≥0.05%** (all 22 adjacent swaps flat; `divider↔icon_x_offset` −0.03). **Exhausts the decl-order axis; the float wall is confirmed NOT decl-reachable here (matches 714C iter-4).** TOOL PAPERCUT (issue #572): `debug mutate decl-orders` throws AstWalkError on this fn — the `M2C_FIELD(sp28,int*,0xC)` macro's `int*` arg makes tree-sitter emit a decl-enclosing ERROR node. WORKAROUND (in #572): temporarily expand to `*(int*)((s8*)sp28+0xC)` (build-identical), run, restore.
+
+### Residual @ 94.07 (banked, ranked for next driver)
+
+1. **S9 float family {f30↔f31 row_spacing/neg_spacing}+{f27↔f29 divider/magic} — THE dominant residual (~14 sites).** CONFIRMED coloring ceiling: statement-order BYTE-INERT (rung 1), `decl-orders --strategy all` no-win (this iter), the float-pair decl swap −0.05 (714C iter-4, both substrates), comma-form = +2 cost (714C iter-2). row_spacing colors f31-not-f30 (ours) vs f30 (target); the FIRST-colored float gets f31 (fresh-descending pick). NOT source-reachable in the no-permuter axis. Real levers left: tuned remote permuter (campaign DO-NOT) or `debug inspect tiebreak`/`intervene` IG what-ifs for row_spacing→f30 (higher cost).
+2. **Table +108 commit + S8 copies (ENTANGLED, the register-life wall):** target `add base,idx`+`addi +108`+`lhz 0(r20)` AND `lhz r3,0; addis r0; addi r17`. Co-reachability blocked (see Rung 2 caveat). Cracking the +108 commit (base+idx → callee-save with in-place +108) unblocks BOTH; candidate = comma-defeat on the `*table` address-mode fold (untried, +2-cost risk per 714C), or an IG intervene forcing base+idx to a callee-save.
+3. **2 lbz dest swap** (S1 residual): coloring tiebreak, operand/decl-inert (this iter).
+4. **Frame residual 8B** (248 vs 240): downstream of S9/over-fold; re-derive after the float wall.
+5. **S4 copy-init mr** (+18c): `addi r4,r3,0` vs `mr r4,r3` for GetNameText result — UNTRIED (low EV, register-only).
+6. **GPR relabel** (r16↔r20 icon-var, r18/r19/r20 high-parts): downstream of S9/over-fold.
+
+**Verdict:** 80245BA4 is now a COLORING-DOMINATED endgame at 94.07 — the structural levers (assoc-order, conversion-node, frame-pad) are LANDED; the dominant residual (S9 float wall) is a confirmed coloring ceiling exhausted on BOTH the statement-order and decl-order axes by two drivers. Next real lever is permuter (campaign DO-NOT) or IG-intervene — both above this iteration's budget. The table-+108/S8 entanglement is a register-life wall; the comma-defeat spelling is the one untried structural candidate (with the 714C +2-cost caveat).
 
 ## Driver-3 Entries (fn_802461BC)
 
