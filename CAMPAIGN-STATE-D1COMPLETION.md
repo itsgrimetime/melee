@@ -669,3 +669,93 @@ completion campaign is COMPLETE pending the 8023FC28 reloc spelling.
    killing-def). Re-test the mndiagram2 zero-emission self-assignment probe on ROOT B if that
    campaign's spelling fires (orchestrator cross-link).
 
+---
+
+## ITERATION 8 (2026-06-11, driver 4) — 8023FC28 LAW-2 RELOC SPELLING **REFUTED** + ★ TU ENDGAME DECLARATION ★
+
+### PART 1 — THE ONE QUESTION — ANSWERED: **NO.** The LAW-2 named-reloc spelling does NOT restore 8023FC28's named relocs, and it perturbs codegen. HARD-REVERTED.
+Budget: 1 of ≤2 builds. 0 commits. Floor 97.82 restored byte-exact (HEAD=25cb88703, tree clean).
+
+**The site (object ground-truth, ours `build/GALE01/src/.../mndiagram.o` vs target asm):**
+- TARGET prologue: `lis r3, mnDiagram_804A0750@ha` / `addi r29,r3,mnDiagram_804A0750@l` / `addi r31,r29,0x1c` (NAMED HA/LO; base→r29, sorted_names→r31).
+- OURS prologue: `lis r3, ...bss.0@ha` / `addi r31,r3,...bss.0@l` / `addi r30,r31,0x1c` (`.bss.0` SECTION-ANCHOR; base→r31, sorted_names→r30).
+- Exactly **2 reloc-paired lines** (`@ha`+`@l`), as the iter-4 partition stated. Plus the callee-save rotation (base r29-vs-r31, sorted_names r31-vs-r30) — the FULLNORM-0 coloring artifact, NOT this iteration's target.
+
+**Spelling tried** (iter-2 LAW-2 cast-copy shape, derived from the site): introduced `u8* sorted = (u8*) assets;` (cast-copy of the once-materialized `assets = (mnDiagram_Assets*)&mnDiagram_804A0750` local) and routed both base uses through it — `u8* dst = sorted + sizeof(mnDiagram_804A0750_t);` (was `assets->sorted_names`) and `u8* p = &sorted[max_idx];` (was `&assets->sorted_fighters[max_idx]`). Semantically identical (`(u8*)assets == &assets->sorted_fighters[0]`; `+0x1C == sorted_names`).
+
+**Why it failed (RELOC METER before/after + mechanism):**
+| Meter | Baseline (committed) | After LAW-2 spelling | Verdict |
+|-------|----------------------|----------------------|---------|
+| `.bss.0@` reloc-paired lines in 8023FC28 | **2** | **2** (UNCHANGED) | reloc NOT restored |
+| named `mnDiagram_804A0750@` in 8023FC28 | 0 | 0 | reloc NOT restored |
+| FULLNORM (instr count) | 108/108 | 108/108 | count neutral |
+| frame | `stwu -0x218` / buf@r1+0x18 | **`stwu -0x220` / buf@r1+0x1C (+8B)** | **codegen PERTURBED** |
+| fuzzy % | 97.8241 | 97.76 (−0.06); classification data-symbol-or-relocation→stack-layout | regressed |
+
+The cast-copy added a stack-homed `sorted` local (frame +8) WITHOUT changing the reloc — a reloc-only lever must be codegen-neutral; this was the documented hard-revert condition. **REVERTED** (`git checkout`), rebuilt, protected sweep green (all 13 tracked fns byte-exact at their state-file numbers).
+
+### WHY LAW-2 DOES NOT TRANSFER HERE (mechanism, banked — do not re-try the cast-copy)
+LAW-2 (iter-2, 8024227C) restored named relocs because its re-read sat INSIDE loop bodies = MULTIPLE per-site base materializations, where the spelling controlled the per-site reloc choice. 8023FC28 has a SINGLE base materialization (one prologue `lis@ha`/`addi@l` pair); copying `assets` downstream cannot change which reloc that single pair uses — it only adds a move/slot.
+
+**TU-WIDE RELOC CENSUS (object-level, decisive):** across the whole mndiagram TU our object emits **16 named `mnDiagram_804A0750@` + 6 `.bss.0@`**; target emits **22 named, 0 `.bss.0`**. The 6 `.bss.0` lines live in exactly THREE functions — **8023FA6C, 8023FC28, 80242C0C** — and in all three the form is identical: `lis rN,.bss.0@ha; addi r31,rN,.bss.0@l; addi r30/r31,r31,0x1C`. **The discriminator is the `+0x1C` (sorted_names) base materialization**: when MWCC needs `&mnDiagram_804A0750 + 0x1C` it selects the `.bss.0` section anchor; when it needs the symbol at offset 0 (`sorted_fighters[idx]`) it keeps the named reloc (the 16 named sites). This is a systematic MWCC base+displacement reloc-selection behavior, NOT a source spelling the C can steer at these three sites. The `.bss.0` reloc lines on {8023FA6C, 8023FC28, 80242C0C} are **reloc-identity ceiling noise**, reclassified from "pending source lever" to ARTIFACT.
+
+---
+
+## ★ TU ENDGAME DECLARATION ★ (handoff artifact for the endgame/permuter phase)
+
+### (a) STRUCTURAL-FRONTIER-CLOSED STATEMENT
+Every remaining non-100 divergence in all three mndiagram TUs is now attributed to a non-structural class. With the iter-7 fsubs window closed (80241E78) and the iter-8 8023FC28 reloc lever refuted, **there are NO remaining known structural windows in the TU.** Every tracked non-100 function is one of: a pure-coloring ceiling (FULLNORM 0, register/FP callee-save rotation), a characterized wall (mechanism-pinned, lever not found in reachable C), or reloc-identity ceiling noise. The STRUCTURAL phase of the completion campaign is **COMPLETE**. What remains is the endgame/permuter phase against coloring cascades + the two documented walls.
+
+Matched (banked 100, protected): **mnDiagram_802437E8, mnDiagram_80243434** (+ all other TU 100s).
+
+### (b) COLORING-CEILING POOL (FULLNORM 0; each with its identified swap/rotation pair)
+| Fn | Fuzzy | Swap/rotation pair (from iter-3/4/7 partition + object disasm) |
+|----|-------|----------------------------------------------------------------|
+| OnFrame | 99.72 | single-pair **r28↔r29**: the `lwz rX,0x2c(r30)` user_data ptr loaded mid-fn (9 use sites). Same dataflow-pinned class as 80241E78's data/row swap. |
+| 802427B4 | 98.84 | callee-save **rotation**: arg homes shift (TGT r26/r27 vs OUR r27/r28) + assets-base **TGT r31 vs OUR r25** (86 reg sites). comma-expr + interferer-trunc already landed (near-ceiling sibling). |
+| 802417D0 | 98.03 | post-flip register-coloring **cascade** (callee-save renumber) off the iter-5 test-home flip; FULLNORM 0 (test-form was the only structural divergence; flip re-rolled the cascade, +0.30 only). |
+| CursorProc | 99.52 | pure coloring **cascade** (FULLNORM 0, Δ0) after the iter-5 lhzu close; ~0.48% to 100. |
+| 80241E78 | 98.94 | **r25↔r26 data/row callee-save swap + FP-coloring shadow** (f26/f27/f28 role rotation). row's ig dataflow-pinned BELOW data's (47<58) — every float input derives from `data->jobjs[...]` loaded before row is first-used. Decl-order/literal/param-direct/call-reorder all INERT (iter-3 B1–B4). FP web re-rolled iter-7, so ONE cheap re-test of the iter-3 levers is permuter-substrate-warranted. |
+| 8023FC28 (post-Part-1) | 97.82 | **whole-web callee-save rotation** rooted at the assets-base materialization: TGT base→r29 then sorted_names→r31; OURS base→r31 then sorted_names→r30 (48 reg sites). PLUS the 2 `.bss.0`-vs-named reloc lines = ceiling noise (LAW-2 refuted, iter-8). FULLNORM 0. |
+
+### (c) THE TWO WALLS (opacity / A1-remat cluster — DO NOT TOUCH; protected)
+- **InputProc 98.67** — the opacity / A1-rematerialization cluster (prior mnDiagram_InputProc campaign; the Door-A survival law). 52-iteration campaign exhausted the source levers; banked-ready (PR #2660). Coloring/remat ceiling; FENCED + protected.
+- **80242C0C 96.95** — same opacity/A1-remat cluster + the consumed expansion door (prior campaign). Also carries one of the three `.bss.0` reloc lines (ceiling noise, same MWCC base+0x1C selection). FENCED + protected.
+- (mnDiagram2_HandleInput 97.46 — protected wall, prior campaign.)
+
+### (d) mnDiagram_8024227C 94.32 — REGISTER-ENDGAME QUEUE
+Structural phase COMPLETE (iter-2: hoist defeated, walk-shape + cast model landed, opcode-stream delta 0, frame byte-equal at stwu-160/stmw r15,92). Residual = 175 register-only lines (callee-save swap r29↔r30 named by checkdiff) + the li-vs-copy trio (+10c/+360/+39c) + 2 one-slot inline-scheduling transpositions (+284/+288, +470/+474). All cascade-watch / coloring. **Banked register-endgame queue (in order):**
+1. decl-order nudges (the decl list is still m2c-alphabetical — reorder to peel callee-saves, apply→re-bootstrap→repeat per the cardstate decl-chain method).
+2. `debug target match-iter-first -f mnDiagram_8024227C --regs gpr-volatile,r0` (checkdiff's own suggestion — the match-iter-first oracle).
+3. force-phys r14–r17 probes (diagnostic only).
+PAD_STACK(24) = diagnostic (frame group byte-equal); natural-frame replacement pending (PENDING-REVIEW).
+
+### (e) mnDiagram_80240D94 97.35 — VN-CSE WALL
+FULLNORM 7, two roots (iter-6, mechanism POSITIVELY CONFIRMED via the `if (arg1==arg2) arg2=arg1;` probe):
+- **ROOT B (VN-CSE):** ours ONE cached `clrlwi r22,r28,24`+`addi r3,r22`+`mr r3,r22` vs target per-site `clrlwi r3,r29,24` ×2 at the two GetNameText calls (src 1807/1822). arg2's two AND-VNs merged by sequential-path IRO CSE; target's did not (arg2's VN was killed between the paragraphs in the original IR). Needs a ZERO-EMISSION VN-kill: must (a) kill arg2's VN between paragraphs, (b) emit 0 instrs, (c) introduce NO block boundary. Probe proved the kill fires but control-flow kills emit `cmpw+bne+mr` (+3) and break the shared `li r23,1` web. **Not permuter-reachable** (needs an IR killing-def, not a register choice). **ROOT B RE-TEST CONDITION:** if the mndiagram2 campaign's zero-emission self-assignment probe FIRES (produces a straight-line, zero-emission, no-block-boundary VN kill), re-test it here — that is the one untried class for ROOT B (orchestrator cross-link).
+- **ROOT A (the one register-class permuter site):** `tbl = &803EE728` init emitted as `addi r0` (hoisted above stwu) + `mr r27,r0` vs target direct post-stmw `addi r28`. Did NOT cascade under the forced split (suggestive-not-decisive). Scheduling/pressure-conditioned (sibling PopupAnimProc: identical spelling, direct form). A's addi/mr **MIGHT be permuter-reachable (register-class)** — the one register-class permuter site on this fn.
+PAD_STACK(24) = provably dead 24B frame space in the retail object (iter-6 frame ground-truth; NOT missing live structure); STAYS (PENDING-REVIEW).
+
+### (f) PENDING-REVIEW LEDGER (TU-wide; resolve before any PR)
+1. **PAD_STACK(24) on 8024227C** (committed 90de0b888) — diagnostic; frame group byte-equal at -160/stmw r15,92. Natural-frame replacement pending (try `u8 stack_obj[24]`+`(void)&` first; meter slot positions).
+2. **PAD_STACK(24) on 80240D94** — KEEP with a comment citing the dead-frame evidence (the 24B is never-referenced in the retail object, pinned by decl-order to a dead local declared after buf; upstream precedent: mndiagram2 CreateStatRow ships `int pad[4]`+PAD_STACK(16)). The "PAD_STACK = missing live structure" doctrine is REFUTED for THIS fn specifically (the missing thing is provably dead). Inventing a dead local would be honesty-negative vs the macro.
+3. **PAD_STACK(12) on 8023FC28** — diagnostic; natural-frame pass pending.
+4. **`sorted = (u8*) assets;` casts on 8024227C** (×3, committed iter-2) — semantically clean (`assets` IS the sorted_fighters base; the overlay struct documents it). Reviewer may prefer `assets->sorted_fighters` — that spelling costs −3.86pp (allocation re-roll); keep the cast-copy, comment if questioned.
+5. **s32 retypes holding u8 values** on 8024227C (var_r0_2/var_r23/var_r17_6) — matches retail codegen (int-home → clrlwi at every (u8) use site). m2c `var_rNN` naming retained throughout; a cosmetic naming pass is free + recommended before PR.
+6. **CursorProc `u16* hov=(u16*)&mn_804A04F0; *++hov; *hov`** (d858e94ae) — the pre-increment walk is the retail idiom (proven by `lhzu`); load-bearing (direct field form costs Δ+1). Keep; comment if questioned.
+7. **0.4f fix on 80241E78** (fe659a04f) — behavior-correcting (digit placement was off by 0.6 units in row≥10/col≥7) + match-neutral. RETAINED. The `extern const f32 mnDiagram_804DBFA0` named form is codegen-DIVERGENT (in-loop reload) — do NOT re-try; the literal stays (also converges with the upstream no-premature-named-externs guideline).
+8. **8523f3539 2-use spelling** `row_offset_adj = y_offset * rowf - 0.4f;` on 80241E78 — LOAD-BEARING (single-use form sinks the fsubs across the call; FULLNORM 0↔20 hinges on it). Semantically identical (CSE'd to one fmuls). Do NOT "simplify" back.
+9. **8023FC28 dead-24B proof / `(u8*)` cast disposition** — the iter-8 cast-copy was REVERTED (not retained); the committed `assets->sorted_names` / `&assets->sorted_fighters[max_idx]` member-deref form is the floor. No new pending item from Part 1.
+
+### (g) RECOMMENDED PERMUTER-CHANNEL ALLOCATION ORDER (for the pool)
+Permuter is currently FENCED on this branch; this is the hand-off order for a permuter-authorized round (highest expected yield first, by cascade size × structural-headroom):
+1. **8024227C (94.32)** — LARGEST headroom (5.68pp), opcode-stream delta 0 + frame matched, 175-line cascade is the LAST family. Run the register-endgame queue (d): decl-order nudges first (cardstate decl-chain method), then match-iter-first oracle (`--regs gpr-volatile,r0`), then force-phys r14–r17. Best single permuter ROI in the TU.
+2. **802417D0 (98.03)** — clean post-flip coloring cascade (FULLNORM 0), 96-site; medium headroom (1.97pp), single root (the iter-5 test-flip).
+3. **80240D94 ROOT A (97.35)** — the ONE register-class permuter site (the `tbl` addi/mr); ROOT B is NOT permuter-reachable (needs an IR killing-def — gate it behind the mndiagram2 zero-emission-probe re-test, not the permuter). Lower headroom on the reachable part.
+4. **80241E78 (98.94)** — ONE cheap permuter re-test of the iter-3 dataflow-pinned levers (the FP web re-rolled iter-7, substrate changed); low odds (the r25↔r26 swap is dataflow-pinned), small headroom (1.06pp).
+5. **802427B4 (98.84)** — near-ceiling sibling; comma-expr + interferer-trunc already landed; LOW yield (the 86-site rotation is a clean callee-save permutation).
+6. **CursorProc (99.52), 8023FC28 (97.82-rotation), OnFrame (99.72)** — LOWEST yield (pure dataflow-pinned single-pair swaps / whole-web rotations; ~0.3–0.5pp each). Park unless a cheap permuter channel is idle. 8023FC28's 2 reloc lines are ceiling noise (not permuter-addressable).
+WALLS (InputProc, 80242C0C, HandleInput) are FENCED + protected — NOT in the permuter rotation.
+
+### STATE-FILE-vs-TREE RECONCILIATION (iter-8)
+Verified at HEAD=25cb88703, tree clean: every tracked-fn number in this declaration was re-measured this iteration via `checkdiff --summary` and matches the iter-7 protected-sweep numbers EXACTLY (8023FC28 97.82, 80241E78 98.94, CursorProc 99.52, 802417D0 98.03, 80240D94 97.35, 8024227C 94.32, OnFrame 99.72, 802427B4 98.84, 802437E8/80243434 100, InputProc 98.67, 80242C0C 96.95, HandleInput 97.46). **No discrepancy found between the state file and the tree.**
