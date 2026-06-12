@@ -56,7 +56,7 @@ witness). If no → `not_order_class` (order is downstream symptom).
 
 | function | base % | routing | step | key evidence |
 |----------|-------:|---------|------|--------------|
-| mnDiagram_OnFrame | 99.72 | **#588-blocked** (infra-timeout; no routing) | reaches Step 3 (forced-union probe) — does not complete | passed Step 1 (register-only primary) + Step 2 (no phys conflict) — the ONLY pool fn to reach Step 3; its 1-entry forced-union build (`--force-iter-first 37`) of mndiagram.c did NOT return on TWO independent attempts (first ran >920s, second >1060s, neither completed; operator-killed) — Step-4b verdict unobtainable (#588/#589) |
+| mnDiagram_OnFrame | 99.72 | **not_order_class** (Step-4b; RESOLVED — see Census FINAL) | reaches Step 4b | passed Step 1 (register-only) + Step 2 (no phys conflict) — the ONLY pool fn to reach Step 4b. Phys witness `--force-phys 0:49:28` = byte MATCH ×2 (ig49 `r29`→`r28`); but ALL 8 order forces mismatch (18–108 lines) → order axis does NOT reproduce the target. The census hang was transient (fast on a fresh DLL, #588/#589). |
 | mnDiagram_802427B4 | 98.84 | not_order_class (Step-1 exclusion) | Step 1 | checkdiff primary `stack-layout`, not register-only — not in the order-distance pool |
 | mnDiagram_802417D0 | 98.03 | not_order_class (Step-1 exclusion) | Step 1 | checkdiff primary `register-allocation`, not register-only — not in the order-distance pool |
 | mnDiagram_80241E78 | 98.94 | not_order_class (Step-1 exclusion) | Step 1 | checkdiff primary `stack-layout`, not register-only — not in the order-distance pool |
@@ -97,7 +97,13 @@ current best form is 98.84% with primary `stack-layout`. Both route out at Step 
 
 ## Headline
 
-**0 directed · 10 not_order_class (all Step-1 exclusions) · 1 #588-blocked (OnFrame, infra-timeout) · 0 unanchorable · 0 force_cap_blocked · 0 unstable.**
+**0 directed · 11 not_order_class (10 Step-1 exclusions + OnFrame at Step-4b) · 0 #588-blocked · 0 unanchorable · 0 force_cap_blocked · 0 unstable.**
+
+> **UPDATE (2026-06-12, OnFrame ig49 round):** the lone `#588-blocked` cell is
+> RESOLVED. The hang was transient (fast on a fresh DLL); OnFrame reaches Step 4b
+> and routes `not_order_class` — phys witness exists (`--force-phys 0:49:28` byte
+> MATCH ×2) but no order force reproduces it. Census is **FINAL at 0/11 directed**.
+> See the "Census FINAL" section below.
 
 - **Directed (kill-switch witness):** 0.
 - **not_order_class:** 10 — every one a Step-1 exclusion (checkdiff primary not in
@@ -137,6 +143,42 @@ discovery of a witness) for `mnDiagram_OnFrame` specifically requires fixing #58
 (give the collector a real `timeout_s` and/or investigate why one forced-debug
 build of `mndiagram.c` exceeds 900s) so its Step-4b forced-build verdict can be
 read; until then OnFrame is the one open question, and it is a tooling question.
+
+## Census FINAL — OnFrame resolved `not_order_class` (2026-06-12, OnFrame ig49 round)
+
+The one open cell is now **closed by evidence, not gated by infra.** A follow-up
+probe (#588/#589 notes) re-ran the exact hanging command on a freshly
+`--rebuild-dll`'d DLL and it **completed in ~2s** — the >920s/>1060s census hang
+was **transient** (contended/stale DLL or ninja/repo-lock contention in the
+campaign worktree at census time), not an inherent slow path of the
+`ig37`/`--diff`/`mndiagram.c` forced build. With the hang removed, OnFrame's
+Step-4b verdict is readable, and it routes **`not_order_class`**:
+
+- **Phys witness EXISTS:** `--force-phys 0:49:28 --force-phys-fn mnDiagram_OnFrame`
+  → byte-identical MATCH (0 changed lines), reproduced **twice**. The residual is
+  a single-node re-color: ig49 (class 0, the inlined `gobj->user_data` temp,
+  `lwz r49,44(r32)`) is `r29` in our build, retail wants `r28`. The lone
+  mismatch is `+1e0: lwz r28,44(r30)` (retail) vs `lwz r29,44(r30)` (ours),
+  inside the inlined `mnDiagram_UpdateScrollArrowVisibility`.
+- **NO order force reproduces it (8 variants, all mismatch):** `--force-iter-first 49`
+  / `--force-select-order 49` (18 lines), `49,45` / `49,37` / `49,33` (100/108/100),
+  the r29 cluster `49,65,47,46,36,34` (92), and the census's `37` / `37,36` / `36`
+  / env-fn (108/108/92/108). Moving ig49 up the simplify list perturbs the whole
+  high-degree r28/r29/r30/r31 cluster instead of giving ig49 `r28`.
+
+So under the census's strict order-class definition (routing = directed iff a
+`force-iter-first` ORDER reproduces the target), **`mnDiagram_OnFrame` routes
+`not_order_class`** — the retail `ig49=r28` is a SELECTION/assignment outcome the
+order axis does not expose. The census is therefore **FINAL at 0/11 directed**,
+with the last cell now a CONCRETE order-class refutation rather than an
+infra-blocked unknown. CAVEAT (unchanged): the target is NOT unreachable — it is
+a single-node phys re-color provably reproducible via `--force-phys`; the
+corresponding C-source question (what makes retail keep that inlined tail temp in
+`r28`) is a separate, still-open matching question (see the OnFrame ig49 round in
+`CAMPAIGN-STATE-D1COMPLETION.md`: the what-if oracle's only flip lever is the
+move-axis = dispense position, which is exactly what the order-force census
+cannot reach; the add/remove-edge what-ifs overshoot, and the proven alias
+channel CSE'd away at OnFrame's low tail pressure).
 
 ## Tooling issues filed
 

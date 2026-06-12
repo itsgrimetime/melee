@@ -1062,3 +1062,41 @@ AggRank (the ranking's #1, coder1-dedicated, base 775) is documented in the D2CO
 
 ### HOST-OCCUPANCY DISCREPANCY (flagged — orchestrator decision needed)
 The brief stated "Both hosts are FREE (all prior jobs stopped at convergence)" — but `remote ps` (live SSH probe) shows **3 pre-existing LIVE descending jobs** the triage-3 round did NOT stop: coder1=`mnDiagram_InputProc_tuned-coder1-20260611-065847` (1.77M iters, the MEMORY "tuned listening post"), coder3=`mnDiagram2_HandleInput-coder3-20260611-125553` + `-175702` (both live; HandleInput is PROTECTED/parked). `remote list` returned EMPTY (filed issue #591 — list reads local metadata JSON, misses these). Per the triage-1/triage-3 precedent (multiple jobs share one host's 16 threads), the new jobs CO-RUN with these — submission did not require stopping them, and stopping the listening-post/PROTECTED jobs is outside the no-triage fence. **coder1 is NOT truly "dedicated" to AggRank until the orchestrator decides whether to stop InputProc_tuned; coder3 now runs 4 jobs (2 HandleInput + GetRankedName + 8024227C).**
+
+## ONFRAME IG49 ROUND — the what-if oracle's minimal flip + source-spelling ladder (2026-06-12, OnFrame source-lever driver)
+
+**Outcome: SEARCH MISS (OnFrame stays 99.72, backend-ceiling). No regressions; tree restored to baseline.** The what-if oracle's minimal-perturbation answer IS the valuable artifact — it pins the residual as a dispense-position (move-axis) outcome that the order-force census already proved unreachable, and the proven alias channel CSE's away at OnFrame's low tail pressure.
+
+### THE RESIDUAL (re-confirmed, single node)
+- The ONLY differing instruction: `+1e0: lwz r28,44(r30)` (retail) vs `lwz r29,44(r30)` (ours). Node **ig49, class 0** (gpr), degree 13, `lwz r49,44(r32)` = a FRESH re-read of `gobj->user_data`. `virtual-to-var r49` = NO source variable (compiler temp).
+- **ig49 lives ENTIRELY INSIDE the inlined `mnDiagram_UpdateScrollArrowVisibility`** (`void* data = ((HSD_GObj*)gobj)->user_data;`, mndiagram.c:2256). The disassembly proves it: `+1e0 lwz r28,44(r30)` then `+1e8 lwz r3,28(r28)` = `((HSD_JObj**)data)[7]` → `HSD_JObjSetFlagsAll(.,0x10)`. **That standalone function is already 100%** (in the 53 hundreds list) — its internal structure is fixed/correct; the residual is purely the inline-merge coloring in OnFrame.
+- `--force-phys 0:49:28 --force-phys-fn mnDiagram_OnFrame` = byte MATCH (witness re-confirmed; #588/#589).
+
+### THE WHAT-IF ORACLE VERDICT (`debug inspect tiebreak`, G1 = 55/55 PERFECT, 0 truncated — what-ifs trustworthy)
+- ig49's REAL neighbors (from OnFrame's n_nodes=80 COLORGRAPH, iter 40): precolored `r0,r3..r12` (the call-clobbered volatiles, ig49 crosses `80241668`/the inlined `SetFlagsAll` calls) + **node 32 = `gobj` base (r30)** + **node 40 = `count` (r27)**. ig49 sees {r27, r30} among callee-saves → r28 AND r29 free → dispense gives it the higher (r29); retail gives r28.
+- **`suggest register-tiebreak -f mnDiagram_OnFrame --force-phys 0:49:28`** → lever family = **interference-insertion** (keep a named value live across ig49's def so the allocator occupies r3-r27 first) + **simplify-order-shift** (move/sink the defining expr later) + targeted-alias. Confirms ig49→r28, below-set r3..r27.
+- **`first-divergence --force-phys 0:49:28 --source`** → class 0, iter 40, ig49 r29→r28, **cause = Case C** ("shift X's simplify-order position so dispense reaches r_target").
+- **THE MINIMAL FLIP (the axis the census never tried):**
+  - `add-interferer 49:N` for r28 nodes (45,37,33) → **no change** (pushes ig49 away from r28, wrong way).
+  - `add-interferer 49:N` for r29 nodes: 49:65 → **r31 (OVERSHOOTS, wrong way)**; 47/46/36/34 → no change.
+  - `remove-edge 49:32`/`49:40` → no change; `49:0` → r0 (degenerate).
+  - **`move 49:later` (simplify order) → r28 (FLIPS, the clean answer):** `move 49:after:45` (smallest), `move 49:before:37` / `:33` / `:36` / `:34`, `move 49:after:40` — ALL predict **r28**. Moving ig49 EARLIER (`before:65`) → r31 (overshoot). ⟹ **the lever is "ig49 dispensed slightly LATER" = lower its degree / shift its simplify position by ONE relative to the r28 cluster — NOT head-of-list (which is why the 8 census order-forces all overshoot to 18-108-line cluster reshuffles).**
+
+### SOURCE-SPELLING LADDER (3 builds; baseline saved to /tmp/mndiagram_ONFRAME_BASELINE.c first)
+| # | Spelling (oracle mapping) | ig49 | match % | verdict |
+|---|---------------------------|------|--------:|---------|
+| baseline | — | r29 | 99.72 (backend-ceiling) | — |
+| 1 | **Sink `data2 = gobj->user_data` PAST `mnDiagram_80241668(gobj)`** (lever-2 statement-sink, both branches) | — | **91.34** (signature-type-mismatch) | **REGRESSED — hard revert.** Sinking past the call REMOVES the cross-call liveness entirely (value re-loaded fresh after the call) — a different graph, not a re-order of the same nodes. Wrong mechanism for "move later." |
+| 2 | **Create-style alias `data2_alias = data2`** read at the 8024227C arg (lever-1/the 4-win ALIAS channel, `mutate insert-alias --at 0`) | r29 | **99.72 (inert)** | Alias is value-identical → MWCC CSE'd it away (OnFrame's tail pressure is too low for the node to survive, unlike Create which had ~10 live locals). Also can't reach ig49 (which is the INLINED function's own re-read, a different temp than `data2`). |
+| 3 | **Decl-reorder: move `int count` above `proc`/`data2`** (count = ig49's r27 neighbor; the recorded decl axis) | r29 | **99.72 (inert)** | Confirms the recorded "decl probes inert for this fn" — OnFrame-local decl order doesn't reach a node living inside the inlined callee. |
+
+### WHY THE MISS (mechanism, NOT an impossibility claim)
+The single clean flip lever the oracle found is the **move-axis (dispense position)** — and the order-class census ALREADY proved that axis is not reachable here via any `force-iter-first` order (8 variants, all 18-108-line mismatches; moving ig49 up the list reshuffles the whole r28/r29/r30/r31 cluster). The C-source handles for the move-axis are: (a) statement-sink → REGRESSES (kills cross-call liveness, because the natural sink crosses a call); (b) alias/interference-insertion → CSE's away at this pressure; (c) decl-order → inert (node is inside the inlined callee). ig49 is the inlined `UpdateScrollArrowVisibility`'s OWN `gobj->user_data` re-read — the standalone callee matches at 100%, so the residual is an inline-MERGE coloring outcome with no OnFrame-local source object bound to ig49 (analogue of the `fn_803AC7DC inline-injection coloring ceiling` and `reread_field_materializes_arg_register`'s NON-materialization sibling). **The target is phys-reachable (witness proven) and source PROVABLY exists; it was just not found via the oracle's full what-if sweep + the proven alias channel + the recorded decl axis. Re-open conditions below.**
+
+### RE-OPEN CONDITIONS (for a future deep-dive)
+1. A spelling that makes the inlined `UpdateScrollArrowVisibility` re-read dispense exactly ONE slot later WITHOUT crossing the `80241668`/SetFlags calls differently — e.g. a higher-pressure neighbor introduced precisely at the inlined load's position (the oracle's interference-insertion lever, but with a node that does NOT CSE — a genuinely distinct value live across line 2256's inlined slot, not a value-identical alias).
+2. A permuter run scoped to OnFrame's tail (NOT this round's fences — coder3 jobs run) with the force-phys 0:49:28 objective + reorder-heavy weights, seeding the move-axis the oracle identified.
+3. Anchoring `count` (the r27 neighbor, node 40) so it colors AFTER ig49 — but `count` is consumed by the inlined `cmpwi r27,7`/`,10`, so its range is structurally fixed by the inline.
+
+### FENCES HONORED
+OnFrame + census doc only. No permuter ops. No PAD_STACK. Tree restored to baseline (diff -q vs /tmp/mndiagram_ONFRAME_BASELINE.c = IDENTICAL). Full protected sweep re-verified post-revert: OnFrame 99.72, 8024227C 96.03, InputProc 98.89, 802427B4 98.84, all 53 hundreds intact (report.json, this worktree's build).
