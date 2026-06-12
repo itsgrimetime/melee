@@ -2384,7 +2384,6 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
 void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
 {
     s32 var_r22_2;
-    void* gobj = arg0;
     s32 arg1_r = arg1;
     s32 arg2_r = arg2;
     u8 is_name = arg3;
@@ -2423,7 +2422,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                         var_r19_2 = mnDiagram_SumNameFalls(
                             mnDiagram_GetVisibleNameCursorFrom(sorted, arg2_r,
                                                                var_r22));
-                        mnDiagram_80241E78(gobj, (u8) var_r22, (u8) var_r30,
+                        mnDiagram_80241E78(arg0, (u8) var_r22, (u8) var_r30,
                                            var_r19_2);
                     }
                 } else {
@@ -2440,7 +2439,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                         var_r19_5 = mnDiagram_SumFighterFalls(
                             mnDiagram_GetVisibleFighterCursorFrom(
                                 sorted, arg2_r, var_r22));
-                        mnDiagram_80241E78(gobj, (u8) var_r22, (u8) var_r30,
+                        mnDiagram_80241E78(arg0, (u8) var_r22, (u8) var_r30,
                                            var_r19_5);
                     }
                 }
@@ -2459,13 +2458,13 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                             sorted, arg1_r, var_r30);
                         if (var_r22_2 == 7) {
                             var_r17_4 = mnDiagram_GetNameTotalKOs(var_r0_2);
-                            mnDiagram_80241E78(gobj, (u8) var_r22_2,
+                            mnDiagram_80241E78(arg0, (u8) var_r22_2,
                                                (u8) var_r30, var_r17_4);
                         } else {
                             var_r17_6 = mnDiagram_GetVisibleNameCursorFrom(
                                 sorted, arg2_r, var_r22_2);
                             mnDiagram_80241E78(
-                                gobj, (u8) var_r22_2, (u8) var_r30,
+                                arg0, (u8) var_r22_2, (u8) var_r30,
                                 GetPersistentNameData((u8) var_r0_2)
                                     ->vs_kos[(u8) var_r17_6]);
                         }
@@ -2509,13 +2508,13 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                             if (var_r16_6 > cap) {
                                 var_r16_6 = cap;
                             }
-                            mnDiagram_80241E78(gobj, (u8) var_r22_3,
+                            mnDiagram_80241E78(arg0, (u8) var_r22_3,
                                                (u8) var_r30, var_r16_6);
                         } else {
                             var_r24 = mnDiagram_GetVisibleFighterCursorFrom(
                                 sorted, arg2_r, var_r22_3);
                             mnDiagram_80241E78(
-                                gobj, (u8) var_r22_3, (u8) var_r30,
+                                arg0, (u8) var_r22_3, (u8) var_r30,
                                 GetPersistentFighterData((u8) var_r23)
                                     ->fighter_kos[var_r24]);
                         }
