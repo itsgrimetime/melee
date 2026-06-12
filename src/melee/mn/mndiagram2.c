@@ -1043,13 +1043,14 @@ void mnDiagram2_Create(int arg0)
     HSD_JObj* jobj;
     mnDiagram_ArchiveData* archive = &mnDiagram_804A0834;
     HSD_GObj* gobj;
-    Diagram2* user_data;
+    Diagram2* new_var;
     u32 is_name;
     u8 entity_idx;
     int scroll;
     int entity_val;
     int threshold;
     int j;
+    Diagram2* user_data;
     int i;
     int offset;
     Diagram2* user_data2;
@@ -1076,10 +1077,11 @@ void mnDiagram2_Create(int arg0)
     HSD_GObj_SetupProc(gobj, mnDiagram2_Think, 0);
 
     is_name = user_data->is_name_mode;
+    new_var = user_data;
     if (is_name) {
-        entity_idx = user_data->selected_name_idx;
+        entity_idx = new_var->selected_name_idx;
     } else {
-        entity_idx = user_data->selected_fighter_idx;
+        entity_idx = new_var->selected_fighter_idx;
     }
     scroll = user_data->scroll_offset & 0xFF;
     if (is_name) {
