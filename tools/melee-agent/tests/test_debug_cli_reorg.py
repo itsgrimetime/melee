@@ -8272,6 +8272,46 @@ def _write_test_mwcc_debug_dll(path: Path, *, manifest: bool = True) -> None:
     path.write_bytes(payload)
 
 
+def _write_legacy_hook_mwcc_debug_dll(path: Path) -> None:
+    legacy_strings = "\0".join([
+        "MWCC_DEBUG_PCDUMP_PATH",
+        "MWCC_DEBUG_FORCE_PHYS_FUNCTION",
+        "MWCC_DEBUG_FORCE_PHYS_ITER",
+        "MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION",
+        "MWCC_DEBUG_FORCE_COALESCE",
+        "MWCC_DEBUG_FORCE_COALESCE_FUNCTION",
+        "[FORCE_COALESCE] alias[%d]: %d -> %d",
+        "[FORCE_COALESCE] scope skip",
+        "MWCC_DEBUG_FORCE_REMAT",
+        "MWCC_DEBUG_FORCE_REMAT_FUNCTION",
+        "[FORCE_REMAT] scope skip",
+        "MWCC_DEBUG_FORCE_INTERFERE",
+        "MWCC_DEBUG_FORCE_INTERFERE_FUNCTION",
+        "[FORCE_INTERFERE] +edge(%d,%d)",
+        "MWCC_DEBUG_FORCE_SCHEDULE",
+        "MWCC_DEBUG_FORCE_SCHEDULE_FUNCTION",
+        "[FORCE_SCHEDULE] scope skip",
+    ])
+    payload = b"MZ" + (b"\0" * 4094) + legacy_strings.encode("ascii")
+    path.write_bytes(payload)
+
+
+def test_debug_dump_doctor_accepts_legacy_hook_dll_without_manifest(
+    tmp_path: Path,
+) -> None:
+    dll = tmp_path / "MWDBG326.dll"
+    _write_legacy_hook_mwcc_debug_dll(dll)
+
+    check = debug_cli._check_mwcc_debug_dll_features(
+        "mwcc_debug DLL features",
+        dll,
+    )
+
+    assert check.ok is True
+    assert "legacy hook strings" in check.detail
+    assert "lacks MWCC_DEBUG_FEATURES" in check.detail
+
+
 def test_debug_dump_doctor_reports_missing_debug_setup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -16399,6 +16399,24 @@ _MWCC_DEBUG_REQUIRED_DLL_FEATURES = (
     "force-schedule",
     "force-no-cse",
 )
+_MWCC_DEBUG_LEGACY_HOOK_STRINGS = (
+    "MWCC_DEBUG_PCDUMP_PATH",
+    "MWCC_DEBUG_FORCE_PHYS_FUNCTION",
+    "MWCC_DEBUG_FORCE_PHYS_ITER",
+    "MWCC_DEBUG_FORCE_ITER_FIRST_FUNCTION",
+    "MWCC_DEBUG_FORCE_COALESCE",
+    "MWCC_DEBUG_FORCE_COALESCE_FUNCTION",
+    "[FORCE_COALESCE]",
+    "MWCC_DEBUG_FORCE_REMAT",
+    "MWCC_DEBUG_FORCE_REMAT_FUNCTION",
+    "[FORCE_REMAT]",
+    "MWCC_DEBUG_FORCE_INTERFERE",
+    "MWCC_DEBUG_FORCE_INTERFERE_FUNCTION",
+    "[FORCE_INTERFERE]",
+    "MWCC_DEBUG_FORCE_SCHEDULE",
+    "MWCC_DEBUG_FORCE_SCHEDULE_FUNCTION",
+    "[FORCE_SCHEDULE]",
+)
 
 
 def _check_path(label: str, path: Path, *, executable: bool = False) -> _DumpSetupCheck:
@@ -16439,11 +16457,34 @@ def _check_mwcc_debug_dll_features(label: str, path: Path) -> _DumpSetupCheck:
         return _DumpSetupCheck(label, False, f"unreadable: {path} ({exc})")
     marker = text.find(_MWCC_DEBUG_DLL_FEATURE_PREFIX)
     if marker < 0:
+        missing_legacy = [
+            probe
+            for probe in _MWCC_DEBUG_LEGACY_HOOK_STRINGS
+            if probe not in text
+        ]
+        if not missing_legacy:
+            return _DumpSetupCheck(
+                label,
+                True,
+                (
+                    f"{path} (legacy hook strings; lacks "
+                    f"{_MWCC_DEBUG_DLL_FEATURE_PREFIX} manifest, so exact "
+                    "feature version is unknown — rebuild/redeploy when you "
+                    "need newly-added hooks)"
+                ),
+            )
         return _DumpSetupCheck(
             label,
             False,
             (
                 f"{path} lacks {_MWCC_DEBUG_DLL_FEATURE_PREFIX} manifest; "
+                f"legacy hook probes missing {', '.join(missing_legacy[:4])}"
+                + (
+                    f" (+{len(missing_legacy) - 4} more)"
+                    if len(missing_legacy) > 4
+                    else ""
+                )
+                + "; "
                 "rebuild/redeploy via `debug dump setup --rebuild-dll`"
             ),
         )
