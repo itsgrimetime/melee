@@ -2253,18 +2253,20 @@ void mnDiagram_ExitAnimProc(HSD_GObj* gobj)
 /// @param count Number of entries (fighters or names) to display.
 void mnDiagram_UpdateScrollArrowVisibility(void* gobj, int count)
 {
+    void* new_var;
     void* data = ((HSD_GObj*) gobj)->user_data;
     PAD_STACK(8);
+    new_var = data;
     if (count <= 7) {
         HSD_JObjSetFlagsAll(((HSD_JObj**) data)[7], 0x10U);
-        HSD_JObjSetFlagsAll(((HSD_JObj**) data)[8], 0x10U);
+        HSD_JObjSetFlagsAll(((HSD_JObj**) new_var)[8], 0x10U);
     } else {
         HSD_JObjClearFlagsAll(((HSD_JObj**) data)[7], 0x10U);
-        HSD_JObjClearFlagsAll(((HSD_JObj**) data)[8], 0x10U);
+        HSD_JObjClearFlagsAll(((HSD_JObj**) new_var)[8], 0x10U);
     }
     if (count <= 10) {
         HSD_JObjSetFlagsAll(((HSD_JObj**) data)[6], 0x10U);
-        HSD_JObjSetFlagsAll(((HSD_JObj**) data)[5], 0x10U);
+        HSD_JObjSetFlagsAll(((HSD_JObj**) new_var)[5], 0x10U);
     } else {
         HSD_JObjClearFlagsAll(((HSD_JObj**) data)[6], 0x10U);
         HSD_JObjClearFlagsAll(((HSD_JObj**) data)[5], 0x10U);
