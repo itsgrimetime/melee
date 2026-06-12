@@ -352,3 +352,100 @@ to transfer; its 97.87 intact).
 Open set: CreateStatRow 80.11 (untouched — data-linking + inline-boundary round pending),
 GetRankedFighter 94.58, GetAggregatedFighterRank 93.56, Create 93.75, GetRankedName 97.87,
 UpdateHeader 94.18 (banked levers), HandleInput 97.46 (WALLED/parked).
+
+---
+
+# ITERATION 4 (driver 2, 2026-06-11): the priced callee-save peel — PARTIAL WIN (+0.58, boundary NOT flipped)
+
+## THE ONE QUESTION: does the priced peel kill GetAggregatedFighterRank's extra callee-save (ours `stmw r21`, expected `stmw r22`)?
+
+ANSWER: **NO — the r21→r22 boundary flip was NOT achieved by any spelling tried.** But the
+investigation isolated the residual to ONE register and landed an unrelated +0.58 structural win.
+
+## Mechanism (precise, from reloc-stripped side-by-side @ baseline 93.56)
+
+The ENTIRE 50-register-only residual is a single coherent cascade rooted in ONE divergence at
+the prologue arg-spill: `type` (param r4) lands in **r21 (ours)** vs **r31 (expected)**.
+- Expected `+018 addi r31,r4,0` (type→r31), `+058 clrlwi r28,r31,24` (type_val cast, LAST read
+  of r31), then `+064 addi r31,r1,40` — **r31 is REUSED for `arr`** (type dies at cast, arr born
+  immediately after, they share the physical reg → 10 callee-saves, `stmw r22`, frame 480).
+- Ours `+018 addi r21,r4,0` (type→r21), cast reads r21, but r21 is NEVER reused; `arr` gets a
+  fresh callee-save → 11 callee-saves, `stmw r21`, frame 488 (+8).
+- Raw `type` is read EXACTLY ONCE in source (the `type_val = type` cast); the switch reads
+  type_val only. So lever family (1) "make type's last use the cast" was ALREADY structurally
+  satisfied at baseline — it is a no-op. The peel is purely a coloring-ORDER decision.
+
+ROOT (newly characterized this iteration): in OURS the funcTable invariant-hoist
+(`mnDiagram_GetNamePlayTimeByFighter` symbol, used in cases 0x15/0x16) colors into **r31**
+(`+058 addi r31,r4` = the lo half), pushing `type`'s spill down to r21. In expected, funcTable
+is r30 and type owns r31. i.e. the preheader SCHEDULE order differs: expected emits the
+`clrlwi`(type-cast) FIRST (+058) so type claims fresh-descending r31; ours emits funcTable +
+arr first and the cast LAST (+064), so type colors after them into the bottom slot. MODEL GAP,
+cause unattributed: no source spelling tried reorders the preheader so the type-cast schedules
+before the funcTable/arr hoists.
+
+## Build ledger (5/5 metered builds used)
+
+| # | Edit | Result | Boundary | Verdict |
+|---|---|---|---|---|
+| 1 | decl: move `arr` ABOVE `type_val` (base,curr,arr,type_val,...) | 93.56 → 93.84 | still `stmw r21` | incidental band shuffle; no peel. Reverted. |
+| 2 | decl: move `arr` LAST (after `zero`) | 93.56 (no change) | still `stmw r21` | decl-order band does not touch the type save. Reverted. |
+| 3 | **inline cast `switch ((s32) type)`, drop `type_val` local** | 93.56 → **94.14** | still `stmw r21` | **KEPT (committed 2a01de812).** Removes the named-local copy/home noise; snaps 5 prologue regs to exact match (base→r27, out→r23, idx→r24, ptr→r28). type STILL lands r21 — proves the extra save is NOT caused by the type_val local. |
+| 4 | named cast-temp `type_val = (s32) type;` before arr, used in switch | **93.56 REGRESS** (vs build-3 94.14) | still `stmw r21` | the named `type_val` local is WORSE than the inline cast (re-adds band noise). Reverted to build-3. |
+| 5 | `arr = entries` moved BEFORE `count = GetNameCount()` | **92.73 REGRESS** (class → signature-type-mismatch) | still `stmw r21` | arr's earlier def hurt; reverted to build-3. |
+
+## Laws extracted / confirmed (iteration 4)
+
+1. **Inline-cast beats named-int-copy for a u8→switch operand:** `switch ((s32) type)` (94.14)
+   strictly dominates `type_val = type; switch(type_val)` (93.56) AND
+   `type_val = (s32) type; switch(type_val)` (93.56) here. The named int local mints a
+   copy/home web that perturbs the prologue arg-spill band; inlining the cast lets the 5 spill
+   pointers (base/out/idx/ptr) color to their exact target registers. (Generalizes the trio's
+   "drop the m2c-minted intermediate local" pattern to a scalar switch operand.)
+2. **The extra callee-save is a coloring-ORDER residual, not a source-object residual:** the
+   peel survives removal of the only named local on type's path (build 3), decl-order moves of
+   the competitor `arr` (builds 1,2), and assignment-order moves (build 5). The lever, if it
+   exists, is whatever reorders the preheader invariant SCHEDULE so the type-cast precedes the
+   funcTable hoist — not reachable via decl-order / assignment-order / cast-spelling here.
+3. **funcTable-hoist-vs-type-spill contention (named, for next driver):** the residual r31 is
+   contested between the hoisted `mnDiagram_GetNamePlayTimeByFighter` address and the `type`
+   param spill; expected gives r31 to type, ours to funcTable. Driver-1 iter-3 already found
+   that DROPPING a funcTable local (direct symbol) was load-bearing for landing 87.64→93.56, so
+   a funcTable *local* is contraindicated (untried this iter precisely because it likely
+   regresses). Next idea-space: force the type-cast to be the first-scheduled preheader op
+   without a named int (e.g. reference `(s32)type` in the loop guard / a comma at loop entry),
+   or investigate whether the switch arm ORDER (0x15/0x16 referencing funcTable before 0x17)
+   controls the hoist priority.
+
+## GetAggregatedFighterRank residual @ 94.14 (next entry)
+
+- Boundary: ours `stmw r21,444(r1)` / frame 488 vs expected `stmw r22,440(r1)` / frame 480
+  (+8 = the one extra callee-save holding `type` in r21, un-reused).
+- The whole 50-line register-only cascade is ONE renumber off this single r21-vs-r31 type
+  landing; everything downstream falls out if the type-cast colors into r31 (gets reused by
+  arr). It is a preheader-schedule/coloring-order wall, NOT a structure or stack residual.
+- 4 stack lines + 2 reloc lines are the same downstream cascade; re-read after a peel.
+- Prologue band is otherwise EXACT after build 3 (base/out/idx/ptr/zero all match).
+
+## PENDING-REVIEW (carried + unchanged)
+
+- mnDiagram2_GetAggregatedFighterRank: `res` is read at the join with NO default arm in the
+  switch (intentionally; original does this; type is always 0x15-0x17 from callers). Carried
+  from iter-3 — reviewer may want `res` initialized; that would break the match. Build-3's
+  inline `switch ((s32) type)` does NOT change this (still no default). No NEW guideline risk
+  this iteration: the commit is natural C only (no PAD_STACK, no volatile, no data-symbol).
+
+## Commit stack (cumulative)
+- cc052016f GetRankedFighter 79.94 -> 94.58 (iter 2)
+- e2d172d4d GetAggregatedFighterRank 81.91 -> 85.19 (iter 2)
+- 05a5aaf91 GetAggregatedFighterRank 85.19 -> 93.56 (iter 3)
+- 2a01de812 GetAggregatedFighterRank 93.56 -> 94.14 (iter 4, this driver)
+
+## TU state after iteration 4
+Open set: CreateStatRow 80.11 (untouched — data-linking + inline-boundary round still pending),
+GetRankedFighter 94.58, **GetAggregatedFighterRank 94.14**, Create 93.75, GetRankedName 97.87,
+UpdateHeader 94.18 (banked levers), HandleInput 97.46 (WALLED/parked).
+Protected-set sweep (full ninja report.json): all 55 mndiagram/2/3 100s hold; all partials
+unchanged (mndiagram3_8024714C 90.23, mndiagram3_80245BA4 94.07, fn_802461BC 98.42,
+GetRankedFighter 94.58, GetRankedName 97.87, HandleInput 97.46, CreateStatRow 80.11,
+Create 93.75, UpdateHeader 94.18, InputProc 98.67, 802427B4 98.84). Zero collateral.
