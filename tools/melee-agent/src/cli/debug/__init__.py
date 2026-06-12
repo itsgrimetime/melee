@@ -21381,6 +21381,54 @@ def _parse_and_run_tiebreak_whatif(tb, ig, spec_str):
     return None
 
 
+
+@inspect_app.command(name="explain-diff")
+def inspect_explain_diff(
+    function_or_path: Annotated[
+        str,
+        typer.Argument(
+            help="Function name (auto-runs checkdiff) or path to a checkdiff JSON file.",
+        ),
+    ],
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit structured diagnosis as JSON."),
+    ] = False,
+):
+    """Unified diff diagnosis: read checkdiff JSON (or auto-generate it for a
+    function) and produce a structured, ranked list of recommendations with
+    specific source-level actions and estimated costs."""
+    import json
+    from pathlib import Path
+    from ...mwcc_debug.explain_diff import (
+        parse_checkdiff_json, run_checkdiff, format_diagnosis, produce_diagnosis,
+    )
+
+    # Determine whether the argument is a file path or a function name
+    function = None
+    if os.path.isfile(function_or_path):
+        data = parse_checkdiff_json(function_or_path)
+        if data:
+            function = data.get("function")
+    else:
+        function = function_or_path
+        melee_root = Path.cwd()
+        data = run_checkdiff(function, str(melee_root))
+
+    if data is None:
+        typer.echo(
+            f"Error: could not load checkdiff data for {function_or_path}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if json_out:
+        diagnosis = produce_diagnosis(data, function)
+        typer.echo(json.dumps(diagnosis, indent=2))
+    else:
+        text = format_diagnosis(data, function)
+        typer.echo(text)
+
 @inspect_app.command(name="explain-virtual")
 def inspect_explain_virtual(
     function: Annotated[
