@@ -4124,3 +4124,9 @@ gate.py's live path is T8's deliverable — the frozen-artifact variant needs no
 complete at the derivation layer; end-to-end closure depends on T14's live factory DERIVING the
 passed-in values (use_set/routed sets, window residual, first-def) from the real report/IG/force-phys
 artifacts rather than convenient literals. The T14 review must re-verify this specifically.
+
+**From the T8 review (166336436 — BINDING for T11):** §3 step 3's confirmed/miss bifurcation AND
+the recorded divergence are both keyed on **actual-vs-TARGET** (`actual.get(k) == phys_target[k]`);
+"compare predicted vs actual" names the validation act. A register predicted correctly but landing
+off-target IS part of the divergence datum. T11 consumes `GateOutcome.register_match`/`all_match`
+from `gate.re_extract_and_classify` (mwcc-free over frozen artifacts — test-pinned).
