@@ -2352,6 +2352,8 @@ void mnDiagram_OnFrame(HSD_GObj* gobj)
 
 void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
 {
+    Diagram* data_alias;
+    f32 row_offset_adj;
     HSD_JObj* jobj;
     HSD_JObj* jobj2;
     Diagram* data;
@@ -2361,16 +2363,16 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
     s32 i;
     f32 x_spacing;
     f32 y_spacing;
-    f32 y_offset;
     f32 base;
     f32 rowf;
     f32 row_offset;
     f32 col_offset;
-    f32 row_offset_adj;
     u8 col = arg1;
     u8 row = arg2;
+    f32 y_offset;
 
     data = ((HSD_GObj*) arg0)->user_data;
+    data_alias = data;
 
     jobj = data->jobjs[11];
     base = HSD_JObjGetTranslationX(jobj);
@@ -2398,7 +2400,8 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
         digit = mn_GetDigitAt(arg3, i);
         jobj = HSD_JObjLoadJoint(joint_data[0]);
         HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2], joint_data[3]);
-        HSD_JObjReqAnimAll(jobj, (f32) digit);
+        base = (f32) digit;
+        HSD_JObjReqAnimAll(jobj, base);
         HSD_JObjAnimAll(jobj);
         if (col < 7) {
             HSD_JObjSetTranslateX(jobj, (x_spacing * (f32) i) + col_offset);
@@ -2411,7 +2414,7 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
         } else {
             HSD_JObjSetTranslateY(jobj, row_offset_adj);
         }
-        HSD_JObjAddChild(data->jobjs[11], jobj);
+        HSD_JObjAddChild(data_alias->jobjs[11], jobj);
     }
 }
 
