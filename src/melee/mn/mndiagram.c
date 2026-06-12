@@ -2355,7 +2355,7 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
     digit_count = mn_GetDigitCount(arg3);
     col_offset = y_spacing * (f32) col;
     row_offset = y_offset * (f32) row;
-    row_offset_adj = row_offset - 1.0f;
+    row_offset_adj = row_offset - 0.4f;
 
     joint_data = mnDiagram_804A07F4;
     for (i = 0; i < digit_count; i++) {
@@ -2368,7 +2368,7 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
             HSD_JObjSetTranslateX(jobj, (x_spacing * (f32) i) + col_offset);
         } else {
             HSD_JObjSetTranslateX(jobj,
-                                  (x_spacing * (f32) i) + col_offset + 1.0f);
+                                  (x_spacing * (f32) i) + col_offset + 0.4f);
         }
         if (row < 10) {
             HSD_JObjSetTranslateY(jobj, row_offset);
