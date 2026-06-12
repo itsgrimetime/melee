@@ -2114,11 +2114,11 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
     jobj2 = data->jobjs[4];
     mn_8022ED6C(jobj2, &tbl->arrow_anim);
     if (data->is_name_mode != 0) {
-        result = (u8) data->name_cursor_pos;
+        i = (u8) data->name_cursor_pos;
     } else {
-        result = (u8) data->fighter_cursor_pos;
+        i = (u8) data->fighter_cursor_pos;
     }
-    if (result != 0) {
+    if (i != 0) {
         HSD_JObjClearFlagsAll(jobj2, 0x10U);
     } else {
         HSD_JObjSetFlagsAll(jobj2, 0x10U);
