@@ -317,6 +317,46 @@ _CONTROL_WORDS = {
 }
 
 
+_AGGREGATE_HEAD_RE = re.compile(
+    r"(?s)^(?:typedef\s+)?(?:struct|union|enum)(?:\s+[A-Za-z_]\w*)?\s*$"
+)
+
+
+def _find_matching_brace(text: str, open_index: int) -> int | None:
+    depth = 0
+    for index in range(open_index, len(text)):
+        ch = text[index]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _aggregate_body_ranges(masked: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for match in re.finditer(r"\{", masked):
+        open_index = match.start()
+        head_start = max(
+            masked.rfind(";", 0, open_index),
+            masked.rfind("{", 0, open_index),
+            masked.rfind("}", 0, open_index),
+        ) + 1
+        head = masked[head_start:open_index].strip()
+        if _AGGREGATE_HEAD_RE.match(head) is None:
+            continue
+        close_index = _find_matching_brace(masked, open_index)
+        if close_index is not None:
+            ranges.append((open_index + 1, close_index))
+    return ranges
+
+
+def _offset_in_ranges(offset: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(start <= offset < end for start, end in ranges)
+
+
 def _body_statements(masked: str) -> list[tuple[int, str]]:
     statements: list[tuple[int, str]] = []
     depth = 0
@@ -420,11 +460,32 @@ def _is_simple_assignment_lhs(text: str, start: int, end: int) -> bool:
     return True
 
 
+def _previous_nonspace_index(text: str, before: int) -> int:
+    index = before - 1
+    while index >= 0 and text[index].isspace():
+        index -= 1
+    return index
+
+
+def _is_member_access_identifier(text: str, start: int) -> bool:
+    prev_index = _previous_nonspace_index(text, start)
+    if prev_index < 0:
+        return False
+    if text[prev_index] == ".":
+        return True
+    if text[prev_index] != ">":
+        return False
+    arrow_start = _previous_nonspace_index(text, prev_index)
+    return arrow_start >= 0 and text[arrow_start] == "-"
+
+
 def _local_reads(text: str, known_locals: set[str]) -> list[tuple[str, int]]:
     reads: list[tuple[str, int]] = []
     for match in _IDENT_RE.finditer(text):
         name = match.group(0)
         if name not in known_locals:
+            continue
+        if _is_member_access_identifier(text, match.start()):
             continue
         if _is_simple_assignment_lhs(text, match.start(), match.end()):
             continue
@@ -436,7 +497,11 @@ def _simple_assignment_defs(text: str, known_locals: set[str]) -> set[str]:
     defs: set[str] = set()
     for match in _IDENT_RE.finditer(text):
         name = match.group(0)
-        if name in known_locals and _is_simple_assignment_lhs(text, match.start(), match.end()):
+        if name not in known_locals:
+            continue
+        if _is_member_access_identifier(text, match.start()):
+            continue
+        if _is_simple_assignment_lhs(text, match.start(), match.end()):
             defs.add(name)
     return defs
 
@@ -446,8 +511,11 @@ def _raw_use_before_def_risks(masked: str) -> list[SourceRisk]:
     seen: set[str] = set()
     known_locals: set[str] = set()
     defined_locals: set[str] = set()
+    aggregate_ranges = _aggregate_body_ranges(masked)
 
     for start, statement in _body_statements(masked):
+        if _offset_in_ranges(start, aggregate_ranges):
+            continue
         declarations = _parse_local_declaration(statement)
         if declarations:
             for name, initializer in declarations:

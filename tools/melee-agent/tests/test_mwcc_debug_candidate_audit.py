@@ -196,6 +196,75 @@ void f(void)
     assert not any(r.kind == "use-before-def" for r in report.risks)
 
 
+def test_candidate_audit_allows_struct_field_hoist_to_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef unsigned char u8;
+typedef struct Diagram {
+    u8 is_name_mode;
+} Diagram;
+void f(Diagram* data)
+{
+    u8 result;
+    result = data->is_name_mode;
+    if (result != 0) {
+        use(result);
+    }
+}
+"""
+    )
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(r.kind == "use-before-def" for r in report.risks)
+
+
+def test_candidate_audit_member_assignment_does_not_define_same_named_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef unsigned char u8;
+typedef struct Diagram {
+    u8 is_name_mode;
+} Diagram;
+void f(Diagram* data)
+{
+    u8 is_name_mode;
+    data->is_name_mode = 1;
+    use(is_name_mode);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.semantic_risk_bucket == "semantic-risk-high"
+    assert report.should_reject is True
+    assert any(
+        r.kind == "use-before-def" and r.name == "is_name_mode"
+        for r in report.risks
+    )
+
+
+def test_candidate_audit_member_read_does_not_read_same_named_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef unsigned char u8;
+typedef struct Diagram {
+    u8 is_name_mode;
+} Diagram;
+void f(Diagram* data)
+{
+    u8 is_name_mode;
+    u8 result = data->is_name_mode;
+    use(result);
+}
+"""
+    )
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(r.kind == "use-before-def" for r in report.risks)
+
+
 def test_candidate_audit_does_not_reject_base_existing_use_before_def() -> None:
     base = """
 void f(void)
