@@ -1061,3 +1061,143 @@ mnDiagram3_HandleInput 98.42, mnDiagram3_80245BA4 94.07. Protected sweep: all 52
    merged cast-in-place type web without minting a home).
 4. CreateStatRow: BANK at 83.24. Do not re-enter without (a) R2 store-value authorization or
    (b) an IRO-trace round. The is_name_mode and stat_type axes are both closed with laws.
+
+---
+
+# ITERATION 10 (driver 5, 2026-06-11): UpdateHeader — priced transfer REFUTED-BY-TARGET-BYTES (no build), raw-helper INERT, Class B float-coloring refuted; AggRank VN-kill probe REFUTED (DCE'd). ZERO landings, zero collateral.
+
+## THE ONE QUESTION: does mnDiagram2_UpdateHeader (94.18) close under the priced transfer + banked levers?
+ANSWER: **NO.** The priced transfer was REFUTED BEFORE BUILDING (the 80242B38 site is already
+byte-identical to target). The only real lever (Class A, the `name` return-width) is a
+SIBLING-FENCED cross-TU prototype wall (documented in docs/superpowers/specs/2026-06-07-signature-local-return-width-design.md). The local `raw-helper-call` variant is INERT (byte-identical). The
+remaining residual is register/scheduling-class (float-temp coloring + 1 schedule site); one
+Class-B spelling refuted (frame-home regression). UpdateHeader stays 94.18, BANKED.
+
+## STEP-0 verified: clean tree, HEAD f1e08163e, all 14 protected baselines exact (sweep at end).
+
+## UpdateHeader full divergence map (objdump -dr both objects, reloc+label normalized, VERIFIED — not checkdiff-display; issue #576 caution honored)
+Function is 97 instrs (0x184), both objects same size. Exactly 9 divergent lines, THREE classes:
+
+**Class A — `name` return-width mask placement (3 sites, the dominant/structural residual):**
+- +1b4: TARGET `mr r31,r3` | OURS `clrlwi r31,r3,24` — the `name = GetNameByIndex_s(idx)` store (line 201).
+- +1c4: TARGET `mr r31,r3` | OURS `clrlwi r31,r3,24` — the `name = GetFighterByIndex_s(idx)` store (line 203).
+- +2cc: TARGET `mr r3,r31` | OURS `clrlwi r3,r31,24` — `gm_8016400C(name)` arg (line 253, gm_8016400C takes u8).
+- NOTE the +1f8 site (the brief's PRICED TRANSFER candidate): TARGET `clrlwi r3,r31,24` == OURS `clrlwi r3,r31,24` — **BYTE-IDENTICAL**. The `mnDiagram_80242B38((u8) name, 0)` call (line 217) ALREADY MATCHES. The iter-7 cast-drop does NOT transfer (see verdict below). The +2a8 GetNameText(int) site is also byte-identical (both `mr`).
+- Mechanism (type-attributed): `mnDiagram_GetNameByIndex`/`GetFighterByIndex` return **u8**; `name` is `int`; `GetNameText(int)`, `gm_8016400C(u8)`, `mnDiagram_80242B38(int,int)`. TARGET holds `name` as the RAW u8 return (`mr` store, no widen node), masks ONLY at the int-param 80242B38 site (the explicit `(u8)` cast → clrlwi, matched), and consumes clean at gm_8016400C (provably-clean-u8 → no mask). OURS widens at the store (clrlwi) AND re-masks at gm_8016400C. The `mr` store requires NO u8→int widening node, which only happens if the helper prototype returns `int`.
+
+**Class B — float-temp register coloring (5 sites, register-only):** the `text->pos_*` block (lines 239-245).
+- +284/+28c: TARGET y→f1, x→f0 | OURS y→f0, x→f1 (f0/f1 swapped between x and the negated y).
+- +290 fneg, +294/+298 stfs follow the same f0/f1 swap. Both objects load in the SAME order (y@28, z@32, x@24); only the f0/f1 PICK between x and y differs. Pure float-coloring tiebreak.
+
+**Class C — instruction order/encoding (1 site, scheduling):** the HSD_SisLib_803A6B98 arm (line 250).
+- TARGET `+2b8 addi r3,r28,0 ; +2bc crset` | OURS `+2b8 crset ; +2bc mr r3,r28` — same two ops, transposed, and addi-vs-mr encoding for `r3=text`.
+
+## Build ledger (3 builds spent of ≤4; the priced transfer cost ZERO builds — refuted at the byte gate)
+
+| # | Subject | Edit | % | Mechanism check | Verdict |
+|---|---|---|---|---|---|
+| (gate) | UpdateHeader | PRICED TRANSFER: drop `(u8)` at 80242B38 (line 217) | — | TARGET +1f8 = `clrlwi r3,r31,24` IDENTICAL to ours; the callee proto `(int,int)` + a u8-clean `name` makes the mask NEEDED here (unlike CreateStatRow's <0x19-guarded site). Dropping it would DIVERGE. | **REFUTED BY TARGET BYTES, NO BUILD.** The brief's verify-first gate caught it. |
+| 1 | UpdateHeader | Class A `raw-helper-call`: lines 201/203 drop the `_s` macro `(int)` cast, call raw u8 helper (tool-generated variant `local-return-width:*:raw-helper-call`) | **94.175255 — byte-identical** | +1b4/+1c4 STILL `clrlwi r31,r3,24`. The `(int)` macro-cast and the implicit u8→int widening are the SAME IR node (sibling of iter-7 law b1). `name` is still int → still widens. | INERT, reverted. The `mr` store is unreachable without a prototype return-type change. |
+| 2 | UpdateHeader | Class B: add explicit `f32 x = sp18.x;` temp first (force x's temp earliest → f0) | **94.12371 REGRESS (-0.05)** | The named `x` local minted a FRAME HOME; sp18's stack slots shifted up (loads moved 28/32/24→32/36/28); f0 STILL went to the negated y, f1 to x. Worse on both axes (named-local frame-home law, iter-7 b2). | REVERTED. |
+| 3 | AggRank (contingent) | VN-kill probe: `type = type;` between `count=...` and `arr=((s32)type,entries)` | **94.10959 — byte-identical** | Preheader UNCHANGED: still `clrlwi r30,r30,24` (cast-in-place on type, merged web), funcTable→r31, arr→r28. The self-assignment is DCE'd by the front-end before it breaks the value-number chain. fn size unchanged (zero instrs = Gate 1 PASS; web-split Gate 2 + match-move Gate 3 FAIL). | **REFUTED, reverted.** |
+
+## UpdateHeader verdict — BANKED at 94.18 (attributed frontier)
+- **Class A is the dominant residual and is a SIBLING-FENCED cross-TU return-width wall.** Independently
+  CONFIRMED by `melee-agent debug suggest signatures -f mnDiagram2_UpdateHeader` (the tooling built
+  for exactly this, docs 2026-06-07-signature-local-return-width-*): it reports the line 201/203
+  `helper-return-width-mismatch` (TARGET `mr` shape=plain-move-32 vs OURS `clrlwi` shape=zero-extend-8)
+  and the line 253 gm_8016400C `argument-width-mismatch` with the SAME cross-TU `prototype-parameter-type
+  u8 -> s32` candidate. The design doc states verbatim: "Broadly changing the helper return type to int
+  improves mnDiagram2_UpdateHeader and mnDiagram2_Create, but it regresses sibling ranked helper callers."
+  The ONLY spelling that yields the target's `mr` store is `mnDiagram_GetNameByIndex`/`GetFighterByIndex`
+  return-type `u8`→`int`, which is the banned broad change (regresses GetRankedName/GetRankedFighter,
+  both PROTECTED). The local `raw-helper-call` escape is INERT (build 1). This is the EXACT analogue of
+  CreateStatRow's is_name_mode consistency triangle (iter-7/8): a return-width that is u8 for the siblings
+  and int for this caller cannot be spelled in one TU. NOT "unmatchable" — the bytes are reachable via the
+  prototype flip (the design doc improved it); the BLOCKER is the sibling-protect fence.
+  - UNTRIED caller-local idea-space (for a future driver, low conviction): the iter-9 int-local
+    PROVABILITY law in reverse — but it does not apply, because the divergence is the STORE widening (no
+    consumer to clean). The `local-temp-widen-consumer-cast` variant (NOT generated by the tool here)
+    would widen `name` and cast at consumers, but `name` is ALREADY int and the consumers already carry
+    the right casts; it reduces to the inert raw-helper case. No caller-local lever found despite the
+    tool's full variant set + the byte-level + the type analysis.
+- **Class B is a float-temp coloring tiebreak** (both objects load y,z,x in identical order; only the
+  f0/f1 pick between x and the negated-y differs). One spelling refuted (explicit temp = frame-home
+  regression). This is the float analogue of the GPR coloring-pick walls this campaign documents
+  (AggRank r26↔r27, GetRankedFighter inner-compare regs); no source lever found across the byte map.
+- **Class C is a 1-instruction schedule/encoding transposition** (addi-vs-mr + crset order) — below
+  source control, re-rolls only if Class A/B move (neither did).
+
+## AggRank reserved self-assignment probe — VERDICT: REFUTED (the iter-5 residual is REAL + still merged)
+- The iter-5 residual is CONFIRMED real (objdump both objects): TARGET splits type→cast into TWO webs
+  (`clrlwi r28,r31,24` cast→r28 reusing dead ptr's slot, then `addi r31,r1,40` arr REUSING type's freed
+  r31); OURS coalesces the cast IN-PLACE on type (`clrlwi r30,r30,24`, merged web), funcTable→r31, arr→r28.
+- `type = type;` is DCE'd (zero instrs emitted, web does NOT split, byte-identical 94.10959). The VN-kill
+  device cannot break a register-resident value's value-number — same front-end transparency as iter-7
+  b1 (u8-alias) and iter-9 law 1 (re-derivation transparency). The two-web split is ALLOCATOR-EMERGENT
+  (exact analogue of iter-9 law 2 for CreateStatRow's stat_type region-2: a dominated re-derivation/the
+  same merged value cannot be source-split; MWCC's own live-range decision). A named-int split is
+  contraindicated (iter-4 band-noise regression). No zero-emission source lever splits this web.
+- **CROSS-CAMPAIGN IMPLICATION (mndiagram.c 80240D94 ROOT-B wall):** the zero-emission `var = var` VN-kill
+  is REFUTED here as a web-splitter (DCE'd). If 80240D94's ROOT-B is an analogous merged-web-needs-split
+  residual, the SAME `var=var` device should be expected to be DCE'd there too — do NOT spend a build on
+  it for ROOT-B without a different (instruction-emitting or opacity) device. The VN-kill→web-split path
+  is now empirically closed for register-resident merged webs in this allocator.
+
+## NEW law minted (iteration 10)
+1. **VN-kill self-assignment is DCE-transparent for register-resident webs (the AggRank probe close):**
+   `x = x;` on a register-resident integer emits nothing AND does not break the value-number — the
+   front end eliminates it before coloring, so a merged cast-in-place web stays merged. Generalizes
+   iter-7 b1 / iter-9 law 1 to the value-number axis. Web-splits that the allocator makes emergently
+   (target's cast→r28 / arr→r31 reuse, and CreateStatRow stat_type region-2) are NOT source-reachable
+   by any zero-emission device tried across this campaign (self-assign, re-derivation, comma).
+2. **Return-width store-widening (`mr` vs `clrlwi`) is prototype-gated, not caller-local-spellable:** when
+   the target keeps a narrow-return helper result RAW at the store (`mr`), the only source lever is the
+   helper's return type (u8→int). Dropping a local widening cast (`raw-helper-call`) is inert because the
+   implicit widening regenerates the same node. (Confirmed by `debug suggest signatures` + build 1.)
+
+## PENDING-REVIEW (iteration 10)
+- NOTHING shipped this iteration (all 3 builds reverted; working tree == baseline f1e08163e, byte-exact).
+  No new guideline risk earned. The UpdateHeader PAD_STACK(8) (line 197) is UNCHANGED/diagnostic — carried,
+  must become natural frame reservation pre-PR (it is on the function's own frame, not introduced here).
+- Carried (unchanged, no edits): CreateStatRow PAD_STACK(16); GetAggregatedFighterRank res-uninitialized-
+  on-default + the `arr = ((s32) type, entries)` comma spelling; the CreateStatRow R2 store-value spelling
+  remains FLAGGED-AWAITING-AUTHORIZATION (not applied).
+
+## Commit stack (cumulative — UNCHANGED; iteration 10 added no code commit, docs-only)
+- cc052016f GetRankedFighter 79.94 -> 94.58 (iter 2)
+- e2d172d4d GetAggregatedFighterRank 81.91 -> 85.19 (iter 2)
+- 05a5aaf91 GetAggregatedFighterRank 85.19 -> 93.56 (iter 3)
+- 2a01de812 GetAggregatedFighterRank 93.56 -> 94.14 (iter 4)
+- 1d924db54 GetAggregatedFighterRank save-boundary flip, 94.14 -> 94.11 (iter 5)
+- 47b40968d CreateStatRow 80.11 -> 81.54 (iter 6 — cached-base reuse R1)
+- 35391757f CreateStatRow 81.54 -> 81.81 (iter 7 — R3-b return-cast drop)
+- 914e7ae31 CreateStatRow 81.81 -> 83.24 (iter 9 — is_name_mode provability probe)
+- (iteration 10: docs-only commit; UpdateHeader transfer refuted-by-bytes + AggRank VN-kill probe refuted, zero code change)
+
+## TU state after iteration 10 (== iteration 9; nothing landed, zero collateral)
+Open set: **UpdateHeader 94.18 (BANKED — Class A sibling-fenced return-width wall; Class B/C register+schedule)**,
+CreateStatRow 83.24 (BANKED — attributed frontier), GetAggregatedFighterRank 94.11 (VN-kill probe REFUTED;
+residual = allocator-emergent two-web split, no source lever), GetRankedFighter 94.58, GetRankedName 97.87,
+Create 93.746475 (iter-1 banked levers UNTOUCHED — only remaining unexplored function), HandleInput 97.46
+(WALLED/parked), mnDiagram3_HandleInput 98.42. Protected sweep (full report.json): all 14 named protected
+functions EXACT; all 52 mndiagram* 100s hold. Zero collateral.
+
+## Iteration-11 recommendation
+1. **Create 93.75 (the iter-1 banked levers) is the LAST unexplored function** — it is the only open
+   subject in the TU that has NOT had a dedicated lever round. CAVEAT (iter-7 anomaly note): its report%
+   moved while its pre/post instruction extract diffed empty during a sibling-size change; meter Create
+   with care (verify the instruction diff is non-empty before trusting a delta). Create shares Class A
+   with UpdateHeader (same GetNameByIndex/GetFighterByIndex return-width per the design doc) — the SAME
+   sibling-fence applies to that portion; look for a Create-LOCAL structural lever distinct from the
+   return-width wall first.
+2. **ENDGAME DECLARATION is otherwise warranted for mndiagram2.c.** Five functions are at attributed
+   frontiers with laws (CreateStatRow 83.24, UpdateHeader 94.18, AggRank 94.11, GetRankedFighter 94.58,
+   GetRankedName 97.87); the three remaining levers across the TU are all FENCED or banned:
+   (a) the GetNameByIndex/GetFighterByIndex return-type flip (UpdateHeader+Create, sibling-fenced),
+   (b) the CreateStatRow R2 store-value spelling (banned-class, awaiting authorization),
+   (c) allocator-emergent web-splits (AggRank cast/arr, CreateStatRow stat_type region-2 — no source lever).
+   After a Create round, recommend declaring mndiagram2.c COMPLETE-AT-FRONTIER and consolidating a PR
+   (replace the 3 diagnostic PAD_STACKs with natural frame reservation; resolve the carried PENDING-REVIEW
+   items) — the matched + improved set is substantial (14/21 at 100, the rest at attributed ceilings).
+3. AggRank VN-kill axis is CLOSED (law 1). Do not re-probe with self-assignment/re-derivation/comma devices.
