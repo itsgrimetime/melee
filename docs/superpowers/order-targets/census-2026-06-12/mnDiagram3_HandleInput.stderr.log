@@ -1,0 +1,82 @@
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/mike/code/melee/tools/melee-agent/src/cli/debug/__init__.py:14095 in  │
+│ order_target_cmd                                                             │
+│                                                                              │
+│   14092 │   │   function=function, unit=resolved_unit, class_id=class_id,    │
+│   14093 │   │   melee_root=melee_root, checkdiff_timeout=checkdiff_timeout,  │
+│   14094 │   )                                                                │
+│ ❱ 14095 │   target = derive_order_target(inputs)                             │
+│   14096 │                                                                    │
+│   14097 │   if json_out:                                                     │
+│   14098 │   │   from dataclasses import asdict                               │
+│                                                                              │
+│ ╭───────────────────────────────── locals ─────────────────────────────────╮ │
+│ │ checkdiff_timeout = 60.0                                                 │ │
+│ │          class_id = 0                                                    │ │
+│ │          function = 'mnDiagram3_HandleInput'                             │ │
+│ │            inputs = DeriveInputs(                                        │ │
+│ │                     │   function='mnDiagram3_HandleInput',               │ │
+│ │                     │   unit='melee/mn/mndiagram3',                      │ │
+│ │                     │   class_id=0,                                      │ │
+│ │                     │   checkdiff_primary='instruction-sequence',        │ │
+│ │                     │   phys_target={},                                  │ │
+│ │                     │   phys_conflicts=[],                               │ │
+│ │                     │   force_iter_first=[],                             │ │
+│ │                     │   applied_positions={},                            │ │
+│ │                     │   forced_class_clean=False,                        │ │
+│ │                     │   forced_ranks={},                                 │ │
+│ │                     │   baseline_ig_set=set(),                           │ │
+│ │                     │   forced_ig_set=set(),                             │ │
+│ │                     │   self_reanchored_roles=set(),                     │ │
+│ │                     │   unscored_roles=[],                               │ │
+│ │                     │   forced_decisions_sha256=[],                      │ │
+│ │                     │                                                    │ │
+│ │                     baseline_source_sha256='c525b20001c0f8f1af369117916… │ │
+│ │                     │   baseline_pcdump_sha256='',                       │ │
+│ │                     │   force_cap_exceeded=False                         │ │
+│ │                     )                                                    │ │
+│ │          json_out = True                                                 │ │
+│ │        melee_root = PosixPath('/Users/mike/code/melee/.claude/worktrees… │ │
+│ │               out = PosixPath('/Users/mike/code/melee/.claude/worktrees… │ │
+│ │     resolved_unit = 'melee/mn/mndiagram3'                                │ │
+│ │              unit = None                                                 │ │
+│ ╰──────────────────────────────────────────────────────────────────────────╯ │
+│                                                                              │
+│ /Users/mike/code/melee/tools/melee-agent/src/mwcc_debug/order_target_derive. │
+│ py:109 in derive_order_target                                                │
+│                                                                              │
+│   106 def derive_order_target(inp: DeriveInputs) -> OrderTarget:             │
+│   107 │   # Step 1 — register-only precondition. A structural diff is not in │
+│   108 │   if inp.checkdiff_primary not in REGISTER_ONLY_PRIMARIES:           │
+│ ❱ 109 │   │   raise ValueError(                                              │
+│   110 │   │   │   f"{inp.function}: checkdiff primary is {inp.checkdiff_prim │
+│   111 │   │   │   f"not register-only ({sorted(REGISTER_ONLY_PRIMARIES)}); " │
+│   112 │   │   │   f"not in the order-distance pool"                          │
+│                                                                              │
+│ ╭─────────────────────────────── locals ───────────────────────────────╮     │
+│ │ inp = DeriveInputs(                                                  │     │
+│ │       │   function='mnDiagram3_HandleInput',                         │     │
+│ │       │   unit='melee/mn/mndiagram3',                                │     │
+│ │       │   class_id=0,                                                │     │
+│ │       │   checkdiff_primary='instruction-sequence',                  │     │
+│ │       │   phys_target={},                                            │     │
+│ │       │   phys_conflicts=[],                                         │     │
+│ │       │   force_iter_first=[],                                       │     │
+│ │       │   applied_positions={},                                      │     │
+│ │       │   forced_class_clean=False,                                  │     │
+│ │       │   forced_ranks={},                                           │     │
+│ │       │   baseline_ig_set=set(),                                     │     │
+│ │       │   forced_ig_set=set(),                                       │     │
+│ │       │   self_reanchored_roles=set(),                               │     │
+│ │       │   unscored_roles=[],                                         │     │
+│ │       │   forced_decisions_sha256=[],                                │     │
+│ │       │   baseline_source_sha256='c525b20001c0f8f1af3691179165b5b0', │     │
+│ │       │   baseline_pcdump_sha256='',                                 │     │
+│ │       │   force_cap_exceeded=False                                   │     │
+│ │       )                                                              │     │
+│ ╰──────────────────────────────────────────────────────────────────────╯     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ValueError: mnDiagram3_HandleInput: checkdiff primary is 'instruction-sequence',
+not register-only (['backend-ceiling', 'normalized-structural-match', 
+'operand-register-or-offset']); not in the order-distance pool
+EXIT=1

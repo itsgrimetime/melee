@@ -1,0 +1,152 @@
+{
+  "census": "order-class pool census 2026-06-12",
+  "worktree_branch": "claude/mndiagram-802427B4-investigation",
+  "tooling": "melee-agent debug target order-target (editable install -> master tools/melee-agent); DEFAULT_MELEE_ROOT=this worktree",
+  "headline": {
+    "directed": 0,
+    "not_order_class": 10,
+    "infra_588_blocked": 1,
+    "unanchorable": 0,
+    "force_cap_blocked": 0,
+    "unstable_target": 0
+  },
+  "directed_class_verdict": "observed-empty (0/11 directed). 10 Step-1-excluded (not register-only). 1 (mnDiagram_OnFrame) is the sole register-only candidate reaching Step 3 but its forced-build verdict is #588-blocked (union build does not complete in feasible wall time, reproduced twice >920s). No kill-switch witness; refutation incomplete for OnFrame (tooling-gated, not refuted).",
+  "issues_filed": [
+    "#588",
+    "#589"
+  ],
+  "results": [
+    {
+      "function": "mnDiagram_OnFrame",
+      "base_match_percent": 99.719,
+      "routing": "#588-blocked",
+      "step": "reaches Step 3 (forced-union probe; did not complete)",
+      "checkdiff_primary": "register-only (one of operand-register-or-offset/backend-ceiling/normalized-structural-match; reached Step 3)",
+      "exit_code": 137,
+      "key_evidence": "passed Step 1 (register-only) + Step 2 (no phys conflict); 1-entry forced-union build (--force-iter-first 37) of mndiagram.c did not return on two attempts (>920s, >1060s); operator-killed; Step-4b verdict unobtainable (#588/#589)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram_802427B4",
+      "base_match_percent": 98.844,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "stack-layout",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'stack-layout', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram_802417D0",
+      "base_match_percent": 98.03,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "register-allocation",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'register-allocation', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram_80241E78",
+      "base_match_percent": 98.942,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "stack-layout",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'stack-layout', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram_8023FC28",
+      "base_match_percent": 97.824,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "data-symbol-or-relocation",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'data-symbol-or-relocation', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram_8024227C",
+      "base_match_percent": 95.389,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "indexed-struct-pointer-materiali\u2026 \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_target={},                                  \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_conflicts=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   force_iter_first=[],                             \u2502 \u2502\n\u2502 \u2502                     \u2502   applied_positions={},                            \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_class_clean=False,                        \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ranks={},                                 \u2502 \u2502\n\u2502 \u2502                     \u2502   baseline_ig_set=set(),                           \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ig_set=set(),                             \u2502 \u2502\n\u2502 \u2502                     \u2502   self_reanchored_roles=set(),                     \u2502 \u2502\n\u2502 \u2502                     \u2502   unscored_roles=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_decisions_sha256=[],                      \u2502 \u2502\n\u2502 \u2502                     \u2502                                                    \u2502 \u2502\n\u2502 \u2502                     baseline_source_sha256=",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'indexed-struct-pointer-materiali\u2026 \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_target={},                                  \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_conflicts=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   force_iter_first=[],                             \u2502 \u2502\n\u2502 \u2502                     \u2502   applied_positions={},                            \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_class_clean=False,                        \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ranks={},                                 \u2502 \u2502\n\u2502 \u2502                     \u2502   baseline_ig_set=set(),                           \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ig_set=set(),                             \u2502 \u2502\n\u2502 \u2502                     \u2502   self_reanchored_roles=set(),                     \u2502 \u2502\n\u2502 \u2502                     \u2502   unscored_roles=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_decisions_sha256=[],                      \u2502 \u2502\n\u2502 \u2502                     \u2502                                                    \u2502 \u2502\n\u2502 \u2502                     baseline_source_sha256=', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram2_UpdateHeader",
+      "base_match_percent": 95.155,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "instruction-sequence",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'instruction-sequence', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram2_GetAggregatedFighterRank",
+      "base_match_percent": 94.11,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "instruction-sequence",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'instruction-sequence', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram2_GetRankedName",
+      "base_match_percent": 97.873,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "indexed-struct-pointer-materiali\u2026 \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_target={},                                  \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_conflicts=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   force_iter_first=[],                             \u2502 \u2502\n\u2502 \u2502                     \u2502   applied_positions={},                            \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_class_clean=False,                        \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ranks={},                                 \u2502 \u2502\n\u2502 \u2502                     \u2502   baseline_ig_set=set(),                           \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ig_set=set(),                             \u2502 \u2502\n\u2502 \u2502                     \u2502   self_reanchored_roles=set(),                     \u2502 \u2502\n\u2502 \u2502                     \u2502   unscored_roles=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_decisions_sha256=[],                      \u2502 \u2502\n\u2502 \u2502                     \u2502                                                    \u2502 \u2502\n\u2502 \u2502                     baseline_source_sha256=",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'indexed-struct-pointer-materiali\u2026 \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_target={},                                  \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_conflicts=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   force_iter_first=[],                             \u2502 \u2502\n\u2502 \u2502                     \u2502   applied_positions={},                            \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_class_clean=False,                        \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ranks={},                                 \u2502 \u2502\n\u2502 \u2502                     \u2502   baseline_ig_set=set(),                           \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ig_set=set(),                             \u2502 \u2502\n\u2502 \u2502                     \u2502   self_reanchored_roles=set(),                     \u2502 \u2502\n\u2502 \u2502                     \u2502   unscored_roles=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_decisions_sha256=[],                      \u2502 \u2502\n\u2502 \u2502                     \u2502                                                    \u2502 \u2502\n\u2502 \u2502                     baseline_source_sha256=', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram2_GetRankedFighter",
+      "base_match_percent": 94.578,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "indexed-struct-pointer-materiali\u2026 \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_target={},                                  \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_conflicts=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   force_iter_first=[],                             \u2502 \u2502\n\u2502 \u2502                     \u2502   applied_positions={},                            \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_class_clean=False,                        \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ranks={},                                 \u2502 \u2502\n\u2502 \u2502                     \u2502   baseline_ig_set=set(),                           \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ig_set=set(),                             \u2502 \u2502\n\u2502 \u2502                     \u2502   self_reanchored_roles=set(),                     \u2502 \u2502\n\u2502 \u2502                     \u2502   unscored_roles=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_decisions_sha256=[],                      \u2502 \u2502\n\u2502 \u2502                     \u2502                                                    \u2502 \u2502\n\u2502 \u2502                     baseline_source_sha256=",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'indexed-struct-pointer-materiali\u2026 \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_target={},                                  \u2502 \u2502\n\u2502 \u2502                     \u2502   phys_conflicts=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   force_iter_first=[],                             \u2502 \u2502\n\u2502 \u2502                     \u2502   applied_positions={},                            \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_class_clean=False,                        \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ranks={},                                 \u2502 \u2502\n\u2502 \u2502                     \u2502   baseline_ig_set=set(),                           \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_ig_set=set(),                             \u2502 \u2502\n\u2502 \u2502                     \u2502   self_reanchored_roles=set(),                     \u2502 \u2502\n\u2502 \u2502                     \u2502   unscored_roles=[],                               \u2502 \u2502\n\u2502 \u2502                     \u2502   forced_decisions_sha256=[],                      \u2502 \u2502\n\u2502 \u2502                     \u2502                                                    \u2502 \u2502\n\u2502 \u2502                     baseline_source_sha256=', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    },
+    {
+      "function": "mnDiagram3_HandleInput",
+      "base_match_percent": 98.417,
+      "routing": "not_order_class (Step-1 exclusion)",
+      "step": "Step 1",
+      "checkdiff_primary": "instruction-sequence",
+      "exit_code": 1,
+      "key_evidence": "checkdiff primary 'instruction-sequence', not register-only (admission set: operand-register-or-offset/backend-ceiling/normalized-structural-match) -> not in the order-distance pool (ValueError, exit 1)",
+      "order_target_yaml_written": false,
+      "named_pair": null,
+      "order_target": null
+    }
+  ]
+}
