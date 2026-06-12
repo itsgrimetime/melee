@@ -106,7 +106,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
             max_distance = 0x5F5E0FF;
             max_percentage = 0x98967F;
             divider = mnDiagram3_804DC008;
-            max_time = 0x5C8D7F;
+            max_time = 0x5B8D7F;
             neg_spacing = -row_spacing;
             stat_table += 0x36;
 
