@@ -310,6 +310,51 @@ def test_frame_reservation_report_finds_extra_unused_low_frame_gap() -> None:
     assert "no current pcode stack access" in report["summary"]
 
 
+def test_frame_reservation_models_address_taken_char_array_from_addi() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000000
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        fn_80000000
+        B0: Succ={} Pred={} Labels={}
+            stwu r1,-72(r1)
+            addi r23,r1,0x30
+            stfd f31,0x38(r1)
+            addi r4,r1,0x30
+            addi r1,r1,72
+    """)
+    expected_asm = textwrap.dedent("""\
+        .fn fn_80000000, global
+        /* 80000000 */    stwu    r1,-0x48(r1)
+        /* 80000004 */    addi    r23,r1,0x30
+        /* 80000008 */    stfd    f31,0x38(r1)
+        /* 8000000c */    addi    r4,r1,0x30
+        /* 80000010 */    addi    r1,r1,0x48
+        .endfn fn_80000000
+    """)
+
+    report = analyze_frame_reservations(
+        pcdump,
+        "fn_80000000",
+        expected_asm_text=expected_asm,
+    )
+
+    for side in ("current", "expected"):
+        frame = report[side]
+        assert {
+            "start": 0x30,
+            "end": 0x38,
+            "size": 8,
+            "kind": "address-taken-local-or-temporary",
+            "source": "r1-address",
+            "boundary_confidence": "next-occupied-boundary",
+            "ambiguous": True,
+            "access_count": 2,
+            "opcodes": ["addi"],
+        } in frame["stack_objects"]
+        assert {"start": 8, "end": 0x30, "size": 0x28} in frame["unused_ranges"]
+        assert {"start": 8, "end": 0x38, "size": 0x30} not in frame["unused_ranges"]
+
+
 def test_frame_reservation_report_finds_current_low_home_realignment_growth() -> None:
     pcdump = textwrap.dedent("""\
         Starting function gm_801A9DD0

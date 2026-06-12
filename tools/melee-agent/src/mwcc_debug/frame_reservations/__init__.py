@@ -973,6 +973,7 @@ def _analyze_instructions(
     frame_size = _frame_size(instructions)
     access_ranges: dict[tuple[int, int, str], dict] = {}
     access_traces: list[dict] = []
+    address_traces: list[dict] = []
     unresolved_symbolic_homes: list[dict] = []
     frame_seen = False
     symbolic_offsets = symbolic_offsets or {}
@@ -983,6 +984,19 @@ def _analyze_instructions(
             frame_seen = True
             continue
         if _is_stack_pointer_restore(instr):
+            continue
+        address_offset = _stack_address_offset(instr)
+        if address_offset is not None:
+            address_traces.append({
+                "offset": address_offset,
+                "kind": "address-taken-local-or-temporary",
+                "opcode": instr.opcode,
+                "operands": instr.operands,
+                "pass": instr.pass_name,
+                "block_idx": instr.block_idx,
+                "instr_idx": instr.instr_idx,
+                "pre_frame": not frame_seen,
+            })
             continue
         symbolic_home = _symbolic_stack_home(instr.operands)
         original_operands = None
@@ -1048,10 +1062,16 @@ def _analyze_instructions(
     implicit = []
     if frame_size is not None and frame_size >= 8:
         implicit.append({"start": 0, "end": 8, "size": 8, "kind": "abi-header"})
-    unused = _unused_ranges(frame_size, [*used, *implicit])
+    address_ranges = _address_taken_ranges(
+        frame_size,
+        address_traces,
+        occupied_ranges=[*used, *implicit],
+    )
+    all_access_ranges = [*used, *address_ranges]
+    unused = _unused_ranges(frame_size, [*all_access_ranges, *implicit])
     stack_objects = _stack_objects(
         frame_size=frame_size,
-        access_ranges=used,
+        access_ranges=all_access_ranges,
         implicit_ranges=implicit,
         unused_ranges=unused,
         access_traces=access_traces,
@@ -1072,7 +1092,7 @@ def _analyze_instructions(
     frame = {
         "frame_size": frame_size,
         "access_ranges": sorted(
-            used,
+            all_access_ranges,
             key=lambda item: (item["start"], item["end"], item["kind"]),
         ),
         "accesses": access_traces,
@@ -1174,11 +1194,19 @@ def _stack_objects(
             "end": item["end"],
             "size": item["size"],
             "kind": item["kind"],
-            "source": "r1-access",
-            "boundary_confidence": "access-width",
-            "ambiguous": False,
-            "access_count": access_count_by_range.get(key, 0),
-            "opcodes": sorted(op for op in opcodes_by_range.get(key, set()) if op),
+            "source": item.get("source", "r1-access"),
+            "boundary_confidence": item.get(
+                "boundary_confidence",
+                "access-width",
+            ),
+            "ambiguous": item.get("ambiguous", False),
+            "access_count": item.get(
+                "access_count",
+                access_count_by_range.get(key, 0),
+            ),
+            "opcodes": item.get("opcodes") or sorted(
+                op for op in opcodes_by_range.get(key, set()) if op
+            ),
         }
         source_symbols = sorted(symbols_by_range.get(key, set()))
         if source_symbols:
@@ -2713,6 +2741,15 @@ def _stack_offset(operands: str) -> int | None:
     return int(match.group("offset"), 0)
 
 
+def _stack_address_offset(instr: _AsmInstruction) -> int | None:
+    if instr.opcode != "addi":
+        return None
+    match = _STACK_ADDRESS_RE.match(instr.operands)
+    if match is None:
+        return None
+    return int(match.group("offset"), 0)
+
+
 def _symbolic_stack_home(operands: str) -> str | None:
     match = _SYMBOLIC_STACK_REF_RE.search(operands)
     if match is None:
@@ -2756,6 +2793,64 @@ def _first_reg(operands: str) -> tuple[str, int] | None:
     if match is None:
         return None
     return (match.group("class"), int(match.group("num")))
+
+
+def _address_taken_ranges(
+    frame_size: int | None,
+    address_traces: list[dict],
+    *,
+    occupied_ranges: list[dict],
+) -> list[dict]:
+    if frame_size is None:
+        return []
+    grouped: dict[int, list[dict]] = {}
+    for trace in address_traces:
+        if trace.get("pre_frame"):
+            continue
+        offset = trace.get("offset")
+        if not isinstance(offset, int) or not (0 <= offset < frame_size):
+            continue
+        grouped.setdefault(offset, []).append(trace)
+    if not grouped:
+        return []
+
+    occupied_starts = sorted(
+        item["start"]
+        for item in occupied_ranges
+        if isinstance(item.get("start"), int)
+        and isinstance(item.get("end"), int)
+        and item["end"] > item["start"]
+    )
+    out: list[dict] = []
+    for offset, traces in sorted(grouped.items()):
+        next_bound = next(
+            (start for start in occupied_starts if start > offset),
+            frame_size,
+        )
+        end = max(offset + 1, min(next_bound, frame_size))
+        if end <= offset:
+            continue
+        opcodes = sorted({
+            str(trace.get("opcode") or "")
+            for trace in traces
+            if trace.get("opcode")
+        })
+        out.append({
+            "start": offset,
+            "end": end,
+            "size": end - offset,
+            "kind": "address-taken-local-or-temporary",
+            "source": "r1-address",
+            "boundary_confidence": (
+                "next-occupied-boundary"
+                if next_bound != frame_size
+                else "frame-end-boundary"
+            ),
+            "ambiguous": True,
+            "access_count": len(traces),
+            "opcodes": opcodes,
+        })
+    return out
 
 
 def _unused_ranges(frame_size: int | None, ranges: list[dict]) -> list[dict]:
