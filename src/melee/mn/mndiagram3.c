@@ -440,6 +440,7 @@ static inline void HSD_JObjSetTranslateZ_Fake(HSD_JObj* jobj, f32 z)
 
 void mnDiagram3_8024714C(void* arg0)
 {
+    void* new_var;
     int i;
     Vec3 sp48;
     Diagram3* data;
@@ -475,7 +476,8 @@ void mnDiagram3_8024714C(void* arg0)
         HSD_JObjReqAnimAll(popup_jobj, mnDiagram3_804DC00C);
         HSD_JObjAnimAll(popup_jobj);
 
-        data = gobj->user_data;
+        new_var = gobj->user_data;
+        data = new_var;
         row0 = data->jobjs[8];
         row_spacing = HSD_JObjGetTranslationY(data->jobjs[9]) -
                       HSD_JObjGetTranslationY(row0);
@@ -496,7 +498,6 @@ void mnDiagram3_8024714C(void* arg0)
         Diagram3* d;
         int scroll;
         u8 stat_idx;
-        u16* base;
 
         gobj = mnDiagram3_804D6C20;
         d = gobj->user_data;
@@ -509,7 +510,6 @@ void mnDiagram3_8024714C(void* arg0)
 
         lb_8000B1CC(d->jobjs[8], &mnDiagram3_803EEC28.x0, &sp48);
 
-        base = mnDiagram3_803EEC4C.indices;
         row_spacing = mnDiagram3_804DBFF8;
         stat_idx = (u8) scroll;
         i = 0;
@@ -533,7 +533,7 @@ void mnDiagram3_8024714C(void* arg0)
                 }
                 limit = (u8) limit;
 
-                val = stat_idx + type_idx;
+                val = type_idx + stat_idx;
                 if (val >= limit) {
                     val = val - limit;
                 } else {
@@ -541,7 +541,7 @@ void mnDiagram3_8024714C(void* arg0)
                 }
 
                 {
-                    u16* entry = &base[(u8) val];
+                    u16* entry = &mnDiagram3_803EEC4C.indices[(u8) val];
                     HSD_SisLib_803A6368(text, *entry);
                 }
             }
