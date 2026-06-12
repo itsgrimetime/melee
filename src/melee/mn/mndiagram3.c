@@ -552,7 +552,8 @@ void mnDiagram3_8024714C(void* arg0)
 
     {
         HSD_GObjProc* proc;
-        proc = HSD_GObj_SetupProc(GObj_Create(0, 1, 0x80), mnDiagram3_HandleInput, 0);
+        proc = HSD_GObj_SetupProc(GObj_Create(0, 1, 0x80),
+                                  mnDiagram3_HandleInput, 0);
         proc->flags_3 = HSD_GObj_804D783C;
     }
 }
