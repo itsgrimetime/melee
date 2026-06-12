@@ -417,3 +417,29 @@ THE ONE QUESTION (does a register-class 0x20-arm counter unlock the +08c/+090 ri
 **Naming evidence stands for close-out:** mnDiagram3_HandleInput (per-frame input proc registered via `HSD_GObj_SetupProc(GObj_Create(0,1,0x80), fn_802461BC, 0)` from 8024714C; siblings mnDiagram_InputProc / mnDiagram2_HandleInput). Apply when the function reaches 100.
 
 **TU end-state: 6/9 matched, 3 PARKED (8024714C 90.23, 80245BA4 94.07, fn_802461BC 98.42); .text 96.49, .data/.sdata 100.**
+
+---
+
+## CLOSE-OUT — Rename (evidenced, codegen-neutral)
+
+**Commit `3c022427c`** — `refactor(mn): name fn_802461BC -> mnDiagram3_HandleInput (per-frame input proc)`. Renamed across the definition (mndiagram3.c:560), the registration caller (mndiagram3.c:555, `HSD_GObj_SetupProc(GObj_Create(0,1,0x80), …, 0)`), the declaration (mndiagram3.static.h:40), and the symbol (config/GALE01/symbols.txt). Build + report verified BYTE-IDENTICAL: renamed fn reports `mnDiagram3_HandleInput @ 98.41656` (was fn_802461BC @ 98.41656); all other percentages unchanged to the decimal (6×100, 80245BA4 94.07179, 8024714C 90.23424). All 11 pre-commit checks passed (incl. Match regressions / Symbol renames / Symbols.txt — no hook block on the rename). Evidence basis: Iteration-8 Unit-2 /understand (per-frame input proc; B-exit/menu-exit/name-toggle/scroll-select; siblings mnDiagram_InputProc / mnDiagram2_HandleInput). The fixture/docstring `fn_802461BC` references under tools/melee-agent/tests/ + docs/ are historical artifacts (pcdump fixture filename + example commands) — intentionally NOT renamed (out of build scope).
+
+---
+
+## PERMUTER ROUND (authorized) — submit-only, 2026-06-12 (UTC)
+
+Campaign DO-NOT lifted by close-out authorization. **Submit-only this round — NO fetch/triage/apply.** Tuned per the PROVEN `mnDiagram_802427B4` template (3 wins incl. the comma-LICM crack `a527c0227`): reorder-heavy `[weight_overrides]` + `randomize_funcs`. Profile per dir: `perm_dummy_comma_expr=35`, `perm_reorder_decls=25`, `perm_split_assignment=20`, `perm_pad_var_decl=15`, `perm_reorder_stmts=15`, `perm_cast_simple=10`, + `perm_inline/add_self_assignment/duplicate_assignment=10`. Bases verified per stale-base doctrine (#558) via direct `permuter.py --seed 0` (all compile, scores plausible for the residual — NOT 20k+).
+
+| Function | Job ID | Host | Threads | Base score | randomize_funcs | Submitted (UTC) |
+|----------|--------|------|---------|-----------|-----------------|-----------------|
+| mnDiagram3_HandleInput (98.42) | `mnDiagram3_HandleInput-coder1-20260611-210107` | coder1 | 16 | **1550** | [self] | 2026-06-12T04:01:07Z |
+| mnDiagram3_80245BA4 (94.07) | `mnDiagram3_80245BA4-coder3-20260611-210600` | coder3 | 16 (shared w/ 714C) | **2375** | [self] | 2026-06-12T04:06:00Z |
+| mnDiagram3_8024714C (90.23) | `mnDiagram3_8024714C-coder3-20260611-210616` | coder3 | 16 (shared w/ 5BA4) | **3155** | [self + HSD_JObjSetTranslate{X,Y,Z}_Fake] | 2026-06-12T04:06:16Z |
+
+All three confirmed live via `debug permute remote tail` (HandleInput@coder1 iter ~4050; the two coder3 jobs share threads, iter ~215-310). coder2 NOT used (BROKEN, #567).
+
+**Bootstrap notes:** HandleInput + 80245BA4 bootstrapped clean (no inlinable same-TU callees). **8024714C base.c was BROKEN by the bootstrap** and required two hand-fixes before it would compile (filed #575): (1) inline-callee injection fused the leading `inline` onto the source's `#undef __FILE__` → `inline #undef __FILE__` (pycparser syntax error); (2) injected `*_Fake` bodies referenced `JOBJ_MTX_INDEP_SRT` (=`(1<<25)`) which import.py did not pull in (mwcceppc undefined-identifier). Both fixed in the local function dir `/Users/mike/code/decomp-permuter/nonmatchings/mnDiagram3_8024714C/base.c`. The 3 injected callees are correctly inlined (#424-safe) and kept in `randomize_funcs`.
+
+**Tooling issues filed:** #574 (`debug permute remote list`/`ps` both crash — `AttributeError: probe_jobs_active`/`remote_ps` missing from `permuter_remote`; workaround = `remote tail <job>`); #575 (bootstrap inline-callee corruption above).
+
+**TRIAGE RULES (for the harvest session — DO NOT apply blindly):** full-FILE diffs (not just main-body — preamble/inline_fn/pragma changes hide there); **score ≠ match%** (a score-improving candidate may gate-fail on +instr/structure regression); **every candidate must be `checkdiff`-verified** before commit; **semantic-break hacks are AUTO-REJECT** (volatile props, no-op masks, var-aliases, `var=(global=snap)`); meter at gate boundaries; re-bootstrap base after any commit (drops the NULL pragma — re-add + re-verify). Pre-classified family inventory + listening-post doctrine: docs/mndiagram-inputproc-campaign.md §permuter. **PARK verdicts still hold** — these residuals are oracle-confirmed coloring/front-end ceilings on the non-permuter axis; the permuter is the authorized next-axis probe, not a refutation of the maps.
