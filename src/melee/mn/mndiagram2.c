@@ -1213,8 +1213,7 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
     }
 
     // Return
-    ptr = &entries[rank];
-    if (ptr->value == (u64) -1) {
+    if (entries[rank].value == (u64) -1) {
         return 25;
     }
     return entries[rank].name;
