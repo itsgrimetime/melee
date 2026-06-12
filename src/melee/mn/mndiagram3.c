@@ -63,7 +63,6 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     u32 max_distance;
     u32 max_time;
     u32 max_percentage;
-    PAD_STACK(8);
 
     data = gobj->user_data;
     base = (char*) &mnDiagram3_803EEC10;
