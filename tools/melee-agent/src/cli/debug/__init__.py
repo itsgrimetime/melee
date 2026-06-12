@@ -15000,7 +15000,7 @@ def _render_force_phys_target_yaml(
     *,
     function: str,
     class_id: int,
-    baseline_dump: Path,
+    baseline_dump: Path | str,
     force_phys: Mapping[int, int],
     coalesce_preservation: bool = True,
 ) -> str:
@@ -15017,6 +15017,13 @@ def _render_force_phys_target_yaml(
     if not coalesce_preservation:
         lines.append("coalesce_preservation: false")
     return "\n".join(lines) + "\n"
+
+
+def _portable_path_for_base(path: Path, base: Path) -> Path | str:
+    try:
+        return path.relative_to(base)
+    except ValueError:
+        return path
 
 
 def _build_simplify_order_compile_sh(
@@ -15530,11 +15537,12 @@ def setup_simplify_order_scorer(
         raise typer.Exit(2)
 
     coalesce_preservation = not no_coalesce_preservation
+    baseline_dump_for_spec = _portable_path_for_base(baseline_dump, perm_dir)
     if force_phys_mode:
         spec_yaml = _render_force_phys_target_yaml(
             function=function,
             class_id=class_id,
-            baseline_dump=baseline_dump,
+            baseline_dump=baseline_dump_for_spec,
             force_phys=parsed_force_phys,
             coalesce_preservation=coalesce_preservation,
         )
@@ -15544,7 +15552,7 @@ def setup_simplify_order_scorer(
             simplify_order_target=parsed_targets,
             simplify_order_target_late=parsed_targets_late,
             class_id=class_id,
-            baseline_dump=baseline_dump,
+            baseline_dump=baseline_dump_for_spec,
             force_phys=parsed_force_phys or None,
             coalesce_preservation=coalesce_preservation,
         )
@@ -15567,6 +15575,7 @@ def setup_simplify_order_scorer(
     scorer_command_name = (
         "score-force-phys" if force_phys_mode else "score-simplify-order"
     )
+    scorer_target = _portable_path_for_base(spec_path, perm_root)
     scorer_command = " ".join(
         shlex.quote(s) for s in [
             melee_agent_bin,
@@ -15576,7 +15585,7 @@ def setup_simplify_order_scorer(
             "--function",
             function,
             "--target",
-            str(spec_path),
+            str(scorer_target),
         ]
     )
 
@@ -16149,6 +16158,19 @@ class _DumpSetupCheck:
     detail: str
 
 
+_MWCC_DEBUG_DLL_FEATURE_PREFIX = "MWCC_DEBUG_FEATURES:"
+_MWCC_DEBUG_REQUIRED_DLL_FEATURES = (
+    "pcdump-path",
+    "function-scope-force-phys",
+    "force-phys-iter",
+    "force-phys-overflow-error",
+    "force-iter-first-overflow-error",
+    "force-remat",
+    "force-interfere",
+    "force-schedule",
+)
+
+
 def _check_path(label: str, path: Path, *, executable: bool = False) -> _DumpSetupCheck:
     if not path.exists():
         return _DumpSetupCheck(label, False, f"missing: {path}")
@@ -16176,6 +16198,42 @@ def _check_dll_is_pe(label: str, path: Path) -> _DumpSetupCheck:
             f"not a PE DLL ({size} bytes, magic={magic!r}): {path} — "
             f"redeploy via `debug dump setup --rebuild-dll`")
     return _DumpSetupCheck(label, True, f"{path} ({size} bytes, MZ)")
+
+
+def _check_mwcc_debug_dll_features(label: str, path: Path) -> _DumpSetupCheck:
+    if not path.exists():
+        return _DumpSetupCheck(label, False, f"missing: {path}")
+    try:
+        text = path.read_bytes().decode("latin-1", errors="ignore")
+    except OSError as exc:
+        return _DumpSetupCheck(label, False, f"unreadable: {path} ({exc})")
+    marker = text.find(_MWCC_DEBUG_DLL_FEATURE_PREFIX)
+    if marker < 0:
+        return _DumpSetupCheck(
+            label,
+            False,
+            (
+                f"{path} lacks {_MWCC_DEBUG_DLL_FEATURE_PREFIX} manifest; "
+                "rebuild/redeploy via `debug dump setup --rebuild-dll`"
+            ),
+        )
+    manifest = text[marker: marker + 512]
+    missing = [
+        feature
+        for feature in _MWCC_DEBUG_REQUIRED_DLL_FEATURES
+        if feature not in manifest
+    ]
+    if missing:
+        return _DumpSetupCheck(
+            label,
+            False,
+            (
+                f"{path} feature manifest is missing {', '.join(missing)}; "
+                "rebuild/redeploy via `debug dump setup --rebuild-dll`"
+            ),
+        )
+    version = manifest.split(";", 1)[0]
+    return _DumpSetupCheck(label, True, f"{path} ({version})")
 
 
 def _format_smoke_process_output(result: Any) -> str:
@@ -16336,6 +16394,10 @@ def _local_dump_setup_checks() -> list[_DumpSetupCheck]:
         _check_path("mwcc_debug DLL source", tools_dir / "MWDBG326.dll"),
         _check_path("deployed DLL", compiler_dir / "MWDBG326.dll"),
         _check_dll_is_pe("deployed DLL integrity", compiler_dir / "MWDBG326.dll"),
+        _check_mwcc_debug_dll_features(
+            "mwcc_debug DLL features",
+            compiler_dir / "MWDBG326.dll",
+        ),
         _check_path("mwcc_debug C source", tools_dir / "mwcc_debug.c"),
         _check_mwcc_debug_dll_freshness(tools_dir, compiler_dir),
         _check_path("wibo build script", tools_dir / "build_wibo.sh"),
@@ -16991,6 +17053,9 @@ def pcdump_local(
                  "Class-scoped entries are passed through to the DLL and only "
                  "apply to that register class. By default "
                  "applies globally — scope with --force-phys-fn. "
+                 "Accepts up to 1024 entries; overflow is a hard pcdump "
+                 "error, not a silent partial apply; application logs are "
+                 "written into the pcdump, not CLI stderr. "
                  "DIAGNOSTIC-ONLY: uses the patched debug compiler and does "
                  "not affect production ninja builds.",
         ),
@@ -17004,7 +17069,9 @@ def pcdump_local(
                  "--force-phys can't target a node by ig_idx (rare, "
                  "but happens for split/spill nodes created post-IG-"
                  "build). E.g. '0:0:31' = class 0 (GPR), iter 0, "
-                 "force to r31. DIAGNOSTIC-ONLY: uses the patched debug "
+                 "force to r31. Accepts up to 1024 entries; application "
+                 "logs are written into the pcdump. DIAGNOSTIC-ONLY: uses "
+                 "the patched debug "
                  "compiler and does not affect production ninja builds.",
         ),
     ] = None,

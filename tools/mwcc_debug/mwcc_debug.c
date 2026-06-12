@@ -20,6 +20,16 @@ typedef int int32;
 #define NULL ((void *)0)
 #define DLL_PROCESS_ATTACH 1
 #define MWCC_DEBUG_ENV_BUF_LEN 8192
+#define MWCC_DEBUG_FEATURE_MANIFEST \
+    "MWCC_DEBUG_FEATURES:v4;" \
+    "pcdump-path;" \
+    "function-scope-force-phys;" \
+    "force-phys-iter;" \
+    "force-phys-overflow-error;" \
+    "force-iter-first-overflow-error;" \
+    "force-remat;" \
+    "force-interfere;" \
+    "force-schedule"
 
 #ifdef MWCC_DEBUG_TEST
 #define __declspec(x)
@@ -780,7 +790,7 @@ static int g_last_n_virtuals[MAX_REGCLASS] = {0, 0, 0, 0};
 // when bit 0x10 is set, and offset 0x24 otherwise. We keep the name conservative:
 // this is an observed alternate operand-slot selector, used only as a diagnostic
 // lever for constant-rider probes.
-#define MAX_FORCE_REMAT_RULES 64
+#define MAX_FORCE_REMAT_RULES 1024
 #define FORCE_REMAT_LITERAL 0
 #define FORCE_REMAT_COPY 1
 
@@ -1026,7 +1036,7 @@ static int apply_force_remat_rules_to_ig_array(int rclass, IGNode **ig, int n_vi
 //     incorrect code (data corruption — multiple live values one reg).
 //   - Forcing across register classes (GPR vs FPR) likely crashes.
 //   - Used purely for matching investigations / hypothesis testing.
-#define MAX_OVERRIDES 32
+#define MAX_OVERRIDES 1024
 
 static struct {
     int rclass;      // -1 = legacy all classes; otherwise exact rclass match
@@ -1035,6 +1045,8 @@ static struct {
 } g_overrides[MAX_OVERRIDES];
 static int g_n_overrides = 0;
 static int g_overrides_parsed = 0;
+static int g_force_phys_parse_overflow = 0;
+static int g_force_phys_env_truncated = 0;
 
 // Iter-based overrides — match by colorgraph iteration position rather
 // than ig_idx. Useful when a node has ig_idx that the IG-array scan
@@ -1042,13 +1054,15 @@ static int g_overrides_parsed = 0;
 // no INTERFERENCEGRAPH[] slot, OR cases where the iteration bound
 // is wrong). Each entry is (rclass, iter_position, physical_reg).
 // Parsed from MWCC_DEBUG_FORCE_PHYS_ITER="class:iter:phys[,...]".
-#define MAX_ITER_OVERRIDES 32
+#define MAX_ITER_OVERRIDES 1024
 static struct {
     int rclass;
     int iter_idx;
     int physical;
 } g_iter_overrides[MAX_ITER_OVERRIDES];
 static int g_n_iter_overrides = 0;
+static int g_force_phys_iter_parse_overflow = 0;
+static int g_force_phys_iter_env_truncated = 0;
 
 // Optional function-scope filter for both FORCE_PHYS and FORCE_PHYS_ITER.
 // Identical mechanism to g_coalesce_scope_fn. Empty = apply globally
@@ -1058,7 +1072,7 @@ static int g_force_phys_scope_fn_set = 0;
 
 static void parse_overrides_from_env(void)
 {
-    char buf[512];
+    static char buf[MWCC_DEBUG_ENV_BUF_LEN];
     uint32 len;
     int i;
     int cur_val;
@@ -1069,6 +1083,10 @@ static void parse_overrides_from_env(void)
     g_overrides_parsed = 1;
     g_n_overrides = 0;
     g_n_iter_overrides = 0;
+    g_force_phys_parse_overflow = 0;
+    g_force_phys_env_truncated = 0;
+    g_force_phys_iter_parse_overflow = 0;
+    g_force_phys_iter_env_truncated = 0;
 
     // Read optional function-scope filter (shared by FORCE_PHYS +
     // FORCE_PHYS_ITER). Empty → apply globally (legacy behavior).
@@ -1085,7 +1103,9 @@ static void parse_overrides_from_env(void)
     // 3-element tuple parsing — small state machine.
     len = GetEnvironmentVariableA(
         "MWCC_DEBUG_FORCE_PHYS_ITER", buf, sizeof(buf));
-    if (len > 0 && len < sizeof(buf)) {
+    if (len >= sizeof(buf)) {
+        g_force_phys_iter_env_truncated = 1;
+    } else if (len > 0) {
         int field; // 0=class, 1=iter, 2=phys
         int saved_class, saved_iter;
         cur_val = 0;
@@ -1100,12 +1120,15 @@ static void parse_overrides_from_env(void)
                 else if (field == 1) saved_iter = cur_val;
                 cur_val = 0;
                 field++;
-            } else if ((c == ',' || c == '\0') && field == 2
-                       && g_n_iter_overrides < MAX_ITER_OVERRIDES) {
-                g_iter_overrides[g_n_iter_overrides].rclass = saved_class;
-                g_iter_overrides[g_n_iter_overrides].iter_idx = saved_iter;
-                g_iter_overrides[g_n_iter_overrides].physical = cur_val;
-                g_n_iter_overrides++;
+            } else if ((c == ',' || c == '\0') && field == 2) {
+                if (g_n_iter_overrides < MAX_ITER_OVERRIDES) {
+                    g_iter_overrides[g_n_iter_overrides].rclass = saved_class;
+                    g_iter_overrides[g_n_iter_overrides].iter_idx = saved_iter;
+                    g_iter_overrides[g_n_iter_overrides].physical = cur_val;
+                    g_n_iter_overrides++;
+                } else {
+                    g_force_phys_iter_parse_overflow = 1;
+                }
                 cur_val = 0;
                 field = 0;
                 saved_class = saved_iter = -1;
@@ -1114,7 +1137,11 @@ static void parse_overrides_from_env(void)
     }
 
     len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_PHYS", buf, sizeof(buf));
-    if (len == 0 || len >= sizeof(buf)) return;
+    if (len == 0) return;
+    if (len >= sizeof(buf)) {
+        g_force_phys_env_truncated = 1;
+        return;
+    }
 
     // Tiny state machine: accept either "ig:phys" (legacy all classes)
     // or "class:ig:phys" (class-scoped). Python normalizes class names
@@ -1139,17 +1166,23 @@ static void parse_overrides_from_env(void)
                 fields[n_fields] = cur_val;
                 n_fields++;
             }
-            if (g_n_overrides < MAX_OVERRIDES) {
-                if (n_fields == 2) {
+            if (n_fields == 2) {
+                if (g_n_overrides < MAX_OVERRIDES) {
                     g_overrides[g_n_overrides].rclass = -1;
                     g_overrides[g_n_overrides].virtual_idx = fields[0];
                     g_overrides[g_n_overrides].physical = fields[1];
                     g_n_overrides++;
-                } else if (n_fields == 3) {
+                } else {
+                    g_force_phys_parse_overflow = 1;
+                }
+            } else if (n_fields == 3) {
+                if (g_n_overrides < MAX_OVERRIDES) {
                     g_overrides[g_n_overrides].rclass = fields[0];
                     g_overrides[g_n_overrides].virtual_idx = fields[1];
                     g_overrides[g_n_overrides].physical = fields[2];
                     g_n_overrides++;
+                } else {
+                    g_force_phys_parse_overflow = 1;
                 }
             }
             cur_val = 0;
@@ -1775,6 +1808,10 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
     {
         // Function-scope check (shared by both mechanisms).
         int scope_skip = 0;
+        int force_phys_parse_error =
+            g_force_phys_env_truncated || g_force_phys_parse_overflow;
+        int force_phys_iter_parse_error =
+            g_force_phys_iter_env_truncated || g_force_phys_iter_parse_overflow;
         if (g_force_phys_scope_fn_set) {
             if (!g_current_function_set) {
                 scope_skip = 1;
@@ -1797,7 +1834,22 @@ static int __cdecl hook_colorgraph(int rclass, IGNode *head)
             }
         }
 
-        if (!scope_skip && (g_n_overrides > 0 || g_n_iter_overrides > 0))
+        if (force_phys_parse_error && PCFILE && DEBUG_GUARD) {
+            debug_printf("\n[FORCE_PHYS] ERROR: override list exceeded parser capacity "
+                         "(cap=%d, env_buf=%d); no partial "
+                         "force-phys overrides applied\n",
+                         MAX_OVERRIDES, MWCC_DEBUG_ENV_BUF_LEN);
+        }
+        if (force_phys_iter_parse_error && PCFILE && DEBUG_GUARD) {
+            debug_printf("\n[FORCE_PHYS_ITER] ERROR: override list exceeded parser capacity "
+                         "(cap=%d, env_buf=%d); no partial "
+                         "force-phys-iter overrides applied\n",
+                         MAX_ITER_OVERRIDES, MWCC_DEBUG_ENV_BUF_LEN);
+        }
+
+        if (!scope_skip && !force_phys_parse_error
+            && !force_phys_iter_parse_error
+            && (g_n_overrides > 0 || g_n_iter_overrides > 0))
         {
             int local_iter = 0;
             for (node = head; node; node = node->next)
@@ -2663,6 +2715,11 @@ static void enable_debug_output(void)
 }
 
 // original license stubs
+__declspec(dllexport) const char *__cdecl mwcc_debug_features(void)
+{
+    return MWCC_DEBUG_FEATURE_MANIFEST;
+}
+
 __declspec(dllexport) int __cdecl lp_checkin(void) { return 0; }
 __declspec(dllexport) int __cdecl lp_checkout(void) { return 0; }
 __declspec(dllexport) int __cdecl lp_errstring(void) { return 0; }

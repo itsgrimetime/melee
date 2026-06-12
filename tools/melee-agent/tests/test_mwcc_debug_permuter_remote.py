@@ -1384,7 +1384,7 @@ def test_doctor_target_flags_yaml_local_path_leaks(tmp_path: Path) -> None:
     assert "simplify_order_target.yaml" in leak_check.detail
 
 
-def test_doctor_target_flags_relative_custom_scorer_target(tmp_path: Path) -> None:
+def test_doctor_target_accepts_relative_custom_scorer_target(tmp_path: Path) -> None:
     local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
     local_perm.mkdir(parents=True)
     (local_perm / "compile.sh").write_text("#!/bin/sh\n")
@@ -1410,17 +1410,23 @@ command = "melee-agent debug target score-simplify-order --function fn_80000000 
         local_perm_dir=local_perm,
         runner=lambda argv, **kwargs: pr.CommandResult(
             returncode=0,
-            stdout=_remote_doctor_ok_stdout(),
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-custom-scorer\tok\t/home/coder/decomp-permuter\n"
+                + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent debug target score-simplify-order --help\n"
+                + "remote-scorer-schema\tok\tstrict-polarity scorer schema supported\n"
+                + "remote-scorer-target\tok\t/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml\n"
+            ),
             stderr="",
         ),
     )
 
-    assert not report.ok
+    assert report.ok
     target_check = next(
         check for check in report.checks if check.name == "local scorer target path"
     )
-    assert not target_check.ok
-    assert "relative --target" in target_check.detail
+    assert target_check.ok
+    assert "/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml" in target_check.detail
 
 
 def test_doctor_target_flags_remote_without_custom_scorer_support(tmp_path: Path) -> None:
@@ -1510,6 +1516,76 @@ command = "melee-agent debug target score-simplify-order --function fn_80000000 
     )
     assert not schema_check.ok
     assert "--strict-polarity" in schema_check.detail
+
+
+def test_doctor_target_probes_force_phys_scorer_and_home_local_bin(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        """
+[scorer]
+command = "melee-agent debug target score-force-phys --function fn_80000000 --target nonmatchings/fn_80000000/simplify_order_target.yaml"
+""".strip()
+        + "\n"
+    )
+    calls: list[list[str]] = []
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    def fake_runner(argv: list[str], **_: object) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-custom-scorer\tok\t/home/coder/decomp-permuter\n"
+                + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent debug target score-force-phys --help\n"
+                + "remote-scorer-schema\tok\tforce-phys scorer schema supported\n"
+                + "remote-scorer-target\tok\t/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml\n"
+            ),
+            stderr="",
+        )
+
+    report = pr.doctor_target(target, local_perm_dir=local_perm, runner=fake_runner)
+
+    assert report.ok
+    target_check = next(
+        check for check in report.checks if check.name == "local scorer target path"
+    )
+    assert target_check.ok
+    assert target_check.detail.endswith(
+        "/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml"
+    )
+    remote_script = calls[0][2]
+    assert 'test -x "$HOME/.local/bin/melee-agent"' in remote_script
+    assert "scorer_command=score-force-phys" in remote_script
+    assert '"$scorer_command" --help' in remote_script
+    assert "--breakdown" in remote_script
+
+
+def test_stale_remote_scorer_schema_is_auto_repairable() -> None:
+    report = pr.DoctorReport(
+        target="coder64",
+        checks=[
+            pr.DoctorCheck(
+                "remote scorer schema",
+                False,
+                "stale score-force-phys help; missing --breakdown",
+            ),
+        ],
+    )
+
+    assert pr._preflight_can_be_repaired(report)
 
 
 def test_repair_target_syncs_tooling_permuter_deps_and_function_dir(tmp_path: Path) -> None:

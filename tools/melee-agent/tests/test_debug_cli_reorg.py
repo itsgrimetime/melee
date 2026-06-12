@@ -7182,6 +7182,9 @@ def test_dump_local_force_phys_help_describes_class_filtering() -> None:
     assert "through to the DLL" in normalized
     assert "apply to that" in normalized
     assert "register class" in normalized
+    assert "up to 1024 entries" in normalized
+    assert "application logs are" in normalized
+    assert "written into the pcdump" in normalized
     assert "ignores the class prefix" not in normalized
 
 
@@ -8105,6 +8108,26 @@ def test_debug_diff_schedule_reports_first_divergence(
     assert "expr=obj->x94" in result.stdout
 
 
+_TEST_DLL_FEATURE_MANIFEST = (
+    "MWCC_DEBUG_FEATURES:v4;"
+    "pcdump-path;"
+    "function-scope-force-phys;"
+    "force-phys-iter;"
+    "force-phys-overflow-error;"
+    "force-iter-first-overflow-error;"
+    "force-remat;"
+    "force-interfere;"
+    "force-schedule"
+)
+
+
+def _write_test_mwcc_debug_dll(path: Path, *, manifest: bool = True) -> None:
+    payload = b"MZ" + (b"\0" * 4094)
+    if manifest:
+        payload += _TEST_DLL_FEATURE_MANIFEST.encode("ascii")
+    path.write_bytes(payload)
+
+
 def test_debug_dump_doctor_reports_missing_debug_setup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -8137,18 +8160,19 @@ def test_debug_dump_doctor_passes_ready_setup(
 ) -> None:
     compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
     compiler_dir.mkdir(parents=True)
-    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe", "MWDBG326.dll"):
+    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe"):
         (compiler_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(compiler_dir / "MWDBG326.dll")
     tools_dir = tmp_path / "tools" / "mwcc_debug"
     tools_dir.mkdir(parents=True)
     for filename in (
-        "MWDBG326.dll",
         "build_wibo.sh",
         "build_macos.sh",
         "mwcc_debug.c",
         "patch_mwcceppc_for_wibo.py",
     ):
         (tools_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(tools_dir / "MWDBG326.dll")
     ready_time = 1_000_000_000
     os.utime(tools_dir / "mwcc_debug.c", (ready_time, ready_time))
     for dll in (tools_dir / "MWDBG326.dll", compiler_dir / "MWDBG326.dll"):
@@ -8170,29 +8194,69 @@ def test_debug_dump_doctor_passes_ready_setup(
     assert "ready for `melee-agent debug dump local`" in out
 
 
+def test_debug_dump_doctor_reports_deployed_dll_missing_feature_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe"):
+        (compiler_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(compiler_dir / "MWDBG326.dll", manifest=False)
+    tools_dir = tmp_path / "tools" / "mwcc_debug"
+    tools_dir.mkdir(parents=True)
+    for filename in (
+        "build_wibo.sh",
+        "build_macos.sh",
+        "mwcc_debug.c",
+        "patch_mwcceppc_for_wibo.py",
+    ):
+        (tools_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(tools_dir / "MWDBG326.dll", manifest=False)
+    ready_time = 1_000_000_000
+    os.utime(tools_dir / "mwcc_debug.c", (ready_time, ready_time))
+    for dll in (tools_dir / "MWDBG326.dll", compiler_dir / "MWDBG326.dll"):
+        os.utime(dll, (ready_time, ready_time))
+    wibo = tmp_path / "tools" / "mwcc_debug" / "bin" / "wibo"
+    wibo.parent.mkdir(parents=True)
+    wibo.write_text("")
+    wibo.chmod(0o755)
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+
+    result = runner.invoke(app, ["debug", "dump", "doctor"])
+
+    assert result.exit_code == 2
+    out = strip_ansi(result.stdout)
+    assert "FAIL\tmwcc_debug DLL features" in out
+    assert "MWCC_DEBUG_FEATURES" in out
+    assert "melee-agent debug dump setup" in out
+
+
 def test_debug_dump_doctor_reports_stale_dll(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
     compiler_dir.mkdir(parents=True)
-    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe", "MWDBG326.dll"):
+    for filename in ("mwcceppc.exe", "mwcceppc_debug.exe"):
         (compiler_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(compiler_dir / "MWDBG326.dll")
     tools_dir = tmp_path / "tools" / "mwcc_debug"
     tools_dir.mkdir(parents=True)
     for filename in (
-        "MWDBG326.dll",
         "build_wibo.sh",
         "build_macos.sh",
         "patch_mwcceppc_for_wibo.py",
     ):
         (tools_dir / filename).write_text("")
+    _write_test_mwcc_debug_dll(tools_dir / "MWDBG326.dll")
     source = tools_dir / "mwcc_debug.c"
     source.write_text("// newer source")
     stale_time = 1_000_000_000
     fresh_time = stale_time + 10
     for path in (tools_dir / "MWDBG326.dll", compiler_dir / "MWDBG326.dll"):
-        path.write_text("old dll")
         path.chmod(0o755)
         os.utime(path, (stale_time, stale_time))
     os.utime(source, (fresh_time, fresh_time))
