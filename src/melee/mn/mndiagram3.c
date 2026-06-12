@@ -233,7 +233,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
             icons: {
                 int icon_id = *table;
                 int r17 = icon_id;
-                if ((u32) icon_id == 0xFFFF) {
+                if (icon_id == 0xFFFF) {
                     goto next;
                 }
 
