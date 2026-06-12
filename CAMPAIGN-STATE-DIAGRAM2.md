@@ -1237,6 +1237,129 @@ mechanism-attributed residual census (S1 reload = band arithmetic, S2 remat
   probe; baseline 97.46 (Δ3, hunks 5) verified before and after; protected
   fns 100/100/98.67.
 
+## CAMPAIGN PARKED (orchestrator decision, 2026-06-11) — 97.46, banked in PR #2660
+
+This is a PARK, not a close. Every residual is mechanism-attributed; the
+reopen conditions are specific and monitored (listening post live). Final
+state: **97.46% (Δ3, hunks 5)**, tree clean at the close-out commit,
+protected set intact (mnDiagram_802437E8 100 / mnDiagram_80243434 100 /
+mnDiagram_InputProc 98.67).
+
+### The complete residual census (final form)
+
+**S1 (+2): the bottom-body reload — band arithmetic.** The target merges
+the data webs (no reload) AND keeps result=r31. Our merge drops result's
+interference 33→31 (data-pair fusion −1, reload sda21 temp −1); at-scan
+degree 29→27 < k=29 → result leaves the front band → whole-function
+rotation (S1-only graph MEASURED, iter-10: result ig97 nIntfr 31, pops
+iter92→r29; merged web 92→r31). Requirement, exact: +2 result-edges
+surviving to result's scan (high-ig), which lands the target layout
+{result=r31, merged=r30} in simulation (iter-9). Doors closed, each with
+mechanism: spanning-web/new_var (displaces result, iter-3b/5); entry-window
+u64 suppliers (__shl2i runtime call / two-li census mismatch, iter-7);
+du-chain splits of ALL 22 result-interferers (gate temps = single rlwinm,
+single-use loads, single-span callee-saves; the named candidates x46/x47/
+var_r5/d2 live in result-DEAD regions, iter-8); 40-byte frame-object forms
+(frame objects contribute NO IG node — no-pad probe IG byte-identical,
+iter-9); fold-away addressing-temp mints (single-use computed bases fold at
+IR-build under plain AND comma spellings; the multi-use-CSE mint (ig61's
+real mechanism) needs a call-free multi-access window, which does not exist
+on result's range outside B4, iter-10); store-fused-init home demotion
+(call-return inits keep `mr temp,r3` staging, iter-10). NOT FOUND with all
+spelling classes tried; the unsearched direction is STRUCTURAL — the
+original's statement factoring may mint a different temp population with
+≥2 result-overlapping high-ig webs (reconstruction search, not spelling
+search).
+
+**S2 (+1): the CP remat `li r0,0; stb r0` — CP exclusion rule** (4 facts,
+iter-6): (1) CP severs a provably-constant local's use and never rebinds
+the severed web; (2) literal stores take the fresh-temp path
+unconditionally; (3) no cross-web redundant-zero peephole exists, even
+color-matched (forced-run oracle); (4) a second zero-holding variable web
+crossing the call costs the 6th callee-save. **≡ InputProc's +048 fresh-li
+(the fusion/opacity-gate family)** — one new opacity mechanism (a C form
+whose constant origin is opaque to CP while staying register-class and
+li-materialized) pays BOTH campaigns at once. Doors closed: all const-expr
+RHS spellings (driver-4), literal store, coloring/peephole instruments
+(iter-6), x48-class second zero webs (iter-5). Open routes are
+damage-trading only (non-provable value risks buttons[0]'s stw; `&var_r28`
+aliasing forces memory home).
+
+**S3 (−1): the CSE'd is_name_mode test load — IRO global load-merge**
+across the if/else (ours folds the test load into UpdateHeader1's arg;
+target emits 2 loads). Doors closed: temp-identity respelling (propagation
+folds it back), comma form (gate regression, iter-3b). Untried: arg-side
+respelling that keeps the test natural.
+
+**R3: the +028/+02c addi order swap — emission order.** Post-coloring IR
+order is lis; addi-LO; mr (result-home copy); target interleaves lis; mr;
+addi-LO. Outside the entire force-schedule instrument family (no same-base
+load window — oracle, iter-3b). Eager-vs-lazy result-home-copy placement;
+lever not found; supplier-temp forms remain untried (u64 store variants
+are census-dead per iter-7).
+
+### REOPEN CONDITIONS (specific)
+
+1. **A new opacity mechanism from ANY campaign** — a C form making a
+   constant origin opaque to front-end CP while staying register-class +
+   li-materialized. Pays S2 here AND InputProc's +048 simultaneously
+   (transfer pricing in iter-6's cross-campaign statement).
+2. **A structural-factoring discovery from the mndiagram3 or 80242C0C
+   arcs** that mints different temp populations from byte-identical source
+   shapes — the mn-menu lever-transfer precedent is ×4
+   (mndiagram_levers_and_walls); any such law transfers here against S1's
+   +2-high-ig-edges requirement.
+3. **Any upstream edit to mndiagram2.c** — substrate change; re-test the
+   wall set per the substrate-relativity doctrine before relying on any
+   banked door.
+4. **A listening-post hit**: any candidate scoring < 965 that is NOT in
+   the spanning-web family (the 535-class new_var/cross-arm patterns are
+   class-rejected — they displace result off r31). Triage gate: ≥97.46,
+   Δ≤3, hunks ≤5, full-file diff, protected set intact.
+
+### Listening post (live)
+
+- Job: `mnDiagram2_HandleInput-coder3-20260611-175702` (coder3, 16t,
+  stock/pure-random — no perm macros, runs indefinitely).
+- Base re-bootstrapped from CURRENT source at the park commit; PAD_STACK
+  pragma preserved; NULL expanded to `0L` by the bootstrap (#558 path
+  verified — no raw NULL token in base.c); **base score 965 verified
+  locally AND reproducing remotely** (remote iter 530 hit 965).
+- Harvest filter (job record): discard spanning-web-family candidates
+  (entry-defined web reused in the bottom body, new_var/cross-arm
+  aliases) — mechanism-rejected class; harvest ONLY non-spanning
+  patterns. Low cadence; stop if 150k+ iterations without a non-family
+  sub-965 candidate.
+- coder1 = InputProc listening post (DO NOT TOUCH); coder2 = broken
+  (#567); `remote ps`/`remote list` CLI broken (module mismatch, #570) —
+  use `remote tail <job-id>` for liveness.
+
+### Campaign summary
+
+- **91.59 → 97.46** (verified worktree baseline → park), function banked
+  in PR #2660. Commits: d229127e4, 384761931, 54f8e1157, 8de2c73ea
+  (iter-1), a97f93631 (masks/_s-macros + var_r28 identity, 95.91→97.1),
+  92775a644 (data re-assignment web split), 213a63310 (d2 alias CSE,
+  97.1→97.5), 9c52d3ce1, 5c5708b56; doc line through cd00d5e5d, 52f375a94,
+  9a8d6901e, c52d2ba21, and this park commit.
+- **Laws discovered (the record is the deliverable):**
+  1. *Frame-object inertness* (iter-9): MWCC's IG = register virtuals
+     only; aggregates/PAD_STACK contribute no node, no edge (no-pad probe
+     IG byte-identical). Bytes and banding are decoupled.
+  2. *Band-model reconciliation* (iter-9): fixed-cut T=33 ≡ incremental
+     scan-time k=29 on all three measured graphs; result sits at at-scan
+     degree = k EXACTLY in the matching layout; the "T=k+4" mystery
+     dissolved (coalesced-away virtuals count as permanent neighbors).
+  3. *The mint mechanism* (iter-10): fold-away addressing temps (IG nodes
+     with zero instructions) come from MULTI-USE CSE bases in call-free
+     spans — never from cast/comma spelling of single-use accesses.
+  4. *The CP exclusion rule* (iter-6, 4 facts) + *literal-store fresh-temp
+     law* + *store-fused-init constant-specificity* (iter-10: call returns
+     resist home demotion).
+  5. *The front-band requirement arithmetic* (iter-9): +2 high-ig
+     result-edges reproduce the target layout in simulation — the exact,
+     constructive gap statement S1 reopens against.
+
 ## DOC-FEEDBACK (methodology observations, iteration 2)
 
 1. **Precise-alignment-first should be doctrine.** Iteration-1 spent a
