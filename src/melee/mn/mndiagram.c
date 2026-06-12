@@ -2839,10 +2839,7 @@ void mnDiagram_80243434(u8 arg0)
     HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);
 
     user_data = HSD_MemAlloc(sizeof(Diagram));
-    if (user_data == NULL) {
-        OSReport(tbl->user_data_error);
-        __assert(tbl->file_name, 0x90E, tbl->user_data_name);
-    }
+    HSD_ASSERTREPORT(0x90E, user_data, "Can't get user_data.\n");
     user_data->saved_menu = mn_804A04F0.cur_menu;
     user_data->saved_selection = mn_804A04F0.hovered_selection;
     user_data->anim_state = arg0;
