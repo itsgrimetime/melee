@@ -1138,9 +1138,7 @@ void mnDiagram2_Init(void)
 u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
 {
     mnDiagram2_SortEntry entries[25];
-    f64 temp0;
-    f64 temp8;
-    u64 baseVal;
+    mnDiagram2_SortEntry temp;
     mnDiagram2_SortEntry* base;
     mnDiagram2_SortEntry* ptr;
     mnDiagram2_SortEntry* curr;
@@ -1151,7 +1149,6 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
     int zero;
     int neg1;
     int name;
-    PAD_STACK(8);
 
     base = entries;
     ptr = base;
@@ -1173,18 +1170,16 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
     }
 
     // Selection sort with insertion shift
-    i = 0;
-    do {
+    for (i = 0; i < 25; i++) {
         k = i + 1;
         curr = &entries[k];
         maxIdx = i;
-        baseVal = base->value;
         while (k < 25) {
             // Skip entries with -1 value
             if (curr->value != (u64) neg1) {
                 // Update if curr > entries[maxIdx] OR base == -1
                 if (curr->value > entries[maxIdx].value ||
-                    baseVal == (u64) neg1)
+                    entries[i].value == (u64) neg1)
                 {
                     maxIdx = k;
                 }
@@ -1195,22 +1190,18 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
 
         if (maxIdx != i) {
             ptr = &entries[maxIdx];
+            temp = *ptr;
             j = maxIdx - i;
-            temp0 = ptr->d0;
-            temp8 = ptr->d8;
 
             while (j > 0) {
-                ptr->d0 = (ptr - 1)->d0;
-                ptr->d8 = (ptr - 1)->d8;
+                *ptr = *(ptr - 1);
                 ptr--;
                 j--;
             }
-            base->d0 = temp0;
-            base->d8 = temp8;
+            *base = temp;
         }
         base++;
-        i++;
-    } while (i < 25);
+    }
 
     // Return
     ptr = &entries[rank];
