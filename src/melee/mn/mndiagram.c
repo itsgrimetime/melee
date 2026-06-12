@@ -359,6 +359,22 @@ static inline int mnDiagram_SumFighterKOs(u8 field_index)
     return total;
 }
 
+static inline int mnDiagram_SumFighterKOsClamped(u8 field_index)
+{
+    int total = 0;
+    int i;
+    for (i = 0; i < 25; i++) {
+        if (mn_IsFighterUnlocked(i) != 0) {
+            total +=
+                GetPersistentFighterData(field_index)->fighter_kos[(u8) i];
+        }
+    }
+    if (total > 999999) {
+        total = 999999;
+    }
+    return total;
+}
+
 /// @brief Gets total falls (deaths) of a fighter against all other fighters.
 /// @details Iterates through all unlocked fighters and sums how many times
 ///          each fighter KO'd the target fighter. This is the column sum
@@ -2491,10 +2507,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                         var_r23 = mnDiagram_GetVisibleFighterCursorFrom(
                             sorted, arg1_r, var_r30);
                         if (var_r22_3 == 7) {
-                            var_r16_6 = mnDiagram_SumFighterKOs(var_r23);
-                            if (var_r16_6 > cap) {
-                                var_r16_6 = cap;
-                            }
+                            var_r16_6 = mnDiagram_SumFighterKOsClamped(var_r23);
                             mnDiagram_80241E78(arg0, (u8) var_r22_3,
                                                (u8) var_r30, var_r16_6);
                         } else {
