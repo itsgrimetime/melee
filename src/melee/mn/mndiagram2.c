@@ -24,9 +24,13 @@
 #include <melee/mn/mndiagram.h>
 #include <melee/mn/mndiagram3.h>
 #include <melee/mn/mnmain.h>
-#include <melee/mn/mnname.h>
 
 /* GetPersistentNameData and GetPersistentFighterData are in gm/gmmain_lib.h */
+
+/* From mnname.c; this TU sees a narrower GetNameText parameter (codegen
+ * requires the u8 view; same per-TU declaration as mnvibration.c). */
+char* GetNameText(u8 slot);
+int GetNameCount(void);
 
 /* Wrapper macros for index functions */
 #define mnDiagram_GetNameByIndex_s(x) ((int) mnDiagram_GetNameByIndex(x))
@@ -189,7 +193,7 @@ void mnDiagram2_ClearStatRows(HSD_GObj* gobj)
 void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
 {
     Vec3 sp18;
-    int name;
+    u8 name;
     Diagram2* data;
     HSD_Text* text;
     void* tmp;
@@ -198,9 +202,9 @@ void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
 
     data = gobj->user_data;
     if (is_name_mode != 0) {
-        name = mnDiagram_GetNameByIndex_s(entity_idx);
+        name = mnDiagram_GetNameByIndex(entity_idx);
     } else {
-        name = mnDiagram_GetFighterByIndex_s(entity_idx);
+        name = mnDiagram_GetFighterByIndex(entity_idx);
     }
 
     if (is_name_mode == 0) {
