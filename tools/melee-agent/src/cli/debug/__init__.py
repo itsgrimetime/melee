@@ -1499,6 +1499,292 @@ def _force_vector_probe_payload(
     }
 
 
+def _order_target_forced_dump(
+    *,
+    tu_c: Path,
+    function: str,
+    class_id: int,
+    force_iter_first: list,
+    melee_root: Path,
+) -> tuple[dict, set, str]:
+    """Run ONE forced-ORDER dump of the CURRENT TU bytes and read it back.
+
+    Returns (ranks {ig: 1-based rank}, ig_set, decisions_sha256). The dump is
+    written to an explicit temp path and never touches the shared cache
+    (forced dumps skip cache sync by design; --no-cache-sync doubles down).
+    Caller must hold (or have disabled via CHECKDIFF_NO_LOCK) the repo lock.
+    """
+    import hashlib
+
+    from src.mwcc_debug.colorgraph_parser import find_function, parse_hook_events
+    from src.search.directed.order_metric import colorgraph_ranks
+
+    out_path = (
+        tu_c.parent
+        / f".{function}.order-target.{os.getpid()}.{int(time.time() * 1000)}.pcdump.txt"
+    )
+    ig_csv = ",".join(str(i) for i in force_iter_first)
+    argv = [
+        sys.executable, "-m", "src.cli", "debug", "dump", "local", str(tu_c),
+        "--function", function, "--output", str(out_path), "--no-cache-sync",
+        "--force-iter-first", ig_csv,
+        "--force-iter-first-class", str(class_id),
+        "--force-iter-first-fn", function,
+    ]
+    proc = subprocess.run(
+        argv, cwd=melee_root / "tools" / "melee-agent",
+        capture_output=True, text=True, timeout=600,
+        env=os.environ.copy(),
+    )
+    if proc.returncode != 0 or not out_path.exists():
+        out_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"forced dump failed (rc={proc.returncode}): "
+            f"{(proc.stderr or proc.stdout or '')[-500:]}"
+        )
+    text = out_path.read_text(encoding="utf-8")
+    out_path.unlink(missing_ok=True)
+    ranks = colorgraph_ranks(text, function, class_id=class_id)
+    fev = find_function(parse_hook_events(text), function)
+    matching = [
+        s for s in (fev.colorgraph_sections if fev else [])
+        if s.class_id == class_id
+    ]
+    section = matching[-1] if matching else None
+    decisions = section.decisions if section else []
+    ig_set = {d.ig_idx for d in decisions}
+    sha = hashlib.sha256(
+        "\n".join(
+            f"{d.iter_idx}:{d.ig_idx}:{d.assigned_reg}" for d in decisions
+        ).encode()
+    ).hexdigest()
+    return ranks, ig_set, sha
+
+
+def _collect_order_target_inputs(
+    *,
+    function: str,
+    unit: str,
+    class_id: int,
+    melee_root: Path,
+    checkdiff_timeout: float,
+):
+    """Collect the §4.2 tool outputs for order-target derivation.
+
+    FRESH-EVERYTHING CONTRACT (cache coherence): never auto-resolves the cached
+    pcdump and never runs checkdiff --no-build. Everything is derived from the
+    CURRENT TU bytes at call time: (1) checkdiff WITH a build; (2) a fresh
+    baseline pcdump compiled to an explicit temp path with --no-cache-sync.
+
+    LOCK CONTRACT (B9): wraps the whole run in _acquire_checkdiff_repo_lock
+    and runs children with CHECKDIFF_NO_LOCK=1 (_checkdiff_env_for_locked_child)
+    so they don't deadlock on the same lock file. Under a parent that already
+    holds the lock and exported CHECKDIFF_NO_LOCK=1 (T6 generate.py), the
+    acquisition here no-ops — the established contract.
+
+    MINIMAL <=64 FORCING-SET SEARCH (B1), concrete strategy:
+      (a) greedy drop of already-correct registers (force-phys targets with
+          already_target=True need no forcing);
+      (b) natural-prefix preservation: per-register first-def anchors ordered
+          by expected first-def position, windowed to the first 64;
+      (c) outcome-verified union probe via _run_force_vector_auto_verify
+          (forced dump + integrated checkdiff); singleton/prefix probes are
+          logged evidence only.
+    force_cap_exceeded is True ONLY when len(anchors) > 64 AND the 64-window
+    union does not eliminate the residual.
+
+    Monkeypatched out in unit tests; the live path is exercised at T6's
+    fixture generation and the Plan-C pool census.
+    """
+    import hashlib
+
+    from src.mwcc_debug.order_target_derive import (
+        REGISTER_ONLY_PRIMARIES,
+        DeriveInputs,
+    )
+    from src.mwcc_debug.role_descriptor import Compile, build_descriptors
+    from src.mwcc_debug.role_reanchor import reanchor_descs
+    from src.search.directed.order_metric import colorgraph_ranks
+    from src.search.directed.order_target import FORCE_CAP
+
+    tu_c = melee_root / "src" / f"{unit}.c"
+    child_env = _checkdiff_env_for_locked_child(disable_fingerprint=False)
+
+    with _acquire_checkdiff_repo_lock(melee_root, label="order-target derivation"):
+        # ---- Step 1: FRESH checkdiff (WITH build) --------------------------
+        proc = subprocess.run(
+            [sys.executable, str(melee_root / "tools" / "checkdiff.py"),
+             function, "--format", "json"],
+            capture_output=True, text=True,
+            timeout=max(checkdiff_timeout, 600),  # the build dominates
+            cwd=melee_root, env=child_env,
+        )
+        checkdiff_payload = json.loads(proc.stdout)
+        classification = checkdiff_payload.get("classification") or {}
+        checkdiff_primary = (
+            classification.get("primary")
+            if isinstance(classification, dict) else str(classification)
+        ) or "unknown"
+
+        def _inert(**over):
+            base = dict(
+                function=function, unit=unit, class_id=class_id,
+                checkdiff_primary=checkdiff_primary,
+                phys_target={}, phys_conflicts=[],
+                force_iter_first=[], applied_positions={},
+                forced_class_clean=False, forced_ranks={},
+                baseline_ig_set=set(), forced_ig_set=set(),
+                self_reanchored_roles=set(), unscored_roles=[],
+                forced_decisions_sha256=[],
+                baseline_source_sha256=hashlib.sha256(
+                    tu_c.read_bytes()).hexdigest()[:32],
+                baseline_pcdump_sha256="",
+                force_cap_exceeded=False,
+            )
+            base.update(over)
+            return DeriveInputs(**base)
+
+        if checkdiff_primary not in REGISTER_ONLY_PRIMARIES:
+            # Classifier raises on this (hard error, not a routing).
+            return _inert()
+
+        # ---- FRESH baseline pcdump (explicit temp path, never the cache) ---
+        baseline_dump = (
+            tu_c.parent
+            / f".{function}.order-target.baseline.{os.getpid()}.pcdump.txt"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-m", "src.cli", "debug", "dump", "local",
+             str(tu_c), "--function", function,
+             "--output", str(baseline_dump), "--no-cache-sync"],
+            cwd=melee_root / "tools" / "melee-agent",
+            capture_output=True, text=True, timeout=600, env=child_env,
+        )
+        if proc.returncode != 0 or not baseline_dump.exists():
+            baseline_dump.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"baseline dump failed (rc={proc.returncode}): "
+                f"{(proc.stderr or proc.stdout or '')[-500:]}"
+            )
+        pcdump_text = baseline_dump.read_text(encoding="utf-8")
+        baseline_dump.unlink(missing_ok=True)
+
+        # ---- Step 2: phys target + conflicts (from the FRESH artifacts) ----
+        fns = parse_pcdump(pcdump_text)
+        fn = next((f for f in fns if f.name == function), None)
+        if fn is None:
+            raise RuntimeError(f"{function} not found in fresh baseline pcdump")
+        pre_pass = fn.last_precolor_pass()
+        events_fn = find_function(parse_hook_events(pcdump_text), function)
+        target_asm = _checkdiff_asm_lines(checkdiff_payload, "target_asm")
+        current_asm = _checkdiff_asm_lines(checkdiff_payload, "current_asm")
+        vector = _derive_force_phys_from_register_diff_lines(
+            target_asm, current_asm, pre_pass, events_fn,
+        )
+        phys_target = {int(k): int(v) for k, v in vector["force_phys"].items()}
+        phys_conflicts = list(vector["conflicts"])
+        if phys_conflicts:
+            # Spec §4.2 step 2: route BEFORE any forced compile is spent.
+            return _inert(phys_target=phys_target, phys_conflicts=phys_conflicts)
+
+        # ---- Step 3: per-register anchors + minimal <=64 set search (B1) ---
+        mismatched_reg_names: list[str] = []
+        for tgt in vector["targets"]:
+            if tgt.get("already_target") is True:
+                continue
+            name = tgt.get("target_reg_name")
+            if name and name not in mismatched_reg_names:
+                mismatched_reg_names.append(name)
+        if not mismatched_reg_names:
+            return _inert(phys_target=phys_target)
+
+        asm_path = melee_root / "build" / "GALE01" / "asm" / f"{unit}.s"
+        asm_fn = asm_extract_function(asm_path.read_text(), function)
+        prologue_end = asm_parse_prologue_end(asm_fn.instructions)
+        body = asm_fn.instructions[prologue_end:]
+        anchor_rows: list[tuple[int, int]] = []  # (expected_pos, ig_idx)
+        for reg in _parse_match_iter_first_regs(",".join(mismatched_reg_names)):
+            expected_def = asm_find_first_def(
+                body, target_reg=reg.number, reg_kind=reg.kind,
+            )
+            if expected_def is None:
+                continue
+            pos, expected_ist = expected_def
+            match = match_virtual_for_expected_def(
+                expected_ist=expected_ist, expected_position=pos,
+                pre_pass=pre_pass, reg_kind=reg.kind,
+            )
+            if match is not None:
+                anchor_rows.append((pos, match.ig_idx))
+        anchor_rows.sort(key=lambda t: t[0])
+        anchors = list(dict.fromkeys(ig for _pos, ig in anchor_rows))
+
+        window = anchors[:FORCE_CAP]
+        entries = _parse_force_vector(
+            ",".join(f"class{class_id}:ig{ig}:iter-first" for ig in window)
+        )
+        probe = _run_force_vector_auto_verify(
+            src_path=tu_c, function=function, entries=entries,
+            melee_root=melee_root, checkdiff_timeout=checkdiff_timeout,
+            run_diagnostic_probes=True,  # singleton/prefix evidence, logged only
+        )
+        forced_class_clean = (probe.get("union") or {}).get("status") == "match"
+        force_cap_exceeded = (not forced_class_clean) and len(anchors) > FORCE_CAP
+        if force_cap_exceeded:
+            return _inert(
+                phys_target=phys_target, force_iter_first=window,
+                force_cap_exceeded=True,
+            )
+
+        # ---- Steps 4-5: forced readback x2 (positions, ranks, igset, sha) --
+        forced_ranks, forced_ig_set, sha1 = _order_target_forced_dump(
+            tu_c=tu_c, function=function, class_id=class_id,
+            force_iter_first=window, melee_root=melee_root,
+        )
+        applied_positions = {
+            ig: forced_ranks[ig] - 1 for ig in window if ig in forced_ranks
+        }
+        _r2, _s2, sha2 = _order_target_forced_dump(
+            tu_c=tu_c, function=function, class_id=class_id,
+            force_iter_first=window, melee_root=melee_root,
+        )
+
+        # ---- Step 6: baseline self-reanchor over the phys-target roles -----
+        baseline_compile = Compile.from_text(
+            pcdump_text, function, tu_c.read_text(encoding="utf-8")
+        )
+        baseline_descs = build_descriptors(baseline_compile, class_id=class_id)
+        baseline_ig_set = set(
+            colorgraph_ranks(pcdump_text, function, class_id=class_id).keys()
+        )
+        self_ra = reanchor_descs(
+            baseline_descs, baseline_descs, dict(phys_target), class_id=class_id,
+        )
+        self_reanchored_roles = {orig for _new, orig in self_ra.matched.items()}
+        unscored_roles = [
+            {"ig": ig, "reason": status}
+            for ig, status in self_ra.diagnostics.items()
+            if ig in phys_target
+        ]
+
+        return DeriveInputs(
+            function=function, unit=unit, class_id=class_id,
+            checkdiff_primary=checkdiff_primary,
+            phys_target=phys_target, phys_conflicts=phys_conflicts,
+            force_iter_first=window, applied_positions=applied_positions,
+            forced_class_clean=forced_class_clean, forced_ranks=forced_ranks,
+            baseline_ig_set=baseline_ig_set, forced_ig_set=forced_ig_set,
+            self_reanchored_roles=self_reanchored_roles,
+            unscored_roles=unscored_roles,
+            forced_decisions_sha256=[sha1, sha2],
+            baseline_source_sha256=hashlib.sha256(
+                tu_c.read_bytes()).hexdigest()[:32],
+            baseline_pcdump_sha256=hashlib.sha256(
+                pcdump_text.encode()).hexdigest()[:32],
+            force_cap_exceeded=False,
+        )
+
+
 def _run_force_vector_auto_verify(
     *,
     src_path: Path,
@@ -13742,6 +14028,91 @@ def force_phys_from_diff(
                         f"    {probe.get('label')}: {probe.get('status')} "
                         f"(returncode {probe.get('returncode')})"
                     )
+
+
+@target_app.command(name="order-target")
+def order_target_cmd(
+    function: Annotated[
+        str, typer.Option("--function", "-f", help="Function to derive (required)."),
+    ],
+    unit: Annotated[
+        Optional[str],
+        typer.Option("--unit", "-u",
+                     help="TU path relative to src/ (e.g. melee/mn/mndiagram). "
+                          "Auto-resolves via report.json if omitted."),
+    ] = None,
+    class_id: Annotated[
+        int, typer.Option("--class-id", help="Register class (0=GPR)."),
+    ] = 0,
+    out: Annotated[
+        Optional[Path],
+        typer.Option("--out",
+                     help="Where to write the OrderTarget YAML on a directed "
+                          "result. Default: docs/superpowers/order-targets/"
+                          "<function>.yaml. No file is written for non-directed "
+                          "routings."),
+    ] = None,
+    checkdiff_timeout: Annotated[
+        float, typer.Option("--checkdiff-timeout", help="Per-checkdiff timeout."),
+    ] = 60.0,
+    json_out: Annotated[
+        bool, typer.Option("--json", help="Emit the full artifact as JSON."),
+    ] = False,
+) -> None:
+    """Derive a proven order-distance target (the §4.2 class partition).
+
+    Runs the pipeline end-to-end and persists an OrderTarget on a `directed`
+    result. Every failure mode is a NAMED routing, not an error; the exit code
+    mirrors routing: 0 directed, 3 unanchorable, 4 not_order_class,
+    5 force_cap_blocked, 6 unstable_target.
+    """
+    from src.mwcc_debug.order_target_derive import derive_order_target
+    from src.search.directed.order_target import (
+        Routing, validate_order_target,
+    )
+
+    melee_root = DEFAULT_MELEE_ROOT
+    resolved_unit = unit or _find_unit_for_function(function, melee_root)
+    if resolved_unit is None:
+        typer.echo(
+            f"function '{function}' not found in report.json; pass --unit.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    inputs = _collect_order_target_inputs(
+        function=function, unit=resolved_unit, class_id=class_id,
+        melee_root=melee_root, checkdiff_timeout=checkdiff_timeout,
+    )
+    target = derive_order_target(inputs)
+
+    if json_out:
+        from dataclasses import asdict
+        print(json.dumps(asdict(target), indent=2, default=list))
+    else:
+        print(f"Function: {target.function}")
+        print(f"Unit:     {target.unit}")
+        print(f"Routing:  {target.routing}")
+        if target.class_evidence:
+            print(f"Evidence: {target.class_evidence}")
+        if target.routing == Routing.DIRECTED.value:
+            print(f"Target roles: {target.target_roles}")
+            print(f"Order vector: {target.order_target}")
+            if target.unscored_roles:
+                print(f"Unscored residual: {target.unscored_roles}")
+
+    if target.routing == Routing.DIRECTED.value:
+        validate_order_target(target)
+        out_path = out or (
+            melee_root / "docs" / "superpowers" / "order-targets"
+            / f"{target.function}.yaml"
+        )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        target.save_yaml(out_path)
+        if not json_out:
+            print(f"Wrote {out_path}")
+
+    raise typer.Exit(target.exit_code())
 
 
 @target_app.command(name="match-iter-first")
