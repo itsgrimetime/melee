@@ -1006,9 +1006,20 @@ def submit_job(
                 ["ssh", target.ssh, _remote_sh(_remote_submit_script(job, target))],
                 check=True,
             )
-        except Exception:
+        except Exception as exc:
             _remove_job_metadata_best_effort(job_path)
-            raise
+            cleanup_detail = _cleanup_remote_run_dir_best_effort(
+                job,
+                target,
+                runner=runner,
+            )
+            raise RemoteJobError(
+                _format_submit_not_started_error(
+                    job,
+                    exc,
+                    cleanup_detail=cleanup_detail,
+                )
+            ) from exc
         return job
 
 
@@ -1135,6 +1146,96 @@ def _remote_submit_script(job: RemoteJob, target: RemoteTarget) -> str:
             "fi",
         ]
     )
+
+
+def _remote_cleanup_run_dir_script(job: RemoteJob, target: RemoteTarget) -> str:
+    remote_root = target.remote_perm_root.rstrip("/")
+    remote_runs_root = f"{remote_root}/remote-runs"
+    return "\n".join([
+        "set -eu",
+        f"remote_run_dir={shlex.quote(job.remote_run_dir)}",
+        f"remote_runs_root={shlex.quote(remote_runs_root)}",
+        'case "$remote_run_dir" in',
+        '  "$remote_runs_root"/*) rm -rf -- "$remote_run_dir" ;;',
+        '  *) echo "refusing to clean path outside remote-runs: $remote_run_dir" >&2; exit 2 ;;',
+        "esac",
+    ])
+
+
+def _cleanup_remote_run_dir_best_effort(
+    job: RemoteJob,
+    target: RemoteTarget,
+    *,
+    runner: Callable[..., CommandResult],
+) -> str | None:
+    try:
+        result = runner(
+            ["ssh", target.ssh, _remote_sh(_remote_cleanup_run_dir_script(job, target))],
+            check=False,
+        )
+    except Exception as exc:
+        return f"remote run dir cleanup failed: {_compact_submit_failure_detail(exc)}"
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        return f"remote run dir cleanup failed: {_compact_submit_failure_text(detail)}"
+    return None
+
+
+def _compact_submit_failure_text(text: str) -> str:
+    raw = text.strip()
+    if not raw:
+        return "no detail"
+    interesting = []
+    markers = (
+        "error",
+        "failed",
+        "timeout",
+        "timed out",
+        "denied",
+        "not found",
+        "no such",
+        "tmux session exited",
+    )
+    for line in raw.splitlines():
+        lowered = line.lower()
+        if any(marker in lowered for marker in markers):
+            interesting.append(line.strip())
+    lines = interesting[-6:] if interesting else raw.splitlines()[-6:]
+    compact = "\n".join(_truncate_middle(line, 360) for line in lines if line.strip())
+    return compact or _truncate_middle(raw, 720)
+
+
+def _compact_submit_failure_detail(exc: object) -> str:
+    return _compact_submit_failure_text(str(exc))
+
+
+def _truncate_middle(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    keep = max(1, (limit - 15) // 2)
+    return f"{text[:keep]} ... [truncated] ... {text[-keep:]}"
+
+
+def _format_submit_not_started_error(
+    job: RemoteJob,
+    exc: object,
+    *,
+    cleanup_detail: str | None,
+) -> str:
+    cleanup = (
+        f"Remote run dir cleanup warning: {cleanup_detail}"
+        if cleanup_detail
+        else "Best-effort remote run dir cleanup was issued."
+    )
+    return "\n".join([
+        f"JOB NOT STARTED: remote permuter submit failed for {job.job_id}.",
+        "Local job metadata was rolled back; no live tmux session was confirmed.",
+        cleanup,
+        f"Remote run dir: {job.remote_run_dir}",
+        "It is safe to retry the submit after the transient remote error clears.",
+        "Failure detail:",
+        _compact_submit_failure_detail(exc),
+    ])
 
 
 def _remote_sh(script: str) -> str:

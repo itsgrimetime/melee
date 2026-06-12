@@ -1716,6 +1716,81 @@ def test_submit_job_builds_rsync_ssh_tmux_and_metadata(tmp_path: Path) -> None:
     assert "permuter.log" in remote_script
 
 
+def test_submit_job_cleans_remote_run_dir_when_launch_fails_after_rsync(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "melee-agent debug target dtk-objdump"\n'
+    )
+    jobs_dir = tmp_path / "jobs"
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        if argv and argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            return pr.CommandResult(
+                returncode=0,
+                stdout=(
+                    _remote_doctor_ok_stdout()
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                ),
+                stderr="",
+            )
+        if argv and argv[0] == "rsync":
+            return pr.CommandResult(returncode=0, stdout="", stderr="")
+        if argv and argv[0] == "ssh" and "tmux new-session" in argv[2]:
+            raise pr.RemoteJobError(
+                "Command failed (255): ssh coder.coder64 sh -lc '<remote heredoc>'\n"
+                "coder ssh: net/http: TLS handshake timeout\n"
+                + ("remote script text\n" * 200)
+            )
+        if argv and argv[0] == "ssh" and "rm -rf" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="", stderr="")
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=jobs_dir,
+            runner=fake_runner,
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    msg = str(exc.value)
+    assert "JOB NOT STARTED" in msg
+    assert "safe to retry" in msg
+    assert "TLS handshake timeout" in msg
+    assert "remote script text" not in msg
+    assert len(msg) < 1800
+    assert not (jobs_dir / "fn_80000000-coder64-20260525-143012.json").exists()
+    cleanup_calls = [
+        call for call in calls
+        if call[0] == "ssh" and "rm -rf" in call[2]
+    ]
+    assert cleanup_calls
+    assert "fn_80000000-coder64-20260525-143012" in cleanup_calls[0][2]
+
+
 def test_remote_submit_script_fails_when_tmux_session_exits_immediately(
     tmp_path: Path,
 ) -> None:
