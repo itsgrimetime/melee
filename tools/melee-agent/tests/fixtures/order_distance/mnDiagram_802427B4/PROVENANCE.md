@@ -1,4 +1,17 @@
-# Kill-switch fixtures — provenance
+# Kill-switch fixtures — provenance (round 2)
+
+Round 1 routed BOTH witnesses out for non-substantive reasons (a frozen source
+that didn't build against HEAD; an admission-set vocabulary mismatch). The T6
+ruling fixed both and re-derived:
+
+- **Amendment 1** — `normalized-structural-match` (the #576 "zero structural
+  diff demotion" = FULLNORM-0 pure-coloring signature) admitted to
+  `REGISTER_ONLY_PRIMARIES` (commit `1b85dc37e`). Flagged for the T7 reviewer:
+  amends the T3-reviewed `order_target_derive.py`.
+- **Amendment 2** — the 802427B4 witness co-freezes its CONTEMPORANEOUS
+  `mndiagram.static.h` (HEAD removed the six `extern f32 mnDiagram_804DBF8x`
+  declarations the frozen sources reference). `generate.py` swaps and
+  byte-exact-restores the header together with the TU (`swapped_files`).
 
 ## Witness 1: mnDiagram_802427B4
 - `pre_win.c` — `src/melee/mn/mndiagram.c` @ `a527c0227~1` (f2d654331), 95.68%.
@@ -6,24 +19,24 @@
   `pos.y = (0, mnDiagram_804DBFAC) - HSD_JObjGetTranslationY(j);` + split
   base-pointer `p = sorted; p = p + start;`; stmw r20/12-saves → r21/11-saves —
   the §6c eligibility risk).
-- `negative_control.c` — NOT generated: the frozen pre-win source does not
-  compile against the current repo tree, so no base match% / control could be
-  measured (the negative-control step is downstream of the base build).
-- Derivation on the pre-win base routed: **unstable_target**
-  (not derivation-eligible — `pre_win_source_does_not_compile_against_HEAD`).
-  The frozen pre-win `.c` references the bare identifier `mnDiagram_804DBF84`,
-  which was declared in the contemporaneous `src/melee/mn/mndiagram.static.h`
-  at `a527c0227~1` but no longer has a C declaration at master HEAD (the win +
-  later restructures replaced those raw `mnDiagram_804DBF8x` references with
-  named struct fields / float literals and rewrote the static header).
-  Verbatim build error captured in `eligibility.json`:
-  `undefined identifier 'mnDiagram_804DBF84'` (src\melee\mn\mndiagram.c:1681).
-  This is the §6c eligibility risk in its STRONGEST form: not merely a
-  callee-save-count change that might push the base out of the order-distance
-  class, but a frozen source that will not build against HEAD at all. Freezing
-  only the historical `.c` (per the plan's extraction) does not capture the
-  contemporaneous header it depends on.
-- named_pair: not derived (routing non-directed).
+- `pre_win.static.h` — `src/melee/mn/mndiagram.static.h` @ `a527c0227~1`;
+  `win.static.h` — @ `a527c0227`. BYTE-IDENTICAL to each other (win-side
+  verified at freeze); both frozen for per-source provenance. ONE header level
+  sufficed: `mndiagram2.static.h`'s HEAD drift removes only two externs
+  (`mnDiagram2_804D4FC0/...FC8`) that no witness references — no cascade.
+- Freeze-time checkdiff with the co-frozen header: pre_win = **95.68%**
+  (exactly the committed value), win = **97.95556%**.
+- `negative_control.c` — pre_win + swap `HSD_Text* text;`/`HSD_Text* row_text;`
+  (adjacent decl pair); freeze-time match% = **95.54667** (≤ 95.68 — verified
+  non-improving, assertion (d)).
+- Derivation on the pre-win base routed: **not_order_class** (Step-1
+  precondition): checkdiff primary is `signature-type-mismatch`, not
+  register-only. With the base now BUILDING, this is the honest verdict the
+  spec anticipated — the celebrated win changed the callee-save count
+  (stmw r20/12 → r21/11), so the pre-win residual contains signature-level
+  divergence, i.e. (at least partly) a node-set-class win outside the
+  order metric's class.
+- named_pair: not derived (routing non-directed; no `order_target.yaml`).
 
 ## Witness 2: fn_803ACD58 (cardstate decl-chain; §6c contingency + secondary witness)
 - `pre_win.c` = chain step 0 (`ffad1f5ed~1`); `win.c` = step 1 (`ffad1f5ed`,
@@ -31,30 +44,32 @@
   hoist, →99.5); `chain_3.c` (`b7013dc48`, size/retries swap, →99.7). Each a
   one-line decl-order edit — pure order moves on a stable node set.
 - `negative_control.c` — pre_win + icon_size/hdr_plus_icon swap; freeze-time
-  match% = **98.644066** (≤ base 98.94068 — verified non-improving, assertion
-  (d) satisfied).
-- Derivation on chain step 0 routed: **not_order_class**.
-  The cardstate base's checkdiff primary is `normalized-structural-match`
-  (the diff is structurally zero after masking registers/immediates/labels/
-  relocations — pure coloring/presentation), which is NOT register-only
-  (`{backend-ceiling, operand-register-or-offset}`). The order-distance
-  classifier's Step-1 precondition deliberately rejects it: a decl-order win
-  whose baseline diff normalizes to structurally identical is INVISIBLE to the
-  order-distance metric's pool. Verified stable across 3 builds (primary +
-  98.941% identical every time — a reproduced classifier verdict, not noise).
+  match% = **98.644066** (≤ base 98.94068 — verified non-improving).
+- With Amendment 1 the base (checkdiff primary `normalized-structural-match`,
+  stable across repeated builds) is ADMITTED past Step 1. The FULL live
+  forcing pipeline ran: minimal-set search = union probe + 6 singleton probes
+  + 4 natural-prefix probes (`[auto-verify]` log lines at freeze).
+- Derivation routed: **not_order_class** (Step 4b — the outcome-verified class
+  gate): *"forced-ORDER build did not byte-eliminate the class residual; order
+  is a symptom of instruction-content/emission divergence upstream of select
+  (e.g. coalescing/VN/liveness/statement-copy skew)."* Routing keyed on the
+  forced-order BYTE-VERDICT, never on attribution. Derive-twice hashes: not
+  part of the record — Step 4b fires upstream of the Step-7 determinism check.
+- Round-2 pcdumps regenerated byte-identical to round 1 (git-clean after
+  regeneration) — a determinism cross-check of the dump path.
 
-## Gating decision (eligibility.json)
-- gating_fixture = **null**.
-- BOTH witnesses routed non-directed:
-  - `mnDiagram_802427B4` → `unstable_target` (pre-win source does not compile
-    against HEAD; not derivation-eligible).
-  - `fn_803ACD58` → `not_order_class` (normalized-structural-match is out of
-    the order-distance pool).
-- Per §6c: with NO derivation-eligible witness, the kill switch **hard-stops at
-  T7 with an orchestrator report** — never a silent pass. The orchestrator must
-  revisit the kill-switch function assignment (e.g. freeze a witness whose
-  pre-win source builds against HEAD and whose baseline diff classifies as a
-  register-only `backend-ceiling` / `operand-register-or-offset` mismatch — the
-  only primaries the order-distance derivation accepts).
+## Gating decision (eligibility.json, round 2)
+- gating_fixture = **null** — BOTH witnesses routed `not_order_class` for
+  SUBSTANTIVE reasons (round 2; the round-1 artifacts are fixed):
+  - `mnDiagram_802427B4`: pre-win residual is not register-only
+    (`signature-type-mismatch`) — consistent with the spec-recorded risk that
+    the win changed the callee-save count (node-set class).
+  - `fn_803ACD58`: admitted, fully force-probed, and the forced-order build
+    did NOT byte-eliminate the residual — the decl-order chain's effect is
+    upstream of select, not pure simplification-order.
+- Per §6c: NO derivation-eligible witness → **T7 hard-stops with an
+  orchestrator report** (its hard-stop documentation path) — never a silent
+  pass. The kill-switch function assignment needs a witness whose pre-win
+  residual is register-only AND whose forced-order build byte-eliminates.
 
 Regenerate everything with: `cd tools/melee-agent && python tests/fixtures/order_distance/generate.py`

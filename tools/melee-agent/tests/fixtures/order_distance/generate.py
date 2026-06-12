@@ -9,7 +9,10 @@ Run from tools/melee-agent:
 
 SAFETY CONTRACTS:
   * B8 — every TU swap is try/finally-restored (byte-exact), even on Ctrl-C
-    or an exception mid-compile.
+    or an exception mid-compile. Amendment 2 (T6 round 2): swaps are
+    multi-file — the TU plus any co-frozen CONTEMPORANEOUS headers the
+    historical source needs (mndiagram.static.h for the 802427B4 witness) are
+    swapped and restored together under the same guarantee.
   * B9 — the whole run holds the repo-wide build lock
     (src.search.adapters._acquire_repo_build_lock) and exports
     CHECKDIFF_NO_LOCK=1 so children (checkdiff, dump local) and the in-process
@@ -62,6 +65,29 @@ WITNESSES = [
              "    f32 y_spacing;\n    f32 x_spacing;"),
         ],
         "chain": [],  # no secondary chain for this witness
+        # Amendment 2 (T6 round 2): the frozen historical .c needs its
+        # CONTEMPORANEOUS static header — HEAD removed the six
+        # `extern f32 mnDiagram_804DBF8x...` declarations from
+        # mndiagram.static.h, so the witnesses' bare-identifier references do
+        # not compile against HEAD's header. Maps source-name ->
+        # [(repo-relative header path, fixture file)], co-swapped and byte-
+        # exact restored TOGETHER with the TU (swapped_files). pre_win.static.h
+        # (@a527c0227~1) and win.static.h (@a527c0227) are byte-identical
+        # (win-side verified at freeze); both frozen for per-source provenance.
+        # negative_control derives from pre_win => pre-win header. ONE header
+        # level sufficed: mndiagram2.static.h's HEAD drift removes only two
+        # externs no witness references (verified at freeze; no cascade).
+        "co_files": {
+            "pre_win": [
+                ("src/melee/mn/mndiagram.static.h", "pre_win.static.h"),
+            ],
+            "win": [
+                ("src/melee/mn/mndiagram.static.h", "win.static.h"),
+            ],
+            "negative_control": [
+                ("src/melee/mn/mndiagram.static.h", "pre_win.static.h"),
+            ],
+        },
     },
     {
         "name": "fn_803ACD58",
@@ -86,14 +112,19 @@ class BuildFailure(RuntimeError):
 
 
 @contextmanager
-def swapped_tu(tu_path: Path, source_text: str):
-    """B8: byte-exact restore on EVERY exit path."""
-    original = tu_path.read_bytes()
+def swapped_files(swaps: list[tuple[Path, str]]):
+    """B8 (extended by Amendment 2): byte-exact restore of EVERY swapped file
+    (the TU + any co-frozen contemporaneous headers) on EVERY exit path, even
+    on Ctrl-C or an exception mid-compile. Originals are snapshotted BEFORE
+    any write; restore runs in reverse order."""
+    originals = [(path, path.read_bytes()) for path, _ in swaps]
     try:
-        tu_path.write_text(source_text, encoding="utf-8")
+        for path, text in swaps:
+            path.write_text(text, encoding="utf-8")
         yield
     finally:
-        tu_path.write_bytes(original)
+        for path, original in reversed(originals):
+            path.write_bytes(original)
 
 
 def run(argv, cwd, timeout=900):
@@ -170,6 +201,19 @@ def process_witness(w: dict) -> dict:
     fn, unit, tu = w["function"], w["unit"], w["tu"]
     pre_src = (wdir / "pre_win.c").read_text(encoding="utf-8")
     win_src = (wdir / "win.c").read_text(encoding="utf-8")
+    co_files = w.get("co_files", {})
+
+    def swaps_for(name: str, src_text: str) -> list[tuple[Path, str]]:
+        """Amendment 2: the TU swap plus any co-frozen contemporaneous headers
+        for this source (e.g. mndiagram.static.h). Sources without a co_files
+        entry (the cardstate witness, chain steps) swap only the TU."""
+        swaps = [(tu, src_text)]
+        for rel_path, fixture_name in co_files.get(name, []):
+            swaps.append((
+                MELEE_ROOT / rel_path,
+                (wdir / fixture_name).read_text(encoding="utf-8"),
+            ))
+        return swaps
 
     # Negative control: first committed exact swap verified non-improving.
     # A frozen historical source that no longer compiles against HEAD (e.g. an
@@ -179,7 +223,7 @@ def process_witness(w: dict) -> dict:
     # gating then promotes the §6c contingency witness. No silent unrunnable
     # path; the build error is captured verbatim into class_evidence.
     try:
-        with swapped_tu(tu, pre_src):
+        with swapped_files(swaps_for("pre_win", pre_src)):
             base_pct = checkdiff_pct(fn)
     except BuildFailure as exc:
         return {
@@ -198,7 +242,7 @@ def process_witness(w: dict) -> dict:
         if old not in pre_src:
             continue
         candidate = pre_src.replace(old, new, 1)
-        with swapped_tu(tu, candidate):
+        with swapped_files(swaps_for("negative_control", candidate)):
             pct = checkdiff_pct(fn)
         if pct <= base_pct:
             control_src, control_desc, control_pct = candidate, f"swap: {old!r} -> {new!r}", pct
@@ -216,7 +260,7 @@ def process_witness(w: dict) -> dict:
     for extra in w["chain"]:
         sources[extra.removesuffix(".c")] = (wdir / extra).read_text(encoding="utf-8")
     for name, src in sources.items():
-        with swapped_tu(tu, src):
+        with swapped_files(swaps_for(name, src)):
             dump_pcdump(tu, fn, wdir / f"{name}.pcdump.txt")
 
     # Derivation on the pre-win base (the eligibility check). The classifier's
@@ -227,7 +271,7 @@ def process_witness(w: dict) -> dict:
     # classifier design) so the eligibility machine consumes it; never crash
     # the freeze. The verbatim classifier message is kept as class_evidence.
     try:
-        with swapped_tu(tu, pre_src):
+        with swapped_files(swaps_for("pre_win", pre_src)):
             target = derive(fn, unit)
     except ValueError as exc:
         if "not in the order-distance pool" not in str(exc):
