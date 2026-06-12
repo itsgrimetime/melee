@@ -1040,8 +1040,8 @@ void mnDiagram2_Create(int arg0)
     Diagram2* user_data;
     u32 is_name;
     u8 entity_idx;
-    u8 scroll;
-    u8 entity_val;
+    int scroll;
+    int entity_val;
     int threshold;
     int j;
     int i;
@@ -1075,7 +1075,7 @@ void mnDiagram2_Create(int arg0)
     } else {
         entity_idx = user_data->selected_fighter_idx;
     }
-    scroll = (u8) user_data->scroll_offset;
+    scroll = user_data->scroll_offset & 0xFF;
     if (is_name) {
         entity_val = mnDiagram_GetNameByIndex(entity_idx);
     } else {
@@ -1089,7 +1089,7 @@ void mnDiagram2_Create(int arg0)
 
     j = 0;
     do {
-        if ((s32) scroll >= threshold) {
+        if (scroll >= threshold) {
             offset = scroll - threshold;
         } else {
             offset = scroll;
