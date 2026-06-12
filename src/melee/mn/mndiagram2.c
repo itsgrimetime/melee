@@ -1289,7 +1289,7 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     mnDiagram2_SortEntry temp;
     mnDiagram2_SortEntry* base;
     mnDiagram2_SortEntry* curr;
-    void* funcTable;
+    int type_val;
     int count;
     int res;
     mnDiagram2_SortEntry* ptr;
@@ -1313,23 +1313,22 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     } while (i < 25);
 
     count = GetNameCount();
-    funcTable = (void*) mnDiagram_GetNamePlayTimeByFighter;
+    type_val = type;
     arr = entries;
 
-    i = 0;
-    while (i < count) {
-        switch ((s32) type) {
+    for (i = 0; i < count; i++) {
+        switch (type_val) {
         case 0x15:
-            res = mnDiagram_GetRankedFighterForName(0, i, funcTable);
+            res = mnDiagram_GetRankedFighterForName(
+                0, i, (void*) mnDiagram_GetNamePlayTimeByFighter);
             break;
         case 0x16:
-            res = mnDiagram_GetRankedFighterForName(1, i, funcTable);
+            res = mnDiagram_GetRankedFighterForName(
+                1, i, (void*) mnDiagram_GetNamePlayTimeByFighter);
             break;
         case 0x17:
             res = mnDiagram_GetLeastPlayedFighter((u8) i);
             break;
-        default:
-            goto next;
         }
 
         if (res != 25) {
@@ -1344,8 +1343,6 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
                 k++;
             }
         }
-    next:
-        i++;
     }
 
     // Bubble sort
@@ -1365,12 +1362,12 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     }
 
     // Write result to output buffer
-    curr = &entries[idx];
-    if (curr->value == 0) {
-        curr->name = 25;
+    if (entries[idx].value == 0) {
+        entries[idx].name = 25;
+        *(mnDiagram2_SortEntry*) out = entries[idx];
+    } else {
+        *(mnDiagram2_SortEntry*) out = entries[idx];
     }
-    ((mnDiagram2_SortEntry*) out)->d0 = curr->d0;
-    ((mnDiagram2_SortEntry*) out)->d8 = curr->d8;
 }
 
 /// @brief Clears the detail view by freeing text objects and removing JObj.
