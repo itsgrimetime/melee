@@ -18,7 +18,7 @@ Complete all 9 functions in `src/melee/mn/mndiagram3.c` to 100%.
 | mnDiagram3_80246F2C | 0xDC | **100%** | matched (PROTECTED) |
 | **mnDiagram3_80247008** | 0x144 (324B) | **100%** | MATCHED (iteration 3, data linking f66cc758a) |
 | **mnDiagram3_8024714C** | 0x378 (888B) | **90.23%** | OPEN — coloring-dominated (iter-4: decl-order axis exhausted). See Map 2 + Iteration 4. |
-| mnDiagram3_80245BA4 | 0x618 (1560B) | 90.53% | OPEN — MAPPED (iteration 5). See Map 3: Δ1 fully attributed, constant bug + 5 transferring 714C levers. |
+| mnDiagram3_80245BA4 | 0x618 (1560B) | **93.74%** | OPEN — ladder ran iteration 6 (90.53→93.74, Δ2, structure landed). See Map 3 + Iteration 6 residual. |
 | fn_802461BC | 0xB84 (2948B) | 98.42% | OPEN — big-body register endgame, do LAST |
 
 Driver 1 mapped 80247008 + 8024714C (this iteration). NO builds beyond baseline diffs (3 checkdiff runs total: 1 build + reused diffs).
@@ -260,6 +260,32 @@ Catalogue items checked and **already correct** (no action): prototype-visibilit
 - **Constant-divergence check belongs in the opening map**: a `lis` high-part off by 1 (92 vs 93, same addi low) is a 2-line diff that is actually a SOURCE CONSTANT BUG (0x5C8D7F vs 0x5B8D7F). Cheap to byte-verify during mapping; high-value (correctness, not just match).
 - The Δ-attribution-by-contributors table format (5 rows summing to +1) made the register-pressure root (hoisted pointers → spill) provable without a build; recommend it as the standard Δ≠0 procedure.
 
+---
+
+## Iteration 6 (driver 2) — 80245BA4 fix ladder, 90.53 → 93.74
+
+**Result: 90.53 → 93.74** (+3.2) | Δ1 → Δ2 (through 3-short mid-ladder) | line-edit 414 → 158 / sim −5.9 → 59.5 | hunks 14 → 47 (preamble slot-ripple, rename-class). 6 builds, 6 commits, all 11/11 protected checks, .data 100 held throughout.
+
+### Rung ledger (mechanism checks)
+
+1. `f740f1f28` **S6 constant**: `max_time = 0x5B8D7F`. Match FLAT (both lis sites are also register-relabeled; the fix flips them only when the cascade settles — expected). Semantic correctness banked.
+2. `aef384713` **S3 (Δ1 root)**: inline-base-cast `(Vec3*)(base+0x24/0x30)` at the three lb_8000B1CC sites. 90.53→92.30. **Mechanism FIRED in full**: r14/r20 hoists vanished, the 9999999 spill (stw/lwz) dissolved, all 3 call sites emit `addi r4,r24,36/48` byte-exact, base landed in r24 = target's register. **Cascade re-roll count: 6 callee-saves snapped register-exact (r14=9999999, r15=5999999, r21=99999999, r23=data-walker, r25=0x4330, r30=i) from 0 before.** Δ went 1-long → 3-short (the predicted −4). CAVEAT: checkdiff WARNED "false progress" on the opcode-similarity collapse (88.9→60.5) — that was the Δ-shift aligner artifact; the register-exact evidence overruled it. First spelling (inline-base-cast) won; comma/per-iter never needed.
+3. `d76bfcaad` **S5 (rank==25 branch-join)**: restructured so rank==25 falls into the value chain (goto-form; icon path guarded by `!= 0x19`, exits via `goto icons`). Match FLAT at 92.30 (Δ3 artifact) but branch topology verified target-exact by inspection (+2e8 beq → chain join, same target as the icon check). Also: pre-commit hook blocked on the pre-existing `*(int*)(sp28+0xC)` my re-indent touched → `M2C_FIELD(sp28, int*, 0xC)` (build-neutral, verified).
+4. `30c308c01` **S1+S2 (714C verbatim transfers)**: `int limit` + `limit = (u8) limit;` self-trunc AND row1 re-read through `data->jobjs[7]` in the getter arg (row1 local deleted). 92.30→93.93, hunks 13→9. **S2 window BYTE-IDENTICAL (r14/r15/f27 register-exact); S1 sequence exact (li/clrlwi/add/cmpw/subf) except the 2 lbz dest registers.** Both 714C levers transfer CLEAN.
+5. `18479d89c` **table-restore + add-flip**: the orphaned `u16* table` decl restored as the +0x36-advanced pointer (`table = stat_table + 0x36`, `*table`) + `val = scroll + offset`. 93.93→93.74 (−0.2) BUT Δ 3→2 (the +108 instruction restored), line-edit 317→158 (sim 18.7→59.5 — function twice as aligned), `add r3,r3,r4` byte-match, lhz now `0(r20)` = target's exact base register/form. The −0.2 = preamble slot-ripple from a remaining association-order diff. Committed per structure-over-match doctrine + the checkdiff NOTE.
+
+### Residual @ 93.74 (banked, ranked for next driver)
+
+1. **Address-association order (3 lines)**: ours `slwi r3; addi r20,r3,108; add r20,r24,r20` = (idx2+108)+base; target `slwi r0; add r20,r24,r0; ... addi r20,r20,108` = (base+idx2)+108 SPLIT (the addi sits at +0f0 AFTER the const bank). stat_table went single-use → MWCC folded+reassociated. Candidate: a spelling where base+idx2 keeps its own web (second stat_table use, or self-increment `table = stat_table; table += 0x36;` two-statement form — untested, build budget).
+2. **S8 copies (the Δ2)**: target `lhz r3` volatile + `addis r0,r3,0` + `addi r17,r3,0`; ours lhz straight to callee-save (coalesced). Per the fold law (copies of provably-equal values FOLD), the present spelling cannot persist — needs a conversion-node spelling (type experiments: `int icon_id`, `u32 check = icon_id`, compare-on-copy variants). NOT attempted per the law-conditions gate.
+3. **2 lbz dest swap** (S1 residual): saved_selection→r4 / scroll_offset→r3 in target, inverted in ours. Register-only; the add now matches.
+4. **S9 float family {f30↔f31}+{f27↔f29}**: untouched. The free statement-order lever (reorder lines 104-110 to mirror target's materialization: fsubs / lfd magic / lfs divider / fneg) is UNTRIED — first move next iteration.
+5. **S4 copy-init mr** (+18c, 1-2 lines): `addi r4,r3,0` vs `mr r4,r3` for the GetNameText result. Untried.
+6. **S11 frame 264 vs 240** + PAD_STACK(8): untouched per DO-NOT (re-derive after structure settles — the spill slot is already gone, so the 24B gap shape has changed; re-measure first).
+7. **GPR relabel residual**: r16/r18/r19/r20-class high-part/walker permutation — downstream; plus the exhaustive `decl-orders --strategy all` pass (23 function-top locals + block scopes) NOT YET RUN — the 714C protocol says run it once on the settled substrate.
+
+**Next-driver opening move**: S9 statement-order + the decl-orders pass (both cheap), then the association-order spelling, then S8 type experiments. The function is no longer Δ-blocked or pressure-blocked; it is in last-mile territory (assoc-order + copies + floats + frame).
+
 ## Driver-3 Entries (fn_802461BC)
 
-(Reserved — fn_802461BC at 98.42 is LAST per TU ordering. 8024714C register endgame queues on permuter channels. 80245BA4 fix session = iteration 6, levers ranked above.)
+(Reserved — fn_802461BC at 98.42 is LAST per TU ordering. 8024714C register endgame queues on permuter channels.)
