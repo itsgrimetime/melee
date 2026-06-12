@@ -48,6 +48,17 @@ def test_dump_local_help_exposes_force_schedule() -> None:
     assert "DIAGNOSTIC-ONLY" in result.stdout
 
 
+def test_dump_local_help_exposes_force_remat() -> None:
+    result = runner.invoke(app, ["debug", "dump", "local", "--help"])
+
+    assert result.exit_code == 0
+    assert "--force-remat" in result.stdout
+    assert "--force-remat-fn" in result.stdout
+    assert "rematerialization" in result.stdout
+    assert "copy|literal" in result.stdout
+    assert "DIAGNOSTIC-ONLY" in result.stdout
+
+
 def test_dump_remote_escapes_force_schedule_for_cmd(monkeypatch: pytest.MonkeyPatch) -> None:
     popen_calls: list[list[str]] = []
 
@@ -90,6 +101,168 @@ def test_dump_remote_escapes_force_schedule_for_cmd(monkeypatch: pytest.MonkeyPa
     remote_cmd = popen_calls[0][2]
     assert 'set "MWCC_DEBUG_FORCE_SCHEDULE=lwz:0x74>0x70"' in remote_cmd
     assert 'set "MWCC_DEBUG_FORCE_SCHEDULE_FUNCTION=fn_8003F294"' in remote_cmd
+
+
+def test_dump_remote_escapes_force_remat_for_cmd(monkeypatch: pytest.MonkeyPatch) -> None:
+    popen_calls: list[list[str]] = []
+
+    class FakeStdout:
+        def read(self, _size: int) -> bytes:
+            return b""
+
+    class FakePopen:
+        stdout = FakeStdout()
+
+        def __init__(self, args, **_kwargs) -> None:
+            popen_calls.append(args)
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(debug_cli, "_resolve_src_relative", lambda _path: "src/melee/pl/plbonuslib.c")
+    monkeypatch.setattr(debug_cli.subprocess, "Popen", FakePopen)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "remote",
+            "src/melee/pl/plbonuslib.c",
+            "--branch",
+            "master",
+            "--output",
+            "-",
+            "--force-remat",
+            "0:62=copy",
+            "--force-remat-fn",
+            "fn_8003F294",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert popen_calls
+    remote_cmd = popen_calls[0][2]
+    assert 'set "MWCC_DEBUG_FORCE_REMAT=0:62=copy"' in remote_cmd
+    assert 'set "MWCC_DEBUG_FORCE_REMAT_FUNCTION=fn_8003F294"' in remote_cmd
+
+
+def test_dump_remote_force_remat_default_output_skips_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    popen_calls: list[list[str]] = []
+
+    class FakeStdout:
+        def __init__(self) -> None:
+            self._chunks = [b"forced dump\n", b""]
+
+        def read(self, _size: int) -> bytes:
+            return self._chunks.pop(0)
+
+    class FakePopen:
+        def __init__(self, args, **_kwargs) -> None:
+            popen_calls.append(args)
+            self.stdout = FakeStdout()
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_resolve_src_relative", lambda _path: "src/melee/pl/plbonuslib.c")
+    monkeypatch.setattr(debug_cli.subprocess, "Popen", FakePopen)
+    monkeypatch.setenv("MWCC_DEBUG_TMP_ROOT", str(tmp_path / "scratch"))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "remote",
+            "src/melee/pl/plbonuslib.c",
+            "--branch",
+            "master",
+            "--force-remat",
+            "0:62=copy",
+            "--force-remat-fn",
+            "fn_8003F294",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert popen_calls
+    assert not (
+        tmp_path / "build" / "mwcc_debug_cache" / "melee" / "pl" / "plbonuslib.txt"
+    ).exists()
+    scratch_outputs = list((tmp_path / "scratch").glob("pcdump_remote_forced_*.txt"))
+    assert len(scratch_outputs) == 1
+    assert scratch_outputs[0].read_text(encoding="utf-8") == "forced dump\n"
+    assert "forced run" in result.stderr
+
+
+def test_dump_local_force_remat_reaches_child_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void)\n{\n}\n")
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("debug compiler")
+    env_capture = tmp_path / "env.txt"
+    wibo = tmp_path / "fake-wibo.py"
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['MELEE_TEST_FORCE_REMAT_ENV']).write_text(\n"
+        "    os.environ.get('MWCC_DEBUG_FORCE_REMAT', '') + '\\n' +\n"
+        "    os.environ.get('MWCC_DEBUG_FORCE_REMAT_FUNCTION', '') + '\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        "pcdump.write_text('Starting function fn_80000000\\n', encoding='utf-8')\n"
+        "if '-o' in sys.argv:\n"
+        "    Path(sys.argv[sys.argv.index('-o') + 1]).write_bytes(b'object')\n"
+    )
+    wibo.chmod(0o755)
+    output = tmp_path / "pcdump.out"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setenv("MELEE_TEST_FORCE_REMAT_ENV", str(env_capture))
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000000",
+            "--output",
+            str(output),
+            "--force-remat",
+            "0:62=copy",
+            "--force-remat-fn",
+            "fn_80000000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert env_capture.read_text(encoding="utf-8").splitlines() == [
+        "0:62=copy",
+        "fn_80000000",
+    ]
+    assert "force-* overrides are DIAGNOSTIC-ONLY" in result.stderr
+    assert output.exists()
 
 
 def test_permute_verify_passes_force_schedule_to_dump_local(
@@ -303,6 +476,123 @@ int main(void)
         return 56;
     if (block.lastPCode != &lower.pc)
         return 57;
+
+    return 0;
+}}
+"""
+    harness.write_text(source)
+
+    compile_proc = subprocess.run(
+        [cc, "-std=c99", "-Werror", str(harness), "-o", str(exe)],
+        capture_output=True,
+        text=True,
+    )
+    assert compile_proc.returncode == 0, compile_proc.stderr
+
+    run_proc = subprocess.run([str(exe)], capture_output=True, text=True)
+    assert run_proc.returncode == 0, run_proc.stderr
+
+
+def test_mwcc_debug_force_remat_c_helper_toggles_alt_operand_flag(
+    tmp_path: Path,
+) -> None:
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("no C compiler available")
+
+    harness = tmp_path / "force_remat_harness.c"
+    exe = tmp_path / "force_remat_harness"
+    source = f"""
+#define MWCC_DEBUG_TEST 1
+#include "{(REPO_ROOT / "tools/mwcc_debug/mwcc_debug.c").as_posix()}"
+
+static void test_formatoperands(void *pc, char *buf, int showBlocks)
+{{
+    (void)pc;
+    (void)showBlocks;
+    buf[0] = '\\0';
+}}
+
+static void set_string(char *dst, const char *src)
+{{
+    int i = 0;
+    while (src[i]) {{
+        dst[i] = src[i];
+        i++;
+    }}
+    dst[i] = '\\0';
+}}
+
+int main(void)
+{{
+    IGNode node62;
+    IGNode node63;
+    IGNode node64;
+    IGNode *ig[80];
+    int i;
+
+    for (i = 0; i < 80; i++)
+        ig[i] = 0;
+
+    node62.next = 0;
+    node62.remat_record = 1;
+    node62._x8 = 0;
+    node62.ig_idx = 62;
+    node62.degree = 0;
+    node62.assignedReg = 21;
+    node62.flags = 0;
+
+    node63.next = 0;
+    node63.remat_record = 1;
+    node63._x8 = 0;
+    node63.ig_idx = 63;
+    node63.degree = 0;
+    node63.assignedReg = 22;
+    node63.flags = IG_FLAG_REMAT_ALT_OPERAND;
+
+    node64.next = 0;
+    node64.remat_record = 1;
+    node64._x8 = 0;
+    node64.ig_idx = 64;
+    node64.degree = 0;
+    node64.assignedReg = 23;
+    node64.flags = 0;
+
+    ig[62] = &node62;
+    ig[63] = &node63;
+    ig[64] = &node64;
+
+    if (parse_force_remat_rules_from_string(
+            "0:62=copy,0:63=literal,1:64=copy",
+            sizeof("0:62=copy,0:63=literal,1:64=copy") - 1) != 3)
+        return 1;
+    g_force_remat_scope_fn_set = 0;
+    if (apply_force_remat_rules_to_ig_array(0, ig, 80) != 2)
+        return 2;
+    if ((node62.flags & IG_FLAG_REMAT_ALT_OPERAND) == 0)
+        return 3;
+    if ((node63.flags & IG_FLAG_REMAT_ALT_OPERAND) != 0)
+        return 4;
+    if ((node64.flags & IG_FLAG_REMAT_ALT_OPERAND) != 0)
+        return 5;
+
+    if (parse_force_remat_rules_from_string(
+            "0:62=literal", sizeof("0:62=literal") - 1) != 1)
+        return 10;
+    g_force_remat_scope_fn_set = 1;
+    set_string(g_force_remat_scope_fn, "other_fn");
+    g_current_function_set = 1;
+    set_string(g_current_function, "fn_80000000");
+    if (apply_force_remat_rules_to_ig_array(0, ig, 80) != 0)
+        return 11;
+    if ((node62.flags & IG_FLAG_REMAT_ALT_OPERAND) == 0)
+        return 12;
+
+    set_string(g_force_remat_scope_fn, "fn_80000000");
+    if (apply_force_remat_rules_to_ig_array(0, ig, 80) != 1)
+        return 13;
+    if ((node62.flags & IG_FLAG_REMAT_ALT_OPERAND) != 0)
+        return 14;
 
     return 0;
 }}

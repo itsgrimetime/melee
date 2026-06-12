@@ -1906,6 +1906,24 @@ def pcdump(
                  "the TU. Other functions compile naturally. EXPERIMENTAL.",
         ),
     ] = None,
+    force_remat: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-remat",
+            help="Tier 7: DIAGNOSTIC-ONLY rematerialization operand-slot bias. "
+                 "Format 'class:ig=copy|literal[,...]'. Sets or clears the "
+                 "observed remat alternate operand selector for a chosen IG "
+                 "node after coloring.",
+        ),
+    ] = None,
+    force_remat_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-remat-fn",
+            help="Scope --force-remat to a single function name in the TU. "
+                 "Other functions compile naturally. EXPERIMENTAL.",
+        ),
+    ] = None,
     force_schedule: Annotated[
         Optional[str],
         typer.Option(
@@ -2089,6 +2107,21 @@ def pcdump(
                 force_coalesce_fn,
             )
         )
+    if force_remat:
+        force_remat = _validate_force_remat(force_remat)
+        cmd_parts.append(_cmd_set_env("MWCC_DEBUG_FORCE_REMAT", force_remat))
+    if force_remat_fn:
+        if any(c in force_remat_fn for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-remat-fn must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        cmd_parts.append(
+            _cmd_set_env(
+                "MWCC_DEBUG_FORCE_REMAT_FUNCTION",
+                force_remat_fn,
+            )
+        )
     if force_schedule:
         force_schedule = _validate_force_schedule(force_schedule)
         cmd_parts.append(_cmd_set_env("MWCC_DEBUG_FORCE_SCHEDULE", force_schedule))
@@ -2109,6 +2142,13 @@ def pcdump(
         f"-File {remote_script} {src_rel}"
     )
     remote_cmd = " && ".join(cmd_parts)
+    remote_any_forced = any([
+        force_phys, force_phys_iter, force_phys_fn,
+        iter_first_value, iter_first_class, force_iter_first_iter, iter_first_fn,
+        force_coalesce, force_coalesce_fn,
+        force_remat, force_remat_fn,
+        force_schedule, force_schedule_fn,
+    ])
 
     # SSH on Windows defaults to cmd as the user's login shell typically.
     # We pass a single command string to be invoked there.
@@ -2130,7 +2170,7 @@ def pcdump(
         stdout_dest = sys.stdout.buffer
         out_path_for_msg = "stdout"
         cache_path_used: Optional[Path] = None
-    elif use_cache:
+    elif use_cache and not remote_any_forced:
         # Strip the `src/` prefix and `.c` suffix to get the unit key.
         unit = src_rel
         if unit.startswith("src/"):
@@ -2144,6 +2184,12 @@ def pcdump(
         out_path_for_msg = str(cache_path_used)
     else:
         cache_path_used = None
+        if use_cache and remote_any_forced:
+            output = mwcc_debug_scratch_path(
+                "pcdump_remote_forced",
+                suffix=".txt",
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
         stdout_dest = open(output, "wb")
         out_path_for_msg = str(output)
 
@@ -2188,6 +2234,12 @@ def pcdump(
                 f"(`inspect analyze`, `inspect guide`, "
                 f"`target score-dump`, etc.) will auto-resolve "
                 f"this dump by function name.",
+                file=sys.stderr,
+            )
+        elif use_cache and remote_any_forced:
+            print(
+                "[mwcc_debug] forced run — skipping cache sync to avoid "
+                f"contaminating baseline. Dump at: {out_path_for_msg}",
                 file=sys.stderr,
             )
     else:
@@ -2237,6 +2289,19 @@ def _validate_force_schedule(raw: str, *, option: str = "--force-schedule") -> s
         raise typer.BadParameter(
             f"{option} must not contain quotes, semicolons, whitespace, "
             "or shell metacharacters other than '>'"
+        )
+    return raw
+
+
+def _validate_force_remat(raw: str, *, option: str = "--force-remat") -> str:
+    if any(c in raw for c in '"\'; \t\r\n&|<>^'):
+        raise typer.BadParameter(
+            f"{option} must not contain quotes, semicolons, whitespace, "
+            "or shell metacharacters"
+        )
+    if not re.fullmatch(r"\d+:\d+=(?:copy|literal)(?:,\d+:\d+=(?:copy|literal))*", raw):
+        raise typer.BadParameter(
+            f"{option} expects 'class:ig=copy|literal[,class:ig=copy|literal]*'"
         )
     return raw
 
@@ -16657,6 +16722,27 @@ def pcdump_local(
                  "--force-coalesce 32=87'.",
         ),
     ] = None,
+    force_remat: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-remat",
+            help="Tier 7: rematerialization operand-slot bias. Format "
+                 "'class:ig=copy|literal[,...]'. Sets or clears the observed "
+                 "alternate remat operand selector for a chosen IG node after "
+                 "coloring. By default applies globally — scope with "
+                 "--force-remat-fn. DIAGNOSTIC-ONLY: uses the patched debug "
+                 "compiler and does not affect production ninja builds.",
+        ),
+    ] = None,
+    force_remat_fn: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-remat-fn",
+            help="Scope --force-remat to a single function name. Other "
+                 "functions in the same TU compile with their natural "
+                 "rematerialization choices.",
+        ),
+    ] = None,
     force_schedule: Annotated[
         Optional[str],
         typer.Option(
@@ -16736,7 +16822,8 @@ def pcdump_local(
             help="Function name to use as the --diff target. When "
                  "omitted, defaults to the value of --force-iter-first-fn / "
                  "--force-select-order-fn / --force-phys-fn / "
-                 "--force-coalesce-fn (in that order) if any is set; "
+                 "--force-coalesce-fn / --force-remat-fn (in that order) "
+                 "if any is set; "
                  "otherwise falls back to the first "
                  "function found in the source file. Use this option "
                  "when working on a non-first function in a multi-function "
@@ -16783,8 +16870,8 @@ def pcdump_local(
     first to patch the compiler and deploy the DLL.
 
     Env-var hooks (--force-phys, --force-iter-first, --force-coalesce,
-    --force-schedule, and their function-scope variants) pass through to
-    the DLL.
+    --force-remat, --force-schedule, and their function-scope variants)
+    pass through to the DLL.
 
     Use --keep-obj PATH to preserve the compiled .o for downstream
     inspection (objdiff/checkdiff/etc.). Use --diff to run an integrated
@@ -16948,6 +17035,15 @@ def pcdump_local(
         env["MWCC_DEBUG_FORCE_COALESCE"] = force_coalesce
     if force_coalesce_fn:
         env["MWCC_DEBUG_FORCE_COALESCE_FUNCTION"] = force_coalesce_fn
+    if force_remat:
+        env["MWCC_DEBUG_FORCE_REMAT"] = _validate_force_remat(force_remat)
+    if force_remat_fn:
+        if any(c in force_remat_fn for c in '"\'; \t&|<>'):
+            raise typer.BadParameter(
+                "--force-remat-fn must not contain quotes, semicolons, "
+                "whitespace, or shell metacharacters"
+            )
+        env["MWCC_DEBUG_FORCE_REMAT_FUNCTION"] = force_remat_fn
     if force_schedule:
         env["MWCC_DEBUG_FORCE_SCHEDULE"] = _validate_force_schedule(force_schedule)
     if force_schedule_fn:
@@ -16994,6 +17090,23 @@ def pcdump_local(
                     f"Same per-function-virtual hazard as --force-coalesce. "
                     f"Re-run with `--force-phys-fn <function_name>` to scope. "
                     f"Pass `--force-phys-fn ''` to opt out (NOT RECOMMENDED).",
+                    err=True,
+                )
+                raise typer.Exit(2)
+    if force_remat and force_remat_fn is None:
+        src_path = melee_root / src_rel
+        if src_path.exists():
+            n_fns = _count_function_defs(src_path.read_text())
+            if n_fns >= 2:
+                typer.echo(
+                    f"refusing --force-remat without --force-remat-fn on a "
+                    f"multi-function TU ({src_rel} has ~{n_fns} function "
+                    f"definitions).\n"
+                    f"Virtual indices are per-function; an override aimed at "
+                    f"one function can perturb another function's remat "
+                    f"records.\n"
+                    f"Re-run with `--force-remat-fn <function_name>` to scope. "
+                    f"Pass `--force-remat-fn ''` to opt out (NOT RECOMMENDED).",
                     err=True,
                 )
                 raise typer.Exit(2)
@@ -17220,7 +17333,8 @@ def pcdump_local(
                           file=sys.stderr)
                     # Resolve the function name for --diff.
                     # Priority: explicit --function > --force-phys-fn >
-                    # --force-coalesce-fn > --force-schedule-fn >
+                    # --force-coalesce-fn > --force-remat-fn >
+                    # --force-schedule-fn >
                     # first function found in source.
                     src_path = melee_root / src_rel
                     explicit_diff_target = any([
@@ -17229,6 +17343,7 @@ def pcdump_local(
                         force_select_order_fn,
                         force_phys_fn,
                         force_coalesce_fn,
+                        force_remat_fn,
                         force_schedule_fn,
                     ])
                     fn_to_diff = (
@@ -17237,6 +17352,7 @@ def pcdump_local(
                         or force_select_order_fn
                         or force_phys_fn
                         or force_coalesce_fn
+                        or force_remat_fn
                         or force_schedule_fn
                         or None
                     )
@@ -17275,6 +17391,7 @@ def pcdump_local(
                                 or force_select_order_fn
                                 or force_phys_fn
                                 or force_coalesce_fn
+                                or force_remat_fn
                                 or force_schedule_fn
                                 or force_frame_from_diff
                             )
@@ -17395,6 +17512,7 @@ def pcdump_local(
         force_iter_first, force_iter_first_fn,
         force_select_order, force_select_order_fn,
         force_coalesce, force_coalesce_fn,
+        force_remat, force_remat_fn,
         force_schedule, force_schedule_fn,
         force_frame_from_diff,
     ])
