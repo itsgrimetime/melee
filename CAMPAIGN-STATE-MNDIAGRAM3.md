@@ -17,9 +17,9 @@ Complete all 9 functions in `src/melee/mn/mndiagram3.c` to 100%.
 | fn_80246F0C | 0x20 | **100%** | matched (PROTECTED) |
 | mnDiagram3_80246F2C | 0xDC | **100%** | matched (PROTECTED) |
 | **mnDiagram3_80247008** | 0x144 (324B) | **100%** | MATCHED (iteration 3, data linking f66cc758a) |
-| **mnDiagram3_8024714C** | 0x378 (888B) | **90.23%** | OPEN — coloring-dominated (iter-4: decl-order axis exhausted). See Map 2 + Iteration 4. |
-| mnDiagram3_80245BA4 | 0x618 (1560B) | **94.07%** | **PARKED** (iteration 8 oracle): S9 float wall = UNREACHABLE-BY-CATALOGUE (4-node class-1 pop-order, force-phys-verified attribution); +108/S8 = front-end address-mode fold, NOT-A-COLORING-QUESTION. Reopen conditions in Iteration 8. |
-| fn_802461BC | 0xB84 (2948B) | **98.42%** | **PARKED** (iterations 9+10): frame/decl/lifetime axes + entry-rider spellings ×3 + named-float substitution all exhausted (every candidate flat/regress, most = repeat fingerprints). Residual = 144 relabel lines (127 GPR Family-A, 17 FPR Family-C) + the 2-instr entry rider. Reopen conditions in Iteration 9+10 close-out. Proposed name mnDiagram3_HandleInput. |
+| **mnDiagram3_8024714C** | 0x378 (888B) | **95.93%** | OPEN — coloring-dominated. FPR ORACLE ROUND (2026-06-12) corrected a regressed 95.68 (CSE-split temp had baked in a wrong 240.0 arg6 + f28 spill, Δ+4) → SisLib arg6=`row_spacing` (=6.5, sibling-evidenced, commit `1c7252443`) → 95.93, Δ0, frame-exact, no spill. Residual = popup-block {f30↔f31} (FPR oracle: order-only/edge-INERT) + GPR callee-save permutation. See Map 2 + Iters 2/4 + FPR ORACLE ROUND. |
+| mnDiagram3_80245BA4 | 0x618 (1560B) | **94.48%** | **PARKED** (iter-8 oracle + 2026-06-12 FPR oracle CONFIRMATION): S9 float family = UNREACHABLE-BY-CATALOGUE (genuine #573 FPR what-ifs: ig48/ig44 order-reachable but edge-INERT). +108/S8 = front-end address-mode fold. 94.07→94.48 via TRIAGE-1 cast-drop. Reopen in Iteration 8 + FPR ORACLE ROUND. |
+| mnDiagram3_HandleInput | 0xB84 (2948B) | **98.42%** | **PARKED** (iters 9+10 + 2026-06-12 FPR census): frame/decl/lifetime/entry-rider/named-float all exhausted. FPR census = MIXED (per-arm {f30↔f31} pairs order-only/edge-inert, f29-block pinned; no source lever). Residual = 144 relabel lines (127 GPR Family-A, 17 FPR Family-C) + 2-instr entry rider. Renamed from fn_802461BC. Reopen in Iter 9+10 + FPR ORACLE ROUND. |
 
 Driver 1 mapped 80247008 + 8024714C (this iteration). NO builds beyond baseline diffs (3 checkdiff runs total: 1 build + reused diffs).
 
@@ -536,3 +536,79 @@ AUTO-REJECTS encountered: 80245BA4-2065 (placeholder leak + behavior narrowing).
 
 ### Epistemic note
 Both coder3 jobs are now exhibiting the wall-class permuter signature (score-improving but unshippable: placeholder leaks, behavior narrowing, callee-save spills) on top of oracle-confirmed coloring/front-end ceilings. This is NOT a refutation of the PARK maps — it is the expected permuter behavior on register/spill/frame walls (only the clean source-shape levers — already harvested in TRIAGE 1 — transfer). 8024714C 95.68 / 80245BA4 94.48 stand as the round-2 high-water marks.
+
+---
+
+## FPR ORACLE ROUND — 2026-06-12 (UTC) — driver: mndiagram3-fpr-oracle
+
+**1 build used** (the 8024714C f28-spill fix). 1 commit. All protected functions hold (six 100s, .data/.sdata 100, 80245BA4 94.48, HandleInput 98.42). Genuine #573 FPR oracle run on all three float functions.
+
+### TOOL TRAP (the round's headline finding) — #585
+
+`debug inspect tiebreak --class fpr` (the #573 FPR oracle, RESOLVED on commit `af61e5895`) is **unreachable from this worktree AND the editable install**:
+- This worktree HEAD `1bd7b31df` is **NOT a descendant of af61e5895** (`git merge-base --is-ancestor` = NO). Its `tiebreak.py` is the OLD GPR-only version (`load_gpr_ig`, `_VOLATILE_LOW_FIRST`, no `load_ig`); `inspect_tiebreak` has no `--class` (`No such option: --class`).
+- The editable `melee-agent` install points at worktree `cursorproc-port` (HEAD `00f08eb3c`), which **also** predates af61e5895 — same OLD version.
+- **WORKAROUND (this round):** extracted `af61e5895:tools/melee-agent/src/mwcc_debug/{tiebreak.py,colorgraph_parser.py}` to a temp dir and drove `tb.load_ig(class_id=1)` / `validate_g1` / `what_if` directly. This runs the GENUINE shipped #573 algorithm — the verdicts below are tool-faithful, not hand-reconstructed. (Iteration 8's GPR-only hand-sim of 80245BA4 is now CONFIRMED by the real FPR algorithm — see below.)
+- The pcdump data path is fine (class=1 COLORGRAPH sections present for all three fns). Only the worktree/install **source** is stale. Fix = rebase the branch onto af61e5895 (or re-point the editable install). Filed #585.
+
+### mnDiagram3_8024714C — RE-MAP (stale char. CORRECTED) + COMMIT 95.68 -> 95.93
+
+**The TRIAGE-2 claim "the committed 95.68 source has the byte-exact 152 frame (no f28)" was WRONG.** Fresh checkdiff of the committed `b38208c2e` (CSE-split) substrate: **Δ +4 (297 vs 293), frame -160 with an `stfd f28,128(r1)` callee-save spill the target lacks**, classification `inline-boundary-toolchain-artifact`. The CSE-split temp (`new_var = mnDiagram3_804DBFFC`, 240.0) created a 5th persistent FPR web → f28 spill. The +5.45 win shipped WITH the regression.
+
+**Root cause + fix (oracle-adjacent, sibling-evidenced):** the do-loop `HSD_SisLib_803A5ACC` call passed `new_var` (=804DBFFC=240.0) as arg6. The TARGET loads arg6 = **f30 = 804DBFF8 = 6.5 = row_spacing** (traced: tgt +268 `lfs f30,804DBFF8`; +290 `fmr f4,f30`; +2a0 `fsubs f1,f1,f30` = arg3's `sp48.x - row_spacing`). The matched sibling call in HandleInput (mndiagram3.c:659) is `HSD_SisLib_803A5ACC(0,1, spDC.x - 6.5f, ..., 6.5f, 240.0f)` — **arg6 = the same 6.5 as arg3, arg7 = 240.0.** So the correct 8024714C source is arg6 = `row_spacing` (the 6.5 already in row_spacing), NOT a 240.0 temp. The CSE-split "win" had baked in a behaviorally-WRONG value (240.0) that scored higher but spilled f28.
+
+- **FIX:** arg6 `new_var` -> `row_spacing`; delete the `new_var` local. **Commit `1c7252443`.**
+- **Effect: frame -160 -> -152 (target-exact, f28 spill GONE), Δ +4 -> 0 (293 = target), 95.68 -> 95.93.** Residual collapsed from 131 reloc / 8 stack lines to 6 reloc / 4 stack + 28 register-only (pure coloring). FPR web count 20 -> 19.
+
+**FPR ORACLE verdict (post-fix substrate):** G1 baseline GPR **69/69 (100%)**, FPR **19/19 (100%)** — surrogate predicts our coloring exactly. Residual = the popup-block {f30↔f31} swap (ig46=popup row_spacing colors f31 ours / f30 target; ig35/34/33 = do-loop webs). What-if table on ig46 (want f30):
+
+| What-if | Result |
+|---|---|
+| `move 46:after:35` / `after:34` / `before:34` / `before:33` | **FLIPS f31 -> f30 (target)** |
+| `remove-edge 46:{35,34,33,40,39,38,37,36,32}` (all) | **no change** |
+| `add-interferer 46:{35,34,33}` (all) | **no change** |
+
+**Verdict: order-reachable, edge-INERT.** Only a select-order (IR-construction-order) change reaches the target; the edge/lifetime axis is dead. Select-order is the same axis iterations 4/7 proved unreachable by statement-order (byte-inert) and decl-order (exhaustive flat). GPR residual (region-1 gobj/archive r27↔r29 swap + SisLib r30↔r28) = callee-save permutation, GPR G1 100% (matches own graph), same-set both sides — iteration-4's "not decl-reachable" coloring cascade. **No oracle-backed source lever found; no further build spent (a float-statement-reorder build = recorded-inert repeat fingerprint).** 8024714C closes this round at **95.93** (was a correction of a regressed 95.68, net +0.25 AND structurally-correct: target frame, correct behavior, no spurious spill).
+
+### mnDiagram3_80245BA4 — S9 FPR oracle: iteration-8 hand-sim CONFIRMED by genuine algorithm
+
+Substrate = 94.48 (cast-drop), Δ1, 14 opcode-aligned register-only lines. FPR ORACLE G1: GPR **91/91**, FPR **41/41** (100%). FPR callee-save webs match iter-8 EXACTLY: ig48=row_spacing→f31, ig46=neg_spacing→f30, ig44=divider→f29, ig43=f28, ig77=magic→f27. Target (iter-8 force-phys probe): ig48→f30, ig46→f31, ig44→f27, ig77→f29.
+
+What-if table:
+
+| What-if | Result |
+|---|---|
+| `move 48:after:46` / `before:44` | **FLIPS f31 -> f30 (target for ig48)** |
+| `remove-edge 48:{46,44,43,77}` (all) | **no change** |
+| `move 44:after:77` | **FLIPS f29 -> f27 (target for ig44)** |
+| `remove-edge 44:48` | flips f29 -> f31 (WRONG direction) |
+| `remove-edge 44:{43,77}` | no change |
+
+**Verdict: the entire S9 FPR family is order-reachable, edge-INERT (UNREACHABLE-BY-CATALOGUE).** The genuine #573 oracle CONFIRMS iteration-8's hand-simulated verdict and ADDS the rigor that the edge axis is mechanically dead for the target direction (remove-edge = no-change or wrong register). Cast-drop opened no new structural lever (it was the already-landed S8 conversion-node family). **No source-probe build warranted** (float statement-order byte-inert, decl-orders exhaustive flat — both recorded for this substrate). **80245BA4 stays PARKED at 94.48.**
+
+### mnDiagram3_HandleInput — FPR census (oracle-only, NO builds) — answer: MIXED
+
+FPR ORACLE G1: GPR **257/257**, FPR **53/53** (100%) on the 2948-byte function. FPR family = the per-arm `spacing` webs (3 arms: ig80/ig79, ig67/ig66, ig54/ig53, each a {f30,f31} pair) + an f30-block (ig50..ig40) + an f29-block (ig39..ig32) = the state-file Family C ({f30↔f31}, {f29↔f30}).
+
+What-if table:
+
+| What-if | Result |
+|---|---|
+| `move 80:after:{79,67,66,54,53}` (arm-1) | **FLIPS f31 -> f30** |
+| `remove-edge 80:{79,67,66,54,53}` (all) | **no change** |
+| `move 67:after:66` (arm-2) | **FLIPS f30 -> f31** |
+| `remove-edge 67:{66,80,79}` (all) | **no change** |
+| `move 39:after:{40,38,32}` (f29-block) | **no change** |
+| `remove-edge 39:{40,38}` (f29-block) | **no change** |
+
+**CENSUS ANSWER: FPR family order-reachable = MIXED.** The per-arm {f30↔f31} spacing pairs are order-reachable but **edge-INERT**; the f29-block is **fully INERT** (pinned deep in the dispense). **No FPR family member is edge/lifetime-reachable** — so there is no order-independent source lever for HandleInput's 17 FPR relabel lines. Confirms the iter-9/10 PARK (Family C = coloring cascade) with the genuine oracle. **For the od-search pool census: HandleInput's FPR residual offers no source-side (edge/lifetime) handle; only an order/IG knob (= not in the catalogue) could move it.** Function stays PARKED at 98.42.
+
+### ROUND SUMMARY
+
+| Function | Before | After | Action |
+|---|---|---|---|
+| mnDiagram3_8024714C | 95.68 (Δ+4, f28 spill) | **95.93 (Δ0, frame-exact)** | COMMIT `1c7252443` — SisLib arg6=row_spacing, drop spurious temp+spill; corrected stale TRIAGE-2 frame claim + behaviorally-wrong 240.0 |
+| mnDiagram3_80245BA4 | 94.48 | 94.48 | PARK held — S9 FPR family order-only/edge-inert (iter-8 hand-sim CONFIRMED by genuine oracle) |
+| mnDiagram3_HandleInput | 98.42 | 98.42 | PARK held — FPR census MIXED (arm-pairs order-only/edge-inert, f29-block pinned); no source lever |
+
+**Epistemic note:** all three functions have FPR G1 = 100% (surrogate is faithful). The universal pattern across all three: **FPR float-pair residuals are select-order-reachable but EDGE-INERT.** Since select-order = IR-construction order (proven NOT statement/decl-reachable on these substrates by 2 prior drivers), and the edge/lifetime axis is mechanically dead (oracle remove-edge/add-interferer = no-change in the target direction), the FPR oracle finds **no source-reachable move on any of the three** beyond the 8024714C structural correction (which was a behavior/frame fix, not a coloring move). The one win this round came from the RE-MAP (catching the regressed substrate), not from the coloring oracle — consistent with [[deep_dive_concrete_cause_vs_ceiling]]: the deep-dive cracks a concrete cause (wrong arg value → spurious web → spill), not a pure ig-order ceiling. TOOL GAP for the next round = #585 (stale worktree/install vs shipped #573).
