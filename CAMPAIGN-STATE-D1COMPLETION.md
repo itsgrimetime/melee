@@ -471,3 +471,291 @@ Protected sweep after EACH commit: 0 regressions. 802437E8/80243434=100, InputPr
 - 802417D0 `i = (u8) data->name_cursor_pos` reusing `s32 i` for the Left-arrow test — clean (the
   Up-arrow already homes its test in `i`); no review risk.
 
+---
+
+## ITERATION 6 (2026-06-11, driver 3) — 80240D94 RECONSTRUCTION ROUND: HYPOTHESIS REFUTED BY OBJECT EVIDENCE; ROOT B MECHANISM POSITIVELY CONFIRMED (VN kill) BUT ZERO-EMISSION KILL NOT FOUND; 97.35 UNCHANGED
+
+### THE ONE QUESTION — ANSWERED: **NO.** The PAD_STACK(24)-elimination reconstruction does not land.
+The iteration-5 hypothesis (missing ~24B of genuine locals and/or a per-block pos helper resolving
+ROOT A + ROOT B together) is REFUTED by object-level evidence on every prong. Budget: 2 of 6 builds
+(1 probe + 1 restore), 0 source commits, floor 97.3504 restored byte-exact.
+
+### FRAME GROUND-TRUTH (object-level; supersedes the frame-tool model — see tool caveat below)
+Both objects (OURS `build/GALE01/src/.../mndiagram.o` with PAD_STACK(24) in place, TARGET asm):
+- frame 0x78, `stmw r21,0x4c(r1)` (saves 0x4c-0x78), **buf @ r1+0x30** (all four format sites:
+  `addi rX,r1,0x30` + stbx digit stores + `addi r4,r1,0x30` into HSD_SisLib_803A6B98),
+  **pos @ r1+0x38-0x44** (ALL SIX lb_8000B1CC sites pass `addi r5,r1,0x38`; all lfs read
+  0x38/0x3c/0x40), rounding gap 0x44-0x4c. mnDiagram_FormatPopupNumber is INLINED in BOTH
+  (identical stbx digit-loop bodies). FRAME DELTA = 0; layouts byte-identical.
+- **The 24B at 0x18-0x30 is NEVER REFERENCED in the retail object.** It is dead frame space.
+- Decl-position arithmetic (MWCC homes locals top-down in decl order; ours: pos→0x38, buf→0x30,
+  pad-last→0x18) PINS the original's 24B object to "declared after buf" — placing a 24B object
+  between pos and buf, or resizing buf, relocates &buf/&pos away from 0x30/0x38 (refuted layouts).
+- Param-area is NOT the supplier (ours computes 16B = max 4 arg words from the identical call
+  list; the varargs callee does not blanket-reserve — cross-check: sibling 802427B4 calls the same
+  803A6B98 yet shows 0x68 sub-local space with NO pad, so reservation is per-function locals/temps,
+  not callee-driven).
+- Frame-tool caveat (ISSUE #578): `debug inspect frame-reservations` modeled 0x8-0x38 as "unused"
+  and claimed "r1-access coverage ok" while the object references buf@0x30 — it tracked only the
+  FPR symbolic homes (pos words). Do not trust its unused-ranges on functions with address-taken
+  char arrays; disasm the object.
+
+### PER-BLOCK-HELPER HYPOTHESIS — REFUTED (evidence, no builds needed)
+1. All six pos-blocks already byte-match the target (mod registers); the y,z,x load order +
+   fneg shape is identical. Nothing structural to recover at those sites.
+2. The paragraphs ORDER-VARY: first two set `default_alignment` AFTER the pos stores, the last
+   four BEFORE. A single shared helper cannot produce both orders.
+3. A helper with its own `Vec3 pos` either materializes per-site homes (refuted: one shared
+   slot 0x38 in retail) or folds transparently (iter-4 Build 2 proved inline params and bodies
+   are VN/copy-prop transparent).
+4. lb_8000B1CC(HSD_JObj*, Vec3*, Vec3*) — all pointer params; no by-value copy temps.
+
+### ROOT B — MECHANISM POSITIVELY CONFIRMED (Build 1 probe), ZERO-EMISSION SPELLING NOT FOUND
+Catalog (validated normalizer, anchored-hunk procedure): the ENTIRE structural divergence is 7
+lines, 2 roots. ROOT B = ours ONE cached `clrlwi r22,r28,24` + `addi r3,r22,0` + `mr r3,r22` vs
+target per-site `clrlwi r3,r29,24` x2. Cross-check that sharpened the model: ours ALREADY emits
+per-site `clrlwi r3,r31,24` for the (u8)arg1 masks — those sit in EXCLUSIVE branches (CSE cannot
+bridge path-disjoint arms); the arg2 masks sit on ONE sequential path, so IRO CSE merges them.
+Retail's same sequential path did NOT merge ⟹ arg2's VN was killed between the paragraphs in the
+original IR.
+
+**Build 1 (probe): `if (arg1 == arg2) { arg2 = arg1; }`** inserted between the two name paragraphs
+(a universal no-op: assigns arg2:=arg1 exactly when already equal; runtime-dead inside the
+`arg1 != arg2`-guarded block). RESULT: **the VN split FIRED** — the entire ROOT-B hunk family
+vanished (per-site masks in target form; arg2 re-homed to r29 = the TARGET home). But the kill
+emits `cmpw r31,r29; bne; mr r29,r31` (+3 — MWCC cannot prove the branch dead) AND the new block
+boundary broke the shared `li r23,0x1` alignment-value web (target shares ONE li across both
+paragraphs; ours rematerialized `li r0,0x1`). 97.35→97.26. REVERTED (Build 2 = restore, sweep
+green, 0 deltas, all 13 tracked fns byte-exact).
+
+**Constraint set for the original splitter (tight, from the probe):** it must (a) kill arg2's VN
+between the paragraphs, (b) emit ZERO instructions, (c) introduce NO block boundary (the li-1 CSE
+and straight-line fallthrough survive in retail). Control-flow kills violate (b)+(c) — proven.
+Straight-line zero-emission kills are the class iter-4 exhausted: self-assign (DCE'd before VN),
+reassign-through-local / inline-param (copy-prop transparent), `arg2 = (u8) arg2` (iter-4 Build-1
+fold family — AND-idempotence unifies the web), comma (re-homes, +8), memory round-trip (adds
+loads), `& 0xFF`/`(u8)(s32)` (same VN). Zero-emission VN kill **not found despite** the ledger's
+7 spellings + this round's control-flow probe + analysis refutations (condition duplication
+re-tests; select/phi emits the same cmpw+mr; signed `% 256` emits the modulo dance; nested-mask
+casts fold at parse). Function stays in the pool; residual characterized, not closed.
+
+### ROOT A — DID NOT CASCADE (probe evidence)
+With ROOT B force-split (and callee-save r22 freed), ours STILL emitted `addi r0,r7,@l` (pre-stwu)
++ `mr r27,r0` vs target's direct post-stmw `addi r28,r7,@l`. The iter-4 cascade prediction ("A
+re-rolls if B lands") did NOT hold under the dirty split — suggestive-not-decisive (the probe's
++4 instrs perturb pressure). A remains scheduling/pressure-conditioned (sibling PopupAnimProc:
+identical spelling, direct form) with no direct C lever identified.
+
+### PARTITION UPDATE
+- **80240D94: STRUCTURAL Δ+2 → CHARACTERIZED WALL (VN-CSE class).** B = sequential-path AND-CSE
+  needing a zero-emission VN kill (not found in reachable C); A = prologue scheduling/coloring of
+  the tbl addi (no direct lever; did not cascade under the forced split). FULLNORM 7 stands. B is
+  NOT permuter-promising (the needed transform is an IR killing-def, not a register choice); A's
+  addi/mr MIGHT be permuter-reachable (register-class).
+- TU STRUCTURAL frontier after this round: 80241E78's fsubs-across-call window (~20 FULLNORM
+  lines, iter-4 errata) is the LAST known structural window. Everything else is ARTIFACT/coloring
+  (8023FC28 named-reloc spelling = source lever for reloc lines only).
+
+### PENDING-REVIEW (iter-6) — PAD_STACK(24) entry SHARPENED, NOT RETIRED
+- **80240D94 PAD_STACK(24) STAYS.** Evidence: the 24B is never-referenced dead frame space in the
+  RETAIL object, pinned by decl-order arithmetic to a dead 24B object declared after buf (a dead
+  local aggregate — e.g. a removed debug buffer — whose identity the bytes cannot disambiguate).
+  Replacing the pad with an invented dead local (`char unused[24]`, two dead Vec3) would be
+  honesty-NEGATIVE vs the documented diagnostic macro. For any PR: keep PAD_STACK(24) with a
+  comment citing the dead-frame evidence (upstream precedent: mndiagram2 CreateStatRow ships
+  `int pad[4]` + PAD_STACK(16) for the same class). The doctrine "PAD_STACK = missing
+  inlines/locals" is REFUTED for this function specifically: the missing thing is provably dead,
+  not live structure.
+- Probe spelling `if (arg1 == arg2) arg2 = arg1;` is NOT retained (reverted) — recorded as the
+  mechanism-confirmation tool for future drivers; do NOT commit it (+4 instrs, block-split).
+
+### NEXT (iteration-7 recommendation)
+1. **80241E78 bundled round** (LAST structural window): 0.4f semantic fix (match-neutral, proven
+   iter-3 B2) + `extern const f32 mnDiagram_804DBFA0` named-float attempt + the fsubs-across-call
+   window (ours defers y_offset fsubs past the mn_GetDigitCount call into volatile f1; target
+   computes into callee-save f26 BEFORE the call — try statement order / consumer-shape around
+   the call). Highest remaining structural yield.
+2. THEN 8023FC28 LAW-2 named-reloc spelling (cheap, reloc-lines-only).
+3. THEN declare the TU structural frontier exhausted → endgame/permuter phase (permuter currently
+   FENCED this branch; A-root addi/mr is the one register-class site worth a permuter look).
+
+---
+
+## ITERATION 7 (2026-06-11, driver 3) — 80241E78 BUNDLED ROUND: THE fsubs WINDOW CLOSED (95.14 -> 98.94, FULLNORM 20 -> 0) + 0.4f FIX COMMITTED + EXTERN REFUTED. **THE TU's STRUCTURAL FRONTIER IS NOW CLOSED.**
+
+### THE ONE QUESTION — ANSWERED: **YES.** The fsubs-across-call window closes, via 2-use anchoring.
+Budget: 4 of 5 builds. 2 commits (fe659a04f semantic fix, 8523f3539 window), 2 hard-reverts.
+80241E78: 95.1362 -> **98.9416**, FULLNORM 20 -> **0**, 257/257 instrs, Δ0.
+
+### NEW LAW — FRONT-END GRAFT LAW (pcdump-proven, transferable):
+MWCC's FRONT END (visible in BEFORE GLOBAL OPTIMIZATION, before any optimizer pass) grafts a
+SINGLE-USE local's RHS tree forward into its consumer statement across STRAIGHT-LINE block chains
+— calls split blocks (B20 -> bl B21 -> B22) but do NOT stop the graft; only BRANCH/JOIN boundaries
+do. Proof pair in one function: y_offset (def and use separated only by the GetDigitCount call)
+grafted post-call; y_spacing (identical shape, but the jobjs[9]/[10] GetTranslationY ASSERT
+DIAMONDS branch between def and use) materialized pre-call. A MULTI-USE local materializes at its
+def. RECOVERY RECIPE: when ours evaluates an expression LATER than the target (sunk across a
+call), give the local a second GENUINE use — here the original's own form: duplicate the product
+into the adj computation and hoist the (f32) conversion into one named local so no second
+conversion slot is created (`rowf = (f32) row; row_offset = y_offset * rowf; row_offset_adj =
+y_offset * rowf - 0.4f;`). MWCC CSEs the duplicate product (ONE fmuls emitted) but the front end
+has already materialized the fsubs at its pre-call def -> callee-save result, volatile raw
+operand = target form; the whole post-call conversion/const cluster re-rolls into the target
+schedule. COROLLARY (Build 2, H1 refuted): assigning into a MULTI-DEF web (`base = TY(jobj2) -
+base`) does NOT anchor evaluation — forwarding is per-EXPRESSION on virtuals (a redefinition
+mints a new virtual; nothing is "killed"), not per-destination-web. The InputProc
+intermediate-copy law's web-persistence is about COPY persistence, not evaluation anchoring.
+
+### Build ledger
+| Build | Edit | Result | Verdict |
+|-------|------|--------|---------|
+| 1 | `1.0f` -> `0.4f` at 2358 (adj) + 2371 (col>=7 X) | 95.1362 (byte-neutral), pool @1519 = 0x3ECCCCCD verified | **COMMITTED fe659a04f** — semantic retail-divergence fix; fuzzy% is reloc-identity-bound not value-bound for anonymous pool constants |
+| 2 | H1: `base = TY(jobj2) - base;` (multi-def web destination) | 95.1362, hunks identical, fsubs still post-call | **INERT — REVERTED.** Destination web does not anchor evaluation (see corollary) |
+| 3 | 2-use anchoring + `f32 rowf` conversion local | **98.9416, FULLNORM 0, 257/257, Δ0**; fsubs immediately pre-bl (volatile operand, callee-save result) | **COMMITTED 8523f3539** |
+| 4 | `extern const f32 mnDiagram_804DBFA0` replacing both 0.4f literals (+static.h decl) | 97.5019, FULLNORM 0 -> 3: extern RELOADED IN-LOOP (`lfs f1,804DBFA0` at the col>=7 site — symbol loads are not hoisted across the loop's calls, even const), pre-loop callee-save f29 home dissolved, FPR save set changed (stfd f31/lfd f26 prologue deltas) | **CASCADE — REVERTED. Literal kept.** Confirms the mndiagram3 forced-named-.sdata2 caution for in-loop-consumed constants |
+
+Protected sweep after each commit + after final restore: 0 regressions / 0 deltas (both 100s,
+802417D0 98.0303, CursorProc 99.5158, 80240D94 97.3504, 8024227C 94.3234, InputProc 98.6726,
+80242C0C 96.9513, HandleInput 97.4605, OnFrame 99.7188, 8023FC28 97.8241, 802427B4 98.8444).
+Tree clean.
+
+### EXTERN / NAMED-RELOC DISPOSITION (recorded, do not re-try)
+- The 0.4f stays a LITERAL: the named-extern form is codegen-DIVERGENT here (in-loop reload).
+  This also converges with the upstream guideline (no premature named-symbol externs in PRs).
+- The remaining reloc-identity residual on this function's pool constants (@1519=0.4f vs
+  mnDiagram_804DBFA0; @192/@1522 f64 conv-magic vs 804DBF78/804DBF98) is COSMETIC and largely
+  source-unreachable — the f64 conversion constants are compiler-generated (you cannot point MWCC's
+  own int->float magic at an extern). The retail "names" are dtk address-labels on the original's
+  anonymous pool, not evidence of source-level externs.
+
+### 80241E78 RESIDUAL CENSUS (@ 98.9416)
+Sole family: the iter-3-characterized **r25<->r26 data/row callee-save swap + FP-coloring shadow**
+(f26/f27/f28 role rotation). FULLNORM 0 ⟹ no structural/scheduling/count residual remains. The
+iter-3 dataflow-pinned-ig characterization carries over; the substrate DID change (FP web
+re-rolled), so the endgame round may spend ONE cheap re-test of the iter-3 levers per
+substrate-relativity doctrine — not spent here (budget discipline; 4 refuted levers at low odds).
+
+### ★ TU STRUCTURAL-FRONTIER CLOSING STATEMENT ★
+With the window closed, EVERY tracked non-100 function in the mndiagram TU is now one of:
+- **ARTIFACT / pure-coloring ceiling (FULLNORM 0):** OnFrame 99.72, 802427B4 98.84 (both
+  rotation/swap webs), 802417D0 98.03, CursorProc 99.52, 80241E78 98.94 (this round).
+- **ARTIFACT + one pending reloc-spelling lever:** 8023FC28 97.82 (`.bss.0` section-anchor vs
+  named symbol — iter-2 LAW-2 cast-copy spelling, the NEXT round's single remaining source lever).
+- **CHARACTERIZED WALLS (mechanism-pinned, lever not found in reachable C):** 80240D94 97.35
+  (VN-CSE zero-emission-kill wall, iter-6), 8024227C 94.32 (banked: li-vs-copy trio + 2
+  transpositions + rename cascade, iter-2), 80242C0C 96.95 / InputProc 98.67 / HandleInput 97.46
+  (prior campaigns' documented walls).
+There are NO remaining known structural windows in this TU. The structural phase of the
+completion campaign is COMPLETE pending the 8023FC28 reloc spelling.
+
+### PENDING-REVIEW (iter-7)
+- **fe659a04f 0.4f fix RETAINED** — behavior-correcting + match-neutral (digit placement was off
+  by 0.6 units in row>=10 / col>=7 cases). Same accepted class as prior retail-value corrections.
+- **8523f3539 2-use spelling** `row_offset_adj = y_offset * rowf - 0.4f;` — recomputes the product
+  instead of `row_offset - 0.4f`. LOAD-BEARING for the match (single-use form sinks the fsubs
+  across the call; FULLNORM 0 <-> 20 hinges on it). Semantically identical (CSE'd to one fmuls).
+  Comment in-source if a reviewer asks; do NOT "simplify" it back.
+- 80241E78's PAD_STACK... has none. No new PAD_STACK introduced anywhere this round.
+
+### ITERATION-8 RECOMMENDATION
+1. **8023FC28 LAW-2 named-reloc spelling round** (the last source lever in the TU): apply the
+   iter-2 LAW-2 cast-copy re-read spelling to restore the named `mnDiagram_804A0750` HA/LO relocs
+   over `.bss.0` section-anchors. Small, bounded, ≤2 builds.
+2. **Then formally declare the endgame/permuter phase** for the coloring-ceiling pool
+   {OnFrame, 802427B4, 802417D0, CursorProc, 80241E78, + the walls if reopened}: permuter is
+   currently FENCED on this branch — the declaration should hand the pool + each function's
+   characterized residual to the orchestrator for a permuter-authorized round (80240D94 ROOT A's
+   addi/mr = the one register-class site; ROOT B is NOT permuter-reachable, it needs an IR
+   killing-def). Re-test the mndiagram2 zero-emission self-assignment probe on ROOT B if that
+   campaign's spelling fires (orchestrator cross-link).
+
+---
+
+## ITERATION 8 (2026-06-11, driver 4) — 8023FC28 LAW-2 RELOC SPELLING **REFUTED** + ★ TU ENDGAME DECLARATION ★
+
+### PART 1 — THE ONE QUESTION — ANSWERED: **NO.** The LAW-2 named-reloc spelling does NOT restore 8023FC28's named relocs, and it perturbs codegen. HARD-REVERTED.
+Budget: 1 of ≤2 builds. 0 commits. Floor 97.82 restored byte-exact (HEAD=25cb88703, tree clean).
+
+**The site (object ground-truth, ours `build/GALE01/src/.../mndiagram.o` vs target asm):**
+- TARGET prologue: `lis r3, mnDiagram_804A0750@ha` / `addi r29,r3,mnDiagram_804A0750@l` / `addi r31,r29,0x1c` (NAMED HA/LO; base→r29, sorted_names→r31).
+- OURS prologue: `lis r3, ...bss.0@ha` / `addi r31,r3,...bss.0@l` / `addi r30,r31,0x1c` (`.bss.0` SECTION-ANCHOR; base→r31, sorted_names→r30).
+- Exactly **2 reloc-paired lines** (`@ha`+`@l`), as the iter-4 partition stated. Plus the callee-save rotation (base r29-vs-r31, sorted_names r31-vs-r30) — the FULLNORM-0 coloring artifact, NOT this iteration's target.
+
+**Spelling tried** (iter-2 LAW-2 cast-copy shape, derived from the site): introduced `u8* sorted = (u8*) assets;` (cast-copy of the once-materialized `assets = (mnDiagram_Assets*)&mnDiagram_804A0750` local) and routed both base uses through it — `u8* dst = sorted + sizeof(mnDiagram_804A0750_t);` (was `assets->sorted_names`) and `u8* p = &sorted[max_idx];` (was `&assets->sorted_fighters[max_idx]`). Semantically identical (`(u8*)assets == &assets->sorted_fighters[0]`; `+0x1C == sorted_names`).
+
+**Why it failed (RELOC METER before/after + mechanism):**
+| Meter | Baseline (committed) | After LAW-2 spelling | Verdict |
+|-------|----------------------|----------------------|---------|
+| `.bss.0@` reloc-paired lines in 8023FC28 | **2** | **2** (UNCHANGED) | reloc NOT restored |
+| named `mnDiagram_804A0750@` in 8023FC28 | 0 | 0 | reloc NOT restored |
+| FULLNORM (instr count) | 108/108 | 108/108 | count neutral |
+| frame | `stwu -0x218` / buf@r1+0x18 | **`stwu -0x220` / buf@r1+0x1C (+8B)** | **codegen PERTURBED** |
+| fuzzy % | 97.8241 | 97.76 (−0.06); classification data-symbol-or-relocation→stack-layout | regressed |
+
+The cast-copy added a stack-homed `sorted` local (frame +8) WITHOUT changing the reloc — a reloc-only lever must be codegen-neutral; this was the documented hard-revert condition. **REVERTED** (`git checkout`), rebuilt, protected sweep green (all 13 tracked fns byte-exact at their state-file numbers).
+
+### WHY LAW-2 DOES NOT TRANSFER HERE (mechanism, banked — do not re-try the cast-copy)
+LAW-2 (iter-2, 8024227C) restored named relocs because its re-read sat INSIDE loop bodies = MULTIPLE per-site base materializations, where the spelling controlled the per-site reloc choice. 8023FC28 has a SINGLE base materialization (one prologue `lis@ha`/`addi@l` pair); copying `assets` downstream cannot change which reloc that single pair uses — it only adds a move/slot.
+
+**TU-WIDE RELOC CENSUS (object-level, decisive):** across the whole mndiagram TU our object emits **16 named `mnDiagram_804A0750@` + 6 `.bss.0@`**; target emits **22 named, 0 `.bss.0`**. The 6 `.bss.0` lines live in exactly THREE functions — **8023FA6C, 8023FC28, 80242C0C** — and in all three the form is identical: `lis rN,.bss.0@ha; addi r31,rN,.bss.0@l; addi r30/r31,r31,0x1C`. **The discriminator is the `+0x1C` (sorted_names) base materialization**: when MWCC needs `&mnDiagram_804A0750 + 0x1C` it selects the `.bss.0` section anchor; when it needs the symbol at offset 0 (`sorted_fighters[idx]`) it keeps the named reloc (the 16 named sites). This is a systematic MWCC base+displacement reloc-selection behavior, NOT a source spelling the C can steer at these three sites. The `.bss.0` reloc lines on {8023FA6C, 8023FC28, 80242C0C} are **reloc-identity ceiling noise**, reclassified from "pending source lever" to ARTIFACT.
+
+---
+
+## ★ TU ENDGAME DECLARATION ★ (handoff artifact for the endgame/permuter phase)
+
+### (a) STRUCTURAL-FRONTIER-CLOSED STATEMENT
+Every remaining non-100 divergence in all three mndiagram TUs is now attributed to a non-structural class. With the iter-7 fsubs window closed (80241E78) and the iter-8 8023FC28 reloc lever refuted, **there are NO remaining known structural windows in the TU.** Every tracked non-100 function is one of: a pure-coloring ceiling (FULLNORM 0, register/FP callee-save rotation), a characterized wall (mechanism-pinned, lever not found in reachable C), or reloc-identity ceiling noise. The STRUCTURAL phase of the completion campaign is **COMPLETE**. What remains is the endgame/permuter phase against coloring cascades + the two documented walls.
+
+Matched (banked 100, protected): **mnDiagram_802437E8, mnDiagram_80243434** (+ all other TU 100s).
+
+### (b) COLORING-CEILING POOL (FULLNORM 0; each with its identified swap/rotation pair)
+| Fn | Fuzzy | Swap/rotation pair (from iter-3/4/7 partition + object disasm) |
+|----|-------|----------------------------------------------------------------|
+| OnFrame | 99.72 | single-pair **r28↔r29**: the `lwz rX,0x2c(r30)` user_data ptr loaded mid-fn (9 use sites). Same dataflow-pinned class as 80241E78's data/row swap. |
+| 802427B4 | 98.84 | callee-save **rotation**: arg homes shift (TGT r26/r27 vs OUR r27/r28) + assets-base **TGT r31 vs OUR r25** (86 reg sites). comma-expr + interferer-trunc already landed (near-ceiling sibling). |
+| 802417D0 | 98.03 | post-flip register-coloring **cascade** (callee-save renumber) off the iter-5 test-home flip; FULLNORM 0 (test-form was the only structural divergence; flip re-rolled the cascade, +0.30 only). |
+| CursorProc | 99.52 | pure coloring **cascade** (FULLNORM 0, Δ0) after the iter-5 lhzu close; ~0.48% to 100. |
+| 80241E78 | 98.94 | **r25↔r26 data/row callee-save swap + FP-coloring shadow** (f26/f27/f28 role rotation). row's ig dataflow-pinned BELOW data's (47<58) — every float input derives from `data->jobjs[...]` loaded before row is first-used. Decl-order/literal/param-direct/call-reorder all INERT (iter-3 B1–B4). FP web re-rolled iter-7, so ONE cheap re-test of the iter-3 levers is permuter-substrate-warranted. |
+| 8023FC28 (post-Part-1) | 97.82 | **whole-web callee-save rotation** rooted at the assets-base materialization: TGT base→r29 then sorted_names→r31; OURS base→r31 then sorted_names→r30 (48 reg sites). PLUS the 2 `.bss.0`-vs-named reloc lines = ceiling noise (LAW-2 refuted, iter-8). FULLNORM 0. |
+
+### (c) THE TWO WALLS (opacity / A1-remat cluster — DO NOT TOUCH; protected)
+- **InputProc 98.67** — the opacity / A1-rematerialization cluster (prior mnDiagram_InputProc campaign; the Door-A survival law). 52-iteration campaign exhausted the source levers; banked-ready (PR #2660). Coloring/remat ceiling; FENCED + protected.
+- **80242C0C 96.95** — same opacity/A1-remat cluster + the consumed expansion door (prior campaign). Also carries one of the three `.bss.0` reloc lines (ceiling noise, same MWCC base+0x1C selection). FENCED + protected.
+- (mnDiagram2_HandleInput 97.46 — protected wall, prior campaign.)
+
+### (d) mnDiagram_8024227C 94.32 — REGISTER-ENDGAME QUEUE
+Structural phase COMPLETE (iter-2: hoist defeated, walk-shape + cast model landed, opcode-stream delta 0, frame byte-equal at stwu-160/stmw r15,92). Residual = 175 register-only lines (callee-save swap r29↔r30 named by checkdiff) + the li-vs-copy trio (+10c/+360/+39c) + 2 one-slot inline-scheduling transpositions (+284/+288, +470/+474). All cascade-watch / coloring. **Banked register-endgame queue (in order):**
+1. decl-order nudges (the decl list is still m2c-alphabetical — reorder to peel callee-saves, apply→re-bootstrap→repeat per the cardstate decl-chain method).
+2. `debug target match-iter-first -f mnDiagram_8024227C --regs gpr-volatile,r0` (checkdiff's own suggestion — the match-iter-first oracle).
+3. force-phys r14–r17 probes (diagnostic only).
+PAD_STACK(24) = diagnostic (frame group byte-equal); natural-frame replacement pending (PENDING-REVIEW).
+
+### (e) mnDiagram_80240D94 97.35 — VN-CSE WALL
+FULLNORM 7, two roots (iter-6, mechanism POSITIVELY CONFIRMED via the `if (arg1==arg2) arg2=arg1;` probe):
+- **ROOT B (VN-CSE):** ours ONE cached `clrlwi r22,r28,24`+`addi r3,r22`+`mr r3,r22` vs target per-site `clrlwi r3,r29,24` ×2 at the two GetNameText calls (src 1807/1822). arg2's two AND-VNs merged by sequential-path IRO CSE; target's did not (arg2's VN was killed between the paragraphs in the original IR). Needs a ZERO-EMISSION VN-kill: must (a) kill arg2's VN between paragraphs, (b) emit 0 instrs, (c) introduce NO block boundary. Probe proved the kill fires but control-flow kills emit `cmpw+bne+mr` (+3) and break the shared `li r23,1` web. **Not permuter-reachable** (needs an IR killing-def, not a register choice). **ROOT B RE-TEST CONDITION:** if the mndiagram2 campaign's zero-emission self-assignment probe FIRES (produces a straight-line, zero-emission, no-block-boundary VN kill), re-test it here — that is the one untried class for ROOT B (orchestrator cross-link).
+- **ROOT A (the one register-class permuter site):** `tbl = &803EE728` init emitted as `addi r0` (hoisted above stwu) + `mr r27,r0` vs target direct post-stmw `addi r28`. Did NOT cascade under the forced split (suggestive-not-decisive). Scheduling/pressure-conditioned (sibling PopupAnimProc: identical spelling, direct form). A's addi/mr **MIGHT be permuter-reachable (register-class)** — the one register-class permuter site on this fn.
+PAD_STACK(24) = provably dead 24B frame space in the retail object (iter-6 frame ground-truth; NOT missing live structure); STAYS (PENDING-REVIEW).
+
+### (f) PENDING-REVIEW LEDGER (TU-wide; resolve before any PR)
+1. **PAD_STACK(24) on 8024227C** (committed 90de0b888) — diagnostic; frame group byte-equal at -160/stmw r15,92. Natural-frame replacement pending (try `u8 stack_obj[24]`+`(void)&` first; meter slot positions).
+2. **PAD_STACK(24) on 80240D94** — KEEP with a comment citing the dead-frame evidence (the 24B is never-referenced in the retail object, pinned by decl-order to a dead local declared after buf; upstream precedent: mndiagram2 CreateStatRow ships `int pad[4]`+PAD_STACK(16)). The "PAD_STACK = missing live structure" doctrine is REFUTED for THIS fn specifically (the missing thing is provably dead). Inventing a dead local would be honesty-negative vs the macro.
+3. **PAD_STACK(12) on 8023FC28** — diagnostic; natural-frame pass pending.
+4. **`sorted = (u8*) assets;` casts on 8024227C** (×3, committed iter-2) — semantically clean (`assets` IS the sorted_fighters base; the overlay struct documents it). Reviewer may prefer `assets->sorted_fighters` — that spelling costs −3.86pp (allocation re-roll); keep the cast-copy, comment if questioned.
+5. **s32 retypes holding u8 values** on 8024227C (var_r0_2/var_r23/var_r17_6) — matches retail codegen (int-home → clrlwi at every (u8) use site). m2c `var_rNN` naming retained throughout; a cosmetic naming pass is free + recommended before PR.
+6. **CursorProc `u16* hov=(u16*)&mn_804A04F0; *++hov; *hov`** (d858e94ae) — the pre-increment walk is the retail idiom (proven by `lhzu`); load-bearing (direct field form costs Δ+1). Keep; comment if questioned.
+7. **0.4f fix on 80241E78** (fe659a04f) — behavior-correcting (digit placement was off by 0.6 units in row≥10/col≥7) + match-neutral. RETAINED. The `extern const f32 mnDiagram_804DBFA0` named form is codegen-DIVERGENT (in-loop reload) — do NOT re-try; the literal stays (also converges with the upstream no-premature-named-externs guideline).
+8. **8523f3539 2-use spelling** `row_offset_adj = y_offset * rowf - 0.4f;` on 80241E78 — LOAD-BEARING (single-use form sinks the fsubs across the call; FULLNORM 0↔20 hinges on it). Semantically identical (CSE'd to one fmuls). Do NOT "simplify" back.
+9. **8023FC28 dead-24B proof / `(u8*)` cast disposition** — the iter-8 cast-copy was REVERTED (not retained); the committed `assets->sorted_names` / `&assets->sorted_fighters[max_idx]` member-deref form is the floor. No new pending item from Part 1.
+
+### (g) RECOMMENDED PERMUTER-CHANNEL ALLOCATION ORDER (for the pool)
+Permuter is currently FENCED on this branch; this is the hand-off order for a permuter-authorized round (highest expected yield first, by cascade size × structural-headroom):
+1. **8024227C (94.32)** — LARGEST headroom (5.68pp), opcode-stream delta 0 + frame matched, 175-line cascade is the LAST family. Run the register-endgame queue (d): decl-order nudges first (cardstate decl-chain method), then match-iter-first oracle (`--regs gpr-volatile,r0`), then force-phys r14–r17. Best single permuter ROI in the TU.
+2. **802417D0 (98.03)** — clean post-flip coloring cascade (FULLNORM 0), 96-site; medium headroom (1.97pp), single root (the iter-5 test-flip).
+3. **80240D94 ROOT A (97.35)** — the ONE register-class permuter site (the `tbl` addi/mr); ROOT B is NOT permuter-reachable (needs an IR killing-def — gate it behind the mndiagram2 zero-emission-probe re-test, not the permuter). Lower headroom on the reachable part.
+4. **80241E78 (98.94)** — ONE cheap permuter re-test of the iter-3 dataflow-pinned levers (the FP web re-rolled iter-7, substrate changed); low odds (the r25↔r26 swap is dataflow-pinned), small headroom (1.06pp).
+5. **802427B4 (98.84)** — near-ceiling sibling; comma-expr + interferer-trunc already landed; LOW yield (the 86-site rotation is a clean callee-save permutation).
+6. **CursorProc (99.52), 8023FC28 (97.82-rotation), OnFrame (99.72)** — LOWEST yield (pure dataflow-pinned single-pair swaps / whole-web rotations; ~0.3–0.5pp each). Park unless a cheap permuter channel is idle. 8023FC28's 2 reloc lines are ceiling noise (not permuter-addressable).
+WALLS (InputProc, 80242C0C, HandleInput) are FENCED + protected — NOT in the permuter rotation.
+
+### STATE-FILE-vs-TREE RECONCILIATION (iter-8)
+Verified at HEAD=25cb88703, tree clean: every tracked-fn number in this declaration was re-measured this iteration via `checkdiff --summary` and matches the iter-7 protected-sweep numbers EXACTLY (8023FC28 97.82, 80241E78 98.94, CursorProc 99.52, 802417D0 98.03, 80240D94 97.35, 8024227C 94.32, OnFrame 99.72, 802427B4 98.84, 802437E8/80243434 100, InputProc 98.67, 80242C0C 96.95, HandleInput 97.46). **No discrepancy found between the state file and the tree.**
