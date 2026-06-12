@@ -50,7 +50,6 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     char* base;
     u16* table;
     HSD_JObj* row0;
-    HSD_JObj* row1;
     f32 neg_spacing;
     f32 row_spacing;
     f32 divider;
@@ -73,13 +72,14 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
         u8 is_name_mode = data->is_name_mode;
         u8 scroll = data->saved_selection;
         u8 offset = data->scroll_offset;
-        u8 limit;
+        int limit;
 
         if (is_name_mode != 0) {
             limit = 0x18;
         } else {
             limit = 0x15;
         }
+        limit = (u8) limit;
 
         {
             int val = offset + scroll;
@@ -93,10 +93,9 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
         }
     }
 
-    row1 = data->jobjs[7];
     {
         f32 row0_y = HSD_JObjGetTranslationY(row0);
-        f32 row1_y = HSD_JObjGetTranslationY(row1);
+        f32 row1_y = HSD_JObjGetTranslationY(data->jobjs[7]);
 
         {
             u16* stat_table;
