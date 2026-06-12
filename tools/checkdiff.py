@@ -30,6 +30,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -1044,6 +1045,27 @@ def _call_targets(lines: list[str]) -> list[str]:
     return targets
 
 
+def _missing_call_targets_by_multiplicity(
+    ref_calls: list[str],
+    our_calls: list[str],
+) -> list[str]:
+    remaining = Counter(our_calls)
+    missing: list[str] = []
+    for call in ref_calls:
+        if remaining[call] > 0:
+            remaining[call] -= 1
+        else:
+            missing.append(call)
+    return missing
+
+
+def _call_target_multiplicity_differs(
+    ref_calls: list[str],
+    our_calls: list[str],
+) -> bool:
+    return Counter(ref_calls) != Counter(our_calls)
+
+
 _PHYSICAL_REG_TOKEN_RE = re.compile(r"\b([rf])(?:[0-9]|[12][0-9]|3[01])\b")
 _SELF_RELATIVE_CALL_RE = re.compile(
     r"^(?P<base>[A-Za-z_.$][A-Za-z0-9_.$]*)(?P<delta>[+-]0x[0-9A-Fa-f]+)?$"
@@ -1320,7 +1342,7 @@ def _detect_inline_boundary_artifact(
     ref_calls: list[str],
     our_calls: list[str],
 ) -> Optional[dict]:
-    missing_ref_calls = [call for call in ref_calls if call not in our_calls]
+    missing_ref_calls = _missing_call_targets_by_multiplicity(ref_calls, our_calls)
     if not missing_ref_calls or len(our_lines) <= len(ref_lines):
         return None
 
@@ -2141,9 +2163,15 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
     our_mnemonics = _mnemonics(our_lines)
     ref_calls = _call_targets(ref_lines)
     our_calls = _call_targets(our_lines)
+    structural_truth_gate = normalized_structural_diff(ref_lines, our_lines)
+    normalized_diff_lines = structural_truth_gate["normalized_diff_lines"]
     ref_branch_shape = _branch_shape(ref_lines)
     our_branch_shape = _branch_shape(our_lines)
     branch_shape_differs = ref_branch_shape != our_branch_shape
+    call_shape_differs = (
+        _call_target_multiplicity_differs(ref_calls, our_calls)
+        and not _call_delta_is_self_relative_offset_only(ref_calls, our_calls)
+    )
     inline_boundary_artifact = _detect_inline_boundary_artifact(
         ref_lines,
         our_lines,
@@ -2152,6 +2180,8 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
     )
     indexed_struct_pointer_materialization = (
         detect_indexed_struct_pointer_materialization(ref_lines, our_lines)
+        if normalized_diff_lines > 0
+        else None
     )
     register_allocation_guidance = detect_register_allocation_guidance(
         ref_lines,
@@ -2228,7 +2258,7 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         if ref_mnemonics == our_mnemonics else None
     )
 
-    if ref_calls != our_calls:
+    if call_shape_differs:
         if backend_ceiling:
             reasons.append(
                 "call shape also differs after alignment; inspect prototypes, "
@@ -2317,8 +2347,6 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
         elif primary in {"instruction-sequence", "operand-register-or-offset"}:
             primary = "indexed-struct-pointer-materialization"
 
-    structural_truth_gate = normalized_structural_diff(ref_lines, our_lines)
-    normalized_diff_lines = structural_truth_gate["normalized_diff_lines"]
     stack_layout_evidence = (
         stack_frame_delta is not None
         or stack_slot_localizer is not None
@@ -2332,7 +2360,8 @@ def classify_asm_diff(ref_lines: list[str], our_lines: list[str]) -> dict:
             "differences as coloring/presentation evidence, not source-shape proof",
         )
         if not stack_layout_evidence:
-            primary = "normalized-structural-match"
+            if primary not in {"register-allocation", "backend-ceiling"}:
+                primary = "normalized-structural-match"
     elif normalized_diff_lines <= 3:
         reasons.insert(
             0,
