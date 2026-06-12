@@ -38,6 +38,16 @@ def test_machine_reg_interferer_blocks_its_own_number():
     assert tb.predict_assignments(ig)[50] == 31
 
 
+def test_fpr_class_uses_fpr_phys_pool():
+    interferers = [(i, i) for i in range(14)]
+    sec = ColorgraphSection(class_id=1, result=1, n_nodes=1,
+                            decisions=[_decision(50, 31, interferers)])
+    ig = tb.build_ig(sec)
+
+    assert tb.predict_assignments(ig)[50] == 31
+    assert tb.register_prefix(ig.class_id) == "f"
+
+
 def test_dispense_reuse_before_fresh():
     # Two non-interfering callee-save nodes: first gets r31, second can REUSE
     # r31? No — they interfere here, so second must go fresh r30.
@@ -111,6 +121,44 @@ def test_cli_whatif_runs_on_fixture():
                                  "--what-if", f"remove-edge {node.ig_idx}:{nb}"])
     assert r.exit_code == 0
     assert "what-if" in r.output
+
+
+def test_cli_tiebreak_class_fpr_accepts_f_tokens(tmp_path):
+    from typer.testing import CliRunner
+    from src.cli import app
+
+    pcdump = tmp_path / "class1.txt"
+    fpr_blockers = " ".join(f"{i}=r{i}" for i in range(14))
+    pcdump.write_text(
+        "Starting function fn_80000000\n"
+        "COLORGRAPH DECISIONS (class=1, result=1, n_nodes=2)\n"
+        "iter  ig_idx assignedReg degree nIntfr flags\n"
+        f"0 33 r31 0 14 0x02\n    interferers: {fpr_blockers}\n"
+        f"1 34 r31 0 14 0x02\n    interferers: {fpr_blockers}\n"
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "tiebreak",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(pcdump),
+            "--class",
+            "fpr",
+            "--ig",
+            "f33",
+            "--what-if",
+            "add-interferer f34:f33",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "observed f31 predicted f31" in result.output
+    assert "predicted f31 -> f30" in result.output
 
 
 def test_move_after_vs_before_are_distinct():

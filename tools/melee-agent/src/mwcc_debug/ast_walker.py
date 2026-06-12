@@ -94,17 +94,66 @@ def _parse_cached(source: str, path: Optional[str]):
     return tree
 
 
-def _has_decl_enclosing_error(node) -> bool:
+_M2C_ERROR_TOLERATED_MACROS = {"M2C_BITWISE", "M2C_FIELD"}
+
+
+def _iter_error_nodes(node):
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type == "ERROR":
+            yield n
+        for child in n.children:
+            stack.append(child)
+
+
+def _call_expression_name(source_bytes: bytes, node) -> str:
+    callee = node.child_by_field_name("function")
+    if callee is None and node.children:
+        callee = node.children[0]
+    if callee is None:
+        return ""
+    return _node_text(source_bytes, callee).strip()
+
+
+def _error_node_is_within_known_m2c_macro(error_node, source_bytes: bytes) -> bool:
+    parent = error_node.parent
+    while parent is not None:
+        if parent.type == "call_expression":
+            return _call_expression_name(source_bytes, parent) in _M2C_ERROR_TOLERATED_MACROS
+        if parent.type == "function_definition":
+            break
+        parent = parent.parent
+    return False
+
+
+def _declaration_error_is_tolerated(decl_node, source_bytes: bytes) -> bool:
+    errors = list(_iter_error_nodes(decl_node))
+    if not errors:
+        return False
+    return all(
+        _error_node_is_within_known_m2c_macro(error, source_bytes)
+        for error in errors
+    )
+
+
+def _has_decl_enclosing_error(node, source_bytes: bytes) -> bool:
     """Return True if any ``declaration`` node within *node* has
     ``has_error=True`` (meaning the declarator is syntactically broken).
 
     Body-level standalone ERROR nodes that don't wrap a declaration fragment
-    (e.g. a bare macro invocation that tree-sitter can't parse) are tolerated.
+    (e.g. a bare macro invocation that tree-sitter can't parse) are tolerated,
+    as are known m2c helper macro arguments that tree-sitter-c parses as
+    declaration-local ERROR nodes without corrupting the actual declarator.
     """
     stack = [node]
     while stack:
         n = stack.pop()
-        if n.type == "declaration" and n.has_error:
+        if (
+            n.type == "declaration"
+            and n.has_error
+            and not _declaration_error_is_tolerated(n, source_bytes)
+        ):
             return True
         for child in n.children:
             stack.append(child)
@@ -352,7 +401,7 @@ def walk_function(
         return []
 
     # Macro-tolerance check: only fail on decl-enclosing ERROR nodes.
-    if _has_decl_enclosing_error(body):
+    if _has_decl_enclosing_error(body, source_bytes):
         line, _ = _byte_offset_to_line_col(source_bytes, body.start_byte)
         raise AstWalkError(
             f"function body for {fn_name!r} contains decl-enclosing ERROR nodes",

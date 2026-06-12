@@ -6383,8 +6383,8 @@ _BOOTSTRAP_TARGET_BL_RE = re.compile(r"\bbl\s+([A-Za-z_]\w*)")
 _BOOTSTRAP_TARGET_B_RE = re.compile(r"\bb\s+([A-Za-z_]\w*)")
 _BOOTSTRAP_INLINE_RE = re.compile(r"^(?:static\s+)?inline\b")
 _BOOTSTRAP_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
-_BOOTSTRAP_QUOTED_INCLUDE_RE = re.compile(
-    r"^[ \t]*#[ \t]*include[ \t]+\"([^\"]+)\"",
+_BOOTSTRAP_INCLUDE_RE = re.compile(
+    r"^[ \t]*#[ \t]*include[ \t]+(?:\"([^\"]+)\"|<([^>]+)>)",
     re.MULTILINE,
 )
 _BOOTSTRAP_CALL_KEYWORDS = {
@@ -6441,7 +6441,7 @@ def _read_bootstrap_target_asm(fn_dir: Path, melee_root: Path) -> str:
         return ""
 
 
-def _bootstrap_resolve_quoted_include(
+def _bootstrap_resolve_include(
     include: str,
     *,
     including_path: Path,
@@ -6450,6 +6450,7 @@ def _bootstrap_resolve_quoted_include(
     candidates = [
         including_path.parent / include,
         melee_root / "src" / "melee" / include,
+        melee_root / "src" / "sysdolphin" / include,
         melee_root / "src" / include,
         melee_root / "include" / include,
         melee_root / include,
@@ -6466,16 +6467,19 @@ def _bootstrap_dependency_context(
     source_path: Path,
     melee_root: Path,
 ) -> str:
-    """Return quoted include text that injected bootstrap callees may need."""
+    """Return local include text that injected bootstrap callees may need."""
     seen: set[Path] = set()
     parts: list[str] = []
 
     def visit(text: str, including_path: Path, depth: int) -> None:
         if depth >= 3:
             return
-        for match in _BOOTSTRAP_QUOTED_INCLUDE_RE.finditer(text):
-            resolved = _bootstrap_resolve_quoted_include(
-                match.group(1),
+        for match in _BOOTSTRAP_INCLUDE_RE.finditer(text):
+            include = match.group(1) or match.group(2)
+            if not include:
+                continue
+            resolved = _bootstrap_resolve_include(
+                include,
                 including_path=including_path,
                 melee_root=melee_root,
             )
@@ -6654,14 +6658,27 @@ def _bootstrap_target_calls(target_asm_text: str) -> set[str]:
 
 
 def _bootstrap_inline_definition(function_text: str) -> str:
-    leading_len = len(function_text) - len(function_text.lstrip())
-    leading = function_text[:leading_len]
-    body = function_text[leading_len:]
+    lines = function_text.splitlines(keepends=True)
+    body_start = 0
+    while body_start < len(lines):
+        stripped = lines[body_start].strip()
+        if not stripped or stripped.startswith("#"):
+            body_start += 1
+            continue
+        break
+    preamble = "".join(lines[:body_start])
+    definition = "".join(lines[body_start:])
+    if not definition:
+        return function_text
+
+    leading_len = len(definition) - len(definition.lstrip())
+    leading = definition[:leading_len]
+    body = definition[leading_len:]
     if _BOOTSTRAP_INLINE_RE.match(body):
         return function_text
     if body.startswith("static "):
-        return leading + "static inline " + body[len("static "):]
-    return leading + "inline " + body
+        return preamble + leading + "static inline " + body[len("static "):]
+    return preamble + leading + "inline " + body
 
 
 def _inject_bootstrap_same_tu_inlined_callees(
@@ -15697,6 +15714,95 @@ def _check_dll_is_pe(label: str, path: Path) -> _DumpSetupCheck:
     return _DumpSetupCheck(label, True, f"{path} ({size} bytes, MZ)")
 
 
+def _format_smoke_process_output(result: Any) -> str:
+    output = "\n".join(
+        part.strip()
+        for part in (getattr(result, "stdout", ""), getattr(result, "stderr", ""))
+        if part and part.strip()
+    )
+    if not output:
+        return ""
+    lines = output.splitlines()
+    tail = "\n".join(lines[-8:])
+    return f"; output:\n{tail}"
+
+
+def _smoke_mwcc_debug_compiler(
+    wibo: Path,
+    compiler_dir: Path,
+    *,
+    timeout: float = 30.0,
+) -> _DumpSetupCheck:
+    debug_compiler = compiler_dir / "mwcceppc_debug.exe"
+    if not debug_compiler.exists():
+        return _DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            False,
+            f"missing patched compiler: {debug_compiler}",
+        )
+    with tempfile.TemporaryDirectory(prefix="mwcc-debug-smoke-") as tmp:
+        tmpdir = Path(tmp)
+        source = tmpdir / "smoke_test.c"
+        obj = tmpdir / "smoke_test.o"
+        pcdump = tmpdir / "pcdump.txt"
+        source.write_text("int smoke_test(int x) { return x + 1; }\n")
+        env = os.environ.copy()
+        env["MWCC_DEBUG_PCDUMP_PATH"] = str(pcdump)
+        cmd = [
+            str(wibo),
+            str(debug_compiler),
+            "-c",
+            "-O4,p",
+            "-proc",
+            "gekko",
+            "-enum",
+            "int",
+            "-fp",
+            "hardware",
+            "-o",
+            str(obj),
+            str(source),
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=tmpdir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return _DumpSetupCheck(
+                "mwcc_debug pcdump smoke",
+                False,
+                f"timed out after {timeout:g}s running patched compiler",
+            )
+        if result.returncode != 0:
+            return _DumpSetupCheck(
+                "mwcc_debug pcdump smoke",
+                False,
+                f"patched compiler exited {result.returncode}"
+                f"{_format_smoke_process_output(result)}",
+            )
+        try:
+            size = pcdump.stat().st_size
+        except OSError:
+            size = 0
+        if size <= 0:
+            return _DumpSetupCheck(
+                "mwcc_debug pcdump smoke",
+                False,
+                f"pcdump.txt missing or empty at {pcdump}"
+                f"{_format_smoke_process_output(result)}",
+            )
+        return _DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            True,
+            f"pcdump smoke produced {size} bytes",
+        )
+
+
 def _path_newer_than(left: Path, right: Path) -> bool:
     return left.stat().st_mtime_ns > right.stat().st_mtime_ns
 
@@ -15883,6 +15989,11 @@ def setup_local(
         raise typer.Exit(6)
     print(f"[ok] compiler patched: {debug_compiler}")
     print(f"[ok] DLL deployed:     {compiler_dir / 'MWDBG326.dll'}")
+    smoke = _smoke_mwcc_debug_compiler(wibo, compiler_dir)
+    if not smoke.ok:
+        typer.echo(f"pcdump smoke failed: {smoke.detail}", err=True)
+        raise typer.Exit(7)
+    print(f"[ok] pcdump smoke:    {smoke.detail}")
     print()
     print("Setup complete. Try:")
     print("  melee-agent debug dump local src/melee/mn/mnvibration.c")
@@ -20931,8 +21042,10 @@ def _select_order_safe_label(value: str) -> str:
 def inspect_tiebreak(
     function: Annotated[str, typer.Option("--function", "-f")],
     pcdump: Annotated[Optional[Path], typer.Option("--pcdump")] = None,
+    register_class: Annotated[str, typer.Option(
+        "--class", help="Register class to analyze: auto, gpr/r/0, or fpr/f/1.")] = "auto",
     ig_targets: Annotated[str, typer.Option(
-        "--ig", help="COLORGRAPH ig_idx values to report, e.g. 88,90.")] = "",
+        "--ig", help="COLORGRAPH ig_idx values to report, e.g. 88,f48,1:48.")] = "",
     what_if: Annotated[str, typer.Option(
         "--what-if", help="Perturbation: 'add-interferer T:N', 'remove-edge "
         "A:B', 'move T:before:M', or 'move T:after:M' (before/after differ by "
@@ -20949,9 +21062,21 @@ def inspect_tiebreak(
     from ...mwcc_debug import tiebreak as tb
 
     pcdump_path = _resolve_pcdump_path(pcdump, function, DEFAULT_MELEE_ROOT)
-    ig = tb.load_gpr_ig(pcdump_path.read_text(), function)
+    try:
+        class_id = _resolve_tiebreak_class(tb, register_class, ig_targets, what_if)
+    except ValueError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2)
+
+    ig = tb.load_ig(
+        pcdump_path.read_text(),
+        function,
+        class_id=class_id,
+        fallback_first=register_class.strip().lower() == "auto" and class_id == 0,
+    )
     if ig is None:
-        typer.secho(f"{function}: no GPR COLORGRAPH section in pcdump",
+        label = _tiebreak_class_label(tb, class_id)
+        typer.secho(f"{function}: no {label} COLORGRAPH section in pcdump",
                     fg="red", err=True)
         raise typer.Exit(2)
     g1 = tb.validate_g1(ig, function)
@@ -20959,7 +21084,9 @@ def inspect_tiebreak(
 
     if json_out:
         import json as _json
-        out = {"function": function, "g1_rate": g1.rate, "g1_total": g1.total,
+        out = {"function": function, "class_id": ig.class_id,
+               "register_class": _tiebreak_class_label(tb, ig.class_id),
+               "g1_rate": g1.rate, "g1_total": g1.total,
                "truncated_nodes": trunc, "mismatches": g1.mismatches}
         if not validate_only and what_if:
             wf = _parse_and_run_tiebreak_whatif(tb, ig, what_if)
@@ -20967,23 +21094,32 @@ def inspect_tiebreak(
         print(_json.dumps(out, indent=2))
         return
 
-    typer.echo(f"tiebreak {function}: G1 {g1.correct}/{g1.total} "
+    prefix = tb.register_prefix(ig.class_id)
+    typer.echo(f"tiebreak {function}: class {ig.class_id} ({prefix}) "
+               f"G1 {g1.correct}/{g1.total} "
                f"({g1.rate*100:.1f}%), {trunc} truncated node(s)")
     if validate_only:
         for ig_i, pred, obs in g1.mismatches[:20]:
-            typer.echo(f"  mismatch ig{ig_i}: pred r{pred} obs r{obs}")
+            typer.echo(
+                f"  mismatch ig{ig_i}: pred {_format_tiebreak_reg(tb, ig, pred)} "
+                f"obs {_format_tiebreak_reg(tb, ig, obs)}"
+            )
         raise typer.Exit(0 if g1.rate == 1.0 else 3)
 
     # report requested nodes' baseline prediction vs observed
     base = tb.predict_assignments(ig)
     for tok in (t.strip() for t in ig_targets.split(",") if t.strip()):
-        n = int(tok.lstrip("rR"))
+        n = _parse_tiebreak_token_for_ig(tb, ig, tok)
+        if n is None:
+            typer.secho(f"could not parse --ig token {tok!r}", fg="red", err=True)
+            raise typer.Exit(2)
         node = ig.nodes.get(n)
         if node is None:
             typer.echo(f"  ig{n}: not in graph")
             continue
-        typer.echo(f"  ig{n}: observed r{node.observed_reg} predicted "
-                   f"r{base.get(n)} degree={node.array_size}"
+        typer.echo(f"  ig{n}: observed {_format_tiebreak_reg(tb, ig, node.observed_reg)} "
+                   f"predicted {_format_tiebreak_reg(tb, ig, base.get(n))} "
+                   f"degree={node.array_size}"
                    f"{' [TRUNCATED]' if node.incomplete else ''}")
 
     if what_if:
@@ -20998,8 +21134,85 @@ def inspect_tiebreak(
             raise typer.Exit(2)
         verb = "FLIPS" if wf.flips else "no change"
         typer.echo(f"  what-if [{wf.description}] on ig{wf.target_ig}: "
-                   f"predicted r{wf.predicted_reg} -> r{wf.perturbed_reg} ({verb})")
+                   f"predicted {_format_tiebreak_reg(tb, ig, wf.predicted_reg)} "
+                   f"-> {_format_tiebreak_reg(tb, ig, wf.perturbed_reg)} ({verb})")
         raise typer.Exit(0)
+
+
+_TIEBREAK_TOKEN_PATTERN = r"(?:[01]:)?[rRfF]?\d+"
+_TIEBREAK_TOKEN_RE = re.compile(rf"^({_TIEBREAK_TOKEN_PATTERN})$")
+_TIEBREAK_PAIR_RE = re.compile(
+    rf"^({_TIEBREAK_TOKEN_PATTERN}):({_TIEBREAK_TOKEN_PATTERN})$"
+)
+_TIEBREAK_MOVE_RE = re.compile(
+    rf"^({_TIEBREAK_TOKEN_PATTERN}):(before|after):({_TIEBREAK_TOKEN_PATTERN})$"
+)
+
+
+def _tiebreak_class_label(tb, class_id: int) -> str:
+    if class_id == 1:
+        return "class-1/FPR"
+    if class_id == 0:
+        return "class-0/GPR"
+    return f"class-{class_id}"
+
+
+def _format_tiebreak_reg(tb, ig, reg: int | None) -> str:
+    if reg is None:
+        return "?"
+    if reg == tb.SPILL:
+        return "spill"
+    return f"{tb.register_prefix(ig.class_id)}{reg}"
+
+
+def _parse_tiebreak_token(tb, token: str, default_class: int) -> tuple[int, int] | None:
+    token = token.strip()
+    if _TIEBREAK_TOKEN_RE.match(token) is None:
+        return None
+    explicit_class: int | None = None
+    if ":" in token:
+        class_part, token = token.split(":", 1)
+        try:
+            explicit_class = tb.parse_register_class(class_part)
+        except ValueError:
+            return None
+    prefix_class: int | None = None
+    if token[:1].lower() in {"r", "f"}:
+        prefix_class = 1 if token[0].lower() == "f" else 0
+        token = token[1:]
+    if explicit_class is not None and prefix_class is not None and explicit_class != prefix_class:
+        return None
+    class_id = explicit_class if explicit_class is not None else (
+        prefix_class if prefix_class is not None else default_class
+    )
+    return class_id, int(token)
+
+
+def _parse_tiebreak_token_for_ig(tb, ig, token: str) -> int | None:
+    parsed = _parse_tiebreak_token(tb, token, ig.class_id)
+    if parsed is None:
+        return None
+    class_id, idx = parsed
+    return idx if class_id == ig.class_id else None
+
+
+def _infer_tiebreak_class(tb, ig_targets: str, what_if: str) -> int:
+    inferred = 0
+    for token in re.findall(_TIEBREAK_TOKEN_PATTERN, ",".join([ig_targets, what_if])):
+        parsed = _parse_tiebreak_token(tb, token, inferred)
+        if parsed is None:
+            continue
+        class_id, _idx = parsed
+        if class_id == 1:
+            inferred = 1
+    return inferred
+
+
+def _resolve_tiebreak_class(tb, register_class: str, ig_targets: str, what_if: str) -> int:
+    value = register_class.strip().lower()
+    if value in {"", "auto"}:
+        return _infer_tiebreak_class(tb, ig_targets, what_if)
+    return tb.parse_register_class(value)
 
 
 def _parse_and_run_tiebreak_whatif(tb, ig, spec_str):
@@ -21011,20 +21224,39 @@ def _parse_and_run_tiebreak_whatif(tb, ig, spec_str):
     arg = parts[1] if len(parts) > 1 else ""
     try:
         if kind == "add-interferer":
-            t, n = (int(x.lstrip("rR")) for x in arg.split(":"))
+            m = _TIEBREAK_PAIR_RE.match(arg)
+            if m is None:
+                return None
+            t = _parse_tiebreak_token_for_ig(tb, ig, m.group(1))
+            n = _parse_tiebreak_token_for_ig(tb, ig, m.group(2))
+            if t is None or n is None:
+                return None
             return tb.what_if(ig, t, add_interferers={n})
         if kind == "remove-edge":
-            a, b = (int(x.lstrip("rR")) for x in arg.split(":"))
+            m = _TIEBREAK_PAIR_RE.match(arg)
+            if m is None:
+                return None
+            a = _parse_tiebreak_token_for_ig(tb, ig, m.group(1))
+            b = _parse_tiebreak_token_for_ig(tb, ig, m.group(2))
+            if a is None or b is None:
+                return None
             return tb.what_if(ig, a, remove_edges={frozenset((a, b))})
         if kind == "move":
             # "move T:before:M" / "move T:after:M". The middle token is
             # semantic — before and after differ by one select slot and can
             # yield different registers; reject anything else loudly.
-            t, where, m = arg.split(":")
+            match = _TIEBREAK_MOVE_RE.match(arg)
+            if match is None:
+                return None
+            t = _parse_tiebreak_token_for_ig(tb, ig, match.group(1))
+            where = match.group(2)
+            m = _parse_tiebreak_token_for_ig(tb, ig, match.group(3))
+            if t is None or m is None:
+                return None
             if where == "before":
-                return tb.what_if(ig, int(t), move_before=int(m))
+                return tb.what_if(ig, t, move_before=m)
             if where == "after":
-                return tb.what_if(ig, int(t), move_after=int(m))
+                return tb.what_if(ig, t, move_after=m)
             return None
     except (ValueError, KeyError):
         return None

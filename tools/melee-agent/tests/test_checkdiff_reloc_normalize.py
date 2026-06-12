@@ -219,6 +219,54 @@ def test_bss_anchor_relocation_only_is_ceiling_not_effective_match(checkdiff):
     ) is False
 
 
+def test_resolve_objdiff_unit_paths_orients_target_and_base(checkdiff, tmp_path):
+    objdiff_data = {
+        "units": [
+            {
+                "name": "main/melee/mn/mndiagram",
+                "target_path": "build/GALE01/obj/melee/mn/mndiagram.o",
+                "base_path": "build/GALE01/src/melee/mn/mndiagram.o",
+            }
+        ]
+    }
+
+    paths = checkdiff.resolve_objdiff_unit_paths(
+        "melee/mn/mndiagram",
+        objdiff_data,
+        repo_root=tmp_path,
+    )
+
+    assert paths == {
+        "expected_path": str(tmp_path / "build/GALE01/obj/melee/mn/mndiagram.o"),
+        "current_path": str(tmp_path / "build/GALE01/src/melee/mn/mndiagram.o"),
+        "unit": "main/melee/mn/mndiagram",
+    }
+
+
+def test_normalized_truth_gate_prevents_signature_banner_on_zero_structural_diff(checkdiff):
+    expected = [
+        "<fn_80000000>:",
+        "+000: 80 7f 00 04 \tlwz     r3,4(r31)",
+        "+004: 48 00 00 01 \tbl      lbl_80001234",
+        '+004: R_PPC_REL24\t"mndiagram.c"',
+    ]
+    current = [
+        "<fn_80000000>:",
+        "+020: 80 9e 00 08 \tlwz     r4,8(r30)",
+        "+024: 48 00 00 02 \tbl      lbl_80005678",
+        '+024: R_PPC_REL24\t"other-file.c"',
+    ]
+
+    classification = checkdiff.classify_asm_diff(expected, current)
+
+    assert classification["primary"] == "normalized-structural-match"
+    assert classification["structural_truth_gate"]["normalized_diff_lines"] == 0
+    assert any(
+        "normalized structural diff is zero" in reason
+        for reason in classification["reasons"]
+    )
+
+
 def test_bss_anchor_diagnostic_survives_mixed_primary_classification(checkdiff):
     expected = [
         "<fn_80181C80>:",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._helpers import *  # noqa: F403
+from ._helpers import _json
 
 def _parse_struct_fields(content: str, struct_name: str) -> list[dict]:
     """Parse struct fields from header content."""
@@ -639,7 +640,7 @@ def _source_statement_at(text: str, idx: int) -> str:
 
 
 def _blank_function_definitions(source_text: str) -> str:
-    from ..mwcc_debug import source_patch
+    from src.mwcc_debug import source_patch
 
     chars = list(source_text)
     for span in source_patch.find_function_definitions(source_text):
@@ -667,7 +668,7 @@ def _top_level_declarations(source_text: str) -> list[str]:
 
 
 def _global_identity_declarations(source_text: str) -> tuple[dict[str, tuple[str, str]], dict[str, tuple[str, str]]]:
-    from ..mwcc_debug import source_patch
+    from src.mwcc_debug import source_patch
 
     globals_by_name: dict[str, tuple[str, str]] = {}
     returns_by_name: dict[str, tuple[str, str]] = {}
@@ -744,7 +745,7 @@ def _initializer_identity_root(
 
 
 def _struct_identity_candidates_from_source(source_text: str, function: str) -> list[StructIdentityCandidate]:
-    from ..mwcc_debug import source_patch
+    from src.mwcc_debug import source_patch
 
     span = source_patch.find_function(source_text, function)
     if span is None:
@@ -909,7 +910,7 @@ def _auto_struct_findings_for_function(
         return [], [(function, "auto-struct unresolved: no source candidates")]
 
     if layout_resolver is None:
-        from ..common import struct_layout
+        from src.common import struct_layout
 
         layout_resolver = struct_layout.resolve_layout
     if layout_cache is None:
@@ -2069,8 +2070,8 @@ def struct_verify_cmd(
         melee-agent struct verify thp/THPDec --struct THPFileInfo --base-map bases.json --tu-src extern/dolphin/src/dolphin/thp/THPDec.c --json
         melee-agent struct verify fn --struct THPFileInfo --base-offset 0x838 --tu-src extern/dolphin/src/dolphin/thp/THPDec.c --json
     """
-    from ..common import struct_layout, struct_verify
-    from ..extractor.report import functions_for_unit
+    from src.common import struct_layout, struct_verify
+    from src.extractor.report import functions_for_unit
 
     repo = get_agent_melee_root()
 

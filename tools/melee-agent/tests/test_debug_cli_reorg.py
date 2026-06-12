@@ -5292,6 +5292,45 @@ def test_permuter_bootstrap_injects_callee_dependencies_missing_from_base() -> N
     )
 
 
+def test_permuter_bootstrap_inline_definition_preserves_preprocessor_preamble() -> None:
+    source = textwrap.dedent(
+        """\
+        #undef __FILE__
+        #define __FILE__ "jobj.h"
+        static void helper(void)
+        {
+        }
+        """
+    )
+
+    result = debug_cli._bootstrap_inline_definition(source)
+
+    assert "inline #undef" not in result
+    assert result.startswith(
+        '#undef __FILE__\n#define __FILE__ "jobj.h"\nstatic inline void helper'
+    )
+
+
+def test_permuter_bootstrap_dependency_context_reads_angle_local_includes(
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "mndiagram3.c"
+    include_path = melee_root / "src" / "sysdolphin" / "baselib" / "jobj.h"
+    src_path.parent.mkdir(parents=True)
+    include_path.parent.mkdir(parents=True)
+    include_path.write_text("#define JOBJ_MTX_INDEP_SRT (1 << 25)\n")
+    source_text = "#include <baselib/jobj.h>\n\nvoid fn(void) {}\n"
+
+    dependency_text = debug_cli._bootstrap_dependency_context(
+        source_text,
+        source_path=src_path,
+        melee_root=melee_root,
+    )
+
+    assert "#define JOBJ_MTX_INDEP_SRT" in dependency_text
+
+
 def test_debug_permute_bootstrap_injects_same_tu_inlined_callee_body(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -8102,6 +8141,15 @@ def test_debug_dump_setup_rebuilds_stale_dll(
     monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
     monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
     monkeypatch.setattr(debug_cli, "_build_local_dll", fake_build)
+    monkeypatch.setattr(
+        debug_cli,
+        "_smoke_mwcc_debug_compiler",
+        lambda *_args, **_kwargs: debug_cli._DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            True,
+            "pcdump smoke produced 1 byte",
+        ),
+    )
     monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["debug", "dump", "setup"])
@@ -8146,6 +8194,15 @@ def test_debug_dump_setup_promotes_import_name_dll_when_build_omits_mwdbg(
 
     monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
     monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_smoke_mwcc_debug_compiler",
+        lambda *_args, **_kwargs: debug_cli._DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            True,
+            "pcdump smoke produced 1 byte",
+        ),
+    )
     monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
 
     result = runner.invoke(app, ["debug", "dump", "setup"])
@@ -8156,6 +8213,75 @@ def test_debug_dump_setup_promotes_import_name_dll_when_build_omits_mwdbg(
     assert str(tools_dir / "MWDBG326.dll") in patch_calls[0]
     out = strip_ansi(result.stdout)
     assert "using alternate DLL output" in out
+
+
+def test_debug_dump_setup_aborts_when_deployed_dll_smoke_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    compiler_dir = tmp_path / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc.exe").write_text("stock compiler")
+    tools_dir = tmp_path / "tools" / "mwcc_debug"
+    tools_dir.mkdir(parents=True)
+    dll = tools_dir / "MWDBG326.dll"
+    dll.write_bytes(b"MZ" + b"\0" * 4096)
+    source = tools_dir / "mwcc_debug.c"
+    source.write_text("// source")
+    for filename in ("build_wibo.sh", "build_macos.sh", "patch_mwcceppc_for_wibo.py"):
+        (tools_dir / filename).write_text("")
+    wibo = tools_dir / "bin" / "wibo"
+    wibo.parent.mkdir(parents=True)
+    wibo.write_text("")
+    wibo.chmod(0o755)
+
+    def fake_run(args: list[str], **_kwargs) -> SimpleNamespace:
+        if "--dll" in args:
+            (compiler_dir / "MWDBG326.dll").write_bytes(dll.read_bytes())
+            (compiler_dir / "mwcceppc_debug.exe").write_text("patched compiler")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        debug_cli,
+        "_smoke_mwcc_debug_compiler",
+        lambda *_args, **_kwargs: debug_cli._DumpSetupCheck(
+            "mwcc_debug pcdump smoke",
+            False,
+            "pcdump.txt missing or empty",
+        ),
+    )
+
+    result = runner.invoke(app, ["debug", "dump", "setup"])
+
+    assert result.exit_code == 7
+    out = strip_ansi(result.stdout + result.stderr)
+    assert "pcdump smoke failed" in out
+    assert "pcdump.txt missing or empty" in out
+
+
+def test_smoke_mwcc_debug_compiler_requires_nonempty_pcdump(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    compiler_dir = tmp_path / "compiler"
+    compiler_dir.mkdir()
+    (compiler_dir / "mwcceppc_debug.exe").write_text("patched compiler")
+    wibo = tmp_path / "wibo"
+    wibo.write_text("")
+    wibo.chmod(0o755)
+
+    def fake_run(_args, **_kwargs) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    check = debug_cli._smoke_mwcc_debug_compiler(wibo, compiler_dir)
+
+    assert check.ok is False
+    assert "missing or empty" in check.detail
 
 
 def test_debug_dump_local_probe_uses_same_tu_build_settings(

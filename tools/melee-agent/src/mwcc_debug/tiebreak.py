@@ -22,13 +22,14 @@ from .colorgraph_parser import (ColorgraphDecision, ColorgraphSection,
                                  FunctionEvents, find_function,
                                  parse_hook_events)
 
-# PowerPC GPR pools. Volatiles tried lowest-first (r0 is the lowest volatile).
-# Callee-saves: reuse an already-dispensed one (ascending) before allocating a
-# fresh one from r31 downward.
-_VOLATILE_LOW_FIRST = [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-_CALLEE_FRESH = [31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20,
-                 19, 18, 17, 16, 15, 14, 13]
-_CALLEE_SET = set(_CALLEE_FRESH)
+# PowerPC register pools. Volatiles are tried lowest-first. Callee-saves are
+# reused when already dispensed before allocating a fresh one from 31 downward.
+_GPR_VOLATILE_LOW_FIRST = [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+_GPR_CALLEE_FRESH = [31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20,
+                     19, 18, 17, 16, 15, 14, 13]
+_FPR_VOLATILE_LOW_FIRST = list(range(14))
+_FPR_CALLEE_FRESH = [31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20,
+                     19, 18, 17, 16, 15, 14]
 SPILL = -1
 
 
@@ -79,14 +80,34 @@ def build_ig(section: ColorgraphSection) -> IG:
               nodes=nodes, decision_igs=decision_igs)
 
 
-def _pick(blocked: set[int], dispensed: set[int]) -> int:
-    for r in _VOLATILE_LOW_FIRST:
+def register_prefix(class_id: int) -> str:
+    return "f" if class_id == 1 else "r"
+
+
+def parse_register_class(value: str | int) -> int:
+    text = str(value).strip().lower()
+    if text in {"0", "gpr", "r"}:
+        return 0
+    if text in {"1", "fpr", "f"}:
+        return 1
+    raise ValueError(f"unknown register class {value!r}")
+
+
+def _register_pools(class_id: int) -> tuple[list[int], list[int], set[int]]:
+    if class_id == 1:
+        return _FPR_VOLATILE_LOW_FIRST, _FPR_CALLEE_FRESH, set(_FPR_CALLEE_FRESH)
+    return _GPR_VOLATILE_LOW_FIRST, _GPR_CALLEE_FRESH, set(_GPR_CALLEE_FRESH)
+
+
+def _pick(class_id: int, blocked: set[int], dispensed: set[int]) -> int:
+    volatile_low_first, callee_fresh, _callee_set = _register_pools(class_id)
+    for r in volatile_low_first:
         if r not in blocked:
             return r
     for r in sorted(dispensed):           # reuse dispensed callee-saves ascending
         if r not in blocked:
             return r
-    for r in _CALLEE_FRESH:               # fresh callee-save, r31 downward
+    for r in callee_fresh:                # fresh callee-save, r31 downward
         if r not in dispensed and r not in blocked:
             return r
     return SPILL
@@ -106,6 +127,7 @@ def predict_assignments(ig: IG, *, order: list[int] | None = None,
     removed = removed_edges or set()
     assigned: dict[int, int] = {}
     dispensed: set[int] = set()
+    _volatile, _fresh, callee_set = _register_pools(ig.class_id)
     for idx in order:
         node = ig.nodes.get(idx)
         if node is None:
@@ -124,9 +146,9 @@ def predict_assignments(ig: IG, *, order: list[int] | None = None,
             if idx in extra and frozenset((idx, n)) not in removed:
                 if n in assigned:
                     blocked.add(assigned[n])
-        pick = _pick(blocked, dispensed)
+        pick = _pick(ig.class_id, blocked, dispensed)
         assigned[idx] = pick
-        if pick in _CALLEE_SET:
+        if pick in callee_set:
             dispensed.add(pick)
     return assigned
 
@@ -168,6 +190,13 @@ def gpr_section(events: FunctionEvents) -> ColorgraphSection | None:
         if s.class_id == 0:
             return s
     return events.colorgraph_sections[0] if events.colorgraph_sections else None
+
+
+def class_section(events: FunctionEvents, class_id: int) -> ColorgraphSection | None:
+    for s in events.colorgraph_sections:
+        if s.class_id == class_id:
+            return s
+    return None
 
 
 # ---- what-if solver ----
@@ -228,6 +257,22 @@ def load_gpr_ig(pcdump_text: str, fn_name: str) -> IG | None:
     if events is None:
         return None
     sec = gpr_section(events)
+    return build_ig(sec) if sec else None
+
+
+def load_ig(
+    pcdump_text: str,
+    fn_name: str,
+    *,
+    class_id: int = 0,
+    fallback_first: bool = False,
+) -> IG | None:
+    events = find_function(parse_hook_events(pcdump_text), fn_name)
+    if events is None:
+        return None
+    sec = class_section(events, class_id)
+    if sec is None and fallback_first and events.colorgraph_sections:
+        sec = events.colorgraph_sections[0]
     return build_ig(sec) if sec else None
 
 
