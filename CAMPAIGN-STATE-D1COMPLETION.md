@@ -315,3 +315,81 @@ Protected sweep after restore-to-committed: 802437E8=100, 80243434=100, InputPro
 
 ### PENDING-REVIEW: none added (no source retained; all 4 builds reverted).
 
+---
+
+## ITERATION 4 (2026-06-11, driver 2) — ITER-3 ERRATA + CORRECTED LAW-1 GATE SWEEP + 80240D94 TOP RUNG (3 spellings refuted)
+
+### ERRATA for ITERATION 3 (critical — read before trusting iter-3's evidence section)
+**The iter-3 "object-level normalized diff" compared the TARGET WITH ITSELF.** `build/GALE01/obj/**`
+is the TARGET object tree (objdiff.json: `target_path=build/GALE01/obj/...`, `base_path=build/GALE01/src/...`).
+The "0 diff over 257 lines" proof was circular. **LAW 1's PROCEDURE is corrected: disassemble
+`build/GALE01/src/melee/mn/<tu>.o` (OURS) vs `build/GALE01/asm/melee/mn/<tu>.s` (target).**
+Consequences, re-verified against the TRUE object:
+- **80241E78 corrected residual: FULLNORM-DIFF = 20, NOT 0.** The r25<->r26 data/row swap (29+8 sites)
+  and FP perm (f26/f27/f28 cycle) are real AS STATED, but there is ALSO a ~20-line structural/scheduling
+  window in the GetDigitCount/float-setup region: ours defers the y_offset fsubs PAST the call (raw load
+  held in callee-save f30, fsubs into volatile f1 after; target: load to volatile f0, fsubs into
+  callee-save f26 BEFORE the call). Iter-3's "no structural residual" claim is RETRACTED; the wall
+  characterization must include this window. Builds 1-4 of iter-3 stand (metered via report.json).
+- **Iter-3 LAW 3 (folded-literal) RETRACTED.** Our object's `@1519` = 0x3F800000 = **1.0f**; the target
+  loads named `mnDiagram_804DBFA0` = **0.4f** at the same site. Build-2's inertness = fuzzy%'s
+  insensitivity to anonymous-pool VALUES (reloc-identity penalty equal either way), NOT constant folding.
+  **The committed source is semantically divergent from retail: `row_offset - 1.0f` (line 2358) and
+  `+ 1.0f` (line 2371) should be `0.4f`.** PENDING-REVIEW: function is fenced this round; the value fix is
+  match%-neutral (proven, iter-3 Build 2) and behavior-correcting — apply in the queued 80241E78 round,
+  and try `extern const f32 mnDiagram_804DBFA0` named reference for the data/symbol reloc lines.
+
+### GATE PARTITION TABLE (corrected procedure; read-only; baseline = 357fa8723 build)
+| Fn | % | instrs tgt/our | FULLNORM | Verdict | Root / swapped pair |
+|----|-----|-----------|----------|---------|---------------------|
+| 8023FC28 | 97.82 | 108/108 | **0** | **ARTIFACT** | whole-web callee-save rotation rooted at the assets-base materialization (TGT `addi r29,r3,&804A0750` vs OUR `addi r31,...`; 48 reg sites) + ours emits `.bss.0` section-anchor reloc vs target NAMED symbol — iter-2 LAW-2 spelling lever may fix the reloc lines (endgame round) |
+| 80240D94 | 97.35 | 351/**353** | **8** | **STRUCTURAL Δ+2** | ROOT B: `(u8) arg2` mask-pair CSE-cached (clrlwi r22 + addi r3,r22 + mr r3,r22) vs target per-site `clrlwi r3,r29,24` x2 at the two GetNameText calls (src 1807/1822); ROOT A: `tbl = &803EE728` init emitted as `addi r0` (hoisted above stwu) + `mr r27,r0` vs target direct `addi r28` post-stmw |
+| 802417D0 | 97.73 | 198/198 | **2** | **STRUCTURAL 1-site** | ours `clrlwi. r0,r0,24` (redundant re-mask as the test) vs target `cmpwi r0,0x0` after the single mask — int-vs-u8 TEST-home retype (LAW-4 family), likely roots the 96-site coloring cascade |
+| OnFrame | 99.72 | 160/160 | **0** | **ARTIFACT** | single-pair r28<->r29: the `lwz rX,0x2c(r30)` user_data ptr loaded mid-function (9 sites) — same class as 80241E78's data/row swap |
+| 802427B4 | 98.84 | 225/225 | **0** | **ARTIFACT** | callee-save rotation: arg homes shift (TGT r26/r27 vs OUR r27/r28) + assets-base TGT r31 vs OUR r25 (86 reg sites) |
+| CursorProc | 98.57 | 221/**222** | **3** | **STRUCTURAL Δ+1** | target `lhzu` (load-half-update) vs ours `addi`+`lhz` 2-instr form, +40 immediate-cascade lines off the updated base — InputProc §4 lhzu family; HERE adopting lhzu SHORTENS ours to the target count (unlike InputProc where it widened Δ) |
+
+### PHASE 2 — 80240D94 build ledger (4 builds: 3 levers + restore; 0 commits; floor 94.32 untouched)
+| Build | Edit | Fuzzy | FULLNORM | Verdict |
+|-------|------|-------|----------|---------|
+| 1 | per-block `u8 name_id = (u8) arg2;` reassignment x2 | 97.32 | 8 | **FOLDED** — copy-prop unified both assignments back into ONE cached mask web (r21); destination kills don't split the RHS VN |
+| 2 | `static inline mnDiagram_SetPopupNameText(text, slot)` with `(u8) slot` INSIDE | 97.350426 (byte-identical to baseline) | 8 | **FOLDED** — inline param copies are fully transparent to VN/copy-prop (refines iter-2's inline-node evidence: init NODES survive expansion, pass-through params do NOT) |
+| 3 | `(u8) (0, arg2)` comma at site 2 | 91.82 | 20 (361 instrs) | **SPLIT THE MASKS but over-perturbed** — two per-site `clrlwi r3` appeared and the cache web died, BUT arg2 re-homed (reads via r0, +8 instrs). Comma = VN-splitter that also breaks operand homing; wrong tool |
+| 4 | restore committed source | 97.350426 | 8 | sweep green: all 13 protected/tracked fns at baseline |
+
+### MECHANISM BANK (80240D94 ROOT B — precise wall statement)
+Target's two masks ⟹ the two AND(arg2,0xFF) nodes carried DIFFERENT value numbers in the original IR.
+In-TU existence proof that same-path per-site masks DO occur: committed 8024227C emits `clrlwi r3,r16,24`
+TWICE 4 instrs apart (SumNameFalls inline; r16 = IRO-PROMOTED loop-carried counter — region-renamed
+per the InputProc band model). A plain never-killed s32 param = ONE VN ⟹ IRO CSE caches across the 3
+intervening calls (callee-save + 2 transfer instrs) — costlier in instructions yet chosen; CSE here is
+not cost-modeled. Splitter requirements (discovered empirically): change the AND's VN withOUT changing
+arg2's home class. Refuted: local-reassign + inline-param (fail VN-split), comma (splits but re-homes),
+`& 0xFF` (same VN), `(u8)(s32)` (identity-folds), self-assign (DCE'd), memory round-trip (adds loads).
+**Lever not found despite 3 built spellings + 4 analysis-refuted shapes.** Function stays in the pool.
+ITERATION-5 HYPOTHESIS (new evidence): the fn carries PAD_STACK(24) — per doctrine, missing
+locals/inline structure. The m2c `{ f32 y; f32 z; }` scoped pos-blocks repeat 6x and suggest per-block
+helper locals in the original; missing per-block homes would change BOTH the VN landscape (ROOT B) and
+the frame/decl picture (ROOT A + the r21..r24 home rotation). A PAD_STACK-elimination reconstruction
+(find the real 24B of locals / the block helper) is the recommended dedicated round for this fn.
+ROOT A note: sibling PopupAnimProc uses the IDENTICAL `tbl` decl-init spelling and emits the
+direct-home `addi r28` ⟹ ROOT A is spelling-independent (scheduler/pressure-conditioned); expect it to
+re-roll if ROOT B / the frame lands. No direct lever identified.
+
+### ITERATION-5 RECOMMENDATION
+1. **802417D0 retype (cheapest, 1 site):** route the tested value through an int home so the test emits
+   `cmpwi` instead of the redundant `clrlwi.` re-mask (LAW-4 recipe; find the `if ((u8) ...)`-shaped test
+   at the lhz 0x3c site). ≤2 builds; may re-roll the 96-site cascade.
+2. **CursorProc lhzu (small, recipe exists):** pointer-walk spelling to fuse addi+lhz → lhzu
+   (InputProc §4 documented the fusion fires with the right base-reg life; here it CLOSES Δ).
+3. **80240D94:** dedicated PAD_STACK-reconstruction round (NOT single-lever; see mechanism bank).
+4. ARTIFACT bucket {8023FC28, OnFrame, 802427B4} → register-endgame/permuter rotation; EXCEPT first try
+   the iter-2 LAW-2 named-reloc spelling on 8023FC28 (that part is a source lever, not coloring).
+5. The queued 80241E78 round must include the ERRATA items: 0.4f value fix + named-float-extern attempt
+   + the fsubs-across-call window (now known structural — try computing y_offset into its consumer's
+   shape, e.g. statement order around the mn_GetDigitCount call, BEFORE any register-endgame).
+
+### PENDING-REVIEW (iter-4)
+- **Committed 80241E78 semantic divergence (1.0f vs retail 0.4f)** at src lines 2358/2371 — fenced this
+  round; fix is match%-neutral + behavior-correcting; apply in its queued round (see ERRATA).
+
