@@ -156,6 +156,69 @@ void f(float delta)
     assert any(r.kind == "manual-abs-sign-flip" for r in report.risks)
 
 
+def test_candidate_audit_rejects_local_use_before_assignment() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef struct HSD_JObj HSD_JObj;
+void f(void)
+{
+    HSD_JObj* jobj;
+    HSD_JObjAddAnimAll(jobj, NULL, NULL, NULL);
+    jobj = HSD_JObjLoadJoint(desc);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.semantic_risk_bucket == "semantic-risk-high"
+    assert report.should_reject is True
+    assert any(
+        r.kind == "use-before-def" and r.name == "jobj"
+        for r in report.risks
+    )
+
+
+def test_candidate_audit_allows_local_after_assignment_or_initializer() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int loaded = make_value();
+    int tmp;
+    tmp = loaded + 1;
+    use(tmp);
+}
+"""
+    )
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(r.kind == "use-before-def" for r in report.risks)
+
+
+def test_candidate_audit_does_not_reject_base_existing_use_before_def() -> None:
+    base = """
+void f(void)
+{
+    int tmp;
+    use(tmp);
+}
+"""
+    candidate = """
+void f(void)
+{
+    int tmp;
+    use(tmp);
+}
+"""
+
+    report = candidate_audit.audit_candidate_source(candidate, base_text=base)
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(r.kind == "use-before-def" for r in report.risks)
+
+
 def test_candidate_audit_buckets_plausible_c_shape() -> None:
     report = candidate_audit.audit_candidate_source(
         "void f(int x)\n{\n    int tmp = x + 1;\n    use(tmp);\n}\n"
