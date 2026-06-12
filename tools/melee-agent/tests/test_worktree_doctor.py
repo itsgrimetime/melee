@@ -69,7 +69,7 @@ def test_missing_report_json_is_a_failure(tmp_path: Path) -> None:
     assert "ninja build/GALE01/report.json" in missing_report[0].fix
 
 
-def test_fix_mode_reinstalls_stale_melee_agent_entrypoint(monkeypatch, tmp_path: Path) -> None:
+def test_fix_mode_does_not_reinstall_stale_melee_agent_entrypoint(monkeypatch, tmp_path: Path) -> None:
     doctor_mod = load_worktree_doctor()
     fake_agent = tmp_path / "melee-agent"
     fake_agent.write_text("#!/usr/bin/env python\n")
@@ -106,8 +106,43 @@ def test_fix_mode_reinstalls_stale_melee_agent_entrypoint(monkeypatch, tmp_path:
     doctor = doctor_mod.Doctor(fix=True)
     doctor.check_cli_tools()
 
-    assert [sys.executable, "-m", "pip", "install", "-e", "tools/melee-agent"] in calls
-    assert any(result.level == "ok" and "reinstalled melee-agent" in result.message for result in doctor.results)
+    assert [sys.executable, "-m", "pip", "install", "-e", "tools/melee-agent"] not in calls
+    assert any(
+        result.level == "warn" and "stale melee-agent entrypoint" in result.message
+        for result in doctor.results
+    )
+
+
+def test_collect_melee_agent_distribution_warnings_flags_duplicate_cli_providers(tmp_path: Path) -> None:
+    doctor_mod = load_worktree_doctor()
+
+    class FakeEntryPoint:
+        group = "console_scripts"
+        name = "melee-agent"
+        value = "src.cli:app"
+
+    class FakeDist:
+        def __init__(self, name: str, version: str, location: Path, entry_points=()) -> None:
+            self.metadata = {"Name": name}
+            self.version = version
+            self.entry_points = entry_points
+            self._location = location
+
+        def locate_file(self, path: str) -> Path:
+            return self._location / path
+
+    results = doctor_mod.collect_melee_agent_distribution_warnings(
+        [
+            FakeDist("melee-decomp-agent", "0.1.0", tmp_path / "old", [FakeEntryPoint()]),
+            FakeDist("melee-agent", "0.1.0", tmp_path / "current", [FakeEntryPoint()]),
+        ]
+    )
+
+    assert results
+    assert results[0].level == "warn"
+    assert "multiple installed melee-agent distributions" in results[0].message
+    assert "melee-decomp-agent 0.1.0" in results[0].message
+    assert "melee-agent 0.1.0" in results[0].message
 
 
 def test_resolve_melee_agent_module_path_uses_launcher_probe(monkeypatch, tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import metadata
 import os
 import platform
 import shlex
@@ -403,6 +404,73 @@ def reinstall_repo_melee_agent(root: Path) -> subprocess.CompletedProcess[str]:
     return run_cmd([sys.executable, "-m", "pip", "install", "-e", "tools/melee-agent"], timeout=120)
 
 
+_GLOBAL_MELEE_AGENT_INSTALL_FIX = (
+    "refresh the global editable install from the authoritative shared checkout "
+    "(the master/shared checkout, not a matcher worktree): "
+    "python -m pip install -e /path/to/melee/tools/melee-agent; "
+    "do not run pip install -e from matcher worktrees"
+)
+
+
+def _dist_name(dist) -> str:
+    try:
+        return str(dist.metadata.get("Name") or "").strip()
+    except Exception:
+        return ""
+
+
+def _dist_location(dist) -> str:
+    try:
+        return str(dist.locate_file(""))
+    except Exception:
+        return "<unknown-location>"
+
+
+def _dist_exposes_melee_agent(dist) -> bool:
+    for entry_point in getattr(dist, "entry_points", ()) or ():
+        if (
+            getattr(entry_point, "group", None) == "console_scripts"
+            and getattr(entry_point, "name", None) == "melee-agent"
+        ):
+            return True
+    return False
+
+
+def collect_melee_agent_distribution_warnings(distributions=None) -> list:
+    from .doctor import CheckResult
+
+    providers = []
+    for dist in distributions if distributions is not None else metadata.distributions():
+        name = _dist_name(dist)
+        if not name:
+            continue
+        normalized = name.replace("_", "-").lower()
+        if normalized in {"melee-agent", "melee-decomp-agent"} or _dist_exposes_melee_agent(dist):
+            providers.append(dist)
+
+    unique: dict[tuple[str, str], object] = {}
+    for dist in providers:
+        name = _dist_name(dist)
+        version = str(getattr(dist, "version", "") or "<unknown-version>")
+        unique[(name.lower(), version, _dist_location(dist))] = dist
+    providers = sorted(unique.values(), key=lambda dist: (_dist_name(dist).lower(), _dist_location(dist)))
+
+    if len(providers) <= 1:
+        return []
+
+    details = "; ".join(
+        f"{_dist_name(dist)} {getattr(dist, 'version', '<unknown-version>')} at {_dist_location(dist)}"
+        for dist in providers
+    )
+    return [
+        CheckResult(
+            "warn",
+            f"multiple installed melee-agent distributions can affect the global CLI: {details}",
+            _GLOBAL_MELEE_AGENT_INSTALL_FIX,
+        )
+    ]
+
+
 def collect_melee_agent_entrypoint_warnings(
     root: Path,
     executable: Path,
@@ -417,7 +485,7 @@ def collect_melee_agent_entrypoint_warnings(
             CheckResult(
                 "warn",
                 f"could not determine src.cli import path for {executable}",
-                "install worktree-resolving launcher with: cd tools/melee-agent && python -m pip install -e .",
+                _GLOBAL_MELEE_AGENT_INSTALL_FIX,
             )
         ]
     if actual == expected:
@@ -426,7 +494,7 @@ def collect_melee_agent_entrypoint_warnings(
                 CheckResult(
                     "warn",
                     "melee-agent imports repo-local src.cli but does not use the worktree-resolving launcher",
-                    "install worktree-resolving launcher with: cd tools/melee-agent && python -m pip install -e .",
+                    _GLOBAL_MELEE_AGENT_INSTALL_FIX,
                 )
             ]
         return [CheckResult("ok", f"melee-agent imports repo-local src.cli: {actual}")]
@@ -436,7 +504,7 @@ def collect_melee_agent_entrypoint_warnings(
         CheckResult(
             "warn",
             f"melee-agent imports src.cli from {actual}, expected {expected}",
-            "install worktree-resolving launcher with: cd tools/melee-agent && python -m pip install -e .",
+            _GLOBAL_MELEE_AGENT_INSTALL_FIX,
         )
     ]
 
