@@ -986,3 +986,24 @@ Branch `claude/mndiagram-802427B4-investigation` (HEAD was `b8eced96f`, the orde
 
 ### CROSS-REF
 mndiagram2 jobs (UpdateHeader, Create) triaged in the same round — see **CAMPAIGN-STATE-D2COMPLETION.md → PERMUTER TRIAGE 3**. Rotation ranking is recorded there (single canonical copy).
+
+---
+
+## PERMUTER ROUND (wave 2) — fleet rotation re-submit (2026-06-12, fleet-rotation agent wave 2)
+
+Mechanical bootstrap + submit only (NO matching, NO triage). Branch `claude/mndiagram-802427B4-investigation`, HEAD `402ccf98c` (triage-3 wins committed: 8024227C=96.03, UpdateHeader=95.46, Create=98.54; tree clean). Allocation = orchestrator-decided per the triage-3 rotation ranking (D2COMPLETION → PERMUTER TRIAGE 3 → ROTATION RANKING) crossed with the order-class census. 3 builds used (the three #558 base-verifies; budget held). Re-bootstrap if any source commit lands on these fns (stale-base doctrine #558).
+
+### NEW JOBS (this round's two coder3-bound + the cross-host AggRank — full table in D2COMPLETION wave-2 section)
+| Function | base % | Host | Job ID | Base score (#558) | Residual the job hunts |
+|----------|--------|------|--------|-------------------|------------------------|
+| **mnDiagram2_GetRankedName** | 97.87 | coder3 (shared) | `mnDiagram2_GetRankedName-coder3-20260612-044336` | **470** (local `permuter.py --seed 0`; remote recomputed 470) | the +1 `subf.`+`mr` j-guard on the indexed-struct-pointer-materialization path (D2COMPLETION:1285) — SAME class 8024227C's u64 win cracked this wave |
+| **mnDiagram_8024227C** (re-bootstrap @ 96.03) | 96.03 | coder3 (shared) | `mnDiagram_8024227C-coder3-20260612-044424` | **1345** (local; = the triage-3 best, because base.c now reflects the committed `var_r0_2`→u64 source — re-bootstrap correctly captured 96.03) | the +284/+288 GetNameTotalKOs-preheader scheduling transposition + the r3/r6 value-home-vs-arg COALESCE order; residual reclassified `stack-layout` (PAD_STACK 24) post-u64 |
+
+AggRank (the ranking's #1, coder1-dedicated, base 775) is documented in the D2COMPLETION wave-2 section (it lives in mndiagram2.c with GetRankedName). All three verified ALIVE via `remote tail`/`remote ps` (each already beat its base within 1 min: AggRank 600<775, GetRankedName 435<470, 8024227C 1330<1345 — weights exploring productively).
+
+### #424 / #575 BOOTSTRAP NOTES
+- **8024227C (#424 critical):** bootstrap re-injected all **7** same-TU inline twins as BODIES (`SumNameFalls, GetVisibleNameCursorFrom, CountUnlockedFightersInline, SumFighterFalls, GetVisibleFighterCursorFrom, GetNameTotalKOs, SumFighterKOsClamped`) — `randomize_funcs` = self + all 7. Base 1345 (low-thousands, NOT 10k+) = injection #424-safe. Bootstrap also auto-applied the **#575 NULL hand-fix** (`#pragma _permuter define NULL 0`); base.c compiled iter 1, 0 errors. Existing per-fn settings.toml was correctly KEPT (already the proven reorder-heavy template + `perm_temp_for_expr=25` coalesce bump). 
+- **GetRankedName (#424 N/A):** `injected_inline_callees: []` — its callees (`GetNameCount/mnDiagram_GetNameByIndex/mnDiagram2_GetStatValue`) are `bl`-emitted in retail. Base 470, clean.
+
+### HOST-OCCUPANCY DISCREPANCY (flagged — orchestrator decision needed)
+The brief stated "Both hosts are FREE (all prior jobs stopped at convergence)" — but `remote ps` (live SSH probe) shows **3 pre-existing LIVE descending jobs** the triage-3 round did NOT stop: coder1=`mnDiagram_InputProc_tuned-coder1-20260611-065847` (1.77M iters, the MEMORY "tuned listening post"), coder3=`mnDiagram2_HandleInput-coder3-20260611-125553` + `-175702` (both live; HandleInput is PROTECTED/parked). `remote list` returned EMPTY (filed issue #591 — list reads local metadata JSON, misses these). Per the triage-1/triage-3 precedent (multiple jobs share one host's 16 threads), the new jobs CO-RUN with these — submission did not require stopping them, and stopping the listening-post/PROTECTED jobs is outside the no-triage fence. **coder1 is NOT truly "dedicated" to AggRank until the orchestrator decides whether to stop InputProc_tuned; coder3 now runs 4 jobs (2 HandleInput + GetRankedName + 8024227C).**
