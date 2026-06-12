@@ -10,11 +10,20 @@ spacing translate, AddChild).
 Called by: mnDiagram_80243434 (matched 100), mnDiagram_InputProc (98.67),
 mnDiagram_802427B4 (95.68 — sibling worktree, active driver).
 
-## Status: ITERATION 3 COMPLETE — 96.29 -> 96.34 (commit 80f374d45). Per-loop-locals
-form PARTIALLY landed: B2b joint_data-per-loop BYTE-EQUAL at the row site; sp_jobj
-slots SEPARATED (84/80, placement residual vs 76/68); walk-init order matched.
-THE HOIST IS THE WALL: four spellings refuted this iteration (idx-derivation,
-(0,..) comma-expr, int loop-var types, k=count). Budget 4/4. See ITERATION 3 section.
+## Status: ITERATION 4 COMPLETE — 96.34 -> 96.93 (commit 09384b217). **THE HOIST FELL.**
+Per-loop `sorted = mnDiagram_804A0750.sorted_fighters;` (re-read INSIDE each for body)
+puts the base in the loop's killed set, so `&sorted[argN]` is no longer loop-invariant
+and IRO_FindLoops computes it in-block per iteration (matching retail). Opcode 98.3 ->
+99.4; all four hoist blocks collapse to register-only. Classification flipped
+inline-boundary-toolchain-artifact -> signature-type-mismatch (the artifact flag WAS the
+hoist). Dump-first proved the mechanism (2 retro dumps, see ITERATION 4). Residual now:
+40 register-only + 16 stack-slot (per-loop converted-float slots 76/68 vs 84/80) + col
+jobj-copy +13c + BSS reloc ceiling. Budget 2/2 (Build 1 inert, Build 2 the win).
+
+(Iteration 3: 96.29 -> 96.34, commit 80f374d45. Per-loop-locals form PARTIALLY landed:
+B2b joint_data-per-loop BYTE-EQUAL at the row site; sp_jobj slots SEPARATED (84/80);
+walk-init order matched. Four hoist spellings refuted: idx-derivation, (0,..) comma-expr,
+int loop-var types, k=count — all leave both EADD operands invariant.)
 
 (Iteration 2: 94.98 -> 96.29, commits 78266c20a + 23fd94dec — MECH-A & 0xFF idiom,
 MECH-B1 FaceB per ruling.)
@@ -333,3 +342,94 @@ lines (cascade), 25 reloc-ceiling lines (do not chase).
 - Cascade-watch: blocks 3/4 (zero-coalesce k-init, jobj copy) after any structural land.
 - Tool issue #569 (struct verify ModuleNotFoundError in worktree) — retry after
   resolver fixes if struct questions recur.
+
+---
+
+## ITERATION 4 (2026-06-11, driver 2) — THE HOIST FELL (96.34 -> 96.93)
+
+### STEP 1 — DUMP-FIRST: the trigger property, named (2 retro dumps)
+
+**Dump A — our source, `melee-agent debug retro dump src/melee/mn/mndiagram.c
+-f mnDiagram_80242C0C --phases frontend`** (62 per-phase IRO files). The hoist is
+performed by **`IRO_FindLoops`** (phase 13 before -> 14 after). The trace logs it
+literally:
+```
+Found loop invariant: 101        <- col: EADD(assets, arg2)
+Found loop invariant: 502        <- row: EADD(assets, arg1)
+IRO_FindLoops:Found loop with header 81   (the for(i) loop)
+Killed in loop: 0,4,7-9,11-17,27-28,30-31,33-34
+```
+- **before-findloops node 7** (the if-block, LoopDepth 0 pre-analysis):
+  `99:EINDIRECT assets, 98:EINDIRECT arg2, 101:EADD 100 98` then `104:EASS p,101`
+  = `p = assets + arg2` computed in-block.
+- **after-findloops node 0** (LoopDepth 0 = the for-loop PREHEADER) now holds
+  `101:EADD 100 98` -> `908:EASS @1916,101` — the invariant address is hoisted and
+  materialized into temp **@1916**. **node 7** (now LoopDepth 1, in-loop) reads it:
+  `905:EINDIRECT @1916 -> 104:EASS p,905` (`p = @1916`; = the disasm `addi r19,r30,0`).
+- **The trigger property, precise:** the address is an `EADD` whose BOTH operands
+  (`assets`/`sorted` — a never-reassigned local pointer; `argN` — a never-reassigned
+  parameter) are absent from the for-loop's *killed* (modified) set, so FindLoops flags
+  it loop-invariant and lifts it to the preheader. Copy-prop (phase 6, BEFORE FindLoops)
+  has already folded `idx=argN` into the address use, which is exactly why the 4 prior
+  spellings (idx-derivation, comma, int-types, k=count) all failed: every one leaves both
+  operands invariant. The trigger is NOT operand identity — it is **operand invariance**
+  (membership in the killed set).
+
+**Dump B — the matched sibling `mnDiagram_802427B4` (98.84%), same frontend dump.**
+Its find-walk is the inlined helper `mnDiagram_GetVisibleNameFrom(sorted, argN, i)`.
+**Its FindLoops finds ZERO `Found loop invariant` entries** — the inlined helper's
+pointer became a compiler-temp **induction variable** (`@1732/@1733/@1744/@1745`) that
+FindLoops strength-reduces (IV base set up in-block), NOT a hoistable invariant.
+after-findloops node 0 has the `sorted=` init but NO `sorted+idx` address. ⟹ the
+inline boundary converts the named-local invariant into an IV; that is WHY the helper
+form does not hoist. (We may NOT rebuild the fighter helper — per campaign DO-NOT.)
+
+### STEP 2 — THE PROPERTY'S CONTROL (build ledger, 2/2)
+
+| Build | Edit | Fuzzy | Opcode | Hoist? | Verdict |
+|-------|------|-------|--------|--------|---------|
+| baseline | — | 96.34 | 98.3 | YES | — |
+| 1 | function-top `u8* sorted = …804A0750.sorted_fighters;` + `p=sorted+idx` both loops | 96.34 | 98.3 | **YES (unchanged)** | **REFUTED — the queued in-block `u8* sorted` candidate. `sorted` is invariant exactly like `assets`; `idx->argN` still folds; FindLoops hoists `EADD(sorted,argN)` identically. Closes that candidate.** |
+| **2** | move `sorted = …804A0750.sorted_fighters;` INSIDE each for body (re-read per iteration) | **96.93** | **99.4** | **NO** | **COMMITTED 09384b217.** Re-reading the base each for-iteration puts `sorted` in the for-loop killed set ⟹ `sorted+argN` no longer invariant ⟹ FindLoops computes it in-block per iteration (matches retail `add r19,r31,r24`). All 4 hoist blocks -> register-only. Δ flipped ours+1 -> ours-1; classification inline-boundary-artifact -> signature-type-mismatch. |
+
+Protected verified after commit: 802437E8=100 (match=true), 80243434=100 (match=true),
+InputProc=98.67, mnDiagram2_HandleInput=97.46. Pre-commit match-regressions gate passed.
+No TU regressions (80242B38=100, 802427B4=98.84, CursorProc=98.57 unchanged).
+
+### THE LICM-DEFEAT LAW (NEW, reusable)
+To stop IRO_FindLoops from hoisting a loop-invariant address `base + index` out of an
+OUTER loop when retail computes it in-block: **re-read the base into its local INSIDE the
+loop body** (`base = GLOBAL.field;` as the first statement of the loop), placing the base
+in the loop's killed set. The address then depends on a loop-modified value and is left
+in-block (per-iteration recompute), semantically identical when the global is stable
+mid-loop. This is the address-computation analogue of the per-loop-locals precedent (B2b)
+— and the within-soup substitute for the inline-boundary IV conversion that the matched
+sibling 802427B4 gets for free from its inlined helper. SCOPE: the comma-expr law defeats
+LICM on DATA READS, not address computations; this killed-set law is the address-side tool.
+
+### STEP 3 — RESIDUAL MAP for ITERATION 5 (post-09384b217, opcode 99.4, 23 hunks)
+The hoist + its 4 blocks are GONE. Remaining (all the queued iter-5 items):
+1. **Stack-slot arrangement (16 stack-slot lines):** target's converted-float scratch
+   slots are PER-LOOP (col `r1,76`, row `r1,68`); ours single-ish (col `r1,84`, row
+   `r1,80`); frame ours -168 vs target -160 (NB: Build 2 also shrank our frame by 8 —
+   `stwu r1,-160` now on BOTH sides at +00c? verify: target -168 / ours -160 — re-check).
+   This is the slot-arrangement search (explicitly the NEXT iteration's job; sibling
+   80243434 ships `u8 stack_obj[8]` precedent).
+2. **Col jobj-copy (+13c):** target `addi r26,r21,0` (copy LoadJoint result jobj into a
+   second reg) before the cmplwi; ours goes straight to the compare. Row has no copy on
+   either side. Allocator region-split copy; intermediate-copy lever candidate if it
+   survives slot work.
+3. **40 register-only paired lines:** the whole-function GPR-rename cascade (re-rolled,
+   correctly metered now). Same family as 80243434's pop-order cascade.
+4. **81 reloc-paired:** mostly the BSS section-anchor ceiling (mnDiagram_804A0750 vs
+   .bss.0) — DO NOT chase.
+PAD_STACK(32) still present — replace as part of the slot-arrangement work (natural
+address-taken objects reaching the per-loop 76/68 slots).
+
+### DUMP NOTES (tooling)
+- `debug retro dump --phases frontend` ran clean (RC=0, 62 phase files + iro-summary +
+  iro-trace), ~6 min each on macOS retrowin32+gdb. iro-trace.txt `Found loop invariant: N`
+  + per-loop `Killed in loop:` sets are the authoritative LICM diagnostic. Output landed
+  under build/mwcc_retro/... (the `-O` path became a directory of phase files).
+- `melee-agent scratch list` showed no scratch for this fn; iterated on source+checkdiff
+  directly (faster). `struct verify` not retried (no struct question arose).
