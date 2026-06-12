@@ -4089,3 +4089,20 @@ No drift found. Any drift surfaced during execution is fixed in T19 Step 3.
 - **Lock contract applies only to the live tasks** (T10 generator, T17 sweep, T18 pilots, optional T15 primary derivation). Everything else is mwcc-free.
 - **Honesty over green.** A calibration miss (T11), a fixture that cannot be frozen from real artifacts (T10), an FPR `hard_stop` (T17), or a pilot diverging from §6 (T18) are VALID outcomes to report — record them (MODEL GAP framing, never "MWCC quirk") rather than forcing a pass.
 
+
+---
+
+## Reviewer guidance appended during execution (binding for later tasks)
+
+**From the T2 review (commit 63bb9dad5, adjudicated deviations):** under the surrogate, a precolored
+neighbor only matters when its pinned register sits at the contention boundary the node would
+otherwise pick (lowest free legal physical); an edge add/remove perturbation is INERT unless the
+toggled edge changes whether the node's preferred register is blocked.
+
+- **T10 (fixtures) and T11 (calibration gate):** any fixture asserting "edge X flips register Y"
+  must place the blocker at the contended physical. Derive ALL expected register values by running
+  `predict_assignments` on the fixture — do NOT copy expected registers from this plan's narrative
+  text (the §9 "r26→r25" numbers came from a fixture T2 proved broken; the primitive is correct,
+  the narrative constants are not).
+- **T15 negative controls:** shuffled/unreachable targets must be confirmed to toggle a CONTENDED
+  register under the dispense rule, not merely differ in a precolor value.
