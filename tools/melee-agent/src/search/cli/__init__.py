@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._helpers import *  # noqa: F403
+from ._helpers import _CFLAGS
 
 class _SearchRunDirectedPipeline:
     """Bridge byte scoring and directed scoring for `debug search run`."""

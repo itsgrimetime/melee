@@ -3825,7 +3825,7 @@ def generate_statement_order_variants(
             )
         )
 
-    from .statement_move import generate_statement_hoist_sink_variants
+    from ..statement_move import generate_statement_hoist_sink_variants
     for cand in generate_statement_hoist_sink_variants(
         source, function, max_candidates=max_candidates):
         br = cand["byte_range"]
