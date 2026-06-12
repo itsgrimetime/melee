@@ -558,3 +558,43 @@ copy spelling folds in ours."** No mismatch-db or discord-knowledge precedent fo
 - Per never-claim: the original col-block source provably exists; its copy-producing
   spelling was NOT FOUND despite dump-precise characterization, 2 direct spellings, and
   knowledge-base search. The function stays in the pool under the reopen conditions.
+
+---
+
+## ITERATION 7 (2026-06-11, driver 2) — EXPANSION RULING EXECUTED: REFUTED; COMMUNITY SCRATCH LIVE
+
+### User ruling
+GO on manual SDK-inline expansion, with community-check path (temporary edit +
+production scratch if not confident).
+
+### Build ledger (2/2) — BOTH INERT, the fold survives caller-local control
+| Build | Edit | Result |
+|-------|------|--------|
+| 1 | Faithful expansion of HSD_JObjSetTranslateX at the col site (exact jobj.h body: the 932 assert reproduced via pooled literals `__assert("jobj.h", 932, "jobj")`; HSD_JObjMtxIsDirty called as the header inline so its 564 assert stays internal; HSD_JObjSetMtxDirty macro body verbatim) with the split: memory-ops on `jobj`, SetMtxDirtySub+AddChild args on `jobj2 = jobj` | **INERT — byte-identical .text** (fingerprint repeat). Expansion is faithful; the copy folds. |
+| 2 | + multi-def fold-blocker: row block's jobj renamed to jobj2 (two defs: col copy + row LoadJoint — matches target r26 web exactly) | **INERT — byte-identical.** MWCC IRO propagation is reaching-def-based, NOT single-def-gated; the col def still uniquely reaches the col uses and folds. |
+
+VERDICT SHARPENED: the col-only-copy class survives even caller-LOCAL control of the
+expanded inline body — `jobj2 = jobj` is IRO-folded in every tested web shape
+(single-def, single-use; single-def, two-use; multi-def). The original's fold-blocking
+property remains unidentified. Park stands. Both edits REVERTED (nothing committed;
+tree back to 04070ec05 state).
+
+### COMMUNITY SCRATCH (the ask-Discord artifact)
+- **URL: https://decomp.me/scratch/Krp0x** — production decomp.me, owned by
+  itsgrimetime (stored prod session was valid; `sync auth` itself is interactive-only
+  and aborted, cf API calls Cloudflare-challenged — verified via real browser instead).
+- **Server score: 1006 (96.23%)** (decomp.me metric; local checkdiff = 96.95%),
+  compiles clean ("No problems").
+- Scratch contains the EDITED source (jobj2 expansion variant, byte-identical to
+  committed) so the Discord question is concrete: "target emits `addi r26,r21,0`
+  (+13c) splitting jobj's call-args from its memory-ops and burning a 13th
+  callee-save (frame -168 vs our -160); every jobj2-copy spelling copy-propagates.
+  What C produces the surviving copy?" Same question applies to the col k-init copy
+  (+040, same class).
+- Claim token rescued to ~/.config/decomp-me/scratch_tokens.json (create crashed
+  post-creation at token save — tooling issue #571 filed: _TOKENS_LOCK_FILE undefined,
+  editable install resolving to sibling worktree's code).
+
+### State
+96.95 unchanged; protected 100/100/98.67/97.46 verified; clean tree at aa04726b0+this.
+PENDING: community answer on the copy pattern (reopen condition (i) of the park).
