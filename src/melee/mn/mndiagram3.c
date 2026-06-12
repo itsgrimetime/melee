@@ -98,8 +98,6 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
         f32 row1_y = HSD_JObjGetTranslationY(data->jobjs[7]);
 
         {
-            u16* stat_table;
-            stat_table = (u16*) (base + ((int) stat_type << 1));
             icon_x_offset = mnDiagram3_804DC010;
             row_spacing = row1_y - row0_y;
             max_distance = 0x5F5E0FF;
@@ -107,7 +105,8 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
             divider = mnDiagram3_804DC008;
             max_time = 0x5B8D7F;
             neg_spacing = -row_spacing;
-            table = stat_table + 0x36;
+            table = (u16*) (base + ((int) stat_type << 1));
+            table += 0x36;
 
             for (i = 0; i < 5; i++) {
                 if (data->is_name_mode != 0) {
@@ -233,7 +232,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                 }
 
             icons: {
-                u16 icon_id = *table;
+                int icon_id = *table;
                 int r17 = icon_id;
                 if ((u32) icon_id == 0xFFFF) {
                     goto next;
