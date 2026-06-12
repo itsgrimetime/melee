@@ -1736,3 +1736,44 @@ RESIDUALS (outside this closeout's three-job scope and the wave-2 fence — flag
 - **coder2** still runs a 4th legacy-era `mnDiagram2_HandleInput-coder2-20260611-112616` (2.05M iters, VERIFIED live/churning ~50 it/s, descending; BEST 1545 > base 965 i.e. no improvement). Not in the three named; brief gave no coder2 allocation. Surfaced on **#591**.
 - **coder3** also has a lingering `mnDiagram_OnFrame-coder3-20260609-021943` (plateau, 36h, BEST 45) outside the wave-2 pair.
 - The many `unknown`-verdict rows in `remote ps` are DEAD job metadata records (no live tmux session; `ps` lists them because local metadata exists) — not running processes (#591).
+
+---
+
+## PERMUTER TRIAGE 4 — wave-2 harvest (3 wins) + STOP-all (2026-06-12, permuter triage round 4 agent)
+
+Harvested the three wave-2 jobs at ~3h runtime, ported each best candidate as a LEVER onto current source, verified per build with the full protected sweep, committed all three, then STOPPED all three (firmly converged). Branch `claude/mndiagram-802427B4-investigation`, baseline HEAD `846921f81` (tree clean). 4 builds used (baseline + 3 levers; budget held, 1 spare).
+
+### PER-JOB TABLE
+
+| Job (host) | Function | Iters | Base → best (job score) | Best found | Newest write | Candidate → verdict |
+|------------|----------|-------|--------------------------|------------|--------------|----------------------|
+| `mnDiagram2_GetAggregatedFighterRank-coder1-20260612-044302` | AggRank | ~400k | **775 → 525** (250↓) | 11:50:12 | 14:44 (630-9) | `output-525-1` **WIN** → comma-expr base at use site |
+| `mnDiagram2_GetRankedName-coder3-20260612-044336` | GetRankedName | ~193k | **470 → 370** (100↓) | 11:44:03 | 14:43 (450-11) | `output-370-1` **WIN** → compare operand-order swap |
+| `mnDiagram_8024227C-coder3-20260612-044424` | 8024227C | ~162k | **1345 → 1325** (20↓) | 11:52:00 | 14:13 (1345-9) | `output-1325-1` **WIN (marginal)** → inline call into arg |
+
+(Output dirs live at `nonmatchings/<fn>/output-N-M`, NOT the run-dir top level — `remote tail`/top-level `ls` miss them; the dir-scan-misses-outputs hazard, cf. MEMORY `permuter_score0_can_be_stale_base_rediscovery`. Best score = lowest `output-N`. permuter.log uses `\r` progress lines so `wc -l` lies; `tr '\r' '\n'` first.)
+
+### THE THREE LEVERS (each ported as a lever, mentally dataflow-executed, NOT raw-file applied)
+
+1. **AggRank `94.11 → 95.72` (+1.61%, commit `cd47d4d41`).** Drop the cached `arr = ((s32)type, entries);` base pointer; index the comma-expression directly at the use site: `((s32)type, entries)[k].value += 1;`. Defeats MWCC caching/hoisting the loop-invariant base into a callee-save register — same **comma-expr-defeats-LICM** lever class as 802427B4 (MEMORY `comma_expr_defeats_licm_hoist`). Semantically identical: comma discards `(s32)type`, yields `entries`. The 525 cluster (525-1..4, 535, 550) all share this; the rest (`i=(zero=0)`, `res++;res--;`, `(0,entries)`, `&0xFFFFFFFFu`, `k=j- -1`, `unsigned long long` proto on one of four) = inert/cosmetic noise rejected. `arr` decl left dead (matches candidate).
+2. **GetRankedName `97.87 → 98.62` (+0.75%, commit `db5baee4e`).** Selection-sort inner compare operand swap: `inner->value > entries[maxIdx].value` → `entries[maxIdx].value < inner->value`. `a>b ≡ b<a`; flips MWCC cmp direction / value-to-register. The single shared substantive mutation across the 370 cluster; 370-2/370-3 layered `(0,...)`/decl-reorder/`inner=&entries[j]`-into-loop noise (rejected).
+3. **8024227C `96.03 → 96.09` (+0.06%, commit `561dcedf9`).** In the `var_r22_3==7` fighter branch, inline `mnDiagram_SumFighterKOsClamped(var_r23)` straight into the `mnDiagram_80241E78` arg instead of caching in `var_r16_6`. `var_r16_6` had a single consumer; `var_r23` unchanged between def and call — safe, semantically identical. Marginal (residual stays stack-layout-class per ROUND wave-2 note); `var_r16_6` decl left dead.
+
+**Protected sweep CLEAN after every edit.** Diffed per-function `fuzzy_match_percent` across all 3 mndiagram TUs (75 fns, 56 at 100%) before/after each build: the ONLY changed function each time was the one being edited; all **56** 100%-fns held at 100; no partial regressed. (CursorProc + the full 100-set protected; floors InputProc 98.89 / UpdateHeader 95.46 / Create 98.54 / OnFrame 99.72 / 802427B4 98.84 / mndiagram3 98.42/95.93/94.48 all held.)
+
+### KEEP/STOP — ALL THREE STOPPED (CONVERGED)
+
+Every job found its global best within ~10 min of launch (~11:44–11:52) and produced NOTHING below it in the ~3 h since (newest writes are all far ABOVE each best — 630/450/1345 re-discoveries, not new floors), at 162k–400k iterations. Firm convergence per the KEEP/STOP rule (no new best in the recent window). Re-submitting identical bases is deterministic + pointless (MEMORY `guided_macro_permuter_jobs_are_finite`); they need RE-BOOTSTRAP onto the new committed source (#558) — orchestrator's call. All three `remote stop` returned `Stopped`; verified gone via SSH `tmux ls`.
+
+### FREED CAPACITY (orchestrator: rotation queue is yours; OnFrame phys-objective recipe is at its head)
+
+- **coder1 → FULLY FREE (16 threads).** Its only session (AggRank) stopped; `tmux ls | grep melee-perm` now EMPTY.
+- **coder3 → wave-2 pair (GetRankedName + 8024227C) stopped → 16 threads freed.** 14 lingering sessions remain (`mnDiagram_InputProc` ×13 + `mnDiagram_802437E8` + `mnDiagram_OnFrame`, all created Jun 10 23:37) but are **DEAD/orphaned tmux windows consuming ZERO threads** — verified: every pane runs only `fish` (no python worker), iteration counts FROZEN across a 6 s sample, only 1 python proc on the host (my own grep). Cosmetic clutter (#591 dead-record class), NOT live jobs; left untouched (out of three-job scope). coder3 load avg ~18 (down from 32) = residue of the just-stopped wave-2 jobs + 22 logged-in users, not these zombies.
+
+### TOOLING ISSUES FILED
+
+- **#593 (NEW, critical):** `melee-agent debug permute remote ps` crashes immediately — `AttributeError: module 'src.mwcc_debug.permuter_remote' has no attribute 'remote_ps'`. The CLI callsite (`cli/debug/__init__.py:7352`) calls `permuter_remote.remote_ps(...)` but NO `permuter_remote.py` defines it (verified absent in this worktree AND the installed module). Dead-on-arrival everywhere — **breaks the workaround #591 recommends** (use `ps` not `list`). So neither occupancy view works: `list` false-empty (#591), `ps` crashes (#593). Workaround used this round: direct SSH `tmux ls | grep melee-perm` + per-session pane-command check + permuter.log iteration-advance sampling. Secondary: the global `melee-agent` editable install resolves `permuter_remote` to the **doorA-application** worktree, not this one — per-worktree CLI fixes won't take until re-installed (editable-install cross-worktree pin hazard).
+
+### STATE COMMIT
+
+Recorded in both CAMPAIGN-STATE-D2COMPLETION.md (this section, canonical) and CAMPAIGN-STATE-D1COMPLETION.md (cross-ref). Commit hash: see the `docs(mn): PERMUTER TRIAGE 4` commit.

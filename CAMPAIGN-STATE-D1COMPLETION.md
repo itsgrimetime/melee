@@ -1100,3 +1100,17 @@ The single clean flip lever the oracle found is the **move-axis (dispense positi
 
 ### FENCES HONORED
 OnFrame + census doc only. No permuter ops. No PAD_STACK. Tree restored to baseline (diff -q vs /tmp/mndiagram_ONFRAME_BASELINE.c = IDENTICAL). Full protected sweep re-verified post-revert: OnFrame 99.72, 8024227C 96.03, InputProc 98.89, 802427B4 98.84, all 53 hundreds intact (report.json, this worktree's build).
+
+---
+
+## PERMUTER TRIAGE 4 — wave-2 harvest (3 wins) + STOP-all (2026-06-12, permuter triage round 4 agent)
+
+Full detail (per-job table, levers, sweep, freed capacity, #593) recorded in **CAMPAIGN-STATE-D2COMPLETION.md → PERMUTER TRIAGE 4** (canonical). Summary:
+
+- **3 WINS committed** (all levers ported + dataflow-verified + protected-sweep-clean, baseline HEAD `846921f81`, 4 builds):
+  - AggRank **94.11 → 95.72** (`cd47d4d41`) — comma-expr base at use site (LICM-defeat class, `output-525-1`, job 775→525).
+  - GetRankedName **97.87 → 98.62** (`db5baee4e`) — selection-sort compare operand-order swap (`output-370-1`, job 470→370).
+  - 8024227C **96.03 → 96.09** (`561dcedf9`, marginal) — inline `SumFighterKOsClamped` into `80241E78` arg (`output-1325-1`, job 1345→1325).
+- **ALL THREE STOPPED — CONVERGED** (each best found ~11:44–11:52, nothing better in the ~3 h / 162k–400k iters since). Re-bootstrap onto new source for any future run (#558) — orchestrator's call.
+- **FREED:** coder1 fully free (16 threads); coder3 wave-2 pair stopped (16 threads). coder3's 14 lingering `InputProc`/`802437E8`/`OnFrame` sessions are DEAD tmux windows (pane=`fish`, iters frozen) consuming zero threads (#591 dead-record class), left untouched.
+- **#593 filed:** `remote ps` crashes (`remote_ps` missing from `permuter_remote`) — breaks #591's recommended workaround; used SSH `tmux ls` + pane-cmd + log-iter-sampling instead.
