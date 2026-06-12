@@ -4,3 +4,31 @@ repos:
   hooks:
   - id: clang-format
     files: ^src/.*\.(c|h|cpp)$
+
+- repo: local
+  hooks:
+  - id: melee-style-check
+    name: Melee style check
+    entry: python tools/check-style.py
+    language: python
+    types: [c]
+    pass_filenames: true
+    description: >
+      Checks C/H files for style violations derived from doldecomp/melee
+      maintainer feedback. See docs/STYLE_GUIDE.md for details.
+
+  - id: check-fork-files
+    name: Check for fork-only files
+    entry: python tools/check-fork-files.py
+    language: python
+    pass_filenames: false
+    always_run: true
+    stages: [pre-push]
+    description: Blocks pushing fork-specific files to doldecomp/melee upstream
+
+  - id: capabilities-drift
+    name: capabilities index up to date
+    entry: bash -c 'melee-agent capabilities generate && git diff --exit-code -- .claude/capabilities-brief.md docs/CAPABILITIES.md'
+    language: system
+    pass_filenames: false
+    files: '^(tools/melee-agent/src/cli/|\.claude/skills/|\.claude/hooks/|\.claude/settings\.json|CLAUDE\.md|docs/agent-tool-manifest\.md)'
