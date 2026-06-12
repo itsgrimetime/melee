@@ -443,3 +443,47 @@ All three confirmed live via `debug permute remote tail` (HandleInput@coder1 ite
 **Tooling issues filed:** #574 (`debug permute remote list`/`ps` both crash — `AttributeError: probe_jobs_active`/`remote_ps` missing from `permuter_remote`; workaround = `remote tail <job>`); #575 (bootstrap inline-callee corruption above).
 
 **TRIAGE RULES (for the harvest session — DO NOT apply blindly):** full-FILE diffs (not just main-body — preamble/inline_fn/pragma changes hide there); **score ≠ match%** (a score-improving candidate may gate-fail on +instr/structure regression); **every candidate must be `checkdiff`-verified** before commit; **semantic-break hacks are AUTO-REJECT** (volatile props, no-op masks, var-aliases, `var=(global=snap)`); meter at gate boundaries; re-bootstrap base after any commit (drops the NULL pragma — re-add + re-verify). Pre-classified family inventory + listening-post doctrine: docs/mndiagram-inputproc-campaign.md §permuter. **PARK verdicts still hold** — these residuals are oracle-confirmed coloring/front-end ceilings on the non-permuter axis; the permuter is the authorized next-axis probe, not a refutation of the maps.
+
+---
+
+## PERMUTER TRIAGE 1 — bounded harvest round, 2026-06-12 (UTC)
+
+Fetched + triaged the three parked jobs after ~3.5h (~78k / ~40k / ~43k iters). **Jobs LEFT RUNNING (none stopped).** 1 build used (combined-apply of the two passing levers + full protected sweep). 2 verified commits.
+
+### Per-job status table (liveness via `remote tail`, #574 workaround)
+
+| Job | Host | Iters (snapshot) | Base | Best (output dirs = ground truth) | Better-score events | Verdict |
+|-----|------|------------------|------|-----------------------------------|---------------------|---------|
+| `mnDiagram3_HandleInput-coder1-20260611-210107` | coder1 | ~78,400 | 1550 | **1550 (no improvement)** | 0 | **NULL** — base stands; nothing fetched (no output dir below base). All sampled scores ≥ 1550. |
+| `mnDiagram3_80245BA4-coder3-20260611-210600` | coder3 | ~39,740 | 2375 | **2075** (`output-2075-{1,2,3,4}`) | ≥1 (log showed `2365 vs 2375`; output dirs deeper at 2075) | **WIN applied** (cast-drop lever). |
+| `mnDiagram3_8024714C-coder3-20260611-210616` | coder3 | ~42,900 | 3155 | **2685** (`output-2685-{1,2}`) | 8 events (best logged 2690; dirs at 2685) | **WIN applied** (CSE-split temp lever). |
+
+No `output-0-*` (no byte-match / no stale-base rediscovery) in any job. Both winning output sets verified inside the correct job-scoped `remote-runs/<job-id>/` dir; both candidate `base.c` files verified to match the committed repo source (NOT stale-base, per #558).
+
+### Candidates reviewed → verdicts
+
+**HandleInput (coder1):** 0 candidates below base after ~78k iters. NULL result — the 98.42 residual is not yielding to this tuned profile. (Consistent with the iter-9/10 PARK: 144-line GPR/FPR relabel + 2-instr entry rider, oracle-confirmed coloring.)
+
+**80245BA4 (coder3), best = 2075 (4 dirs):** All 4 share ONE real body change (rest = permuter pragma/inline normalization noise): drop the redundant `(u32)` cast in `if ((u32) icon_id == 0xFFFF)` → `if (icon_id == 0xFFFF)` (line 236; `int icon_id = *table`, `table` is `u16*` so value ∈ [0,0xFFFF] — cast is behaviorally inert, pure source-shape / S8 conversion-node family). 2075-3 additionally injected a dead `u32 new_var;` (ignored — used the clean 2075-1 form). **PASS triage** (no volatile/alias/side-effect). **APPLIED + verified: 94.07 → 94.48.**
+
+**8024714C (coder3), best = 2685 (2 dirs):** Both share ONE real lever (2685-1 vs 2685-2 differ only in decl/assign position of the temp): hoist the first of the two identical `mnDiagram3_804DBFFC` args to `HSD_SisLib_803A5ACC` into a temp `f32 new_var = mnDiagram3_804DBFFC;` and pass `new_var` for arg 6, keeping the global for arg 7 (splits MWCC's CSE of the two identical `.sdata2` const-float reads — the 802427B4 temp-introduction class). `mnDiagram3_804DBFFC` is a `size:0x4 scope:global data:float` — pure read, hoist is safe. **PASS triage.** **APPLIED + verified: 90.23 → 95.68 (+5.45).** Used 2685-1 placement (decl after `neg_spacing`, assign between `stat_idx=(u8)scroll;` and `i=0;`).
+
+AUTO-REJECTS: none encountered — no volatile/no-op-mask/var-alias/side-effect-hoist candidates surfaced in the best buckets (only clean source-shape levers + permuter normalization noise).
+
+### Build/verify (1 build, combined apply)
+
+`python configure.py && ninja` (exit 0). Protected sweep from `build/GALE01/report.json`:
+- Six 100s HOLD: fn_80246E04, fn_80246E64, fn_80246F0C, mnDiagram3_80246D40, mnDiagram3_80246F2C, mnDiagram3_80247008 — all 100.0.
+- mndiagram3.c **.data = 100.0** (80247008 data-linking f66cc758a holds), .sdata = 100.0, .sdata2 = 71.875 (out-of-scope, unchanged).
+- mnDiagram3_HandleInput = 98.41656 (unchanged — untouched trio fn).
+- mnDiagram3_8024714C = 95.68, mnDiagram3_80245BA4 = 94.48 (both improved).
+- All 11/11 pre-commit checks (incl. Match regressions) passed on both commits.
+
+### Commits
+- `eee79b118` feat(mn): mnDiagram3_80245BA4 94.07 -> 94.48 (drop redundant (u32) cast)
+- `b38208c2e` feat(mn): mnDiagram3_8024714C 90.23 -> 95.68 (CSE-split temp)
+
+### Recommendation
+- **KEEP RUNNING: 8024714C @ coder3** — productive (8 better-score events, +5.45 banked, best 2685 still well above a byte-match 0; more headroom likely). Re-harvest next round.
+- **KEEP RUNNING (watch): 80245BA4 @ coder3** — yielded a real lever but only +0.41; best 2075 vs base 2375. Worth one more harvest cycle since it shares the coder3 threads with 8024714C anyway.
+- **STOP / re-tune candidate: HandleInput @ coder1** — 0 wins in ~78k iters on the tuned profile. The 98.42 residual (relabel + entry-rider) is not falling to this `[weight_overrides]`. Either re-tune (different randomize_funcs / inline-callee injection of `HandleInput`'s same-TU callees) or stop coder1 and reallocate the channel to the mndiagram.c endgame pool. Recommend reallocate unless a fresh tuning hypothesis exists.
