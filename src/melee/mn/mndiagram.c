@@ -2329,6 +2329,7 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
     f32 y_spacing;
     f32 y_offset;
     f32 base;
+    f32 rowf;
     f32 row_offset;
     f32 col_offset;
     f32 row_offset_adj;
@@ -2354,8 +2355,9 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
 
     digit_count = mn_GetDigitCount(arg3);
     col_offset = y_spacing * (f32) col;
-    row_offset = y_offset * (f32) row;
-    row_offset_adj = row_offset - 0.4f;
+    rowf = (f32) row;
+    row_offset = y_offset * rowf;
+    row_offset_adj = y_offset * rowf - 0.4f;
 
     joint_data = mnDiagram_804A07F4;
     for (i = 0; i < digit_count; i++) {
