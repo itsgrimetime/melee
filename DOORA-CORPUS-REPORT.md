@@ -315,3 +315,42 @@ same-value copies in general.
 
 No campaign source, no `src/melee/mn/*`, and no CAMPAIGN-STATE file was modified. The
 only repo write is this report.
+
+---
+
+## 6. SHARPENED PRINCIPLE — application-round addendum (2026-06-11, REQUIRED READING before reusing §3-4)
+
+The five-site application round (doorA-application worktree; 1 decisive build + dump-first
+analysis) found the §4 interference principle **necessary but NOT sufficient**. Two
+preconditions gate it, and they split by shape:
+
+1. **A2/A3 (IR-born copies) survive ONLY when the copied (RHS) local is subsequently
+   MUTATED.** IRO copy-prop runs before coloring and folds any same-value copy whose
+   source is never redefined — *regardless of interference*. The §3 precedents survive
+   because: GetLeastPlayedFighter's `i` keeps incrementing after `min = i`;
+   `__CARDFormat`'s `rand` is mutated after `rand = time = OSGetTime()`. A copy of a
+   never-mutated value (e.g. `jobj2 = jobj; AddChild(jobj2)`) is FOLDED byte-identically
+   (built and confirmed at mnDiagram_80242C0C +13c). A copy whose source is a known
+   constant at the copy point constant-props instead (`k = count` with count==0 → `li`,
+   never `mr`).
+2. **A1 (constant-rider li+mr) is an ALLOCATOR REMATERIALIZATION CHOICE, not a source
+   construct.** BEFORE-GLOBAL IR has two independent `li`; the copy is invented at
+   coloring, gated by register pressure/band state. Identical source shape produces
+   li+mr in GetNameTotalFalls (2 adjacent callee-saves) and li+li at mnDiagram_80242C0C
+   +040 (13 callee-saves, loop re-entry). **Not reachable by choosing the A1 source
+   shape.** Tooling door: a force-remat/remat-bias mwcc-debug override (filed) would
+   characterize the pressure threshold.
+
+**Complete survival law:** a same-value copy survives MWCC iff the two virtuals
+interfere AND (the value is a non-constant runtime value that is subsequently mutated
+[A2/A3] OR the allocator independently rematerializes a shared constant under
+low-pressure band conditions [A1, not source-controllable]).
+
+**Narrowed community ask** (supersedes §4's): "for a same-value copy of a
+never-mutated/constant value, is there a C shape that defeats IRO copy-prop without
+changing emitted work?" — distinct from BOTH the disjoint-live-range residual AND the
+interference condition.
+
+Per-site outcomes and the full reasoning: the application agent's report (orchestrator
+chronicle Round 106). All five §4-recommended sites REMAIN PARKED with complete
+mechanism attributions; do not re-run A1/A2/A3 source spellings there.
