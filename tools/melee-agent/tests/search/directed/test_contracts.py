@@ -41,3 +41,29 @@ def test_scoring_call_carries_objective_and_parent():
     ps = DirectedSearchState(prev_state=None, history=(), last_lever=None, current_best=None, state_id="root")
     call = DirectedScoringCall(objective=obj, parent_state=ps)
     assert call.objective.class_id == 0 and call.parent_state.state_id == "root"
+
+
+def test_directed_objective_defaults_to_phys_mode():
+    from src.search.directed.contracts import DirectedObjective
+    obj = DirectedObjective(
+        search_target=None, role_target=None, baseline_compile=None,
+        baseline_pcdump_path=None, baseline_source_hash="h", class_id=0,
+        objective_iter_by_original_ig={}, proof_force_phys={},
+    )
+    assert obj.objective_mode == "phys"
+    assert obj.order_target_roles == ()
+    assert obj.unscored_roles == ()
+
+
+def test_directed_objective_accepts_order_mode():
+    from src.search.directed.contracts import DirectedObjective
+    obj = DirectedObjective(
+        search_target=None, role_target=None, baseline_compile=None,
+        baseline_pcdump_path=None, baseline_source_hash="h", class_id=0,
+        objective_iter_by_original_ig={28: 2, 29: 3}, proof_force_phys={28: 29, 29: 28},
+        objective_mode="order", order_target_roles=(28, 29),
+        unscored_roles=({"ig": 31, "reason": "ambiguous_signature"},),
+    )
+    assert obj.objective_mode == "order"
+    assert obj.order_target_roles == (28, 29)
+    assert obj.unscored_roles[0]["ig"] == 31
