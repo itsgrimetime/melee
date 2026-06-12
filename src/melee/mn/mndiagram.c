@@ -1009,7 +1009,7 @@ loop:
     return found;
 }
 
-static inline u8 mnDiagram_GetVisibleNameCursorFrom(u8* sorted, int start,
+static inline int mnDiagram_GetVisibleNameCursorFrom(u8* sorted, int start,
                                                     int rank)
 {
     u8* p;
@@ -2402,27 +2402,25 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     s32 var_r3;
     s32 var_r17_4;
     s32 var_r19_5;
-    u8 var_r0;
-    u8 var_r0_2;
-    u8 var_r17_6;
-    u8 var_r21;
-    u8 var_r23;
+    s32 var_r0_2;
+    s32 var_r17_6;
+    s32 var_r23;
     u8 var_r24;
     u8* sorted;
-    PAD_STACK(32);
+    PAD_STACK(24);
 
     var_r30 = 0;
     do {
         if (var_r30 == 0xA) {
             var_r22 = 0;
             do {
-                sorted = mnDiagram_804A0750.sorted_fighters;
+                sorted = (u8*) assets;
                 if (is_name != 0) {
                     var_r3 = GetNameCount();
                     if (var_r3 > var_r22) {
-                        var_r0 = mnDiagram_GetVisibleNameCursorFrom(
-                            sorted, arg2_r, var_r22);
-                        var_r19_2 = mnDiagram_SumNameFalls(var_r0);
+                        var_r19_2 = mnDiagram_SumNameFalls(
+                            mnDiagram_GetVisibleNameCursorFrom(sorted, arg2_r,
+                                                               var_r22));
                         mnDiagram_80241E78(gobj, (u8) var_r22, (u8) var_r30,
                                            var_r19_2);
                     }
@@ -2437,9 +2435,9 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                         var_r19_3 += 1;
                     } while (var_r19_3 < 0x19);
                     if (var_r18_3 > var_r22) {
-                        var_r21 = mnDiagram_GetVisibleFighterCursorFrom(
-                            sorted, arg2_r, var_r22);
-                        var_r19_5 = mnDiagram_SumFighterFalls(var_r21);
+                        var_r19_5 = mnDiagram_SumFighterFalls(
+                            mnDiagram_GetVisibleFighterCursorFrom(
+                                sorted, arg2_r, var_r22));
                         mnDiagram_80241E78(gobj, (u8) var_r22, (u8) var_r30,
                                            var_r19_5);
                     }
@@ -2451,11 +2449,11 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
             if (var_r3 > var_r30) {
                 var_r22_2 = 0;
                 do {
-                    sorted = mnDiagram_804A0750.sorted_fighters;
+                    sorted = (u8*) assets;
                     if ((var_r22_2 == 7) ||
                         (var_r3 = GetNameCount(), (var_r3 > var_r22_2)))
                     {
-                        var_r0_2 = mnDiagram_GetVisibleNameCursorFrom(
+                        var_r0_2 = (u8) mnDiagram_GetVisibleNameCursorFrom(
                             sorted, arg1_r, var_r30);
                         if (var_r22_2 == 7) {
                             var_r17_4 = mnDiagram_GetNameTotalKOs(var_r0_2);
@@ -2467,7 +2465,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                             mnDiagram_80241E78(
                                 gobj, (u8) var_r22_2, (u8) var_r30,
                                 GetPersistentNameData((u8) var_r0_2)
-                                    ->vs_kos[var_r17_6]);
+                                    ->vs_kos[(u8) var_r17_6]);
                         }
                     }
                     var_r22_2 += 1;
@@ -2486,7 +2484,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
             if (var_r17_7 > var_r30) {
                 var_r22_3 = 0;
                 do {
-                    sorted = mnDiagram_804A0750.sorted_fighters;
+                    sorted = (u8*) assets;
                     if (var_r22_3 != 7) {
                         var_r17_8 = 0;
                         var_r18_10 = 0;
