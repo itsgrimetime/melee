@@ -1,0 +1,22 @@
+{
+  "gating_fixture": null,
+  "witnesses": {
+    "mnDiagram_802427B4": {
+      "routing": "unstable_target",
+      "class_evidence": "frozen pre-win source does not compile against the current repo tree \u2014 not derivation-eligible: checkdiff/build failed for mnDiagram_802427B4 (rc=1): /python@3.11/bin/python3.11\" tools/transform_dep.py build/GALE01/src/melee/mn/mndiagram.d build/GALE01/src/melee/mn/mndiagram.d\n### mwcceppc.exe Compiler:\n#    File: src\\melee\\mn\\mndiagram.c\n# ---------------------------------\n#    1681: HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);\n#   Error:                          ^^^^^^^^^^^^^^^^^^\n#   undefined identifier 'mnDiagram_804DBF84'\n#   Too many errors printed, aborting program\n\nUser break, cancelled...\nninja: build stopped: subcommand failed.\n\n\n",
+      "base_match_percent": null,
+      "negative_control_edit": null,
+      "negative_control_match_percent": null,
+      "not_eligible_reason": "pre_win_source_does_not_compile_against_HEAD"
+    },
+    "fn_803ACD58": {
+      "routing": "not_order_class",
+      "class_evidence": "fn_803ACD58: checkdiff primary is 'normalized-structural-match', not register-only (['backend-ceiling', 'operand-register-or-offset']); not in the order-distance pool",
+      "base_match_percent": 98.94068,
+      "negative_control_edit": "swap: '    s32 icon_size;\\n    s32 hdr_plus_icon;' -> '    s32 hdr_plus_icon;\\n    s32 icon_size;'",
+      "negative_control_match_percent": 98.644066,
+      "not_eligible_reason": "checkdiff_primary_not_register_only"
+    }
+  },
+  "notes": "gating: mnDiagram_802427B4 whenever it derives directed (an empty named_pair then FIRES at T7 \u2014 the win invisible to role-stable order distance is a refutation, never dodged); fn_803ACD58 (pure decl-order chain) is promoted ONLY when the primary base is not derivation-eligible (\u00a76c contingency). null gating_fixture => NO derivation-eligible witness: the kill switch hard-stops and the orchestrator must revisit the kill-switch function assignment."
+}
