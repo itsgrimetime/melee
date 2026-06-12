@@ -384,6 +384,20 @@ int mnDiagram_GetFighterTotalFalls(u8 field_index)
     return mnDiagram_SumFighterFalls(field_index);
 }
 
+/// @brief Counts the number of unlocked fighters (inline-expanded form).
+/// @return Number of unlocked fighters.
+static inline int mnDiagram_CountUnlockedFightersInline(void)
+{
+    int count = 0;
+    int i;
+    for (i = 0; i < 0x19; i++) {
+        if (mn_IsFighterUnlocked(i)) {
+            count++;
+        }
+    }
+    return count;
+}
+
 /// @brief Formats a number with optional decimal places.
 /// @param buf Output buffer for the string.
 /// @param val The value to format (treat last decimal_places digits as
@@ -2392,11 +2406,8 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     s32 var_r16_6;
     s32 var_r17_7;
     s32 var_r17_8;
-    s32 var_r18_10;
     s32 var_r18_3;
-    s32 var_r18_9;
     s32 var_r19_2;
-    s32 var_r19_3;
     s32 var_r22;
     s32 var_r22_3;
     s32 var_r30;
@@ -2426,15 +2437,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                                            var_r19_2);
                     }
                 } else {
-                    var_r18_3 = 0;
-                    var_r19_3 = 0;
-                    do {
-                        var_r3 = mn_IsFighterUnlocked(var_r19_3);
-                        if (var_r3 != 0) {
-                            var_r18_3 += 1;
-                        }
-                        var_r19_3 += 1;
-                    } while (var_r19_3 < 0x19);
+                    var_r18_3 = mnDiagram_CountUnlockedFightersInline();
                     if (var_r18_3 > var_r22) {
                         var_r19_5 = mnDiagram_SumFighterFalls(
                             mnDiagram_GetVisibleFighterCursorFrom(
@@ -2473,29 +2476,13 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                 } while (var_r22_2 <= 7);
             }
         } else {
-            var_r17_7 = 0;
-            var_r18_9 = 0;
-            do {
-                var_r3 = mn_IsFighterUnlocked(var_r18_9);
-                if (var_r3 != 0) {
-                    var_r17_7 += 1;
-                }
-                var_r18_9 += 1;
-            } while (var_r18_9 < 0x19);
+            var_r17_7 = mnDiagram_CountUnlockedFightersInline();
             if (var_r17_7 > var_r30) {
                 var_r22_3 = 0;
                 do {
                     sorted = (u8*) assets;
                     if (var_r22_3 != 7) {
-                        var_r17_8 = 0;
-                        var_r18_10 = 0;
-                        do {
-                            var_r3 = mn_IsFighterUnlocked(var_r18_10);
-                            if (var_r3 != 0) {
-                                var_r17_8 += 1;
-                            }
-                            var_r18_10 += 1;
-                        } while (var_r18_10 < 0x19);
+                        var_r17_8 = mnDiagram_CountUnlockedFightersInline();
                         if (var_r17_8 > var_r22_3) {
                             goto block_83;
                         }
