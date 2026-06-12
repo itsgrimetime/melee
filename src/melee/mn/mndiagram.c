@@ -1035,7 +1035,9 @@ static inline u8 mnDiagram_GetVisibleNameCursorFrom(u8* sorted, int start,
         }
         remaining--;
     }
-    return *p;
+    p = sorted;
+    p += idx;
+    return p[0x1C];
 }
 
 static inline u8 mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
@@ -1045,25 +1047,31 @@ static inline u8 mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
     u8* p2;
     int remaining;
     int idx;
+    u8 result;
 
-    p = sorted + start;
     remaining = rank;
     idx = start;
-    while (remaining > 0) {
+    p = sorted + start;
+    while (remaining >= 0) {
+        if (remaining == 0) {
+            result = sorted[idx];
+            break;
+        }
         p2 = p;
     loop:
         idx++;
         p2++;
         p++;
         if (idx >= 0x19) {
-            return 0x19;
+            result = 0x19;
+            break;
         }
         if (mn_IsFighterUnlocked(*p2) == 0) {
             goto loop;
         }
         remaining--;
     }
-    return *p;
+    return result;
 }
 
 /// @brief Persists the current name/fighter cursor positions and mode into
@@ -2381,14 +2389,9 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     s32 cap = 0xF423F;
     s32 var_r16_6;
-    s32 var_r17_10;
-    s32 var_r17_11;
     s32 var_r17_7;
     s32 var_r17_8;
-    s32 var_r17_9;
     s32 var_r18_10;
-    s32 var_r18_11;
-    s32 var_r18_12;
     s32 var_r18_3;
     s32 var_r18_9;
     s32 var_r19_2;
@@ -2405,10 +2408,6 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     u8 var_r21;
     u8 var_r23;
     u8 var_r24;
-    u8* var_r15_2;
-    u8* var_r15_3;
-    u8* var_r16_5;
-    u8* var_r16_7;
     u8* sorted;
     PAD_STACK(32);
 
@@ -2503,75 +2502,18 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                         }
                     } else {
                     block_83:
-                        var_r18_11 = var_r30;
-                        var_r17_9 = arg1_r;
-                        var_r16_5 = &sorted[arg1_r];
-                    loop_91:
-                        if (var_r18_11 >= 0) {
-                            if (var_r18_11 == 0) {
-                                var_r23 = sorted[var_r17_9];
-                            } else {
-                                var_r15_2 = var_r16_5;
-                            loop_87:
-                                var_r17_9 += 1;
-                                var_r15_2 += 1;
-                                var_r16_5 += 1;
-                                if (var_r17_9 >= 0x19) {
-                                    var_r23 = 0x19;
-                                } else {
-                                    if (mn_IsFighterUnlocked(
-                                            (s32) *var_r15_2) != 0)
-                                    {
-                                        var_r18_11 -= 1;
-                                        goto loop_91;
-                                    }
-                                    goto loop_87;
-                                }
-                            }
-                        }
+                        var_r23 = mnDiagram_GetVisibleFighterCursorFrom(
+                            sorted, arg1_r, var_r30);
                         if (var_r22_3 == 7) {
-                            var_r16_6 = 0;
-                            var_r17_10 = 0;
-                            do {
-                                if (mn_IsFighterUnlocked(var_r17_10) != 0) {
-                                    var_r16_6 +=
-                                        GetPersistentFighterData((u8) var_r23)
-                                            ->fighter_kos[var_r17_10];
-                                }
-                                var_r17_10 += 1;
-                            } while (var_r17_10 < 0x19);
+                            var_r16_6 = mnDiagram_SumFighterKOs(var_r23);
                             if (var_r16_6 > cap) {
                                 var_r16_6 = cap;
                             }
                             mnDiagram_80241E78(gobj, (u8) var_r22_3,
                                                (u8) var_r30, var_r16_6);
                         } else {
-                            var_r18_12 = var_r22_3;
-                            var_r17_11 = arg2_r;
-                            var_r16_7 = &sorted[arg2_r];
-                        loop_108:
-                            if (var_r18_12 >= 0) {
-                                if (var_r18_12 == 0) {
-                                    var_r24 = sorted[var_r17_11];
-                                } else {
-                                    var_r15_3 = var_r16_7;
-                                loop_104:
-                                    var_r17_11 += 1;
-                                    var_r15_3 += 1;
-                                    var_r16_7 += 1;
-                                    if (var_r17_11 >= 0x19) {
-                                        var_r24 = 0x19;
-                                    } else {
-                                        if (mn_IsFighterUnlocked(
-                                                (s32) *var_r15_3) != 0)
-                                        {
-                                            var_r18_12 -= 1;
-                                            goto loop_108;
-                                        }
-                                        goto loop_104;
-                                    }
-                                }
-                            }
+                            var_r24 = mnDiagram_GetVisibleFighterCursorFrom(
+                                sorted, arg2_r, var_r22_3);
                             mnDiagram_80241E78(
                                 gobj, (u8) var_r22_3, (u8) var_r30,
                                 GetPersistentFighterData((u8) var_r23)
