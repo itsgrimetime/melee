@@ -909,3 +909,34 @@ Three temp-arg draw sites (+0f0 SumNameFalls header, +1cc SumFighterFalls header
 2. **The gate does NOT pass and CANNOT yet** — the r3/r6 ORDER + the −24 frame keep it content/coalescing-gated, not pure-coloring. The register endgame is NOT yet enterable as a clean coloring cascade. The blocker is the same coalescing-structure root Rounds 1-2 characterized (force-* cannot split a coalesced value-into-r6 life).
 3. **Next lever is the COALESCING boundary, not registers:** the only remaining axis is a coalescer-pressure source experiment that makes MWCC keep the clamped draw values in their homes (defeat the value↔r6 coalesce) — a deep-dive/permuter task targeting the coalescing boundary (per iter-8 allocation order, 8024227C is rank-1 for permuter ROI, but the permuter must target the value-home-vs-arg coalesce, NOT register tiebreaks). Re-bootstrap coder1 at 95.39 first.
 4. PAD_STACK(24) natural-frame pass remains the standing TU pending-review item (gate `delta=-24` confirms 24B).
+## CURSORPROC PORT (2026-06-12, verification + peel-harvest round)
+
+**Provenance:** ported from branch `codex/mn-diagram-cursorproc-99pct`, commit `b415208c3` (another agent's claimed-100 form). VERIFIED on our base: `match=true match_percent=100.00 classification=instruction-identical` (checkdiff), FULLNORM 0. The verified body is now COMMITTED here (`6a9b5b70e match(mnDiagram_CursorProc): ... 99.52 -> 100`). Our prior 99.52 form was the lhzu/FULLNORM-0 pure-coloring residual; theirs closes it.
+
+**The two forms (our 99.52 vs theirs 100):**
+- ours: direct `mn_804A04F0.*` field reads, `u16* hov = (u16*)&mn_804A04F0` init-at-decl, `gobj` used directly, `int row`, plain `4.5`/`0.1` literals, `PAD_STACK(8)`.
+- theirs: `MenuFlow* flow = &mn_804A04F0` base-alias, `u16* selection` assigned `(u16*)flow` after the early-return, `HSD_GObj* gp = gobj` param-alias used at all 4 sites, `u8 row`, `(int) row - (f64) 4.5F) - (f64) 0.1F` explicit casts at both use sites, `PAD_STACK(12)`.
+
+**PEEL TABLE (peel one/group from the working 100 form back toward ours; 4 builds):**
+
+| Build | Form (delta from theirs-100) | % | checkdiff class | Verdict |
+|-------|------------------------------|-----|-----------------|---------|
+| (port)| theirs full | **100.00** | instruction-identical | reference |
+| 1 | PAD_STACK(12) -> (8) | 99.90 | stack-layout | PAD(12) **load-bearing** (frame gap 12B) |
+| 2 | drop `gp` alias (use `gobj`) | 99.77 | register-allocation | `gp` param-alias **load-bearing** |
+| 3 | drop flow alias + u8 row->int + (f64)->plain | 99.62 | data-symbol-or-relocation | group **load-bearing** |
+| 4 | restore flow alias; keep int row + plain literals | 99.95 | data-symbol-or-relocation | flow recovers most; u8 row / (f64) casts close the last 1 instr |
+
+**MECHANISM ATTRIBUTION (per lever family):**
+- `HSD_GObj* gp = gobj` — **param-alias / copy-survival.** A distinct copy of the param that survives across the 4 calls; the allocator colors it into the callee-save it expects (vs re-using the param reg). NODE-SET (adds a virtual). Load-bearing (-0.23 when removed).
+- `MenuFlow* flow = &mn_804A04F0` — **base-alias.** Anchors the walking pointer + field reads at a single materialized base local rather than the global symbol; changes how `mn_804A04F0` is referenced (checkdiff flips to data-symbol-or-relocation class when removed). NODE-SET. Load-bearing (group -0.33; flow alone recovers to 99.95).
+- `u8 row` + `(int) row - (f64) 4.5F - (f64) 0.1F` — **type-home + literal-vs-named-temp.** Together they account for the final 99.95 -> 100 (one instruction). The `u8` storage + explicit f64 promotion at the use site reproduce the target's exact convert/load sequence. (Could not bisect these two apart within the 4-build budget; they are jointly the last instruction.)
+- `PAD_STACK(12)` — **frame.** PEEL-PROVEN load-bearing (PAD(8) -> 99.90 stack-layout). NOT gratuitous: the natural frame for this body reserves 12 bytes. **PENDING-REVIEW** (retained PAD_STACK; ported from another agent's branch). checkdiff `source_guidance=natural-frame-reservation` suggests a future attempt to express the 12B as natural C (address-taken local / array), but no such form was found this round.
+
+**MINIMAL FORM:** every sub-lever proved load-bearing on this base, so the minimal 100 form IS the full ported body (no peel held at 100). Committed as-is.
+
+**LEVER CLASS for the order-distance / coalescing-search tooling: NODE-SET, not ORDER.** The load-bearing levers (`gp` and `flow` aliases) each CREATE a new virtual (a copy / a materialized base local) that the allocator must color — they add nodes to the interference graph, they do not merely reorder the existing node set's decl/emission. This makes CursorProc a candidate **kill-switch fixture** for a NODE-SET-aware search: pre-win = our 99.52 form (no aliases, FULLNORM 0, pure coloring), win = the minimal 100 form (aliases added), both now reproducible on one base (this branch). The 99.52->100 gap is bridged by introducing virtuals, the cleanest possible NODE-SET signal.
+
+**SIBLING TRANSFER TEST — gp-alias on mnDiagram2_HandleInput (97.46): REVERTED.** Their HandleInput branch (`f686147a4`) claimed `gobj alias restores r28 CSE (+0.4)`. On OUR base it REGRESSED: 97.46 -> 97.30 (-0.16, inline-boundary-toolchain-artifact). Mechanism: HandleInput has only ONE body use of `gobj` (the `HSD_GObjPLink_80390228` call in the `result & 0xC0` branch), vs CursorProc's four uses across calls — so the alias adds a copy without enabling the cross-call copy-survival/CSE that paid off in CursorProc. The lever is use-count-gated: it helps when the param is consumed at multiple call sites, hurts at a single site. Reverted; HandleInput re-verified 97.46, 0 regressions.
+
+**PROTECTED SWEEP (vs this round's saved baseline /tmp/cursorproc_baseline_report.json):** 0 regressions. Only change: CursorProc 99.52 -> 100.00. mnDiagram2_HandleInput 97.46 (transfer reverted), mnDiagram_8024227C 94.80 (untouched, at ITS active-driver baseline). HEAD after this round = `6a9b5b70e` (one source commit, CursorProc).

@@ -2746,37 +2746,42 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
 
 void mnDiagram_CursorProc(HSD_GObj* gobj)
 {
+    MenuFlow* flow = &mn_804A04F0;
+    u16* selection;
+    HSD_GObj* gp = gobj;
     Diagram* data;
     HSD_JObj* sp_jobj;
     int col;
-    int row;
+    u8 row;
     f32 x_spacing;
     f32 y_spacing;
-    u16* hov = (u16*) &mn_804A04F0;
-    PAD_STACK(8);
+    PAD_STACK(12);
 
-    if ((mn_804A04F0.cur_menu != 0x1E) || (mn_804A04F0.x10 != 0)) {
-        HSD_GObjPLink_80390228(gobj);
+    if ((flow->cur_menu != 0x1E) || (flow->x10 != 0)) {
+        HSD_GObjPLink_80390228(gp);
         return;
     }
 
     data = mnDiagram_804D6C10->user_data;
-    lb_80011E24((HSD_JObj*) gobj->hsd_obj, &sp_jobj, 3, -1);
+    lb_80011E24((HSD_JObj*) gp->hsd_obj, &sp_jobj, 3, -1);
 
-    col = *++hov >> 8;
+    selection = (u16*) flow;
+    col = *++selection >> 8;
     x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
                 HSD_JObjGetTranslationX(data->jobjs[7]);
     HSD_JObjSetTranslateX(sp_jobj, x_spacing * (col - 3));
 
-    lb_80011E24((HSD_JObj*) gobj->hsd_obj, &sp_jobj, 4, -1);
-    row = (u8) *hov;
+    lb_80011E24((HSD_JObj*) gp->hsd_obj, &sp_jobj, 4, -1);
+    row = (u8) *selection;
     y_spacing = HSD_JObjGetTranslationY(data->jobjs[10]) -
                 HSD_JObjGetTranslationY(data->jobjs[9]);
-    HSD_JObjSetTranslateY(sp_jobj, y_spacing * (row - 4.5) - 0.1);
+    HSD_JObjSetTranslateY(sp_jobj,
+                          y_spacing * ((int) row - (f64) 4.5F) - (f64) 0.1F);
 
-    lb_80011E24((HSD_JObj*) gobj->hsd_obj, &sp_jobj, 2, -1);
+    lb_80011E24((HSD_JObj*) gp->hsd_obj, &sp_jobj, 2, -1);
     HSD_JObjSetTranslateX(sp_jobj, x_spacing * (col - 3));
-    HSD_JObjSetTranslateY(sp_jobj, y_spacing * (row - 4.5) - 0.1);
+    HSD_JObjSetTranslateY(sp_jobj,
+                          y_spacing * ((int) row - (f64) 4.5F) - (f64) 0.1F);
 }
 
 void mnDiagram_802433AC(void)
