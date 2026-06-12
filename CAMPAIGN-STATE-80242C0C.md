@@ -433,3 +433,55 @@ address-taken objects reaching the per-loop 76/68 slots).
   under build/mwcc_retro/... (the `-O` path became a directory of phase files).
 - `melee-agent scratch list` showed no scratch for this fn; iterated on source+checkdiff
   directly (faster). `struct verify` not retried (no struct question arose).
+
+---
+
+## ITERATION 5 (2026-06-11, driver 2) — SLOTS LANDED, FRAME DECOMPOSED (96.93 -> 96.95)
+
+### FRAME MAP (arithmetic-first; CORRECTS the iter-4 doc note AND the orchestrator recap:
+TARGET = -168, OURS = -160 — the recap had it transposed)
+
+| Offset | TARGET (-168, stmw r19,100, f30@152, f31@160) | OURS pre-build (-160, stmw r20,96, f30@144, f31@152) |
+|--------|------------------------------------------------|------------------------------------------------------|
+| 96-99 | align pad (locals top 100; lfd scratch 8-aligns DOWN to 88) | — (locals top 96, scratch flush) |
+| 88-95 | conversion scratch double | same (88/92 both sides) |
+| 80-87 | **8B object** | sp_jobj 84, sp_jobj2 80 |
+| 76-79 | sp_jobj | — |
+| 72-75 | **4B object** | PAD_STACK(32) @ 48-79 |
+| 68-71 | sp_jobj2 | … |
+| 48-67 | **20B object(s)** | … |
+| 8-47 | param area 40B (both) | same |
+
+KEY DERIVATION: the 32 invisible target bytes distribute **8 above sp_jobj + 4 between
++ 20 below** (sum = exactly our PAD_STACK(32)); because the scratch double 8-aligns to 88
+at EITHER frame size, every offset below 88 is GPR-count-independent ⟹ **slots (76/68)
+and frame size (-160 vs -168) are SEPARABLE**. The -168 frame = the 13th callee-save
+(r19) = the +13c extra-live-range pressure, NOT arrangement-reachable.
+
+### Build ledger (1 arrangement build + 1 jobj-copy build)
+
+| Build | Edit | Fuzzy | Verdict |
+|-------|------|-------|---------|
+| A | `u8 stack_obj[8];` before sp_jobj + `u8 stack_obj2[4];` between + `u8 stack_obj3[20];` after sp_jobj2, `(void)&` each (80243434 idiom), PAD_STACK(32) REMOVED | **96.95** | **COMMITTED 04070ec05.** sp_jobj=76 / sp_jobj2=68 BYTE-EQUAL (addi r4 + lwz r3 ×4 all matched); hunks 21; stack-slot lines 16->14 (the 4 frame-group lines remain); opcode 99.4 held. Decl-order-top-down allocation confirmed (iter-3's +8 anomaly was the do-scope PAD interaction, not array alignment — pure decl arrays pack tight). |
+| B | `jobj2 = jobj;` after the lb/AnimAll block + `AddChild(..., jobj2)` col-only | 96.95 | **INERT — reverted.** Codegen byte-identical: copy-prop folds it (the intermediate-copy persistence condition did not fire at this site). Attempts tracker: same fingerprint previously hit by another agent, same outcome. |
+
+Protected after commit: 100/100/98.67/97.46. Pre-commit match-regressions gate OK.
+
+### +13c JOBJ-COPY CHARACTERIZED (disasm-precise; build-B refuted the caller-side spelling)
+Target col: jobj=r21 through ALL memory-ops of the SetTranslateX inline (stfs 56(r21),
+dirty lwz 20(r21), asserts, flag reads); the +13c copy r26's ONLY consumers are the two
+CALL ARGUMENTS — `mr r3,r26` (HSD_JObjSetMtxDirtySub, INSIDE the SetTranslateX expansion)
+and `mr r4,r26` (HSD_JObjAddChild). A caller-side `jobj2` cannot produce checks-via-r21 +
+SetMtxDirtySub-via-r26 within one inline expansion (one parameter ≠ two variables) ⟹ the
+copy is the inline-parameter temp of the SetTranslateX/SetMtxDirty chain taking a separate
+color under the target's 13-GPR pressure (row's same temp coalesces into r26 = row jobj
+directly). Not found via the intermediate-copy spelling (copy-props); lever not found
+despite the disasm read — inline-param band/cascade territory. **The frame group (stwu
+-168 / stfd 160+152 / stmw r19,100 / 96-99 pad) hangs on this same extra live range.**
+
+### Residual (post-04070ec05, 96.95, opcode 99.4, 21 hunks)
+1. Frame group: 4 lines (stwu/stfd×2/stmw) — coupled to the +13c copy (above).
+2. +13c copy: 1-line insert + cascade.
+3. ~40 register-only lines (cascade; re-rolls if 1-2 ever land).
+4. Reloc/BSS section-anchor ceiling — do not chase.
+sp_jobj slots, PAD_STACK: DONE (natural form shipped).
