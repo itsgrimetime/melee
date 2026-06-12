@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import textwrap
 
-from src.mwcc_debug.parser import parse_pcdump
+from src.mwcc_debug.parser import parse_pcdump, slice_pcdump_to_function
 
 
 def test_parse_pcdump_recovers_from_malformed_block_header() -> None:
@@ -62,6 +62,49 @@ def test_parse_pcdump_function_slice_only_returns_target() -> None:
     fns = parse_pcdump(text, function="fn_target")
     assert len(fns) == 1
     assert fns[0].name == "fn_target"
+
+
+def test_slice_pcdump_to_function_returns_only_target_section() -> None:
+    text = textwrap.dedent("""\
+        preamble
+        Starting function fn_other
+        BEFORE
+            li r3, 0
+
+        Starting function fn_target
+        BEFORE
+            li r4, 5
+        AFTER
+            blr
+
+        Starting function fn_tail
+        BEFORE
+            li r5, 6
+    """)
+
+    sliced = slice_pcdump_to_function(text, "fn_target")
+
+    assert sliced.startswith("Starting function fn_target\n")
+    assert "li r4, 5" in sliced
+    assert "fn_other" not in sliced
+    assert "fn_tail" not in sliced
+
+
+def test_slice_pcdump_to_function_keeps_repeated_target_markers() -> None:
+    text = textwrap.dedent("""\
+        Starting function fn_target
+        chunk 0
+        Starting function fn_target
+        chunk 1
+        Starting function fn_tail
+        tail
+    """)
+
+    sliced = slice_pcdump_to_function(text, "fn_target")
+
+    assert "chunk 0" in sliced
+    assert "chunk 1" in sliced
+    assert "fn_tail" not in sliced
 
 
 def test_parse_pcdump_function_slice_missing_returns_empty() -> None:

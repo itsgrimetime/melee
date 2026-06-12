@@ -7513,6 +7513,119 @@ def test_dump_local_requested_function_missing_exits_nonzero_and_preserves_dump(
     assert "Starting function fn_80000001" in output.read_text()
 
 
+def test_dump_local_function_scopes_explicit_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(
+        "void fn_80000000(void)\n{\n}\n"
+        "void fn_80000001(void)\n{\n}\n"
+        "void fn_80000002(void)\n{\n}\n"
+    )
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        "pcdump.write_text("
+        "'Starting function fn_80000000\\nfirst\\n'"
+        "'Starting function fn_80000001\\ntarget\\n'"
+        "'Starting function fn_80000002\\nlast\\n'"
+        ")\n"
+    )
+    wibo.chmod(0o755)
+    output = tmp_path / "pcdump.out"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000001",
+            "--output",
+            str(output),
+            "--no-cache-sync",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert output.read_text() == "Starting function fn_80000001\ntarget\n"
+
+
+def test_dump_local_function_scoped_output_keeps_full_cache_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text(
+        "void fn_80000000(void)\n{\n}\n"
+        "void fn_80000001(void)\n{\n}\n"
+        "void fn_80000002(void)\n{\n}\n"
+    )
+    compiler_dir = melee_root / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    full_dump = (
+        "Starting function fn_80000000\nfirst\n"
+        "Starting function fn_80000001\ntarget\n"
+        "Starting function fn_80000002\nlast\n"
+    )
+    wibo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "pcdump = Path.cwd() / os.environ['MWCC_DEBUG_PCDUMP_PATH']\n"
+        f"pcdump.write_text({full_dump!r})\n"
+    )
+    wibo.chmod(0o755)
+    output = tmp_path / "pcdump.out"
+    cache = melee_root / "build" / "mwcc_debug_cache" / "melee" / "mn" / "sample.txt"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "local",
+            str(src_path),
+            "--function",
+            "fn_80000001",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert output.read_text() == "Starting function fn_80000001\ntarget\n"
+    assert cache.read_text() == full_dump
+    assert cache.with_suffix(".hash").exists()
+
+
 def test_dump_local_forced_default_output_uses_managed_scratch_root(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

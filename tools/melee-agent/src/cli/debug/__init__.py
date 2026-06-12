@@ -41,6 +41,7 @@ from ...mwcc_debug import (
     parse_pcdump,
     score_function,
     simulate_function,
+    slice_pcdump_to_function,
     suggest,
 )
 from ...mwcc_debug import candidate_audit
@@ -17675,9 +17676,17 @@ def pcdump_local(
         typer.echo("compile completed but no pcdump.txt was emitted", err=True)
         raise typer.Exit(4)
 
+    pcdump_text_cache: str | None = None
+
+    def _read_pcdump_text() -> str:
+        nonlocal pcdump_text_cache
+        if pcdump_text_cache is None:
+            pcdump_text_cache = pcdump_path.read_text()
+        return pcdump_text_cache
+
     function_missing_exit_code: int | None = None
     if function:
-        available_names = [fn.name for fn in parse_pcdump(pcdump_path.read_text())]
+        available_names = [fn.name for fn in parse_pcdump(_read_pcdump_text())]
         if function not in available_names:
             _emit_function_not_in_dump(
                 function,
@@ -17690,6 +17699,21 @@ def pcdump_local(
                 ),
             )
             function_missing_exit_code = 3
+
+    def _user_output_pcdump_text() -> str:
+        text = _read_pcdump_text()
+        if function and function_missing_exit_code is None:
+            scoped = slice_pcdump_to_function(text, function)
+            if scoped:
+                return scoped
+        return text
+
+    def _write_user_output_pcdump(path: Path) -> None:
+        if function and function_missing_exit_code is None:
+            path.write_text(_user_output_pcdump_text())
+            pcdump_path.unlink()
+        else:
+            pcdump_path.rename(path)
 
     # Warn early if --keep-obj was requested but the compiler didn't emit
     # an object (e.g. a forced coalesce hung the wibo process mid-compile).
@@ -17932,7 +17956,7 @@ def pcdump_local(
 
     # Place output
     if str(output) == "-":
-        print(pcdump_path.read_text())
+        sys.stdout.write(_user_output_pcdump_text())
         pcdump_path.unlink()
         _finish_pcdump_local_run()
         return
@@ -17986,7 +18010,7 @@ def pcdump_local(
                 root=scratch_root,
             )
             output.parent.mkdir(parents=True, exist_ok=True)
-            pcdump_path.rename(output)
+            _write_user_output_pcdump(output)
             os.utime(output, None)
             if cache_skip_reason:
                 print(
@@ -18033,7 +18057,8 @@ def pcdump_local(
     else:
         # --output specified: write there.
         output.parent.mkdir(parents=True, exist_ok=True)
-        pcdump_path.rename(output)
+        full_pcdump_text = _read_pcdump_text()
+        _write_user_output_pcdump(output)
         os.utime(output, None)  # same mtime fix as above
         if skip_cache_sync:
             # Forced run — don't mirror the experimental pcdump into the
@@ -18061,7 +18086,7 @@ def pcdump_local(
             # auto-resolve doesn't read a stale dump.
             try:
                 cache_target.parent.mkdir(parents=True, exist_ok=True)
-                cache_target.write_bytes(output.read_bytes())
+                cache_target.write_text(full_pcdump_text)
                 # Write hash sidecar for the mirrored cache file.
                 try:
                     if compiled_source_digest is not None:

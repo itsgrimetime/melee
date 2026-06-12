@@ -274,7 +274,7 @@ def _parse_instruction(line: str) -> Optional[Instruction]:
     return Instruction(opcode=opcode, operands=ops_part, annotations=annotations, regs=regs)
 
 
-def _slice_to_function(text: str, function: str) -> str:
+def slice_pcdump_to_function(text: str, function: str) -> str:
     """Return only the portion of `text` between `Starting function <name>`
     and the next `Starting function` (or EOF). Returns empty string if the
     function isn't found.
@@ -289,8 +289,10 @@ def _slice_to_function(text: str, function: str) -> str:
         if m.group(1) == function and start is None:
             start = i
             continue
-        if start is not None:
-            # Next function boundary after the target — stop here
+        if start is not None and m.group(1) != function:
+            # Next different function boundary after the target — stop here.
+            # Repeated markers for the same function can appear in synthetic
+            # or partial pcdumps; keep them with the target section.
             end = i
             break
     if start is None:
@@ -312,7 +314,7 @@ def parse_pcdump(text: str, function: Optional[str] = None) -> list[Function]:
     function so malformed output in other functions doesn't abort the parse.
     """
     if function is not None:
-        text = _slice_to_function(text, function)
+        text = slice_pcdump_to_function(text, function)
         if not text:
             return []
 
