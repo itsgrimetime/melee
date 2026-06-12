@@ -2751,6 +2751,7 @@ void mnDiagram_CursorProc(HSD_GObj* gobj)
     int row;
     f32 x_spacing;
     f32 y_spacing;
+    u16* hov = (u16*) &mn_804A04F0;
     PAD_STACK(8);
 
     if ((mn_804A04F0.cur_menu != 0x1E) || (mn_804A04F0.x10 != 0)) {
@@ -2761,13 +2762,13 @@ void mnDiagram_CursorProc(HSD_GObj* gobj)
     data = mnDiagram_804D6C10->user_data;
     lb_80011E24((HSD_JObj*) gobj->hsd_obj, &sp_jobj, 3, -1);
 
-    col = mn_804A04F0.hovered_selection >> 8;
+    col = *++hov >> 8;
     x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
                 HSD_JObjGetTranslationX(data->jobjs[7]);
     HSD_JObjSetTranslateX(sp_jobj, x_spacing * (col - 3));
 
     lb_80011E24((HSD_JObj*) gobj->hsd_obj, &sp_jobj, 4, -1);
-    row = (u8) mn_804A04F0.hovered_selection;
+    row = (u8) *hov;
     y_spacing = HSD_JObjGetTranslationY(data->jobjs[10]) -
                 HSD_JObjGetTranslationY(data->jobjs[9]);
     HSD_JObjSetTranslateY(sp_jobj, y_spacing * (row - 4.5) - 0.1);
