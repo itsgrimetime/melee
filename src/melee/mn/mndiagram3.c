@@ -463,8 +463,8 @@ void mnDiagram3_8024714C(void* arg0)
     data = gobj->user_data;
 
     {
-        HSD_GObj* popup;
         HSD_JObj* popup_jobj;
+        HSD_GObj* popup;
 
         popup = GObj_Create(6, 7, 0x80);
         data->popup_gobj = popup;
