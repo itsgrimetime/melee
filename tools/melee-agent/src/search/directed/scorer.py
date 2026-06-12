@@ -23,6 +23,7 @@ from src.search.directed.metric import (
     phys_match_fraction,
     phys_mismatch_count,
 )
+from src.search.directed.order_metric import score_candidate_reanchored
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +156,15 @@ class DirectedScorePipeline:
         if not roles:
             return self._invalid(art, call, "no_roles")
 
+        # --- ORDER-MODE BRANCH (order-distance directed search, T4) ----------
+        # Placed BEFORE the compile/analyze/case/report/coverage machinery (B3):
+        # in order mode the §3.3 rules (1.0 target-role reanchor coverage, >= 2
+        # anchored — enforced inside the shared scoring core) are THE validity
+        # gate; the divergence-case analysis and the generic coverage_floor=0.5
+        # are phys-mode-only. Gate/scheduler polarity is untouched (Plan C).
+        if getattr(obj, "objective_mode", "phys") == "order":
+            return self._score_order(art, call)
+
         # --- compile and analyze ---
         if self._compile_from_text is not None:
             compile = self._compile_from_text(art)
@@ -263,6 +273,102 @@ class DirectedScorePipeline:
         )
 
         return replace(art, directed_score=disp, directed_meta=meta, status="ok")
+
+    # ------------------------------------------------------------------
+    # _score_order — the objective_mode == "order" scoring path.
+    # ------------------------------------------------------------------
+
+    def _score_order(self, art: Any, call: DirectedScoringCall) -> Any:
+        """Score a candidate against the PROVEN order vector via the shared
+        generalized scorer (T5).  Lower order_distance is better; the §3.3
+        validity rule (inside the core) rejects candidates that lose a target
+        role.
+
+        Field semantics in order mode (B6):
+          * order_distance   = role-matched Kendall vs the proven vector;
+          * displacement     = metric.displacement — the spec's smooth SIGNED-
+                               GAP diagnostic over the same role positions
+                               (never the accept/win signal; never a phys
+                               fraction);
+          * directed_scalar  = the Kendall scalar (float).
+        Phys telemetry is NOT folded into any gate field; the CandidateScore
+        retains phys_matched for diagnostics read directly by the kill switch.
+
+        Polarity note: the gate and scheduler still read displacement fields
+        higher-is-better; flipping that comparator is Plan C (T8/T9). For A+B
+        the kill switch reads CandidateScore.order_distance directly, so the
+        scorer exposing the objective is sufficient.
+        """
+        from src.search.directed.metric import displacement as signed_gap_displacement
+
+        obj = call.objective
+        parent_state = call.parent_state
+        order_target = dict(obj.objective_iter_by_original_ig)
+        phys_target = dict(obj.proof_force_phys)
+        pcdump_text = art.pcdump_path.read_text(encoding="utf-8")
+        source_text = art.source_blob.read_text(encoding="utf-8")
+        ref_descs = self._order_ref_descs(obj)
+
+        cs = score_candidate_reanchored(
+            pcdump_text, ref_descs, function=obj.role_target.function,
+            class_id=obj.class_id, order_target=order_target,
+            phys_target=phys_target, cand_source=source_text,
+        )
+        if not cs.valid:
+            return self._invalid(art, call, cs.invalid_reason or "target_role_lost")
+
+        # B6: displacement carries the SIGNED-GAP DIAGNOSTIC.
+        disp = signed_gap_displacement(cs.ranks_by_role or {}, order_target)
+        parent_disp = self._parent_displacement_of(parent_state)
+        applied_mutator, non_actionable = self._attribution(art, parent_state)
+        parent_id = (
+            getattr(call.parent_state.current_best, "candidate_id", None)
+            if call.parent_state.current_best is not None else None
+        )
+        meta = DirectedMeta(
+            candidate_id=art.candidate_id,
+            source_hash=art.source_hash,
+            iteration=0,
+            parent_id=parent_id,
+            parent_state_id=parent_state.state_id,
+            valid=True,
+            invalid_reason=None,
+            case="order",
+            label="order",
+            order_distance=cs.order_distance,
+            displacement=disp,
+            displacement_delta=disp - parent_disp,
+            reanchor_matched=len(cs.ranks_by_role or {}),
+            reanchor_total=len(order_target),
+            diagnosis_chars=len("order"),
+            applied_mutator=applied_mutator,
+            directed_scalar=float(cs.order_distance),
+            proof_assignments=None,
+            byte_score=art.byte_score,
+            checkdiff_gate=_checkdiff_gate_for_byte_score(art.byte_score),
+            non_actionable=non_actionable,
+            iter_order_distance=cs.order_distance,
+            iter_displacement=disp,
+        )
+        return replace(art, directed_score=float(cs.order_distance),
+                       directed_meta=meta, status="ok")
+
+    def _order_ref_descs(self, obj: Any) -> dict:
+        """Build the baseline identity reference descriptors for order scoring.
+
+        Prefer the objective's pre-built baseline_compile; fall back to building
+        from the baseline pcdump path.  One build per candidate is dwarfed by
+        the candidate compile, so no caching."""
+        from src.mwcc_debug.role_descriptor import Compile, build_descriptors
+        bc = obj.baseline_compile
+        if bc is not None:
+            return build_descriptors(bc, class_id=obj.class_id)
+        if obj.baseline_pcdump_path is not None:
+            from pathlib import Path
+            text = Path(obj.baseline_pcdump_path).read_text(encoding="utf-8")
+            compile = Compile.from_text(text, obj.role_target.function, "")
+            return build_descriptors(compile, class_id=obj.class_id)
+        return {}
 
     # ------------------------------------------------------------------
     # _attribution — resolve applied_mutator + the non_actionable flag.
