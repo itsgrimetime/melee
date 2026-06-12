@@ -1366,3 +1366,116 @@ frontiers. Protected sweep: all 52 mndiagram* 100s hold; every sibling-TU floor 
 NEXT PHASE (no driver-6 matching round warranted): (1) the PENDING-REVIEW pre-PR pass + PR
 consolidation across the three mndiagram TUs; (2) queue the (e) permuter listening posts;
 (3) the (c) co-flip round if/when authorized. Reopen matching only on those triggers.
+
+---
+
+# ITERATION 12 (driver 6, 2026-06-11): the AUTHORIZED R2 store-value round — REFUTED (store node is NOT opaque to const-prop; two-li persists), prediction NOT triggered. HARD-REVERTED.
+
+## THE ONE QUESTION: does the store-value spelling `var_r3 = (text2->default_alignment = 1);` —
+binding the flag to the STORE's value rather than re-deriving the literal — fuse the two 1-uses
+into ONE shared web (defeating the const-prop re-split that killed the assignment-topology forms),
+producing the target's preset-flag/bge ladder shape?
+
+**ANSWER: NO. The store node is NOT opaque to const-prop (the iter-9.1 hypothesis is REFUTED).**
+The store value materialized INDEPENDENTLY in r0 (MWCC's preferred u8-store scratch reg), the
+flag web materialized its own `1` in r3 — the two-li signature PERSISTS, exactly as the refuted
+copy-channel (iter-7 b4) and preset (iter-6 #2) forms. CreateStatRow 83.24 → **82.64 REGRESS
+(-0.61)**. HARD-REVERTED (git checkout + rebuild; baseline restored EXACT 83.24064).
+
+## STEP-0 verified: clean tree, HEAD bb5e1721b. Baselines exact: CreateStatRow 83.24064,
+Create 98.42958, AggRank 94.10959, UpdateHeader 94.175255, GetRankedFighter 94.57792,
+GetRankedName 97.87313, HandleInput 97.460526, GetStatValue 100.0.
+
+## Ladder map (derived from iter-7 + objdump ground truth; which ladder carries default_alignment)
+Four if-ladders in CreateStatRow (src 679-797). `default_alignment` stores are at offset 0x4A:
+- **Ladder 1 (src 679-685, `var_r3`)** — carries `text2->default_alignment = 1;` IMMEDIATELY
+  before it (src 676). THE PROTOCOL'S FIRST SITE. (`>=0x12`→0 / `>=0xE`→1 / else→0.)
+- Ladder 2 (src 703-709, `var_r0`) — NO default_alignment store directly precedes it.
+- Ladder 3 (src 751-757, `var_r0_3`) — in the text3 block, after `text3->default_alignment = 2;`
+  (src 740); but separated by the `r23==0xB` FormatTime branch + text3 setup.
+- Ladder 4 (src 769-797, nested `var_r0_4`/`var_r0_5`) — deeper in the text3 block.
+Only ladder 1 has the store IMMEDIATELY adjacent (the target's CSE pattern requires adjacency),
+so it is the sole clean store-value candidate. Build budget spent on it (1 build); did not extend.
+
+## Ground-truth target shape (objdump -dr obj/, ladder-1 region 0xdb0-0xddc — the CSE PROOF)
+```
+db0:  li      r3,1          <- FLAG PRESET in r3 = 1
+db4:  cmpwi   r23,18
+db8:  stb     r3,74(r28)    <- default_alignment STORE REUSES r3 (the SAME 1) -- ONE shared web
+dc4:  bge     dd8           <- (r23 >= 0x12) override-to-0
+dc8:  cmpwi   r23,14
+dcc:  bge     ddc           <- (r23 >= 0xE) keep 1
+dd8:  li      r3,0          <- else: 0
+ddc:  cmpwi   r3,0          <- test flag
+```
+TARGET: ONE `li r3,1` feeds BOTH the stb AND the flag; `bge`/`bge` polarity; flag in r3.
+
+## Build ledger (1/4 used — early report, ONE QUESTION decisively answered NO)
+
+| # | Edit | % | meter (a) two-li→one? | (b) polarity | (c) prediction (region-2/saves) | Verdict |
+|---|---|---|---|---|---|---|
+| 1 | ladder-1: `var_r3 = (text2->default_alignment = 1);` + drop the explicit `=1` middle arm (preset form) | 83.24 → **82.64** | **NO** — still TWO `li ...,1`: store `li r0,1`@dc0, flag `li r3,1`@dcc (DIFFERENT regs, NOT fused) | PARTIAL: bge 2→3, blt 9→8 (one arm flipped to bge); flag DID move to r3 preset (`li r3,1`@dcc) but the `b`-around at dd8 keeps a `blt` | **NOT triggered**: stmw r22 (10 saves) UNCHANGED, NO `stmw r21`; no region-2 stat_type clrlwi (census 4→4); instrs 451→450 | **REFUTED. Hard-reverted.** |
+
+## Mechanism (the decisive datum — meter a)
+OURS build-1 ladder-1: `dc0: li r0,1` (store value) -> `dc8: stb r0,74(r3)` (store uses **r0**)
+-> `dcc: li r3,1` (flag preset, **r3**). The store-value binding `var_r3 = (field = 1)` did NOT
+collapse to one node: const-prop materialized the store's `1` in r0 (the u8-store scratch reg)
+SEPARATELY from the flag web's `1` in r3. The store's value node is therefore NOT opaque to
+const-prop — it is re-split identically to `var = 1; field = var;` (iter-7 b4). The flag preset
+DID land in r3 (progress over baseline's middle-arm `li r0,1`), but without fusion the net is a
+regress (the dd8 `b`-around + the unfused store cost more than baseline's symmetric `li r0` form).
+
+## Prediction verdict (iter-9.2 — the trichotomy pressure hypothesis)
+**The prediction was NOT triggered and remains UNTESTED in its intended regime.** Iter-9.2
+predicted: IF R2 lands (the shared-1 flag webs appear, adding pressure), THEN region-2 stat_type
+may appear free (saves 10→11, `stmw r22`→`stmw r21`). Since R2 did NOT land (no shared web; flag
++store stayed two webs), the precondition never held — stmw stayed r22, census stayed 4, no
+region-2 split. **The pressure hypothesis is neither confirmed nor refuted; it is moot because its
+antecedent (R2 landing) is now shown to be unreachable via the store-value spelling.** For the
+trichotomy law: this CLOSES the last source-reachable R2 spelling (store-value joins copy-channel
++ preset + assignment-topology as const-prop-defeated). The shared-1 web requires the `1` to
+survive as ONE node, which NO source spelling reaches — only an opacity device (volatile/call
+result) could, and that is out of bounds. R2 is now FULLY CLOSED at the source level.
+
+## Law minted (iteration 12)
+**Store-node const-prop transparency (R2 fully closed):** a constant stored to a u8 field AND
+bound to a flag variable via `flag = (field = CONST)` does NOT share one node — const-prop
+materializes the store's constant in the u8-store scratch reg (r0) independently of the flag
+web's constant. The store value node is NOT opaque (refutes iter-9.1's "store nodes are opaque,
+unlike the copy-channel" hypothesis). This is the FOURTH and final refuted R2 spelling
+(copy-channel iter-7.b4, preset-1 iter-6.#2, assignment-topology iter-7, store-value iter-12).
+The target's single-`li r3,1`-feeding-both-stb-and-flag is a front-end const-CSE outcome no C
+expression triggers here; an opacity device (volatile/call) would be required, out of bounds.
+
+## CreateStatRow disposition: UNCHANGED at 83.24, BANKED at attributed frontier (iter-9 endgame
+map stands verbatim). R2 is now CLOSED with the 4-spelling proof; no source-reachable lever
+remains. Reopen ONLY on an IRO-trace round that attributes the const-CSE trigger, or an
+opacity-device authorization (volatile flag) — NOT recommended (regresses semantics for codegen).
+
+## Iteration-13 priors (the co-flip / return-width round): UNCHANGED by this iteration.
+The R2 store-value verdict is orthogonal to the return-width see-saw (iter-13's axis). The
+prediction's mootness means iter-13 should NOT bank on region-2 stat_type appearing free — the
+R2 pressure that iter-9.2 hypothesized would unlock it is unreachable, so CreateStatRow's
+stat_type region-2 stays allocator-emergent-with-no-source-lever regardless of the return-width
+round. iter-13 priors stand: the see-saw is a cross-TU prototype wall; the regressed-sibling
+re-match (GetRankedName/GetRankedFighter) is the prize and the risk, per (c) FUTURE-ROUND.
+
+## PENDING-REVIEW (iteration 12)
+- **Nothing shipped this iteration** (store-value hard-reverted; working tree == baseline bb5e1721b,
+  CreateStatRow restored EXACT 83.24064). No PENDING-REVIEW entry earned — the store-value spelling
+  (`var_r3 = (field = 1)`, the authorized banned-class buttons-idiom family per
+  [[melee-upstream-code-conventions]]) was NOT retained because it REGRESSED. Had it landed it
+  would have flagged here citing the buttons-idiom precedent (`field = (i = 0)` in matched code)
+  and PR #2660's review noting only DATA-presentation patterns were flagged, not expression idioms.
+- Carried (unchanged): CreateStatRow PAD_STACK(16) diagnostic (pre-PR natural frame); AggRank
+  res-uninitialized + comma spelling; all (d) ledger items from iter-11.
+
+## Commit stack (cumulative — UNCHANGED; iteration 12 added no CODE commit, docs-only)
+- (iterations 2-11 commits unchanged — see iter-11 stack)
+- (iteration 12: docs-only commit; R2 store-value refuted + reverted, zero code change)
+
+## TU state after iteration 12 (== iteration 11; store-value reverted)
+14/21 at 100. Partials UNCHANGED: Create 98.43, GetRankedName 97.87, HandleInput 97.46 (walled),
+GetRankedFighter 94.58, UpdateHeader 94.18, AggRank 94.11, **CreateStatRow 83.24 (R2 now FULLY
+CLOSED — 4-spelling proof)**. Protected sweep (full report.json): all 55 mndiagram* 100s hold;
+every partial byte-exact vs baseline. Zero collateral.
