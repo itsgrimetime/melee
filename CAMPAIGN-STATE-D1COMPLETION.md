@@ -579,3 +579,93 @@ identical spelling, direct form) with no direct C lever identified.
 3. THEN declare the TU structural frontier exhausted → endgame/permuter phase (permuter currently
    FENCED this branch; A-root addi/mr is the one register-class site worth a permuter look).
 
+---
+
+## ITERATION 7 (2026-06-11, driver 3) — 80241E78 BUNDLED ROUND: THE fsubs WINDOW CLOSED (95.14 -> 98.94, FULLNORM 20 -> 0) + 0.4f FIX COMMITTED + EXTERN REFUTED. **THE TU's STRUCTURAL FRONTIER IS NOW CLOSED.**
+
+### THE ONE QUESTION — ANSWERED: **YES.** The fsubs-across-call window closes, via 2-use anchoring.
+Budget: 4 of 5 builds. 2 commits (fe659a04f semantic fix, 8523f3539 window), 2 hard-reverts.
+80241E78: 95.1362 -> **98.9416**, FULLNORM 20 -> **0**, 257/257 instrs, Δ0.
+
+### NEW LAW — FRONT-END GRAFT LAW (pcdump-proven, transferable):
+MWCC's FRONT END (visible in BEFORE GLOBAL OPTIMIZATION, before any optimizer pass) grafts a
+SINGLE-USE local's RHS tree forward into its consumer statement across STRAIGHT-LINE block chains
+— calls split blocks (B20 -> bl B21 -> B22) but do NOT stop the graft; only BRANCH/JOIN boundaries
+do. Proof pair in one function: y_offset (def and use separated only by the GetDigitCount call)
+grafted post-call; y_spacing (identical shape, but the jobjs[9]/[10] GetTranslationY ASSERT
+DIAMONDS branch between def and use) materialized pre-call. A MULTI-USE local materializes at its
+def. RECOVERY RECIPE: when ours evaluates an expression LATER than the target (sunk across a
+call), give the local a second GENUINE use — here the original's own form: duplicate the product
+into the adj computation and hoist the (f32) conversion into one named local so no second
+conversion slot is created (`rowf = (f32) row; row_offset = y_offset * rowf; row_offset_adj =
+y_offset * rowf - 0.4f;`). MWCC CSEs the duplicate product (ONE fmuls emitted) but the front end
+has already materialized the fsubs at its pre-call def -> callee-save result, volatile raw
+operand = target form; the whole post-call conversion/const cluster re-rolls into the target
+schedule. COROLLARY (Build 2, H1 refuted): assigning into a MULTI-DEF web (`base = TY(jobj2) -
+base`) does NOT anchor evaluation — forwarding is per-EXPRESSION on virtuals (a redefinition
+mints a new virtual; nothing is "killed"), not per-destination-web. The InputProc
+intermediate-copy law's web-persistence is about COPY persistence, not evaluation anchoring.
+
+### Build ledger
+| Build | Edit | Result | Verdict |
+|-------|------|--------|---------|
+| 1 | `1.0f` -> `0.4f` at 2358 (adj) + 2371 (col>=7 X) | 95.1362 (byte-neutral), pool @1519 = 0x3ECCCCCD verified | **COMMITTED fe659a04f** — semantic retail-divergence fix; fuzzy% is reloc-identity-bound not value-bound for anonymous pool constants |
+| 2 | H1: `base = TY(jobj2) - base;` (multi-def web destination) | 95.1362, hunks identical, fsubs still post-call | **INERT — REVERTED.** Destination web does not anchor evaluation (see corollary) |
+| 3 | 2-use anchoring + `f32 rowf` conversion local | **98.9416, FULLNORM 0, 257/257, Δ0**; fsubs immediately pre-bl (volatile operand, callee-save result) | **COMMITTED 8523f3539** |
+| 4 | `extern const f32 mnDiagram_804DBFA0` replacing both 0.4f literals (+static.h decl) | 97.5019, FULLNORM 0 -> 3: extern RELOADED IN-LOOP (`lfs f1,804DBFA0` at the col>=7 site — symbol loads are not hoisted across the loop's calls, even const), pre-loop callee-save f29 home dissolved, FPR save set changed (stfd f31/lfd f26 prologue deltas) | **CASCADE — REVERTED. Literal kept.** Confirms the mndiagram3 forced-named-.sdata2 caution for in-loop-consumed constants |
+
+Protected sweep after each commit + after final restore: 0 regressions / 0 deltas (both 100s,
+802417D0 98.0303, CursorProc 99.5158, 80240D94 97.3504, 8024227C 94.3234, InputProc 98.6726,
+80242C0C 96.9513, HandleInput 97.4605, OnFrame 99.7188, 8023FC28 97.8241, 802427B4 98.8444).
+Tree clean.
+
+### EXTERN / NAMED-RELOC DISPOSITION (recorded, do not re-try)
+- The 0.4f stays a LITERAL: the named-extern form is codegen-DIVERGENT here (in-loop reload).
+  This also converges with the upstream guideline (no premature named-symbol externs in PRs).
+- The remaining reloc-identity residual on this function's pool constants (@1519=0.4f vs
+  mnDiagram_804DBFA0; @192/@1522 f64 conv-magic vs 804DBF78/804DBF98) is COSMETIC and largely
+  source-unreachable — the f64 conversion constants are compiler-generated (you cannot point MWCC's
+  own int->float magic at an extern). The retail "names" are dtk address-labels on the original's
+  anonymous pool, not evidence of source-level externs.
+
+### 80241E78 RESIDUAL CENSUS (@ 98.9416)
+Sole family: the iter-3-characterized **r25<->r26 data/row callee-save swap + FP-coloring shadow**
+(f26/f27/f28 role rotation). FULLNORM 0 ⟹ no structural/scheduling/count residual remains. The
+iter-3 dataflow-pinned-ig characterization carries over; the substrate DID change (FP web
+re-rolled), so the endgame round may spend ONE cheap re-test of the iter-3 levers per
+substrate-relativity doctrine — not spent here (budget discipline; 4 refuted levers at low odds).
+
+### ★ TU STRUCTURAL-FRONTIER CLOSING STATEMENT ★
+With the window closed, EVERY tracked non-100 function in the mndiagram TU is now one of:
+- **ARTIFACT / pure-coloring ceiling (FULLNORM 0):** OnFrame 99.72, 802427B4 98.84 (both
+  rotation/swap webs), 802417D0 98.03, CursorProc 99.52, 80241E78 98.94 (this round).
+- **ARTIFACT + one pending reloc-spelling lever:** 8023FC28 97.82 (`.bss.0` section-anchor vs
+  named symbol — iter-2 LAW-2 cast-copy spelling, the NEXT round's single remaining source lever).
+- **CHARACTERIZED WALLS (mechanism-pinned, lever not found in reachable C):** 80240D94 97.35
+  (VN-CSE zero-emission-kill wall, iter-6), 8024227C 94.32 (banked: li-vs-copy trio + 2
+  transpositions + rename cascade, iter-2), 80242C0C 96.95 / InputProc 98.67 / HandleInput 97.46
+  (prior campaigns' documented walls).
+There are NO remaining known structural windows in this TU. The structural phase of the
+completion campaign is COMPLETE pending the 8023FC28 reloc spelling.
+
+### PENDING-REVIEW (iter-7)
+- **fe659a04f 0.4f fix RETAINED** — behavior-correcting + match-neutral (digit placement was off
+  by 0.6 units in row>=10 / col>=7 cases). Same accepted class as prior retail-value corrections.
+- **8523f3539 2-use spelling** `row_offset_adj = y_offset * rowf - 0.4f;` — recomputes the product
+  instead of `row_offset - 0.4f`. LOAD-BEARING for the match (single-use form sinks the fsubs
+  across the call; FULLNORM 0 <-> 20 hinges on it). Semantically identical (CSE'd to one fmuls).
+  Comment in-source if a reviewer asks; do NOT "simplify" it back.
+- 80241E78's PAD_STACK... has none. No new PAD_STACK introduced anywhere this round.
+
+### ITERATION-8 RECOMMENDATION
+1. **8023FC28 LAW-2 named-reloc spelling round** (the last source lever in the TU): apply the
+   iter-2 LAW-2 cast-copy re-read spelling to restore the named `mnDiagram_804A0750` HA/LO relocs
+   over `.bss.0` section-anchors. Small, bounded, ≤2 builds.
+2. **Then formally declare the endgame/permuter phase** for the coloring-ceiling pool
+   {OnFrame, 802427B4, 802417D0, CursorProc, 80241E78, + the walls if reopened}: permuter is
+   currently FENCED on this branch — the declaration should hand the pool + each function's
+   characterized residual to the orchestrator for a permuter-authorized round (80240D94 ROOT A's
+   addi/mr = the one register-class site; ROOT B is NOT permuter-reachable, it needs an IR
+   killing-def). Re-test the mndiagram2 zero-emission self-assignment probe on ROOT B if that
+   campaign's spelling fires (orchestrator cross-link).
+
