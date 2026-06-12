@@ -82,7 +82,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
         limit = (u8) limit;
 
         {
-            int val = offset + scroll;
+            int val = scroll + offset;
             if (val >= limit) {
                 val = val - limit;
             } else {
@@ -107,7 +107,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
             divider = mnDiagram3_804DC008;
             max_time = 0x5B8D7F;
             neg_spacing = -row_spacing;
-            stat_table += 0x36;
+            table = stat_table + 0x36;
 
             for (i = 0; i < 5; i++) {
                 if (data->is_name_mode != 0) {
@@ -233,7 +233,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                 }
 
             icons: {
-                u16 icon_id = *stat_table;
+                u16 icon_id = *table;
                 int r17 = icon_id;
                 if ((u32) icon_id == 0xFFFF) {
                     goto next;
