@@ -2682,8 +2682,11 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     void** joint_data;
     HSD_JObj* jobj;
+    u8 stack_obj[8];
     HSD_JObj* sp_jobj;
+    u8 stack_obj2[4];
     HSD_JObj* sp_jobj2;
+    u8 stack_obj3[20];
     int i;
     int k;
     int idx;
@@ -2692,7 +2695,10 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     u8* sorted;
     f32 x_spacing;
     f32 y_spacing;
-    PAD_STACK(32);
+
+    (void) &stack_obj;
+    (void) &stack_obj2;
+    (void) &stack_obj3;
 
     // Column headers (fighter icons)
     joint_data = assets->FaceB;
