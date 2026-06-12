@@ -440,6 +440,7 @@ static inline void HSD_JObjSetTranslateZ_Fake(HSD_JObj* jobj, f32 z)
 
 void mnDiagram3_8024714C(void* arg0)
 {
+    int i;
     Vec3 sp48;
     Diagram3* data;
     HSD_GObj* gobj;
@@ -447,7 +448,6 @@ void mnDiagram3_8024714C(void* arg0)
     mnDiagram_ArchiveData* archive;
     f32 row_spacing;
     f32 neg_spacing;
-    int i;
     PAD_STACK(16);
 
     {
