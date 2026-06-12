@@ -790,3 +790,164 @@ triangle-walled per law 3; R2 ladders banked as const-prop class), GetRankedFigh
 GetAggregatedFighterRank 94.11, Create 93.75, GetRankedName 97.87, UpdateHeader 94.18,
 HandleInput 97.46 (WALLED/parked), mnDiagram3_HandleInput 98.42. Protected-set sweep:
 all 55 mndiagram* 100s hold; every partial exact. Zero collateral.
+
+---
+
+# ITERATION 8 (driver 4, 2026-06-11): the cross-TU u8-chain co-flip (triangle resolution path a) — REFUTED by the default-tail pin, HARD-REVERTED
+
+## THE ONE QUESTION: does the cross-TU u8-chain co-flip close the consistency triangle —
+killing the 6 CreateStatRow masks with ZERO collateral?
+ANSWER: **NO. The co-flip closes 3 of GetStatValue's 4 pins (the forward arms, perfectly) but
+the default-tail pin (law 3c-i) is REAL and now INSTRUMENT-CONFIRMED: `return is_name_mode;`
+under a u8 param emits `clrlwi r3,r3,24` (u8→int return promotion) that the int-param form
+elides → GetStatValue 100 → 99.06. Hard-reverted (zero-collateral fence).** The win on
+CreateStatRow (+1.84 → 83.65) is real but unbankable at the cost of GetStatValue's 100.
+
+## Pre-build evidence (ground-truth disassembly, the decisive read)
+Method: `build/binutils/powerpc-eabi-objdump -dr` on BOTH objects (obj/ = target DTK-extract,
+src/ = ours), reloc+label normalized. The whole triangle's handoffs read MASK-FREE in the
+target — the smoking gun for an original u8 chain:
+- PopulateStatRows→CreateStatRow (target 12a8): `addi r4,r27,0` — is_name_mode arg MASK-FREE
+  (r27 = raw incoming r5 param; prologue `clrlwi. r0,r5,24` tests into r0, leaves r27 raw).
+- CreateStatRow→GetStatValue (target de4): `addi r3,r24,0` — is_name_mode arg MASK-FREE
+  (r24 = CreateStatRow's clean u8 param). OURS masks it (`clrlwi r3,r24,24`) at all 6 sites.
+- GetStatValue→Hit/Play/Avg (target 994/aec/af4): plain `bl`, NO preceding clrlwi.
+- GetStatValue default tail (target): switch default `bgt c50` jumps STRAIGHT to the epilogue
+  with r3 = raw is_name_mode, NO mask. (`c4c clrlwi r3,r3,24` is exclusively the
+  GetLeastPlayedFighter u8-return mask, falls through from c48.)
+- The three legs (GetHit int / GetPlay u8 / GetAvg int) ALL emit identical `clrlwi. r0,r3,24`
+  for `(u8) is_name_mode != 0` — PROVING the int↔u8 param flip is body-codegen-INVISIBLE for
+  them (GetPlay already ships u8 at 100). Gate-b safe for those legs by construction.
+
+## The co-flip design (path a, exactly as built)
+4 type-line edits, NO bodies touched (verified `git diff`: 4 files, 6 ins / 11 del):
+1. `mnDiagram2_GetStatValue`: param `int`→`u8` (mndiagram2.c def + mndiagram2.h proto).
+2. `mnDiagram_GetHitPercentage`: param `int`→`u8` (mndiagram.c def + mndiagram.h proto).
+3. `mnDiagram_GetAveragePlayerCount`: param `int`→`u8` (mndiagram.c def + mndiagram.h proto).
+4. `mnDiagram_GetPlayPercentage`: def already u8; **collapsed the `#ifdef MNDIAGRAM_SOURCE`
+   conditional proto** (which gave mndiagram2.c an `int` view) to always-u8.
+Scope verified: Hit/Play/Avg referenced only in mndiagram.c+mndiagram2.c; GetStatValue also in
+mndiagram3.c (80245BA4) but those pass `data->is_name_mode` (lbz-loaded = PROVEN CLEAN, elided)
++ `0`/`1` literals → flip-invisible. PopulateStatRows/CreateStatRow params left u8 (correct;
+iter-7 build-2 flipped THOSE = the wrong flip).
+
+## Build ledger (2/2 used — 1 closure + 1 revert-rebuild)
+
+| # | Edit | CreateStatRow | GetStatValue | Other protected | Verdict |
+|---|---|---|---|---|---|
+| 1 | full co-flip (4 type lines) | 81.81 → **83.652405** (6 masks DIED) | **100 → 99.06393** | PopulateStatRows 100, GetHit/GetPlay/GetAvg 100, Create 93.746475 EXACT; 51/52 hundreds hold | **GATE-B FAIL** on GetStatValue. Forward legs closed perfectly; default tail broke. |
+| 2 | hard-revert (git checkout 4 files) + rebuild | 81.81016 EXACT | 100.0 | all 72 mndiagram* == baseline | Baseline restored exactly. |
+
+## Instrument fact (the refutation, from the build-1 src/.o)
+GetStatValue (u8 param) default tail diverges from target by EXACTLY ONE instruction:
+- TARGET: default `bgt c50` → epilogue, r3 raw, no mask.
+- OURS (u8): default branches to **`c5c clrlwi r3,r3,24`** → epilogue. The +1 mask (60 vs 59
+  clrlwi in the fn) IS the u8→s32 return promotion on `return is_name_mode;`.
+- The forward arms (99c Hit / af4 Play / afc Avg) in OURS-u8 are now plain `bl` with NO
+  preceding clrlwi — i.e. **the co-flip DID close the forward-arm legs** (u8→u8 mask-free,
+  byte-matching target). The ONLY residual is the default tail. Pin law 3c-i CONFIRMED.
+
+## Laws minted / sharpened (iteration 8)
+
+1. **GetStatValue is a DUAL-CONSTRAINT param (the triangle's irreducible core):** its first
+   param faces TWO opposing conversion demands that no single C type satisfies —
+   (i) the default tail `return is_name_mode;` wants **int** (int→int return = 0 instrs; u8→int
+   = +1 `clrlwi r3,r3,24`), and (ii) the CreateStatRow handoff + forward arms read mask-free in
+   the target, which the iter-7 conversion rule attributes to **u8** (u8→u8 plain). int param:
+   tail OK + forwards OK + CreateStatRow MASKS (baseline, 6 masks). u8 param: forwards OK +
+   CreateStatRow OK + tail BREAKS. The param-type axis is a SEE-SAW; the original satisfied both
+   ends simultaneously, which a single param type provably cannot. ⟹ path (a) is the WRONG axis.
+2. **Provable-clean-u8 exception to the conversion rule (the real mechanism, MODEL GAP):** the
+   target passes CreateStatRow's u8 `is_name_mode` (r24) to GetStatValue's **int** param WITH NO
+   MASK (`addi r3,r24,0`). The iter-7 rule "u8 value → int param = MASK" predicts a mask here and
+   is WRONG for this case. The exception: a u8 value that is **provably clean** (a clean u8 param
+   threaded through the body without redefinition) converts to int MASK-FREE — MWCC's front end
+   tracks the cleanliness. OURS masks because our IRO does NOT prove r24 clean across
+   CreateStatRow's long body (4 GetStatValue call regions, interleaved stat_type work). The lever
+   is therefore PROVABILITY (make MWCC see is_name_mode as clean at the call sites), NOT the param
+   type. Cause unattributed at the IRO level (no front-end trace pulled this iteration). This is
+   the same family as the iter-7 "lbz-loaded = elided" provability rule and mndiagram3's clean
+   `data->is_name_mode` handoff — both are PROVABLE-clean sources that skip the mask.
+3. **The conditional-proto device (`#ifdef MNDIAGRAM_SOURCE`) is a per-TU view skew, ALREADY
+   PRESENT for GetPlayPercentage** (def u8, but mndiagram2.c saw int via `#else`). This is the
+   mechanism a cross-TU co-flip WOULD use — and it is shippable precedent IF a consistent typing
+   existed. It does not (law 1). The device cannot manufacture a type that is both int (for the
+   tail) and u8 (for the call) within the SAME TU (mndiagram2.c sees ONE GetStatValue signature).
+
+## Why the co-flip cannot be repaired (the one-repair-build was NOT spent on a doomed retry)
+The default tail returns the VALUE of is_name_mode as int. Any C spelling that returns the u8
+value promotes it (mask). The only mask-free form is an int-typed value = int param = re-opens
+the 6 CreateStatRow masks. There is no within-GetStatValue spelling (verified by the see-saw law)
+that frees the tail while keeping the param u8. The repair build was instead spent reverting
+(correct per the zero-collateral fence). Rung-3 (stat_type split) NOT reached: contingent required
+≥2 builds unspent; 0 were unspent (closure + mandatory revert = the 2-build budget).
+
+## CreateStatRow residual @ 81.81 (UNCHANGED — rung-3 entry for iteration 9)
+Reverted to baseline. The map is unchanged from iter-7:
+- 9 clrlwi vs target's mixed 4: ours-only = the **6 is_name_mode masks** (now proven to be a
+  PROVABILITY residual per law 2, NOT a param-type residual — the iter-7 "triangle" framing is
+  refined: it is not that no consistent typing exists in the abstract, it is that the mask-free
+  CreateStatRow→GetStatValue handoff requires MWCC to prove r24 clean, which our IRO doesn't);
+  target-only = a SECOND `clrlwi rX, r25, 24` (stat_type, the two-region split).
+- **RUNG-3 (iteration-9 TOP RUNG, structural, carried high-conviction): stat_type two-region
+  truncation split.** TARGET truncates `(u8) stat_type` TWICE (region 1 `clrlwi r22,r26,24` +
+  `clrlwi r23,r25,24`; region 2 `clrlwi r22,r25,24` right before the cmpwi 0x18 ladders). OURS
+  mints ONE long-lived `int r23 = (u8) stat_type` (src line ~659) in a callee-save spanning the
+  whole fn. Split into two region-scoped re-derivations (re-`(u8) stat_type` in the text3 block)
+  to mirror the target web structure; frees a long-lived callee-save mid-fn. **Save-boundary note
+  (from iter-6/7): OURS = `stmw r22` (10 saves), TARGET = `stmw r21` (11 saves) — target saves
+  ONE MORE; the split should move OUR boundary DOWN toward r21 (more saves, shorter-lived webs),
+  i.e. the direction is r22→r21.** Same family as iter-3 per-branch duplication + the campaign
+  web-split lever. ≤2 builds. Watch: row_idx/entity_idx r26/r27 prologue swap + the +5-line delta
+  (re-read after the split — web-structure first).
+- **RUNG-4 (provability probe, NEW from law 2, MEDIUM conviction):** make MWCC prove
+  is_name_mode clean at the 6 GetStatValue call sites WITHOUT changing the param type. Candidate
+  idea-spaces (all UNTRIED): (i) a single `is_name_mode &= 0xFF;`-style clean at fn entry that
+  IRO can forward as a clean fact (risk: u8 param `&= 0xFF` may DCE to nothing like the u8-alias,
+  iter-7 law 1 — but it is an int-context AND so might anchor a clean web); (ii) cache the cleaned
+  value through an explicit int that IS proven clean (the opposite of iter-7 lever-1's u8-alias —
+  try `int mode = (u8) is_name_mode;` ONCE, pass `mode` to all 6 — this mints an int web that is
+  PROVABLY the masked value, so the call sites become int→int mask-free AND the masks coalesce to
+  ONE; this is the untried inverse of the see-saw and is the single most promising probe).
+  CAVEAT: (ii) failed as a *u8* local (iter-7 b1 byte-identical); the NEW hypothesis is that an
+  *int* local holding the pre-masked value behaves differently (one shared clrlwi feeding an int
+  web vs six conversion-node masks). Build it FIRST in iteration 9 if rung-3 stalls — it directly
+  targets law-2's provability mechanism and may collapse 6 masks → 1.
+
+## PENDING-REVIEW (iteration 8)
+- **Nothing shipped this iteration** (co-flip hard-reverted; working tree == baseline). No
+  PENDING-REVIEW entry earned. The cross-TU type-edit precedent class (consistency-fixing type
+  corrections that keep .text byte-identical) was NOT validated here because the co-flip was not
+  byte-identical (GetStatValue regressed). Had it landed, it would have flagged for pre-PR review.
+- Carried (unchanged, no edits): CreateStatRow PAD_STACK(16) diagnostic (must become natural
+  frame reservation pre-PR); GetAggregatedFighterRank res-uninitialized-on-default + comma spelling.
+
+## Commit stack (cumulative — UNCHANGED; iteration 8 added no code commit)
+- cc052016f GetRankedFighter 79.94 -> 94.58 (iter 2)
+- e2d172d4d GetAggregatedFighterRank 81.91 -> 85.19 (iter 2)
+- 05a5aaf91 GetAggregatedFighterRank 85.19 -> 93.56 (iter 3)
+- 2a01de812 GetAggregatedFighterRank 93.56 -> 94.14 (iter 4)
+- 1d924db54 GetAggregatedFighterRank save-boundary flip, 94.14 -> 94.11 (iter 5)
+- 47b40968d CreateStatRow 80.11 -> 81.54 (iter 6 — cached-base reuse R1)
+- 35391757f CreateStatRow 81.54 -> 81.81 (iter 7 — R3-b return-cast drop)
+- (iteration 8: docs-only commit; co-flip refuted + reverted, zero code change)
+
+## TU state after iteration 8 (== iteration 7; co-flip reverted)
+Open set: **CreateStatRow 81.81** (path-a co-flip REFUTED by default-tail dual-constraint pin;
+iteration-9 = rung-3 stat_type two-region split THEN rung-4 int-clean-local provability probe),
+GetRankedFighter 94.58, GetAggregatedFighterRank 94.11, Create 93.746475, GetRankedName 97.87,
+UpdateHeader 94.18, HandleInput 97.46 (WALLED/parked), mnDiagram3_HandleInput 98.42,
+mnDiagram3_80245BA4 94.07. Protected-set sweep (full report.json): all 52 mndiagram* 100s hold;
+every partial byte-exact (verified all 72 mndiagram* == /tmp/baseline_census.json). Zero collateral.
+
+## Iteration-9 recommendation
+1. **Rung-3 FIRST (stat_type two-region split)** — structural, high-conviction, carried from
+   iter-7, independent of the (now-refuted) is_name_mode axis. Direction: OUR `stmw r22` should
+   move toward target's `stmw r21` (one MORE save, shorter webs). ≤2 builds.
+2. **Rung-4 (int-clean-local provability probe) if rung-3 stalls** — `int mode = (u8) is_name_mode;`
+   ONCE, pass `mode` to all 6 GetStatValue calls. Hypothesis (law 2): collapses the 6 conversion
+   masks to ONE shared int web (int→int mask-free at the calls). This is the untried inverse of
+   iter-7's refuted u8-alias (b1) and directly targets the provable-clean mechanism. 1-2 builds.
+3. The is_name_mode param-type axis (path a) is CLOSED — do NOT re-flip GetStatValue's param;
+   it is a dual-constraint see-saw (law 1). Any further is_name_mode work must attack PROVABILITY
+   (law 2), not type.
