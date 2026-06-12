@@ -303,7 +303,7 @@ class TestScoreCandidateReanchored:
         """Build synthetic pcdump: decisions = [(iter_idx, ig_idx, assigned_reg)]."""
         return _make_pcdump("grIceMt_801F9ACC", decisions)
 
-    def test_baseline_identity_stable_order_distance_4(self):
+    def test_baseline_identity_stable_order_distance_kendall_1(self):
         # Candidate has same ig numbering as ref: ig33@rank3, ig40@rank5 (baseline swap)
         pcdump = self._pcdump_with([
             (0, 32, 3),
@@ -331,7 +331,10 @@ class TestScoreCandidateReanchored:
         assert result.invalid_reason is None
         assert result.rank33 == 3
         assert result.rank40 == 5
-        assert result.order_distance == 4
+        # Kendall: the single (ig33, ig40) pair is inverted vs target -> 1.
+        # (The OLD sum-of-deltas form scored this 4; that form still lives in
+        # the standalone order_distance/score_9acc, tested separately.)
+        assert result.order_distance == 1
         assert result.phys_matched == 0  # both are swapped
 
     def test_target_identity_stable_order_distance_0(self):
@@ -376,8 +379,10 @@ class TestScoreCandidateReanchored:
 
         assert result.valid is False
         assert result.invalid_reason is not None
-        assert "identity_lost" in result.invalid_reason
-        assert "33" in result.invalid_reason
+        # §3.3 (T5): all lost-target-role cases collapse to the single unified
+        # reason "target_role_lost" (the old "identity_lost: orig_ig 33" string
+        # was replaced when the validity rule was generalized).
+        assert result.invalid_reason == "target_role_lost"
 
     def test_compile_parse_failure_returns_invalid(self):
         # If Compile.from_text raises, result is invalid
@@ -522,3 +527,105 @@ def test_live_force_iter_first_distance_is_0(tmp_path):
     assert (matched, total) == (2, 2), f"Expected phys=(2,2), got ({matched},{total})"
     assert ranks.get(40) == 3, f"Expected rank40=3, got {ranks.get(40)}"
     assert ranks.get(33) == 5, f"Expected rank33=5, got {ranks.get(33)}"
+
+
+# ---------------------------------------------------------------------------
+# Generalized score_candidate_reanchored (order-distance directed search, T5)
+# ---------------------------------------------------------------------------
+
+class TestGeneralizedCandidateScore:
+    def _pc(self, decisions):
+        return _make_pcdump("mnDiagram_OnFrame", decisions)
+
+    def _three_role_ref(self):
+        return {
+            28: _make_role_descriptor(28, "mr r#,r#", True, "a", assigned_reg=29),
+            29: _make_role_descriptor(29, "li r#,0", False, "b", assigned_reg=28),
+            31: _make_role_descriptor(31, "addi r#,r#,0", False, "c", assigned_reg=30),
+        }
+
+    def test_arbitrary_roles_kendall_zero_when_in_target_order(self):
+        # Target order: ig28 earlier (rank 5) than ig29 (rank 7). Candidate matches.
+        pc = self._pc([(4, 28, 29), (6, 29, 28)])  # rank5=iter4, rank7=iter6
+        ref = {
+            28: _make_role_descriptor(28, "mr r#,r#", True, "a", assigned_reg=29),
+            29: _make_role_descriptor(29, "li r#,0", False, "b", assigned_reg=28),
+        }
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile"):
+            with patch("src.search.directed.order_metric.build_descriptors") as bd:
+                bd.return_value = ref
+                result = score_candidate_reanchored(
+                    pc, ref, function="mnDiagram_OnFrame",
+                    order_target={28: 5, 29: 7}, phys_target={28: 29, 29: 28},
+                )
+        assert result.valid is True
+        assert result.ranks_by_role == {28: 5, 29: 7}
+        assert result.order_distance == 0
+        assert result.coverage == 1.0
+
+    def test_kendall_one_when_pair_inverted(self):
+        # Candidate has ig28 LATER than ig29 -> one inversion vs target.
+        pc = self._pc([(6, 28, 29), (4, 29, 28)])
+        ref = {
+            28: _make_role_descriptor(28, "mr r#,r#", True, "a", assigned_reg=29),
+            29: _make_role_descriptor(29, "li r#,0", False, "b", assigned_reg=28),
+        }
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile"):
+            with patch("src.search.directed.order_metric.build_descriptors") as bd:
+                bd.return_value = ref
+                result = score_candidate_reanchored(
+                    pc, ref, function="mnDiagram_OnFrame",
+                    order_target={28: 5, 29: 7}, phys_target={28: 29, 29: 28},
+                )
+        assert result.valid is True
+        assert result.order_distance == 1
+
+    def test_target_role_lost_is_invalid_not_zero(self):
+        # §3.3 hole: a candidate that LOSES a target role must be invalid, never 0.
+        ref = self._three_role_ref()
+        cand_only_two = {
+            28: _make_role_descriptor(28, "mr r#,r#", True, "a", assigned_reg=29),
+            29: _make_role_descriptor(29, "li r#,0", False, "b", assigned_reg=28),
+        }  # ig31 GONE
+        pc = self._pc([(4, 28, 29), (6, 29, 28)])
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile"):
+            with patch("src.search.directed.order_metric.build_descriptors") as bd:
+                bd.return_value = cand_only_two
+                result = score_candidate_reanchored(
+                    pc, ref, function="mnDiagram_OnFrame",
+                    order_target={28: 5, 29: 7, 31: 9}, phys_target={28: 29, 29: 28, 31: 30},
+                )
+        assert result.valid is False
+        assert result.invalid_reason == "target_role_lost"
+        assert result.order_distance is None
+
+    def test_fewer_than_two_anchored_is_invalid(self):
+        ref = {28: _make_role_descriptor(28, "mr r#,r#", True, "a", assigned_reg=29)}
+        pc = self._pc([(4, 28, 29)])
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile"):
+            with patch("src.search.directed.order_metric.build_descriptors") as bd:
+                bd.return_value = ref
+                result = score_candidate_reanchored(
+                    pc, ref, function="mnDiagram_OnFrame",
+                    order_target={28: 5}, phys_target={28: 29},
+                )
+        assert result.valid is False
+        assert result.invalid_reason == "target_role_lost"
+
+    def test_legacy_rank33_rank40_shim_still_populated(self):
+        # The 9ACC two-role path keeps the back-compat rank33/rank40 fields.
+        pc = _make_pcdump("grIceMt_801F9ACC", [(2, 40, 29), (4, 33, 27)])
+        ref = _ref_descs_9acc_baseline()
+        from unittest.mock import patch
+        with patch("src.search.directed.order_metric.Compile"):
+            with patch("src.search.directed.order_metric.build_descriptors") as bd:
+                bd.return_value = ref
+                result = score_candidate_reanchored(pc, ref)
+        assert result.valid is True
+        assert result.rank33 == 5
+        assert result.rank40 == 3
+        assert result.ranks_by_role == {33: 5, 40: 3}

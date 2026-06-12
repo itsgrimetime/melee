@@ -205,28 +205,31 @@ def score_9acc(pcdump_text: str, class_id: int = 0) -> Score:
 class CandidateScore:
     """Result of score_candidate_reanchored for one mutated-source compile.
 
-    Fields
-    ------
-    valid           : False if either target role is missing from the reanchor
-                      match (identity lost, role coalesced/spilled, or the
-                      function was not found in the pcdump).
-    invalid_reason  : human-readable reason when valid=False, else None.
-    rank33          : 1-based colorgraph position for the REANCHORED ig that
-                      maps to original ig33 (role ``y``, param).  None if invalid.
-    rank40          : 1-based colorgraph position for the REANCHORED ig that
-                      maps to original ig40 (role ``gp``, local).  None if invalid.
-    order_distance  : sum |rank - target_rank| for both roles (0 == perfect).
-                      Set to None when invalid.
-    phys_matched    : count of the two target roles whose assigned_reg matches
-                      the desired physical register.  None when invalid.
+    Generalized (order-distance directed search, T5) to an arbitrary target-role
+    set.  ``ranks_by_role`` maps each original target ig to its 1-based rank in
+    the candidate's (reanchored) coloring.  ``order_distance`` is the role-matched
+    Kendall pairwise-inversion distance vs the target order (0 == every pair in
+    target relative order).  ``coverage`` is the fraction of target roles that
+    round-trip-reanchored.
+
+    §3.3 validity: a candidate is ``valid`` iff coverage == 1.0 over the target
+    roles AND >= 2 roles anchored.  Otherwise ``valid=False`` with
+    ``invalid_reason="target_role_lost"`` — losing a target role can NEVER look
+    like progress (closes the test_metric.py:32 hollowing hole at the objective).
+
+    Back-compat: ``rank33``/``rank40`` remain populated for the 9ACC two-role
+    pilot so older callers/tests keep working.
     """
 
     valid: bool
     invalid_reason: Optional[str]
-    rank33: Optional[int]
-    rank40: Optional[int]
+    ranks_by_role: Optional[dict]
     order_distance: Optional[int]
     phys_matched: Optional[int]
+    coverage: Optional[float]
+    # --- 9ACC back-compat shims ---
+    rank33: Optional[int] = None
+    rank40: Optional[int] = None
 
 
 def score_candidate_reanchored(
@@ -239,138 +242,82 @@ def score_candidate_reanchored(
     phys_target: Optional[dict] = None,
     cand_source: str = "",
 ) -> CandidateScore:
-    """Identity-safe scorer for a mutated-source 9ACC candidate.
+    """Identity-safe order-distance scorer for a mutated-source candidate.
 
-    Mutating source can renumber IG nodes.  This function resolves the NEW ig
-    numbers that correspond to original ig33 (role ``y``) and ig40 (role
-    ``gp``) via ``reanchor_descs``, then reads ranks and assigned registers
-    for those REANCHORED nodes.
+    Mutating source can renumber IG nodes.  This resolves each target role's NEW
+    ig via ``reanchor_descs``, reads ranks/assignments at the reanchored nodes,
+    and computes the role-matched Kendall ``order_distance`` vs ``order_target``.
 
-    Parameters
-    ----------
-    cand_pcdump_text : pcdump text from compiling the mutated source.
-    ref_descs        : ``{ig_idx: RoleDescriptor}`` built from the BASELINE
-                       compile (the identity reference).  Obtain with
-                       ``build_descriptors(Compile.from_text(...), class_id=0)``.
-    function         : function name to look up in the pcdump.
-    class_id         : colorgraph class (default 0 = GPR).
-    order_target     : override NINEACC_ORDER_TARGET (original ig → desired rank).
-    phys_target      : override NINEACC_PHYS_TARGET (original ig → desired phys).
-    cand_source      : the mutated C source text for the candidate (used for IR
-                       name binding in build_descriptors).  If empty, variable
-                       names are not available and identity matching relies only
-                       on first_def_sig and use_site_multiset.  For the sweep,
-                       pass the actual variant source for best matching quality.
+    §3.3 validity (the objective rule): every target role must round-trip-
+    reanchor (coverage == 1.0) AND >= 2 roles must anchor, else the candidate is
+    ``valid=False, invalid_reason="target_role_lost"`` — never ranked, never 0.
 
-    Returns
-    -------
-    CandidateScore with valid=False and an ``invalid_reason`` if either target
-    role is identity-lost (absent from reanchor.matched).  When valid=True,
-    ``rank33``, ``rank40``, ``order_distance``, and ``phys_matched`` are all
-    populated using the reanchored ig numbers.
+    This is the SHARED scoring core used by the scorer's order branch (T4) and
+    the kill-switch harness (T7), so both exercise the same path.
     """
+    from src.search.directed.metric import order_distance as kendall_distance
+
     _order_target = order_target if order_target is not None else NINEACC_ORDER_TARGET
     _phys_target = phys_target if phys_target is not None else NINEACC_PHYS_TARGET
 
-    # Compile, build_descriptors, and reanchor_descs are bound at module level
-    # so tests can patch them via "src.search.directed.order_metric.Compile" etc.
+    def _invalid(reason: str) -> CandidateScore:
+        return CandidateScore(
+            valid=False, invalid_reason=reason, ranks_by_role=None,
+            order_distance=None, phys_matched=None, coverage=None,
+            rank33=None, rank40=None,
+        )
 
-    # Build candidate descriptors.
     try:
         cand_compile = Compile.from_text(cand_pcdump_text, function, source=cand_source)
-    except (ValueError, Exception) as exc:
-        return CandidateScore(
-            valid=False,
-            invalid_reason=f"compile_parse_failed: {exc}",
-            rank33=None,
-            rank40=None,
-            order_distance=None,
-            phys_matched=None,
-        )
+    except Exception as exc:
+        return _invalid(f"compile_parse_failed: {exc}")
 
     cand_descs = build_descriptors(cand_compile, class_id=class_id)
-
-    # Desired phys for the roles we care about (using original ig numbers).
     desired = {orig_ig: phys for orig_ig, phys in _phys_target.items()}
-
-    # Reanchor: map original ig numbers → candidate ig numbers.
     ra = reanchor_descs(ref_descs, cand_descs, desired, class_id=class_id)
-    # ra.matched: {new_ig: orig_ig} (round-trip confirmed)
-
-    # Invert to orig_ig -> new_ig.
     orig_to_new: dict[int, int] = {orig: new for new, orig in ra.matched.items()}
 
-    # Check both target roles are reanchored.
-    missing_roles = [orig for orig in _order_target if orig not in orig_to_new]
-    if missing_roles:
-        reason = "identity_lost: orig_ig " + ",".join(str(x) for x in sorted(missing_roles))
-        return CandidateScore(
-            valid=False,
-            invalid_reason=reason,
-            rank33=None,
-            rank40=None,
-            order_distance=None,
-            phys_matched=None,
-        )
+    # §3.3 coverage: every target role must round-trip-reanchor.
+    target_igs = list(_order_target)
+    anchored = [ig for ig in target_igs if ig in orig_to_new]
+    coverage = len(anchored) / len(target_igs) if target_igs else 0.0
+    if coverage < 1.0 or len(anchored) < 2:
+        return _invalid("target_role_lost")
 
-    # Read ranks from candidate pcdump using REANCHORED ig numbers.
+    # Read ranks at the reanchored ig numbers.
     cand_ranks_raw = colorgraph_ranks(cand_pcdump_text, function, class_id=class_id)
-
-    # Build reanchored rank map: original_ig -> rank (using new ig).
-    reanchored_ranks: dict[int, int] = {}
+    ranks_by_role: dict[int, int] = {}
     for orig_ig, new_ig in orig_to_new.items():
-        if new_ig in cand_ranks_raw:
-            reanchored_ranks[orig_ig] = cand_ranks_raw[new_ig]
+        if orig_ig in _order_target and new_ig in cand_ranks_raw:
+            ranks_by_role[orig_ig] = cand_ranks_raw[new_ig]
 
-    # Both roles must appear in the colorgraph section.
-    missing_in_graph = [orig for orig in _order_target if orig not in reanchored_ranks]
-    if missing_in_graph:
-        reason = "role_not_in_colorgraph: orig_ig " + ",".join(
-            str(x) for x in sorted(missing_in_graph)
-        )
-        return CandidateScore(
-            valid=False,
-            invalid_reason=reason,
-            rank33=None,
-            rank40=None,
-            order_distance=None,
-            phys_matched=None,
-        )
+    # A target role that reanchored but is absent from the colorgraph (spilled
+    # out of the decision set) breaks coverage just like a lost role.
+    if len([ig for ig in target_igs if ig in ranks_by_role]) < len(target_igs):
+        return _invalid("target_role_lost")
+    for orig_ig in target_igs:
+        desc = cand_descs.get(orig_to_new[orig_ig])
+        if desc is not None and desc.spilled:
+            return _invalid("target_role_lost")
 
-    # Check for spill (spilled roles are invalid for rank comparison).
-    for orig_ig, new_ig in orig_to_new.items():
-        if orig_ig in _order_target:
-            desc = cand_descs.get(new_ig)
-            if desc is not None and desc.spilled:
-                return CandidateScore(
-                    valid=False,
-                    invalid_reason=f"role_spilled: orig_ig {orig_ig}",
-                    rank33=None,
-                    rank40=None,
-                    order_distance=None,
-                    phys_matched=None,
-                )
+    # Role-matched Kendall distance: build cand/objective iter maps keyed by the
+    # ORIGINAL ig (ranks are 1-based positions; relative order is what Kendall
+    # consumes, so using ranks directly is equivalent to using iter_idx).
+    od = kendall_distance(ranks_by_role, _order_target)
 
-    # Compute order_distance using reanchored ranks with the original-ig keys.
-    od = order_distance(reanchored_ranks, _order_target)
-
-    # Compute phys_matched using reanchored ig numbers.
+    # Phys hits at reanchored igs.
     phys_hits = 0
+    dec_by_ig = {d.ig_idx: d for d in _iter_decisions(cand_pcdump_text, function, class_id)}
     for orig_ig, desired_reg in _phys_target.items():
         new_ig = orig_to_new.get(orig_ig)
-        if new_ig is not None:
-            dec_by_ig = {d.ig_idx: d for d in _iter_decisions(cand_pcdump_text, function, class_id)}
-            cand_dec = dec_by_ig.get(new_ig)
-            if cand_dec is not None and cand_dec.assigned_reg == desired_reg:
-                phys_hits += 1
+        dec = dec_by_ig.get(new_ig) if new_ig is not None else None
+        if dec is not None and dec.assigned_reg == desired_reg:
+            phys_hits += 1
 
     return CandidateScore(
-        valid=True,
-        invalid_reason=None,
-        rank33=reanchored_ranks.get(33),
-        rank40=reanchored_ranks.get(40),
-        order_distance=od,
-        phys_matched=phys_hits,
+        valid=True, invalid_reason=None, ranks_by_role=ranks_by_role,
+        order_distance=od, phys_matched=phys_hits, coverage=coverage,
+        rank33=ranks_by_role.get(33), rank40=ranks_by_role.get(40),
     )
 
 
