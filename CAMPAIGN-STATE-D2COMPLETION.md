@@ -1701,3 +1701,38 @@ All three verified ALIVE via `remote tail` + `remote ps` (descending; each beat 
 
 ### HOST-OCCUPANCY DISCREPANCY (orchestrator decision needed)
 Brief said "both hosts FREE"; `remote ps` shows **3 pre-existing LIVE descending jobs** triage-3 did NOT stop: coder1=`mnDiagram_InputProc_tuned-coder1-20260611-065847` (1.77M iters, the "tuned listening post"), coder3=`mnDiagram2_HandleInput-coder3-20260611-125553` + `-175702` (HandleInput is PROTECTED). `remote list` falsely returned EMPTY → **issue #591** filed (list reads local metadata JSON, misses these; use `remote ps` for occupancy). New jobs CO-RUN with these (triage-1/3 precedent: jobs share a host's 16 threads); stopping the listening-post/PROTECTED jobs is outside the no-triage fence. **coder1 not truly "dedicated" until the orchestrator stops InputProc_tuned; coder3 now hosts 4 jobs.**
+
+---
+
+## LEGACY POSTS CLOSEOUT (2026-06-12, legacy listening-post closeout agent)
+
+The three campaign-era jobs the HOST-OCCUPANCY DISCREPANCY section flagged (the ones triage-3/wave-2 left running because stopping them was "outside the no-triage fence") were given ONE bounded final-harvest pass and then stopped, freeing the threads wave-2 needs. Branch `claude/mndiagram-802427B4-investigation`, HEAD `6bffce320` after the harvest commit. Base scores read authoritatively from each job's remote `permuter.log` header (`base score = N`). All three were pure-random (`No perm macros found. Defaulting to randomization.`).
+
+### THE THREE EPITAPHS
+
+| Job (host) | Function | Final iters | Base score | Best (floor) | Harvest verdict |
+|------------|----------|-------------|------------|--------------|-----------------|
+| `mnDiagram_InputProc_tuned-coder1-20260611-065847` | mnDiagram_InputProc | **1,796,629** | **1190** | **1025** (`output-1025-1`) | **WIN harvested** → InputProc **98.67 → 98.89%** |
+| `mnDiagram2_HandleInput-coder3-20260611-125553` | mnDiagram2_HandleInput | **1,043,159** | **965** | **440** (`output-440-1`) | **NULL** — floor is a use-before-def break (rejected) |
+| `mnDiagram2_HandleInput-coder3-20260611-175702` | mnDiagram2_HandleInput | **390,336** | **965** | **440** (`output-440-1`) | **NULL** — identical use-before-def break (rejected) |
+
+### HARVEST DETAIL
+
+- **InputProc WIN (committed `6bffce320`).** The `output-1025` candidate (165 below base 1190) is, after stripping the permuter pretty-printer's cosmetic inline-helper reflow, a SINGLE substantive mutation: alias `mn_804A04F0` through `MenuFlow *new_var3 = &mn_804A04F0;` (assigned unconditionally at function top, before use) and read the **row2** fighter-cursor field as `(*new_var3).hovered_selection >> 8` — a pure address-of-global alias, semantically identical (mentally executed: dominator-clean, the other 7 `mn_804A04F0.hovered_selection` reads left direct). Ported the LEVER (one field read), not the file. Truth gate: retail **98.6726 → 98.8943%** (+0.22). Protected sweep CLEAN — diffing per-function `fuzzy_match_percent` across the whole `main/melee/mn/mndiagram` unit (45 fns) before/after, the ONLY changed function was InputProc; all **36** 100%-functions in the TU held at 100; no partial regressed. (mndiagram2/mndiagram3 are separate TUs, unaffected; MWCC compiles per-function frames.) This is the same address-of-global / `user_data` alias lever class as triage-3's Create win — confirming the coloring-residual class is permuter-crackable for InputProc's row2 read specifically. InputProc is no longer "parked at 98.67"; new parked value **98.89%**.
+
+- **HandleInput NULLs (both jobs, both `output-440`).** base.c IDENTICAL across the two jobs. Both 440 floors share the EXACT semantic break: a `void *new_var2` is assigned `mnDiagram2_804D6C18->user_data` ONLY inside the `if (result & 0xC0)` block — which ALWAYS returns — then read by `data = new_var2;` on the fall-through path where that block never executed (reads UNINITIALIZED stack). The permuter scored it 525-below-base precisely BY exploiting the uninit read; base re-reads `->user_data` freshly there. This is exactly the #590 class (candidate_audit lacks dataflow; caught by mental execution per the triage rules). The genuinely-valid `new_var = data` aliasing also present in these diffs is coloring-NEUTRAL for HandleInput (unlike InputProc's row2), so no clean sub-base lever exists in this corpus. HandleInput stays at its parked **97.46%** — the S1/S2/S3/R3 attribution walls hold.
+
+### PERMUTER-NULL-AT-SCALE (the deliverable for the opacity/attribution walls)
+
+A pure-random null at **1.79M iterations** (InputProc, beyond its one valid alias lever) and **~1.04M + ~390K iterations** (HandleInput, only uninit-exploit floors) is itself the evidence: for InputProc's opacity/A1-remat residual and HandleInput's S1/S2/S3/R3-attributed residual, exhaustive unguided source-shape randomization at million-iteration scale surfaces NO shippable structure beyond the single InputProc field-alias already harvested. These walls are not source-shape-reachable by random search; any further crack needs a directed lever with a named source object, not more permuter wall-clock. Do NOT re-submit identical pure-random bases on these functions (cf. MEMORY `guided_macro_permuter_jobs_are_finite` / `never-claim-unmatchable`: source provably exists, but the random-permuter channel is exhausted here).
+
+### POST-STOP HOST STATE (verified `remote tail` ×2 frozen + `remote ps`)
+
+All three stopped via `melee-agent debug permute remote stop <job_id>` (each returned `Stopped`); iteration counts FROZEN across two `remote tail` reads 8s apart (InputProc 1796629, HandleInput-125553 1043159, HandleInput-175702 390336 — all unchanged). `remote ps` confirms:
+- **coder1 → ONLY** `mnDiagram2_GetAggregatedFighterRank-coder1-20260612-044302` (AggRank wave-2). coder1 is now truly dedicated as wave-2 intended.
+- **coder3 → `mnDiagram2_GetRankedName-coder3-20260612-044336` + `mnDiagram_8024227C-coder3-20260612-044424`** (the wave-2 pair), as intended.
+
+RESIDUALS (outside this closeout's three-job scope and the wave-2 fence — flagged, NOT touched):
+- **coder2** still runs a 4th legacy-era `mnDiagram2_HandleInput-coder2-20260611-112616` (2.05M iters, VERIFIED live/churning ~50 it/s, descending; BEST 1545 > base 965 i.e. no improvement). Not in the three named; brief gave no coder2 allocation. Surfaced on **#591**.
+- **coder3** also has a lingering `mnDiagram_OnFrame-coder3-20260609-021943` (plateau, 36h, BEST 45) outside the wave-2 pair.
+- The many `unknown`-verdict rows in `remote ps` are DEAD job metadata records (no live tmux session; `ps` lists them because local metadata exists) — not running processes (#591).

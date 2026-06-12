@@ -2935,6 +2935,8 @@ Match: **98.67%**, Δ1, hunks 6, opcode 99.4%.
 Source commit: `7a17d3dc5` (campaign worktree), `32c905b47` (PR branch).
 Branch: `pr/mn-inputproc-98pct` at `/Users/mike/code/melee-pr` (NOT pushed).
 
+> **CLOSED 2026-06-12 (legacy listening-post closeout):** tuned-065847 (coder1) STOPPED at 1,796,629 iters. Final harvest landed the `output-1025` `&mn_804A04F0` row2-alias lever → InputProc **98.67 → 98.89%** (commit `6bffce320`); protected sweep clean. Pure-random null beyond that single lever at 1.79M iters = the wall's permuter-null-at-scale evidence. Do NOT re-submit an identical pure-random base here. Full epitaph: CAMPAIGN-STATE-D2COMPLETION.md § LEGACY POSTS CLOSEOUT.
+
 **Listening-post cadence:** harvest tuned-065847 (coder1) at low cadence — once per
 session or after any future commit. Bootstrap reminder: the NULL pragma ALWAYS drops
 (5/5 occurrences deterministic) — add `#pragma _permuter define NULL 0` at line 2.
