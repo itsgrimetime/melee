@@ -23,6 +23,22 @@
 #include <melee/mn/mnmain.h>
 #include <melee/mn/mnname.h>
 
+AnimLoopSettings mnDiagram3_803EEC10 = { 10.0F, 19.0F, -0.1F };
+AnimLoopSettings mnDiagram3_803EEC1C = { 0.0F, 199.0F, 0.0F };
+
+mnDiagram3_PosTable mnDiagram3_803EEC28 = {
+    { 3.3F, 0.5F, 0.0F },
+    { -2.0F, 0.57F, 0.0F },
+    { 8.0F, 0.57F, 0.0F },
+};
+
+mnDiagram3_StatTable mnDiagram3_803EEC4C = { {
+    0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D,
+    0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79,
+    0x7A, 0x7A, 0x7A, 0x7C, 0x7C, 0x7C, 0x7C, 0x7C, 0x7A, 0x7A, 0x7A, 0xFFFF,
+    0x7C, 0x7B, 0x7E, 0x7E, 0x7E, 0x7E, 0x7D, 0x7D, 0x7D, 0x7B, 0x7B, 0x7B,
+} };
+
 void mnDiagram3_80245BA4(HSD_GObj* gobj)
 {
     Vec3 sp6C;
@@ -34,7 +50,6 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     char* base;
     u16* table;
     HSD_JObj* row0;
-    HSD_JObj* row1;
     f32 neg_spacing;
     f32 row_spacing;
     f32 divider;
@@ -48,7 +63,6 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     u32 max_distance;
     u32 max_time;
     u32 max_percentage;
-    PAD_STACK(8);
 
     data = gobj->user_data;
     base = (char*) &mnDiagram3_803EEC10;
@@ -57,16 +71,17 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
         u8 is_name_mode = data->is_name_mode;
         u8 scroll = data->saved_selection;
         u8 offset = data->scroll_offset;
-        u8 limit;
+        int limit;
 
         if (is_name_mode != 0) {
             limit = 0x18;
         } else {
             limit = 0x15;
         }
+        limit = (u8) limit;
 
         {
-            int val = offset + scroll;
+            int val = scroll + offset;
             if (val >= limit) {
                 val = val - limit;
             } else {
@@ -77,29 +92,27 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
         }
     }
 
-    row1 = data->jobjs[7];
     {
         f32 row0_y = HSD_JObjGetTranslationY(row0);
-        f32 row1_y = HSD_JObjGetTranslationY(row1);
+        f32 row1_y = HSD_JObjGetTranslationY(data->jobjs[7]);
 
         {
-            u16* stat_table;
-            stat_table = (u16*) (base + ((int) stat_type << 1));
             icon_x_offset = mnDiagram3_804DC010;
             row_spacing = row1_y - row0_y;
             max_distance = 0x5F5E0FF;
             max_percentage = 0x98967F;
             divider = mnDiagram3_804DC008;
-            max_time = 0x5C8D7F;
+            max_time = 0x5B8D7F;
             neg_spacing = -row_spacing;
-            stat_table += 0x36;
+            table = (u16*) (base + ((int) stat_type << 1));
+            table += 0x36;
 
             for (i = 0; i < 5; i++) {
                 if (data->is_name_mode != 0) {
                     if (!mnDiagram2_IsIconOnlyStat(stat_type)) {
                         if (i == 0) {
-                            lb_8000B1CC(data->jobjs[6],
-                                        &mnDiagram3_803EEC28.xC, &sp6C);
+                            lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x24),
+                                        &sp6C);
                             title_text = HSD_SisLib_803A6754(0, 1);
                             data->title_text = title_text;
                             title_text->font_size.x = divider;
@@ -133,7 +146,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                 }
 
                 if (i == 0) {
-                    lb_8000B1CC(data->jobjs[6], &mnDiagram3_803EEC28.x18, &sp6C);
+                    lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x30), &sp6C);
                     value_text = HSD_SisLib_803A6754(0, 1);
                     data->value_text = value_text;
                     value_text->font_size.x = divider;
@@ -152,28 +165,30 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                 if (mnDiagram2_IsIconOnlyStat(stat_type)) {
                     mnDiagram2_GetAggregatedFighterRank(sp48, stat_type,
                                                         (u8) i);
-                    if (sp48[0] == 0x19) {
-                        goto next;
-                    }
-                    mnDiagram2_GetAggregatedFighterRank(sp38, stat_type,
-                                                        (u8) i);
-                    icon = mnDiagram_80242B38(sp38[0], 0);
-                    HSD_JObjSetTranslateY(icon, row_spacing * (f32) i);
-                    HSD_JObjAddChild(data->jobjs[6], icon);
+                    if (sp48[0] != 0x19) {
+                        mnDiagram2_GetAggregatedFighterRank(sp38, stat_type,
+                                                            (u8) i);
+                        icon = mnDiagram_80242B38(sp38[0], 0);
+                        HSD_JObjSetTranslateY(icon, row_spacing * (f32) i);
+                        HSD_JObjAddChild(data->jobjs[6], icon);
 
-                    mnDiagram2_GetAggregatedFighterRank(sp28, stat_type,
-                                                        (u8) i);
-                    {
-                        int val = *(int*) (sp28 + 0xC);
-                        mnDiagram_FormatDecimalNumber((char*) sp58, val, 0);
+                        mnDiagram2_GetAggregatedFighterRank(sp28, stat_type,
+                                                            (u8) i);
+                        {
+                            int val = M2C_FIELD(sp28, int*, 0xC);
+                            mnDiagram_FormatDecimalNumber((char*) sp58, val,
+                                                          0);
+                        }
+                        {
+                            f32 f1 = mnDiagram3_804DC00C;
+                            f32 offset_y = neg_spacing * (f32) i / divider;
+                            HSD_SisLib_803A6B98(value_text, f1, offset_y,
+                                                (char*) sp58);
+                        }
+                        goto icons;
                     }
-                    {
-                        f32 f1 = mnDiagram3_804DC00C;
-                        f32 offset_y = neg_spacing * (f32) i / divider;
-                        HSD_SisLib_803A6B98(value_text, f1, offset_y,
-                                            (char*) sp58);
-                    }
-                } else {
+                }
+                {
                     if (mnDiagram2_IsTimeStat(stat_type)) {
                         int val = mnDiagram2_GetStatValue(data->is_name_mode,
                                                           stat_type, entity);
@@ -215,36 +230,36 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                     }
                 }
 
-                {
-                    u16 icon_id = *stat_table;
-                    int r17 = icon_id;
-                    if ((u32) icon_id == 0xFFFF) {
-                        goto next;
-                    }
-
-                    lb_8000B1CC(data->jobjs[6], &mnDiagram3_803EEC28.x18, &sp6C);
-                    {
-                        HSD_Text* icon_text;
-                        f32 negated_y = -sp6C.y;
-                        icon_text = HSD_SisLib_803A5ACC(
-                            0, 1, icon_x_offset + sp6C.x,
-                            neg_spacing * (f32) i + negated_y, sp6C.z,
-                            mnDiagram3_804DC014, mnDiagram3_804DC014);
-                        data->row_icons[i] = icon_text;
-                        icon_text->default_alignment = 1;
-                        icon_text->text_color = mn_804D4B64;
-
-                        if (mnDiagram2_IsDistanceStat(stat_type)) {
-                            u32 stat_val = mnDiagram2_GetStatValue(
-                                data->is_name_mode, stat_type, entity);
-                            if (mnDiagram_IsDistanceOverflow(stat_val)) {
-                                HSD_SisLib_803A6368(icon_text, 0x7F);
-                                goto next;
-                            }
-                        }
-                        HSD_SisLib_803A6368(icon_text, r17);
-                    }
+            icons: {
+                int icon_id = *table;
+                int r17 = icon_id;
+                if ((u32) icon_id == 0xFFFF) {
+                    goto next;
                 }
+
+                lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x30), &sp6C);
+                {
+                    HSD_Text* icon_text;
+                    f32 negated_y = -sp6C.y;
+                    icon_text = HSD_SisLib_803A5ACC(
+                        0, 1, icon_x_offset + sp6C.x,
+                        neg_spacing * (f32) i + negated_y, sp6C.z,
+                        mnDiagram3_804DC014, mnDiagram3_804DC014);
+                    data->row_icons[i] = icon_text;
+                    icon_text->default_alignment = 1;
+                    icon_text->text_color = mn_804D4B64;
+
+                    if (mnDiagram2_IsDistanceStat(stat_type)) {
+                        u32 stat_val = mnDiagram2_GetStatValue(
+                            data->is_name_mode, stat_type, entity);
+                        if (mnDiagram_IsDistanceOverflow(stat_val)) {
+                            HSD_SisLib_803A6368(icon_text, 0x7F);
+                            goto next;
+                        }
+                    }
+                    HSD_SisLib_803A6368(icon_text, r17);
+                }
+            }
 
             next:
                 (void) 0;
@@ -424,16 +439,15 @@ static inline void HSD_JObjSetTranslateZ_Fake(HSD_JObj* jobj, f32 z)
 
 void mnDiagram3_8024714C(void* arg0)
 {
+    int i;
     Vec3 sp48;
     Diagram3* data;
     HSD_GObj* gobj;
     HSD_JObj* row0;
-    HSD_JObj* row1;
     mnDiagram_ArchiveData* archive;
     f32 row_spacing;
     f32 neg_spacing;
-    int i;
-    PAD_STACK(64);
+    PAD_STACK(16);
 
     {
         MenuFlow* flow = &mn_804A04F0;
@@ -448,8 +462,8 @@ void mnDiagram3_8024714C(void* arg0)
     data = gobj->user_data;
 
     {
-        HSD_GObj* popup;
         HSD_JObj* popup_jobj;
+        HSD_GObj* popup;
 
         popup = GObj_Create(6, 7, 0x80);
         data->popup_gobj = popup;
@@ -462,9 +476,8 @@ void mnDiagram3_8024714C(void* arg0)
 
         data = gobj->user_data;
         row0 = data->jobjs[8];
-        row1 = data->jobjs[9];
-        row_spacing =
-            HSD_JObjGetTranslationY(row1) - HSD_JObjGetTranslationY(row0);
+        row_spacing = HSD_JObjGetTranslationY(data->jobjs[9]) -
+                      HSD_JObjGetTranslationY(row0);
 
         row0 = data->jobjs[8];
         HSD_JObjSetTranslateX_Fake(popup_jobj, HSD_JObjGetTranslationX(row0));
@@ -480,7 +493,7 @@ void mnDiagram3_8024714C(void* arg0)
 
     {
         Diagram3* d;
-        u8 scroll;
+        int scroll;
         u8 stat_idx;
         u16* base;
 
@@ -489,16 +502,15 @@ void mnDiagram3_8024714C(void* arg0)
         row0 = d->jobjs[8];
         scroll = d->scroll_offset;
 
-        row1 = d->jobjs[9];
-        row_spacing =
-            HSD_JObjGetTranslationY(row1) - HSD_JObjGetTranslationY(row0);
+        row_spacing = HSD_JObjGetTranslationY(d->jobjs[9]) -
+                      HSD_JObjGetTranslationY(row0);
+        neg_spacing = -row_spacing;
 
         lb_8000B1CC(d->jobjs[8], &mnDiagram3_803EEC28.x0, &sp48);
 
-        neg_spacing = -row_spacing;
         base = mnDiagram3_803EEC4C.indices;
         row_spacing = mnDiagram3_804DBFF8;
-        stat_idx = scroll;
+        stat_idx = (u8) scroll;
         i = 0;
 
         do {
@@ -511,17 +523,18 @@ void mnDiagram3_8024714C(void* arg0)
             {
                 u8 type_idx = (u8) i;
                 int val;
-                u8 limit;
+                int limit;
 
                 if (d->is_name_mode != 0) {
                     limit = 0x18;
                 } else {
                     limit = 0x15;
                 }
+                limit = (u8) limit;
 
                 val = stat_idx + type_idx;
-                if (val >= (u8) limit) {
-                    val = val - (u8) limit;
+                if (val >= limit) {
+                    val = val - limit;
                 } else {
                     val = (u8) val;
                 }
