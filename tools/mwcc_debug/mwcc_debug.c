@@ -92,6 +92,15 @@ static int g_current_function_set = 0;
 #define DEBUGLISTING (*(char *)0x584226)
 #define DEBUG_GUARD (*(int *)0x5882B8)
 
+static int mwcc_debug_output_active(void)
+{
+#ifdef MWCC_DEBUG_TEST
+    return 0;
+#else
+    return PCFILE && DEBUG_GUARD;
+#endif
+}
+
 // PCode structs for v1.2.5n, not exhaustive, just what is needed to walk lists
 typedef struct PCode
 {
@@ -719,7 +728,7 @@ static void hook_fn(void *func_addr, void *hook_func,
 typedef struct IGNode
 {
     /* +0x00 */ struct IGNode *next;   // populated by simplifygraph (linked list)
-    /* +0x04 */ int _x4;               // init 0
+    /* +0x04 */ int remat_record;      // nonzero rematerialization operand record
     /* +0x08 */ int _x8;               // init 0
     /* +0x0C */ int16 ig_idx;          // own index in INTERFERENCEGRAPH
     /* +0x0E */ int16 degree;          // initially = arraySize, decremented by simplify
@@ -728,6 +737,7 @@ typedef struct IGNode
                                        // colorgraph overwrites it with a physical reg
     /* +0x12 */ uint8 flags;           // bit 0x4 = node was coalesced AWAY
                                        // bit 0x8 = node is a coalesce ROOT
+                                       // bit 0x10 = remat alternate operand slot
                                        // bit 0x1 = IG_FLAG_SPILLED (added by allocator)
     /* +0x13 */ uint8 _pad13;
     /* +0x14 */ int16 arraySize;       // # of interferer entries
@@ -737,6 +747,7 @@ typedef struct IGNode
 #define IG_FLAG_SPILLED       0x01
 #define IG_FLAG_COALESCED_AWAY 0x04
 #define IG_FLAG_COALESCE_ROOT  0x08
+#define IG_FLAG_REMAT_ALT_OPERAND 0x10
 
 #define INTERFERENCEGRAPH (*(IGNode ***)0x587E3C)
 #define N_IGNODES (*(int *)0x587190)
@@ -757,6 +768,246 @@ typedef struct IGNode
 // dereference hangs wibo (root-caused 2026-05-19). Indexed by rclass.
 #define MAX_REGCLASS 4
 static int g_last_n_virtuals[MAX_REGCLASS] = {0, 0, 0, 0};
+
+// ---------------------------------------------------------------------------
+// FORCE_REMAT (#579) — late rematerialization operand-slot bias.
+//
+// MWCC_DEBUG_FORCE_REMAT="class:ig=copy[,class:ig=literal]*"
+//   copy    -> set IGNode flag bit 0x10 before 0x4CE1A0 applies coloring
+//   literal -> clear IGNode flag bit 0x10
+//
+// The hook at 0x4CE1A0 writes node->assignedReg to remat operand offset 0x26
+// when bit 0x10 is set, and offset 0x24 otherwise. We keep the name conservative:
+// this is an observed alternate operand-slot selector, used only as a diagnostic
+// lever for constant-rider probes.
+#define MAX_FORCE_REMAT_RULES 64
+#define FORCE_REMAT_LITERAL 0
+#define FORCE_REMAT_COPY 1
+
+typedef struct ForceRematRule
+{
+    int rclass;
+    int ig_idx;
+    int mode;
+} ForceRematRule;
+
+static ForceRematRule g_force_remat_rules[MAX_FORCE_REMAT_RULES];
+static int g_n_force_remat_rules = 0;
+static int g_force_remat_rules_parsed = 0;
+static int g_force_remat_parse_overflow = 0;
+static int g_force_remat_env_truncated = 0;
+static char g_force_remat_scope_fn[FUNCNAME_BUF_LEN] = {0};
+static int g_force_remat_scope_fn_set = 0;
+
+static int token_eq_literal(const char *buf, int start, int end, const char *lit)
+{
+    int i;
+
+    while (start < end && buf[start] == ' ') start++;
+    while (end > start && buf[end - 1] == ' ') end--;
+    for (i = 0; ; i++) {
+        if (start + i >= end) return lit[i] == '\0';
+        if (lit[i] == '\0') return 0;
+        if (buf[start + i] != lit[i]) return 0;
+    }
+}
+
+static int parse_force_remat_rules_from_string(const char *buf, int len)
+{
+    int entry_start;
+
+    g_n_force_remat_rules = 0;
+    g_force_remat_parse_overflow = 0;
+
+    entry_start = 0;
+    while (entry_start < len) {
+        int entry_end = entry_start;
+        int colon = -1;
+        int equals = -1;
+        int j;
+        int rclass;
+        int ig_idx;
+        int mode = -1;
+
+        while (entry_end < len && buf[entry_end] != ',')
+            entry_end++;
+
+        for (j = entry_start; j < entry_end; j++) {
+            if (buf[j] == ':' && colon < 0) colon = j;
+            else if (buf[j] == '=' && equals < 0) equals = j;
+        }
+
+        if (colon > entry_start && equals > colon) {
+            if (parse_int_token(buf, entry_start, colon, &rclass)
+                && parse_int_token(buf, colon + 1, equals, &ig_idx))
+            {
+                if (token_eq_literal(buf, equals + 1, entry_end, "copy"))
+                    mode = FORCE_REMAT_COPY;
+                else if (token_eq_literal(buf, equals + 1, entry_end, "literal"))
+                    mode = FORCE_REMAT_LITERAL;
+
+                if (mode >= 0) {
+                    if (g_n_force_remat_rules < MAX_FORCE_REMAT_RULES) {
+                        g_force_remat_rules[g_n_force_remat_rules].rclass = rclass;
+                        g_force_remat_rules[g_n_force_remat_rules].ig_idx = ig_idx;
+                        g_force_remat_rules[g_n_force_remat_rules].mode = mode;
+                        g_n_force_remat_rules++;
+                    } else {
+                        g_force_remat_parse_overflow = 1;
+                    }
+                }
+            }
+        }
+
+        entry_start = entry_end + 1;
+    }
+
+    return g_n_force_remat_rules;
+}
+
+static void parse_force_remat_from_env(void)
+{
+    static char buf[MWCC_DEBUG_ENV_BUF_LEN];
+    uint32 len;
+
+    g_force_remat_rules_parsed = 1;
+    g_n_force_remat_rules = 0;
+    g_force_remat_parse_overflow = 0;
+    g_force_remat_env_truncated = 0;
+
+    len = GetEnvironmentVariableA(
+        "MWCC_DEBUG_FORCE_REMAT_FUNCTION",
+        g_force_remat_scope_fn, sizeof(g_force_remat_scope_fn));
+    g_force_remat_scope_fn_set =
+        (len > 0 && len < sizeof(g_force_remat_scope_fn)) ? 1 : 0;
+    if (!g_force_remat_scope_fn_set)
+        g_force_remat_scope_fn[0] = '\0';
+
+    len = GetEnvironmentVariableA("MWCC_DEBUG_FORCE_REMAT", buf, sizeof(buf));
+    if (len == 0) return;
+    if (len >= sizeof(buf)) {
+        g_force_remat_env_truncated = 1;
+        return;
+    }
+    parse_force_remat_rules_from_string(buf, (int)len);
+}
+
+static int force_remat_scope_skip(void)
+{
+    int j;
+
+    if (!g_force_remat_scope_fn_set)
+        return 0;
+    if (!g_current_function_set)
+        return 1;
+    for (j = 0; j < FUNCNAME_BUF_LEN; j++) {
+        if (g_current_function[j] != g_force_remat_scope_fn[j])
+            return 1;
+        if (g_current_function[j] == '\0')
+            break;
+    }
+    return 0;
+}
+
+static int apply_force_remat_rules_to_ig_array(int rclass, IGNode **ig, int n_virtuals)
+{
+    int i;
+    int applied = 0;
+
+    if (g_n_force_remat_rules == 0)
+        return 0;
+    if (force_remat_scope_skip()) {
+        if (mwcc_debug_output_active()) {
+            debug_printf("[FORCE_REMAT] scope skip (fn=%s, scope=%s)\n",
+                         g_current_function_set ? g_current_function : "<unset>",
+                         g_force_remat_scope_fn);
+        }
+        return 0;
+    }
+    if (ig == 0) {
+        if (mwcc_debug_output_active())
+            debug_printf("[FORCE_REMAT] skip all: INTERFERENCEGRAPH is null\n");
+        return 0;
+    }
+
+    for (i = 0; i < g_n_force_remat_rules; i++) {
+        ForceRematRule *rule = &g_force_remat_rules[i];
+        IGNode *node;
+        uint8 old_flags;
+        uint8 new_flags;
+        const char *mode_name;
+
+        if (rule->rclass != rclass)
+            continue;
+        if (rule->ig_idx < 0 || rule->ig_idx >= n_virtuals) {
+            if (mwcc_debug_output_active()) {
+                debug_printf("[FORCE_REMAT] skip class=%d ig_idx=%d: "
+                             "out of range (n_virtuals=%d)\n",
+                             rclass, rule->ig_idx, n_virtuals);
+            }
+            continue;
+        }
+        if (rule->ig_idx < 32) {
+            if (mwcc_debug_output_active()) {
+                debug_printf("[FORCE_REMAT] skip class=%d ig_idx=%d: "
+                             "physical register node\n",
+                             rclass, rule->ig_idx);
+            }
+            continue;
+        }
+
+        node = ig[rule->ig_idx];
+        if (node == 0) {
+            if (mwcc_debug_output_active()) {
+                debug_printf("[FORCE_REMAT] skip class=%d ig_idx=%d: null node\n",
+                             rclass, rule->ig_idx);
+            }
+            continue;
+        }
+        if ((int)node->ig_idx != rule->ig_idx) {
+            if (mwcc_debug_output_active()) {
+                debug_printf("[FORCE_REMAT] skip class=%d ig_idx=%d: "
+                             "slot holds ig_idx=%d\n",
+                             rclass, rule->ig_idx, (int)node->ig_idx);
+            }
+            continue;
+        }
+        if (node->flags & IG_FLAG_SPILLED) {
+            if (mwcc_debug_output_active()) {
+                debug_printf("[FORCE_REMAT] skip class=%d ig_idx=%d: spilled\n",
+                             rclass, rule->ig_idx);
+            }
+            continue;
+        }
+        if (node->remat_record == 0) {
+            if (mwcc_debug_output_active()) {
+                debug_printf("[FORCE_REMAT] skip class=%d ig_idx=%d: "
+                             "no remat record\n",
+                             rclass, rule->ig_idx);
+            }
+            continue;
+        }
+
+        old_flags = node->flags;
+        if (rule->mode == FORCE_REMAT_COPY)
+            node->flags = (uint8)(node->flags | IG_FLAG_REMAT_ALT_OPERAND);
+        else
+            node->flags = (uint8)(node->flags & ~IG_FLAG_REMAT_ALT_OPERAND);
+        new_flags = node->flags;
+        mode_name = (rule->mode == FORCE_REMAT_COPY) ? "copy" : "literal";
+        applied++;
+
+        if (mwcc_debug_output_active()) {
+            debug_printf("[FORCE_REMAT] fn=%s class=%d ig_idx=%d mode=%s "
+                         "flags 0x%02x -> 0x%02x\n",
+                         g_current_function_set ? g_current_function : "<unset>",
+                         rclass, rule->ig_idx, mode_name,
+                         (int)old_flags, (int)new_flags);
+        }
+    }
+
+    return applied;
+}
 
 // ---------------------------------------------------------------------------
 // Tier 5 — allocator biasing via env var.
@@ -1425,6 +1676,10 @@ static int coalesce_normalize_alias_roots_guarded(
 // trampoline. trampoline buffer must hold prologue (7) + jump (5) = 12 bytes.
 static unsigned char colorgraph_trampoline[24];
 
+// apply-coloring/remat rewrite at 0x4CE1A0: prologue is 8 bytes
+// (push ebx, push esi, mov esi,[0x587c74]); resume on push edi.
+static unsigned char apply_coloring_trampoline[24];
+
 // simplifygraph: same shape prologue as colorgraph (7 bytes).
 static unsigned char simplifygraph_trampoline[24];
 
@@ -1468,6 +1723,32 @@ static unsigned char obtain_nv_crf_trampoline[24];
 static int dispense_counter_gpr = 0;
 static int dispense_counter_fpr = 0;
 static int dispense_counter_crf = 0;
+
+// hook @ 0x4CE1A0, applies assigned registers to operands/remat records.
+static void __cdecl hook_apply_coloring(int rclass, int n_virtuals)
+{
+    typedef void(__cdecl * apply_coloring_fn)(int, int);
+
+    if (!g_force_remat_rules_parsed)
+        parse_force_remat_from_env();
+
+    if (g_force_remat_env_truncated || g_force_remat_parse_overflow) {
+        if (mwcc_debug_output_active()) {
+            debug_printf("[FORCE_REMAT] ERROR: override list exceeded parser "
+                         "capacity (cap=%d, env_buf=%d); no partial remat "
+                         "overrides applied\n",
+                         MAX_FORCE_REMAT_RULES, MWCC_DEBUG_ENV_BUF_LEN);
+        }
+    } else if (g_n_force_remat_rules > 0) {
+        IGNode **ig = INTERFERENCEGRAPH;
+        int cap = n_virtuals;
+        if (cap < 0) cap = 0;
+        if (cap > 4096) cap = 4096;
+        apply_force_remat_rules_to_ig_array(rclass, ig, cap);
+    }
+
+    ((apply_coloring_fn)apply_coloring_trampoline)(rclass, n_virtuals);
+}
 
 // hook @ 0x4CE2D0, colorgraph
 static int __cdecl hook_colorgraph(int rclass, IGNode *head)
@@ -2299,6 +2580,12 @@ static void install_hooks(void)
     hook_fn((void *)0x4CE2D0, hook_colorgraph,
             colorgraph_trampoline, 7);
 
+    // apply-coloring/remat rewrite @ 0x4CE1A0 — after coloring, before final
+    // listing/rewrite observes rematerialization operand slots. Prologue 8 bytes:
+    // push ebx + push esi + mov esi,[0x587c74].
+    hook_fn((void *)0x4CE1A0, hook_apply_coloring,
+            apply_coloring_trampoline, 8);
+
     // buildinterferencegraph @ 0x530A00 (Tier 3 hook) — runs before
     // colorgraph for each (function, register class). After it returns,
     // interferencegraph[] is populated with all edges MWCC computed for
@@ -2414,6 +2701,7 @@ int __stdcall DllMain(void *hModule, uint32 reason, void *reserved)
         parse_overrides_from_env();
         parse_iter_first_from_env();
         parse_force_schedule_from_env();
+        parse_force_remat_from_env();
         install_hooks();
     }
     return 1;
