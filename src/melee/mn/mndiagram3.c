@@ -447,7 +447,6 @@ void mnDiagram3_8024714C(void* arg0)
     mnDiagram_ArchiveData* archive;
     f32 row_spacing;
     f32 neg_spacing;
-    f32 new_var;
     PAD_STACK(16);
 
     {
@@ -512,14 +511,13 @@ void mnDiagram3_8024714C(void* arg0)
         base = mnDiagram3_803EEC4C.indices;
         row_spacing = mnDiagram3_804DBFF8;
         stat_idx = (u8) scroll;
-        new_var = mnDiagram3_804DBFFC;
         i = 0;
 
         do {
             f32 fi = (f32) i;
             HSD_Text* text = HSD_SisLib_803A5ACC(
                 0, 1, sp48.x - row_spacing, neg_spacing * fi + -sp48.y, sp48.z,
-                new_var, mnDiagram3_804DBFFC);
+                row_spacing, mnDiagram3_804DBFFC);
 
             d->row_labels[i] = text;
             {
