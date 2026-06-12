@@ -1286,8 +1286,7 @@ u8 mnDiagram2_GetRankedName(u8 stat_type, u8 rank)
 void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
 {
     mnDiagram2_SortEntry entries[25];
-    f64 temp0;
-    f64 temp8;
+    mnDiagram2_SortEntry temp;
     mnDiagram2_SortEntry* base;
     mnDiagram2_SortEntry* curr;
     void* funcTable;
@@ -1350,27 +1349,20 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     }
 
     // Bubble sort
-    j = 0;
-    do {
+    for (j = 0; j < 25; j++) {
         k = j + 1;
         curr = &entries[k];
         while (k < 25) {
-            u64 a = base->value;
-            u64 b = curr->value;
-            if (a < b) {
-                temp0 = base->d0;
-                temp8 = base->d8;
-                base->d0 = curr->d0;
-                base->d8 = curr->d8;
-                curr->d0 = temp0;
-                curr->d8 = temp8;
+            if (base->value < curr->value) {
+                temp = *base;
+                *base = *curr;
+                *curr = temp;
             }
             curr++;
             k++;
         }
         base++;
-        j++;
-    } while (j < 25);
+    }
 
     // Write result to output buffer
     curr = &entries[idx];
