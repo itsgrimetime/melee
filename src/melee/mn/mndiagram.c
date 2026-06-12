@@ -835,7 +835,8 @@ void mnDiagram_8023FC28(void)
             if ((GetNameText(mnDiagram_804A076C.sorted_names[j]) != NULL) &&
                 ((totals[mnDiagram_804A076C.sorted_names[max_idx]] <
                   totals[mnDiagram_804A076C.sorted_names[j]]) ||
-                 ((GetNameText(mnDiagram_804A076C.sorted_names[max_idx]) ==
+                 ((GetNameText(
+                       (0, mnDiagram_804A076C.sorted_names[max_idx])) ==
                    NULL) &&
                   (GetNameText(mnDiagram_804A076C.sorted_names[j]) != NULL))))
             {
