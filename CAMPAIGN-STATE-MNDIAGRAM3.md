@@ -19,7 +19,7 @@ Complete all 9 functions in `src/melee/mn/mndiagram3.c` to 100%.
 | **mnDiagram3_80247008** | 0x144 (324B) | **100%** | MATCHED (iteration 3, data linking f66cc758a) |
 | **mnDiagram3_8024714C** | 0x378 (888B) | **90.23%** | OPEN — coloring-dominated (iter-4: decl-order axis exhausted). See Map 2 + Iteration 4. |
 | mnDiagram3_80245BA4 | 0x618 (1560B) | **94.07%** | **PARKED** (iteration 8 oracle): S9 float wall = UNREACHABLE-BY-CATALOGUE (4-node class-1 pop-order, force-phys-verified attribution); +108/S8 = front-end address-mode fold, NOT-A-COLORING-QUESTION. Reopen conditions in Iteration 8. |
-| fn_802461BC | 0xB84 (2948B) | 98.42% | OPEN — MAPPED (iteration 8 Unit 2): Δ0/opcode 99.9; frame-spacing (28B Vec3 interleave, PAD_STACK(72)) + entry zero-rider = the two structural levers; GPR rotation downstream. Proposed name mnDiagram3_HandleInput. |
+| fn_802461BC | 0xB84 (2948B) | **98.42%** | **PARKED** (iterations 9+10): frame/decl/lifetime axes + entry-rider spellings ×3 + named-float substitution all exhausted (every candidate flat/regress, most = repeat fingerprints). Residual = 144 relabel lines (127 GPR Family-A, 17 FPR Family-C) + the 2-instr entry rider. Reopen conditions in Iteration 9+10 close-out. Proposed name mnDiagram3_HandleInput. |
 
 Driver 1 mapped 80247008 + 8024714C (this iteration). NO builds beyond baseline diffs (3 checkdiff runs total: 1 build + reused diffs).
 
@@ -368,4 +368,52 @@ The **BEFORE GLOBAL OPTIMIZATION pcode already contains `lhz r36,108(r54)`** —
 
 ## Driver-3 Entries (fn_802461BC)
 
-(fn_802461BC opening map = Iteration 8 Unit 2 above. Fix session next.)
+(fn_802461BC opening map = Iteration 8 Unit 2 above. Fix sessions = Iterations 9+10 below.)
+
+---
+
+## Iteration 9 (driver 4) — fn_802461BC structural pair: NEGATIVE (4 builds + decl-orders + lifetime probes; no commits, clean baseline return)
+
+### Frame lever (D) — flat + repeat-fingerprint; layout not reachable on the decl/lifetime axes
+
+- **Ground truth (`debug inspect frame-reservations`):** both frames already 320B (PAD_STACK(72) makes size exact; prologue/epilogue byte-match). The ONLY frame diffs are the three `lb_8000B1CC` r5-args: target `addi r5,r1,{220,192,164}` (spDC=0xdc, spC0=0xc0, spA4=0xa4 — **28B spacing**, units = `[Vec3 12B | 16B arm-locals]` at 0xa4-0x108, low 0x8-0xa4 (156B) unused) vs ours `{252,240,228}` (packed 12B apart, single 220B low gap).
+- **Vec3-into-arm-blocks (+PAD_STACK kept):** produces the right SHAPE (3 separated Vec3s with gaps) but gaps 12B/4B not 16B/16B, block LOW (0x80) not high (0xa4); match **flat 98.42**, REPEAT fingerprint (prior attempt #1/#3 neutral). Without PAD_STACK: natural frame = 248 (16B/24B gaps) — wrong size. **The passing form needs ~72B of real stack-resident locals filling the 16B gaps (the arm locals currently register-allocate, not spill)** — missing-stack-object territory, not a reorder.
+- `debug suggest frame`: "add-low-frame-reservation, `--frame-reservation-bytes 36`" (target block sits exactly 36B higher). `debug mutate lifetime-layout --compile-probes` (declaration-use-distance / block-scope / call-argument-tempization): **all probes frame_delta=0, flat 98.4166.**
+
+### Entry zero-rider — mechanism re-derived; shared-i idiom degrades
+
+- **Corrected channel anatomy:** r29 = the canonical zero minted by the `Menu_GetAllInputs()` inline's buttons-hi store (`li r29,0` +048, `stw r29,8(r26)` +050 — both UNCONDITIONAL, before the 0x20 branch). Downstream riders: `entering_menu = 0` (`stb r29,17` +060) rides it in BOTH builds; the 0xC0-arm `i = 0` copies it in BOTH (+118/+11c `slwi r0,r29,2; addi rX,r29,0`). The SOLE divergence: the **0x20-arm i-init** — target copies (`addi r26,r29,0`), ours rematerializes (`li r28,0`).
+- Buttons idiom on the shared `i` (`entering_menu = (i = 0)`): init forced early, classification → signature-type-mismatch. REVERTED.
+
+### decl-orders close-out — exhausted
+
+`debug mutate decl-orders fn_802461BC --strategy all` (9 locals, 24 candidates): **NO ordering improves ≥0.05%.** All Vec3/i/limit/v moves byte-inert (Δ0.00); base/data/input moves regress (−0.03 to −1.38).
+
+### NEW — @732/@733 float-pool sites are DOWNSTREAM of the cascade (do NOT retry)
+
+Only 2 genuine opcode-order divergence families exist at baseline: the +08c/+090 rider, and **6 reloc sites** (+28c/+2d8, +684/+6d0, +a9c/+ae8) where the `6.5f`/`240.0f` literals load as anonymous `@732`/`@733` .sdata2 pool entries vs target's named `mnDiagram3_804DBFF8`/`804DBFFC` (values byte-verified 0x40D00000=6.5, 0x43700000=240.0; the names are already used by 80245BA4 at lines 512/520). **Forcing the named refs eliminated @732/@733 but dropped match to 94.34** with a full 1-instruction-shift cascade (894 diff lines) — and is itself a REPEAT fingerprint (prior attempt #5). Unlike 80247008's .data strings (iteration 3), this float-pool residual is a cascade artifact: it can only coalesce naturally once the body matches. **FENCE: no named-float retry.**
+
+---
+
+## Iteration 10 (driver 4) — lever (c) register-class counter: NEGATIVE (2 builds, hard-reverted) → PARK @ 98.42
+
+THE ONE QUESTION (does a register-class 0x20-arm counter unlock the +08c/+090 rider, and do frame/floats re-roll?): **NO — the rider does not fire in either spelling; no substrate change to re-measure.**
+
+1. **Build 1 — block `int i2` + idiom `entering_menu = (i2 = 0)`:** the store consumes the value → init forced EARLY at the idiom site (`li r30,0` at +064, directly after the entering_menu stb; NO init at the loop; 10-instruction misalignment window +064..+094). Even with a register-class recipient and r29's zero live, the init is **still a fresh `li`, not a copy** — the literal law holds at the idiom site. 98.15, signature-type-mismatch. Gates (a)+(b) FAIL.
+2. **Build 2 — plain `int i2 = 0` block-local (init at the loop position, no idiom):** **+08c/+090 BYTE-IDENTICAL to baseline** (fresh `li r28,0` — the literal law holds for register-class variables too). −0.27 (98.15) from the i-identity split renumbering the Family-A bands (170 vs 169 diff lines). REPEAT fingerprint (prior attempt #7). Gate (a) FAILS; classification holds instruction-sequence.
+3. **MECHANISM CORRECTION (kills the home-class theory):** the baseline 0xC0-arm copy (`addi r30,r29,0` +11c) comes from the SAME shared home-class `i` — so remat-vs-copy is a **per-region materialization/scheduling decision on the promoted i variable's regions**, not a variable-class property. The 0x20-arm region remats where the target copies; the spelling that flips it was not found despite the shared-i idiom (iter-9 B3), idiom+register-class i2 (iter-10 B1), and plain register-class i2 (iter-10 B2).
+
+### PARK census — fn_802461BC @ 98.42 (Δ0, opcode 99.9, hunks 86, PAD_STACK(72))
+
+| Residual | Attribution | Status |
+|---|---|---|
+| entry +08c/+090 rider (2 instrs) | per-region remat-vs-copy on promoted i's 0x20-region | not found despite 3 spellings (idiom shared-i / idiom register-class / plain register-class) — all degrade or byte-inert, 2 = repeat fingerprints |
+| frame 28B Vec3 spacing (14 stack lines) | needs ~72B real stack-resident arm-locals (currently registerized); 36B low-reservation delta | not found despite Vec3-in-blocks (repeat), suggest-frame, lifetime-layout 3-operator compile probes, decl-orders all (24 cands) |
+| @732/@733 float pool (6 reloc sites) | downstream cascade artifact (named-ref forcing = 94.34 + 894-line shift, repeat fingerprint) | FENCED — do not retry named-float substitution |
+| 144 relabel lines (127 GPR Family-A rotation, 17 FPR Family-C) | coloring cascade, same register set both sides | levers not found despite all of the above + exhaustive decl-orders |
+
+**Reopen conditions:** (a) tuned-permuter channel authorized (campaign DO-NOT lifts), (b) #573 FPR what-ifs / IG-intervene names a reachable knob for the Family-C pair or the 0x20-region remat-vs-copy decision, (c) any campaign finds a spelling that makes per-arm block locals stack-resident (the 16B gap-fill — would unlock the frame), (d) upstream edits this TU.
+
+**Naming evidence stands for close-out:** mnDiagram3_HandleInput (per-frame input proc registered via `HSD_GObj_SetupProc(GObj_Create(0,1,0x80), fn_802461BC, 0)` from 8024714C; siblings mnDiagram_InputProc / mnDiagram2_HandleInput). Apply when the function reaches 100.
+
+**TU end-state: 6/9 matched, 3 PARKED (8024714C 90.23, 80245BA4 94.07, fn_802461BC 98.42); .text 96.49, .data/.sdata 100.**
