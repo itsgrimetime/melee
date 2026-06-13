@@ -62,11 +62,11 @@ static uint32 GetEnvironmentVariableA(const char *name, char *buf, uint32 size)
 
 #define PAGE_EXECUTE_READWRITE 0x40
 
-void *memcpy(void *dst, const void *src, unsigned long n)
+void *memcpy(void *dst, const void *src, __SIZE_TYPE__ n)
 {
     volatile uint8 *d = (volatile uint8 *)dst;
     const volatile uint8 *s = (const volatile uint8 *)src;
-    unsigned long i;
+    __SIZE_TYPE__ i;
     for (i = 0; i < n; i++)
         d[i] = s[i];
     return dst;
@@ -121,15 +121,6 @@ static int g_current_function_set = 0;
 #define U32_AT(p, off) (*(uint32 *)((char *)(p) + (off)))
 #define U16_AT(p, off) (*(uint16 *)((char *)(p) + (off)))
 #define U8_AT(p, off) (*(uint8 *)((char *)(p) + (off)))
-
-static int mwcc_debug_output_active(void)
-{
-#ifdef MWCC_DEBUG_TEST
-    return 0;
-#else
-    return PCFILE && DEBUG_GUARD;
-#endif
-}
 
 static int mwcc_debug_output_active(void)
 {
