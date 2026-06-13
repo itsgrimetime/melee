@@ -54,6 +54,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     f32 row_spacing;
     f32 divider;
     f32 icon_x_offset;
+    float new_var;
     u8 stat_type;
     int i;
     HSD_Text* title_text;
@@ -122,7 +123,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                                 f32 y = sp6C.y;
                                 f32 z = sp6C.z;
                                 title_text->pos_x = sp6C.x;
-                                title_text->pos_y = -y;
+                                title_text->pos_y = (new_var = -y);
                                 title_text->pos_z = z;
                             }
                         }
@@ -157,7 +158,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                         f32 y = sp6C.y;
                         f32 z = sp6C.z;
                         value_text->pos_x = sp6C.x;
-                        value_text->pos_y = -y;
+                        value_text->pos_y = (new_var = -y);
                         value_text->pos_z = z;
                     }
                     value_text->default_alignment = 2;
