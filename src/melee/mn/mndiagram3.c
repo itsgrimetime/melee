@@ -170,8 +170,10 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                     HSD_JObjSetTranslateY(icon, row_spacing * (f32) i);
                     HSD_JObjAddChild(data->jobjs[6], icon);
 
-                    mnDiagram2_GetAggregatedFighterRank(sp28, stat_type,
-                                                        (u8) i);
+                    {
+                        u8 ii = (u8) i;
+                        mnDiagram2_GetAggregatedFighterRank(sp28, stat_type, ii);
+                    }
                     {
                         int val = M2C_FIELD(sp28, int*, 0xC);
                         mnDiagram_FormatDecimalNumber((char*) sp58, val, 0);
