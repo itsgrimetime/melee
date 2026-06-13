@@ -530,7 +530,7 @@ void mnDiagram3_8024714C(void* arg0)
                 }
                 limit = (u8) limit;
 
-                val = type_idx + stat_idx;
+                val = stat_idx + type_idx;
                 if (val >= limit) {
                     val = val - limit;
                 } else {
