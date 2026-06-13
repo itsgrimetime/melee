@@ -2660,6 +2660,8 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     u8* sorted;
     int count;
     int fighter_id;
+    u8* pr;
+    u8* pr2;
     f32 x_spacing;
     f32 y_spacing;
 
@@ -2729,22 +2731,22 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
         if (count > i) {
             remaining = i;
             idx = arg1;
-            p = sorted + idx;
+            pr = sorted + idx;
             while (remaining >= 0) {
                 if (remaining == 0) {
                     fighter_id = sorted[idx];
                     goto row_found;
                 }
-                p2 = p;
+                pr2 = pr;
             row_inner:
                 idx++;
-                p2++;
-                p++;
+                pr2++;
+                pr++;
                 if (idx >= 0x19) {
                     fighter_id = 0x19;
                     goto row_found;
                 }
-                if (mn_IsFighterUnlocked(*p2) == 0) {
+                if (mn_IsFighterUnlocked(*pr2) == 0) {
                     goto row_inner;
                 }
                 remaining--;
