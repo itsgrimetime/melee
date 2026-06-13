@@ -1307,7 +1307,6 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     int count;
     int res;
     mnDiagram2_SortEntry* ptr;
-    mnDiagram2_SortEntry* arr;
     int i;
     int j;
     int k;
