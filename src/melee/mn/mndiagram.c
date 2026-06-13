@@ -1797,6 +1797,7 @@ void mnDiagram_80240D94(void* arg0, s32 arg1, s32 arg2, s32 arg3)
     mnDiagram_PopupData* data = ((HSD_GObj*) arg0)->user_data;
     mnDiagram_AnimTable* tbl = (mnDiagram_AnimTable*) &mnDiagram_803EE728;
     Point3d pos;
+    float new_var;
     char buf[8];
     u32 kos;
     u32 sd_count;
@@ -1811,7 +1812,7 @@ void mnDiagram_80240D94(void* arg0, s32 arg1, s32 arg2, s32 arg3)
         f32 y = pos.y;
         f32 z = pos.z;
         text->pos_x = pos.x;
-        text->pos_y = -y;
+        text->pos_y = (new_var = -y);
         text->pos_z = z;
     }
     text->default_alignment = 0;
@@ -1824,35 +1825,44 @@ void mnDiagram_80240D94(void* arg0, s32 arg1, s32 arg2, s32 arg3)
     }
 
     if ((arg3 != 0) && (arg1 != arg2)) {
-        text = HSD_SisLib_803A6754(0, 1);
-        data->text[2] = text;
-        lb_8000B1CC(data->jobjs[10], &tbl->points[2], &pos);
-        text->font_size.x = 0.035f;
-        text->font_size.y = 0.05f;
         {
-            f32 y = pos.y;
-            f32 z = pos.z;
-            text->pos_x = pos.x;
-            text->pos_y = -y;
-            text->pos_z = z;
-        }
-        text->default_alignment = 1;
-        HSD_SisLib_803A6B98(text, 0.0f, 0.0f, GetNameText((u8) arg2));
+            HSD_Text* label_text;
 
-        text = HSD_SisLib_803A6754(0, 1);
-        data->text[4] = text;
-        lb_8000B1CC(data->jobjs[2], &tbl->points[2], &pos);
-        text->font_size.x = 0.035f;
-        text->font_size.y = 0.05f;
-        {
-            f32 y = pos.y;
-            f32 z = pos.z;
-            text->pos_x = pos.x;
-            text->pos_y = -y;
-            text->pos_z = z;
+            label_text = HSD_SisLib_803A6754(0, 1);
+            data->text[2] = label_text;
+            lb_8000B1CC(data->jobjs[10], &tbl->points[2], &pos);
+            label_text->font_size.x = 0.035f;
+            label_text->font_size.y = 0.05f;
+            {
+                f32 y = pos.y;
+                f32 z = pos.z;
+                label_text->pos_x = pos.x;
+                label_text->pos_y = (new_var = -y);
+                label_text->pos_z = z;
+            }
+            label_text->default_alignment = 1;
+            HSD_SisLib_803A6B98(label_text, 0.0f, 0.0f,
+                                GetNameText(arg2 & 0xFF));
         }
-        text->default_alignment = 1;
-        HSD_SisLib_803A6B98(text, 0.0f, 0.0f, GetNameText((u8) arg2));
+
+        {
+            HSD_Text* label_text;
+
+            label_text = HSD_SisLib_803A6754(0, 1);
+            data->text[4] = label_text;
+            lb_8000B1CC(data->jobjs[2], &tbl->points[2], &pos);
+            label_text->font_size.x = 0.035f;
+            label_text->font_size.y = 0.05f;
+            {
+                f32 y = pos.y;
+                f32 z = pos.z;
+                label_text->pos_x = pos.x;
+                label_text->pos_y = (new_var = -y);
+                label_text->pos_z = z;
+            }
+            label_text->default_alignment = 1;
+            HSD_SisLib_803A6B98(label_text, 0.0f, 0.0f, GetNameText((u8) arg2));
+        }
     }
 
     if ((arg3 == 0) || (arg1 != arg2)) {
@@ -1866,7 +1876,7 @@ void mnDiagram_80240D94(void* arg0, s32 arg1, s32 arg2, s32 arg3)
             f32 y = pos.y;
             f32 z = pos.z;
             text->pos_x = pos.x;
-            text->pos_y = -y;
+            text->pos_y = (new_var = -y);
             text->pos_z = z;
         }
 
@@ -1891,7 +1901,7 @@ void mnDiagram_80240D94(void* arg0, s32 arg1, s32 arg2, s32 arg3)
             f32 y = pos.y;
             f32 z = pos.z;
             text->pos_x = pos.x;
-            text->pos_y = -y;
+            text->pos_y = (new_var = -y);
             text->pos_z = z;
         }
         if (arg3 != 0) {
@@ -1905,7 +1915,10 @@ void mnDiagram_80240D94(void* arg0, s32 arg1, s32 arg2, s32 arg3)
     } else {
         text = HSD_SisLib_803A6754(0, 1);
         data->text[3] = text;
-        lb_8000B1CC(data->jobjs[3], &tbl->points[1], &pos);
+        {
+            Point3d* point = &tbl->points[1];
+            lb_8000B1CC(data->jobjs[3], point, &pos);
+        }
         text->font_size.x = 0.0521f;
         text->font_size.y = 0.0521f;
         text->default_alignment = 1;
@@ -1913,15 +1926,16 @@ void mnDiagram_80240D94(void* arg0, s32 arg1, s32 arg2, s32 arg3)
             f32 y = pos.y;
             f32 z = pos.z;
             text->pos_x = pos.x;
-            text->pos_y = -y;
+            text->pos_y = (new_var = -y);
             text->pos_z = z;
         }
         if (arg3 != 0) {
-            kos = GetPersistentNameData((u8) arg2)->vs_kos[(u8) arg1];
-            mnDiagram_FormatPopupNumber(buf, kos);
+            u32 count = GetPersistentNameData((u8) arg2)->vs_kos[(u8) arg1];
+            mnDiagram_FormatPopupNumber(buf, count);
         } else {
-            kos = GetPersistentFighterData((u8) arg2)->fighter_kos[(u8) arg1];
-            mnDiagram_FormatPopupNumber(buf, kos);
+            u32 count =
+                GetPersistentFighterData((u8) arg2)->fighter_kos[(u8) arg1];
+            mnDiagram_FormatPopupNumber(buf, count);
         }
         HSD_SisLib_803A6B98(text, 0.0f, 0.0f, buf);
     }
