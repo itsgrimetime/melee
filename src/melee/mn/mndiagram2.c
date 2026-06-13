@@ -378,7 +378,6 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
         return;
     }
 
-    data = mnDiagram2_804D6C18->user_data;
     if (data->is_name_mode != 0) {
         GetNameCount();
         if (result & 1) {
