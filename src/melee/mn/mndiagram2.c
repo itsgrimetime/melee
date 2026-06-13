@@ -663,7 +663,6 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
 
             table = (u16*) (base + ((stat_type << 1) & 0x1FE));
             {
-                int r23 = (u8) stat_type;
                 HSD_SisLib_803A6368(text, table[0x18]);
 
                 {
@@ -751,7 +750,8 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                             }
                             mnDiagram_IntToStr((char*) str, val);
                         } else {
-                            int var_r0_4 = mnDiagram2_IsPercentageStat(stat_type);
+                            int var_r0_4 =
+                                mnDiagram2_IsPercentageStat(stat_type);
 
                             if (var_r0_4 != 0) {
                                 int val = mnDiagram2_GetStatValue(
