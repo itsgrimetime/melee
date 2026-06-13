@@ -2643,7 +2643,6 @@ HSD_JObj* mnDiagram_80242B38(int idx, int arg1)
 void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
 {
     int count;
-    u8* p2;
     int fighter_id;
     Diagram* data = GET_DIAGRAM(arg0);
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
@@ -2659,6 +2658,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     int idx;
     int remaining;
     u8* p;
+    u8* p2;
     u8* sorted;
     f32 x_spacing;
     f32 y_spacing;
