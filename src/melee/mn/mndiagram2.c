@@ -302,13 +302,11 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
     PAD_STACK(40);
 
     data = mnDiagram2_804D6C18->user_data;
-    result = mn_80229624(4);
-    ((s32*) &mn_804A04F0.buttons)[1] = result;
-    ((s32*) &mn_804A04F0.buttons)[0] = (var_r28 = 0);
+    result = mn_804A04F0.buttons = mn_80229624(4);
 
     if (result & 0x20) {
         lbAudioAx_80024030(0);
-        mn_804A04F0.entering_menu = var_r28;
+        mn_804A04F0.entering_menu = 0;
         data2 = mnDiagram2_804D6C18->user_data;
         x46 = data2->selected_fighter_idx;
         gmMainLib_8015CC34()->x12 = x46;
@@ -345,6 +343,7 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
             return;
         }
         lbAudioAx_80024030(1);
+        var_r28 = 0;
         if (data->is_name_mode == 0) {
             var_r28 = 1;
         }
