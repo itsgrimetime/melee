@@ -578,14 +578,16 @@ void mnDiagram3_HandleInput(HSD_GObj* gobj)
         HSD_GObjPLink_80390228(data->popup_gobj);
         data = mnDiagram3_804D6C20->user_data;
         {
-            Diagram3* check_data = data;
-            Diagram3* text_data = data;
+            HSD_Text** check_cur = data->row_labels;
+            HSD_Text** text_cur = data->row_labels;
             i = 0;
             do {
-                if (check_data->row_labels[i] != NULL) {
-                    HSD_SisLib_803A5CC4(text_data->row_labels[i]);
-                    check_data->row_labels[i] = NULL;
+                if (*check_cur != NULL) {
+                    HSD_SisLib_803A5CC4(*text_cur);
+                    *check_cur = NULL;
                 }
+                check_cur++;
+                text_cur++;
             } while (++i < 0xA);
         }
         mn_80229894(0x1C, 0, 3);
