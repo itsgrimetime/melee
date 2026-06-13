@@ -1322,10 +1322,10 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     }
 
     // Write result to output buffer
-    if (entries[idx].value == 0) {
-        entries[idx].name = 25;
+    if (entries[idx].value != 0) {
         *(mnDiagram2_SortEntry*) out = entries[idx];
     } else {
+        entries[idx].name = 25;
         *(mnDiagram2_SortEntry*) out = entries[idx];
     }
 }
