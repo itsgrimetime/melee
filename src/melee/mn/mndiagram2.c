@@ -724,10 +724,10 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                             mnDiagram2_GetStatValue(mode, stat_type,
                                                     entity_idx),
                             0);
-                        HSD_JObjSetTranslateX(jobj, -2.0f);
+                        HSD_JObjSetTranslateX(jobj, ((f32*) base)[9]);
                         HSD_JObjSetTranslateY(jobj, (f30 * (f32) row_idx) +
-                                                        0.0f);
-                        HSD_JObjSetTranslateZ(jobj, 0.0f);
+                                                        ((f32*) base)[10]);
+                        HSD_JObjSetTranslateZ(jobj, ((f32*) base)[11]);
 
                         HSD_JObjAddChild(data->icon_parent, jobj);
                         return;
