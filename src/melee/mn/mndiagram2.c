@@ -1008,9 +1008,9 @@ void mnDiagram2_Create(int arg0)
     mnDiagram_ArchiveData* archive = &mnDiagram_804A0834;
     HSD_GObj* gobj;
     Diagram2* new_var;
+    int j;
     int entity_val;
     u32 is_name;
-    int j;
     u8 entity_idx;
     int scroll;
     int i;
