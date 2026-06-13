@@ -48,7 +48,6 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     u8 sp28[0x10];
     Diagram3* data;
     char* base;
-    u16* table;
     HSD_JObj* row0;
     f32 neg_spacing;
     f32 row_spacing;
@@ -64,7 +63,6 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     u32 max_distance;
     u32 max_time;
     u32 max_percentage;
-    PAD_STACK(8);
 
     data = gobj->user_data;
     base = (char*) &mnDiagram3_803EEC10;
@@ -113,8 +111,8 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                 if (data->is_name_mode != 0) {
                     if (!mnDiagram2_IsIconOnlyStat(stat_type)) {
                         if (i == 0) {
-                            lb_8000B1CC(data->jobjs[6],
-                                        (Vec3*) (base + 0x24), &sp6C);
+                            lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x24),
+                                        &sp6C);
                             title_text = HSD_SisLib_803A6754(0, 1);
                             data->title_text = title_text;
                             title_text->font_size.x = divider;
@@ -148,8 +146,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                 }
 
                 if (i == 0) {
-                    lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x30),
-                                &sp6C);
+                    lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x30), &sp6C);
                     value_text = HSD_SisLib_803A6754(0, 1);
                     data->value_text = value_text;
                     value_text->font_size.x = divider;
@@ -234,12 +231,11 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                 {
                     u16 icon_id = *stat_table;
                     int r17 = icon_id;
-                    if ((u32) icon_id == 0xFFFF) {
+                    if ((u32) r17 == 0xFFFF) {
                         goto next;
                     }
 
-                    lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x30),
-                                &sp6C);
+                    lb_8000B1CC(data->jobjs[6], (Vec3*) (base + 0x30), &sp6C);
                     {
                         HSD_Text* icon_text;
                         f32 negated_y = -sp6C.y;
