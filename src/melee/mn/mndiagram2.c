@@ -628,7 +628,6 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
 {
     Vec3 sp20;
     u8 str[4];
-    int pad[4];
     Diagram2* data;
     HSD_JObj* jobj;
     char* base;
@@ -637,7 +636,6 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
     f32 f31;
     f32 f30;
     int mode = is_name_mode;
-    PAD_STACK(16);
 
     data = gobj->user_data;
     base = (char*) &mnDiagram2_803EEAD0;
@@ -684,13 +682,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                         text2->default_alignment = 1;
                         text2->text_color = mnDiagram2_804D4FBC;
 
-                        if (r23 >= 0x12) {
-                            var_r3 = 0;
-                        } else if (r23 >= 0xE) {
-                            var_r3 = 1;
-                        } else {
-                            var_r3 = 0;
-                        }
+                        var_r3 = mnDiagram2_IsDistanceStat(stat_type);
 
                         if (var_r3 != 0) {
                             u32 stat_val = mnDiagram2_GetStatValue(
@@ -707,14 +699,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                 }
 
                 {
-                    int var_r0;
-                    if (r23 >= 0x18) {
-                        var_r0 = 0;
-                    } else if (r23 >= 0x15) {
-                        var_r0 = 1;
-                    } else {
-                        var_r0 = 0;
-                    }
+                    int var_r0 = mnDiagram2_IsIconOnlyStat(stat_type);
 
                     if (var_r0 != 0 &&
                         (u32) mnDiagram2_GetStatValue(mode, stat_type,
@@ -747,7 +732,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                     text3->text_color = mnDiagram2_804D4FBC;
                     text3->default_alignment = 2;
 
-                    if (r23 == 0xB) {
+                    if (mnDiagram2_IsTimeStat(stat_type)) {
                         int val = mnDiagram2_GetStatValue(
                             mode, stat_type, entity_idx);
                         if ((u32) val > 0x927BF) {
@@ -755,14 +740,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                         }
                         mnDiagram_FormatTime((char*) str, val);
                     } else {
-                        int var_r0_3;
-                        if (r23 >= 0x12) {
-                            var_r0_3 = 0;
-                        } else if (r23 >= 0xE) {
-                            var_r0_3 = 1;
-                        } else {
-                            var_r0_3 = 0;
-                        }
+                        int var_r0_3 = mnDiagram2_IsDistanceStat(stat_type);
 
                         if (var_r0_3 != 0) {
                             u32 val = mnDiagram2_GetStatValue(
@@ -773,18 +751,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                             }
                             mnDiagram_IntToStr((char*) str, val);
                         } else {
-                            int var_r0_4;
-                            if (r23 >= 0xC) {
-                                if (r23 < 0xE) {
-                                    var_r0_4 = 1;
-                                } else {
-                                    var_r0_4 = 0;
-                                }
-                            } else if (r23 == 3) {
-                                var_r0_4 = 1;
-                            } else {
-                                var_r0_4 = 0;
-                            }
+                            int var_r0_4 = mnDiagram2_IsPercentageStat(stat_type);
 
                             if (var_r0_4 != 0) {
                                 int val = mnDiagram2_GetStatValue(
@@ -795,14 +762,8 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                                 mnDiagram_FormatDecimalNumber((char*) str, val,
                                                               2);
                             } else {
-                                int var_r0_5;
-                                if (r23 >= 0x18) {
-                                    var_r0_5 = 0;
-                                } else if (r23 >= 0x15) {
-                                    var_r0_5 = 1;
-                                } else {
-                                    var_r0_5 = 0;
-                                }
+                                int var_r0_5 =
+                                    mnDiagram2_IsIconOnlyStat(stat_type);
 
                                 if (var_r0_5 != 0) {
                                     str[0] = mnDiagram2_804D4FD0[0];
