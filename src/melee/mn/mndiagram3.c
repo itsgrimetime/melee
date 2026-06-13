@@ -227,7 +227,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                 {
                     u16 icon_id = *stat_table;
                     int r17 = icon_id;
-                    if ((u32) r17 == 0xFFFF) {
+                    if (r17 == 0xFFFF) {
                         goto next;
                     }
 
@@ -247,7 +247,8 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                             if (mnDiagram_IsDistanceOverflow(
                                     mnDiagram2_GetStatValue(data->is_name_mode,
                                                             stat_type,
-                                                            entity))) {
+                                                            entity)))
+                            {
                                 HSD_SisLib_803A6368(icon_text, 0x7F);
                                 goto next;
                             }
