@@ -242,10 +242,10 @@ void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
     }
     text->text_color = mnDiagram2_804D4FB8;
     {
-        f32 y = sp18.y;
+        f32 ny = -sp18.y;
         f32 z = sp18.z;
         text->pos_x = sp18.x;
-        text->pos_y = -y;
+        text->pos_y = ny;
         text->pos_z = z;
     }
     text->default_alignment = 1;
