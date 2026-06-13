@@ -1201,15 +1201,13 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
             k++;
         }
 
-        if (maxIdx != i) {
+        if (i < maxIdx) {
             ptr = &entries[maxIdx];
             temp = *ptr;
-            j = maxIdx - i;
 
-            while (j > 0) {
+            for (j = i; j < maxIdx; j++) {
                 *ptr = *(ptr - 1);
                 ptr--;
-                j--;
             }
             *base = temp;
         }
