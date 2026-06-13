@@ -1233,7 +1233,6 @@ u8 mnDiagram2_GetRankedName(u8 stat_type, u8 rank)
     mnDiagram2_SortEntry temp;
     mnDiagram2_SortEntry* base;
     mnDiagram2_SortEntry* ptr;
-    mnDiagram2_SortEntry* inner;
     int count;
     int i;
     int j;
@@ -1262,12 +1261,10 @@ u8 mnDiagram2_GetRankedName(u8 stat_type, u8 rank)
     while (i < count) {
         j = i + 1;
         maxIdx = i;
-        inner = &entries[j];
         while (j < count) {
-            if (entries[maxIdx].value < inner->value) {
+            if (entries[maxIdx].value < entries[j].value) {
                 maxIdx = j;
             }
-            inner++;
             j++;
         }
 
