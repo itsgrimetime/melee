@@ -244,9 +244,10 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                         icon_text->text_color = mn_804D4B64;
 
                         if (mnDiagram2_IsDistanceStat(stat_type)) {
-                            u32 stat_val = mnDiagram2_GetStatValue(
-                                data->is_name_mode, stat_type, entity);
-                            if (mnDiagram_IsDistanceOverflow(stat_val)) {
+                            if (mnDiagram_IsDistanceOverflow(
+                                    mnDiagram2_GetStatValue(data->is_name_mode,
+                                                            stat_type,
+                                                            entity))) {
                                 HSD_SisLib_803A6368(icon_text, 0x7F);
                                 goto next;
                             }
