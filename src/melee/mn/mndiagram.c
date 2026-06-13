@@ -2643,10 +2643,10 @@ HSD_JObj* mnDiagram_80242B38(int idx, int arg1)
 void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
 {
     int remr;
+    HSD_JObj* jobj;
     Diagram* data = GET_DIAGRAM(arg0);
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     void** joint_data;
-    HSD_JObj* jobj;
     u8 stack_obj[8];
     HSD_JObj* sp_jobj;
     u8 stack_obj2[4];
