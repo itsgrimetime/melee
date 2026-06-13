@@ -2642,6 +2642,9 @@ HSD_JObj* mnDiagram_80242B38(int idx, int arg1)
 
 void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
 {
+    int count;
+    u8* pr;
+    u8* p2;
     int remr;
     HSD_JObj* jobj;
     Diagram* data = GET_DIAGRAM(arg0);
@@ -2652,19 +2655,17 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     u8 stack_obj2[4];
     HSD_JObj* sp_jobj2;
     u8 stack_obj3[20];
-    int i;
     int k;
     int idx;
     int remaining;
     u8* p;
-    u8* p2;
     u8* sorted;
-    int count;
     int fighter_id;
-    u8* pr;
     u8* pr2;
     f32 x_spacing;
     f32 y_spacing;
+    int fighter_idr;
+    int i;
 
     (void) &stack_obj;
     (void) &stack_obj2;
@@ -2735,7 +2736,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
             pr = sorted + idx;
             while (remr >= 0) {
                 if (remr == 0) {
-                    fighter_id = sorted[idx];
+                    fighter_idr = sorted[idx];
                     goto row_found;
                 }
                 pr2 = pr;
@@ -2744,7 +2745,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
                 pr2++;
                 pr++;
                 if (idx >= 0x19) {
-                    fighter_id = 0x19;
+                    fighter_idr = 0x19;
                     goto row_found;
                 }
                 if (mn_IsFighterUnlocked(*pr2) == 0) {
@@ -2759,7 +2760,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
             HSD_JObjReqAnimAll(jobj, 0.0f);
             HSD_JObjAnimAll(jobj);
             lb_80011E24(jobj, &sp_jobj2, 2, -1);
-            HSD_JObjReqAnimAll(sp_jobj2, (f32) (fighter_id & 0xFF));
+            HSD_JObjReqAnimAll(sp_jobj2, (f32) (fighter_idr & 0xFF));
             HSD_JObjAnimAll(sp_jobj2);
             y_spacing = HSD_JObjGetTranslationY(data->jobjs[10]) -
                         HSD_JObjGetTranslationY(data->jobjs[9]);
