@@ -814,23 +814,25 @@ static inline int mnDiagram_SumNameKOs(u8 field_index)
 void mnDiagram_8023FC28(void)
 {
     u32 totals[0x78];
+    int max_idx;
+    u8* dst_iter;
+    int i;
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     u8* dst = assets->sorted_names;
-    u8* dst_iter;
     u32* tp;
-    int i;
+    int n;
     int j;
     PAD_STACK(12);
 
     dst_iter = dst;
     tp = totals;
-    for (i = 0; i < 0x78; i++, dst_iter++, tp++) {
-        *dst_iter = (u8) i;
-        *tp = mnDiagram_SumNameKOs(i & 0xFF);
+    for (n = 0; n < 0x78; n++, dst_iter++, tp++) {
+        *dst_iter = (u8) n;
+        *tp = mnDiagram_SumNameKOs(n & 0xFF);
     }
 
     for (i = 0; i < 0x78; i++) {
-        int max_idx = i;
+        max_idx = i;
         for (j = i + 1; j < 0x78; j++) {
             if ((GetNameText(mnDiagram_804A076C.sorted_names[j]) != NULL) &&
                 ((totals[mnDiagram_804A076C.sorted_names[max_idx]] <
