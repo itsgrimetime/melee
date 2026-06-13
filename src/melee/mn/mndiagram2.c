@@ -1004,18 +1004,18 @@ void mnDiagram2_InitUserData(void* arg, int unused)
 void mnDiagram2_Create(int arg0)
 {
     char* base = (char*) &mnDiagram2_803EEAD0;
+    Diagram2* user_data;
     HSD_JObj* jobj;
     mnDiagram_ArchiveData* archive = &mnDiagram_804A0834;
     HSD_GObj* gobj;
     Diagram2* new_var;
+    int entity_val;
     u32 is_name;
+    int j;
     u8 entity_idx;
     int scroll;
-    int entity_val;
-    int threshold;
-    int j;
-    Diagram2* user_data;
     int i;
+    int threshold;
     int offset;
     Diagram2* user_data2;
 
