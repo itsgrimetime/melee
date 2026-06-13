@@ -193,12 +193,12 @@ void mnDiagram2_ClearStatRows(HSD_GObj* gobj)
 void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
 {
     Vec3 sp18;
-    u8 name;
     Diagram2* data;
     char* name_str;
     HSD_Text* text;
     void* tmp;
     HSD_JObj* jobj;
+    u8 name;
     PAD_STACK(8);
 
     data = gobj->user_data;
@@ -235,7 +235,6 @@ void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
         lb_8000B1CC(data->x1C, (Vec3*) &mnDiagram2_803EEAD0, &sp18);
     }
 
-    name_str = GetNameText(name);
     {
         f32 font = mnDiagram2_804DBFC8;
         text->font_size.x = font;
@@ -252,9 +251,9 @@ void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
     text->default_alignment = 1;
 
     if (is_name_mode != 0) {
-        char* str = name_str;
+        name_str = GetNameText(name);
         HSD_SisLib_803A6B98(text, mnDiagram2_804DBFCC, mnDiagram2_804DBFCC,
-                            str);
+                            name_str);
     } else {
         gm_80160B40(text, gm_8016400C(name), 0);
     }
