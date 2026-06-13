@@ -1157,7 +1157,6 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
     mnDiagram2_SortEntry temp;
     mnDiagram2_SortEntry* base;
     mnDiagram2_SortEntry* ptr;
-    mnDiagram2_SortEntry* curr;
     int i;
     int j;
     int k;
@@ -1188,19 +1187,17 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
     // Selection sort with insertion shift
     for (i = 0; i < 25; i++) {
         k = i + 1;
-        curr = &entries[k];
         maxIdx = i;
         while (k < 25) {
             // Skip entries with -1 value
-            if (curr->value != (u64) neg1) {
-                // Update if curr > entries[maxIdx] OR base == -1
-                if (curr->value > entries[maxIdx].value ||
+            if (entries[k].value != (u64) neg1) {
+                // Update if entries[k] > entries[maxIdx] OR entries[i] == -1
+                if (entries[k].value > entries[maxIdx].value ||
                     entries[i].value == (u64) neg1)
                 {
                     maxIdx = k;
                 }
             }
-            curr++;
             k++;
         }
 
