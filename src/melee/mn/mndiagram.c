@@ -2642,6 +2642,7 @@ HSD_JObj* mnDiagram_80242B38(int idx, int arg1)
 
 void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
 {
+    int remr;
     Diagram* data = GET_DIAGRAM(arg0);
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     void** joint_data;
@@ -2729,11 +2730,11 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
             }
         }
         if (count > i) {
-            remaining = i;
+            remr = i;
             idx = arg1;
             pr = sorted + idx;
-            while (remaining >= 0) {
-                if (remaining == 0) {
+            while (remr >= 0) {
+                if (remr == 0) {
                     fighter_id = sorted[idx];
                     goto row_found;
                 }
@@ -2749,7 +2750,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
                 if (mn_IsFighterUnlocked(*pr2) == 0) {
                     goto row_inner;
                 }
-                remaining--;
+                remr--;
             }
         row_found:
             jobj = HSD_JObjLoadJoint(joint_data[0]);
