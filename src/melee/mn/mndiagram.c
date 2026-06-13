@@ -2458,7 +2458,6 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     s32 var_r23;
     u8 var_r24;
     u8* sorted;
-    PAD_STACK(24);
 
     var_r30 = 0;
     do {
