@@ -94,7 +94,8 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
             u16* stat_table;
             stat_table = (u16*) (base + ((int) stat_type << 1));
             icon_x_offset = mnDiagram3_804DC010;
-            row_spacing = row1_y - row0_y;
+            row_spacing = row1_y;
+            row_spacing = row_spacing - row0_y;
             max_distance = 0x5F5E0FF;
             max_percentage = 0x98967F;
             divider = mnDiagram3_804DC008;
