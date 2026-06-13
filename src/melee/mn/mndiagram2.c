@@ -1044,6 +1044,7 @@ void mnDiagram2_InitUserData(void* arg, int unused)
 /// @param arg0 Unused parameter
 void mnDiagram2_Create(int arg0)
 {
+    char* base = (char*) &mnDiagram2_803EEAD0;
     HSD_JObj* jobj;
     mnDiagram_ArchiveData* archive = &mnDiagram_804A0834;
     HSD_GObj* gobj;
@@ -1068,7 +1069,9 @@ void mnDiagram2_Create(int arg0)
     HSD_JObjReqAnimAll(jobj, mnDiagram2_804DBFCC);
 
     user_data = (Diagram2*) HSD_MemAlloc(0xC8);
-    HSD_ASSERTREPORT(0x3E6, user_data, "Can't get user_data.\n");
+    (user_data) ? (void) 0
+                : (OSReport(base + 0x108),
+                   __assert(base + 0x120, 0x3E6, base + 0x130));
     mnDiagram2_InitUserData(user_data, arg0);
     GObj_InitUserData(gobj, 0, (void (*)(void*)) mnDiagram2_FreeUserData,
                       user_data);
