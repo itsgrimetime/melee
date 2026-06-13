@@ -1124,8 +1124,8 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
     int neg1;
     int name;
 
-    base = entries;
-    ptr = base;
+    ptr = entries;
+    base = ptr;
     i = 0;
     zero = 0;
     neg1 = -1;
