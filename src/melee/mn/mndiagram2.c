@@ -1256,19 +1256,20 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     int j;
     int k;
     int zero;
+    int n;
 
     base = entries;
     ptr = base;
-    i = 0;
+    n = 0;
     zero = 0;
 
     do {
-        ptr->name = mnDiagram_GetFighterByIndex(i);
-        i++;
+        ptr->name = mnDiagram_GetFighterByIndex(n);
+        n++;
         ptr->xC = zero;
         ptr->x8 = zero;
         ptr++;
-    } while (i < 25);
+    } while (n < 25);
 
     count = GetNameCount();
 
