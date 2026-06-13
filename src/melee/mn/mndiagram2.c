@@ -681,14 +681,11 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
 
                         var_r3 = mnDiagram2_IsDistanceStat(stat_type);
 
-                        if (var_r3 != 0) {
-                            u32 stat_val = mnDiagram2_GetStatValue(
-                                mode, stat_type, entity_idx);
-                            if (mnDiagram_IsDistanceOverflow(stat_val)) {
-                                HSD_SisLib_803A6368(text2, 0x7F);
-                            } else {
-                                HSD_SisLib_803A6368(text2, r21);
-                            }
+                        if (var_r3 != 0 &&
+                            mnDiagram_IsDistanceOverflow(mnDiagram2_GetStatValue(
+                                mode, stat_type, entity_idx)))
+                        {
+                            HSD_SisLib_803A6368(text2, 0x7F);
                         } else {
                             HSD_SisLib_803A6368(text2, r21);
                         }
