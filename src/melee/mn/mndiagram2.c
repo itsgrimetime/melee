@@ -194,7 +194,6 @@ void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
 {
     Vec3 sp18;
     Diagram2* data;
-    char* name_str;
     HSD_Text* text;
     void* tmp;
     HSD_JObj* jobj;
@@ -251,9 +250,7 @@ void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
     text->default_alignment = 1;
 
     if (is_name_mode != 0) {
-        name_str = GetNameText(name);
-        HSD_SisLib_803A6B98(text, mnDiagram2_804DBFCC, mnDiagram2_804DBFCC,
-                            name_str);
+        HSD_SisLib_803A6B98(text, 0.0f, 0.0f, GetNameText(name));
     } else {
         gm_80160B40(text, gm_8016400C(name), 0);
     }
