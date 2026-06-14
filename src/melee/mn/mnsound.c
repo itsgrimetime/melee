@@ -148,6 +148,7 @@ void mnSound_802492CC(HSD_GObj* gobj)
 
 void fn_80249A1C(HSD_GObj* arg0)
 {
+    Menu* menu = GET_MENU(arg0);
     HSD_JObj* sp40;
     HSD_JObj* sp3C;
     HSD_JObj* sp34;
@@ -158,9 +159,7 @@ void fn_80249A1C(HSD_GObj* arg0)
     f32 var_f1;
     u8 temp_r4;
     f32 arg8 = 0.0F; // this should be uninitialized
-
     HSD_JObj* jobj = arg0->hsd_obj;
-    Menu* menu = GET_MENU(arg0);
     PAD_STACK(16);
     if ((u8) mn_804A04F0.cur_menu != 0x14) {
         HSD_GObjPLink_80390228(arg0);
@@ -171,10 +170,10 @@ void fn_80249A1C(HSD_GObj* arg0)
     if (temp_r4 != 0) {
         menu->cursor = (u8) (temp_r4 - 1);
         if ((u8) menu->cursor != 0) {
-            HSD_JObjSetFlagsAll(jobj, 0x10U);
+            HSD_JObjSetFlagsAll(jobj, JOBJ_HIDDEN);
             return;
         }
-        HSD_JObjClearFlagsAll(jobj, 0x10U);
+        HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
         return;
     }
     if ((u8) menu->unk2 == 0) {
@@ -257,7 +256,7 @@ void mnSound_80249C08(int unused)
         HSD_JObjReqAnimAll(sp60,
                            mnSound_803EEED8[user_data->unk1 + 4].start_frame);
         HSD_JObjAnimAll(sp60);
-        HSD_JObjSetFlagsAll(jobj, 0x10U);
+        HSD_JObjSetFlagsAll(jobj, JOBJ_HIDDEN);
     }
 }
 

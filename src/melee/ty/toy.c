@@ -1687,7 +1687,8 @@ void un_80307018(void)
             ptr2->x8 = GObj_Create(3, 4, 0);
             kind = HSD_GObj_804D7848;
             HSD_GObjObject_80390A70(ptr2->x8, kind, fog);
-            GObj_SetupGXLink(ptr2->x8, (GObj_RenderFunc) un_80306A0C, 0x35, 0);
+            GObj_SetupGXLink(ptr2->x8, (GObj_RenderFunc) (Event) un_80306A0C,
+                             0x35, 0);
         }
     }
 }
@@ -2088,8 +2089,8 @@ void fn_80307E84(HSD_GObj* gobj)
 
     if (x0F_val <= 0) {
         if (state->x10 == 1) {
-            HSD_JObjSetFlagsAll(jobj0, 0x10);
-            HSD_JObjSetFlagsAll(jobj1, 0x10);
+            HSD_JObjSetFlagsAll(jobj0, JOBJ_HIDDEN);
+            HSD_JObjSetFlagsAll(jobj1, JOBJ_HIDDEN);
         }
         state->x10 = 0;
         HSD_JObjRemoveAnimAll(jobj0);
@@ -2260,19 +2261,19 @@ void un_803083D8(HSD_JObj* jobj, s32 arg1)
     s32 temp_r31;
 
     if (arg1 == 0x3E6) {
-        HSD_JObjClearFlagsAll(jobj, 0x10);
+        HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
         return;
     }
     if (arg1 == 0x3E7) {
-        HSD_JObjSetFlagsAll(jobj, 0x10);
+        HSD_JObjSetFlagsAll(jobj, JOBJ_HIDDEN);
         return;
     }
     temp_r31 = (s32) un_803060BC(arg1, 8);
     if (temp_r31 == 0) {
-        HSD_JObjSetFlagsAll(jobj, 0x10);
+        HSD_JObjSetFlagsAll(jobj, JOBJ_HIDDEN);
         return;
     }
-    HSD_JObjClearFlagsAll(jobj, 0x10);
+    HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
     if (temp_r31 == 1) {
         HSD_JObjReqAnim(jobj, 0.0F);
     } else {
@@ -2501,7 +2502,7 @@ HSD_GObj* un_803087F4(void* arg0)
 
     {
         HSD_JObj* child = un_80307BA0(parent_jobj, anim->xC);
-        HSD_JObjSetFlagsAll(child, 0x10);
+        HSD_JObjSetFlagsAll(child, JOBJ_HIDDEN);
         anim->x0E = 0;
     }
 
@@ -2546,17 +2547,17 @@ void un_80308DC8(HSD_CObj* cobj)
     if (temp_r30->x18 < 10.0F) {
         if (eye_pos.y < 0.0F) {
             temp_r31->x0E = 1;
-            HSD_JObjClearFlagsAll(temp_r31->jobj[1], 0x10);
-            HSD_JObjSetFlagsAll(temp_r31->jobj[0], 0x10);
+            HSD_JObjClearFlagsAll(temp_r31->jobj[1], JOBJ_HIDDEN);
+            HSD_JObjSetFlagsAll(temp_r31->jobj[0], JOBJ_HIDDEN);
         } else {
             temp_r31->x0E = 0;
-            HSD_JObjClearFlagsAll(temp_r31->jobj[0], 0x10);
-            HSD_JObjSetFlagsAll(temp_r31->jobj[1], 0x10);
+            HSD_JObjClearFlagsAll(temp_r31->jobj[0], JOBJ_HIDDEN);
+            HSD_JObjSetFlagsAll(temp_r31->jobj[1], JOBJ_HIDDEN);
         }
     } else {
         temp_r31->x0E = 1;
-        HSD_JObjClearFlagsAll(temp_r31->jobj[1], 0x10);
-        HSD_JObjSetFlagsAll(temp_r31->jobj[0], 0x10);
+        HSD_JObjClearFlagsAll(temp_r31->jobj[1], JOBJ_HIDDEN);
+        HSD_JObjSetFlagsAll(temp_r31->jobj[0], JOBJ_HIDDEN);
     }
 }
 
@@ -4698,8 +4699,8 @@ void fn_8030E110(HSD_GObj* arg0)
             }
 
             {
-                HSD_JObjSetFlagsAll(anim->jobj[0], 0x10U);
-                HSD_JObjSetFlagsAll(anim->jobj[1], 0x10U);
+                HSD_JObjSetFlagsAll(anim->jobj[0], JOBJ_HIDDEN);
+                HSD_JObjSetFlagsAll(anim->jobj[1], JOBJ_HIDDEN);
             }
 
             un_8030715C(state->x50, state->x54);
@@ -4749,7 +4750,7 @@ void un_8030FA50(void)
     cobj = lb_80013B14(cam_desc);
     kind = HSD_GObj_804D784B;
     HSD_GObjObject_80390A70(state[0], kind, cobj);
-    GObj_SetupGXLinkMax(state[0], (GObj_RenderFunc) un_80306954, 0U);
+    GObj_SetupGXLinkMax(state[0], (GObj_RenderFunc) (Event) un_80306954, 0U);
     gobj = state[0];
     gobj->gxlink_prios = 0x1048000000000000ULL;
 
@@ -4770,7 +4771,7 @@ void un_8030FA50(void)
                        frustum_far);
     kind = HSD_GObj_804D784B;
     HSD_GObjObject_80390A70(state[2], kind, cobj);
-    GObj_SetupGXLinkMax(state[2], (GObj_RenderFunc) un_803068E0, 0U);
+    GObj_SetupGXLinkMax(state[2], (GObj_RenderFunc) (Event) un_803068E0, 0U);
     gobj = state[2];
     gobj->gxlink_prios = 0x0E80000000000000ULL;
 
@@ -4795,7 +4796,7 @@ void un_8030FA50(void)
     cobj = lb_80013B14((HSD_CameraDescPerspective*) (str + 0x974));
     kind = HSD_GObj_804D784B;
     HSD_GObjObject_80390A70(state[1], kind, cobj);
-    GObj_SetupGXLinkMax(state[1], (GObj_RenderFunc) un_803068E0, 0U);
+    GObj_SetupGXLinkMax(state[1], (GObj_RenderFunc) (Event) un_803068E0, 0U);
     gobj = state[1];
     gobj->gxlink_prios = 0x8000000000000000ULL;
 
@@ -5862,7 +5863,7 @@ void un_80311AB0_OnEnter(void* arg0)
     un_804D6E50 = 0;
     un_804D6EA1 = 0;
 
-    if (g_debugLevel >= 3) {
+    if (DbLevel >= 3) {
         /* Check Z button */
         buttons = un_80305C44();
 
