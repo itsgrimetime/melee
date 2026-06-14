@@ -2482,8 +2482,8 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                     name_count = GetNameCount();
                     if (name_count > total_col) {
                         name_fall_sum = mnDiagram_SumNameFalls(
-                            mnDiagram_GetVisibleNameCursorFrom(sorted, row_cursor,
-                                                               total_col));
+                            mnDiagram_GetVisibleNameCursorFrom(
+                                sorted, row_cursor, total_col));
                         mnDiagram_80241E78(arg0, (u8) total_col, (u8) row,
                                            name_fall_sum);
                     }
@@ -2512,9 +2512,10 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                             sorted, col_cursor, row);
                         if (name_col == 7) {
                             // Totals column: this name's grand-total KOs.
-                            name_total_kos = mnDiagram_GetNameTotalKOs(row_name_id);
-                            mnDiagram_80241E78(arg0, (u8) name_col,
-                                               (u8) row, name_total_kos);
+                            name_total_kos =
+                                mnDiagram_GetNameTotalKOs(row_name_id);
+                            mnDiagram_80241E78(arg0, (u8) name_col, (u8) row,
+                                               name_total_kos);
                         } else {
                             col_name_id = mnDiagram_GetVisibleNameCursorFrom(
                                 sorted, row_cursor, name_col);
@@ -2534,7 +2535,8 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                 do {
                     sorted = (u8*) assets;
                     if (fighter_col != 7) {
-                        fighter_count2 = mnDiagram_CountUnlockedFightersInline();
+                        fighter_count2 =
+                            mnDiagram_CountUnlockedFightersInline();
                         if (fighter_count2 > fighter_col) {
                             goto block_83;
                         }
@@ -2544,12 +2546,14 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                             sorted, col_cursor, row);
                         if (fighter_col == 7) {
                             // Totals column: this fighter's grand-total KOs.
-                            mnDiagram_80241E78(
-                                arg0, (u8) fighter_col, (u8) row,
-                                mnDiagram_SumFighterKOsClamped(row_fighter_id));
+                            mnDiagram_80241E78(arg0, (u8) fighter_col,
+                                               (u8) row,
+                                               mnDiagram_SumFighterKOsClamped(
+                                                   row_fighter_id));
                         } else {
-                            col_fighter_id = mnDiagram_GetVisibleFighterCursorFrom(
-                                sorted, row_cursor, fighter_col);
+                            col_fighter_id =
+                                mnDiagram_GetVisibleFighterCursorFrom(
+                                    sorted, row_cursor, fighter_col);
                             mnDiagram_80241E78(
                                 arg0, (u8) fighter_col, (u8) row,
                                 GetPersistentFighterData((u8) row_fighter_id)
@@ -2564,10 +2568,18 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     } while (row <= 0xA);
 }
 
-void mnDiagram_802427B4(void* arg0, s32 arg1, s32 arg2)
+/// @brief Builds the name-mode row/column header text for the records grid.
+///
+/// Creates two HSD_Text objects (column headers across the top, row headers
+/// down the left) and fills each visible slot with the player name at that
+/// scroll position, looked up from the sorted-fighters table.
+/// @param gobj       Diagram screen GObj (holds Diagram user_data).
+/// @param col_cursor Column-axis scroll cursor (drives the row-header names).
+/// @param row_cursor Row-axis scroll cursor (drives the column-header names).
+void mnDiagram_802427B4(void* gobj, s32 col_cursor, s32 row_cursor)
 {
     int i;
-    Diagram* data = ((HSD_GObj*) arg0)->user_data;
+    Diagram* data = ((HSD_GObj*) gobj)->user_data;
     u8* sorted = mnDiagram_804A0750.sorted_fighters;
     HSD_Text* text;
     HSD_Text* row_text;
@@ -2594,7 +2606,7 @@ void mnDiagram_802427B4(void* arg0, s32 arg1, s32 arg2)
         if (GetNameCount() > i) {
             u8 name_byte;
             s32 name_id;
-            name_byte = mnDiagram_GetVisibleNameFrom(sorted, arg2, i);
+            name_byte = mnDiagram_GetVisibleNameFrom(sorted, row_cursor, i);
             name_id = name_byte;
             x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
                         HSD_JObjGetTranslationX(data->jobjs[7]);
@@ -2622,7 +2634,7 @@ void mnDiagram_802427B4(void* arg0, s32 arg1, s32 arg2)
         if (GetNameCount() > i) {
             u8 name_byte;
             s32 name_id;
-            name_byte = mnDiagram_GetVisibleNameFrom(sorted, arg1, i);
+            name_byte = mnDiagram_GetVisibleNameFrom(sorted, col_cursor, i);
             name_id = name_byte;
             y_spacing = HSD_JObjGetTranslationY(data->jobjs[10]) -
                         HSD_JObjGetTranslationY(data->jobjs[9]);
