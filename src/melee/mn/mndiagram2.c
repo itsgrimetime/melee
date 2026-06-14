@@ -1110,6 +1110,7 @@ void mnDiagram2_Init(void)
 /// @return Fighter ID at the given rank, or 25 if no data
 u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
 {
+    int zero;
     mnDiagram2_SortEntry entries[25];
     mnDiagram2_SortEntry temp;
     mnDiagram2_SortEntry* base;
@@ -1118,7 +1119,6 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
     int j;
     int k;
     int maxIdx;
-    int zero;
     int neg1;
     int name;
 
