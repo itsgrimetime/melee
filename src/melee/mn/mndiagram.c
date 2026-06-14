@@ -2436,119 +2436,132 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
     }
 }
 
+/// @brief Populates every cell of the VS-records KO grid.
+///
+/// Iterates rows 0..10 (row 10 is the per-column totals row) and columns
+/// 0..7 (column 7 is the per-row totals column). For each visible cell it
+/// resolves the name/fighter id at that grid position from the sorted lookup
+/// table and renders the matching KO count via mnDiagram_80241E78.
+/// @param arg0 Diagram screen GObj (holds Diagram user_data).
+/// @param arg1 Column-axis scroll cursor.
+/// @param arg2 Row-axis scroll cursor.
+/// @param arg3 1 = name mode, 0 = fighter mode.
 void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
 {
-    s32 var_r22_2;
-    s32 arg1_r = arg1;
-    s32 arg2_r = arg2;
+    s32 name_col;
+    s32 col_cursor = arg1;
+    s32 row_cursor = arg2;
     u8 is_name = arg3;
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
-    s32 cap = 0xF423F;
-    s32 var_r16_6;
-    s32 var_r17_7;
-    s32 var_r17_8;
-    s32 var_r18_3;
-    s32 var_r19_2;
-    s32 var_r22;
-    s32 var_r22_3;
-    s32 var_r30;
-    s32 var_r3;
-    s32 var_r17_4;
-    s32 var_r19_5;
-    unsigned long long var_r0_2;
-    s32 var_r17_6;
-    s32 var_r23;
-    u8 var_r24;
+    s32 ko_display_max = 0xF423F; // 999999; unused leftover (KO display cap)
+    s32 unused_r16;
+    s32 fighter_count;
+    s32 fighter_count2;
+    s32 fighter_count3;
+    s32 name_fall_sum;
+    s32 total_col;
+    s32 fighter_col;
+    s32 row;
+    s32 name_count;
+    s32 name_total_kos;
+    s32 fighter_fall_sum;
+    unsigned long long row_name_id;
+    s32 col_name_id;
+    s32 row_fighter_id;
+    u8 col_fighter_id;
     u8* sorted;
 
-    var_r30 = 0;
+    row = 0;
     do {
-        if (var_r30 == 0xA) {
-            var_r22 = 0;
+        if (row == 0xA) {
+            // Totals row: render each column's summed KO count.
+            total_col = 0;
             do {
                 sorted = (u8*) assets;
                 if (is_name != 0) {
-                    var_r3 = GetNameCount();
-                    if (var_r3 > var_r22) {
-                        var_r19_2 = mnDiagram_SumNameFalls(
-                            mnDiagram_GetVisibleNameCursorFrom(sorted, arg2_r,
-                                                               var_r22));
-                        mnDiagram_80241E78(arg0, (u8) var_r22, (u8) var_r30,
-                                           var_r19_2);
+                    name_count = GetNameCount();
+                    if (name_count > total_col) {
+                        name_fall_sum = mnDiagram_SumNameFalls(
+                            mnDiagram_GetVisibleNameCursorFrom(sorted, row_cursor,
+                                                               total_col));
+                        mnDiagram_80241E78(arg0, (u8) total_col, (u8) row,
+                                           name_fall_sum);
                     }
                 } else {
-                    var_r18_3 = mnDiagram_CountUnlockedFightersInline();
-                    if (var_r18_3 > var_r22) {
-                        var_r19_5 = mnDiagram_SumFighterFalls(
+                    fighter_count3 = mnDiagram_CountUnlockedFightersInline();
+                    if (fighter_count3 > total_col) {
+                        fighter_fall_sum = mnDiagram_SumFighterFalls(
                             mnDiagram_GetVisibleFighterCursorFrom(
-                                sorted, arg2_r, var_r22));
-                        mnDiagram_80241E78(arg0, (u8) var_r22, (u8) var_r30,
-                                           var_r19_5);
+                                sorted, row_cursor, total_col));
+                        mnDiagram_80241E78(arg0, (u8) total_col, (u8) row,
+                                           fighter_fall_sum);
                     }
                 }
-                var_r22 += 1;
-            } while (var_r22 < 7);
+                total_col += 1;
+            } while (total_col < 7);
         } else if (is_name != 0) {
-            var_r3 = GetNameCount();
-            if (var_r3 > var_r30) {
-                var_r22_2 = 0;
+            name_count = GetNameCount();
+            if (name_count > row) {
+                name_col = 0;
                 do {
                     sorted = (u8*) assets;
-                    if ((var_r22_2 == 7) ||
-                        (var_r3 = GetNameCount(), (var_r3 > var_r22_2)))
+                    if ((name_col == 7) ||
+                        (name_count = GetNameCount(), (name_count > name_col)))
                     {
-                        var_r0_2 = (u8) mnDiagram_GetVisibleNameCursorFrom(
-                            sorted, arg1_r, var_r30);
-                        if (var_r22_2 == 7) {
-                            var_r17_4 = mnDiagram_GetNameTotalKOs(var_r0_2);
-                            mnDiagram_80241E78(arg0, (u8) var_r22_2,
-                                               (u8) var_r30, var_r17_4);
+                        row_name_id = (u8) mnDiagram_GetVisibleNameCursorFrom(
+                            sorted, col_cursor, row);
+                        if (name_col == 7) {
+                            // Totals column: this name's grand-total KOs.
+                            name_total_kos = mnDiagram_GetNameTotalKOs(row_name_id);
+                            mnDiagram_80241E78(arg0, (u8) name_col,
+                                               (u8) row, name_total_kos);
                         } else {
-                            var_r17_6 = mnDiagram_GetVisibleNameCursorFrom(
-                                sorted, arg2_r, var_r22_2);
+                            col_name_id = mnDiagram_GetVisibleNameCursorFrom(
+                                sorted, row_cursor, name_col);
                             mnDiagram_80241E78(
-                                arg0, (u8) var_r22_2, (u8) var_r30,
-                                GetPersistentNameData((u8) var_r0_2)
-                                    ->vs_kos[(u8) var_r17_6]);
+                                arg0, (u8) name_col, (u8) row,
+                                GetPersistentNameData((u8) row_name_id)
+                                    ->vs_kos[(u8) col_name_id]);
                         }
                     }
-                    var_r22_2 += 1;
-                } while (var_r22_2 <= 7);
+                    name_col += 1;
+                } while (name_col <= 7);
             }
         } else {
-            var_r17_7 = mnDiagram_CountUnlockedFightersInline();
-            if (var_r17_7 > var_r30) {
-                var_r22_3 = 0;
+            fighter_count = mnDiagram_CountUnlockedFightersInline();
+            if (fighter_count > row) {
+                fighter_col = 0;
                 do {
                     sorted = (u8*) assets;
-                    if (var_r22_3 != 7) {
-                        var_r17_8 = mnDiagram_CountUnlockedFightersInline();
-                        if (var_r17_8 > var_r22_3) {
+                    if (fighter_col != 7) {
+                        fighter_count2 = mnDiagram_CountUnlockedFightersInline();
+                        if (fighter_count2 > fighter_col) {
                             goto block_83;
                         }
                     } else {
                     block_83:
-                        var_r23 = mnDiagram_GetVisibleFighterCursorFrom(
-                            sorted, arg1_r, var_r30);
-                        if (var_r22_3 == 7) {
+                        row_fighter_id = mnDiagram_GetVisibleFighterCursorFrom(
+                            sorted, col_cursor, row);
+                        if (fighter_col == 7) {
+                            // Totals column: this fighter's grand-total KOs.
                             mnDiagram_80241E78(
-                                arg0, (u8) var_r22_3, (u8) var_r30,
-                                mnDiagram_SumFighterKOsClamped(var_r23));
+                                arg0, (u8) fighter_col, (u8) row,
+                                mnDiagram_SumFighterKOsClamped(row_fighter_id));
                         } else {
-                            var_r24 = mnDiagram_GetVisibleFighterCursorFrom(
-                                sorted, arg2_r, var_r22_3);
+                            col_fighter_id = mnDiagram_GetVisibleFighterCursorFrom(
+                                sorted, row_cursor, fighter_col);
                             mnDiagram_80241E78(
-                                arg0, (u8) var_r22_3, (u8) var_r30,
-                                GetPersistentFighterData((u8) var_r23)
-                                    ->fighter_kos[var_r24]);
+                                arg0, (u8) fighter_col, (u8) row,
+                                GetPersistentFighterData((u8) row_fighter_id)
+                                    ->fighter_kos[col_fighter_id]);
                         }
                     }
-                    var_r22_3 += 1;
-                } while (var_r22_3 <= 7);
+                    fighter_col += 1;
+                } while (fighter_col <= 7);
             }
         }
-        var_r30 += 1;
-    } while (var_r30 <= 0xA);
+        row += 1;
+    } while (row <= 0xA);
 }
 
 void mnDiagram_802427B4(void* arg0, s32 arg1, s32 arg2)
