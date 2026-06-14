@@ -649,14 +649,13 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
 
     {
         u32 r22 = (u8) row_idx;
+        f32 ny = -sp20.y;
         f32 temp_f31 = -f30 * (f32) r22;
-        text = HSD_SisLib_803A5ACC(0, 1, sp20.x, -sp20.y + temp_f31, sp20.z,
+        text = HSD_SisLib_803A5ACC(0, 1, sp20.x, ny + temp_f31, sp20.z,
                                    mnDiagram2_804DBFD0, mnDiagram2_804DBFD4);
 
         {
-            int r29 = row_idx << 2;
-            Diagram2* temp_r22 = (Diagram2*) ((u8*) data + r29);
-            temp_r22->row_labels[0] = text;
+            data->row_labels[row_idx] = text;
 
             table = (u16*) (base + ((stat_type << 1) & 0x1FE));
             {
@@ -669,12 +668,15 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                         int var_r3;
                         lb_8000B1CC(data->row0_ref, (Vec3*) (base + 0xC),
                                     &sp20);
-                        text2 = HSD_SisLib_803A5ACC(
-                            0, 1, mnDiagram2_804DBFD8 + sp20.x,
-                            -sp20.y + temp_f31, sp20.z, mnDiagram2_804DBFDC,
-                            mnDiagram2_804DBFDC);
+                        {
+                            f32 py2 = -sp20.y + temp_f31;
+                            text2 = HSD_SisLib_803A5ACC(
+                                0, 1, mnDiagram2_804DBFD8 + sp20.x, py2,
+                                sp20.z, mnDiagram2_804DBFDC,
+                                mnDiagram2_804DBFDC);
+                        }
 
-                        temp_r22->row_icons[0] = text2;
+                        data->row_icons[row_idx] = text2;
                         text2->default_alignment = 1;
                         text2->text_color = mnDiagram2_804D4FBC;
 
@@ -714,14 +716,17 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
 
                 {
                     HSD_Text* text3 = HSD_SisLib_803A6754(0, 1);
-                    temp_r22->row_values[0] = text3;
+                    data->row_values[row_idx] = text3;
                     text3->font_size.x = mnDiagram2_804DBFE0;
                     text3->font_size.y = mnDiagram2_804DBFE4;
                     lb_8000B1CC(data->icon_parent, (Vec3*) (base + 0x18),
                                 &sp20);
-                    text3->pos_x = sp20.x;
-                    text3->pos_y = -sp20.y + temp_f31;
-                    text3->pos_z = sp20.z;
+                    {
+                        f32 py = -sp20.y + temp_f31;
+                        text3->pos_x = sp20.x;
+                        text3->pos_y = py;
+                        text3->pos_z = sp20.z;
+                    }
                     text3->text_color = mnDiagram2_804D4FBC;
                     text3->default_alignment = 2;
 
