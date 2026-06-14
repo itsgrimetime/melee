@@ -621,7 +621,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                               u8 row_idx, u8 entity_idx)
 {
     Vec3 sp20;
-    u8 str[4];
+    u8 str[8];
     Diagram2* data;
     HSD_JObj* jobj;
     char* base;
