@@ -2677,8 +2677,7 @@ void mnDiagram_80242C0C(void* arg0, int arg1, int arg2)
     joint_data = assets->FaceB;
     for (i = 0; i < 7; i++) {
         sorted = mnDiagram_804A0750.sorted_fighters;
-        count = 0;
-        for (k = 0; k < 0x19; k++) {
+        for (count = k = 0; k < 0x19; k++) {
             if (mn_IsFighterUnlocked(k) != 0) {
                 count++;
             }
