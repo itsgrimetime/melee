@@ -439,14 +439,15 @@ void mnDiagram3_8024714C(void* arg0)
 {
     void* new_var;
     int i;
+    u8 sp54[8];
     Vec3 sp48;
+    u8 sp40[8];
     Diagram3* data;
     HSD_GObj* gobj;
     HSD_JObj* row0;
     mnDiagram_ArchiveData* archive;
     f32 row_spacing;
     f32 neg_spacing;
-    PAD_STACK(16);
 
     {
         MenuFlow* flow = &mn_804A04F0;
