@@ -332,6 +332,104 @@ def test_explain_virtuals_binds_fpr_product_to_float_local_assignment() -> None:
     assert row_offset.expression == "y_offset * row"
 
 
+def test_explain_virtuals_binds_fpr_subtraction_to_float_local_assignment() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000006
+        BEFORE REGISTER COLORING
+        fn_80000006
+        B0: Succ={} Pred={} Labels={}
+            fsubs f36,f42,f41
+            lfd f44,@192(r0)
+            lfd f45,@1518(r1)
+            fsubs f46,f45,f44
+            fmuls f38,f35,f49
+            lfs f50,@1517(r0)
+            fsubs f33,f38,f50
+        COLORGRAPH DECISIONS (class=1, result=1, n_nodes=2)
+          iter ig_idx phys degree nIntfr flags
+            0 36 r27 0 0 0x00
+            1 33 r28 0 0 0x00
+    """)
+    source = textwrap.dedent("""\
+        typedef float f32;
+        void fn_80000006(f32 base, f32 y_offset, f32 row) {
+            f32 y_spacing;
+            f32 row_offset;
+            f32 row_offset_adj;
+            y_spacing = y_offset - base;
+            row_offset = y_offset * row;
+            row_offset_adj = row_offset - 0.4f;
+            sink(y_spacing, row_offset_adj);
+        }
+    """)
+
+    report = explain_virtuals(
+        pcdump,
+        "fn_80000006",
+        virtuals=[36, 33],
+        source_text=source,
+        source_file="sample.c",
+        reg_class="fpr",
+    )
+
+    by_virtual = {entry.virtual: entry for entry in report.virtuals}
+    first = by_virtual[36].source
+    second = by_virtual[33].source
+    assert first is not None
+    assert first.kind == "local"
+    assert first.confidence == "fpr-expression-order"
+    assert first.name == "y_spacing"
+    assert first.type == "f32"
+    assert first.expression == "y_offset - base"
+    assert second is not None
+    assert second.kind == "local"
+    assert second.confidence == "fpr-expression-order"
+    assert second.name == "row_offset_adj"
+    assert second.type == "f32"
+    assert second.expression == "row_offset - 0.4f"
+
+
+def test_explain_virtuals_ignores_unary_minus_for_fpr_subtraction_rank() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000007
+        BEFORE REGISTER COLORING
+        fn_80000007
+        B0: Succ={} Pred={} Labels={}
+            fsubs f33,f42,f41
+        COLORGRAPH DECISIONS (class=1, result=1, n_nodes=1)
+          iter ig_idx phys degree nIntfr flags
+            0 33 r28 0 0 0x00
+    """)
+    source = textwrap.dedent("""\
+        typedef float f32;
+        void fn_80000007(f32 base, f32 y_offset) {
+            f32 negated;
+            f32 cast_negated;
+            f32 delta;
+            negated = -base;
+            cast_negated = (f32) -base;
+            delta = y_offset - base;
+            sink(negated, cast_negated, delta);
+        }
+    """)
+
+    report = explain_virtuals(
+        pcdump,
+        "fn_80000007",
+        virtuals=[33],
+        source_text=source,
+        source_file="sample.c",
+        reg_class="fpr",
+    )
+
+    source_attr = report.virtuals[0].source
+    assert source_attr is not None
+    assert source_attr.kind == "local"
+    assert source_attr.name == "delta"
+    assert source_attr.type == "f32"
+    assert source_attr.expression == "y_offset - base"
+
+
 def test_explain_virtual_cli_all_reports_every_pcode_virtual(tmp_path: pathlib.Path) -> None:
     pcdump = tmp_path / "pcdump.txt"
     source = tmp_path / "sample.c"

@@ -101,11 +101,27 @@ _FLOATING_SCALAR_TYPES = {"float", "f32", "double", "f64"}
 _FPR_SOURCE_EXPR_OPS = {
     "fmul": "*",
     "fmuls": "*",
+    "fsub": "-",
+    "fsubs": "-",
 }
 _PLAIN_ASSIGNMENT_RE = re.compile(
     r"(?m)^(?P<indent>[ \t]*)"
     r"(?P<lhs>[A-Za-z_][A-Za-z_0-9]*)"
     r"[ \t]*=[ \t]*(?P<rhs>[^;\n]+);[ \t]*$"
+)
+_COMPOUND_FLOAT_SUB_RE = re.compile(
+    r"(?m)^(?P<indent>[ \t]*)"
+    r"(?P<lhs>[A-Za-z_][A-Za-z_0-9]*)"
+    r"[ \t]*-=[ \t]*(?P<rhs>[^;\n]+);[ \t]*$"
+)
+_CAST_ONLY_EXPR_RE = re.compile(
+    r"^\s*\(\s*"
+    r"(?:const\s+|volatile\s+)?"
+    r"(?:signed\s+|unsigned\s+)?"
+    r"(?:void|char|short|int|long|float|double|"
+    r"s8|u8|s16|u16|s32|u32|s64|u64|f32|f64|bool|BOOL)"
+    r"(?:\s*\*)*"
+    r"\s*\)\s*$"
 )
 
 
@@ -445,14 +461,30 @@ def _floating_decl_types_for_function(
 
 def _top_level_operator_present(expression: str, operator: str) -> bool:
     depth = 0
-    for ch in expression:
+    for idx, ch in enumerate(expression):
         if ch == "(":
             depth += 1
         elif ch == ")" and depth > 0:
             depth -= 1
         elif ch == operator and depth == 0:
+            if operator == "-" and not _is_binary_top_level_minus(expression, idx):
+                continue
             return True
     return False
+
+
+def _is_binary_top_level_minus(expression: str, idx: int) -> bool:
+    before = expression[:idx].rstrip()
+    after = expression[idx + 1 :].lstrip()
+    if not before or not after:
+        return False
+    if after.startswith(">"):
+        return False
+    if before[-1] in "+-*/%&|^!~<>=?:,({[":
+        return False
+    if _CAST_ONLY_EXPR_RE.fullmatch(before):
+        return False
+    return True
 
 
 def _fpr_source_expr_rank(
@@ -472,6 +504,8 @@ def _fpr_source_expr_rank(
                 kind, num = instr.regs[0]
                 if kind != "f" or num < 32:
                     continue
+                if _is_conversion_subtract(instr, block.instructions[:instr_idx]):
+                    continue
                 if (
                     pass_.name == site.pass_name
                     and block.index == site.block_idx
@@ -480,6 +514,23 @@ def _fpr_source_expr_rank(
                     return rank
                 rank += 1
     return None
+
+
+def _is_conversion_subtract(instr, previous_instructions) -> bool:
+    if instr.opcode.lower() not in {"fsub", "fsubs"} or len(instr.regs) < 3:
+        return False
+    src_regs = [num for kind, num in instr.regs[1:3] if kind == "f"]
+    if len(src_regs) != 2:
+        return False
+
+    seen_lfd: set[int] = set()
+    for previous in previous_instructions:
+        if previous.opcode.lower() != "lfd" or not previous.regs:
+            continue
+        kind, num = previous.regs[0]
+        if kind == "f":
+            seen_lfd.add(num)
+    return all(num in seen_lfd for num in src_regs)
 
 
 def _source_from_fpr_expression_assignment(
@@ -506,7 +557,7 @@ def _source_from_fpr_expression_assignment(
     if rank is None:
         return None
 
-    candidates: list[tuple[str, str, int, int]] = []
+    candidates: list[tuple[int, str, str, int, int]] = []
     for match in _PLAIN_ASSIGNMENT_RE.finditer(body_text):
         lhs = match.group("lhs")
         if lhs not in floating_types:
@@ -517,11 +568,29 @@ def _source_from_fpr_expression_assignment(
         line = start_line + body_text.count("\n", 0, match.start())
         line_start = body_text.rfind("\n", 0, match.start("rhs")) + 1
         col = match.start("rhs") - line_start + 1
-        candidates.append((lhs, rhs, line, col))
+        candidates.append((match.start(), lhs, rhs, line, col))
 
+    if operator == "-":
+        for match in _COMPOUND_FLOAT_SUB_RE.finditer(body_text):
+            lhs = match.group("lhs")
+            if lhs not in floating_types:
+                continue
+            rhs = match.group("rhs").strip()
+            line = start_line + body_text.count("\n", 0, match.start())
+            line_start = body_text.rfind("\n", 0, match.start("lhs")) + 1
+            col = match.start("lhs") - line_start + 1
+            candidates.append((
+                match.start(),
+                lhs,
+                f"{lhs} - {rhs}",
+                line,
+                col,
+            ))
+
+    candidates.sort(key=lambda row: row[0])
     if rank >= len(candidates):
         return None
-    name, expression, line, col = candidates[rank]
+    _start, name, expression, line, col = candidates[rank]
     return SourceAttribution(
         kind="local",
         confidence="fpr-expression-order",

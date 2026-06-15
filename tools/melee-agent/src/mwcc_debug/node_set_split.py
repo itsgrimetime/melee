@@ -242,12 +242,14 @@ def _normalize_node_set_delta_payload(delta: dict[str, Any]) -> dict[str, Any]:
 
 def is_node_set_request_introducible(request: NodeSetSplitRequest | None) -> bool:
     """True when a request can bind an unbindable expression to a typed local."""
-    return (
-        request is not None
-        and request.var_name is None
-        and request.source_expression is not None
-        and request.source_type is not None
-    )
+    if (
+        request is None
+        or request.var_name is not None
+        or request.source_expression is None
+        or request.source_type is None
+    ):
+        return False
+    return _source_expression_is_safe_to_bind(request.source_expression)
 
 
 def generate_node_set_split_patches(
@@ -2735,7 +2737,10 @@ def _is_simple_identifier(value: str | None) -> bool:
 def _is_field_expression(expression: str | None) -> bool:
     if expression is None:
         return False
-    return "." in expression or "->" in expression
+    return "->" in expression or re.search(
+        r"(?:\b[A-Za-z_][A-Za-z_0-9]*|\]|\))\s*\.",
+        expression,
+    ) is not None
 
 
 def _optional_str(value: Any) -> str | None:

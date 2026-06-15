@@ -1766,6 +1766,92 @@ def test_requests_from_node_set_delta_can_include_introducible_entries() -> None
     assert reqs[1].source_type == "int"
 
 
+def test_requests_from_node_set_delta_rejects_unsafe_introducible_entries() -> None:
+    source = (
+        "void fn_test(int i) {\n"
+        "    int holder;\n"
+        "    holder = get_value(i);\n"
+        "    use(holder);\n"
+        "}\n"
+    )
+    delta = {
+        "function": "fn_test",
+        "class_id": 0,
+        "missing_virtuals": [
+            {"target_ig": 1, "desired_registers": ["r27"],
+             "source": {"name": "holder", "expression": "holder"}},
+            {"target_ig": 2, "desired_registers": ["r26"],
+             "source": {
+                 "kind": "call-result",
+                 "expression": "get_value(i)",
+                 "type": "int",
+             }},
+        ],
+    }
+
+    reqs = requests_from_node_set_delta(
+        delta,
+        source_text=source,
+        include_introducible=True,
+        max_requests=0,
+    )
+
+    assert [r.target_ig for r in reqs] == [1]
+
+
+def test_requests_from_node_set_delta_keeps_fpr_subtraction_local_in_coupled_set() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void fn_test(f32 y_spacing, f32 col, f32 row_offset) {\n"
+        "    f32 col_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    col_offset = y_spacing * col;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    sink(col_offset, row_offset_adj);\n"
+        "}\n"
+    )
+    delta = {
+        "function": "fn_test",
+        "class_id": 1,
+        "missing_virtuals": [
+            {
+                "target_ig": 32,
+                "current_register": "f26",
+                "desired_registers": ["f0"],
+                "source": {
+                    "kind": "local",
+                    "name": "col_offset",
+                    "type": "f32",
+                    "expression": "y_spacing * col",
+                },
+            },
+            {
+                "target_ig": 33,
+                "current_register": "f27",
+                "desired_registers": ["f28"],
+                "source": {
+                    "kind": "local",
+                    "name": "row_offset_adj",
+                    "type": "f32",
+                    "expression": "row_offset - 0.4f",
+                },
+            },
+        ],
+    }
+
+    reqs = requests_from_node_set_delta(
+        delta,
+        source_text=source,
+        include_introducible=True,
+        max_requests=0,
+    )
+
+    assert [req.target_ig for req in reqs] == [32, 33]
+    assert [req.var_name for req in reqs] == ["col_offset", "row_offset_adj"]
+    assert [req.class_id for req in reqs] == [1, 1]
+    assert [req.target_reg for req in reqs] == ["f0", "f28"]
+
+
 def test_requests_from_node_set_delta_filters_undeclared_against_source() -> None:
     delta = {
         "function": "fn_test",
