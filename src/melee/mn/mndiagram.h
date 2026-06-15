@@ -41,19 +41,27 @@
 /* 23FED4 */ void mnDiagram_InputProc(HSD_GObj*);
 /* 240B18 */ void mnDiagram_PopupCleanup(void* arg0);
 /* 240B98 */ void mnDiagram_PopupAnimProc(void* arg0);
-/* 240D94 */ void mnDiagram_CreatePopupText(void* gobj, s32 col_id, s32 row_id, s32 is_name_mode);
-/* 241310 */ void mnDiagram_CreatePopup(s32 col_id, s32 row_id, s32 is_name_mode);
+/* 240D94 */ void mnDiagram_CreatePopupText(void* gobj, s32 col_id, s32 row_id,
+                                            s32 is_name_mode);
+/* 241310 */ void mnDiagram_CreatePopup(s32 col_id, s32 row_id,
+                                        s32 is_name_mode);
 /* 241668 */ void mnDiagram_ClearGridContent(void* gobj);
-/* 241730 */ void mnDiagram_RedrawGrid(HSD_GObj* gobj, int col_cursor, int row_cursor);
+/* 241730 */ void mnDiagram_RedrawGrid(HSD_GObj* gobj, int col_cursor,
+                                       int row_cursor);
 /* 2417D0 */ void mnDiagram_UpdateArrowsForCursor(HSD_GObj* gobj);
 /* 241AE8 */ void mnDiagram_ExitAnimProc(HSD_GObj* gobj);
 /* 241B4C */ void mnDiagram_UpdateScrollArrowVisibility(void* gobj, int count);
 /* 241BF8 */ void mnDiagram_OnFrame(HSD_GObj* gobj);
-/* 241E78 */ void mnDiagram_DrawCellNumber(void* gobj, u8 col, u8 row, int value);
-/* 24227C */ void mnDiagram_FillGridCells(void* gobj, s32 col_cursor, s32 row_cursor, u8 is_name_mode);
-/* 2427B4 */ void mnDiagram_BuildNameHeaders(void* gobj, s32 col_cursor, s32 row_cursor);
-/* 242B38 */ HSD_JObj* mnDiagram_CreateFighterIcon(int fighter_id, int variant);
-/* 242C0C */ void mnDiagram_BuildFighterHeaders(void* gobj, int col_cursor, int row_cursor);
+/* 241E78 */ void mnDiagram_DrawCellNumber(void* gobj, u8 col, u8 row,
+                                           int value);
+/* 24227C */ void mnDiagram_FillGridCells(void* gobj, s32 col_cursor,
+                                          s32 row_cursor, u8 is_name_mode);
+/* 2427B4 */ void mnDiagram_BuildNameHeaders(void* gobj, s32 col_cursor,
+                                             s32 row_cursor);
+/* 242B38 */ HSD_JObj* mnDiagram_CreateFighterIcon(int fighter_id,
+                                                   int variant);
+/* 242C0C */ void mnDiagram_BuildFighterHeaders(void* gobj, int col_cursor,
+                                                int row_cursor);
 /* 243038 */ void mnDiagram_CursorProc(HSD_GObj* gobj);
 /* 2433AC */ void mnDiagram_CreateCursor(void);
 /* 243434 */ void mnDiagram_Create(u8 anim_state);
