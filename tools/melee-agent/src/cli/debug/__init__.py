@@ -24915,22 +24915,23 @@ def solve_node_set_split_cmd(
             )
         ]
         if len(coupled_requests) < 2:
-            summary = _node_set_split_blocked_summary(
+            aggregate = NodeSetSplitRequest(
                 function=function,
                 class_id=class_id,
-                target_ig=target_ig,
-                reason=(
+                target_ig=target_ig if target_ig is not None else -1,
+                blocked_reason=(
                     "coupled mode needs >=2 bindable missing virtuals "
                     f"(found {len(coupled_requests)})"
                 ),
-                threshold=threshold,
             )
-            summary["coupled_requests"] = [
-                dataclasses.asdict(req) for req in coupled_requests
-            ]
-            # Schema parity with the kwarg-built coupled summaries (a <2 set
-            # cannot share a var, so this is always None here).
-            summary["shared_source_var"] = None
+            summary = summarize_node_set_split_scores(
+                function,
+                aggregate,
+                [],
+                [],
+                threshold,
+                coupled_requests=coupled_requests,
+            )
             _emit_node_set_split_summary(summary, json_out=json_out)
             raise typer.Exit(3)
         # Synthesized aggregate request: stands in for the single `request`
@@ -25088,6 +25089,7 @@ def solve_node_set_split_cmd(
             candidate_limit=candidate_limit,
             budget_seconds=budget,
             elapsed_seconds=time.monotonic() - started_at,
+            coupled_requests=coupled_requests,
         )
         _emit_node_set_split_summary(summary, json_out=json_out)
         raise typer.Exit(4)
@@ -25113,6 +25115,7 @@ def solve_node_set_split_cmd(
             [],
             [],
             threshold,
+            coupled_requests=coupled_requests,
         )
         _emit_node_set_split_summary(summary, json_out=json_out)
         raise typer.Exit(3) from exc
@@ -25133,6 +25136,7 @@ def solve_node_set_split_cmd(
             candidate_limit=candidate_limit,
             budget_seconds=budget,
             elapsed_seconds=time.monotonic() - started_at,
+            coupled_requests=coupled_requests,
         )
         _emit_node_set_split_summary(summary, json_out=json_out)
         raise typer.Exit(4)
@@ -25158,6 +25162,7 @@ def solve_node_set_split_cmd(
             [],
             [],
             threshold,
+            coupled_requests=coupled_requests,
         )
         _emit_node_set_split_summary(summary, json_out=json_out)
         raise typer.Exit(3)

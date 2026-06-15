@@ -2216,6 +2216,44 @@ def test_summarize_coupled_all_wrong_register_marks_exhaustive_terminal() -> Non
     assert "switch to coloring-register steering" in next_steps
 
 
+def test_summarize_coupled_all_wrong_register_emits_no_shippable_classification() -> None:
+    reqs = _coupled_reqs()
+    aggregate = NodeSetSplitRequest(
+        "fn_test", 0, 34, target_reg="r27+r25", var_name="holder+other"
+    )
+    patches = [
+        CandidatePatch("c0", "src0", "c0", ((0, 0),), hunk="@@ c0"),
+        CandidatePatch("c1", "src1", "c1", ((0, 0),), hunk="@@ c1"),
+    ]
+    scored = []
+    for candidate_id in ("c0", "c1"):
+        score = CandidateScore(
+            candidate_id, compile_ok=True, checkdiff_pct=None,
+            checkdiff_delta=None, pcdump_score_delta=None,
+            diagnostics_path=None, status="objective-failed",
+        )
+        scored.append({
+            "score": score,
+            "objective": {"status": "wrong-register"},
+        })
+
+    summary = summarize_node_set_split_scores(
+        "fn_test", aggregate, patches, scored, threshold=1.0,
+        coupled_requests=reqs,
+    )
+
+    classification = summary["in_place_recolor"]
+    assert classification["kind"] == "coupled-same-class-in-place-recolor"
+    assert classification["status"] == "no-shippable-mutator"
+    assert classification["terminal"] is True
+    assert classification["function"] == "fn_test"
+    assert classification["target_igs"] == [34, 44]
+    assert classification["class_id"] == 0
+    assert classification["evidence"]["wrong_register_count"] == 2
+    assert classification["evidence"]["pending_count"] == 0
+    assert "do not rerun" in classification["recommendation"]
+
+
 def test_summarize_candidate_limited_wrong_register_is_not_exhaustive() -> None:
     reqs = _coupled_reqs()
     aggregate = NodeSetSplitRequest(
@@ -2246,6 +2284,72 @@ def test_summarize_candidate_limited_wrong_register_is_not_exhaustive() -> None:
     assert summary["wrong_register_count"] == 1
     assert summary["wrong_register_exhausted"] is False
     assert summary["terminal_reason"] is None
+
+
+def test_summarize_coupled_candidate_limited_classification_is_incomplete() -> None:
+    reqs = _coupled_reqs()
+    aggregate = NodeSetSplitRequest(
+        "fn_test", 0, 34, target_reg="r27+r25", var_name="holder+other"
+    )
+    patches = [
+        CandidatePatch("c0", "src0", "c0", ((0, 0),), hunk="@@ c0"),
+        CandidatePatch("c1", "src1", "c1", ((0, 0),), hunk="@@ c1"),
+    ]
+    score = CandidateScore(
+        "c0", compile_ok=True, checkdiff_pct=None,
+        checkdiff_delta=None, pcdump_score_delta=None,
+        diagnostics_path=None, status="objective-failed",
+    )
+
+    summary = summarize_node_set_split_scores(
+        "fn_test",
+        aggregate,
+        patches,
+        [{"score": score, "objective": {"status": "wrong-register"}}],
+        threshold=1.0,
+        stop_reason="candidate-limit",
+        candidate_limit=1,
+        coupled_requests=reqs,
+    )
+
+    classification = summary["in_place_recolor"]
+    assert classification["status"] == "incomplete"
+    assert classification["terminal"] is False
+    assert "larger --max-candidates" in classification["recommendation"]
+
+
+def test_summarize_coupled_generator_cap_classification_is_incomplete() -> None:
+    reqs = _coupled_reqs()
+    aggregate = NodeSetSplitRequest(
+        "fn_test", 0, 34, target_reg="r27+r25", var_name="holder+other"
+    )
+    patches = [
+        CandidatePatch("c0", "src0", "c0", ((0, 0),), hunk="@@ c0"),
+        CandidatePatch("c1", "src1", "c1", ((0, 0),), hunk="@@ c1"),
+    ]
+    scored = []
+    for candidate_id in ("c0", "c1"):
+        score = CandidateScore(
+            candidate_id, compile_ok=True, checkdiff_pct=None,
+            checkdiff_delta=None, pcdump_score_delta=None,
+            diagnostics_path=None, status="objective-failed",
+        )
+        scored.append({
+            "score": score,
+            "objective": {"status": "wrong-register"},
+        })
+
+    summary = summarize_node_set_split_scores(
+        "fn_test", aggregate, patches, scored, threshold=1.0,
+        candidate_limit=2,
+        coupled_requests=reqs,
+    )
+
+    classification = summary["in_place_recolor"]
+    assert summary["wrong_register_exhausted"] is True
+    assert classification["status"] == "incomplete"
+    assert classification["terminal"] is False
+    assert "larger --max-candidates" in classification["recommendation"]
 
 
 # ---------------------------------------------------------------------------
@@ -2449,3 +2553,7 @@ def test_cli_coupled_blocks_when_fewer_than_two_bindable(tmp_path, monkeypatch) 
     assert "coupled mode needs >=2" in (summary.get("blocked_reason") or "")
     assert len(summary["coupled_requests"]) == 1
     assert summary["shared_source_var"] is None
+    classification = summary["in_place_recolor"]
+    assert classification["status"] == "insufficient-source-bindings"
+    assert classification["terminal"] is False
+    assert classification["target_igs"] == [34]

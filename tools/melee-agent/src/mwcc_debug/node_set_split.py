@@ -957,7 +957,99 @@ def summarize_node_set_split_scores(
                 seen_vars.add(name)
         summary["coupled_requests"] = [asdict(r) for r in coupled_requests]
         summary["shared_source_var"] = shared_source_var
+        in_place_recolor = _in_place_recolor_classification(
+            status=status,
+            request=request,
+            patches=patches,
+            rows=rows,
+            coupled_requests=coupled_requests,
+            wrong_register_exhausted=wrong_register_exhausted,
+            stop_reason=stop_reason,
+            pending_count=pending_count,
+            candidate_limit=candidate_limit,
+            budget_seconds=budget_seconds,
+        )
+        if in_place_recolor is not None:
+            summary["in_place_recolor"] = in_place_recolor
     return summary
+
+
+def _in_place_recolor_classification(
+    *,
+    status: str,
+    request: NodeSetSplitRequest,
+    patches: list[CandidatePatch],
+    rows: list[dict[str, Any]],
+    coupled_requests: list[NodeSetSplitRequest] | None,
+    wrong_register_exhausted: bool,
+    stop_reason: str | None,
+    pending_count: int,
+    candidate_limit: int | None,
+    budget_seconds: float | None,
+) -> dict[str, Any] | None:
+    if coupled_requests is None:
+        return None
+
+    wrong_register_count = sum(
+        1 for row in rows if row.get("objective_status") == "wrong-register"
+    )
+    evidence = {
+        "generated_count": len(patches),
+        "scored_count": len(rows),
+        "pending_count": pending_count,
+        "wrong_register_count": wrong_register_count,
+        "stop_reason": stop_reason,
+        "candidate_limit": candidate_limit,
+        "budget_seconds": budget_seconds,
+    }
+
+    candidate_cap_may_have_truncated = (
+        candidate_limit is not None and len(patches) >= candidate_limit
+    )
+
+    if wrong_register_exhausted and not candidate_cap_may_have_truncated:
+        class_status = "no-shippable-mutator"
+        terminal = True
+        recommendation = (
+            "do not rerun node-set-split with the same delta; classify this "
+            "as a practical ceiling for source-shape in-place recolor and move "
+            "to backend/coalescer control or a new mutator family"
+        )
+    elif status == "blocked" and len(coupled_requests) < 2:
+        class_status = "insufficient-source-bindings"
+        terminal = False
+        recommendation = (
+            request.blocked_reason
+            or "coupled mode needs at least two source-bindable requests"
+        )
+    elif stop_reason == "candidate-limit" or candidate_cap_may_have_truncated:
+        class_status = "incomplete"
+        terminal = False
+        recommendation = (
+            "rerun with a larger --max-candidates value, or use "
+            "--max-candidates 0 for an exhaustive source-shape search"
+        )
+    elif stop_reason == "budget-exhausted":
+        class_status = "incomplete"
+        terminal = False
+        recommendation = "rerun with a larger --budget value"
+    else:
+        class_status = "search-active"
+        terminal = False
+        recommendation = (
+            "continue only if a broader source mutator family is available"
+        )
+
+    return {
+        "kind": "coupled-same-class-in-place-recolor",
+        "status": class_status,
+        "terminal": terminal,
+        "function": request.function,
+        "class_id": request.class_id,
+        "target_igs": [req.target_ig for req in coupled_requests],
+        "evidence": evidence,
+        "recommendation": recommendation,
+    }
 
 
 def _node_set_split_next_steps(

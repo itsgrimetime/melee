@@ -1468,7 +1468,92 @@ def test_solve_node_set_split_coupled_generation_honors_budget(
     assert payload["stop_condition"]["kind"] == "budget-exhausted"
     assert payload["generated_count"] == 0
     assert payload["evaluated_count"] == 0
+    assert payload["in_place_recolor"]["status"] == "incomplete"
+    assert payload["in_place_recolor"]["terminal"] is False
     assert compile_labels == []
+
+
+def test_solve_node_set_split_coupled_baseline_timeout_has_in_place_classification(
+    monkeypatch,
+    tmp_path,
+):
+    source = _node_split_repo(
+        tmp_path,
+        monkeypatch,
+        source_text=(
+            "void fn_test(void) {\n"
+            "    int holder;\n"
+            "    int other;\n"
+            "    int out;\n"
+            "    holder = make();\n"
+            "    other = build();\n"
+            "    out = holder + other;\n"
+            "    use(out, holder, other);\n"
+            "}\n"
+        ),
+    )
+    delta_path = tmp_path / "node-set-delta.json"
+    delta_path.write_text(json.dumps({
+        "kind": "node-set-delta",
+        "function": "fn_test",
+        "class_id": 0,
+        "missing_virtuals": [
+            {
+                "target_ig": 34,
+                "current_register": "r24",
+                "desired_registers": ["r27"],
+                "source": {"name": "holder", "expression": "holder"},
+            },
+            {
+                "target_ig": 44,
+                "current_register": "r27",
+                "desired_registers": ["r25"],
+                "source": {"name": "other", "expression": "other"},
+            },
+        ],
+    }), encoding="utf-8")
+    clock = {"now": 100.0}
+
+    def fake_generate(source_text, function, requests, **kwargs):
+        patched = source_text.replace(
+            "out = holder + other;",
+            "out = other + holder;",
+        )
+        clock["now"] = 102.0
+        return [
+            CandidatePatch(
+                "node-split-coupled-ig34+ig44-c0",
+                patched,
+                "coupled candidate",
+                ((0, len(source_text)),),
+                hunk="@@ coupled",
+            )
+        ]
+
+    monkeypatch.setattr(debugcli.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        "src.mwcc_debug.node_set_split.generate_coupled_node_set_split_patches",
+        fake_generate,
+    )
+
+    result = runner.invoke(debugcli.debug_app, [
+        "solve", "node-set-split",
+        "--coupled",
+        "--node-set-delta", str(delta_path),
+        "--source-file", str(source),
+        "--max-candidates", "0",
+        "--budget", "1",
+        "--json",
+    ])
+
+    assert result.exit_code == 4, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "exhausted"
+    assert payload["stop_condition"]["kind"] == "budget-exhausted"
+    assert payload["generated_count"] == 1
+    assert payload["pending_count"] == 1
+    assert payload["in_place_recolor"]["status"] == "incomplete"
+    assert payload["in_place_recolor"]["target_igs"] == [34, 44]
 
 
 def test_solve_node_set_split_max_candidates_stops_after_cap(
