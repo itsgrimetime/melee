@@ -136,7 +136,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                     }
                 } else {
                     entity = mnDiagram2_GetRankedFighter(stat_type, (u8) i);
-                    icon = mnDiagram_80242B38(entity, 0);
+                    icon = mnDiagram_CreateFighterIcon(entity, 0);
                     HSD_JObjSetTranslateY(icon, row_spacing * (f32) i);
                     HSD_JObjAddChild(data->jobjs[6], icon);
                 }
@@ -166,7 +166,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
                     }
                     mnDiagram2_GetAggregatedFighterRank(sp38, stat_type,
                                                         (u8) i);
-                    icon = mnDiagram_80242B38(sp38[0], 0);
+                    icon = mnDiagram_CreateFighterIcon(sp38[0], 0);
                     HSD_JObjSetTranslateY(icon, row_spacing * (f32) i);
                     HSD_JObjAddChild(data->jobjs[6], icon);
 
@@ -617,7 +617,7 @@ void mnDiagram3_HandleInput(HSD_GObj* gobj)
             mnDiagram2_Init();
             return;
         }
-        mnDiagram_802437E8(0, 0);
+        mnDiagram_Init(0, 0);
         return;
     }
     if (input & 0xC00) {
