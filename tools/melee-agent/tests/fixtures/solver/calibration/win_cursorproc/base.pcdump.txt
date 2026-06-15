@@ -1,0 +1,6160 @@
+Starting function mnDiagram_CursorProc
+--------------------------------------------------------------------------------
+Removing unreachable code at: 80
+Removing goto next at 234
+Removing goto next at 434
+Removing goto next at 542
+Removing goto next at 643
+*****************
+Dumps for pass=0
+*****************
+Found propagatable assignment at: 94
+Found propagatable assignment at: 130
+Found propagatable assignment at: 203
+Found propagatable assignment at: 223
+Found propagatable assignment at: 290
+Found propagatable assignment at: 326
+Found propagatable assignment at: 403
+Found propagatable assignment at: 423
+Found propagatable assignment at: 511
+Found propagatable assignment at: 531
+Found propagatable assignment at: 612
+Found propagatable assignment at: 632
+Found propagation at 132 from 94
+Found propagation at 134 from 130
+Found propagation at 328 from 290
+Found propagation at 330 from 326
+Found propagatable expression assignment at: 5
+Found propagatable expression assignment at: 37
+Found propagatable expression assignment at: 66
+Found expression propagation at 648 from 66
+Found propagatable expression assignment at: 89
+Found propagatable expression assignment at: 94
+Found propagatable expression assignment at: 102
+Found expression propagation at 658 from 89
+Found expression propagation at 659 from 102
+Found propagatable expression assignment at: 125
+Found propagatable expression assignment at: 130
+Found propagatable expression assignment at: 138
+Found propagatable expression assignment at: 143
+Found expression propagation at 127 from 125
+Found expression propagation at 134 from 125
+Found expression propagation at 145 from 143
+Found propagatable expression assignment at: 203
+Found propagatable expression assignment at: 223
+Found propagatable expression assignment at: 254
+Found propagatable expression assignment at: 262
+Found expression propagation at 664 from 262
+Found propagatable expression assignment at: 285
+Found propagatable expression assignment at: 290
+Found propagatable expression assignment at: 298
+Found expression propagation at 674 from 285
+Found expression propagation at 675 from 298
+Found propagatable expression assignment at: 321
+Found propagatable expression assignment at: 326
+Found propagatable expression assignment at: 334
+Found propagatable expression assignment at: 339
+Found expression propagation at 323 from 321
+Found expression propagation at 330 from 321
+Found expression propagation at 341 from 339
+Found propagatable expression assignment at: 403
+Found propagatable expression assignment at: 423
+Found propagatable expression assignment at: 451
+Found expression propagation at 453 from 451
+Found propagatable expression assignment at: 511
+Found propagatable expression assignment at: 531
+Found propagatable expression assignment at: 548
+Found expression propagation at 550 from 548
+Found propagatable expression assignment at: 612
+Found propagatable expression assignment at: 632
+Removing dead assignment 94
+Removing dead assignment 130
+Removing dead assignment 290
+Removing dead assignment 326
+Found propagatable assignment at: 219
+Found propagatable assignment at: 239
+Found propagatable assignment at: 435
+Found propagatable assignment at: 455
+Found propagatable assignment at: 543
+Found propagatable assignment at: 563
+Found propagatable assignment at: 644
+Found propagatable assignment at: 664
+Replacing common sub at 73 with 63
+Replacing common sub at 120 with 110
+Replacing common sub at 161 with 156
+Replacing common sub at 232 with 224
+Replacing common sub at 285 with 275
+Replacing common sub at 332 with 322
+Replacing common sub at 373 with 368
+Replacing common sub at 448 with 440
+Replacing common sub at 485 with 480
+Replacing common sub at 505 with 181
+Replacing common sub at 556 with 548
+Replacing common sub at 582 with 577
+Replacing common sub at 605 with 396
+Replacing common sub at 657 with 649
+Removing branch around goto at 74
+Removing branch around goto at 121
+Removing branch around goto at 162
+Removing branch around goto at 204
+Removing branch around goto at 286
+Removing branch around goto at 333
+Removing branch around goto at 374
+Removing branch around goto at 420
+Removing branch around goto at 486
+Removing branch around goto at 528
+Removing branch around goto at 583
+Removing branch around goto at 629
+Found propagatable assignment at: 237
+Found propagatable assignment at: 262
+Found propagatable assignment at: 476
+Found propagatable assignment at: 501
+Found propagatable assignment at: 596
+Found propagatable assignment at: 621
+Found propagatable assignment at: 709
+Found propagatable assignment at: 734
+Found propagatable assignment at: 237
+Found propagatable assignment at: 262
+Found propagatable assignment at: 476
+Found propagatable assignment at: 501
+Found propagatable assignment at: 596
+Found propagatable assignment at: 621
+Found propagatable assignment at: 709
+Found propagatable assignment at: 734
+Found propagatable assignment at: 237
+Found propagatable assignment at: 262
+Found propagatable assignment at: 476
+Found propagatable assignment at: 501
+Found propagatable assignment at: 596
+Found propagatable assignment at: 621
+Found propagatable assignment at: 709
+Found propagatable assignment at: 734
+*****************
+Dumps for pass=1
+*****************
+Found propagatable assignment at: 237
+Found propagatable assignment at: 262
+Found propagatable assignment at: 476
+Found propagatable assignment at: 501
+Found propagatable assignment at: 596
+Found propagatable assignment at: 621
+Found propagatable assignment at: 709
+Found propagatable assignment at: 734
+Found propagatable expression assignment at: 5
+Found propagatable expression assignment at: 37
+Found propagatable expression assignment at: 99
+Found propagatable expression assignment at: 151
+Found propagatable expression assignment at: 164
+Found expression propagation at 754 from 151
+Found propagatable expression assignment at: 237
+Found propagatable expression assignment at: 262
+Found propagatable expression assignment at: 293
+Found propagatable expression assignment at: 334
+Found propagatable expression assignment at: 386
+Found propagatable expression assignment at: 399
+Found expression propagation at 760 from 386
+Found propagatable expression assignment at: 476
+Found propagatable expression assignment at: 501
+Found propagatable expression assignment at: 596
+Found propagatable expression assignment at: 621
+Found propagatable expression assignment at: 709
+Found propagatable expression assignment at: 734
+Removing dead assignment 151
+Removing dead assignment 386
+Found propagatable assignment at: 237
+Found propagatable assignment at: 262
+Found propagatable assignment at: 476
+Found propagatable assignment at: 501
+Found propagatable assignment at: 596
+Found propagatable assignment at: 621
+Found propagatable assignment at: 709
+Found propagatable assignment at: 734
+Found propagatable assignment at: 243
+Found propagatable assignment at: 268
+Found propagatable assignment at: 488
+Found propagatable assignment at: 513
+Found propagatable assignment at: 608
+Found propagatable assignment at: 633
+Found propagatable assignment at: 721
+Found propagatable assignment at: 746
+
+BEFORE GLOBAL OPTIMIZATION
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=1825499944
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=27854
+B2: Succ={B3 B4 } Pred={B1 } Labels={L2 }
+
+    lis     r61,HA(mn_804A04F0)
+    addi    r62,r61,LO(mn_804A04F0)
+    mr      r33,r62
+    lis     r63,HA(mn_804A04F0)
+    addi    r64,r63,LO(mn_804A04F0)
+    lbz     r65,0(r64); fIsPtrOp
+    cmpli   cr0,r65,30
+    bf      cr0,eq,B4
+:{0004}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B2 } Labels={L25 }
+
+    lis     r66,HA(mn_804A04F0)
+    addi    r67,r66,LO(mn_804A04F0)
+    lbz     r68,16(r67); fIsPtrOp
+    cmpli   cr0,r68,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B2 } Labels={L3 L26 }
+
+    mr      r3,r32
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{0004}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r69,mnDiagram_804D6C10(r0)
+    lwz     r36,44(r69); fIsPtrOp
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,3
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    mr      r70,r3
+    addi    r33,r33,2
+    lhz     r71,0(r33); fIsPtrOp
+    srawi   r35,r71,8
+    lwz     r48,36(r36); fIsPtrOp
+    mr      r59,r48
+    cmpli   cr0,r48,0
+    bf      cr0,eq,B12
+:{0004}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lfs     f37,56(r59); fIsPtrOp
+    lwz     r47,40(r36); fIsPtrOp
+    mr      r60,r47
+    cmpli   cr0,r47,0
+    bf      cr0,eq,B15
+:{0004}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lfs     f38,56(r60); fIsPtrOp
+    fsubs   f33,f38,f37
+    lwz     r46,sp_jobj(r1)
+    mr      r58,r46
+    cmpli   cr0,r46,0
+    bf      cr0,eq,B18
+:{0004}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r72,r35,-3
+    lfd     f39,@1538(r0); fIsConst
+    xoris   r73,r72,0x8000
+    stw     r73,@2032+4(r1)
+    lis     r74,17200
+    stw     r74,@2032(r1)
+    lfd     f40,@2032(r1)
+    fsubs   f41,f40,f39
+    fmuls   f35,f33,f41
+    stfs    f35,56(r58); fIsPtrOp
+    lwz     r75,20(r58); fIsPtrOp
+    rlwinm  r76,r75,0,6,6
+    cmpli   cr0,r76,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r58,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    cmpli   cr0,r58,0
+    bf      cr0,eq,B23
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    li      r52,0
+    lwz     r45,20(r58); fIsPtrOp
+    rlwinm  r77,r45,0,8,8
+    cmpli   cr0,r77,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r78,r45,0,25,25
+    cmpli   cr0,r78,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r52,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r52,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r58
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,4
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    mr      r79,r3
+    lhz     r80,0(r33); fIsPtrOp
+    rlwinm  r81,r80,0,24,31
+    rlwinm  r34,r81,0,24,31
+    lwz     r44,44(r36); fIsPtrOp
+    mr      r56,r44
+    cmpli   cr0,r44,0
+    bf      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lfs     f36,60(r56); fIsPtrOp
+    lwz     r43,48(r36); fIsPtrOp
+    mr      r57,r43
+    cmpli   cr0,r43,0
+    bf      cr0,eq,B37
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lfs     f42,60(r57); fIsPtrOp
+    fsubs   f32,f42,f36
+    lwz     r42,sp_jobj(r1)
+    mr      r55,r42
+    cmpli   cr0,r42,0
+    bf      cr0,eq,B40
+:{0004}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    lfd     f43,@1538(r0); fIsConst
+    xoris   r82,r34,0x8000
+    stw     r82,@2032+4(r1)
+    lis     r83,17200
+    stw     r83,@2032(r1)
+    lfd     f44,@2032(r1)
+    fsub    f45,f44,f43
+    lfd     f46,@2030(r0); fIsConst
+    fsub    f47,f45,f46
+    lfd     f48,@2031(r0); fIsConst
+    fmsub   f34,f32,f47,f48
+    frsp    f49,f34
+    stfs    f49,60(r55); fIsPtrOp
+    lwz     r84,20(r55); fIsPtrOp
+    rlwinm  r85,r84,0,6,6
+    cmpli   cr0,r85,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r55,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    cmpli   cr0,r55,0
+    bf      cr0,eq,B45
+:{0004}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    li      r51,0
+    lwz     r41,20(r55); fIsPtrOp
+    rlwinm  r86,r41,0,8,8
+    cmpli   cr0,r86,0
+    bf      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r87,r41,0,25,25
+    cmpli   cr0,r87,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r51,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r51,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r55
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,2
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    mr      r88,r3
+    lwz     r40,sp_jobj(r1)
+    mr      r54,r40
+    cmpli   cr0,r40,0
+    bf      cr0,eq,B56
+:{0004}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f35,56(r54); fIsPtrOp
+    lwz     r89,20(r54); fIsPtrOp
+    rlwinm  r90,r89,0,6,6
+    cmpli   cr0,r90,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r54,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    cmpli   cr0,r54,0
+    bf      cr0,eq,B61
+:{0004}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    li      r50,0
+    lwz     r39,20(r54); fIsPtrOp
+    rlwinm  r91,r39,0,8,8
+    cmpli   cr0,r91,0
+    bf      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r92,r39,0,25,25
+    cmpli   cr0,r92,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r50,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r50,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r54
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r38,sp_jobj(r1)
+    mr      r53,r38
+    cmpli   cr0,r38,0
+    bf      cr0,eq,B70
+:{0004}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f50,f34
+    stfs    f50,60(r53); fIsPtrOp
+    lwz     r93,20(r53); fIsPtrOp
+    rlwinm  r94,r93,0,6,6
+    cmpli   cr0,r94,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r53,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    cmpli   cr0,r53,0
+    bf      cr0,eq,B75
+:{0004}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    li      r49,0
+    lwz     r37,20(r53); fIsPtrOp
+    rlwinm  r95,r37,0,8,8
+    cmpli   cr0,r95,0
+    bf      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r96,r37,0,25,25
+    cmpli   cr0,r96,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r49,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r49,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r53
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+
+AFTER COPY PROPAGATION
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=1825499944
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=27854
+B2: Succ={B3 B4 } Pred={B1 } Labels={L2 }
+
+    lis     r61,HA(mn_804A04F0)
+    addi    r62,r61,LO(mn_804A04F0)
+    lis     r63,HA(mn_804A04F0)
+    addi    r64,r63,LO(mn_804A04F0)
+    lbz     r65,0(r64); fIsPtrOp
+    cmpli   cr0,r65,30
+    bf      cr0,eq,B4
+:{0004}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B2 } Labels={L25 }
+
+    lis     r66,HA(mn_804A04F0)
+    addi    r67,r66,LO(mn_804A04F0)
+    lbz     r68,16(r67); fIsPtrOp
+    cmpli   cr0,r68,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B2 } Labels={L3 L26 }
+
+    mr      r3,r32
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{0004}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r69,mnDiagram_804D6C10(r0)
+    lwz     r36,44(r69); fIsPtrOp
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,3
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    mr      r70,r3
+    addi    r33,r62,2
+    lhz     r71,0(r33); fIsPtrOp
+    srawi   r35,r71,8
+    lwz     r48,36(r36); fIsPtrOp
+    cmpli   cr0,r48,0
+    bf      cr0,eq,B12
+:{0004}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lfs     f37,56(r48); fIsPtrOp
+    lwz     r47,40(r36); fIsPtrOp
+    cmpli   cr0,r47,0
+    bf      cr0,eq,B15
+:{0004}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lfs     f38,56(r47); fIsPtrOp
+    fsubs   f33,f38,f37
+    lwz     r46,sp_jobj(r1)
+    mr      r58,r46
+    cmpli   cr0,r46,0
+    bf      cr0,eq,B18
+:{0004}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r72,r35,-3
+    lfd     f39,@1538(r0); fIsConst
+    xoris   r73,r72,0x8000
+    stw     r73,@2032+4(r1)
+    lis     r74,17200
+    stw     r74,@2032(r1)
+    lfd     f40,@2032(r1)
+    fsubs   f41,f40,f39
+    fmuls   f35,f33,f41
+    stfs    f35,56(r58); fIsPtrOp
+    lwz     r75,20(r58); fIsPtrOp
+    rlwinm  r76,r75,0,6,6
+    cmpli   cr0,r76,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r58,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    cmpli   cr0,r58,0
+    bf      cr0,eq,B23
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    li      r52,0
+    lwz     r45,20(r58); fIsPtrOp
+    rlwinm  r77,r45,0,8,8
+    cmpli   cr0,r77,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r78,r45,0,25,25
+    cmpli   cr0,r78,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r52,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r52,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r58
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,4
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    mr      r79,r3
+    lhz     r80,0(r33); fIsPtrOp
+    rlwinm  r81,r80,0,24,31
+    rlwinm  r34,r81,0,24,31
+    lwz     r44,44(r36); fIsPtrOp
+    cmpli   cr0,r44,0
+    bf      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lfs     f36,60(r44); fIsPtrOp
+    lwz     r43,48(r36); fIsPtrOp
+    cmpli   cr0,r43,0
+    bf      cr0,eq,B37
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lfs     f42,60(r43); fIsPtrOp
+    fsubs   f32,f42,f36
+    lwz     r42,sp_jobj(r1)
+    mr      r55,r42
+    cmpli   cr0,r42,0
+    bf      cr0,eq,B40
+:{0004}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    lfd     f43,@1538(r0); fIsConst
+    xoris   r82,r34,0x8000
+    stw     r82,@2032+4(r1)
+    lis     r83,17200
+    stw     r83,@2032(r1)
+    lfd     f44,@2032(r1)
+    fsub    f45,f44,f43
+    lfd     f46,@2030(r0); fIsConst
+    fsub    f47,f45,f46
+    lfd     f48,@2031(r0); fIsConst
+    fmsub   f34,f32,f47,f48
+    frsp    f49,f34
+    stfs    f49,60(r55); fIsPtrOp
+    lwz     r84,20(r55); fIsPtrOp
+    rlwinm  r85,r84,0,6,6
+    cmpli   cr0,r85,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r55,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    cmpli   cr0,r55,0
+    bf      cr0,eq,B45
+:{0004}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    li      r51,0
+    lwz     r41,20(r55); fIsPtrOp
+    rlwinm  r86,r41,0,8,8
+    cmpli   cr0,r86,0
+    bf      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r87,r41,0,25,25
+    cmpli   cr0,r87,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r51,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r51,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r55
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,2
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    mr      r88,r3
+    lwz     r40,sp_jobj(r1)
+    mr      r54,r40
+    cmpli   cr0,r40,0
+    bf      cr0,eq,B56
+:{0004}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f35,56(r54); fIsPtrOp
+    lwz     r89,20(r54); fIsPtrOp
+    rlwinm  r90,r89,0,6,6
+    cmpli   cr0,r90,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r54,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    cmpli   cr0,r54,0
+    bf      cr0,eq,B61
+:{0004}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    li      r50,0
+    lwz     r39,20(r54); fIsPtrOp
+    rlwinm  r91,r39,0,8,8
+    cmpli   cr0,r91,0
+    bf      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r92,r39,0,25,25
+    cmpli   cr0,r92,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r50,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r50,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r54
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r38,sp_jobj(r1)
+    mr      r53,r38
+    cmpli   cr0,r38,0
+    bf      cr0,eq,B70
+:{0004}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f50,f34
+    stfs    f50,60(r53); fIsPtrOp
+    lwz     r93,20(r53); fIsPtrOp
+    rlwinm  r94,r93,0,6,6
+    cmpli   cr0,r94,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r53,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    cmpli   cr0,r53,0
+    bf      cr0,eq,B75
+:{0004}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    li      r49,0
+    lwz     r37,20(r53); fIsPtrOp
+    rlwinm  r95,r37,0,8,8
+    cmpli   cr0,r95,0
+    bf      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r96,r37,0,25,25
+    cmpli   cr0,r96,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r49,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r49,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r53
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+
+AFTER COPY PROPAGATION
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=1825499944
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=27854
+B2: Succ={B3 B4 } Pred={B1 } Labels={L2 }
+
+    lis     r61,HA(mn_804A04F0)
+    addi    r62,r61,LO(mn_804A04F0)
+    lis     r63,HA(mn_804A04F0)
+    addi    r64,r63,LO(mn_804A04F0)
+    lbz     r65,0(r64); fIsPtrOp
+    cmpli   cr0,r65,30
+    bf      cr0,eq,B4
+:{0004}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B2 } Labels={L25 }
+
+    lis     r66,HA(mn_804A04F0)
+    addi    r67,r66,LO(mn_804A04F0)
+    lbz     r68,16(r67); fIsPtrOp
+    cmpli   cr0,r68,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B2 } Labels={L3 L26 }
+
+    mr      r3,r32
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{0004}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r69,mnDiagram_804D6C10(r0)
+    lwz     r36,44(r69); fIsPtrOp
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,3
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    addi    r33,r62,2
+    lhz     r71,0(r33); fIsPtrOp
+    srawi   r35,r71,8
+    lwz     r48,36(r36); fIsPtrOp
+    cmpli   cr0,r48,0
+    bf      cr0,eq,B12
+:{0004}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lfs     f37,56(r48); fIsPtrOp
+    lwz     r47,40(r36); fIsPtrOp
+    cmpli   cr0,r47,0
+    bf      cr0,eq,B15
+:{0004}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lfs     f38,56(r47); fIsPtrOp
+    fsubs   f33,f38,f37
+    lwz     r46,sp_jobj(r1)
+    mr      r58,r46
+    cmpli   cr0,r46,0
+    bf      cr0,eq,B18
+:{0004}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r72,r35,-3
+    lfd     f39,@1538(r0); fIsConst
+    xoris   r73,r72,0x8000
+    stw     r73,@2032+4(r1)
+    lis     r74,17200
+    stw     r74,@2032(r1)
+    lfd     f40,@2032(r1)
+    fsubs   f41,f40,f39
+    fmuls   f35,f33,f41
+    stfs    f35,56(r58); fIsPtrOp
+    lwz     r75,20(r58); fIsPtrOp
+    rlwinm  r76,r75,0,6,6
+    cmpli   cr0,r76,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r58,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    cmpli   cr0,r58,0
+    bf      cr0,eq,B23
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    li      r52,0
+    lwz     r45,20(r58); fIsPtrOp
+    rlwinm  r77,r45,0,8,8
+    cmpli   cr0,r77,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r78,r45,0,25,25
+    cmpli   cr0,r78,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r52,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r52,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r58
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,4
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lhz     r80,0(r33); fIsPtrOp
+    rlwinm  r81,r80,0,24,31
+    rlwinm  r34,r81,0,24,31
+    lwz     r44,44(r36); fIsPtrOp
+    cmpli   cr0,r44,0
+    bf      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lfs     f36,60(r44); fIsPtrOp
+    lwz     r43,48(r36); fIsPtrOp
+    cmpli   cr0,r43,0
+    bf      cr0,eq,B37
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lfs     f42,60(r43); fIsPtrOp
+    fsubs   f32,f42,f36
+    lwz     r42,sp_jobj(r1)
+    mr      r55,r42
+    cmpli   cr0,r42,0
+    bf      cr0,eq,B40
+:{0004}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    lfd     f43,@1538(r0); fIsConst
+    xoris   r82,r34,0x8000
+    stw     r82,@2032+4(r1)
+    lis     r83,17200
+    stw     r83,@2032(r1)
+    lfd     f44,@2032(r1)
+    fsub    f45,f44,f43
+    lfd     f46,@2030(r0); fIsConst
+    fsub    f47,f45,f46
+    lfd     f48,@2031(r0); fIsConst
+    fmsub   f34,f32,f47,f48
+    frsp    f49,f34
+    stfs    f49,60(r55); fIsPtrOp
+    lwz     r84,20(r55); fIsPtrOp
+    rlwinm  r85,r84,0,6,6
+    cmpli   cr0,r85,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r55,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    cmpli   cr0,r55,0
+    bf      cr0,eq,B45
+:{0004}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    li      r51,0
+    lwz     r41,20(r55); fIsPtrOp
+    rlwinm  r86,r41,0,8,8
+    cmpli   cr0,r86,0
+    bf      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r87,r41,0,25,25
+    cmpli   cr0,r87,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r51,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r51,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r55
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,2
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r40,sp_jobj(r1)
+    mr      r54,r40
+    cmpli   cr0,r40,0
+    bf      cr0,eq,B56
+:{0004}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f35,56(r54); fIsPtrOp
+    lwz     r89,20(r54); fIsPtrOp
+    rlwinm  r90,r89,0,6,6
+    cmpli   cr0,r90,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r54,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    cmpli   cr0,r54,0
+    bf      cr0,eq,B61
+:{0004}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    li      r50,0
+    lwz     r39,20(r54); fIsPtrOp
+    rlwinm  r91,r39,0,8,8
+    cmpli   cr0,r91,0
+    bf      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r92,r39,0,25,25
+    cmpli   cr0,r92,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r50,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r50,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r54
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r38,sp_jobj(r1)
+    mr      r53,r38
+    cmpli   cr0,r38,0
+    bf      cr0,eq,B70
+:{0004}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f50,f34
+    stfs    f50,60(r53); fIsPtrOp
+    lwz     r93,20(r53); fIsPtrOp
+    rlwinm  r94,r93,0,6,6
+    cmpli   cr0,r94,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r53,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    cmpli   cr0,r53,0
+    bf      cr0,eq,B75
+:{0004}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    li      r49,0
+    lwz     r37,20(r53); fIsPtrOp
+    rlwinm  r95,r37,0,8,8
+    cmpli   cr0,r95,0
+    bf      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r96,r37,0,25,25
+    cmpli   cr0,r96,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r49,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r49,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r53
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+
+CONSTPROP RAN (changed_flag: before=0 after=1)
+
+AFTER CONSTANT PROPAGATION
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=1825499944
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=27854
+B2: Succ={B3 B4 } Pred={B1 } Labels={L2 }
+
+    lis     r61,HA(mn_804A04F0)
+    addi    r62,r61,LO(mn_804A04F0)
+    lis     r63,HA(mn_804A04F0)
+    addi    r64,r63,LO(mn_804A04F0)
+    lbz     r65,0(r64); fIsPtrOp
+    cmpli   cr0,r65,30
+    bf      cr0,eq,B4
+:{0004}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B2 } Labels={L25 }
+
+    lis     r66,HA(mn_804A04F0)
+    addi    r67,r66,LO(mn_804A04F0)
+    lbz     r68,16(r67); fIsPtrOp
+    cmpli   cr0,r68,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B2 } Labels={L3 L26 }
+
+    mr      r3,r32
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{0004}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r69,mnDiagram_804D6C10(r0)
+    lwz     r36,44(r69); fIsPtrOp
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,3
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    addi    r33,r62,2
+    lhz     r71,0(r33); fIsPtrOp
+    srawi   r35,r71,8
+    lwz     r48,36(r36); fIsPtrOp
+    cmpli   cr0,r48,0
+    bf      cr0,eq,B12
+:{0004}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lfs     f37,56(r48); fIsPtrOp
+    lwz     r47,40(r36); fIsPtrOp
+    cmpli   cr0,r47,0
+    bf      cr0,eq,B15
+:{0004}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lfs     f38,56(r47); fIsPtrOp
+    fsubs   f33,f38,f37
+    lwz     r46,sp_jobj(r1)
+    mr      r58,r46
+    cmpli   cr0,r46,0
+    bf      cr0,eq,B18
+:{0004}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r72,r35,-3
+    lfd     f39,@1538(r0); fIsConst
+    xoris   r73,r72,0x8000
+    stw     r73,@2032+4(r1)
+    lis     r74,17200
+    stw     r74,@2032(r1)
+    lfd     f40,@2032(r1)
+    fsubs   f41,f40,f39
+    fmuls   f35,f33,f41
+    stfs    f35,56(r58); fIsPtrOp
+    lwz     r75,20(r58); fIsPtrOp
+    rlwinm  r76,r75,0,6,6
+    cmpli   cr0,r76,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r58,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    cmpli   cr0,r58,0
+    bf      cr0,eq,B23
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    li      r52,0
+    lwz     r45,20(r58); fIsPtrOp
+    rlwinm  r77,r45,0,8,8
+    cmpli   cr0,r77,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r78,r45,0,25,25
+    cmpli   cr0,r78,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r52,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r52,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r58
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,4
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lhz     r80,0(r33); fIsPtrOp
+    rlwinm  r81,r80,0,24,31
+    mr      r34,r81
+    lwz     r44,44(r36); fIsPtrOp
+    cmpli   cr0,r44,0
+    bf      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lfs     f36,60(r44); fIsPtrOp
+    lwz     r43,48(r36); fIsPtrOp
+    cmpli   cr0,r43,0
+    bf      cr0,eq,B37
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lfs     f42,60(r43); fIsPtrOp
+    fsubs   f32,f42,f36
+    lwz     r42,sp_jobj(r1)
+    mr      r55,r42
+    cmpli   cr0,r42,0
+    bf      cr0,eq,B40
+:{0004}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    lfd     f43,@1538(r0); fIsConst
+    xoris   r82,r34,0x8000
+    stw     r82,@2032+4(r1)
+    lis     r83,17200
+    stw     r83,@2032(r1)
+    lfd     f44,@2032(r1)
+    fsub    f45,f44,f43
+    lfd     f46,@2030(r0); fIsConst
+    fsub    f47,f45,f46
+    lfd     f48,@2031(r0); fIsConst
+    fmsub   f34,f32,f47,f48
+    frsp    f49,f34
+    stfs    f49,60(r55); fIsPtrOp
+    lwz     r84,20(r55); fIsPtrOp
+    rlwinm  r85,r84,0,6,6
+    cmpli   cr0,r85,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r55,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    cmpli   cr0,r55,0
+    bf      cr0,eq,B45
+:{0004}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    li      r51,0
+    lwz     r41,20(r55); fIsPtrOp
+    rlwinm  r86,r41,0,8,8
+    cmpli   cr0,r86,0
+    bf      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r87,r41,0,25,25
+    cmpli   cr0,r87,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r51,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r51,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r55
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,2
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r40,sp_jobj(r1)
+    mr      r54,r40
+    cmpli   cr0,r40,0
+    bf      cr0,eq,B56
+:{0004}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f35,56(r54); fIsPtrOp
+    lwz     r89,20(r54); fIsPtrOp
+    rlwinm  r90,r89,0,6,6
+    cmpli   cr0,r90,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r54,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    cmpli   cr0,r54,0
+    bf      cr0,eq,B61
+:{0004}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    li      r50,0
+    lwz     r39,20(r54); fIsPtrOp
+    rlwinm  r91,r39,0,8,8
+    cmpli   cr0,r91,0
+    bf      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r92,r39,0,25,25
+    cmpli   cr0,r92,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r50,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r50,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r54
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r38,sp_jobj(r1)
+    mr      r53,r38
+    cmpli   cr0,r38,0
+    bf      cr0,eq,B70
+:{0004}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f50,f34
+    stfs    f50,60(r53); fIsPtrOp
+    lwz     r93,20(r53); fIsPtrOp
+    rlwinm  r94,r93,0,6,6
+    cmpli   cr0,r94,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r53,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    cmpli   cr0,r53,0
+    bf      cr0,eq,B75
+:{0004}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    li      r49,0
+    lwz     r37,20(r53); fIsPtrOp
+    rlwinm  r95,r37,0,8,8
+    cmpli   cr0,r95,0
+    bf      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r96,r37,0,25,25
+    cmpli   cr0,r96,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r49,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r49,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r53
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+
+AFTER VALUE NUMBERING 2
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=1825499944
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=27854
+B2: Succ={B3 B4 } Pred={B1 } Labels={L2 }
+
+    lis     r61,HA(mn_804A04F0)
+    addi    r62,r61,LO(mn_804A04F0)
+    lbz     r65,0(r62); fIsPtrOp
+    cmpli   cr0,r65,30
+    bf      cr0,eq,B4
+:{0004}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B2 } Labels={L25 }
+
+    lbz     r68,16(r62); fIsPtrOp
+    cmpli   cr0,r68,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B2 } Labels={L3 L26 }
+
+    mr      r3,r32
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{0004}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r69,mnDiagram_804D6C10(r0)
+    lwz     r36,44(r69); fIsPtrOp
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,3
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    addi    r33,r62,2
+    lhz     r71,0(r33); fIsPtrOp
+    srawi   r35,r71,8
+    lwz     r48,36(r36); fIsPtrOp
+    cmpli   cr0,r48,0
+    bf      cr0,eq,B12
+:{0004}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lfs     f37,56(r48); fIsPtrOp
+    lwz     r47,40(r36); fIsPtrOp
+    cmpli   cr0,r47,0
+    bf      cr0,eq,B15
+:{0004}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lfs     f38,56(r47); fIsPtrOp
+    fsubs   f33,f38,f37
+    lwz     r46,sp_jobj(r1)
+    mr      r58,r46
+    cmpli   cr0,r46,0
+    bf      cr0,eq,B18
+:{0004}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r72,r35,-3
+    lfd     f39,@1538(r0); fIsConst
+    xoris   r73,r72,0x8000
+    stw     r73,@2032+4(r1)
+    lis     r74,17200
+    stw     r74,@2032(r1)
+    lfd     f40,@2032(r1)
+    fsubs   f41,f40,f39
+    fmuls   f35,f33,f41
+    stfs    f35,56(r58); fIsPtrOp
+    lwz     r75,20(r58); fIsPtrOp
+    rlwinm  r76,r75,0,6,6
+    cmpli   cr0,r76,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r58,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    bf      cr0,eq,B23
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    li      r52,0
+    lwz     r45,20(r58); fIsPtrOp
+    rlwinm  r77,r45,0,8,8
+    cmpli   cr0,r77,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r78,r45,0,25,25
+    cmpli   cr0,r78,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r52,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r52,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r58
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,4
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lhz     r80,0(r33); fIsPtrOp
+    rlwinm  r81,r80,0,24,31
+    lwz     r44,44(r36); fIsPtrOp
+    cmpli   cr0,r44,0
+    bf      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lfs     f36,60(r44); fIsPtrOp
+    lwz     r43,48(r36); fIsPtrOp
+    cmpli   cr0,r43,0
+    bf      cr0,eq,B37
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lfs     f42,60(r43); fIsPtrOp
+    fsubs   f32,f42,f36
+    lwz     r42,sp_jobj(r1)
+    mr      r55,r42
+    cmpli   cr0,r42,0
+    bf      cr0,eq,B40
+:{0004}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    lfd     f43,@1538(r0); fIsConst
+    xoris   r82,r81,0x8000
+    stw     r82,@2032+4(r1)
+    lis     r83,17200
+    stw     r83,@2032(r1)
+    lfd     f44,@2032(r1)
+    fsub    f45,f44,f43
+    lfd     f46,@2030(r0); fIsConst
+    fsub    f47,f45,f46
+    lfd     f48,@2031(r0); fIsConst
+    fmsub   f34,f32,f47,f48
+    frsp    f49,f34
+    stfs    f49,60(r55); fIsPtrOp
+    lwz     r84,20(r55); fIsPtrOp
+    rlwinm  r85,r84,0,6,6
+    cmpli   cr0,r85,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r55,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    bf      cr0,eq,B45
+:{0004}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    li      r51,0
+    lwz     r41,20(r55); fIsPtrOp
+    rlwinm  r86,r41,0,8,8
+    cmpli   cr0,r86,0
+    bf      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r87,r41,0,25,25
+    cmpli   cr0,r87,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r51,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r51,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r55
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    li      r5,2
+    li      r6,-1
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r40,sp_jobj(r1)
+    mr      r54,r40
+    cmpli   cr0,r40,0
+    bf      cr0,eq,B56
+:{0004}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f35,56(r54); fIsPtrOp
+    lwz     r89,20(r54); fIsPtrOp
+    rlwinm  r90,r89,0,6,6
+    cmpli   cr0,r90,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r54,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    bf      cr0,eq,B61
+:{0004}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    li      r50,0
+    lwz     r39,20(r54); fIsPtrOp
+    rlwinm  r91,r39,0,8,8
+    cmpli   cr0,r91,0
+    bf      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r92,r39,0,25,25
+    cmpli   cr0,r92,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r50,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r50,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r54
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r38,sp_jobj(r1)
+    mr      r53,r38
+    cmpli   cr0,r38,0
+    bf      cr0,eq,B70
+:{0004}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f50,f34
+    stfs    f50,60(r53); fIsPtrOp
+    lwz     r93,20(r53); fIsPtrOp
+    rlwinm  r94,r93,0,6,6
+    cmpli   cr0,r94,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r53,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    bf      cr0,eq,B75
+:{0004}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    li      r49,0
+    lwz     r37,20(r53); fIsPtrOp
+    rlwinm  r95,r37,0,8,8
+    cmpli   cr0,r95,0
+    bf      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r96,r37,0,25,25
+    cmpli   cr0,r96,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r49,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r49,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r53
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+
+AFTER INSTRUCTION SCHEDULING
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{000c}::::LOOPWEIGHT=1825499944
+B1: Succ={B3 B4 } Pred={B0 } Labels={L1 }
+
+    lis     r61,HA(mn_804A04F0)
+    addi    r62,r61,LO(mn_804A04F0)
+    lbz     r65,0(r62); fIsPtrOp
+    mr      r32,r3
+    cmpli   cr0,r65,30
+    bf      cr0,eq,B4
+:{000c}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B1 } Labels={L25 }
+
+    lbz     r68,16(r62); fIsPtrOp
+    cmpli   cr0,r68,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B1 } Labels={L3 L26 }
+
+    mr      r3,r32
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{000c}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r69,mnDiagram_804D6C10(r0)
+    addi    r4,r1,sp_jobj
+    lwz     r3,40(r32); fIsPtrOp
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    lwz     r36,44(r69); fIsPtrOp
+    li      r5,3
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    lwz     r48,36(r36); fIsPtrOp
+    addi    r33,r62,2
+    lhz     r71,0(r33); fIsPtrOp
+    cmpli   cr0,r48,0
+    srawi   r35,r71,8
+    bf      cr0,eq,B12
+:{000c}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lwz     r47,40(r36); fIsPtrOp
+    lfs     f37,56(r48); fIsPtrOp
+    cmpli   cr0,r47,0
+    bf      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lwz     r46,sp_jobj(r1)
+    lfs     f38,56(r47); fIsPtrOp
+    cmpli   cr0,r46,0
+    fsubs   f33,f38,f37
+    mr      r58,r46
+    bf      cr0,eq,B18
+:{000c}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r72,r35,-3
+    lfd     f39,@1538(r0); fIsConst
+    xoris   r73,r72,0x8000
+    stw     r73,@2032+4(r1)
+    lis     r74,17200
+    stw     r74,@2032(r1)
+    lfd     f40,@2032(r1)
+    fsubs   f41,f40,f39
+    fmuls   f35,f33,f41
+    stfs    f35,56(r58); fIsPtrOp
+    lwz     r75,20(r58); fIsPtrOp
+    rlwinm  r76,r75,0,6,6
+    cmpli   cr0,r76,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r58,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    bf      cr0,eq,B23
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    lwz     r45,20(r58); fIsPtrOp
+    li      r52,0
+    rlwinm  r77,r45,0,8,8
+    cmpli   cr0,r77,0
+    bf      cr0,eq,B26
+:{000c}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r78,r45,0,25,25
+    cmpli   cr0,r78,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r52,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r52,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r58
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,4
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lwz     r44,44(r36); fIsPtrOp
+    lhz     r80,0(r33); fIsPtrOp
+    cmpli   cr0,r44,0
+    rlwinm  r81,r80,0,24,31
+    bf      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lwz     r43,48(r36); fIsPtrOp
+    lfs     f36,60(r44); fIsPtrOp
+    cmpli   cr0,r43,0
+    bf      cr0,eq,B37
+:{000c}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lwz     r42,sp_jobj(r1)
+    lfs     f42,60(r43); fIsPtrOp
+    cmpli   cr0,r42,0
+    fsubs   f32,f42,f36
+    mr      r55,r42
+    bf      cr0,eq,B40
+:{000c}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    xoris   r82,r81,0x8000
+    lfd     f43,@1538(r0); fIsConst
+    stw     r82,@2032+4(r1)
+    lis     r83,17200
+    lfd     f46,@2030(r0); fIsConst
+    stw     r83,@2032(r1)
+    lfd     f48,@2031(r0); fIsConst
+    lfd     f44,@2032(r1)
+    fsub    f45,f44,f43
+    fsub    f47,f45,f46
+    fmsub   f34,f32,f47,f48
+    frsp    f49,f34
+    stfs    f49,60(r55); fIsPtrOp
+    lwz     r84,20(r55); fIsPtrOp
+    rlwinm  r85,r84,0,6,6
+    cmpli   cr0,r85,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r55,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    bf      cr0,eq,B45
+:{000c}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    lwz     r41,20(r55); fIsPtrOp
+    li      r51,0
+    rlwinm  r86,r41,0,8,8
+    cmpli   cr0,r86,0
+    bf      cr0,eq,B48
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r87,r41,0,25,25
+    cmpli   cr0,r87,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r51,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r51,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r55
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,2
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r40,sp_jobj(r1)
+    cmpli   cr0,r40,0
+    mr      r54,r40
+    bf      cr0,eq,B56
+:{000c}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f35,56(r54); fIsPtrOp
+    lwz     r89,20(r54); fIsPtrOp
+    rlwinm  r90,r89,0,6,6
+    cmpli   cr0,r90,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r54,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    bf      cr0,eq,B61
+:{000c}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    lwz     r39,20(r54); fIsPtrOp
+    li      r50,0
+    rlwinm  r91,r39,0,8,8
+    cmpli   cr0,r91,0
+    bf      cr0,eq,B64
+:{000c}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r92,r39,0,25,25
+    cmpli   cr0,r92,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r50,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r50,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r54
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r38,sp_jobj(r1)
+    cmpli   cr0,r38,0
+    mr      r53,r38
+    bf      cr0,eq,B70
+:{000c}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f50,f34
+    stfs    f50,60(r53); fIsPtrOp
+    lwz     r93,20(r53); fIsPtrOp
+    rlwinm  r94,r93,0,6,6
+    cmpli   cr0,r94,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r53,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    bf      cr0,eq,B75
+:{000c}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    lwz     r37,20(r53); fIsPtrOp
+    li      r49,0
+    rlwinm  r95,r37,0,8,8
+    cmpli   cr0,r95,0
+    bf      cr0,eq,B78
+:{000c}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r96,r37,0,25,25
+    cmpli   cr0,r96,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r49,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r49,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r53
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+
+AFTER PEEPHOLE FORWARD
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{000c}::::LOOPWEIGHT=1825499944
+B1: Succ={B3 B4 } Pred={B0 } Labels={L1 }
+
+    lis     r61,HA(mn_804A04F0)
+    addi    r62,r61,LO(mn_804A04F0)
+    lbz     r65,0(r62); fIsPtrOp
+    mr      r32,r3
+    cmpli   cr0,r65,30
+    bf      cr0,eq,B4
+:{000c}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B1 } Labels={L25 }
+
+    lbz     r68,16(r62); fIsPtrOp
+    cmpli   cr0,r68,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B1 } Labels={L3 L26 }
+
+    mr      r3,r32
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{000c}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r69,mnDiagram_804D6C10(r0)
+    addi    r4,r1,sp_jobj
+    lwz     r3,40(r32); fIsPtrOp
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    lwz     r36,44(r69); fIsPtrOp
+    li      r5,3
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    lwz     r48,36(r36); fIsPtrOp
+    addi    r33,r62,2
+    lhz     r71,0(r33); fIsPtrOp
+    cmpli   cr0,r48,0
+    srawi   r35,r71,8
+    bf      cr0,eq,B12
+:{000c}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lwz     r47,40(r36); fIsPtrOp
+    lfs     f37,56(r48); fIsPtrOp
+    cmpli   cr0,r47,0
+    bf      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lwz     r46,sp_jobj(r1)
+    lfs     f38,56(r47); fIsPtrOp
+    cmpli   cr0,r46,0
+    fsubs   f33,f38,f37
+    mr      r58,r46
+    bf      cr0,eq,B18
+:{000c}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r72,r35,-3
+    lfd     f39,@1538(r0); fIsConst
+    xoris   r73,r72,0x8000
+    stw     r73,@2032+4(r1)
+    lis     r74,17200
+    stw     r74,@2032(r1)
+    lfd     f40,@2032(r1)
+    fsubs   f41,f40,f39
+    fmuls   f35,f33,f41
+    stfs    f35,56(r58); fIsPtrOp
+    lwz     r75,20(r58); fIsPtrOp
+    rlwinm  r76,r75,0,6,6
+    cmpli   cr0,r76,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r58,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    bf      cr0,eq,B23
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    lwz     r45,20(r58); fIsPtrOp
+    li      r52,0
+    rlwinm  r77,r45,0,8,8
+    cmpli   cr0,r77,0
+    bf      cr0,eq,B26
+:{000c}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r78,r45,0,25,25
+    cmpli   cr0,r78,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r52,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r52,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r58
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,4
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lwz     r44,44(r36); fIsPtrOp
+    lhz     r80,0(r33); fIsPtrOp
+    cmpli   cr0,r44,0
+    rlwinm  r81,r80,0,24,31
+    bf      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lwz     r43,48(r36); fIsPtrOp
+    lfs     f36,60(r44); fIsPtrOp
+    cmpli   cr0,r43,0
+    bf      cr0,eq,B37
+:{000c}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lwz     r42,sp_jobj(r1)
+    lfs     f42,60(r43); fIsPtrOp
+    cmpli   cr0,r42,0
+    fsubs   f32,f42,f36
+    mr      r55,r42
+    bf      cr0,eq,B40
+:{000c}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    xoris   r82,r81,0x8000
+    lfd     f43,@1538(r0); fIsConst
+    stw     r82,@2032+4(r1)
+    lis     r83,17200
+    lfd     f46,@2030(r0); fIsConst
+    stw     r83,@2032(r1)
+    lfd     f48,@2031(r0); fIsConst
+    lfd     f44,@2032(r1)
+    fsub    f45,f44,f43
+    fsub    f47,f45,f46
+    fmsub   f34,f32,f47,f48
+    frsp    f49,f34
+    stfs    f49,60(r55); fIsPtrOp
+    lwz     r84,20(r55); fIsPtrOp
+    rlwinm  r85,r84,0,6,6
+    cmpli   cr0,r85,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r55,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    bf      cr0,eq,B45
+:{000c}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    lwz     r41,20(r55); fIsPtrOp
+    li      r51,0
+    rlwinm  r86,r41,0,8,8
+    cmpli   cr0,r86,0
+    bf      cr0,eq,B48
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r87,r41,0,25,25
+    cmpli   cr0,r87,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r51,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r51,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r55
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r32); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,2
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r40,sp_jobj(r1)
+    cmpli   cr0,r40,0
+    mr      r54,r40
+    bf      cr0,eq,B56
+:{000c}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f35,56(r54); fIsPtrOp
+    lwz     r89,20(r54); fIsPtrOp
+    rlwinm  r90,r89,0,6,6
+    cmpli   cr0,r90,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r54,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    bf      cr0,eq,B61
+:{000c}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    lwz     r39,20(r54); fIsPtrOp
+    li      r50,0
+    rlwinm  r91,r39,0,8,8
+    cmpli   cr0,r91,0
+    bf      cr0,eq,B64
+:{000c}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r92,r39,0,25,25
+    cmpli   cr0,r92,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r50,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r50,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r54
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r38,sp_jobj(r1)
+    cmpli   cr0,r38,0
+    mr      r53,r38
+    bf      cr0,eq,B70
+:{000c}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f50,f34
+    stfs    f50,60(r53); fIsPtrOp
+    lwz     r93,20(r53); fIsPtrOp
+    rlwinm  r94,r93,0,6,6
+    cmpli   cr0,r94,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r53,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    bf      cr0,eq,B75
+:{000c}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    lwz     r37,20(r53); fIsPtrOp
+    li      r49,0
+    rlwinm  r95,r37,0,8,8
+    cmpli   cr0,r95,0
+    bf      cr0,eq,B78
+:{000c}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r96,r37,0,25,25
+    cmpli   cr0,r96,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r49,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r49,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r53
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+
+[DATAFLOW] enter class=0 n_nodes=97 N_IGNODES_pre=82
+[DATAFLOW] exit result=0 N_IGNODES_post=82
+
+[COALESCE] enter class=0 n_virtuals=97
+[COALESCE] natural mappings (virt -> root):
+  53 -> 38
+  54 -> 40
+  55 -> 42
+  58 -> 46
+[COALESCE] exit class=0 n_virtuals=97 distinct_roots=93 forced=0
+
+IG CONSTRUCTED (class=0, n_nodes=82)
+
+SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=97)
+iter  ig_idx  degree  arraySize flags     notes
+0     36      13      33       0x2       
+1     33      13      30       0x2       
+2     32      14      47       0x2       
+3     -1      1       3        0x2       
+4     -1      1       4        0x2       
+5     -1      1       2        0x2       
+6     -1      1       2        0x2       
+7     -1      2       4        0x2       
+8     -1      2       5        0x2       
+9     -1      2       3        0x2       
+10    -1      2       3        0x2       
+11    -1      0       0        0x2       
+12    -1      2       5        0x2       
+13    -1      2       6        0x2       
+14    -1      2       4        0x2       
+15    -1      2       4        0x2       
+16    -1      2       4        0x2       
+17    -1      2       4        0x2       
+18    81      13      18       0x2       
+19    80      1       4        0x2       
+20    79      0       0        0x2       
+21    78      2       7        0x2       
+22    77      2       8        0x2       
+23    76      2       6        0x2       
+24    75      2       6        0x2       
+25    74      2       6        0x2       
+26    73      2       6        0x2       
+27    72      2       6        0x2       
+28    71      1       5        0x2       
+29    70      0       0        0x2       
+30    69      4       6        0x2       
+31    68      1       3        0x2       
+32    67      0       0        0x2       
+33    66      0       0        0x2       
+34    65      2       4        0x2       
+35    64      0       0        0x2       
+36    63      0       0        0x2       
+37    62      12      18       0x2       
+38    61      3       3        0x2       
+39    60      0       0        0x2       
+40    59      0       0        0x2       
+41    57      0       0        0x2       
+42    56      0       0        0x2       
+43    52      2       9        0x2       
+44    51      2       7        0x2       
+45    50      2       6        0x2       
+46    49      1       5        0x2       
+47    48      12      19       0x2       
+48    47      12      18       0x2       
+49    46      12      26       0xa       SPILLED
+50    45      2       8        0x2       
+51    44      12      18       0x2       
+52    43      12      16       0x2       
+53    42      12      23       0xa       SPILLED
+54    41      2       6        0x2       
+55    40      12      18       0xa       SPILLED
+56    39      2       5        0x2       
+57    38      11      17       0xa       SPILLED
+58    37      1       4        0x2       
+59    35      13      19       0x2       
+60    34      0       0        0x2       
+
+COLORGRAPH DECISIONS (class=0, result=1, n_nodes=82)
+iter  ig_idx  assignedReg degree  nIntfr  flags
+0     36      r31        13      33      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 33=r30 35=r26 44=r27 45=r4 46=r28 47=r27 48=r28 52=r3 58=r46 62=r30 71=r0 72=r0 73=r0 74=r0 75=r0 76=r0 77=r0 78=r0 80=r0 81=r30
+1     33      r30        13      30      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 35=r26 36=r31 44=r27 45=r4 46=r28 47=r27 48=r28 52=r3 58=r46 71=r0 72=r0 73=r0 74=r0 75=r0 76=r0 77=r0 78=r0
+2     32      r29        14      47      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 33=r30 35=r26 36=r31 41=r4 42=r27 43=r28 44=r27 45=r4 46=r28 47=r27 48=r28 51=r3 52=r3 55=r42 58=r46 62=r30 65=r0 68=r0 69=r5 71=r0 72=r0 73=r0 74=r0 75=r0 76=r0 77=r0 78=r0 80=r0 81=r30 82=r-1 83=r-1 84=r-1 85=r-1 86=r-1 87=r-1
+3     96      r0         1       3       0x02
+      interferers: 38=r27 49=r3 53=r38
+4     95      r0         1       4       0x02
+      interferers: 37=r4 38=r27 49=r3 53=r38
+5     94      r0         1       2       0x02
+      interferers: 38=r27 53=r38
+6     93      r0         1       2       0x02
+      interferers: 38=r27 53=r38
+7     92      r0         2       4       0x02
+      interferers: 1=r1 40=r27 50=r3 54=r40
+8     91      r0         2       5       0x02
+      interferers: 1=r1 39=r4 40=r27 50=r3 54=r40
+9     90      r0         2       3       0x02
+      interferers: 1=r1 40=r27 54=r40
+10    89      r0         2       3       0x02
+      interferers: 1=r1 40=r27 54=r40
+11    88      r0         0       0       0x02
+12    87      r0         2       5       0x02
+      interferers: 1=r1 32=r29 42=r27 51=r3 55=r42
+13    86      r0         2       6       0x02
+      interferers: 1=r1 32=r29 41=r4 42=r27 51=r3 55=r42
+14    85      r0         2       4       0x02
+      interferers: 1=r1 32=r29 42=r27 55=r42
+15    84      r0         2       4       0x02
+      interferers: 1=r1 32=r29 42=r27 55=r42
+16    83      r0         2       4       0x02
+      interferers: 1=r1 32=r29 42=r27 55=r42
+17    82      r0         2       4       0x02
+      interferers: 1=r1 32=r29 42=r27 55=r42
+18    81      r30        13      18      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 36=r31 42=r27 43=r28 44=r27 55=r42
+19    80      r0         1       4       0x02
+      interferers: 1=r1 32=r29 36=r31 44=r27
+20    79      r0         0       0       0x02
+21    78      r0         2       7       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 46=r28 52=r3 58=r46
+22    77      r0         2       8       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 45=r4 46=r28 52=r3 58=r46
+23    76      r0         2       6       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 46=r28 58=r46
+24    75      r0         2       6       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 46=r28 58=r46
+25    74      r0         2       6       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 46=r28 58=r46
+26    73      r0         2       6       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 46=r28 58=r46
+27    72      r0         2       6       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 46=r28 58=r46
+28    71      r0         1       5       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 48=r28
+29    70      r0         0       0       0x02
+30    69      r5         4       6       0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 32=r29 62=r30
+31    68      r0         1       3       0x02
+      interferers: 1=r1 32=r29 62=r30
+32    67      r0         0       0       0x02
+33    66      r0         0       0       0x02
+34    65      r0         2       4       0x02
+      interferers: 1=r1 3=r3 32=r29 62=r30
+35    64      r0         0       0       0x02
+36    63      r0         0       0       0x02
+37    62      r30        12      18      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 36=r31 48=r28 65=r0 68=r0 69=r5
+38    61      r4         3       3       0x02
+      interferers: 0=r0 1=r1 3=r3
+39    60      r0         0       0       0x02
+40    59      r0         0       0       0x02
+41    57      r0         0       0       0x02
+42    56      r0         0       0       0x02
+43    52      r3         2       9       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 45=r4 46=r28 58=r46 77=r0 78=r0
+44    51      r3         2       7       0x02
+      interferers: 1=r1 32=r29 41=r4 42=r27 55=r42 86=r-1 87=r-1
+45    50      r3         2       6       0x02
+      interferers: 1=r1 39=r4 40=r27 54=r40 91=r-1 92=r-1
+46    49      r3         1       5       0x02
+      interferers: 37=r4 38=r27 53=r38 95=r-1 96=r-1
+47    48      r28        12      19      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 33=r30 35=r26 36=r31 47=r27 62=r30 71=r0
+48    47      r27        12      18      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 33=r30 35=r26 36=r31 46=r28 48=r28
+49    46      r28        12      26      0x0a  [ROOT]
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 33=r30 35=r26 36=r31 45=r4 47=r27 52=r3 72=r0 73=r0 74=r0 75=r0 76=r0 77=r0 78=r0
+50    45      r4         2       8       0x02
+      interferers: 1=r1 32=r29 33=r30 36=r31 46=r28 52=r3 58=r46 77=r0
+51    44      r27        12      18      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 33=r30 36=r31 43=r28 80=r0 81=r30
+52    43      r28        12      16      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 42=r27 44=r27 81=r30
+53    42      r27        12      23      0x0a  [ROOT]
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 41=r4 43=r28 51=r3 81=r30 82=r-1 83=r-1 84=r-1 85=r-1 86=r-1 87=r-1
+54    41      r4         2       6       0x02
+      interferers: 1=r1 32=r29 42=r27 51=r3 55=r42 86=r-1
+55    40      r27        12      18      0x0a  [ROOT]
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 39=r4 50=r3 89=r-1 90=r-1 91=r-1 92=r-1
+56    39      r4         2       5       0x02
+      interferers: 1=r1 40=r27 50=r3 54=r40 91=r-1
+57    38      r27        11      17      0x0a  [ROOT]
+      interferers: 0=r0 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 37=r4 49=r3 93=r-1 94=r-1 95=r-1 96=r-1
+58    37      r4         1       4       0x02
+      interferers: 38=r27 49=r3 53=r38 95=r-1
+59    35      r26        13      19      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 33=r30 36=r31 46=r28 47=r27 48=r28 58=r46
+60    34      r0         0       0       0x02
+
+COALESCED ALIASES (alias_idx -> root_idx [root_phys]):
+  53 -> 38 [r27]
+  54 -> 40 [r27]
+  55 -> 42 [r27]
+  58 -> 46 [r28]
+
+[DATAFLOW] enter class=1 n_nodes=51 N_IGNODES_pre=82
+[DATAFLOW] exit result=0 N_IGNODES_post=82
+
+[COALESCE] enter class=1 n_virtuals=51
+[COALESCE] natural mappings (virt -> root):
+  (none — no virtuals coalesced)
+[COALESCE] exit class=1 n_virtuals=51 distinct_roots=51 forced=0
+
+IG CONSTRUCTED (class=1, n_nodes=82)
+
+SIMPLIFY GRAPH (class=1, n_colors=32, n_class_regs=51)
+iter  ig_idx  degree  arraySize flags     notes
+0     50      0       0        0x2       
+1     49      0       2        0x2       
+2     48      0       7        0x2       
+3     47      0       3        0x2       
+4     46      0       6        0x2       
+5     45      0       4        0x2       
+6     44      0       5        0x2       
+7     43      0       5        0x2       
+8     42      0       2        0x2       
+9     41      0       1        0x2       
+10    40      0       2        0x2       
+11    39      0       2        0x2       
+12    38      0       1        0x2       
+13    37      14      15       0x2       
+14    36      14      16       0x2       
+15    35      14      25       0x2       
+16    34      14      16       0x2       
+17    33      14      17       0x2       
+18    32      14      21       0x2       
+
+COLORGRAPH DECISIONS (class=1, result=1, n_nodes=82)
+iter  ig_idx  assignedReg degree  nIntfr  flags
+0     50      r0         0       0       0x02
+1     49      r0         0       2       0x02
+      interferers: 34=r31 35=r30
+2     48      r0         0       7       0x02
+      interferers: 32=r31 35=r30 43=r3 44=r2 45=r2 46=r1 47=r1
+3     47      r1         0       3       0x02
+      interferers: 32=r31 35=r30 48=r0
+4     46      r1         0       6       0x02
+      interferers: 32=r31 35=r30 43=r3 44=r2 45=r2 48=r0
+5     45      r2         0       4       0x02
+      interferers: 32=r31 35=r30 46=r1 48=r0
+6     44      r2         0       5       0x02
+      interferers: 32=r31 35=r30 43=r3 46=r1 48=r0
+7     43      r3         0       5       0x02
+      interferers: 32=r31 35=r30 44=r2 46=r1 48=r0
+8     42      r0         0       2       0x02
+      interferers: 35=r30 36=r31
+9     41      r0         0       1       0x02
+      interferers: 33=r30
+10    40      r0         0       2       0x02
+      interferers: 33=r30 39=r1
+11    39      r1         0       2       0x02
+      interferers: 33=r30 40=r0
+12    38      r0         0       1       0x02
+      interferers: 37=r31
+13    37      r31        14      15      0x02
+      interferers: 0=r0 1=r1 2=r2 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 13=r13 38=r0
+14    36      r31        14      16      0x02
+      interferers: 0=r0 1=r1 2=r2 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 13=r13 35=r30 42=r0
+15    35      r30        14      25      0x02
+      interferers: 0=r0 1=r1 2=r2 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 13=r13 32=r31 34=r31 36=r31 42=r0 43=r3 44=r2 45=r2 46=r1 47=r1 48=r0 49=r0
+16    34      r31        14      16      0x02
+      interferers: 0=r0 1=r1 2=r2 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 13=r13 35=r30 49=r0
+17    33      r30        14      17      0x02
+      interferers: 0=r0 1=r1 2=r2 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 13=r13 39=r1 40=r0 41=r0
+18    32      r31        14      21      0x02
+      interferers: 0=r0 1=r1 2=r2 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 13=r13 35=r30 43=r3 44=r2 45=r2 46=r1 47=r1 48=r0
+
+AFTER REGISTER COLORING
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{000c}::::LOOPWEIGHT=1825499944
+B1: Succ={B3 B4 } Pred={B0 } Labels={L1 }
+
+    lis     r4,HA(mn_804A04F0)
+    addi    r30,r4,LO(mn_804A04F0)
+    lbz     r0,0(r30); fIsPtrOp
+    mr      r29,r3
+    cmpli   cr0,r0,30
+    bf      cr0,eq,B4
+:{000c}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B1 } Labels={L25 }
+
+    lbz     r0,16(r30); fIsPtrOp
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B1 } Labels={L3 L26 }
+
+    mr      r3,r29
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{000c}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r5,mnDiagram_804D6C10(r0)
+    addi    r4,r1,sp_jobj
+    lwz     r3,40(r29); fIsPtrOp
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    lwz     r31,44(r5); fIsPtrOp
+    li      r5,3
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    lwz     r28,36(r31); fIsPtrOp
+    addi    r30,r30,2
+    lhz     r0,0(r30); fIsPtrOp
+    cmpli   cr0,r28,0
+    srawi   r26,r0,8
+    bf      cr0,eq,B12
+:{000c}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lwz     r27,40(r31); fIsPtrOp
+    lfs     f31,56(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lwz     r28,sp_jobj(r1)
+    lfs     f0,56(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    fsubs   f30,f0,f31
+    bf      cr0,eq,B18
+:{000c}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r0,r26,-3
+    lfd     f1,@1538(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    stw     r0,@2032(r1)
+    lfd     f0,@2032(r1)
+    fsubs   f0,f0,f1
+    fmuls   f30,f30,f0
+    stfs    f30,56(r28); fIsPtrOp
+    lwz     r0,20(r28); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r28,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    bf      cr0,eq,B23
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    lwz     r4,20(r28); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B26
+:{000c}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r28
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,4
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lwz     r27,44(r31); fIsPtrOp
+    lhz     r0,0(r30); fIsPtrOp
+    cmpli   cr0,r27,0
+    rlwinm  r30,r0,0,24,31
+    bf      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lwz     r28,48(r31); fIsPtrOp
+    lfs     f31,60(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    bf      cr0,eq,B37
+:{000c}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lwz     r27,sp_jobj(r1)
+    lfs     f0,60(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    fsubs   f31,f0,f31
+    bf      cr0,eq,B40
+:{000c}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    xoris   r0,r30,0x8000
+    lfd     f3,@1538(r0); fIsConst
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    lfd     f1,@2030(r0); fIsConst
+    stw     r0,@2032(r1)
+    lfd     f0,@2031(r0); fIsConst
+    lfd     f2,@2032(r1)
+    fsub    f2,f2,f3
+    fsub    f1,f2,f1
+    fmsub   f31,f31,f1,f0
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    bf      cr0,eq,B45
+:{000c}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B48
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,2
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B56
+:{000c}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f30,56(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    bf      cr0,eq,B61
+:{000c}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B64
+:{000c}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B70
+:{000c}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    bf      cr0,eq,B75
+:{000c}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B78
+:{000c}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+
+AFTER GENERATING EPILOGUE, PROLOGUE
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-96(r1); fIsPtrOp
+    stfd    f31,88(r1); fIsPtrOp
+    stfd    f30,80(r1); fIsPtrOp
+    stmw    r26,56(r1); fIsPtrOp
+:{000c}::::LOOPWEIGHT=1825499944
+B1: Succ={B3 B4 } Pred={B0 } Labels={L1 }
+
+    lis     r4,HA(mn_804A04F0)
+    addi    r30,r4,LO(mn_804A04F0)
+    lbz     r0,0(r30); fIsPtrOp
+    mr      r29,r3
+    cmpli   cr0,r0,30
+    bf      cr0,eq,B4
+:{000c}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B1 } Labels={L25 }
+
+    lbz     r0,16(r30); fIsPtrOp
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B1 } Labels={L3 L26 }
+
+    mr      r3,r29
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{000c}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r5,mnDiagram_804D6C10(r0)
+    addi    r4,r1,sp_jobj
+    lwz     r3,40(r29); fIsPtrOp
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    lwz     r31,44(r5); fIsPtrOp
+    li      r5,3
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    lwz     r28,36(r31); fIsPtrOp
+    addi    r30,r30,2
+    lhz     r0,0(r30); fIsPtrOp
+    cmpli   cr0,r28,0
+    srawi   r26,r0,8
+    bf      cr0,eq,B12
+:{000c}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lwz     r27,40(r31); fIsPtrOp
+    lfs     f31,56(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lwz     r28,sp_jobj(r1)
+    lfs     f0,56(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    fsubs   f30,f0,f31
+    bf      cr0,eq,B18
+:{000c}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r0,r26,-3
+    lfd     f1,@1538(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    stw     r0,@2032(r1)
+    lfd     f0,@2032(r1)
+    fsubs   f0,f0,f1
+    fmuls   f30,f30,f0
+    stfs    f30,56(r28); fIsPtrOp
+    lwz     r0,20(r28); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r28,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    bf      cr0,eq,B23
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    lwz     r4,20(r28); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B26
+:{000c}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r28
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,4
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lwz     r27,44(r31); fIsPtrOp
+    lhz     r0,0(r30); fIsPtrOp
+    cmpli   cr0,r27,0
+    rlwinm  r30,r0,0,24,31
+    bf      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lwz     r28,48(r31); fIsPtrOp
+    lfs     f31,60(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    bf      cr0,eq,B37
+:{000c}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lwz     r27,sp_jobj(r1)
+    lfs     f0,60(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    fsubs   f31,f0,f31
+    bf      cr0,eq,B40
+:{000c}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    xoris   r0,r30,0x8000
+    lfd     f3,@1538(r0); fIsConst
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    lfd     f1,@2030(r0); fIsConst
+    stw     r0,@2032(r1)
+    lfd     f0,@2031(r0); fIsConst
+    lfd     f2,@2032(r1)
+    fsub    f2,f2,f3
+    fsub    f1,f2,f1
+    fmsub   f31,f31,f1,f0
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    bf      cr0,eq,B45
+:{000c}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B48
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,2
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B56
+:{000c}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f30,56(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    bf      cr0,eq,B61
+:{000c}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B64
+:{000c}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B70
+:{000c}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    bf      cr0,eq,B75
+:{000c}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B78
+:{000c}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+    lwz     r0,100(r1); fIsPtrOp
+    lfd     f31,88(r1); fIsVolatile; fIsPtrOp
+    lfd     f30,80(r1); fIsVolatile; fIsPtrOp
+    lmw     r26,56(r1); fIsVolatile; fIsPtrOp
+    addi    r1,r1,96; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
+
+AFTER MERGING EPILOGUE, PROLOGUE
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B3 B4 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-96(r1); fIsPtrOp
+    stfd    f31,88(r1); fIsPtrOp
+    stfd    f30,80(r1); fIsPtrOp
+    stmw    r26,56(r1); fIsPtrOp
+    lis     r4,HA(mn_804A04F0)
+    addi    r30,r4,LO(mn_804A04F0)
+    lbz     r0,0(r30); fIsPtrOp
+    mr      r29,r3
+    cmpli   cr0,r0,30
+    bf      cr0,eq,B4
+:{000c}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B0 } Labels={L25 }
+
+    lbz     r0,16(r30); fIsPtrOp
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B0 } Labels={L3 L26 }
+
+    mr      r3,r29
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{000c}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r5,mnDiagram_804D6C10(r0)
+    addi    r4,r1,sp_jobj
+    lwz     r3,40(r29); fIsPtrOp
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    lwz     r31,44(r5); fIsPtrOp
+    li      r5,3
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    lwz     r28,36(r31); fIsPtrOp
+    addi    r30,r30,2
+    lhz     r0,0(r30); fIsPtrOp
+    cmpli   cr0,r28,0
+    srawi   r26,r0,8
+    bf      cr0,eq,B12
+:{000c}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lwz     r27,40(r31); fIsPtrOp
+    lfs     f31,56(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lwz     r28,sp_jobj(r1)
+    lfs     f0,56(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    fsubs   f30,f0,f31
+    bf      cr0,eq,B18
+:{000c}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r0,r26,-3
+    lfd     f1,@1538(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    stw     r0,@2032(r1)
+    lfd     f0,@2032(r1)
+    fsubs   f0,f0,f1
+    fmuls   f30,f30,f0
+    stfs    f30,56(r28); fIsPtrOp
+    lwz     r0,20(r28); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r28,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    bf      cr0,eq,B23
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    lwz     r4,20(r28); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B26
+:{000c}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r28
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,4
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lwz     r27,44(r31); fIsPtrOp
+    lhz     r0,0(r30); fIsPtrOp
+    cmpli   cr0,r27,0
+    rlwinm  r30,r0,0,24,31
+    bf      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lwz     r28,48(r31); fIsPtrOp
+    lfs     f31,60(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    bf      cr0,eq,B37
+:{000c}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lwz     r27,sp_jobj(r1)
+    lfs     f0,60(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    fsubs   f31,f0,f31
+    bf      cr0,eq,B40
+:{000c}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    xoris   r0,r30,0x8000
+    lfd     f3,@1538(r0); fIsConst
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    lfd     f1,@2030(r0); fIsConst
+    stw     r0,@2032(r1)
+    lfd     f0,@2031(r0); fIsConst
+    lfd     f2,@2032(r1)
+    fsub    f2,f2,f3
+    fsub    f1,f2,f1
+    fmsub   f31,f31,f1,f0
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    bf      cr0,eq,B45
+:{000c}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B48
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,2
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B56
+:{000c}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f30,56(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    bf      cr0,eq,B61
+:{000c}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B64
+:{000c}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B70
+:{000c}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    bf      cr0,eq,B75
+:{000c}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    cmpli   cr0,r0,0
+    bf      cr0,eq,B78
+:{000c}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r0,r4,0,25,25
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+    lwz     r0,100(r1); fIsPtrOp
+    lfd     f31,88(r1); fIsVolatile; fIsPtrOp
+    lfd     f30,80(r1); fIsVolatile; fIsPtrOp
+    lmw     r26,56(r1); fIsVolatile; fIsPtrOp
+    addi    r1,r1,96; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
+
+AFTER PEEPHOLE OPTIMIZATION
+mnDiagram_CursorProc
+:{0005}::::LOOPWEIGHT=27764
+B0: Succ={B3 B4 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-96(r1); fIsPtrOp
+    stfd    f31,88(r1); fIsPtrOp
+    stfd    f30,80(r1); fIsPtrOp
+    stmw    r26,56(r1); fIsPtrOp
+    lis     r4,HA(mn_804A04F0)
+    addi    r30,r4,LO(mn_804A04F0)
+    lbz     r0,0(r30); fIsPtrOp
+    addi    r29,r3,0
+    cmpli   cr0,r0,30
+    bf      cr0,eq,B4
+:{000c}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B0 } Labels={L25 }
+
+    lbz     r0,16(r30); fIsPtrOp
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B0 } Labels={L3 L26 }
+
+    mr      r3,r29
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{000c}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r5,mnDiagram_804D6C10(r0)
+    addi    r4,r1,sp_jobj
+    lwz     r3,40(r29); fIsPtrOp
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    lwz     r31,44(r5); fIsPtrOp
+    li      r5,3
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    lwz     r28,36(r31); fIsPtrOp
+    lhzu    r0,2(r30); fIsPtrOp
+    cmpli   cr0,r28,0
+    srawi   r26,r0,8
+    bf      cr0,eq,B12
+:{000c}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lwz     r27,40(r31); fIsPtrOp
+    lfs     f31,56(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lwz     r28,sp_jobj(r1)
+    lfs     f0,56(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    fsubs   f30,f0,f31
+    bf      cr0,eq,B18
+:{000c}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r0,r26,-3
+    lfd     f1,@1538(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    stw     r0,@2032(r1)
+    lfd     f0,@2032(r1)
+    fsubs   f0,f0,f1
+    fmuls   f30,f30,f0
+    stfs    f30,56(r28); fIsPtrOp
+    lwz     r0,20(r28); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r28,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    bf      cr0,eq,B23
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    lwz     r4,20(r28); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r0,r4,0,25,25
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r28
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,4
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lwz     r27,44(r31); fIsPtrOp
+    lhz     r0,0(r30); fIsPtrOp
+    cmpli   cr0,r27,0
+    rlwinm  r30,r0,0,24,31
+    bf      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lwz     r28,48(r31); fIsPtrOp
+    lfs     f31,60(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    bf      cr0,eq,B37
+:{000c}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lwz     r27,sp_jobj(r1)
+    lfs     f0,60(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    fsubs   f31,f0,f31
+    bf      cr0,eq,B40
+:{000c}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    xoris   r0,r30,0x8000
+    lfd     f3,@1538(r0); fIsConst
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    lfd     f1,@2030(r0); fIsConst
+    stw     r0,@2032(r1)
+    lfd     f0,@2031(r0); fIsConst
+    lfd     f2,@2032(r1)
+    fsub    f2,f2,f3
+    fsub    f1,f2,f1
+    fmsub   f31,f31,f1,f0
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    bf      cr0,eq,B45
+:{000c}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    bf      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r0,r4,0,25,25
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,2
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{0004}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B56
+:{000c}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f30,56(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    bf      cr0,eq,B61
+:{000c}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    bf      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r0,r4,0,25,25
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0004}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B70
+:{000c}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    bf      cr0,eq,B75
+:{000c}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{0004}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    bf      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r0,r4,0,25,25
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{0006}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+    lwz     r0,100(r1); fIsPtrOp
+    lfd     f31,88(r1); fIsVolatile; fIsPtrOp
+    lfd     f30,80(r1); fIsVolatile; fIsPtrOp
+    lmw     r26,56(r1); fIsVolatile; fIsPtrOp
+    addi    r1,r1,96; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
+
+FINAL CODE AFTER INSTRUCTION SCHEDULING
+mnDiagram_CursorProc
+:{000d}::::LOOPWEIGHT=27764
+B0: Succ={B3 B4 } Pred={} Labels={L0 }
+
+    mflr    r0
+    lis     r4,HA(mn_804A04F0)
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-96(r1); fIsPtrOp
+    stfd    f31,88(r1); fIsPtrOp
+    stfd    f30,80(r1); fIsPtrOp
+    stmw    r26,56(r1); fIsPtrOp
+    addi    r30,r4,LO(mn_804A04F0)
+    addi    r29,r3,0
+    lbz     r0,0(r30); fIsPtrOp
+    cmpli   cr0,r0,30
+    bf      cr0,eq,B4
+:{000c}::::LOOPWEIGHT=176422912
+B3: Succ={B4 B7 } Pred={B0 } Labels={L25 }
+
+    lbz     r0,16(r30); fIsPtrOp
+    cmpli   cr0,r0,0
+    bt      cr0,eq,B7
+:{0004}::::LOOPWEIGHT=27854
+B4: Succ={B5 } Pred={B3 B0 } Labels={L3 L26 }
+
+    mr      r3,r29
+:{0004}::::LOOPWEIGHT=78670869
+B5: Succ={B6 } Pred={B4 } Labels={L27 }
+
+    bl      HSD_GObjPLink_80390228; fLink
+:{0004}::::LOOPWEIGHT=0
+B6: Succ={B81 } Pred={B5 } Labels={L28 }
+
+    b       B81
+:{000c}::::LOOPWEIGHT=-769130496
+B7: Succ={B8 } Pred={B3 } Labels={L4 }
+
+    lwz     r5,mnDiagram_804D6C10(r0)
+    addi    r4,r1,sp_jobj
+    lwz     r3,40(r29); fIsPtrOp
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    lwz     r31,44(r5); fIsPtrOp
+    li      r5,3
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L30 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1152385024
+B9: Succ={B10 B12 } Pred={B8 } Labels={L31 }
+
+    lwz     r28,36(r31); fIsPtrOp
+    lhzu    r0,2(r30); fIsPtrOp
+    cmpli   cr0,r28,0
+    srawi   r26,r0,8
+    bf      cr0,eq,B12
+:{000c}::::LOOPWEIGHT=-579862528
+B10: Succ={B11 } Pred={B9 } Labels={L32 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27855
+B11: Succ={B12 } Pred={B10 } Labels={L33 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=260
+B12: Succ={B13 B15 } Pred={B11 B9 } Labels={L5 L34 }
+
+    lwz     r27,40(r31); fIsPtrOp
+    lfs     f31,56(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=1638400
+B13: Succ={B14 } Pred={B12 } Labels={L35 }
+
+    li      r3,@1250
+    li      r4,993
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 } Pred={B13 } Labels={L36 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=240676047
+B15: Succ={B16 B18 } Pred={B14 B12 } Labels={L6 L37 }
+
+    lwz     r28,sp_jobj(r1)
+    lfs     f0,56(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    fsubs   f30,f0,f31
+    bf      cr0,eq,B18
+:{000c}::::LOOPWEIGHT=0
+B16: Succ={B17 } Pred={B15 } Labels={L38 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=322464975
+B17: Succ={B18 } Pred={B16 } Labels={L39 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=0
+B18: Succ={B19 B29 } Pred={B17 B15 } Labels={L7 L40 }
+
+    addi    r0,r26,-3
+    lfd     f1,@1538(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    stw     r0,@2032(r1)
+    lfd     f0,@2032(r1)
+    fsubs   f0,f0,f1
+    fmuls   f30,f30,f0
+    stfs    f30,56(r28); fIsPtrOp
+    lwz     r0,20(r28); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=424176847
+B19: Succ={B20 B29 } Pred={B18 } Labels={L41 }
+
+    cmpli   cr0,r28,0
+    bt      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B23 } Pred={B19 } Labels={L42 }
+
+    bf      cr0,eq,B23
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L43 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L44 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=27854
+B23: Succ={B24 B26 } Pred={B22 B20 } Labels={L8 L45 }
+
+    lwz     r4,20(r28); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=1825513992
+B24: Succ={B25 B26 } Pred={B23 } Labels={L46 }
+
+    rlwinm  r0,r4,0,25,25
+    bt      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L47 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168296448
+B26: Succ={B27 B29 } Pred={B25 B24 B23 } Labels={L9 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B29
+:{0004}::::LOOPWEIGHT=627600591
+B27: Succ={B28 } Pred={B26 } Labels={L48 }
+
+    mr      r3,r28
+:{0004}::::LOOPWEIGHT=15756495
+B28: Succ={B29 } Pred={B27 } Labels={L49 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=258
+B29: Succ={B30 } Pred={B28 B26 B19 B18 } Labels={L10 L50 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,4
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=-169869312
+B30: Succ={B31 } Pred={B29 } Labels={L51 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=1825335880
+B31: Succ={B32 B34 } Pred={B30 } Labels={L52 }
+
+    lwz     r27,44(r31); fIsPtrOp
+    lhz     r0,0(r30); fIsPtrOp
+    cmpli   cr0,r27,0
+    rlwinm  r30,r0,0,24,31
+    bf      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L53 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=-169869312
+B33: Succ={B34 } Pred={B32 } Labels={L54 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825338072
+B34: Succ={B35 B37 } Pred={B33 B31 } Labels={L11 L55 }
+
+    lwz     r28,48(r31); fIsPtrOp
+    lfs     f31,60(r27); fIsPtrOp
+    cmpli   cr0,r28,0
+    bf      cr0,eq,B37
+:{000c}::::LOOPWEIGHT=0
+B35: Succ={B36 } Pred={B34 } Labels={L56 }
+
+    li      r3,@1250
+    li      r4,1006
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524809
+B36: Succ={B37 } Pred={B35 } Labels={L57 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=108
+B37: Succ={B38 B40 } Pred={B36 B34 } Labels={L12 L58 }
+
+    lwz     r27,sp_jobj(r1)
+    lfs     f0,60(r28); fIsPtrOp
+    cmpli   cr0,r27,0
+    fsubs   f31,f0,f31
+    bf      cr0,eq,B40
+:{000c}::::LOOPWEIGHT=65673
+B38: Succ={B39 } Pred={B37 } Labels={L59 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=17
+B39: Succ={B40 } Pred={B38 } Labels={L60 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825313576
+B40: Succ={B41 B51 } Pred={B39 B37 } Labels={L13 L61 }
+
+    xoris   r0,r30,0x8000
+    lfd     f3,@1538(r0); fIsConst
+    stw     r0,@2032+4(r1)
+    lis     r0,17200
+    lfd     f1,@2030(r0); fIsConst
+    stw     r0,@2032(r1)
+    lfd     f0,@2031(r0); fIsConst
+    lfd     f2,@2032(r1)
+    fsub    f2,f2,f3
+    fsub    f1,f2,f1
+    fmsub   f31,f31,f1,f0
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=1825315136
+B41: Succ={B42 B51 } Pred={B40 } Labels={L62 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=721408
+B42: Succ={B43 B45 } Pred={B41 } Labels={L63 }
+
+    bf      cr0,eq,B45
+:{000c}::::LOOPWEIGHT=393737
+B43: Succ={B44 } Pred={B42 } Labels={L64 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825316648
+B44: Succ={B45 } Pred={B43 } Labels={L65 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=-1
+B45: Succ={B46 B48 } Pred={B44 B42 } Labels={L14 L66 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    bf      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B46: Succ={B47 B48 } Pred={B45 } Labels={L67 }
+
+    rlwinm  r0,r4,0,25,25
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B48 } Pred={B46 } Labels={L68 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=-168820726
+B48: Succ={B49 B51 } Pred={B47 B46 B45 } Labels={L15 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=197120
+B49: Succ={B50 } Pred={B48 } Labels={L69 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=524809
+B50: Succ={B51 } Pred={B49 } Labels={L70 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=673213646
+B51: Succ={B52 } Pred={B50 B48 B41 B40 } Labels={L16 L71 }
+
+    lwz     r3,40(r29); fIsPtrOp
+    addi    r4,r1,sp_jobj
+    crxor   cr1[eq],cr1[eq],cr1[eq]
+    li      r5,2
+    li      r6,-1
+:{0004}::::LOOPWEIGHT=1825320688
+B52: Succ={B53 } Pred={B51 } Labels={L72 }
+
+    bl      lb_80011E24; fLink
+:{000c}::::LOOPWEIGHT=33620071
+B53: Succ={B54 B56 } Pred={B52 } Labels={L73 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B56
+:{000c}::::LOOPWEIGHT=260
+B54: Succ={B55 } Pred={B53 } Labels={L74 }
+
+    li      r3,@1250
+    li      r4,932
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27854
+B55: Succ={B56 } Pred={B54 } Labels={L75 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=131593
+B56: Succ={B57 B67 } Pred={B55 B53 } Labels={L17 L76 }
+
+    stfs    f30,56(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B57: Succ={B58 B67 } Pred={B56 } Labels={L77 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=2073860
+B58: Succ={B59 B61 } Pred={B57 } Labels={L78 }
+
+    bf      cr0,eq,B61
+:{000c}::::LOOPWEIGHT=65627
+B59: Succ={B60 } Pred={B58 } Labels={L79 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=1825365664
+B60: Succ={B61 } Pred={B59 } Labels={L80 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825365680
+B61: Succ={B62 B64 } Pred={B60 B58 } Labels={L18 L81 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    bf      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=131593
+B62: Succ={B63 B64 } Pred={B61 } Labels={L82 }
+
+    rlwinm  r0,r4,0,25,25
+    bt      cr0,eq,B64
+:{0004}::::LOOPWEIGHT=-1
+B63: Succ={B64 } Pred={B62 } Labels={L83 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=0
+B64: Succ={B65 B67 } Pred={B63 B62 B61 } Labels={L19 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B67
+:{0004}::::LOOPWEIGHT=0
+B65: Succ={B66 } Pred={B64 } Labels={L84 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B66: Succ={B67 } Pred={B65 } Labels={L85 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000c}::::LOOPWEIGHT=524809
+B67: Succ={B68 B70 } Pred={B66 B64 B57 B56 } Labels={L20 L86 }
+
+    lwz     r27,sp_jobj(r1)
+    cmpli   cr0,r27,0
+    bf      cr0,eq,B70
+:{000c}::::LOOPWEIGHT=3670020
+B68: Succ={B69 } Pred={B67 } Labels={L87 }
+
+    li      r3,@1250
+    li      r4,947
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=524801
+B69: Succ={B70 } Pred={B68 } Labels={L88 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=328192
+B70: Succ={B71 B81 } Pred={B69 B67 } Labels={L21 L89 }
+
+    frsp    f0,f31
+    stfs    f0,60(r27); fIsPtrOp
+    lwz     r0,20(r27); fIsPtrOp
+    rlwinm  r0,r0,0,6,6
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=1825328776
+B71: Succ={B72 B81 } Pred={B70 } Labels={L90 }
+
+    cmpli   cr0,r27,0
+    bt      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=388
+B72: Succ={B73 B75 } Pred={B71 } Labels={L91 }
+
+    bf      cr0,eq,B75
+:{000c}::::LOOPWEIGHT=2359300
+B73: Succ={B74 } Pred={B72 } Labels={L92 }
+
+    li      r3,@1250
+    li      r4,564
+    li      r5,@1251
+:{0004}::::LOOPWEIGHT=27852
+B74: Succ={B75 } Pred={B73 } Labels={L93 }
+
+    bl      __assert; fLink
+:{000c}::::LOOPWEIGHT=1825180896
+B75: Succ={B76 B78 } Pred={B74 B72 } Labels={L22 L94 }
+
+    lwz     r4,20(r27); fIsPtrOp
+    li      r3,0
+    rlwinm  r0,r4,0,8,8
+    bf      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=743468236
+B76: Succ={B77 B78 } Pred={B75 } Labels={L95 }
+
+    rlwinm  r0,r4,0,25,25
+    bt      cr0,eq,B78
+:{0004}::::LOOPWEIGHT=1825365920
+B77: Succ={B78 } Pred={B76 } Labels={L96 }
+
+    li      r3,1
+:{0004}::::LOOPWEIGHT=1825332216
+B78: Succ={B79 B81 } Pred={B77 B76 B75 } Labels={L23 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B81
+:{0004}::::LOOPWEIGHT=0
+B79: Succ={B80 } Pred={B78 } Labels={L97 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=655873
+B80: Succ={B81 } Pred={B79 } Labels={L98 }
+
+    bl      HSD_JObjSetMtxDirtySub; fLink
+:{000e}::::LOOPWEIGHT=1825511000
+B81: Succ={} Pred={B80 B78 B71 B70 B6 } Labels={L29 L24 L99 }
+
+    lmw     r26,56(r1); fIsVolatile; fIsPtrOp
+    lwz     r0,100(r1); fIsPtrOp
+    lfd     f31,88(r1); fIsVolatile; fIsPtrOp
+    lfd     f30,80(r1); fIsVolatile; fIsPtrOp
+    addi    r1,r1,96; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive

@@ -1,0 +1,43 @@
+{
+  "function": "mnVibration_80248644",
+  "class_id": 0,
+  "matched_dump": "mnVibration_matched_pcdump.txt",
+  "wip_dump": "mnVibration_wip_pcdump.txt",
+  "matched_rev": "3cc6d4951",
+  "wip_rev": "9731c25df",
+  "adjudication_basis": "Source-grounded, matcher-independent: each 'same' role is identified by its struct-field offset / defining-op semantics, which are identical in both dumps (the rev diff was a GetNameSlot inline extraction that renumbered virtuals but did not change these struct accesses). The three 'li 0' counters (matched igs 35/38/51) are NOT independently adjudicated: they share an identical first-def and are only distinguishable by use-site, which is the matcher's OWN feature, so scoring them would be circular. They are excluded from the gate metric. The two mr roles (32, 42) and the add (41) share a generic first-def with siblings, so the matcher recovers them partly via use-site; they remain independently distinguishable by def-operand lineage (ig32 copies r3 = the ABI arg; ig42 copies the +44-load base; ig41 adds that base) - a source-grounded distinction not yet in the descriptor, which is why they clear the bar the three identical li-0 zero-inits do not.",
+  "same": {
+    "32": 32,
+    "36": 39,
+    "43": 36,
+    "40": 43,
+    "41": 44,
+    "42": 45
+  },
+  "same_role_notes": {
+    "32": "mr from r3 (the gobj arg copy)",
+    "36": "lwz +44 from the gobj",
+    "43": "lbz +10",
+    "40": "lwz +80",
+    "41": "add base + index",
+    "42": "mr of the +44-base"
+  },
+  "unadjudicated": [
+    35,
+    38,
+    51
+  ],
+  "raw_ig_baseline_correct": 1,
+  "raw_ig_note": "Of the 6 adjudicated roles, raw ig_idx agrees on only ig 32 (matched->wip same number). The other 5 drifted, matching Campaign B's ~1/9 finding. The matcher must recover the drifted roles via identity-core features.",
+  "use_site_stress": {
+    "42": 45,
+    "41": 44,
+    "39": 42
+  },
+  "use_site_stress_notes": {
+    "42": "mr r#,r# <- lwz r#,44(r#)",
+    "41": "add r#,r#,r# <- lwz r#,44(r#)",
+    "39": "add r#,r#,r# <- lbz r#,10(r#)"
+  },
+  "use_site_stress_basis": "Use-site-stress labels: GENERIC first-def roles (mr/add/lbz/rlwinm/subf) that DRIFTED, adjudicated by source-grounded composite def-lineage (the chain of defining ops to a unique anchor such as lwz +44 / a named symbol) -- this lineage is the role PRODUCERS, independent of the matcher use_site (consumers) feature, so it is non-circular. Each listed role is recovered by the matcher WITH use_site but NOT when use_site is ablated, proving use_site is load-bearing. The method reproduces mnVibration hand-labels 41->44 and 42->45."
+}

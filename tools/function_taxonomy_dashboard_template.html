@@ -1,0 +1,1531 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Melee Function Taxonomy</title>
+  <style>
+    :root {
+      --bg: #f5f6f3;
+      --panel: #ffffff;
+      --ink: #1d2428;
+      --muted: #647076;
+      --line: #d9dedc;
+      --teal: #0f766e;
+      --coral: #c2413a;
+      --gold: #b7791f;
+      --indigo: #5156a6;
+      --green: #2f855a;
+      --violet: #805ad5;
+      --cyan: #0e7490;
+      --rose: #b83280;
+      --shadow: 0 8px 20px rgba(29, 36, 40, 0.08);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.8), rgba(245,246,243,0.9) 220px),
+        var(--bg);
+    }
+
+    a { color: inherit; }
+
+    .app-shell {
+      width: min(1560px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 22px 0 36px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: start;
+      padding: 8px 0 18px;
+    }
+
+    .eyebrow {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    h1 {
+      margin: 4px 0 6px;
+      font-size: 32px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      max-width: 920px;
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .status {
+      min-width: 260px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.75);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .status strong {
+      display: block;
+      color: var(--ink);
+      margin-bottom: 2px;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(160px, 1fr));
+      gap: 12px;
+      margin: 4px 0 18px;
+    }
+
+    .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 13px 14px;
+      box-shadow: var(--shadow);
+      min-height: 92px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 28px;
+      font-weight: 760;
+      line-height: 1;
+    }
+
+    .metric .hint {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 390px;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .panel-note {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.4fr) repeat(6, minmax(130px, 1fr));
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfa;
+    }
+
+    label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    input, select, button {
+      font: inherit;
+      color: var(--ink);
+    }
+
+    input[type="search"], input[type="number"], select {
+      min-width: 0;
+      height: 36px;
+      border: 1px solid #cfd6d3;
+      border-radius: 6px;
+      background: #fff;
+      padding: 0 10px;
+      outline: none;
+    }
+
+    input[type="search"]:focus, input[type="number"]:focus, select:focus {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16);
+    }
+
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 16px 14px;
+      background: #fbfcfa;
+    }
+
+    .taxonomy-guide {
+      display: grid;
+      gap: 9px;
+      padding: 12px 16px 14px;
+      border-top: 1px solid #edf0ee;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfa;
+    }
+
+    .taxonomy-guide.empty-guide {
+      display: none;
+    }
+
+    .guide-title {
+      color: #465157;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .guide-items {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .guide-item {
+      border-left: 3px solid var(--teal);
+      padding-left: 10px;
+      color: #334047;
+      line-height: 1.42;
+      font-size: 13px;
+    }
+
+    .guide-item h3 {
+      margin: 0 0 4px;
+      color: var(--ink);
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .guide-item p {
+      margin: 0;
+    }
+
+    .guide-meta {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .chip {
+      height: 30px;
+      border: 1px solid #cfd6d3;
+      border-radius: 999px;
+      background: #fff;
+      padding: 0 10px;
+      cursor: pointer;
+      color: #394348;
+      font-size: 12px;
+    }
+
+    .chip.active {
+      border-color: var(--teal);
+      background: #e7f4f1;
+      color: #0d5d57;
+      font-weight: 700;
+    }
+
+    .charts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .chart {
+      min-height: 286px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 13px;
+      background: #fff;
+    }
+
+    .chart h3 {
+      margin: 0 0 12px;
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 170px minmax(120px, 1fr) 42px;
+      gap: 8px;
+      align-items: center;
+      margin: 8px 0;
+      font-size: 12px;
+    }
+
+    .bar-label {
+      color: #354045;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .bar-track {
+      height: 12px;
+      border-radius: 999px;
+      background: #edf0ee;
+      overflow: hidden;
+    }
+
+    .bar {
+      height: 100%;
+      min-width: 2px;
+      border-radius: 999px;
+    }
+
+    .bar-count {
+      text-align: right;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .tier-stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .tier-row {
+      display: grid;
+      grid-template-columns: 64px minmax(120px, 1fr) 42px;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .stack-track {
+      display: flex;
+      height: 14px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #edf0ee;
+    }
+
+    .stack-piece {
+      height: 100%;
+      min-width: 1px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px 12px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    .table-wrap {
+      max-height: 620px;
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: #f7f8f6;
+      border-bottom: 1px solid var(--line);
+      color: #465157;
+      padding: 9px 10px;
+      text-align: left;
+      white-space: nowrap;
+      z-index: 2;
+      cursor: pointer;
+    }
+
+    td {
+      border-bottom: 1px solid #edf0ee;
+      padding: 9px 10px;
+      vertical-align: top;
+    }
+
+    tr:hover td {
+      background: #f9fbfa;
+    }
+
+    tr.selected td {
+      background: #eaf5f3;
+    }
+
+    .fn {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .bucket-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 230px;
+      height: 24px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0 8px;
+      background: #fff;
+      white-space: nowrap;
+    }
+
+    .bucket-pill .dot {
+      flex: 0 0 auto;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .side {
+      position: sticky;
+      top: 14px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .detail {
+      padding: 15px 16px;
+    }
+
+    .detail h2 {
+      margin: 0;
+      font-size: 18px;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 14px 0;
+    }
+
+    .kv {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px;
+      min-height: 62px;
+      background: #fbfcfa;
+    }
+
+    .kv .k {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .kv .v {
+      margin-top: 5px;
+      font-size: 14px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .section-label {
+      margin: 16px 0 7px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .reason-list {
+      margin: 0;
+      padding-left: 17px;
+      color: #344047;
+      line-height: 1.45;
+      font-size: 13px;
+    }
+
+    .command {
+      border: 1px solid #cfd6d3;
+      border-radius: 6px;
+      background: #f7f8f6;
+      padding: 10px;
+      color: #253036;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+    }
+
+    .queue-list {
+      padding: 8px 16px 14px;
+      display: grid;
+      gap: 7px;
+    }
+
+    .queue-link {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      text-decoration: none;
+      background: #fff;
+      font-size: 12px;
+    }
+
+    .queue-link:hover {
+      border-color: var(--teal);
+      background: #f7fbfa;
+    }
+
+    .queue-count {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .empty {
+      padding: 36px 16px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .footer {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    @media (max-width: 1180px) {
+      .cards { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
+      .layout { grid-template-columns: 1fr; }
+      .side { position: static; }
+    }
+
+    @media (max-width: 760px) {
+      .app-shell { width: min(100vw - 20px, 1560px); padding-top: 12px; }
+      .topbar { grid-template-columns: 1fr; }
+      h1 { font-size: 26px; }
+      .cards { grid-template-columns: 1fr 1fr; }
+      .filters { grid-template-columns: 1fr; }
+      .guide-items { grid-template-columns: 1fr; }
+      .charts { grid-template-columns: 1fr; }
+      .bar-row { grid-template-columns: 132px minmax(80px, 1fr) 36px; }
+      .detail-grid { grid-template-columns: 1fr; }
+      th:nth-child(5), td:nth-child(5),
+      th:nth-child(8), td:nth-child(8) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Melee decompilation</div>
+        <h1>Function mismatch taxonomy</h1>
+        <p class="subtitle">
+          Interactive view of the current non-100% function inventory. Filter by work bucket,
+          match tier, primary checkdiff classification, or module, then open a function row for
+          evidence and the next command to run.
+        </p>
+      </div>
+      <div class="status" id="loadStatus">
+        <strong>Loading taxonomy</strong>
+        Fetching local JSONL artifacts from this directory.
+      </div>
+    </header>
+
+    <section class="cards" id="metrics"></section>
+
+    <section class="layout">
+      <div class="panel">
+        <div class="panel-head">
+          <h2 class="panel-title">Inventory</h2>
+          <div class="panel-note" id="resultNote">0 functions</div>
+        </div>
+
+        <div class="filters">
+          <label>
+            Search
+            <input id="search" type="search" placeholder="function, file, subcategory">
+          </label>
+          <label>
+            Bucket
+            <select id="bucketFilter"></select>
+          </label>
+          <label>
+            Actionability
+            <select id="sourceActionabilityFilter"></select>
+          </label>
+          <label>
+            Tier
+            <select id="tierFilter"></select>
+          </label>
+          <label>
+            Primary
+            <select id="primaryFilter"></select>
+          </label>
+          <label>
+            Closability
+            <select id="closabilityFilter"></select>
+          </label>
+          <label>
+            Min match %
+            <input id="minMatch" type="number" min="0" max="100" step="0.01" value="0">
+          </label>
+        </div>
+        <div class="filter-row">
+          <button class="chip" id="near99">Near 99+</button>
+          <button class="chip" id="smallPattern">Small pattern</button>
+          <button class="chip" id="hasDeepening">Has deepening</button>
+          <button class="chip" id="resetFilters">Reset</button>
+        </div>
+        <div class="taxonomy-guide empty-guide" id="taxonomyGuide"></div>
+
+        <div class="charts">
+          <div class="chart">
+            <h3>Work bucket distribution</h3>
+            <div id="bucketChart"></div>
+          </div>
+          <div class="chart">
+            <h3>Match tiers by bucket</h3>
+            <div id="tierChart"></div>
+            <div class="legend" id="tierLegend"></div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-sort="match_percent">Match</th>
+                <th data-sort="function">Function</th>
+                <th data-sort="work_bucket">Bucket</th>
+                <th data-sort="source_actionability">Actionability</th>
+                <th data-sort="primary">Primary</th>
+                <th data-sort="subcategory">Subcategory</th>
+                <th data-sort="frame_closability_tier">Frame closability</th>
+                <th data-sort="file_path">File</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <aside class="side">
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Selected function</h2>
+            <div class="panel-note">click a row</div>
+          </div>
+          <div class="detail" id="detail"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Queues</h2>
+            <div class="panel-note" id="queueNote">0 files</div>
+          </div>
+          <div class="queue-list" id="queues"></div>
+        </section>
+      </aside>
+    </section>
+
+    <p class="footer">
+      This dashboard is read-only. The underlying data is generated from
+      <span class="mono">taxonomy.records.jsonl</span>, queue TSVs, and the auxiliary
+      report-only/error JSONL artifacts in this directory.
+    </p>
+  </main>
+
+  <script src="dashboard-data.js"></script>
+  <script>
+    const bucketColors = {
+      "signature-call-type": "#c2413a",
+      "inline-boundary": "#b7791f",
+      "structural-reconstruction": "#5156a6",
+      "data-symbol-relocation": "#0f766e",
+      "stack-local-layout": "#2f855a",
+      "indexed-struct-pointer": "#0e7490",
+      "known-small-pattern-candidate": "#805ad5",
+      "register-allocator": "#b83280"
+    };
+
+    const tierOrder = [">=99%", "97-99%", "95-97%", "90-95%", "<90%"];
+    const closabilityOrder = [
+      "current-tools-padstack",
+      "gen-gated-366",
+      "reorder-gated-362",
+      "ceiling"
+    ];
+    const actionabilityOrder = [
+      "current-tools-data-symbol",
+      "current-tools-indexed-pointer",
+      "current-tools",
+      "manual-signature-guidance",
+      "manual-inline-guidance",
+      "manual-small-pattern",
+      "structural-rebuild",
+      "opcode-reconstruction",
+      "pcdump-proof-needed",
+      "generator-gated",
+      "backend-ceiling",
+      "ceiling",
+      "diagnostic-only",
+      "source-probe"
+    ];
+    const bucketOrder = [
+      "signature-call-type",
+      "inline-boundary",
+      "structural-reconstruction",
+      "data-symbol-relocation",
+      "stack-local-layout",
+      "indexed-struct-pointer",
+      "known-small-pattern-candidate",
+      "register-allocator"
+    ];
+
+    const bucketInfo = {
+      "signature-call-type": {
+        label: "Signature / Call Type",
+        description: "Call setup differs in a way that usually points at prototypes, return types, parameter types, casts, or caller-side signature propagation.",
+        focus: "Audit declarations and call sites first; these are good candidates for batch type and header cleanup."
+      },
+      "inline-boundary": {
+        label: "Inline Boundary",
+        description: "The mismatch centers on whether a helper call is emitted, inlined, or shaped as a toolchain inline artifact.",
+        focus: "Compare helper boundaries and inline source shape before tuning local statements."
+      },
+      "structural-reconstruction": {
+        label: "Structural Reconstruction",
+        description: "Control flow or opcode sequence differs enough that the source is probably not expressing the original structure yet.",
+        focus: "Use opseq, xrefs, and nearby matched code to rebuild natural source structure."
+      },
+      "data-symbol-relocation": {
+        label: "Data / Symbol Relocation",
+        description: "Data, string, or relocation references are wrong even when surrounding code is close.",
+        focus: "Model named data, string blobs, and relocation-bearing objects instead of chasing registers."
+      },
+      "stack-local-layout": {
+        label: "Stack / Local Layout",
+        description: "The function is close, but stack frame size, slot placement, or local lifetime is still different.",
+        focus: "Try declaration order, local scope/lifetime, and frame-layout diagnostics."
+      },
+      "indexed-struct-pointer": {
+        label: "Indexed Struct Pointer",
+        description: "The compiler chose a different source shape for array-indexed struct access versus materialized element pointers.",
+        focus: "Rewrite array/struct access form and pointer temporaries around indexed loads and stores."
+      },
+      "known-small-pattern-candidate": {
+        label: "Known Small Pattern",
+        description: "Only a small opcode, operand, or idiom remains, and it resembles patterns that are often batch-fixable.",
+        focus: "Search mismatch DB/opcode examples and try narrow type, cast, or addressing tweaks."
+      },
+      "register-allocator": {
+        label: "Register Allocator",
+        description: "The instruction stream is largely right, but register allocation or scheduling proof is still needed.",
+        focus: "Use pcdump-backed evidence and first-divergence analysis before manual RA tuning."
+      }
+    };
+
+    const actionabilityInfo = {
+      "manual-signature-guidance": {
+        label: "Manual Signature Guidance",
+        description: "Prototype, cast, typedef-width, or call-shape work where current tools provide diagnostics but not source-emitting candidates.",
+        focus: "Run debug suggest casts, audit headers, and verify call-site declarations manually."
+      },
+      "manual-inline-guidance": {
+        label: "Manual Inline Guidance",
+        description: "Inline or emitted-call boundary work where existing pattern inspection gives context but not bounded source patches.",
+        focus: "Compare helper definitions, static inline annotations, and call-preserving source forms manually."
+      },
+      "current-tools-data-symbol": {
+        label: "Data Symbol Tools",
+        description: "Data, string, blob, or relocation rows where naming/modeling data is the primary current-tool path.",
+        focus: "Use checkdiff name-magic evidence and model named data or string blobs."
+      },
+      "current-tools-indexed-pointer": {
+        label: "Indexed Pointer Shape",
+        description: "Array-indexed versus materialized element-pointer rows that current source-shape rewrites can test.",
+        focus: "Try pointer temporaries, array indexing, and struct member access variants."
+      },
+      "current-tools-small-pattern": {
+        label: "Small Pattern Tools",
+        description: "Tiny opcode, operand, or idiom rows that are good mismatch-db/opseq candidates.",
+        focus: "Search known patterns, then try a narrow type, cast, constant, or address-base tweak."
+      },
+      "current-tools": {
+        label: "Current Frame Tools",
+        description: "Frame rows with a bounded current-tool probe path.",
+        focus: "Run the row's next command before broader source exploration."
+      },
+      "structural-rebuild": {
+        label: "Structural Rebuild",
+        description: "Control-flow/source-shape rows that need natural branch, loop, or early-exit reconstruction.",
+        focus: "Use extract, opseq, xrefs, and nearby matched functions to rebuild high-level structure."
+      },
+      "opcode-reconstruction": {
+        label: "Opcode Reconstruction",
+        description: "Generic instruction sequence rows where the next split is opcode-pattern research.",
+        focus: "Search opseq and mismatch-db for similar emitted instruction runs."
+      },
+      "pcdump-proof-needed": {
+        label: "Pcdump Proof Needed",
+        description: "Register-allocation rows that need allocator evidence before source edits are credible.",
+        focus: "Collect pcdump-backed first-divergence or force-phys evidence."
+      },
+      "generator-gated": {
+        label: "Generator Gated",
+        description: "Likely source-reachable, but blocked on a missing generator or source lever.",
+        focus: "Use the frame closability tier or issue reference to decide which generator work unblocks it."
+      },
+      "backend-ceiling": {
+        label: "Backend Ceiling",
+        description: "Rows classified as backend/toolchain ceilings or direct-inspection cases, not current source-probe wins.",
+        focus: "Inspect manually and bank unless new evidence reveals a source lever."
+      },
+      "ceiling": {
+        label: "Ceiling",
+        description: "Current evidence marks this as unresolved, compiler-internal, or not worth routing to source probes.",
+        focus: "Bank it or collect better attribution evidence."
+      },
+      "diagnostic-only": {
+        label: "Diagnostic Only",
+        description: "Rows where current tools can explain the residual but do not yet offer a bounded source transform.",
+        focus: "Inspect before investing in source experiments."
+      },
+      "source-probe": {
+        label: "Generic Source Probe",
+        description: "Fallback actionability for rows that do not yet have a sharper source-action tier.",
+        focus: "Use the bucket and primary classification to choose the first tool."
+      }
+    };
+
+    const closabilityInfo = {
+      "current-tools-padstack": {
+        label: "Current Tools: Frame Reservation",
+        description: "Current tools can test this with a frame-reservation probe command without committing diagnostic padding.",
+        focus: "Run frame-transform-search with frame-reservation-pad-stack."
+      },
+      "gen-gated-366": {
+        label: "Generator Gated: #366",
+        description: "Likely source-reachable, but blocked on the #366 directed frame-transform/source generator.",
+        focus: "Do not treat this as a quick row until the #366 generator is available."
+      },
+      "reorder-gated-362": {
+        label: "Reorder Gated: #362",
+        description: "Same-frame stack-slot placement is blocked on the #362 assignment-order/reorder lever.",
+        focus: "Use lifetime-layout evidence; closure waits for the reorder lever."
+      },
+      "ceiling": {
+        label: "Ceiling",
+        description: "Current frame attribution marks this as unresolved, compiler-internal, or not source-closable with current tools.",
+        focus: "Bank the row unless new attribution evidence appears."
+      }
+    };
+
+    const primaryInfo = {
+      "signature-type-mismatch": {
+        label: "Signature Type Mismatch",
+        description: "A call or operand shape suggests the compiler sees different argument, return, pointer, signedness, or cast information.",
+        focus: "Start with headers, prototypes, typedef width, and explicit casts at the relevant call."
+      },
+      "inline-boundary-toolchain-artifact": {
+        label: "Inline Boundary Toolchain Artifact",
+        description: "The reference and current code disagree around a helper call versus inlined body, often due to inline annotations or helper source shape.",
+        focus: "Check helper definitions, static inline boundaries, and call-preserving source forms."
+      },
+      "control-flow-source-shape": {
+        label: "Control Flow Source Shape",
+        description: "Branching, loop structure, condition ordering, or early-exit shape is not matching the original source structure.",
+        focus: "Reconstruct the high-level control flow before chasing final register differences."
+      },
+      "instruction-sequence": {
+        label: "Instruction Sequence",
+        description: "Opcode order or selected instructions differ without a more specific classifier taking ownership.",
+        focus: "Compare similar matched functions and known opcode idioms for source-shape clues."
+      },
+      "data-symbol-or-relocation": {
+        label: "Data Symbol Or Relocation",
+        description: "A data reference, string symbol, relocation, or blob offset is mismatched.",
+        focus: "Name the data and model blob layout so the emitted relocation matches."
+      },
+      "indexed-struct-pointer-materialization": {
+        label: "Indexed Struct Pointer Materialization",
+        description: "One side materializes an element pointer while the other keeps address arithmetic in indexed load/store instructions.",
+        focus: "Adjust temporary pointers, array indexing, and struct member access shape."
+      },
+      "stack-slot-layout": {
+        label: "Stack Slot Layout",
+        description: "The frame size is usually close, but local variables or spills occupy different stack slots.",
+        focus: "Try local declaration order, scope narrowing, and lifetime changes."
+      },
+      "stack-layout": {
+        label: "Stack Layout",
+        description: "The overall stack frame reservation or local storage shape differs.",
+        focus: "Look for missing locals, widened types, helper calls, or source shapes that create spills."
+      },
+      "register-allocation": {
+        label: "Register Allocation",
+        description: "Remaining differences are mainly register choices after the structural instruction stream is close.",
+        focus: "Use pcdump/allocator diagnostics to prove the first allocator divergence."
+      },
+      "operand-register-or-offset": {
+        label: "Operand Register Or Offset",
+        description: "A small register operand, immediate, or offset differs while the surrounding opcode pattern is close.",
+        focus: "Check casts, constants, field offsets, address bases, and narrow source-expression tweaks."
+      }
+    };
+
+    const queueFiles = [
+      "signature-call-type.tsv",
+      "inline-boundary.tsv",
+      "structural-reconstruction.tsv",
+      "data-symbol-relocation.tsv",
+      "stack-local-layout.tsv",
+      "indexed-struct-pointer.tsv",
+      "known-small-pattern-candidate.tsv",
+      "register-allocator.tsv",
+      "checkdiff-errors.tsv",
+      "report-only-not-extract-backed.tsv",
+      "db-completed-extract-backed-non100.tsv"
+    ];
+
+    const state = {
+      records: [],
+      errors: [],
+      reportOnly: [],
+      dbCompleted: [],
+      queueCounts: new Map(),
+      filtered: [],
+      selected: null,
+      sortKey: "match_percent",
+      sortDir: "desc",
+      toggles: {
+        near99: false,
+        smallPattern: false,
+        hasDeepening: false
+      }
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    async function fetchText(path) {
+      const response = await fetch(path, { cache: "no-store" });
+      if (!response.ok) throw new Error(`${path}: ${response.status}`);
+      return response.text();
+    }
+
+    function parseJsonl(text) {
+      return text.split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    }
+
+    function parseTsvCount(text) {
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      return Math.max(0, lines.length - 1);
+    }
+
+    function countBy(rows, key) {
+      const map = new Map();
+      for (const row of rows) {
+        const value = row[key] ?? "unknown";
+        map.set(value, (map.get(value) || 0) + 1);
+      }
+      return map;
+    }
+
+    function pct(value) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    function formatPct(value) {
+      return pct(value).toFixed(2);
+    }
+
+    function avg(rows, key) {
+      if (!rows.length) return 0;
+      return rows.reduce((sum, row) => sum + pct(row[key]), 0) / rows.length;
+    }
+
+    function median(values) {
+      const nums = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+      if (!nums.length) return 0;
+      const mid = Math.floor(nums.length / 2);
+      return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+    }
+
+    function taxonomyInfo(kind, value) {
+      if (!value) return null;
+      if (kind === "bucket") return bucketInfo[value];
+      if (kind === "primary") return primaryInfo[value];
+      if (kind === "actionability") return actionabilityInfo[value];
+      if (kind === "closability") return closabilityInfo[value];
+      return null;
+    }
+
+    function taxonomyTitle(kind, value) {
+      const info = taxonomyInfo(kind, value);
+      if (!info) return value || "";
+      return `${info.label}: ${info.description}`;
+    }
+
+    function taxonomyLabel(kind, value) {
+      return taxonomyInfo(kind, value)?.label || value || "Unknown";
+    }
+
+    function taxonomyCount(key, value) {
+      return state.records.filter((row) => row[key] === value).length;
+    }
+
+    function optionList(select, values, label, kind) {
+      select.innerHTML = `<option value="">All ${label}</option>` +
+        values.map((value) => {
+          const title = kind ? taxonomyTitle(kind, value) : value;
+          return `<option value="${escapeHtml(value)}" title="${escapeHtml(title)}">${escapeHtml(value)}</option>`;
+        }).join("");
+    }
+
+    function initControls() {
+      optionList($("bucketFilter"), bucketOrder, "buckets", "bucket");
+      const sourceActionabilityValues = actionabilityOrder.filter((value) =>
+        state.records.some((row) => row.source_actionability === value)
+      );
+      const extraActionability = Array.from(countBy(state.records, "source_actionability").keys())
+        .filter((value) => value && !actionabilityOrder.includes(value))
+        .sort();
+      optionList(
+        $("sourceActionabilityFilter"),
+        sourceActionabilityValues.concat(extraActionability),
+        "actionability tiers",
+        "actionability"
+      );
+      optionList($("tierFilter"), tierOrder, "tiers");
+      const primaries = Array.from(countBy(state.records, "primary").keys()).sort();
+      optionList($("primaryFilter"), primaries, "primary classifications", "primary");
+      const closabilityValues = closabilityOrder.filter((value) =>
+        state.records.some((row) => row.frame_closability_tier === value)
+      );
+      const extraClosability = Array.from(countBy(state.records, "frame_closability_tier").keys())
+        .filter((value) => value && !closabilityOrder.includes(value))
+        .sort();
+      optionList(
+        $("closabilityFilter"),
+        closabilityValues.concat(extraClosability),
+        "frame closability tiers",
+        "closability"
+      );
+
+      for (const id of ["search", "bucketFilter", "sourceActionabilityFilter", "tierFilter", "primaryFilter", "closabilityFilter", "minMatch"]) {
+        $(id).addEventListener("input", applyFilters);
+      }
+      $("near99").addEventListener("click", () => toggleButton("near99"));
+      $("smallPattern").addEventListener("click", () => toggleButton("smallPattern"));
+      $("hasDeepening").addEventListener("click", () => toggleButton("hasDeepening"));
+      $("resetFilters").addEventListener("click", resetFilters);
+
+      document.querySelectorAll("th[data-sort]").forEach((th) => {
+        th.addEventListener("click", () => {
+          const key = th.dataset.sort;
+          if (state.sortKey === key) {
+            state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+          } else {
+            state.sortKey = key;
+            state.sortDir = key === "match_percent" ? "desc" : "asc";
+          }
+          applyFilters();
+        });
+      });
+    }
+
+    function toggleButton(key) {
+      state.toggles[key] = !state.toggles[key];
+      $(key).classList.toggle("active", state.toggles[key]);
+      applyFilters();
+    }
+
+    function resetFilters() {
+      $("search").value = "";
+      $("bucketFilter").value = "";
+      $("sourceActionabilityFilter").value = "";
+      $("tierFilter").value = "";
+      $("primaryFilter").value = "";
+      $("closabilityFilter").value = "";
+      $("minMatch").value = "0";
+      for (const key of Object.keys(state.toggles)) {
+        state.toggles[key] = false;
+        $(key).classList.remove("active");
+      }
+      applyFilters();
+    }
+
+    function hasDeepening(row) {
+      return Boolean(row.static_deepening || row.name_magic_deepening);
+    }
+
+    function rowMatchesSearch(row, query) {
+      if (!query) return true;
+      const haystack = [
+        row.function,
+        row.file_path,
+        row.work_bucket,
+        row.source_actionability,
+        row.primary,
+        row.subcategory,
+        row.frame_cause,
+        row.frame_verdict,
+        row.frame_closability_tier,
+        row.frame_source_object_symbol,
+        row.next_command
+      ].join(" ").toLowerCase();
+      return haystack.includes(query);
+    }
+
+    function renderTaxonomyGuide(bucket, primary, sourceActionability, closability) {
+      const guide = $("taxonomyGuide");
+      const items = [];
+
+      if (bucket) {
+        const info = taxonomyInfo("bucket", bucket);
+        const total = taxonomyCount("work_bucket", bucket);
+        const visible = state.filtered.filter((row) => row.work_bucket === bucket).length;
+        items.push({
+          title: `Bucket: ${taxonomyLabel("bucket", bucket)}`,
+          key: bucket,
+          color: bucketColors[bucket] || "#647076",
+          description: info?.description || "No description captured for this bucket.",
+          focus: info?.focus,
+          meta: `${total.toLocaleString()} total classified; ${visible.toLocaleString()} currently visible.`
+        });
+      }
+
+      if (primary) {
+        const info = taxonomyInfo("primary", primary);
+        const total = taxonomyCount("primary", primary);
+        const visible = state.filtered.filter((row) => row.primary === primary).length;
+        const primaryBuckets = countBy(state.records.filter((row) => row.primary === primary), "work_bucket");
+        const topBucket = Array.from(primaryBuckets.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+        items.push({
+          title: `Primary: ${taxonomyLabel("primary", primary)}`,
+          key: primary,
+          color: bucketColors[topBucket] || "#647076",
+          description: info?.description || "No description captured for this primary classification.",
+          focus: info?.focus,
+          meta: `${total.toLocaleString()} total classified; ${visible.toLocaleString()} currently visible.`
+        });
+      }
+
+      if (sourceActionability) {
+        const info = taxonomyInfo("actionability", sourceActionability);
+        const total = taxonomyCount("source_actionability", sourceActionability);
+        const visible = state.filtered.filter((row) => row.source_actionability === sourceActionability).length;
+        items.push({
+          title: `Actionability: ${taxonomyLabel("actionability", sourceActionability)}`,
+          key: sourceActionability,
+          color: "#465157",
+          description: info?.description || "No description captured for this actionability tier.",
+          focus: info?.focus,
+          meta: `${total.toLocaleString()} total classified; ${visible.toLocaleString()} currently visible.`
+        });
+      }
+
+      if (closability) {
+        const info = taxonomyInfo("closability", closability);
+        const total = taxonomyCount("frame_closability_tier", closability);
+        const visible = state.filtered.filter((row) => row.frame_closability_tier === closability).length;
+        items.push({
+          title: `Frame closability: ${taxonomyLabel("closability", closability)}`,
+          key: closability,
+          color: "#2f855a",
+          description: info?.description || "No description captured for this frame closability tier.",
+          focus: info?.focus,
+          meta: `${total.toLocaleString()} total classified; ${visible.toLocaleString()} currently visible.`
+        });
+      }
+
+      if (!items.length) {
+        guide.classList.add("empty-guide");
+        guide.innerHTML = "";
+        return;
+      }
+
+      guide.classList.remove("empty-guide");
+      guide.innerHTML = `
+        <div class="guide-title">Taxonomy guide</div>
+        <div class="guide-items">
+          ${items.map((item) => `
+            <section class="guide-item" style="border-left-color:${escapeHtml(item.color)}" title="${escapeHtml(item.description)}">
+              <h3>${escapeHtml(item.title)}</h3>
+              <p>${escapeHtml(item.description)}</p>
+              ${item.focus ? `<p class="guide-meta">Focus: ${escapeHtml(item.focus)}</p>` : ""}
+              <div class="guide-meta">${escapeHtml(item.meta)}</div>
+            </section>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function applyFilters() {
+      const query = $("search").value.trim().toLowerCase();
+      const bucket = $("bucketFilter").value;
+      const sourceActionability = $("sourceActionabilityFilter").value;
+      const tier = $("tierFilter").value;
+      const primary = $("primaryFilter").value;
+      const closability = $("closabilityFilter").value;
+      const minMatch = pct($("minMatch").value);
+
+      state.filtered = state.records.filter((row) => {
+        if (!rowMatchesSearch(row, query)) return false;
+        if (bucket && row.work_bucket !== bucket) return false;
+        if (sourceActionability && row.source_actionability !== sourceActionability) return false;
+        if (tier && row.match_tier !== tier) return false;
+        if (primary && row.primary !== primary) return false;
+        if (closability && row.frame_closability_tier !== closability) return false;
+        if (pct(row.match_percent) < minMatch) return false;
+        if (state.toggles.near99 && pct(row.match_percent) < 99) return false;
+        if (state.toggles.smallPattern && !row.known_small_pattern_candidate) return false;
+        if (state.toggles.hasDeepening && !hasDeepening(row)) return false;
+        return true;
+      });
+
+      sortRows();
+      renderTaxonomyGuide(bucket, primary, sourceActionability, closability);
+      renderMetrics();
+      renderCharts();
+      renderTable();
+      $("resultNote").textContent = `${state.filtered.length.toLocaleString()} of ${state.records.length.toLocaleString()} classified`;
+    }
+
+    function sortRows() {
+      const key = state.sortKey;
+      const dir = state.sortDir === "asc" ? 1 : -1;
+      state.filtered.sort((a, b) => {
+        const av = a[key];
+        const bv = b[key];
+        if (key === "match_percent" || key === "size_bytes") {
+          return (pct(av) - pct(bv)) * dir;
+        }
+        return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
+      });
+    }
+
+    function renderMetrics() {
+      const rows = state.records;
+      const near99 = rows.filter((r) => pct(r.match_percent) >= 99).length;
+      const stack = rows.filter((r) => r.work_bucket === "stack-local-layout").length;
+      const data = rows.filter((r) => r.work_bucket === "data-symbol-relocation").length;
+      const reg = rows.filter((r) => r.work_bucket === "register-allocator").length;
+      const currentTools = rows.filter((r) => r.frame_closability_tier === "current-tools-padstack").length;
+      const med = median(rows.map((r) => r.match_percent));
+      const near99Pct = rows.length ? near99 / rows.length * 100 : 0;
+      const metrics = [
+        ["Classified", rows.length.toLocaleString(), `${state.errors.length} checkdiff errors`],
+        ["Near 99+", near99.toLocaleString(), `${formatPct(near99Pct)}% of classified`],
+        ["Median Match", `${formatPct(med)}%`, `Average ${formatPct(avg(rows, "match_percent"))}%`],
+        ["Stack/Data", (stack + data).toLocaleString(), `${stack} stack, ${data} data`],
+        ["Current Frame Tools", currentTools.toLocaleString(), "Frame rows with bounded probes"],
+        ["Register", reg.toLocaleString(), "Needs pcdump-backed proof"]
+      ];
+      $("metrics").innerHTML = metrics.map(([label, value, hint]) => `
+        <article class="metric">
+          <div class="label">${escapeHtml(label)}</div>
+          <div class="value">${escapeHtml(value)}</div>
+          <div class="hint">${escapeHtml(hint)}</div>
+        </article>
+      `).join("");
+    }
+
+    function renderCharts() {
+      const bucketCounts = countBy(state.filtered, "work_bucket");
+      const maxBucket = Math.max(1, ...Array.from(bucketCounts.values()));
+      $("bucketChart").innerHTML = bucketOrder
+        .filter((bucket) => bucketCounts.has(bucket))
+        .map((bucket) => {
+          const count = bucketCounts.get(bucket);
+          return `
+            <div class="bar-row">
+              <div class="bar-label" title="${escapeHtml(taxonomyTitle("bucket", bucket))}">${escapeHtml(bucket)}</div>
+              <div class="bar-track"><div class="bar" style="width:${count / maxBucket * 100}%; background:${bucketColors[bucket] || "#647076"}"></div></div>
+              <div class="bar-count">${count}</div>
+            </div>
+          `;
+        }).join("") || `<div class="empty">No rows match the current filters.</div>`;
+
+      const tierRows = tierOrder.map((tier) => {
+        const tierRecords = state.filtered.filter((row) => row.match_tier === tier);
+        const total = tierRecords.length;
+        const bucketMap = countBy(tierRecords, "work_bucket");
+        const pieces = bucketOrder.map((bucket) => {
+          const count = bucketMap.get(bucket) || 0;
+          if (!count || !total) return "";
+          return `<div class="stack-piece" title="${escapeHtml(`${taxonomyTitle("bucket", bucket)} (${count})`)}" style="width:${count / total * 100}%; background:${bucketColors[bucket] || "#647076"}"></div>`;
+        }).join("");
+        return `
+          <div class="tier-row">
+            <div>${escapeHtml(tier)}</div>
+            <div class="stack-track">${pieces}</div>
+            <div class="bar-count">${total}</div>
+          </div>
+        `;
+      }).join("");
+      $("tierChart").innerHTML = `<div class="tier-stack">${tierRows}</div>`;
+      $("tierLegend").innerHTML = bucketOrder.map((bucket) => `
+        <span title="${escapeHtml(taxonomyTitle("bucket", bucket))}"><i class="dot" style="background:${bucketColors[bucket]}"></i>${escapeHtml(bucket)}</span>
+      `).join("");
+    }
+
+    function renderTable() {
+      const rows = state.filtered.slice(0, 500);
+      const selectedName = state.selected?.function;
+      $("rows").innerHTML = rows.map((row) => `
+        <tr data-fn="${escapeHtml(row.function)}" class="${row.function === selectedName ? "selected" : ""}">
+          <td class="mono">${formatPct(row.match_percent)}%</td>
+          <td><div class="fn">${escapeHtml(row.function)}</div><div class="muted">${escapeHtml(row.match_tier)}</div></td>
+          <td>${bucketPill(row.work_bucket)}</td>
+          <td title="${escapeHtml(taxonomyTitle("actionability", row.source_actionability))}">${escapeHtml(row.source_actionability || "-")}</td>
+          <td title="${escapeHtml(taxonomyTitle("primary", row.primary))}">${escapeHtml(row.primary)}</td>
+          <td>${escapeHtml(row.subcategory)}</td>
+          <td>${escapeHtml(row.frame_closability_tier || "-")}</td>
+          <td><span class="mono">${escapeHtml(row.file_path)}</span></td>
+        </tr>
+      `).join("") || `<tr><td colspan="8"><div class="empty">No rows match the current filters.</div></td></tr>`;
+
+      document.querySelectorAll("tr[data-fn]").forEach((tr) => {
+        tr.addEventListener("click", () => {
+          const row = state.records.find((item) => item.function === tr.dataset.fn);
+          if (row) selectRow(row);
+        });
+      });
+    }
+
+    function bucketPill(bucket) {
+      return `<span class="bucket-pill" title="${escapeHtml(taxonomyTitle("bucket", bucket))}"><i class="dot" style="background:${bucketColors[bucket] || "#647076"}"></i>${escapeHtml(bucket)}</span>`;
+    }
+
+    function selectRow(row) {
+      state.selected = row;
+      renderDetail(row);
+      renderTable();
+    }
+
+    function renderDetail(row) {
+      const reasons = row.reasons || row.classification?.reasons || [];
+      const structural = row.structural || {};
+      const rowBucketInfo = taxonomyInfo("bucket", row.work_bucket);
+      const rowPrimaryInfo = taxonomyInfo("primary", row.primary);
+      const rowActionabilityInfo = taxonomyInfo("actionability", row.source_actionability);
+      const rowClosabilityInfo = taxonomyInfo("closability", row.frame_closability_tier);
+      const taxonomyNotes = [
+        rowBucketInfo ? `Bucket: ${rowBucketInfo.description}` : "",
+        rowActionabilityInfo ? `Actionability: ${rowActionabilityInfo.description}` : "",
+        rowPrimaryInfo ? `Primary: ${rowPrimaryInfo.description}` : "",
+        rowClosabilityInfo ? `Frame closability: ${rowClosabilityInfo.description}` : "",
+        row.frame_cause ? `Frame cause: ${row.frame_cause}` : "",
+        row.frame_verdict ? `Frame verdict: ${row.frame_verdict}` : ""
+      ].filter(Boolean);
+      const deepening = [];
+      if (row.static_deepening) {
+        const sd = row.static_deepening;
+        deepening.push(`decl-order candidates: ${sd.decl_order_candidate_count ?? 0}`);
+        deepening.push(`cast warnings: ${sd.cast_warning_count ?? 0}`);
+        deepening.push(`HSD assert strings: ${sd.hsd_assert_string_count ?? 0}`);
+      }
+      if (row.name_magic_deepening) {
+        deepening.push(`name-magic residual: ${row.name_magic_deepening.primary}`);
+      }
+      const opcodePairs = (row.opcode_pairs || []).slice(0, 8)
+        .map((pair) => `${pair[0] || "-"} -> ${pair[1] || "-"}`)
+        .join(", ");
+
+      $("detail").innerHTML = `
+        <h2 class="mono">${escapeHtml(row.function)}</h2>
+        <div style="margin-top:10px">${bucketPill(row.work_bucket)}</div>
+        <div class="detail-grid">
+          <div class="kv"><div class="k">Match</div><div class="v">${formatPct(row.match_percent)}%</div></div>
+          <div class="kv"><div class="k">Tier</div><div class="v">${escapeHtml(row.match_tier)}</div></div>
+          <div class="kv"><div class="k">Actionability</div><div class="v">${escapeHtml(row.source_actionability || "-")}</div></div>
+          <div class="kv"><div class="k">Primary</div><div class="v">${escapeHtml(row.primary)}</div></div>
+          <div class="kv"><div class="k">Frame closability</div><div class="v">${escapeHtml(row.frame_closability_tier || "-")}</div></div>
+          <div class="kv"><div class="k">Frame source</div><div class="v">${escapeHtml(row.frame_source_object_symbol || "-")}</div></div>
+          <div class="kv"><div class="k">Size</div><div class="v">${escapeHtml(row.size_bytes || "-")} bytes</div></div>
+        </div>
+        ${taxonomyNotes.length ? `<div class="section-label">Classification meaning</div><ul class="reason-list">${taxonomyNotes.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+        <div class="section-label">File</div>
+        <div class="command">${escapeHtml(row.file_path)}</div>
+        <div class="section-label">Evidence</div>
+        ${reasons.length ? `<ul class="reason-list">${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : `<div class="muted">No reason text captured.</div>`}
+        <div class="section-label">Structural metrics</div>
+        <div class="detail-grid">
+          <div class="kv"><div class="k">Opcode similarity</div><div class="v">${formatPct((structural.opcode_similarity || 0) * 100)}%</div></div>
+          <div class="kv"><div class="k">Line delta</div><div class="v">${escapeHtml(structural.line_delta ?? "-")}</div></div>
+          <div class="kv"><div class="k">Hunks</div><div class="v">${escapeHtml(structural.hunk_count ?? "-")}</div></div>
+          <div class="kv"><div class="k">Confidence</div><div class="v">${escapeHtml(row.confidence)}</div></div>
+        </div>
+        ${deepening.length ? `<div class="section-label">Deepening</div><ul class="reason-list">${deepening.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+        ${opcodePairs ? `<div class="section-label">Opcode pairs</div><div class="command">${escapeHtml(opcodePairs)}</div>` : ""}
+        <div class="section-label">Next command</div>
+        <div class="command">${escapeHtml(row.frame_next_command || row.next_command)}</div>
+      `;
+    }
+
+    function renderQueues() {
+      $("queueNote").textContent = `${queueFiles.length} files`;
+      $("queues").innerHTML = queueFiles.map((file) => {
+        const count = state.queueCounts.get(file);
+        const label = file.replace(/\.tsv$/, "");
+        return `
+          <a class="queue-link" href="queues/${escapeHtml(file)}">
+            <span>${escapeHtml(label)}</span>
+            <span class="queue-count">${count == null ? "n/a" : count.toLocaleString()}</span>
+          </a>
+        `;
+      }).join("");
+    }
+
+    async function loadQueues() {
+      await Promise.all(queueFiles.map(async (file) => {
+        try {
+          const text = await fetchText(`queues/${file}`);
+          state.queueCounts.set(file, parseTsvCount(text));
+        } catch {
+          state.queueCounts.set(file, null);
+        }
+      }));
+    }
+
+    async function loadFromHttp() {
+      const [recordsText, errorsText, reportOnlyText, dbCompletedText] = await Promise.all([
+          fetchText("taxonomy.records.jsonl"),
+          fetchText("checkdiff-errors.jsonl"),
+          fetchText("report-only-nonextract-backed.jsonl"),
+          fetchText("db-completed-extract-backed-non100.jsonl")
+      ]);
+      state.records = parseJsonl(recordsText);
+      state.errors = parseJsonl(errorsText);
+      state.reportOnly = parseJsonl(reportOnlyText);
+      state.dbCompleted = parseJsonl(dbCompletedText);
+      await loadQueues();
+      return "HTTP";
+    }
+
+    function loadEmbedded() {
+      const embedded = window.__TAXONOMY_DASHBOARD_DATA__;
+      if (!embedded) return null;
+      state.records = embedded.records || [];
+      state.errors = embedded.errors || [];
+      state.reportOnly = embedded.reportOnly || [];
+      state.dbCompleted = embedded.dbCompleted || [];
+      state.queueCounts = new Map(Object.entries(embedded.queueCounts || {}));
+      return "embedded JS";
+    }
+
+    async function load() {
+      try {
+        let source;
+        try {
+          source = await loadFromHttp();
+        } catch {
+          source = loadEmbedded();
+          if (!source) throw new Error("Could not load JSONL files or dashboard-data.js");
+        }
+
+        $("loadStatus").innerHTML = `
+          <strong>Loaded ${state.records.length.toLocaleString()} classified functions</strong>
+          ${state.errors.length.toLocaleString()} checkdiff errors, ${state.reportOnly.length.toLocaleString()} report-only rows. Source: ${escapeHtml(source)}.
+        `;
+        initControls();
+        renderQueues();
+        applyFilters();
+        if (state.records.length) selectRow(state.records[0]);
+      } catch (error) {
+        $("loadStatus").innerHTML = `<strong>Load failed</strong>${escapeHtml(error.message)}`;
+        $("rows").innerHTML = `<tr><td colspan="8"><div class="empty">Could not load taxonomy files. Open this dashboard through a local HTTP server from the taxonomy directory.</div></td></tr>`;
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,2917 @@
+Starting function ftPp_SpecialS_0_Coll
+--------------------------------------------------------------------------------
+Removing unreachable code at: 16
+Removing goto next at 252
+Removing goto next at 320
+Removing goto next at 322
+Removing goto next at 387
+Removing goto next at 432
+*****************
+Dumps for pass=0
+*****************
+Found propagatable assignment at: 258
+Found propagatable assignment at: 357
+Found propagatable assignment at: 370
+Found propagation at 359 from 357
+Found propagation at 372 from 370
+Found propagatable expression assignment at: 8
+Found propagatable expression assignment at: 14
+Found propagatable expression assignment at: 34
+Found propagatable expression assignment at: 40
+Found expression propagation at 437 from 8
+Found expression propagation at 442 from 34
+Found propagatable expression assignment at: 177
+Found propagatable expression assignment at: 183
+Found propagatable expression assignment at: 217
+Found propagatable expression assignment at: 223
+Found propagatable expression assignment at: 258
+Found propagatable expression assignment at: 285
+Found propagatable expression assignment at: 291
+Found expression propagation at 447 from 177
+Found expression propagation at 186 from 183
+Found expression propagation at 452 from 217
+Found expression propagation at 226 from 223
+Found expression propagation at 457 from 285
+Found expression propagation at 294 from 291
+Found propagatable expression assignment at: 334
+Found propagatable expression assignment at: 340
+Found propagatable expression assignment at: 357
+Found propagatable expression assignment at: 365
+Found propagatable expression assignment at: 370
+Found propagatable expression assignment at: 376
+Found propagatable expression assignment at: 397
+Found propagatable expression assignment at: 403
+Found expression propagation at 462 from 334
+Found expression propagation at 367 from 365
+Found expression propagation at 372 from 365
+Found expression propagation at 467 from 397
+Found expression propagation at 406 from 403
+Removing dead assignment 8
+Removing dead assignment 34
+Removing dead assignment 177
+Removing dead assignment 217
+Removing dead assignment 285
+Removing dead assignment 334
+Removing dead assignment 357
+Removing dead assignment 370
+Removing dead assignment 397
+Found propagatable assignment at: 278
+Found propagatable assignment at: 278
+*****************
+Dumps for pass=1
+*****************
+Found propagatable assignment at: 278
+Found propagatable expression assignment at: 19
+Found propagatable expression assignment at: 50
+Found propagatable expression assignment at: 198
+Found propagatable expression assignment at: 243
+Found propagatable expression assignment at: 278
+Found propagatable expression assignment at: 316
+Found expression propagation at 201 from 198
+Found expression propagation at 246 from 243
+Found expression propagation at 319 from 316
+Found propagatable expression assignment at: 370
+Found propagatable expression assignment at: 395
+Found propagatable expression assignment at: 406
+Found propagatable expression assignment at: 438
+Found expression propagation at 471 from 395
+Found expression propagation at 441 from 438
+Removing dead assignment 395
+Found propagatable assignment at: 278
+Found propagatable assignment at: 278
+Found propagatable assignment at: 278
+
+BEFORE GLOBAL OPTIMIZATION
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=2
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=8
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    lwz     r35,44(r32); fIsPtrOp
+    lbz     r3,12(r35); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r44,r3
+    mr      r34,r44
+    lwz     r33,44(r34); fIsPtrOp
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    mr      r45,r3
+    cmpi    cr0,r45,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    mr      r46,r3
+    cmpi    cr0,r46,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r47,176(r33); fIsPtrOp
+    lwz     r48,180(r33); fIsPtrOp
+    stw     r47,176(r35); fIsPtrOp
+    stw     r48,180(r35); fIsPtrOp
+    lwz     r49,184(r33); fIsPtrOp
+    stw     r49,184(r35); fIsPtrOp
+    mr      r3,r33
+    mr      r4,r35
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{0004}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r50,224(r35); fIsPtrOp
+    lwz     r51,224(r33); fIsPtrOp
+    cmp     cr0,r50,r51
+    bt      cr0,eq,B15
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    mr      r3,r32
+    li      r4,360
+    lis     r52,3148
+    addi    r5,r52,21130
+    lfs     f1,2196(r35); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    lfs     f3,@227(r0); fIsConst
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{0004}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r53,224(r33); fIsPtrOp
+    stw     r53,224(r35); fIsPtrOp
+    b       B26
+:{0004}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r54,9024(r35); fIsPtrOp
+    addi    r55,r54,1
+    stw     r55,9024(r35); fIsPtrOp
+    lwz     r56,9024(r35); fIsPtrOp
+    cmpi    cr0,r56,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r57,5
+    stw     r57,9024(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lfs     f32,@555(r0); fIsConst
+    lwz     r58,9024(r35); fIsPtrOp
+    lfd     f33,@428(r0); fIsConst
+    xoris   r59,r58,0x8000
+    stw     r59,@556+4(r1)
+    lis     r60,17200
+    stw     r60,@556(r1)
+    lfd     f34,@556(r1)
+    fsubs   f35,f34,f33
+    lfs     f36,44(r35); fIsPtrOp
+    fmuls   f37,f35,f36
+    lfs     f38,176(r33); fIsPtrOp
+    fnmsubs f39,f32,f37,f38
+    stfs    f39,176(r35); fIsPtrOp
+    mr      r3,r32
+    lis     r61,HA(ftNn_Unk2_803CDD60)
+    addi    r62,r61,LO(ftNn_Unk2_803CDD60)
+    mr      r4,r62
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    mr      r63,r3
+    cmpi    cr0,r63,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r42,44(r32); fIsPtrOp
+    li      r64,0
+    stw     r64,8716(r42); fIsPtrOp
+    stw     r64,8712(r42); fIsPtrOp
+    stw     r64,8708(r42); fIsPtrOp
+    stw     r64,8704(r42); fIsPtrOp
+    lwz     r37,44(r32); fIsPtrOp
+    lis     r65,HA(ftNn_Init_80122FAC)
+    addi    r66,r65,LO(ftNn_Init_80122FAC)
+    mr      r67,r66
+    stw     r67,8668(r37); fIsPtrOp
+    lis     r68,HA(ftNn_Init_80122FAC)
+    addi    r69,r68,LO(ftNn_Init_80122FAC)
+    mr      r70,r69
+    stw     r70,8676(r37); fIsPtrOp
+    lis     r71,HA(efLib_PauseAll)
+    addi    r72,r71,LO(efLib_PauseAll)
+    mr      r73,r72
+    stw     r73,8660(r37); fIsPtrOp
+    lis     r74,HA(efLib_ResumeAll)
+    addi    r75,r74,LO(efLib_ResumeAll)
+    mr      r76,r75
+    stw     r76,8664(r37); fIsPtrOp
+    mr      r43,r42
+    mr      r3,r43
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    mr      r3,r32
+    li      r4,360
+    lis     r77,3148
+    addi    r5,r77,21130
+    lfs     f1,2196(r42); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    lfs     f3,@227(r0); fIsConst
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r36,44(r32); fIsPtrOp
+    lis     r78,HA(ftNn_Init_80122FAC)
+    addi    r79,r78,LO(ftNn_Init_80122FAC)
+    mr      r80,r79
+    stw     r80,8668(r36); fIsPtrOp
+    lis     r81,HA(ftNn_Init_80122FAC)
+    addi    r82,r81,LO(ftNn_Init_80122FAC)
+    mr      r83,r82
+    stw     r83,8676(r36); fIsPtrOp
+    lis     r84,HA(efLib_PauseAll)
+    addi    r85,r84,LO(efLib_PauseAll)
+    mr      r86,r85
+    stw     r86,8660(r36); fIsPtrOp
+    lis     r87,HA(efLib_ResumeAll)
+    addi    r88,r87,LO(efLib_ResumeAll)
+    mr      r89,r88
+    stw     r89,8664(r36); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r39,44(r32); fIsPtrOp
+    lbz     r3,12(r39); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    mr      r90,r3
+    mr      r40,r90
+    lwz     r41,44(r40); fIsPtrOp
+    mr      r3,r41
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    fmr     f40,f1
+    mr      r3,r39
+    li      r4,0
+    fmr     f1,f40
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lwz     r38,44(r32); fIsPtrOp
+    lis     r91,HA(ftNn_Init_80122FAC)
+    addi    r92,r91,LO(ftNn_Init_80122FAC)
+    mr      r93,r92
+    stw     r93,8668(r38); fIsPtrOp
+    lis     r94,HA(ftNn_Init_80122FAC)
+    addi    r95,r94,LO(ftNn_Init_80122FAC)
+    mr      r96,r95
+    stw     r96,8676(r38); fIsPtrOp
+    lis     r97,HA(efLib_PauseAll)
+    addi    r98,r97,LO(efLib_PauseAll)
+    mr      r99,r98
+    stw     r99,8660(r38); fIsPtrOp
+    lis     r100,HA(efLib_ResumeAll)
+    addi    r101,r100,LO(efLib_ResumeAll)
+    mr      r102,r101
+    stw     r102,8664(r38); fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+
+AFTER COPY PROPAGATION
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=2
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=8
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    lwz     r35,44(r32); fIsPtrOp
+    lbz     r3,12(r35); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r44,r3
+    mr      r34,r44
+    lwz     r33,44(r34); fIsPtrOp
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    mr      r45,r3
+    cmpi    cr0,r45,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    mr      r46,r3
+    cmpi    cr0,r46,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r47,176(r33); fIsPtrOp
+    lwz     r48,180(r33); fIsPtrOp
+    stw     r47,176(r35); fIsPtrOp
+    stw     r48,180(r35); fIsPtrOp
+    lwz     r49,184(r33); fIsPtrOp
+    stw     r49,184(r35); fIsPtrOp
+    mr      r3,r33
+    mr      r4,r35
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{0004}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r50,224(r35); fIsPtrOp
+    lwz     r51,224(r33); fIsPtrOp
+    cmp     cr0,r50,r51
+    bt      cr0,eq,B15
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    mr      r3,r32
+    li      r4,360
+    lis     r52,3148
+    addi    r5,r52,21130
+    lfs     f1,2196(r35); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    lfs     f3,@227(r0); fIsConst
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{0004}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r53,224(r33); fIsPtrOp
+    stw     r53,224(r35); fIsPtrOp
+    b       B26
+:{0004}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r54,9024(r35); fIsPtrOp
+    addi    r55,r54,1
+    stw     r55,9024(r35); fIsPtrOp
+    lwz     r56,9024(r35); fIsPtrOp
+    cmpi    cr0,r56,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r57,5
+    stw     r57,9024(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lfs     f32,@555(r0); fIsConst
+    lwz     r58,9024(r35); fIsPtrOp
+    lfd     f33,@428(r0); fIsConst
+    xoris   r59,r58,0x8000
+    stw     r59,@556+4(r1)
+    lis     r60,17200
+    stw     r60,@556(r1)
+    lfd     f34,@556(r1)
+    fsubs   f35,f34,f33
+    lfs     f36,44(r35); fIsPtrOp
+    fmuls   f37,f35,f36
+    lfs     f38,176(r33); fIsPtrOp
+    fnmsubs f39,f32,f37,f38
+    stfs    f39,176(r35); fIsPtrOp
+    mr      r3,r32
+    lis     r61,HA(ftNn_Unk2_803CDD60)
+    addi    r62,r61,LO(ftNn_Unk2_803CDD60)
+    mr      r4,r62
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    mr      r63,r3
+    cmpi    cr0,r63,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r42,44(r32); fIsPtrOp
+    li      r64,0
+    stw     r64,8716(r42); fIsPtrOp
+    stw     r64,8712(r42); fIsPtrOp
+    stw     r64,8708(r42); fIsPtrOp
+    stw     r64,8704(r42); fIsPtrOp
+    lwz     r37,44(r32); fIsPtrOp
+    lis     r65,HA(ftNn_Init_80122FAC)
+    addi    r66,r65,LO(ftNn_Init_80122FAC)
+    stw     r66,8668(r37); fIsPtrOp
+    lis     r68,HA(ftNn_Init_80122FAC)
+    addi    r69,r68,LO(ftNn_Init_80122FAC)
+    stw     r69,8676(r37); fIsPtrOp
+    lis     r71,HA(efLib_PauseAll)
+    addi    r72,r71,LO(efLib_PauseAll)
+    stw     r72,8660(r37); fIsPtrOp
+    lis     r74,HA(efLib_ResumeAll)
+    addi    r75,r74,LO(efLib_ResumeAll)
+    stw     r75,8664(r37); fIsPtrOp
+    mr      r43,r42
+    mr      r3,r43
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    mr      r3,r32
+    li      r4,360
+    lis     r77,3148
+    addi    r5,r77,21130
+    lfs     f1,2196(r42); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    lfs     f3,@227(r0); fIsConst
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r36,44(r32); fIsPtrOp
+    lis     r78,HA(ftNn_Init_80122FAC)
+    addi    r79,r78,LO(ftNn_Init_80122FAC)
+    stw     r79,8668(r36); fIsPtrOp
+    lis     r81,HA(ftNn_Init_80122FAC)
+    addi    r82,r81,LO(ftNn_Init_80122FAC)
+    stw     r82,8676(r36); fIsPtrOp
+    lis     r84,HA(efLib_PauseAll)
+    addi    r85,r84,LO(efLib_PauseAll)
+    stw     r85,8660(r36); fIsPtrOp
+    lis     r87,HA(efLib_ResumeAll)
+    addi    r88,r87,LO(efLib_ResumeAll)
+    stw     r88,8664(r36); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r39,44(r32); fIsPtrOp
+    lbz     r3,12(r39); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    mr      r90,r3
+    lwz     r41,44(r90); fIsPtrOp
+    mr      r3,r41
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    fmr     f40,f1
+    mr      r3,r39
+    li      r4,0
+    fmr     f1,f40
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lwz     r38,44(r32); fIsPtrOp
+    lis     r91,HA(ftNn_Init_80122FAC)
+    addi    r92,r91,LO(ftNn_Init_80122FAC)
+    stw     r92,8668(r38); fIsPtrOp
+    lis     r94,HA(ftNn_Init_80122FAC)
+    addi    r95,r94,LO(ftNn_Init_80122FAC)
+    stw     r95,8676(r38); fIsPtrOp
+    lis     r97,HA(efLib_PauseAll)
+    addi    r98,r97,LO(efLib_PauseAll)
+    stw     r98,8660(r38); fIsPtrOp
+    lis     r100,HA(efLib_ResumeAll)
+    addi    r101,r100,LO(efLib_ResumeAll)
+    stw     r101,8664(r38); fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+
+AFTER COPY PROPAGATION
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=2
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=8
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    lwz     r35,44(r32); fIsPtrOp
+    lbz     r3,12(r35); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r44,r3
+    mr      r34,r44
+    lwz     r33,44(r34); fIsPtrOp
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r47,176(r33); fIsPtrOp
+    lwz     r48,180(r33); fIsPtrOp
+    stw     r47,176(r35); fIsPtrOp
+    stw     r48,180(r35); fIsPtrOp
+    lwz     r49,184(r33); fIsPtrOp
+    stw     r49,184(r35); fIsPtrOp
+    mr      r3,r33
+    mr      r4,r35
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{0004}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r50,224(r35); fIsPtrOp
+    lwz     r51,224(r33); fIsPtrOp
+    cmp     cr0,r50,r51
+    bt      cr0,eq,B15
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    mr      r3,r32
+    li      r4,360
+    lis     r52,3148
+    addi    r5,r52,21130
+    lfs     f1,2196(r35); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    lfs     f3,@227(r0); fIsConst
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{0004}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r53,224(r33); fIsPtrOp
+    stw     r53,224(r35); fIsPtrOp
+    b       B26
+:{0004}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r54,9024(r35); fIsPtrOp
+    addi    r55,r54,1
+    stw     r55,9024(r35); fIsPtrOp
+    lwz     r56,9024(r35); fIsPtrOp
+    cmpi    cr0,r56,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r57,5
+    stw     r57,9024(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lfs     f32,@555(r0); fIsConst
+    lwz     r58,9024(r35); fIsPtrOp
+    lfd     f33,@428(r0); fIsConst
+    xoris   r59,r58,0x8000
+    stw     r59,@556+4(r1)
+    lis     r60,17200
+    stw     r60,@556(r1)
+    lfd     f34,@556(r1)
+    fsubs   f35,f34,f33
+    lfs     f36,44(r35); fIsPtrOp
+    fmuls   f37,f35,f36
+    lfs     f38,176(r33); fIsPtrOp
+    fnmsubs f39,f32,f37,f38
+    stfs    f39,176(r35); fIsPtrOp
+    mr      r3,r32
+    lis     r61,HA(ftNn_Unk2_803CDD60)
+    addi    r62,r61,LO(ftNn_Unk2_803CDD60)
+    mr      r4,r62
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r42,44(r32); fIsPtrOp
+    li      r64,0
+    stw     r64,8716(r42); fIsPtrOp
+    stw     r64,8712(r42); fIsPtrOp
+    stw     r64,8708(r42); fIsPtrOp
+    stw     r64,8704(r42); fIsPtrOp
+    lwz     r37,44(r32); fIsPtrOp
+    lis     r65,HA(ftNn_Init_80122FAC)
+    addi    r66,r65,LO(ftNn_Init_80122FAC)
+    stw     r66,8668(r37); fIsPtrOp
+    lis     r68,HA(ftNn_Init_80122FAC)
+    addi    r69,r68,LO(ftNn_Init_80122FAC)
+    stw     r69,8676(r37); fIsPtrOp
+    lis     r71,HA(efLib_PauseAll)
+    addi    r72,r71,LO(efLib_PauseAll)
+    stw     r72,8660(r37); fIsPtrOp
+    lis     r74,HA(efLib_ResumeAll)
+    addi    r75,r74,LO(efLib_ResumeAll)
+    stw     r75,8664(r37); fIsPtrOp
+    mr      r43,r42
+    mr      r3,r43
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    mr      r3,r32
+    li      r4,360
+    lis     r77,3148
+    addi    r5,r77,21130
+    lfs     f1,2196(r42); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    lfs     f3,@227(r0); fIsConst
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r36,44(r32); fIsPtrOp
+    lis     r78,HA(ftNn_Init_80122FAC)
+    addi    r79,r78,LO(ftNn_Init_80122FAC)
+    stw     r79,8668(r36); fIsPtrOp
+    lis     r81,HA(ftNn_Init_80122FAC)
+    addi    r82,r81,LO(ftNn_Init_80122FAC)
+    stw     r82,8676(r36); fIsPtrOp
+    lis     r84,HA(efLib_PauseAll)
+    addi    r85,r84,LO(efLib_PauseAll)
+    stw     r85,8660(r36); fIsPtrOp
+    lis     r87,HA(efLib_ResumeAll)
+    addi    r88,r87,LO(efLib_ResumeAll)
+    stw     r88,8664(r36); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r39,44(r32); fIsPtrOp
+    lbz     r3,12(r39); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    lwz     r41,44(r3); fIsPtrOp
+    mr      r3,r41
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    fmr     f40,f1
+    mr      r3,r39
+    li      r4,0
+    fmr     f1,f40
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lwz     r38,44(r32); fIsPtrOp
+    lis     r91,HA(ftNn_Init_80122FAC)
+    addi    r92,r91,LO(ftNn_Init_80122FAC)
+    stw     r92,8668(r38); fIsPtrOp
+    lis     r94,HA(ftNn_Init_80122FAC)
+    addi    r95,r94,LO(ftNn_Init_80122FAC)
+    stw     r95,8676(r38); fIsPtrOp
+    lis     r97,HA(efLib_PauseAll)
+    addi    r98,r97,LO(efLib_PauseAll)
+    stw     r98,8660(r38); fIsPtrOp
+    lis     r100,HA(efLib_ResumeAll)
+    addi    r101,r100,LO(efLib_ResumeAll)
+    stw     r101,8664(r38); fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+
+CONSTPROP RAN (changed_flag: before=0 after=0)
+
+AFTER VALUE NUMBERING 2
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=2
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=8
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    lwz     r35,44(r32); fIsPtrOp
+    lbz     r3,12(r35); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r44,r3
+    mr      r34,r44
+    lwz     r33,44(r34); fIsPtrOp
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r47,176(r33); fIsPtrOp
+    lwz     r48,180(r33); fIsPtrOp
+    stw     r47,176(r35); fIsPtrOp
+    stw     r48,180(r35); fIsPtrOp
+    lwz     r49,184(r33); fIsPtrOp
+    stw     r49,184(r35); fIsPtrOp
+    mr      r3,r33
+    mr      r4,r35
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{0004}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r50,224(r35); fIsPtrOp
+    lwz     r51,224(r33); fIsPtrOp
+    cmp     cr0,r50,r51
+    bt      cr0,eq,B15
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    mr      r3,r32
+    li      r4,360
+    lis     r52,3148
+    addi    r5,r52,21130
+    lfs     f1,2196(r35); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    lfs     f3,@227(r0); fIsConst
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{0004}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r53,224(r33); fIsPtrOp
+    stw     r53,224(r35); fIsPtrOp
+    b       B26
+:{0004}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r54,9024(r35); fIsPtrOp
+    addi    r55,r54,1
+    stw     r55,9024(r35); fIsPtrOp
+    lwz     r56,9024(r35); fIsPtrOp
+    cmpi    cr0,r56,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r57,5
+    stw     r57,9024(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lfs     f32,@555(r0); fIsConst
+    lwz     r58,9024(r35); fIsPtrOp
+    lfd     f33,@428(r0); fIsConst
+    xoris   r59,r58,0x8000
+    stw     r59,@556+4(r1)
+    lis     r60,17200
+    stw     r60,@556(r1)
+    lfd     f34,@556(r1)
+    fsubs   f35,f34,f33
+    lfs     f36,44(r35); fIsPtrOp
+    fmuls   f37,f35,f36
+    lfs     f38,176(r33); fIsPtrOp
+    fnmsubs f39,f32,f37,f38
+    stfs    f39,176(r35); fIsPtrOp
+    mr      r3,r32
+    lis     r61,HA(ftNn_Unk2_803CDD60)
+    addi    r62,r61,LO(ftNn_Unk2_803CDD60)
+    mr      r4,r62
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r42,44(r32); fIsPtrOp
+    li      r64,0
+    stw     r64,8716(r42); fIsPtrOp
+    stw     r64,8712(r42); fIsPtrOp
+    stw     r64,8708(r42); fIsPtrOp
+    stw     r64,8704(r42); fIsPtrOp
+    lwz     r37,44(r32); fIsPtrOp
+    lis     r65,HA(ftNn_Init_80122FAC)
+    addi    r66,r65,LO(ftNn_Init_80122FAC)
+    stw     r66,8668(r37); fIsPtrOp
+    stw     r66,8676(r37); fIsPtrOp
+    lis     r71,HA(efLib_PauseAll)
+    addi    r72,r71,LO(efLib_PauseAll)
+    stw     r72,8660(r37); fIsPtrOp
+    lis     r74,HA(efLib_ResumeAll)
+    addi    r75,r74,LO(efLib_ResumeAll)
+    stw     r75,8664(r37); fIsPtrOp
+    mr      r43,r42
+    mr      r3,r43
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    mr      r3,r32
+    li      r4,360
+    lis     r77,3148
+    addi    r5,r77,21130
+    lfs     f1,2196(r42); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    lfs     f3,@227(r0); fIsConst
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r36,44(r32); fIsPtrOp
+    stw     r66,8668(r36); fIsPtrOp
+    stw     r66,8676(r36); fIsPtrOp
+    stw     r72,8660(r36); fIsPtrOp
+    stw     r75,8664(r36); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r39,44(r32); fIsPtrOp
+    lbz     r3,12(r39); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    lwz     r41,44(r3); fIsPtrOp
+    mr      r3,r41
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    fmr     f40,f1
+    mr      r3,r39
+    li      r4,0
+    fmr     f1,f40
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lwz     r38,44(r32); fIsPtrOp
+    lis     r91,HA(ftNn_Init_80122FAC)
+    addi    r92,r91,LO(ftNn_Init_80122FAC)
+    stw     r92,8668(r38); fIsPtrOp
+    stw     r92,8676(r38); fIsPtrOp
+    lis     r97,HA(efLib_PauseAll)
+    addi    r98,r97,LO(efLib_PauseAll)
+    stw     r98,8660(r38); fIsPtrOp
+    lis     r100,HA(efLib_ResumeAll)
+    addi    r101,r100,LO(efLib_ResumeAll)
+    stw     r101,8664(r38); fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+
+AFTER INSTRUCTION SCHEDULING
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{000c}::::LOOPWEIGHT=2
+B1: Succ={B3 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+    lwz     r35,44(r32); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B1 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{000c}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r44,r3
+    mr      r34,r44
+    lwz     r33,44(r34); fIsPtrOp
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{000c}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r47,176(r33); fIsPtrOp
+    mr      r3,r33
+    lwz     r48,180(r33); fIsPtrOp
+    mr      r4,r35
+    stw     r47,176(r35); fIsPtrOp
+    stw     r48,180(r35); fIsPtrOp
+    lwz     r49,184(r33); fIsPtrOp
+    stw     r49,184(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{000c}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r50,224(r35); fIsPtrOp
+    lwz     r51,224(r33); fIsPtrOp
+    cmp     cr0,r50,r51
+    bt      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    lis     r52,3148
+    lfs     f1,2196(r35); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r32
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r52,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r53,224(r33); fIsPtrOp
+    stw     r53,224(r35); fIsPtrOp
+    b       B26
+:{000c}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r54,9024(r35); fIsPtrOp
+    addi    r55,r54,1
+    stw     r55,9024(r35); fIsPtrOp
+    lwz     r56,9024(r35); fIsPtrOp
+    cmpi    cr0,r56,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r57,5
+    stw     r57,9024(r35); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lwz     r58,9024(r35); fIsPtrOp
+    lis     r61,HA(ftNn_Unk2_803CDD60)
+    addi    r62,r61,LO(ftNn_Unk2_803CDD60)
+    lfd     f33,@428(r0); fIsConst
+    xoris   r59,r58,0x8000
+    stw     r59,@556+4(r1)
+    lis     r60,17200
+    lfs     f36,44(r35); fIsPtrOp
+    mr      r3,r32
+    stw     r60,@556(r1)
+    lfs     f32,@555(r0); fIsConst
+    mr      r4,r62
+    lfd     f34,@556(r1)
+    lfs     f38,176(r33); fIsPtrOp
+    fsubs   f35,f34,f33
+    fmuls   f37,f35,f36
+    fnmsubs f39,f32,f37,f38
+    stfs    f39,176(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B26
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r42,44(r32); fIsPtrOp
+    li      r64,0
+    lis     r65,HA(ftNn_Init_80122FAC)
+    stw     r64,8716(r42); fIsPtrOp
+    lis     r71,HA(efLib_PauseAll)
+    lis     r74,HA(efLib_ResumeAll)
+    stw     r64,8712(r42); fIsPtrOp
+    mr      r43,r42
+    addi    r66,r65,LO(ftNn_Init_80122FAC)
+    stw     r64,8708(r42); fIsPtrOp
+    addi    r72,r71,LO(efLib_PauseAll)
+    addi    r75,r74,LO(efLib_ResumeAll)
+    stw     r64,8704(r42); fIsPtrOp
+    mr      r3,r43
+    lwz     r37,44(r32); fIsPtrOp
+    stw     r66,8668(r37); fIsPtrOp
+    stw     r66,8676(r37); fIsPtrOp
+    stw     r72,8660(r37); fIsPtrOp
+    stw     r75,8664(r37); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{000c}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    lis     r77,3148
+    lfs     f1,2196(r42); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r32
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r77,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r36,44(r32); fIsPtrOp
+    stw     r66,8668(r36); fIsPtrOp
+    stw     r66,8676(r36); fIsPtrOp
+    stw     r72,8660(r36); fIsPtrOp
+    stw     r75,8664(r36); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r39,44(r32); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r39); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{000c}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    lwz     r41,44(r3); fIsPtrOp
+    li      r4,0
+    mr      r3,r41
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{000c}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    fmr     f40,f1
+    mr      r3,r39
+    li      r4,0
+    fmr     f1,f40
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lis     r91,HA(ftNn_Init_80122FAC)
+    lwz     r38,44(r32); fIsPtrOp
+    addi    r92,r91,LO(ftNn_Init_80122FAC)
+    stw     r92,8668(r38); fIsPtrOp
+    lis     r97,HA(efLib_PauseAll)
+    lis     r100,HA(efLib_ResumeAll)
+    stw     r92,8676(r38); fIsPtrOp
+    addi    r98,r97,LO(efLib_PauseAll)
+    addi    r101,r100,LO(efLib_ResumeAll)
+    stw     r98,8660(r38); fIsPtrOp
+    stw     r101,8664(r38); fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+
+AFTER PEEPHOLE FORWARD
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{000c}::::LOOPWEIGHT=2
+B1: Succ={B3 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+    lwz     r35,44(r32); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B1 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{000c}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r44,r3
+    mr      r34,r44
+    lwz     r33,44(r34); fIsPtrOp
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{000c}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r47,176(r33); fIsPtrOp
+    mr      r3,r33
+    lwz     r48,180(r33); fIsPtrOp
+    mr      r4,r35
+    stw     r47,176(r35); fIsPtrOp
+    stw     r48,180(r35); fIsPtrOp
+    lwz     r49,184(r33); fIsPtrOp
+    stw     r49,184(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{000c}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r50,224(r35); fIsPtrOp
+    lwz     r51,224(r33); fIsPtrOp
+    cmp     cr0,r50,r51
+    bt      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    lis     r52,3148
+    lfs     f1,2196(r35); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r32
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r52,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r53,224(r33); fIsPtrOp
+    stw     r53,224(r35); fIsPtrOp
+    b       B26
+:{000c}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r54,9024(r35); fIsPtrOp
+    addi    r55,r54,1
+    stw     r55,9024(r35); fIsPtrOp
+    lwz     r56,9024(r35); fIsPtrOp
+    cmpi    cr0,r56,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r57,5
+    stw     r57,9024(r35); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lwz     r58,9024(r35); fIsPtrOp
+    lis     r61,HA(ftNn_Unk2_803CDD60)
+    addi    r62,r61,LO(ftNn_Unk2_803CDD60)
+    lfd     f33,@428(r0); fIsConst
+    xoris   r59,r58,0x8000
+    stw     r59,@556+4(r1)
+    lis     r60,17200
+    lfs     f36,44(r35); fIsPtrOp
+    mr      r3,r32
+    stw     r60,@556(r1)
+    lfs     f32,@555(r0); fIsConst
+    mr      r4,r62
+    lfd     f34,@556(r1)
+    lfs     f38,176(r33); fIsPtrOp
+    fsubs   f35,f34,f33
+    fmuls   f37,f35,f36
+    fnmsubs f39,f32,f37,f38
+    stfs    f39,176(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B26
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r42,44(r32); fIsPtrOp
+    li      r64,0
+    lis     r65,HA(ftNn_Init_80122FAC)
+    stw     r64,8716(r42); fIsPtrOp
+    lis     r71,HA(efLib_PauseAll)
+    lis     r74,HA(efLib_ResumeAll)
+    stw     r64,8712(r42); fIsPtrOp
+    mr      r43,r42
+    addi    r66,r65,LO(ftNn_Init_80122FAC)
+    stw     r64,8708(r42); fIsPtrOp
+    addi    r72,r71,LO(efLib_PauseAll)
+    addi    r75,r74,LO(efLib_ResumeAll)
+    stw     r64,8704(r42); fIsPtrOp
+    mr      r3,r43
+    lwz     r37,44(r32); fIsPtrOp
+    stw     r66,8668(r37); fIsPtrOp
+    stw     r66,8676(r37); fIsPtrOp
+    stw     r72,8660(r37); fIsPtrOp
+    stw     r75,8664(r37); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{000c}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    lis     r77,3148
+    lfs     f1,2196(r42); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r32
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r77,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r36,44(r32); fIsPtrOp
+    stw     r66,8668(r36); fIsPtrOp
+    stw     r66,8676(r36); fIsPtrOp
+    stw     r72,8660(r36); fIsPtrOp
+    stw     r75,8664(r36); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r39,44(r32); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r39); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{000c}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    lwz     r41,44(r3); fIsPtrOp
+    li      r4,0
+    mr      r3,r41
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{000c}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    fmr     f40,f1
+    mr      r3,r39
+    li      r4,0
+    fmr     f1,f40
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lis     r91,HA(ftNn_Init_80122FAC)
+    lwz     r38,44(r32); fIsPtrOp
+    addi    r92,r91,LO(ftNn_Init_80122FAC)
+    stw     r92,8668(r38); fIsPtrOp
+    lis     r97,HA(efLib_PauseAll)
+    lis     r100,HA(efLib_ResumeAll)
+    stw     r92,8676(r38); fIsPtrOp
+    addi    r98,r97,LO(efLib_PauseAll)
+    addi    r101,r100,LO(efLib_ResumeAll)
+    stw     r98,8660(r38); fIsPtrOp
+    stw     r101,8664(r38); fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+
+[DATAFLOW] enter class=0 n_nodes=103 N_IGNODES_pre=34
+[DATAFLOW] exit result=0 N_IGNODES_post=34
+
+[COALESCE] enter class=0 n_virtuals=103
+[COALESCE] natural mappings (virt -> root):
+  41 -> 3
+  43 -> 42
+  44 -> 3
+  62 -> 4
+[COALESCE] exit class=0 n_virtuals=103 distinct_roots=99 forced=0
+
+IG CONSTRUCTED (class=0, n_nodes=34)
+
+SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=103)
+iter  ig_idx  degree  arraySize flags     notes
+0     -1      14      32       0x2       
+1     33      13      30       0x2       
+2     32      16      47       0x2       
+3     -1      0       0        0x2       
+4     -1      0       2        0x2       
+5     -1      1       5        0x2       
+6     -1      0       0        0x2       
+7     -1      0       3        0x2       
+8     -1      1       4        0x2       
+9     -1      0       0        0x2       
+10    -1      0       0        0x2       
+11    -1      0       0        0x2       
+12    -1      0       0        0x2       
+13    -1      0       3        0x2       
+14    -1      1       3        0x2       
+15    -1      0       0        0x2       
+16    -1      0       0        0x2       
+17    -1      0       0        0x2       
+18    -1      0       0        0x2       
+19    -1      0       0        0x2       
+20    -1      0       0        0x2       
+21    -1      0       0        0x2       
+22    -1      0       0        0x2       
+23    -1      0       0        0x2       
+24    -1      0       0        0x2       
+25    -1      0       0        0x2       
+26    -1      0       0        0x2       
+27    -1      0       0        0x2       
+28    -1      2       7        0x2       
+29    -1      0       0        0x2       
+30    -1      12      20       0x2       
+31    -1      2       9        0x2       
+32    -1      0       0        0x2       
+33    -1      12      21       0x2       
+34    -1      2       8        0x2       
+35    -1      0       0        0x2       
+36    -1      0       0        0x2       
+37    -1      0       0        0x2       
+38    -1      0       0        0x2       
+39    -1      12      22       0x2       
+40    -1      2       7        0x2       
+41    -1      1       9        0x2       
+42    -1      0       0        0x2       
+43    -1      2       6        0x2       
+44    -1      4       7        0x2       
+45    -1      3       6        0x2       
+46    -1      3       7        0x2       
+47    -1      1       4        0x2       
+48    -1      1       4        0x2       
+49    -1      1       4        0x2       
+50    -1      2       5        0x2       
+51    -1      0       2        0x2       
+52    -1      2       5        0x2       
+53    -1      0       4        0x2       
+54    -1      0       4        0x2       
+55    -1      2       5        0x2       
+56    -1      2       6        0x2       
+57    -1      2       6        0x2       
+58    -1      0       0        0x2       
+59    -1      0       0        0x2       
+60    -1      11      21       0xa       SPILLED
+61    -1      0       0        0x2       
+62    -1      12      13       0x2       
+63    -1      1       7        0x2       
+64    -1      2       7        0x2       
+65    -1      1       5        0x2       
+66    -1      12      15       0x2       
+
+COLORGRAPH DECISIONS (class=0, result=1, n_nodes=34)
+iter  ig_idx  assignedReg degree  nIntfr  flags
+0     35      r31        14      32      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 33=r30 34=r-1 44=r-1 47=r-1 48=r-1 49=r-1 50=r-1 51=r-1 52=r-1 53=r-1 54=r-1 55=r-1 56=r-1 57=r-1 58=r-1 59=r-1 60=r-1 61=r-1 62=r-1
+1     33      r30        13      30      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 34=r-1 35=r-1 47=r-1 48=r-1 49=r-1 50=r-1 51=r-1 52=r-1 54=r-1 55=r-1 56=r-1 57=r-1 58=r-1 59=r-1 60=r-1 61=r-1 62=r-1
+2     32      r29        16      47      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 33=r30 34=r-1 35=r-1 36=r-1 37=r-1 39=r-1 41=r-1 42=r-1 43=r-1 44=r-1 47=r-1 48=r-1 49=r-1 50=r-1 51=r-1 52=r-1 53=r-1 54=r-1 55=r-1 56=r-1 57=r-1 58=r-1 59=r-1 60=r-1 61=r-1 62=r-1 64=r-1 65=r-1 66=r-1 71=r-1 72=r-1 74=r-1 75=r-1 77=r-1 91=r-1
+3     102     r0         0       0       0x02
+4     101     r0         0       2       0x02
+      interferers: 38=r-1 98=r-1
+5     100     r3         1       5       0x02
+      interferers: 0=r0 38=r-1 92=r-1 97=r-1 98=r-1
+6     99      r0         0       0       0x02
+7     98      r4         0       3       0x02
+      interferers: 38=r-1 100=r-1 101=r-1
+8     97      r4         1       4       0x02
+      interferers: 0=r0 38=r-1 92=r-1 100=r-1
+9     96      r0         0       0       0x02
+10    95      r0         0       0       0x02
+11    94      r0         0       0       0x02
+12    93      r0         0       0       0x02
+13    92      r0         0       3       0x02
+      interferers: 38=r-1 97=r-1 100=r-1
+14    91      r3         1       3       0x02
+      interferers: 0=r0 32=r29 38=r-1
+15    90      r0         0       0       0x02
+16    89      r0         0       0       0x02
+17    88      r0         0       0       0x02
+18    87      r0         0       0       0x02
+19    86      r0         0       0       0x02
+20    85      r0         0       0       0x02
+21    84      r0         0       0       0x02
+22    83      r0         0       0       0x02
+23    82      r0         0       0       0x02
+24    81      r0         0       0       0x02
+25    80      r0         0       0       0x02
+26    79      r0         0       0       0x02
+27    78      r0         0       0       0x02
+28    77      r4         2       7       0x02
+      interferers: 0=r0 3=r3 32=r29 42=r-1 66=r-1 72=r-1 75=r-1
+29    76      r0         0       0       0x02
+30    75      r30        12      20      0x02
+      interferers: 0=r0 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 36=r-1 37=r-1 42=r-1 43=r-1 64=r-1 66=r-1 72=r-1 77=r-1
+31    74      r3         2       9       0x02
+      interferers: 0=r0 32=r29 42=r-1 43=r-1 64=r-1 65=r-1 66=r-1 71=r-1 72=r-1
+32    73      r0         0       0       0x02
+33    72      r31        12      21      0x02
+      interferers: 0=r0 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 36=r-1 37=r-1 42=r-1 43=r-1 64=r-1 66=r-1 74=r-1 75=r-1 77=r-1
+34    71      r4         2       8       0x02
+      interferers: 0=r0 32=r29 42=r-1 43=r-1 64=r-1 65=r-1 66=r-1 74=r-1
+35    70      r0         0       0       0x02
+36    69      r0         0       0       0x02
+37    68      r0         0       0       0x02
+38    67      r0         0       0       0x02
+39    66      r28        12      22      0x02
+      interferers: 0=r0 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 36=r-1 37=r-1 42=r-1 43=r-1 64=r-1 71=r-1 72=r-1 74=r-1 75=r-1 77=r-1
+40    65      r5         2       7       0x02
+      interferers: 0=r0 32=r29 42=r-1 43=r-1 64=r-1 71=r-1 74=r-1
+41    64      r0         1       9       0x02
+      interferers: 32=r29 42=r-1 43=r-1 65=r-1 66=r-1 71=r-1 72=r-1 74=r-1 75=r-1
+42    63      r0         0       0       0x02
+43    61      r3         2       6       0x02
+      interferers: 0=r0 1=r1 32=r29 33=r30 35=r-1 58=r-1
+44    60      r0         4       7       0x02
+      interferers: 1=r1 3=r3 4=r4 32=r29 33=r30 35=r-1 62=r-1
+45    59      r0         3       6       0x02
+      interferers: 1=r1 4=r4 32=r29 33=r30 35=r-1 62=r-1
+46    58      r0         3       7       0x02
+      interferers: 1=r1 4=r4 32=r29 33=r30 35=r-1 61=r-1 62=r-1
+47    57      r0         1       4       0x02
+      interferers: 1=r1 32=r29 33=r30 35=r-1
+48    56      r0         1       4       0x02
+      interferers: 1=r1 32=r29 33=r30 35=r-1
+49    55      r0         1       4       0x02
+      interferers: 1=r1 32=r29 33=r30 35=r-1
+50    54      r3         2       5       0x02
+      interferers: 0=r0 1=r1 32=r29 33=r30 35=r-1
+51    53      r0         0       2       0x02
+      interferers: 32=r29 35=r-1
+52    52      r4         2       5       0x02
+      interferers: 0=r0 3=r3 32=r29 33=r30 35=r-1
+53    51      r0         0       4       0x02
+      interferers: 32=r29 33=r30 35=r-1 50=r-1
+54    50      r3         0       4       0x02
+      interferers: 32=r29 33=r30 35=r-1 51=r-1
+55    49      r0         2       5       0x02
+      interferers: 3=r3 4=r4 32=r29 33=r30 35=r-1
+56    48      r0         2       6       0x02
+      interferers: 3=r3 4=r4 32=r29 33=r30 35=r-1 47=r-1
+57    47      r5         2       6       0x02
+      interferers: 3=r3 4=r4 32=r29 33=r30 35=r-1 48=r-1
+58    46      r0         0       0       0x02
+59    45      r0         0       0       0x02
+60    42      r27        11      21      0x0a  [ROOT]
+      interferers: 0=r0 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 37=r-1 64=r-1 65=r-1 66=r-1 71=r-1 72=r-1 74=r-1 75=r-1 77=r-1
+61    40      r0         0       0       0x02
+62    39      r27        12      13      0x02
+      interferers: 0=r0 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 41=r-1
+63    38      r5         1       7       0x02
+      interferers: 0=r0 91=r-1 92=r-1 97=r-1 98=r-1 100=r-1 101=r-1
+64    37      r4         2       7       0x02
+      interferers: 0=r0 3=r3 32=r29 42=r-1 66=r-1 72=r-1 75=r-1
+65    36      r3         1       5       0x02
+      interferers: 0=r0 32=r29 66=r-1 72=r-1 75=r-1
+66    34      r27        12      15      0x02
+      interferers: 0=r0 1=r1 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r29 33=r30 35=r-1
+
+COALESCED ALIASES (alias_idx -> root_idx [root_phys]):
+  41 -> 3 [r3]
+  43 -> 42 [r27]
+  44 -> 3 [r3]
+  62 -> 4 [r4]
+
+[DATAFLOW] enter class=1 n_nodes=41 N_IGNODES_pre=34
+[DATAFLOW] exit result=0 N_IGNODES_post=34
+
+[COALESCE] enter class=1 n_virtuals=41
+[COALESCE] natural mappings (virt -> root):
+  40 -> 1
+[COALESCE] exit class=1 n_virtuals=41 distinct_roots=40 forced=0
+
+IG CONSTRUCTED (class=1, n_nodes=34)
+
+SIMPLIFY GRAPH (class=1, n_colors=32, n_class_regs=41)
+iter  ig_idx  degree  arraySize flags     notes
+0     -1      0       0        0x2       
+1     -1      0       6        0x2       
+2     -1      0       2        0x2       
+3     -1      0       5        0x2       
+4     -1      0       3        0x2       
+5     -1      0       4        0x2       
+6     33      0       4        0x2       
+7     32      0       6        0x2       
+
+COLORGRAPH DECISIONS (class=1, result=1, n_nodes=34)
+iter  ig_idx  assignedReg degree  nIntfr  flags
+0     39      r0         0       0       0x02
+1     38      r0         0       6       0x02
+      interferers: 32=r4 33=r3 34=r-1 35=r-1 36=r-1 37=r-1
+2     37      r1         0       2       0x02
+      interferers: 32=r4 38=r-1
+3     36      r1         0       5       0x02
+      interferers: 32=r4 33=r3 34=r-1 35=r-1 38=r-1
+4     35      r2         0       3       0x02
+      interferers: 32=r4 36=r-1 38=r-1
+5     34      r2         0       4       0x02
+      interferers: 32=r4 33=r3 36=r-1 38=r-1
+6     33      r3         0       4       0x02
+      interferers: 32=r4 34=r-1 36=r-1 38=r-1
+7     32      r4         0       6       0x02
+      interferers: 33=r3 34=r-1 35=r-1 36=r-1 37=r-1 38=r-1
+
+COALESCED ALIASES (alias_idx -> root_idx [root_phys]):
+  40 -> 1 [r1]
+
+AFTER REGISTER COLORING
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{000c}::::LOOPWEIGHT=2
+B1: Succ={B3 } Pred={B0 } Labels={L1 }
+
+    mr      r29,r3
+    lwz     r31,44(r29); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B1 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r27,r3
+    lwz     r30,44(r27); fIsPtrOp
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{000c}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r5,176(r30); fIsPtrOp
+    mr      r3,r30
+    lwz     r0,180(r30); fIsPtrOp
+    mr      r4,r31
+    stw     r5,176(r31); fIsPtrOp
+    stw     r0,180(r31); fIsPtrOp
+    lwz     r0,184(r30); fIsPtrOp
+    stw     r0,184(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{000c}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r3,224(r31); fIsPtrOp
+    lwz     r0,224(r30); fIsPtrOp
+    cmp     cr0,r3,r0
+    bt      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    lis     r4,3148
+    lfs     f1,2196(r31); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r0,224(r30); fIsPtrOp
+    stw     r0,224(r31); fIsPtrOp
+    b       B26
+:{000c}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r3,9024(r31); fIsPtrOp
+    addi    r0,r3,1
+    stw     r0,9024(r31); fIsPtrOp
+    lwz     r0,9024(r31); fIsPtrOp
+    cmpi    cr0,r0,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r0,5
+    stw     r0,9024(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lwz     r0,9024(r31); fIsPtrOp
+    lis     r3,HA(ftNn_Unk2_803CDD60)
+    addi    r4,r3,LO(ftNn_Unk2_803CDD60)
+    lfd     f3,@428(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@556+4(r1)
+    lis     r0,17200
+    lfs     f1,44(r31); fIsPtrOp
+    mr      r3,r29
+    stw     r0,@556(r1)
+    lfs     f4,@555(r0); fIsConst
+    lfd     f2,@556(r1)
+    lfs     f0,176(r30); fIsPtrOp
+    fsubs   f2,f2,f3
+    fmuls   f1,f2,f1
+    fnmsubs f0,f4,f1,f0
+    stfs    f0,176(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r0,0
+    lis     r5,HA(ftNn_Init_80122FAC)
+    stw     r0,8716(r27); fIsPtrOp
+    lis     r4,HA(efLib_PauseAll)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8712(r27); fIsPtrOp
+    addi    r28,r5,LO(ftNn_Init_80122FAC)
+    stw     r0,8708(r27); fIsPtrOp
+    addi    r31,r4,LO(efLib_PauseAll)
+    addi    r30,r3,LO(efLib_ResumeAll)
+    stw     r0,8704(r27); fIsPtrOp
+    mr      r3,r27
+    lwz     r4,44(r29); fIsPtrOp
+    stw     r28,8668(r4); fIsPtrOp
+    stw     r28,8676(r4); fIsPtrOp
+    stw     r31,8660(r4); fIsPtrOp
+    stw     r30,8664(r4); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{000c}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    lis     r4,3148
+    lfs     f1,2196(r27); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r3,44(r29); fIsPtrOp
+    stw     r28,8668(r3); fIsPtrOp
+    stw     r28,8676(r3); fIsPtrOp
+    stw     r31,8660(r3); fIsPtrOp
+    stw     r30,8664(r3); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r27); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    lwz     r3,44(r3); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    mr      r3,r27
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lis     r3,HA(ftNn_Init_80122FAC)
+    lwz     r5,44(r29); fIsPtrOp
+    addi    r0,r3,LO(ftNn_Init_80122FAC)
+    stw     r0,8668(r5); fIsPtrOp
+    lis     r4,HA(efLib_PauseAll)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8676(r5); fIsPtrOp
+    addi    r4,r4,LO(efLib_PauseAll)
+    addi    r0,r3,LO(efLib_ResumeAll)
+    stw     r4,8660(r5); fIsPtrOp
+    stw     r0,8664(r5); fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+
+AFTER GENERATING EPILOGUE, PROLOGUE
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-104(r1); fIsPtrOp
+    stmw    r27,84(r1); fIsPtrOp
+:{000c}::::LOOPWEIGHT=2
+B1: Succ={B3 } Pred={B0 } Labels={L1 }
+
+    mr      r29,r3
+    lwz     r31,44(r29); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B1 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r27,r3
+    lwz     r30,44(r27); fIsPtrOp
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{000c}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r5,176(r30); fIsPtrOp
+    mr      r3,r30
+    lwz     r0,180(r30); fIsPtrOp
+    mr      r4,r31
+    stw     r5,176(r31); fIsPtrOp
+    stw     r0,180(r31); fIsPtrOp
+    lwz     r0,184(r30); fIsPtrOp
+    stw     r0,184(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{000c}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r3,224(r31); fIsPtrOp
+    lwz     r0,224(r30); fIsPtrOp
+    cmp     cr0,r3,r0
+    bt      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    lis     r4,3148
+    lfs     f1,2196(r31); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r0,224(r30); fIsPtrOp
+    stw     r0,224(r31); fIsPtrOp
+    b       B26
+:{000c}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r3,9024(r31); fIsPtrOp
+    addi    r0,r3,1
+    stw     r0,9024(r31); fIsPtrOp
+    lwz     r0,9024(r31); fIsPtrOp
+    cmpi    cr0,r0,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r0,5
+    stw     r0,9024(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lwz     r0,9024(r31); fIsPtrOp
+    lis     r3,HA(ftNn_Unk2_803CDD60)
+    addi    r4,r3,LO(ftNn_Unk2_803CDD60)
+    lfd     f3,@428(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@556+4(r1)
+    lis     r0,17200
+    lfs     f1,44(r31); fIsPtrOp
+    mr      r3,r29
+    stw     r0,@556(r1)
+    lfs     f4,@555(r0); fIsConst
+    lfd     f2,@556(r1)
+    lfs     f0,176(r30); fIsPtrOp
+    fsubs   f2,f2,f3
+    fmuls   f1,f2,f1
+    fnmsubs f0,f4,f1,f0
+    stfs    f0,176(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r0,0
+    lis     r5,HA(ftNn_Init_80122FAC)
+    stw     r0,8716(r27); fIsPtrOp
+    lis     r4,HA(efLib_PauseAll)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8712(r27); fIsPtrOp
+    addi    r28,r5,LO(ftNn_Init_80122FAC)
+    stw     r0,8708(r27); fIsPtrOp
+    addi    r31,r4,LO(efLib_PauseAll)
+    addi    r30,r3,LO(efLib_ResumeAll)
+    stw     r0,8704(r27); fIsPtrOp
+    mr      r3,r27
+    lwz     r4,44(r29); fIsPtrOp
+    stw     r28,8668(r4); fIsPtrOp
+    stw     r28,8676(r4); fIsPtrOp
+    stw     r31,8660(r4); fIsPtrOp
+    stw     r30,8664(r4); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{000c}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    lis     r4,3148
+    lfs     f1,2196(r27); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r3,44(r29); fIsPtrOp
+    stw     r28,8668(r3); fIsPtrOp
+    stw     r28,8676(r3); fIsPtrOp
+    stw     r31,8660(r3); fIsPtrOp
+    stw     r30,8664(r3); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r27); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    lwz     r3,44(r3); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    mr      r3,r27
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lis     r3,HA(ftNn_Init_80122FAC)
+    lwz     r5,44(r29); fIsPtrOp
+    addi    r0,r3,LO(ftNn_Init_80122FAC)
+    stw     r0,8668(r5); fIsPtrOp
+    lis     r4,HA(efLib_PauseAll)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8676(r5); fIsPtrOp
+    addi    r4,r4,LO(efLib_PauseAll)
+    addi    r0,r3,LO(efLib_ResumeAll)
+    stw     r4,8660(r5); fIsPtrOp
+    stw     r0,8664(r5); fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+    lwz     r0,108(r1); fIsPtrOp
+    lmw     r27,84(r1); fIsVolatile; fIsPtrOp
+    addi    r1,r1,104; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
+
+AFTER MERGING EPILOGUE, PROLOGUE
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B3 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-104(r1); fIsPtrOp
+    stmw    r27,84(r1); fIsPtrOp
+    mr      r29,r3
+    lwz     r31,44(r29); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B0 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r27,r3
+    lwz     r30,44(r27); fIsPtrOp
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{000c}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r5,176(r30); fIsPtrOp
+    mr      r3,r30
+    lwz     r0,180(r30); fIsPtrOp
+    mr      r4,r31
+    stw     r5,176(r31); fIsPtrOp
+    stw     r0,180(r31); fIsPtrOp
+    lwz     r0,184(r30); fIsPtrOp
+    stw     r0,184(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{000c}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r3,224(r31); fIsPtrOp
+    lwz     r0,224(r30); fIsPtrOp
+    cmp     cr0,r3,r0
+    bt      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    lis     r4,3148
+    lfs     f1,2196(r31); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r0,224(r30); fIsPtrOp
+    stw     r0,224(r31); fIsPtrOp
+    b       B26
+:{000c}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r3,9024(r31); fIsPtrOp
+    addi    r0,r3,1
+    stw     r0,9024(r31); fIsPtrOp
+    lwz     r0,9024(r31); fIsPtrOp
+    cmpi    cr0,r0,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r0,5
+    stw     r0,9024(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lwz     r0,9024(r31); fIsPtrOp
+    lis     r3,HA(ftNn_Unk2_803CDD60)
+    addi    r4,r3,LO(ftNn_Unk2_803CDD60)
+    lfd     f3,@428(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@556+4(r1)
+    lis     r0,17200
+    lfs     f1,44(r31); fIsPtrOp
+    mr      r3,r29
+    stw     r0,@556(r1)
+    lfs     f4,@555(r0); fIsConst
+    lfd     f2,@556(r1)
+    lfs     f0,176(r30); fIsPtrOp
+    fsubs   f2,f2,f3
+    fmuls   f1,f2,f1
+    fnmsubs f0,f4,f1,f0
+    stfs    f0,176(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r0,0
+    lis     r5,HA(ftNn_Init_80122FAC)
+    stw     r0,8716(r27); fIsPtrOp
+    lis     r4,HA(efLib_PauseAll)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8712(r27); fIsPtrOp
+    addi    r28,r5,LO(ftNn_Init_80122FAC)
+    stw     r0,8708(r27); fIsPtrOp
+    addi    r31,r4,LO(efLib_PauseAll)
+    addi    r30,r3,LO(efLib_ResumeAll)
+    stw     r0,8704(r27); fIsPtrOp
+    mr      r3,r27
+    lwz     r4,44(r29); fIsPtrOp
+    stw     r28,8668(r4); fIsPtrOp
+    stw     r28,8676(r4); fIsPtrOp
+    stw     r31,8660(r4); fIsPtrOp
+    stw     r30,8664(r4); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{000c}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    lis     r4,3148
+    lfs     f1,2196(r27); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r3,44(r29); fIsPtrOp
+    stw     r28,8668(r3); fIsPtrOp
+    stw     r28,8676(r3); fIsPtrOp
+    stw     r31,8660(r3); fIsPtrOp
+    stw     r30,8664(r3); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r27); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    lwz     r3,44(r3); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    mr      r3,r27
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lis     r3,HA(ftNn_Init_80122FAC)
+    lwz     r5,44(r29); fIsPtrOp
+    addi    r0,r3,LO(ftNn_Init_80122FAC)
+    stw     r0,8668(r5); fIsPtrOp
+    lis     r4,HA(efLib_PauseAll)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8676(r5); fIsPtrOp
+    addi    r4,r4,LO(efLib_PauseAll)
+    addi    r0,r3,LO(efLib_ResumeAll)
+    stw     r4,8660(r5); fIsPtrOp
+    stw     r0,8664(r5); fIsPtrOp
+    lwz     r0,108(r1); fIsPtrOp
+    lmw     r27,84(r1); fIsVolatile; fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+    addi    r1,r1,104; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
+
+AFTER PEEPHOLE OPTIMIZATION
+ftPp_SpecialS_0_Coll
+:{0005}::::LOOPWEIGHT=5017344
+B0: Succ={B3 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-104(r1); fIsPtrOp
+    stmw    r27,84(r1); fIsPtrOp
+    mr      r29,r3
+    lwz     r31,44(r3); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B0 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r27,r3
+    lwz     r30,44(r3); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{000c}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r5,176(r30); fIsPtrOp
+    mr      r3,r30
+    lwz     r0,180(r30); fIsPtrOp
+    mr      r4,r31
+    stw     r5,176(r31); fIsPtrOp
+    stw     r0,180(r31); fIsPtrOp
+    lwz     r0,184(r30); fIsPtrOp
+    stw     r0,184(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{000c}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r3,224(r31); fIsPtrOp
+    lwz     r0,224(r30); fIsPtrOp
+    cmp     cr0,r3,r0
+    bt      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    lis     r4,3148
+    lfs     f1,2196(r31); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r0,224(r30); fIsPtrOp
+    stw     r0,224(r31); fIsPtrOp
+    b       B26
+:{000c}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r3,9024(r31); fIsPtrOp
+    addi    r0,r3,1
+    stw     r0,9024(r31); fIsPtrOp
+    lwz     r0,9024(r31); fIsPtrOp
+    cmpi    cr0,r0,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r0,5
+    stw     r0,9024(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lwz     r0,9024(r31); fIsPtrOp
+    lis     r3,HA(ftNn_Unk2_803CDD60)
+    addi    r4,r3,LO(ftNn_Unk2_803CDD60)
+    lfd     f3,@428(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@556+4(r1)
+    lis     r0,17200
+    lfs     f1,44(r31); fIsPtrOp
+    mr      r3,r29
+    stw     r0,@556(r1)
+    lfs     f4,@555(r0); fIsConst
+    lfd     f2,@556(r1)
+    lfs     f0,176(r30); fIsPtrOp
+    fsubs   f2,f2,f3
+    fmuls   f1,f2,f1
+    fnmsubs f0,f4,f1,f0
+    stfs    f0,176(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B26
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r0,0
+    lis     r5,HA(ftNn_Init_80122FAC)
+    stw     r0,8716(r27); fIsPtrOp
+    lis     r4,HA(efLib_PauseAll)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8712(r27); fIsPtrOp
+    addi    r28,r5,LO(ftNn_Init_80122FAC)
+    stw     r0,8708(r27); fIsPtrOp
+    addi    r31,r4,LO(efLib_PauseAll)
+    addi    r30,r3,LO(efLib_ResumeAll)
+    stw     r0,8704(r27); fIsPtrOp
+    mr      r3,r27
+    lwz     r4,44(r29); fIsPtrOp
+    stw     r28,8668(r4); fIsPtrOp
+    stw     r28,8676(r4); fIsPtrOp
+    stw     r31,8660(r4); fIsPtrOp
+    stw     r30,8664(r4); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{000c}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    lis     r4,3148
+    lfs     f1,2196(r27); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r3,44(r29); fIsPtrOp
+    stw     r28,8668(r3); fIsPtrOp
+    stw     r28,8676(r3); fIsPtrOp
+    stw     r31,8660(r3); fIsPtrOp
+    stw     r30,8664(r3); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r27); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    lwz     r3,44(r3); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    addi    r3,r27,0
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lis     r3,HA(ftNn_Init_80122FAC)
+    lwz     r5,44(r29); fIsPtrOp
+    addi    r0,r3,LO(ftNn_Init_80122FAC)
+    stw     r0,8668(r5); fIsPtrOp
+    lis     r4,HA(efLib_PauseAll)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8676(r5); fIsPtrOp
+    addi    r4,r4,LO(efLib_PauseAll)
+    addi    r0,r3,LO(efLib_ResumeAll)
+    stw     r4,8660(r5); fIsPtrOp
+    stw     r0,8664(r5); fIsPtrOp
+    lwz     r0,108(r1); fIsPtrOp
+    lmw     r27,84(r1); fIsVolatile; fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+    addi    r1,r1,104; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
+
+FINAL CODE AFTER INSTRUCTION SCHEDULING
+ftPp_SpecialS_0_Coll
+:{000d}::::LOOPWEIGHT=5017344
+B0: Succ={B3 } Pred={} Labels={L0 }
+
+    mflr    r0
+    li      r4,0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-104(r1); fIsPtrOp
+    stmw    r27,84(r1); fIsPtrOp
+    mr      r29,r3
+    lwz     r31,44(r3); fIsPtrOp
+    lbz     r3,12(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B0 } Labels={L7 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L8 }
+
+    mr      r27,r3
+    lwz     r30,44(r3); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 } Pred={B4 } Labels={L9 }
+
+    bl      ftPp_SpecialS_8011F964; fLink
+:{0004}::::LOOPWEIGHT=1813685792
+B6: Succ={B7 B16 } Pred={B5 } Labels={L10 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{0004}::::LOOPWEIGHT=1
+B7: Succ={B8 } Pred={B6 } Labels={L11 }
+
+    mr      r3,r27
+:{0004}::::LOOPWEIGHT=0
+B8: Succ={B9 } Pred={B7 } Labels={L12 }
+
+    bl      ftPp_SpecialS_8011F6FC; fLink
+:{0004}::::LOOPWEIGHT=131593
+B9: Succ={B10 B16 } Pred={B8 } Labels={L13 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B16
+:{000c}::::LOOPWEIGHT=262145
+B10: Succ={B11 } Pred={B9 } Labels={L14 }
+
+    lwz     r5,176(r30); fIsPtrOp
+    mr      r3,r30
+    lwz     r0,180(r30); fIsPtrOp
+    mr      r4,r31
+    stw     r5,176(r31); fIsPtrOp
+    stw     r0,180(r31); fIsPtrOp
+    lwz     r0,184(r30); fIsPtrOp
+    stw     r0,184(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=512
+B11: Succ={B12 } Pred={B10 } Labels={L15 }
+
+    bl      ft_800849EC; fLink
+:{000c}::::LOOPWEIGHT=0
+B12: Succ={B13 B15 } Pred={B11 } Labels={L16 }
+
+    lwz     r3,224(r31); fIsPtrOp
+    lwz     r0,224(r30); fIsPtrOp
+    cmp     cr0,r3,r0
+    bt      cr0,eq,B15
+:{000c}::::LOOPWEIGHT=0
+B13: Succ={B14 } Pred={B12 } Labels={L17 }
+
+    lis     r4,3148
+    lfs     f1,2196(r31); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=1813689336
+B14: Succ={B15 } Pred={B13 } Labels={L18 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=1813681184
+B15: Succ={B26 } Pred={B14 B12 } Labels={L3 L19 }
+
+    lwz     r0,224(r30); fIsPtrOp
+    stw     r0,224(r31); fIsPtrOp
+    b       B26
+:{000c}::::LOOPWEIGHT=1813688592
+B16: Succ={B17 B18 } Pred={B9 B6 } Labels={L4 }
+
+    lwz     r3,9024(r31); fIsPtrOp
+    addi    r0,r3,1
+    stw     r0,9024(r31); fIsPtrOp
+    lwz     r0,9024(r31); fIsPtrOp
+    cmpi    cr0,r0,5
+    bf      cr0,gt,B18
+:{0004}::::LOOPWEIGHT=0
+B17: Succ={B18 } Pred={B16 } Labels={L20 }
+
+    li      r0,5
+    stw     r0,9024(r31); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B18: Succ={B19 } Pred={B17 B16 } Labels={L5 }
+
+    lwz     r0,9024(r31); fIsPtrOp
+    lis     r3,HA(ftNn_Unk2_803CDD60)
+    addi    r4,r3,LO(ftNn_Unk2_803CDD60)
+    lfd     f3,@428(r0); fIsConst
+    xoris   r0,r0,0x8000
+    stw     r0,@556+4(r1)
+    lis     r0,17200
+    lfs     f1,44(r31); fIsPtrOp
+    mr      r3,r29
+    stw     r0,@556(r1)
+    lfs     f4,@555(r0); fIsConst
+    lfd     f2,@556(r1)
+    lfs     f0,176(r30); fIsPtrOp
+    fsubs   f2,f2,f3
+    fmuls   f1,f2,f1
+    fnmsubs f0,f4,f1,f0
+    stfs    f0,176(r31); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 } Pred={B18 } Labels={L21 }
+
+    bl      ft_80082888; fLink
+:{0004}::::LOOPWEIGHT=2
+B20: Succ={B21 B26 } Pred={B19 } Labels={L22 }
+
+    cmpi    cr0,r3,0
+    bf      cr0,eq,B26
+:{000c}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L23 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r0,0
+    lis     r4,HA(efLib_PauseAll)
+    stw     r0,8716(r27); fIsPtrOp
+    lis     r5,HA(ftNn_Init_80122FAC)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8712(r27); fIsPtrOp
+    addi    r30,r3,LO(efLib_ResumeAll)
+    addi    r31,r4,LO(efLib_PauseAll)
+    stw     r0,8708(r27); fIsPtrOp
+    addi    r28,r5,LO(ftNn_Init_80122FAC)
+    mr      r3,r27
+    stw     r0,8704(r27); fIsPtrOp
+    lwz     r4,44(r29); fIsPtrOp
+    stw     r28,8668(r4); fIsPtrOp
+    stw     r28,8676(r4); fIsPtrOp
+    stw     r31,8660(r4); fIsPtrOp
+    stw     r30,8664(r4); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B22: Succ={B23 } Pred={B21 } Labels={L24 }
+
+    bl      ftCommon_8007D5D4; fLink
+:{000c}::::LOOPWEIGHT=0
+B23: Succ={B24 } Pred={B22 } Labels={L25 }
+
+    lis     r4,3148
+    lfs     f1,2196(r27); fIsPtrOp
+    lfs     f2,@324(r0); fIsConst
+    mr      r3,r29
+    lfs     f3,@227(r0); fIsConst
+    addi    r5,r4,21130
+    li      r4,360
+    li      r6,0
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 } Pred={B23 } Labels={L26 }
+
+    bl      Fighter_ChangeMotionState; fLink
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 } Pred={B24 } Labels={L27 }
+
+    lwz     r3,44(r29); fIsPtrOp
+    stw     r28,8668(r3); fIsPtrOp
+    stw     r28,8676(r3); fIsPtrOp
+    stw     r31,8660(r3); fIsPtrOp
+    stw     r30,8664(r3); fIsPtrOp
+:{000c}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 B20 B15 } Labels={L6 }
+
+    lwz     r27,44(r29); fIsPtrOp
+    li      r4,0
+    lbz     r3,12(r27); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B27: Succ={B28 } Pred={B26 } Labels={L28 }
+
+    bl      Player_GetEntityAtIndex; fLink
+:{0004}::::LOOPWEIGHT=0
+B28: Succ={B29 } Pred={B27 } Labels={L29 }
+
+    lwz     r3,44(r3); fIsPtrOp
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B29: Succ={B30 } Pred={B28 } Labels={L30 }
+
+    bl      ftPartGetRotX; fLink
+:{0004}::::LOOPWEIGHT=0
+B30: Succ={B31 } Pred={B29 } Labels={L31 }
+
+    addi    r3,r27,0
+    li      r4,0
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B32 } Pred={B30 } Labels={L32 }
+
+    bl      ftPartSetRotX; fLink
+:{000c}::::LOOPWEIGHT=0
+B32: Succ={B33 } Pred={B31 } Labels={L33 }
+
+    lis     r3,HA(ftNn_Init_80122FAC)
+    lwz     r5,44(r29); fIsPtrOp
+    addi    r0,r3,LO(ftNn_Init_80122FAC)
+    stw     r0,8668(r5); fIsPtrOp
+    lis     r4,HA(efLib_PauseAll)
+    lis     r3,HA(efLib_ResumeAll)
+    stw     r0,8676(r5); fIsPtrOp
+    addi    r4,r4,LO(efLib_PauseAll)
+    addi    r0,r3,LO(efLib_ResumeAll)
+    stw     r4,8660(r5); fIsPtrOp
+    stw     r0,8664(r5); fIsPtrOp
+    lwz     r0,108(r1); fIsPtrOp
+    lmw     r27,84(r1); fIsVolatile; fIsPtrOp
+:{000e}::::LOOPWEIGHT=0
+B33: Succ={} Pred={B32 } Labels={L34 }
+
+    addi    r1,r1,104; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
