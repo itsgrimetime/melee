@@ -76,7 +76,11 @@ typedef struct mnDiagram_AnimData {
 mnDiagram_804A0750_t mnDiagram_804A0750;
 mnDiagram_804A076C_t mnDiagram_804A076C;
 
-static AnimLoopSettings mnDiagram_803EE768 = { 0.0f, 9.0f, -0.1f };
+static Point3d mnDiagram_803EE728[3] = {
+    { 4.0F, 1.0F, 0.0F },
+    { -3.0F, 0.8F, 0.0F },
+    { -1.0F, 0.7F, 0.0F },
+};
 
 static u8 mnDiagram_803EE74C[0x1C] = {
     8,    1,    6,    0x10, 0x11, 4,   2,   0xD, 0xB, 0,
@@ -84,11 +88,7 @@ static u8 mnDiagram_803EE74C[0x1C] = {
     0x18, 0x13, 0x14, 0x17, 0x16, 0,   0,   0,
 };
 
-static Point3d mnDiagram_803EE728[3] = {
-    { 4.0F, 1.0F, 0.0F },
-    { -3.0F, 0.8F, 0.0F },
-    { -1.0F, 0.7F, 0.0F },
-};
+static AnimLoopSettings mnDiagram_803EE768 = { 0.0f, 9.0f, -0.1f };
 
 /// Overlay over &mnDiagram_803EE728 to reach the trailing animation/text-layout
 /// data the popup/cursor procs read at fixed offsets.
