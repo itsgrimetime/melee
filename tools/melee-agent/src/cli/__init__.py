@@ -2,8 +2,8 @@
 CLI interface for the Melee Decomp Agent tooling.
 
 This package provides a modular CLI structure with separate modules for each
-command group: extract, scratch, commit, docker, sync, pr, audit, hook, struct,
-stub, state, analytics, setup, and mismatch.
+command group: extract, scratch, claim, complete, commit, docker, sync, pr,
+audit, hook, struct, stub, state, analytics, setup, and mismatch.
 
 Usage:
     python -m src.cli <command>
@@ -33,7 +33,9 @@ from ._common import (
 )
 from .analytics import analytics_app
 from .audit import audit_app
+from .claim import claim_app
 from .commit import commit_app
+from .complete import complete_app
 from .compilers import list_compilers
 from .debug import _acquire_checkdiff_repo_lock, debug_app
 from .docker import docker_app
@@ -83,6 +85,8 @@ app = ReportingTyper(
 # Register sub-apps
 app.add_typer(extract_app, name="extract")
 app.add_typer(scratch_app, name="scratch")
+app.add_typer(claim_app, name="claim")
+app.add_typer(complete_app, name="complete")
 app.add_typer(commit_app, name="commit")
 app.add_typer(debug_app, name="debug")
 app.add_typer(docker_app, name="docker")

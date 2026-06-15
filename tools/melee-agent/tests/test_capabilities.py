@@ -142,11 +142,11 @@ def test_render_brief_is_compact_and_grouped():
     assert len(brief.encode("utf-8")) < 9_000
 
 
-def test_find_unregistered_apps_flags_exactly_the_known_three():
+def test_find_unregistered_apps_flags_only_the_known_workflow_orphan():
     flagged_vars = {f.split(" ", 1)[0] for f in cap.find_unregistered_apps(REPO)}
-    # claim_app / complete_app / workflow_app exist under src/cli but are never
-    # add_typer'd anywhere — nested debug sub-apps must NOT be false-positived.
-    assert flagged_vars == {"claim_app", "complete_app", "workflow_app"}
+    # workflow_app is intentionally not part of the public top-level CLI. Nested
+    # debug sub-apps must NOT be false-positived.
+    assert flagged_vars == {"workflow_app"}
 
 
 def test_find_unregistered_apps_resolves_imported_typer_alias(tmp_path):

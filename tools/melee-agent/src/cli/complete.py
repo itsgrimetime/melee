@@ -11,7 +11,7 @@ import typer
 from rich.table import Table
 
 from ._common import console, db_release_claim, db_upsert_function
-from .utils import file_lock, load_json_with_expiry, save_json_atomic
+from .utils import file_lock, load_json_with_expiry
 
 # File paths
 DECOMP_CLAIMS_FILE = os.environ.get("DECOMP_CLAIMS_FILE", "/tmp/decomp_claims.json")
@@ -30,8 +30,14 @@ def _load_claims() -> dict[str, Any]:
 
 
 def _save_claims(claims: dict[str, Any]) -> None:
-    """Save claims to file."""
-    save_json_atomic(Path(DECOMP_CLAIMS_FILE), claims)
+    """Save claims to file.
+
+    Caller must already hold the claim-file lock.
+    """
+    path = Path(DECOMP_CLAIMS_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(claims, f, indent=2)
 
 
 def _load_completed() -> dict[str, Any]:
@@ -46,6 +52,20 @@ def _save_completed(completed: dict[str, Any]) -> None:
     from ._common import save_completed_functions
 
     save_completed_functions(completed)
+
+
+def _release_claim_file(function_name: str) -> None:
+    claims_path = Path(DECOMP_CLAIMS_FILE)
+    if not claims_path.exists():
+        return
+
+    lock_path = claims_path.with_suffix(".json.lock")
+    with file_lock(lock_path, exclusive=True):
+        claims = _load_claims()
+        if function_name not in claims:
+            return
+        del claims[function_name]
+        _save_claims(claims)
 
 
 def _get_current_branch(repo_path: Path | None = None) -> str | None:
@@ -107,14 +127,7 @@ def complete_mark(
     )
 
     # Also release any claim
-    claims_path = Path(DECOMP_CLAIMS_FILE)
-    if claims_path.exists():
-        lock_path = claims_path.with_suffix(".json.lock")
-        with file_lock(lock_path, exclusive=True):
-            claims = _load_claims()
-            if function_name in claims:
-                del claims[function_name]
-                _save_claims(claims)
+    _release_claim_file(function_name)
 
     # Also release from state database (non-blocking)
     db_release_claim(function_name)
@@ -178,6 +191,7 @@ def complete_document(
     )
 
     # Release any claim
+    _release_claim_file(function_name)
     db_release_claim(function_name)
 
     if output_json:
