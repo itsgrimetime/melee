@@ -438,6 +438,16 @@ struct AnimLoopSettings {
     /* +08 */ f32 loop_frame; ///< if this is -0.1f, dont loop
 };
 
+/// Joint + animation descriptor set for one display object, as loaded from a
+/// model archive. The four pointers are the arguments to HSD_JObjLoadJoint
+/// (joint) and HSD_JObjAddAnimAll (anim_joint, mat_anim, shape_anim).
+typedef struct {
+    /* 0x00 */ HSD_Joint* joint;
+    /* 0x04 */ HSD_AnimJoint* anim_joint;
+    /* 0x08 */ HSD_MatAnimJoint* mat_anim;
+    /* 0x0C */ HSD_ShapeAnimJoint* shape_anim;
+} mnDiagram_ArchiveData;
+
 /// User data for VS Records diagram screen (mnDiagram)
 struct Diagram {
     /* 0x00 */ u8 saved_menu; ///< Saved menu ID on entry

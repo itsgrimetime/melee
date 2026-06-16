@@ -23,6 +23,9 @@
 #include <melee/mn/mnmain.h>
 #include <melee/mn/mnname.h>
 
+mnDiagram_ArchiveData mnDiagram_804A0844;
+mnDiagram_ArchiveData mnDiagram_804A0854;
+
 AnimLoopSettings mnDiagram3_803EEC10 = { 10.0F, 19.0F, -0.1F };
 AnimLoopSettings mnDiagram3_803EEC1C = { 0.0F, 199.0F, 0.0F };
 
@@ -385,10 +388,11 @@ void mnDiagram3_80247008(int arg0)
 
     gobj = GObj_Create(6, 7, 0x80);
     mnDiagram3_804D6C20 = gobj;
-    jobj = HSD_JObjLoadJoint(archive->x0);
+    jobj = HSD_JObjLoadJoint(archive->joint);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
     GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 6, 0x80);
-    HSD_JObjAddAnimAll(jobj, archive->x4, archive->x8, archive->xC);
+    HSD_JObjAddAnimAll(jobj, archive->anim_joint, archive->mat_anim,
+                       archive->shape_anim);
     HSD_JObjReqAnimAll(jobj, mnDiagram3_804DC00C);
     HSD_JObjAnimAll(jobj);
 
@@ -467,10 +471,11 @@ void mnDiagram3_8024714C(void* arg0)
 
         popup = GObj_Create(6, 7, 0x80);
         data->popup_gobj = popup;
-        popup_jobj = HSD_JObjLoadJoint(archive->x0);
+        popup_jobj = HSD_JObjLoadJoint(archive->joint);
         HSD_GObjObject_80390A70(popup, HSD_GObj_804D7849, popup_jobj);
         GObj_SetupGXLink(popup, HSD_GObj_JObjCallback, 4, 0x80);
-        HSD_JObjAddAnimAll(popup_jobj, archive->x4, archive->x8, archive->xC);
+        HSD_JObjAddAnimAll(popup_jobj, archive->anim_joint, archive->mat_anim,
+                           archive->shape_anim);
         HSD_JObjReqAnimAll(popup_jobj, mnDiagram3_804DC00C);
         HSD_JObjAnimAll(popup_jobj);
 

@@ -132,6 +132,11 @@ STATIC_ASSERT(sizeof(mnDiagram_AnimTable) == 0x3A8);
 
 mnDiagram_804A0750_t mnDiagram_804A0750;
 mnDiagram_804A076C_t mnDiagram_804A076C;
+mnDiagram_ArchiveData mnDiagram_804A07E4;
+mnDiagram_ArchiveData mnDiagram_804A07F4;
+mnDiagram_ArchiveData mnDiagram_804A0804;
+mnDiagram_ArchiveData mnDiagram_804A0814;
+mnDiagram_ArchiveData mnDiagram_804A0824;
 
 static s32 mnDiagram_804D4FA0 = 0xFF;
 
@@ -1993,22 +1998,23 @@ void mnDiagram_CreatePopup(s32 col_id, s32 row_id, s32 is_name_mode)
 {
     int i;
     mnDiagram_AnimTable* tbl;
-    void** joint_data;
+    mnDiagram_ArchiveData* joint_data;
     Diagram* data;
     HSD_GObj* gobj;
     HSD_JObj* jobj;
     mnDiagram_PopupData* user_data;
 
     tbl = (mnDiagram_AnimTable*) &mnDiagram_803EE728;
-    joint_data = mnDiagram_804A07E4;
+    joint_data = &mnDiagram_804A07E4;
     data = GET_DIAGRAM(mnDiagram_screen_gobj);
 
     gobj = GObj_Create(6, 7, 0x80);
     data->popup_gobj = gobj;
-    jobj = HSD_JObjLoadJoint(joint_data[0]);
+    jobj = HSD_JObjLoadJoint(joint_data->joint);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
     GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 6, 0x80);
-    HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2], joint_data[3]);
+    HSD_JObjAddAnimAll(jobj, joint_data->anim_joint, joint_data->mat_anim,
+                       joint_data->shape_anim);
     HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);
     HSD_JObjAnimAll(jobj);
 
@@ -2447,7 +2453,7 @@ void mnDiagram_DrawCellNumber(void* gobj, u8 arg1, u8 arg2, int value)
     HSD_JObj* jobj;
     HSD_JObj* jobj2;
     Diagram* data;
-    void** joint_data;
+    mnDiagram_ArchiveData* joint_data;
     s32 digit_count;
     s32 digit;
     s32 i;
@@ -2485,11 +2491,12 @@ void mnDiagram_DrawCellNumber(void* gobj, u8 arg1, u8 arg2, int value)
     row_offset = y_offset * rowf;
     row_offset_adj = y_offset * rowf - 0.4f;
 
-    joint_data = mnDiagram_804A07F4;
+    joint_data = &mnDiagram_804A07F4;
     for (i = 0; i < digit_count; i++) {
         digit = mn_GetDigitAt(value, i);
-        jobj = HSD_JObjLoadJoint(joint_data[0]);
-        HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2], joint_data[3]);
+        jobj = HSD_JObjLoadJoint(joint_data->joint);
+        HSD_JObjAddAnimAll(jobj, joint_data->anim_joint, joint_data->mat_anim,
+                           joint_data->shape_anim);
         base = (f32) digit;
         HSD_JObjReqAnimAll(jobj, base);
         HSD_JObjAnimAll(jobj);
@@ -2727,12 +2734,13 @@ void mnDiagram_BuildNameHeaders(void* gobj, s32 col_cursor, s32 row_cursor)
 HSD_JObj* mnDiagram_CreateFighterIcon(int fighter_id, int variant)
 {
     HSD_JObj* sp10;
-    void** joint_data = mnDiagram_804A0804;
+    mnDiagram_ArchiveData* joint_data = &mnDiagram_804A0804;
     HSD_JObj* temp_r3;
     f32 var_f1;
 
-    temp_r3 = HSD_JObjLoadJoint(joint_data[0]);
-    HSD_JObjAddAnimAll(temp_r3, joint_data[1], joint_data[2], joint_data[3]);
+    temp_r3 = HSD_JObjLoadJoint(joint_data->joint);
+    HSD_JObjAddAnimAll(temp_r3, joint_data->anim_joint, joint_data->mat_anim,
+                       joint_data->shape_anim);
     if (variant != 0) {
         var_f1 = 1.0f;
     } else {
@@ -2928,14 +2936,14 @@ void mnDiagram_CursorProc(HSD_GObj* gobj)
 ///          tracks the highlighted cell each frame.
 void mnDiagram_CreateCursor(void)
 {
-    void** joint_data;
+    mnDiagram_ArchiveData* joint_data;
     HSD_GObj* gobj;
     HSD_JObj* jobj;
     PAD_STACK(40);
 
-    joint_data = mnDiagram_804A0814;
+    joint_data = &mnDiagram_804A0814;
     gobj = GObj_Create(6, 7, 0x80);
-    jobj = HSD_JObjLoadJoint(*joint_data);
+    jobj = HSD_JObjLoadJoint(joint_data->joint);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
     GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 4, 0x80);
     HSD_GObj_SetupProc(gobj, mnDiagram_CursorProc, 0);
@@ -2964,20 +2972,21 @@ void mnDiagram_Create(u8 anim_state)
     Diagram* user_data;
     Diagram* data2;
     int count;
-    void** joint_data;
+    mnDiagram_ArchiveData* joint_data;
     mnDiagram_AnimTable* tbl = GET_DIAGRAM_ANIM_TABLE();
     int i;
     u16 indices;
     u8 stack_obj[8];
 
     (void) &stack_obj;
-    joint_data = (void**) &mnDiagram_804A0824;
+    joint_data = &mnDiagram_804A0824;
     gobj = GObj_Create(6, 7, 0x80);
     mnDiagram_screen_gobj = gobj;
-    jobj = HSD_JObjLoadJoint(joint_data[0]);
+    jobj = HSD_JObjLoadJoint(joint_data->joint);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
     GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 6, 0x80);
-    HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2], joint_data[3]);
+    HSD_JObjAddAnimAll(jobj, joint_data->anim_joint, joint_data->mat_anim,
+                       joint_data->shape_anim);
     HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);
 
     user_data = HSD_MemAlloc(sizeof(Diagram));

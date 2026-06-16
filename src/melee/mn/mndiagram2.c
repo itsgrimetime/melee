@@ -87,8 +87,9 @@ typedef struct {
 
 /* Diagram2 struct is defined in mn/types.h */
 
-/* mnDiagram_ArchiveData, mnDiagram2_804D6C18, mnDiagram_804A0834 defined in
+/* mnDiagram_ArchiveData type + mnDiagram2_804D6C18 declared in
  * mndiagram2.static.h */
+mnDiagram_ArchiveData mnDiagram_804A0834;
 
 /// @brief Checks if stat type uses time format (H:MM:SS).
 /// @param stat_type The stat type index (VSRecordsStatType)
@@ -1019,10 +1020,11 @@ void mnDiagram2_Create(int arg0)
 
     gobj = GObj_Create(6, 7, 0x80);
     mnDiagram2_804D6C18 = gobj;
-    jobj = HSD_JObjLoadJoint(archive->x0);
+    jobj = HSD_JObjLoadJoint(archive->joint);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_804D7849, jobj);
     GObj_SetupGXLink(gobj, HSD_GObj_JObjCallback, 6, 0x80);
-    HSD_JObjAddAnimAll(jobj, archive->x4, archive->x8, archive->xC);
+    HSD_JObjAddAnimAll(jobj, archive->anim_joint, archive->mat_anim,
+                       archive->shape_anim);
     HSD_JObjReqAnimAll(jobj, mnDiagram2_804DBFCC);
 
     user_data = (Diagram2*) HSD_MemAlloc(0xC8);
