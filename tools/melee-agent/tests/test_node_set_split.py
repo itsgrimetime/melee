@@ -1,6 +1,8 @@
 """Tests for node-set split request parsing and candidate scoring."""
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import src.mwcc_debug.node_set_split as node_set_split
@@ -538,6 +540,109 @@ def test_node_set_patch_order_prioritizes_new_families_before_high_volume_legacy
         "operand-alias",
         "block-scope",
     ]
+
+
+def test_generate_node_set_split_patches_emits_bounded_combo_candidates() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void fn_test(void) {\n"
+        "    f32 y_offset;\n"
+        "    f32 rowf;\n"
+        "    f32 y_spacing;\n"
+        "    f32 col;\n"
+        "    f32 tmp;\n"
+        "    f32 other;\n"
+        "    f32 out;\n"
+        "    tmp = y_offset * rowf;\n"
+        "    other = y_spacing * col;\n"
+        "    out = y_offset * rowf - 0.4f;\n"
+        "    use(other, out);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        1,
+        33,
+        target_reg="f28",
+        var_name="out",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+    combo_patches = [
+        patch
+        for patch in patches
+        if patch.candidate_id.startswith("node-split-combo-out-ig33-")
+    ]
+
+    assert 0 < len(combo_patches) <= 24
+    assert len({patch.candidate_id for patch in combo_patches}) == len(combo_patches)
+    assert len({patch.patched_source for patch in combo_patches}) == len(combo_patches)
+    assert all(
+        re.search(r"-c\d+-[0-9a-f]{6}$", patch.candidate_id)
+        for patch in combo_patches
+    )
+    assert any(
+        "prologue-reorder+assignment-chain+operand-alias"
+        in patch.candidate_id
+        for patch in combo_patches
+    )
+    for patch in combo_patches:
+        match = re.search(
+            r"node-split-combo-out-ig33-(?P<chain>.+)-c\d+-[0-9a-f]{6}$",
+            patch.candidate_id,
+        )
+        assert match is not None
+        families = match.group("chain").split("+")
+        assert len(families) == len(set(families))
+
+
+def test_generate_node_set_split_patches_keeps_existing_patches_when_combo_fails(
+    monkeypatch,
+) -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int holder;\n"
+        "    int out;\n"
+        "    holder = make();\n"
+        "    out = holder + 1;\n"
+        "    use(out, holder);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="holder",
+    )
+
+    def raise_combo_error(*_args, **_kwargs):
+        raise RuntimeError("forced combo failure")
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.node_set_split._generate_node_set_family_patches",
+        raise_combo_error,
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+    ids = {patch.candidate_id for patch in patches}
+
+    assert "node-split-alias-holder-ig40-use0" in ids
+    assert "node-split-lifetime-holder-ig40-use0" in ids
+    assert not any(
+        candidate_id.startswith("node-split-combo-holder-ig40-")
+        for candidate_id in ids
+    )
 
 
 def test_node_set_simple_assignment_records_require_immediate_block_and_safe_rhs() -> None:
@@ -2902,6 +3007,48 @@ def test_generate_coupled_respects_max_candidates() -> None:
     assert len(patches) <= 2
 
 
+def test_generate_coupled_default_per_ig_cap_keeps_priority_families(
+    monkeypatch,
+) -> None:
+    import src.mwcc_debug.node_set_split as node_set_split
+
+    def fake_request_patches(cur_source, function, request, **_kwargs):
+        legacy = [
+            CandidatePatch(
+                f"node-split-alias-holder-ig{request.target_ig}-use{i}",
+                cur_source + f"\n/* legacy {request.target_ig} {i} */",
+                "legacy",
+                (),
+                "",
+            )
+            for i in range(20)
+        ]
+        return legacy + [
+            CandidatePatch(
+                f"node-split-operand-alias-holder-ig{request.target_ig}-b0-s1-opx-o0",
+                cur_source + f"\n/* priority {request.target_ig} */",
+                "priority",
+                (),
+                "",
+            )
+        ]
+
+    monkeypatch.setattr(
+        node_set_split,
+        "_generate_node_set_request_patches",
+        fake_request_patches,
+    )
+
+    patches = generate_coupled_node_set_split_patches(
+        _TWO_VAR_SOURCE,
+        "fn_test",
+        [NodeSetSplitRequest("fn_test", 0, 34, target_reg="r27", var_name="holder")],
+        max_candidates=0,
+    )
+
+    assert any("priority 34" in patch.patched_source for patch in patches)
+
+
 def test_generate_coupled_stops_when_deadline_expires(monkeypatch) -> None:
     import src.mwcc_debug.node_set_split as node_set_split
 
@@ -3550,3 +3697,113 @@ def test_cli_coupled_blocks_when_fewer_than_two_bindable(tmp_path, monkeypatch) 
     assert classification["status"] == "insufficient-source-bindings"
     assert classification["terminal"] is False
     assert classification["target_igs"] == [34]
+
+
+def test_cli_node_set_split_orders_priority_families_before_candidate_cap(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import json as _json
+
+    from typer.testing import CliRunner
+
+    from src.cli import debug as cli_debug
+    import src.mwcc_debug.node_set_split as node_set_split
+
+    melee_root = tmp_path / "melee"
+    src_dir = melee_root / "src" / "melee" / "mn"
+    src_dir.mkdir(parents=True)
+    source_file = src_dir / "sample.c"
+    source_file.write_text(
+        "void fn_test(void) {\n"
+        "    int holder;\n"
+        "    holder = make();\n"
+        "    use(holder);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    report = melee_root / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(_json.dumps({
+        "units": [
+            {"name": "main/melee/mn/sample", "functions": [{"name": "fn_test"}]},
+        ],
+    }), encoding="utf-8")
+
+    def fake_generate(source, function, request, **_kwargs):
+        legacy = [
+            CandidatePatch(
+                f"node-split-alias-holder-ig40-use{i}",
+                source + f"\n/* legacy {i} */",
+                "legacy",
+                (),
+                "",
+            )
+            for i in range(8)
+        ]
+        return legacy + [
+            CandidatePatch(
+                "node-split-operand-alias-holder-ig40-b0-s1-opx-o0",
+                source + "\n/* priority */",
+                "priority",
+                (),
+                "",
+            )
+        ]
+
+    monkeypatch.setattr(cli_debug, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        node_set_split,
+        "generate_node_set_split_patches",
+        fake_generate,
+    )
+    monkeypatch.setattr(
+        cli_debug,
+        "_node_set_split_compile_signature",
+        lambda *args, **kwargs: _signature(
+            assigned_regs=frozenset({(40, 31)})
+        ),
+    )
+    monkeypatch.setattr(
+        cli_debug,
+        "_fresh_node_set_split_baseline_pct",
+        lambda **_kwargs: (50.0, None),
+    )
+    monkeypatch.setattr(
+        cli_debug,
+        "_node_set_split_compile_signature_and_pcdump",
+        lambda *args, **kwargs: _signature(
+            assigned_regs=frozenset({(40, 29)})
+        ),
+    )
+    monkeypatch.setattr(
+        cli_debug,
+        "_node_set_split_steering_children",
+        lambda *args, **kwargs: [],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_debug.solve_app, [
+        "node-set-split",
+        "-f",
+        "fn_test",
+        "--ig",
+        "40",
+        "--target-reg",
+        "r30",
+        "--var",
+        "holder",
+        "--source-file",
+        str(source_file),
+        "--max-candidates",
+        "2",
+        "--json",
+    ])
+
+    assert result.exit_code == 4, result.output
+    summary = _json.loads(result.output)
+    candidate_ids = [row["candidate_id"] for row in summary["candidates"]]
+    assert candidate_ids == [
+        "node-split-operand-alias-holder-ig40-b0-s1-opx-o0",
+        "node-split-alias-holder-ig40-use0",
+    ]

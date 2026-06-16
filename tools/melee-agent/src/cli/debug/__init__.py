@@ -24906,6 +24906,7 @@ def solve_node_set_split_cmd(
         generate_node_set_introduce_binding_patches,
         generate_node_set_split_patches,
         is_node_set_request_introducible,
+        _order_node_set_patches_for_search,
         request_from_node_set_delta,
         requests_from_node_set_delta,
         summarize_node_set_split_scores,
@@ -25101,6 +25102,7 @@ def solve_node_set_split_cmd(
             request,
             max_read_sites=max_read_sites,
         )
+    patches = _order_node_set_patches_for_search(patches)
     generation_budget_exhausted = (
         deadline is not None and time.monotonic() >= deadline
     )

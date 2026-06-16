@@ -60,6 +60,12 @@ _NODE_SET_PRIORITY_FAMILIES = (
     "operand-alias",
     "block-scope",
 )
+_NODE_SET_COMBO_FAMILIES = (
+    "prologue-reorder",
+    "assignment-chain",
+    "operand-alias",
+    "block-scope",
+)
 _NODE_SET_SCALAR_DECL_RE = re.compile(
     r"^\s*(?P<type>.+?)(?P<name>[A-Za-z_][A-Za-z_0-9]*)"
     r"\s*(?:=[^;]*)?;\s*$",
@@ -455,8 +461,15 @@ def generate_node_set_split_patches(
         target_ig,
         request.class_id,
     )
+    _append_combo_patches(
+        patches,
+        seen_sources,
+        source,
+        fn_name,
+        request,
+    )
 
-    return patches
+    return _order_node_set_patches_for_search(patches)
 
 
 def generate_node_set_introduce_binding_patches(
@@ -554,7 +567,7 @@ def generate_coupled_node_set_split_patches(
     requests: list[NodeSetSplitRequest],
     *,
     max_read_sites: int = 4,
-    max_per_ig: int = 6,
+    max_per_ig: int = 12,
     max_candidates: int = 24,
     deadline: float | None = None,
 ) -> list[CandidatePatch]:
@@ -599,8 +612,11 @@ def generate_coupled_node_set_split_patches(
             )
             if _deadline_expired(deadline):
                 return []
-            taken = 0
-            for patch in singles:
+            ordered_singles = _order_node_set_patches_for_search(
+                singles,
+                cap=max_per_ig if max_per_ig else None,
+            )
+            for patch in ordered_singles:
                 if _deadline_expired(deadline):
                     return []
                 if patch.patched_source == cur_source:
@@ -610,9 +626,6 @@ def generate_coupled_node_set_split_patches(
                     ids + [patch.candidate_id],
                     summaries + [patch.summary],
                 ))
-                taken += 1
-                if max_per_ig and taken >= max_per_ig:
-                    break
         if not next_frontier:
             # Some ig produced no edit on any branch: the coupled rotation
             # cannot be realized as a composition of these single edits.
@@ -664,6 +677,169 @@ def _generate_node_set_request_patches(
         max_bind_sites=max_read_sites,
         max_read_sites=max_read_sites,
     )
+
+
+def _append_combo_patches(
+    patches: list[CandidatePatch],
+    seen_sources: set[str],
+    source: str,
+    function: str,
+    request: NodeSetSplitRequest,
+    *,
+    max_depth: int = 3,
+    max_per_family_per_layer: int = 2,
+    max_outputs: int = 24,
+) -> None:
+    if (
+        request.var_name is None
+        or request.blocked_reason is not None
+        or request.class_id not in {0, 1}
+    ):
+        return
+
+    patch_count = len(patches)
+    seen_sources_snapshot = set(seen_sources)
+    try:
+        frontier: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
+            (source, (), ())
+        ]
+        combo_idx = 0
+        for _depth in range(max_depth):
+            layer_counts: dict[str, int] = defaultdict(int)
+            next_frontier: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
+            for cur_source, family_chain, summaries in frontier:
+                for family in _NODE_SET_COMBO_FAMILIES:
+                    if family in family_chain:
+                        continue
+                    if (
+                        max_per_family_per_layer
+                        and layer_counts[family] >= max_per_family_per_layer
+                    ):
+                        continue
+                    family_patches = _generate_node_set_family_patches(
+                        cur_source,
+                        function,
+                        request,
+                        family=family,
+                    )
+                    if not family_patches:
+                        continue
+                    for family_patch in family_patches:
+                        if (
+                            max_per_family_per_layer
+                            and layer_counts[family] >= max_per_family_per_layer
+                        ):
+                            break
+                        if family_patch.patched_source == cur_source:
+                            continue
+                        layer_counts[family] += 1
+                        next_family_chain = family_chain + (family,)
+                        next_summaries = summaries + (family_patch.summary,)
+                        next_frontier.append((
+                            family_patch.patched_source,
+                            next_family_chain,
+                            next_summaries,
+                        ))
+                        if len(next_family_chain) < 2:
+                            continue
+                        digest = sha1(
+                            (
+                                "|".join(next_family_chain)
+                                + "\0"
+                                + family_patch.patched_source
+                            ).encode("utf-8")
+                        ).hexdigest()[:6]
+                        candidate_id = (
+                            f"node-split-combo-{request.var_name}-"
+                            f"ig{request.target_ig}-"
+                            f"{'+'.join(next_family_chain)}-"
+                            f"c{combo_idx}-{digest}"
+                        )
+                        before_count = len(patches)
+                        _append_unique_patch(
+                            patches,
+                            seen_sources,
+                            source,
+                            family_patch.patched_source,
+                            candidate_id=candidate_id,
+                            summary=(
+                                "Compose node-set split families "
+                                f"{' + '.join(next_family_chain)} "
+                                f"targeting ig{request.target_ig}: "
+                                + "; ".join(next_summaries)
+                            ),
+                        )
+                        if len(patches) > before_count:
+                            combo_idx += 1
+                            if max_outputs and combo_idx >= max_outputs:
+                                return
+            if not next_frontier:
+                return
+            frontier = next_frontier
+    except Exception:
+        del patches[patch_count:]
+        seen_sources.clear()
+        seen_sources.update(seen_sources_snapshot)
+        return
+
+
+def _generate_node_set_family_patches(
+    source: str,
+    function: str,
+    request: NodeSetSplitRequest,
+    *,
+    family: str,
+) -> list[CandidatePatch]:
+    if request.var_name is None or request.blocked_reason is not None:
+        return []
+    patches: list[CandidatePatch] = []
+    seen_sources: set[str] = set()
+    var_name = request.var_name
+    target_ig = request.target_ig
+    class_id = request.class_id
+    if family == "prologue-reorder":
+        _append_prologue_reorder_patches(
+            patches,
+            seen_sources,
+            source,
+            function,
+            var_name,
+            target_ig,
+            class_id,
+        )
+    elif family == "assignment-chain":
+        _append_assignment_chain_patches(
+            patches,
+            seen_sources,
+            source,
+            function,
+            var_name,
+            target_ig,
+            class_id,
+        )
+    elif family == "operand-alias":
+        _append_operand_alias_patches(
+            patches,
+            seen_sources,
+            source,
+            function,
+            var_name,
+            target_ig,
+            class_id,
+        )
+    elif family == "block-scope":
+        _append_block_scope_patches(
+            patches,
+            seen_sources,
+            source,
+            function,
+            var_name,
+            target_ig,
+            class_id,
+        )
+    else:
+        return []
+    return _order_node_set_patches_for_search(patches)
 
 
 def _node_set_candidate_family(candidate_id: str) -> str:
