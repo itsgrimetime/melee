@@ -199,6 +199,12 @@ class _SimpleAssignmentRecord:
     lhs_type: str
 
 
+@dataclass(frozen=True)
+class _NodeSetScalarBinding:
+    source_type: str
+    normalized_type: str
+
+
 def request_from_node_set_delta(
     delta: dict[str, Any],
     target_ig: int | None = None,
@@ -423,6 +429,15 @@ def generate_node_set_split_patches(
         request.class_id,
     )
     _append_assignment_chain_patches(
+        patches,
+        seen_sources,
+        source,
+        fn_name,
+        var_name,
+        target_ig,
+        request.class_id,
+    )
+    _append_operand_alias_patches(
         patches,
         seen_sources,
         source,
@@ -1331,8 +1346,8 @@ def _node_set_type_allowed_for_class(type_name: str, class_id: int) -> bool:
 
 
 def _same_safe_scalar_type_class(type_a: str, type_b: str, class_id: int) -> bool:
-    norm_a = _normalize_node_set_scalar_type(type_a)
-    norm_b = _normalize_node_set_scalar_type(type_b)
+    norm_a = _canonical_node_set_scalar_type(type_a)
+    norm_b = _canonical_node_set_scalar_type(type_b)
     if norm_a is None or norm_b is None:
         return False
     if class_id == 1:
@@ -1350,6 +1365,12 @@ def _same_safe_scalar_type_class(type_a: str, type_b: str, class_id: int) -> boo
             "ptr",
         }
     return False
+
+
+def _canonical_node_set_scalar_type(type_str: str | None) -> str | None:
+    if type_str in _NODE_SET_ALLOWED_FPR_TYPES | _NODE_SET_ALLOWED_GPR_TYPES:
+        return type_str
+    return _normalize_node_set_scalar_type(type_str)
 
 
 def _normalize_node_set_scalar_type(type_str: str | None) -> str | None:
@@ -2710,6 +2731,380 @@ def _append_assignment_chain_patches(
         seen_sources.clear()
         seen_sources.update(seen_sources_snapshot)
         return
+
+
+def _append_operand_alias_patches(
+    patches: list[CandidatePatch],
+    seen_sources: set[str],
+    source: str,
+    function: str,
+    var_name: str,
+    target_ig: int,
+    class_id: int,
+) -> None:
+    if class_id not in {0, 1}:
+        return
+
+    patch_count = len(patches)
+    seen_sources_snapshot = set(seen_sources)
+    try:
+        records = _simple_assignment_records(source, function, class_id)
+        scalar_bindings = _node_set_unique_scalar_bindings(source, function)
+        for record in records:
+            if record.lhs != var_name:
+                continue
+            if not _node_set_record_starts_on_plain_line(source, record):
+                continue
+            decl_insert = _node_set_block_declaration_insert_pos(
+                source,
+                function,
+                record.block_id,
+                record.start,
+            )
+            if decl_insert is None:
+                continue
+
+            for occurrence_idx, occurrence in enumerate(
+                _node_set_operand_alias_occurrences(source, record)
+            ):
+                operand, occ_start, occ_end = occurrence
+                binding = scalar_bindings.get(operand)
+                if binding is None:
+                    continue
+                if not _same_safe_scalar_type_class(
+                    record.lhs_type,
+                    binding.normalized_type,
+                    class_id,
+                ):
+                    continue
+
+                alias_name = _unique_binding_name(
+                    source,
+                    f"{operand}_alias_{target_ig}_{occurrence_idx}",
+                )
+                patched_source = _build_node_set_operand_alias_source(
+                    source,
+                    record,
+                    decl_insert=decl_insert,
+                    operand=operand,
+                    operand_start=occ_start,
+                    operand_end=occ_end,
+                    operand_type=binding.source_type,
+                    alias_name=alias_name,
+                )
+                if patched_source is None:
+                    continue
+                candidate_id = (
+                    f"node-split-operand-alias-{var_name}-ig{target_ig}-"
+                    f"b{record.block_id}-s{record.start}-"
+                    f"op{_candidate_id_fragment(operand)}-o{occurrence_idx}"
+                )
+                _append_unique_patch(
+                    patches,
+                    seen_sources,
+                    source,
+                    patched_source,
+                    candidate_id=candidate_id,
+                    summary=(
+                        f"Alias operand {operand} in the assignment to "
+                        f"{var_name} targeting ig{target_ig}."
+                    ),
+                )
+    except Exception:
+        del patches[patch_count:]
+        seen_sources.clear()
+        seen_sources.update(seen_sources_snapshot)
+        return
+
+
+def _node_set_unique_scalar_bindings(
+    source: str,
+    function: str,
+) -> dict[str, _NodeSetScalarBinding]:
+    span = find_function(source, function)
+    if span is None:
+        return {}
+
+    bindings: dict[str, _NodeSetScalarBinding] = {}
+    counts: dict[str, int] = {}
+
+    def add_binding(name: str, type_str: str) -> None:
+        source_type = _node_set_alias_source_type(type_str)
+        normalized_type = _normalize_node_set_scalar_type(source_type)
+        if source_type is None or normalized_type is None:
+            return
+        counts[name] = counts.get(name, 0) + 1
+        bindings[name] = _NodeSetScalarBinding(
+            source_type=source_type,
+            normalized_type=normalized_type,
+        )
+
+    extracted = _extract_function_text(source, function)
+    if extracted is None:
+        return {}
+    params_text, _body_text, _line = extracted
+    for decl in _parse_params(params_text):
+        add_binding(decl.name, decl.type_str)
+
+    stripped = _strip_c_comments(source)
+    for stmt_start, stmt_end, _block_id in _iter_node_set_statement_ranges(
+        stripped,
+        span.body_open + 1,
+        span.body_close,
+    ):
+        decl_parts = _parse_node_set_scalar_decl_source_parts(
+            source[stmt_start:stmt_end]
+        )
+        if decl_parts is None:
+            continue
+        name, source_type, normalized_type = decl_parts
+        counts[name] = counts.get(name, 0) + 1
+        bindings[name] = _NodeSetScalarBinding(
+            source_type=source_type,
+            normalized_type=normalized_type,
+        )
+
+    return {
+        name: binding
+        for name, binding in bindings.items()
+        if counts.get(name) == 1
+    }
+
+
+def _parse_node_set_scalar_decl_source_parts(
+    statement: str,
+) -> tuple[str, str, str] | None:
+    text = statement.strip()
+    if not text.endswith(";"):
+        return None
+    left, _sep, _initializer = text[:-1].partition("=")
+    if any(ch in left for ch in "[]{}(),"):
+        return None
+    match = _NODE_SET_SCALAR_DECL_RE.match(left + ";")
+    if match is None:
+        return None
+    source_type = _node_set_alias_source_type(match.group("type"))
+    normalized_type = _normalize_node_set_scalar_type(source_type)
+    if source_type is None or normalized_type is None:
+        return None
+    return match.group("name"), source_type, normalized_type
+
+
+def _node_set_alias_source_type(type_str: str | None) -> str | None:
+    source_type = _normalize_alias_binding_type(type_str)
+    if source_type is None:
+        return None
+    tokens = source_type.split()
+    if "volatile" in tokens:
+        return None
+    normalized_type = _normalize_node_set_scalar_type(source_type)
+    if normalized_type is None:
+        return None
+    if normalized_type == "ptr":
+        source_type = re.sub(r"\b(?:register|static)\s+", "", source_type)
+        source_type = re.sub(r"(?<=\*)\s*const\s*$", "", source_type)
+        return source_type.strip() or None
+    source_type = " ".join(
+        token
+        for token in tokens
+        if token not in {"const", "register", "static"}
+    )
+    return source_type or None
+
+
+def _normalize_alias_binding_type(type_str: str | None) -> str | None:
+    source_type = _normalize_safe_binding_type(type_str)
+    if source_type is not None:
+        return source_type
+    if type_str is None:
+        return None
+    compact = " ".join(type_str.strip().split())
+    compact = re.sub(r"\s*\*\s*", "*", compact)
+    compact = re.sub(r"(?<=\*)\s*const\s*$", "", compact)
+    if compact == type_str:
+        return None
+    return _normalize_safe_binding_type(compact)
+
+
+def _node_set_block_declaration_insert_pos(
+    source: str,
+    function: str,
+    block_id: int,
+    target_start: int,
+) -> int | None:
+    span = find_function(source, function)
+    if span is None:
+        return None
+
+    stripped = _strip_c_comments(source)
+    body_start = span.body_open + 1
+    body_end = span.body_close
+    block_opens = _node_set_block_open_offsets(
+        stripped,
+        body_start,
+        body_end,
+        root_open=span.body_open,
+    )
+    block_open = block_opens.get(block_id)
+    if block_open is None:
+        return None
+
+    decl_insert = _node_set_block_body_insert_pos(source, block_open)
+    saw_statement = False
+    target_seen = False
+    for stmt_start, stmt_end, stmt_block_id in _iter_node_set_statement_ranges(
+        stripped,
+        body_start,
+        body_end,
+    ):
+        if stmt_block_id != block_id:
+            continue
+        decl_parts = _parse_node_set_scalar_decl_parts(
+            stripped[stmt_start:stmt_end]
+        )
+        if decl_parts is not None:
+            if saw_statement:
+                return None
+            if not _node_set_statement_is_full_plain_line(
+                source,
+                stmt_start,
+                stmt_end,
+            ):
+                return None
+            decl_insert = _node_set_line_end(source, stmt_end)
+            continue
+
+        saw_statement = True
+        if stmt_start == target_start:
+            target_seen = True
+
+    if not target_seen:
+        return None
+    if _node_set_line_start(source, target_start) < decl_insert:
+        return None
+    return decl_insert
+
+
+def _node_set_block_open_offsets(
+    stripped: str,
+    start: int,
+    end: int,
+    *,
+    root_open: int,
+) -> dict[int, int]:
+    block_stack = [0]
+    block_opens = {0: root_open}
+    next_block_id = 1
+    cursor = start
+    while cursor < end:
+        while cursor < end and stripped[cursor].isspace():
+            cursor += 1
+        if cursor >= end:
+            break
+        if stripped[cursor] == "{":
+            block_id = next_block_id
+            block_stack.append(block_id)
+            block_opens[block_id] = cursor
+            next_block_id += 1
+            cursor += 1
+            continue
+        if stripped[cursor] == "}":
+            if len(block_stack) > 1:
+                block_stack.pop()
+            cursor += 1
+            continue
+        if _node_set_control_starts_at(stripped, cursor):
+            cursor = _skip_node_set_control_statement(stripped, cursor, end)
+            continue
+
+        statement_end = _find_statement_semicolon(stripped, cursor, end)
+        if statement_end is None:
+            break
+        cursor = statement_end + 1
+    return block_opens
+
+
+def _node_set_block_body_insert_pos(source: str, open_brace: int) -> int:
+    pos = open_brace + 1
+    while pos < len(source) and source[pos] in " \t\r":
+        pos += 1
+    if pos < len(source) and source[pos] == "\n":
+        pos += 1
+    return pos
+
+
+def _node_set_operand_alias_occurrences(
+    source: str,
+    record: _SimpleAssignmentRecord,
+):
+    rhs_span = _node_set_assignment_rhs_span(source, record)
+    if rhs_span is None:
+        return
+    rhs_start, rhs_end = rhs_span
+    stripped_rhs = _strip_c_comments(source[rhs_start:rhs_end])
+    read_names = set(record.reads)
+    for match in re.finditer(r"\b[A-Za-z_][A-Za-z_0-9]*\b", stripped_rhs):
+        operand = match.group(0)
+        if operand not in read_names:
+            continue
+        yield operand, rhs_start + match.start(), rhs_start + match.end()
+
+
+def _build_node_set_operand_alias_source(
+    source: str,
+    record: _SimpleAssignmentRecord,
+    *,
+    decl_insert: int,
+    operand: str,
+    operand_start: int,
+    operand_end: int,
+    operand_type: str,
+    alias_name: str,
+) -> str | None:
+    if not _node_set_record_starts_on_plain_line(source, record):
+        return None
+    line_start = _node_set_record_line_start(source, record)
+    indent = source[line_start:record.start]
+    if indent.strip():
+        return None
+
+    decl_line = f"{indent}{operand_type} {alias_name};\n"
+    assign_line = f"{indent}{alias_name} = {operand};\n"
+    edits = [
+        (operand_start, operand_end, alias_name),
+        (line_start, line_start, assign_line),
+        (decl_insert, decl_insert, decl_line),
+    ]
+    patched = source
+    for edit_start, edit_end, replacement in sorted(
+        edits,
+        key=lambda item: item[0],
+        reverse=True,
+    ):
+        patched = patched[:edit_start] + replacement + patched[edit_end:]
+    return patched
+
+
+def _node_set_statement_is_full_plain_line(
+    source: str,
+    start: int,
+    end: int,
+) -> bool:
+    line_start = _node_set_line_start(source, start)
+    line_end = _node_set_line_end(source, end)
+    return (
+        source[line_start:start].strip() == ""
+        and source[end:line_end].strip() == ""
+    )
+
+
+def _node_set_line_start(source: str, offset: int) -> int:
+    return source.rfind("\n", 0, offset) + 1
+
+
+def _node_set_line_end(source: str, offset: int) -> int:
+    next_line = source.find("\n", offset)
+    return len(source) if next_line < 0 else next_line + 1
 
 
 def _node_set_scalar_type_map(source: str, function: str) -> dict[str, str]:

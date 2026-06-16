@@ -1144,6 +1144,396 @@ def test_generate_node_set_split_patches_emits_assignment_chain_candidate() -> N
     assert "row_offset_adj = row_offset - 0.4f;" in patch.patched_source
 
 
+def test_generate_node_set_split_patches_emits_operand_alias_candidate() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void fn_test(void) {\n"
+        "    f32 y_spacing;\n"
+        "    f32 col;\n"
+        "    f32 col_offset;\n"
+        "    col_offset = y_spacing * col;\n"
+        "    use(col_offset);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        1,
+        33,
+        target_reg="f28",
+        var_name="col_offset",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+    patch = next(
+        p
+        for p in patches
+        if p.candidate_id.startswith(
+            "node-split-operand-alias-col_offset-ig33-"
+        )
+    )
+
+    assert "f32 y_spacing_alias_33_0;" in patch.patched_source
+    assert "y_spacing_alias_33_0 = y_spacing;" in patch.patched_source
+    assert "col_offset = y_spacing_alias_33_0 * col;" in patch.patched_source
+
+
+def test_generate_node_set_split_patches_operand_alias_rejects_mixed_declaration_statement_block(
+) -> None:
+    source = (
+        "typedef float f32;\n"
+        "void fn_test(void) {\n"
+        "    f32 y_spacing;\n"
+        "    use(y_spacing);\n"
+        "    f32 col_offset;\n"
+        "    col_offset = y_spacing;\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        1,
+        33,
+        target_reg="f28",
+        var_name="col_offset",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+
+    assert not any(
+        p.candidate_id.startswith(
+            "node-split-operand-alias-col_offset-ig33-"
+        )
+        for p in patches
+    )
+
+
+def test_generate_node_set_split_patches_operand_alias_handles_pointer_operands(
+) -> None:
+    source = (
+        "typedef struct Entry Entry;\n"
+        "void fn_test(Entry* cursor) {\n"
+        "    Entry* holder;\n"
+        "    holder = cursor;\n"
+        "    use(holder);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="holder",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+    patch = next(
+        p
+        for p in patches
+        if p.candidate_id.startswith(
+            "node-split-operand-alias-holder-ig40-"
+        )
+    )
+
+    assert "Entry* cursor_alias_40_0;" in patch.patched_source
+    assert "cursor_alias_40_0 = cursor;" in patch.patched_source
+    assert "holder = cursor_alias_40_0;" in patch.patched_source
+
+
+def test_generate_node_set_split_patches_operand_alias_preserves_pointer_pointee_const(
+) -> None:
+    source = (
+        "typedef struct Entry Entry;\n"
+        "void fn_test(const Entry* cursor) {\n"
+        "    const Entry* holder;\n"
+        "    holder = cursor;\n"
+        "    use(holder);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="holder",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+    patch = next(
+        p
+        for p in patches
+        if p.candidate_id.startswith(
+            "node-split-operand-alias-holder-ig40-"
+        )
+    )
+
+    assert "const Entry* cursor_alias_40_0;" in patch.patched_source
+    assert "    Entry* cursor_alias_40_0;" not in patch.patched_source
+
+
+def test_generate_node_set_split_patches_operand_alias_strips_top_level_pointer_const(
+) -> None:
+    source = (
+        "typedef struct Entry Entry;\n"
+        "void fn_test(Entry* const cursor) {\n"
+        "    Entry* holder;\n"
+        "    holder = cursor;\n"
+        "    use(holder);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="holder",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+    patch = next(
+        p
+        for p in patches
+        if p.candidate_id.startswith(
+            "node-split-operand-alias-holder-ig40-"
+        )
+    )
+
+    assert "Entry* cursor_alias_40_0;" in patch.patched_source
+    assert "Entry* const cursor_alias_40_0;" not in patch.patched_source
+
+
+def test_generate_node_set_split_patches_operand_alias_rejects_internal_pointer_const(
+) -> None:
+    source = (
+        "typedef struct Entry Entry;\n"
+        "void fn_test(Entry* const* cursor) {\n"
+        "    Entry* const* holder;\n"
+        "    holder = cursor;\n"
+        "    use(holder);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="holder",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+
+    assert not any(
+        p.candidate_id.startswith(
+            "node-split-operand-alias-holder-ig40-"
+        )
+        for p in patches
+    )
+
+
+def test_generate_node_set_split_patches_operand_alias_rewrites_one_repeated_operand(
+) -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int value;\n"
+        "    int out;\n"
+        "    out = value + value;\n"
+        "    use(out);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="out",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+    alias_patches = [
+        p
+        for p in patches
+        if p.candidate_id.startswith("node-split-operand-alias-out-ig40-")
+    ]
+
+    assert len(alias_patches) == 2
+    assert "out = value_alias_40_0 + value;" in alias_patches[0].patched_source
+    assert "out = value + value_alias_40_1;" in alias_patches[1].patched_source
+    assert "out = value_alias_40_0 + value_alias_40_0;" not in (
+        alias_patches[0].patched_source
+    )
+
+
+def test_generate_node_set_split_patches_operand_alias_uses_unique_alias_name(
+) -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int value;\n"
+        "    int value_alias_40_0;\n"
+        "    int out;\n"
+        "    out = value;\n"
+        "    use(out, value_alias_40_0);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="out",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+    patch = next(
+        p
+        for p in patches
+        if p.candidate_id.startswith("node-split-operand-alias-out-ig40-")
+    )
+
+    assert "int value_alias_40_0_1;" in patch.patched_source
+    assert "value_alias_40_0_1 = value;" in patch.patched_source
+    assert "out = value_alias_40_0_1;" in patch.patched_source
+
+
+def test_generate_node_set_split_patches_operand_alias_rejects_shadowed_operand_name(
+) -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int value;\n"
+        "    int out;\n"
+        "    {\n"
+        "        int value;\n"
+        "        use(value);\n"
+        "    }\n"
+        "    out = value;\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="out",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-operand-alias-out-ig40-")
+        for p in patches
+    )
+
+
+def test_generate_node_set_split_patches_operand_alias_rejects_same_line_target(
+) -> None:
+    source = "void fn_test(void) { int value; int out; out = value; use(out); }\n"
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="out",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-operand-alias-out-ig40-")
+        for p in patches
+    )
+
+
+def test_generate_node_set_split_patches_keeps_existing_patches_when_operand_alias_fails(
+    monkeypatch,
+) -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int holder;\n"
+        "    int out;\n"
+        "    holder = make();\n"
+        "    out = holder + 1;\n"
+        "    use(out, holder);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        40,
+        target_reg="r30",
+        var_name="holder",
+    )
+
+    def raise_operand_alias_error(*_args, **_kwargs):
+        raise RuntimeError("forced operand-alias failure")
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.node_set_split._node_set_unique_scalar_bindings",
+        raise_operand_alias_error,
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+    ids = {patch.candidate_id for patch in patches}
+
+    assert "node-split-alias-holder-ig40-use0" in ids
+    assert "node-split-lifetime-holder-ig40-use0" in ids
+    assert not any(
+        candidate_id.startswith("node-split-operand-alias-holder-ig40-")
+        for candidate_id in ids
+    )
+
+
 @pytest.mark.parametrize(
     "source",
     [
