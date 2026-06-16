@@ -192,6 +192,21 @@ def test_decision_coloring_excludes_r0_spilled_and_sentinel():
     assert fd.decision_coloring(fev, 0) == {5: 4}
 
 
+def test_decision_coloring_retains_fpr_f0_for_class_one():
+    def _d(ig, reg):
+        return type("D", (), dict(ig_idx=ig, iter_idx=0, assigned_reg=reg,
+                                  n_interferers=0, flags=0, interferers=[]))()
+
+    class _Sec:
+        class_id = 1
+
+    sec = _Sec()
+    sec.decisions = [_d(5, 0), _d(6, 32), _d(-1, 4)]
+    fev = _FakeFunctionEvents("f", [sec])
+
+    assert fd.decision_coloring(fev, 1) == {5: 0}
+
+
 def test_decision_coloring_round_trips_to_none():
     """A target built from decision_coloring is faithful: feeding it straight
     back reports no divergence (the force-phys-safe natural-self path)."""
@@ -281,6 +296,81 @@ def test_replay_flags_unreliable_on_missing_callee_save_interferer():
     assert 26 in steps[5].blockers
 
 
+def test_fpr_replay_treats_missing_f13_as_volatile_not_incomplete():
+    # FPR class 1 has f0..f13 in the initial volatile set. The GPR replay
+    # boundary used to treat f13 as callee-save and falsely abstain on FPR
+    # residuals whose interferences mention precolored f13.
+    views = [_view(39, 0, 28, interferers=((900, 13),))]
+
+    steps = {s.ig_idx: s for s in fd.replay_decisions(views, class_id=1)}
+
+    assert 13 in steps[39].blockers
+    assert steps[39].unreliable is False
+
+
+def test_fpr_replay_flags_unreliable_on_missing_f14_interferer():
+    views = [_view(39, 0, 28, interferers=((900, 14),))]
+
+    steps = {s.ig_idx: s for s in fd.replay_decisions(views, class_id=1)}
+
+    assert 14 in steps[39].blockers
+    assert steps[39].unreliable is True
+
+
+def test_fpr_callee_save_swap_classifies_instead_of_abstaining():
+    class _Sec:
+        class_id = 1
+
+    volatile_fprs = tuple((900 + reg, reg) for reg in range(14))
+    sec = _Sec()
+    sec.decisions = [
+        type("D", (), dict(ig_idx=37, iter_idx=0, assigned_reg=31, degree=0,
+                           n_interferers=len(volatile_fprs), flags=0,
+                           interferers=volatile_fprs))(),
+        type("D", (), dict(ig_idx=53, iter_idx=1, assigned_reg=30, degree=0,
+                           n_interferers=len(volatile_fprs), flags=0,
+                           interferers=volatile_fprs))(),
+        type("D", (), dict(ig_idx=52, iter_idx=2, assigned_reg=29, degree=0,
+                           n_interferers=len(volatile_fprs), flags=0,
+                           interferers=volatile_fprs))(),
+        type("D", (), dict(
+            ig_idx=39, iter_idx=3, assigned_reg=28, degree=0,
+            n_interferers=len(volatile_fprs) + 4, flags=0,
+            interferers=volatile_fprs + ((37, 31), (52, 29), (53, 30), (33, 26)),
+        ))(),
+        type("D", (), dict(
+            ig_idx=33, iter_idx=4, assigned_reg=26, degree=0,
+            n_interferers=len(volatile_fprs) + 4, flags=0,
+            interferers=volatile_fprs + ((37, 31), (39, 28), (52, 29), (53, 30)),
+        ))(),
+    ]
+    fev = _FakeFunctionEvents("fpr", [sec])
+    target = fd.TargetColoring(class_id=1, force_phys={33: 28, 39: 26})
+
+    report = fd.analyze_first_divergence(fev, target)
+
+    assert report.fact.case == fd.DivergenceCase.C2_STICKY_POOL
+    assert report.fact.ig_idx == 39
+
+
+def test_fpr_f0_is_not_the_gpr_r0_model_boundary():
+    class _Sec:
+        class_id = 1
+
+    sec = _Sec()
+    sec.decisions = [
+        type("D", (), dict(ig_idx=44, iter_idx=0, assigned_reg=1, degree=0,
+                           n_interferers=0, flags=0, interferers=[]))(),
+    ]
+    fev = _FakeFunctionEvents("fpr", [sec])
+    target = fd.TargetColoring(class_id=1, force_phys={44: 0})
+
+    report = fd.analyze_first_divergence(fev, target)
+
+    assert report.fact.case != fd.DivergenceCase.ABSTAINED
+    assert report.fact.target_reg == 0
+
+
 def _step(ig, working, blockers=()):
     return fd.ReplayStep(ig_idx=ig, iter_idx=0, working_mask=frozenset(working),
                          predicted_reg=min(working) if working else -1,
@@ -349,6 +439,22 @@ def test_local_target_strings_per_case():
     assert "earlier" in fd.local_target_for(fd.DivergenceCase.B_INVERSE)
     assert "simplify-order" in fd.local_target_for(fd.DivergenceCase.C_DISPENSE_ORDER)
     assert "nonvolatiles dispense" in fd.local_target_for(fd.DivergenceCase.C2_STICKY_POOL)
+
+
+def test_format_report_uses_fpr_register_prefix_for_class_one():
+    fact = fd.AllocatorFact(
+        class_id=1, ig_idx=39, case=fd.DivergenceCase.C2_STICKY_POOL,
+        iter_idx=26, baseline_reg=28, target_reg=26, coalesced_nodes=(),
+        coalesced_root=None, coalesced_root_phys=None, blocker_ig=None,
+        blocker_dependency=False, working_mask=frozenset(), cap_hit=False,
+        earlier_unmapped_warning=False, local_target="shift FPR dispense order",
+    )
+
+    rendered = fd.format_report(fd.FirstDivergenceReport(fact=fact, source=None))
+
+    assert "baseline: ig 39 -> f28" in rendered
+    assert "target:   ig 39 -> f26" in rendered
+    assert "r28" not in rendered
 
 
 def test_analyze_gm_like_returns_case_d():

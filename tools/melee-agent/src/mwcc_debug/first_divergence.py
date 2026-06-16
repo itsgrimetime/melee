@@ -97,6 +97,45 @@ class TargetColoring:
     force_phys: Mapping[int, int]
 
 
+@dataclass(frozen=True)
+class RegisterClassPolicy:
+    initial_volatile_regs: frozenset[int]
+    reserved_regs: frozenset[int]
+    nonvolatile_alloc_order: tuple[int, ...]
+    model_boundary_regs: frozenset[int]
+    reg_prefix: str
+
+    @property
+    def callee_save_regs(self) -> frozenset[int]:
+        return frozenset(self.nonvolatile_alloc_order)
+
+
+def register_class_policy(class_id: int) -> RegisterClassPolicy:
+    if class_id == 0:
+        return RegisterClassPolicy(
+            initial_volatile_regs=frozenset(INITIAL_VOLATILE_REGS),
+            reserved_regs=frozenset(RESERVED_REGS),
+            nonvolatile_alloc_order=tuple(NONVOLATILE_ALLOC_ORDER),
+            model_boundary_regs=frozenset({0}),
+            reg_prefix="r",
+        )
+    if class_id == 1:
+        return RegisterClassPolicy(
+            initial_volatile_regs=frozenset(range(14)),
+            reserved_regs=frozenset(),
+            nonvolatile_alloc_order=tuple(range(31, 13, -1)),
+            model_boundary_regs=frozenset(),
+            reg_prefix="f",
+        )
+    raise NotImplementedError(f"unsupported register class id: {class_id}")
+
+
+def _reg_name(class_id: int, reg: Optional[int]) -> str:
+    if reg is None:
+        return "?"
+    return f"{register_class_policy(class_id).reg_prefix}{reg}"
+
+
 def target_identity_set(target: "TargetColoring") -> set[int]:
     """The set of target nodes is the force-phys map KEYS (not the forced dump's
     surviving nodes) — coalesced-away nodes must remain in this set so Step 1a
@@ -136,15 +175,15 @@ def local_target_for(case: "DivergenceCase", *, coalesced_nodes=(), root=None,
                 f"one live range, or process X before Y")
     if case is DivergenceCase.B_TARGET_HIGHER:
         return ("introduce interference with the holders of the registers below "
-                "r_target, or move X later in simplify order")
+                "the target register, or move X later in simplify order")
     if case is DivergenceCase.B_INVERSE:
         return ("reduce X's interference, or process X earlier so it isn't pushed "
                 "higher than target")
     if case is DivergenceCase.C_DISPENSE_ORDER:
-        return "shift X's simplify-order position so dispense reaches r_target"
+        return "shift X's simplify-order position so dispense reaches the target register"
     if case is DivergenceCase.C2_STICKY_POOL:
         return ("change how many nonvolatiles dispense before X (reorder upstream "
-                "virtuals) so r_target is in the sticky pool by X's turn")
+                "virtuals) so the target register is in the sticky pool by X's turn")
     return case.value
 
 
@@ -188,10 +227,16 @@ def decision_coloring(fev, class_id: int) -> dict[int, int]:
     section = select_class_section(fev, class_id)
     if section is None:
         return {}
+    policy = register_class_policy(class_id)
     return {
         v.ig_idx: v.assigned_reg
         for v in decision_views(section, fev)
-        if v.ig_idx >= 0 and 0 < v.assigned_reg <= 31 and not v.spilled
+        if (
+            v.ig_idx >= 0
+            and 0 <= v.assigned_reg <= 31
+            and v.assigned_reg not in policy.model_boundary_regs
+            and not v.spilled
+        )
     }
 
 
@@ -349,8 +394,9 @@ def _register_choice_divergences(views, target: TargetColoring) -> list[Divergen
     return points
 
 
-def _is_r0_boundary(point: DivergencePoint) -> bool:
-    return point.baseline_reg == 0 or point.target_reg == 0
+def _is_model_boundary(point: DivergencePoint, class_id: int) -> bool:
+    boundary = register_class_policy(class_id).model_boundary_regs
+    return point.baseline_reg in boundary or point.target_reg in boundary
 
 
 def _with_r0_continuation(
@@ -370,9 +416,6 @@ def _with_r0_continuation(
     )
 
 
-_CALLEE_SAVE = set(NONVOLATILE_ALLOC_ORDER)  # {13..31}
-
-
 def classify_divergence(point: "DivergencePoint", step: ReplayStep,
                         target: TargetColoring, views_by_ig: dict,
                         interferers: tuple) -> AllocatorFact:
@@ -383,6 +426,7 @@ def classify_divergence(point: "DivergencePoint", step: ReplayStep,
     blocker_ig = None
     blocker_dependency = False
     case: DivergenceCase
+    policy = register_class_policy(target.class_id)
 
     if want in step.blockers:
         case = DivergenceCase.A_BLOCKED
@@ -398,13 +442,13 @@ def classify_divergence(point: "DivergencePoint", step: ReplayStep,
         # target was AVAILABLE at X but baseline picked another register
         case = (DivergenceCase.B_TARGET_HIGHER if want > base
                 else DivergenceCase.B_INVERSE)
-    elif want in INITIAL_VOLATILE_REGS:
+    elif want in policy.initial_volatile_regs:
         # target is a volatile that wasn't free at X; baseline ended higher
         # (too much interference / processed too late) -> reduce interference.
         # Must precede the dispense cases: a dispensed nonvolatile baseline with
         # a *volatile* target is B-inverse, not C.
         case = DivergenceCase.B_INVERSE
-    elif step.dispensed and want in _CALLEE_SAVE and _dispensed_later(
+    elif step.dispensed and want in policy.callee_save_regs and _dispensed_later(
             want, views_by_ig, point.iter_idx):
         case = DivergenceCase.C2_STICKY_POOL
     else:
@@ -461,9 +505,9 @@ def analyze_first_divergence(fev, target: TargetColoring) -> FirstDivergenceRepo
         )
     point = points[0]
     skipped_r0: list[DivergencePoint] = []
-    if _is_r0_boundary(point):
+    if _is_model_boundary(point, target.class_id):
         for candidate in points:
-            if _is_r0_boundary(candidate):
+            if _is_model_boundary(candidate, target.class_id):
                 skipped_r0.append(candidate)
                 continue
             point = candidate
@@ -472,7 +516,7 @@ def analyze_first_divergence(fev, target: TargetColoring) -> FirstDivergenceRepo
             skipped_r0 = []
 
     # Step 2 — replay + state at X.
-    steps = {s.ig_idx: s for s in replay_decisions(views)}
+    steps = {s.ig_idx: s for s in replay_decisions(views, target.class_id)}
     step = steps[point.ig_idx]
     interferers = views_by_ig[point.ig_idx].interferers
 
@@ -482,7 +526,7 @@ def analyze_first_divergence(fev, target: TargetColoring) -> FirstDivergenceRepo
         abstain_reasons.append("interferer row truncated (regenerate with an uncapped dump)")
     if step.unreliable:
         abstain_reasons.append("decision table incomplete (a missing node holds a callee-save)")
-    if point.baseline_reg == 0 or point.target_reg == 0:
+    if _is_model_boundary(point, target.class_id):
         abstain_reasons.append("divergence involves r0, a model boundary the replay cannot predict")
     if abstain_reasons:
         return FirstDivergenceReport(
@@ -646,21 +690,22 @@ def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
     )
 
 
-def replay_decisions(views) -> list[ReplayStep]:
+def replay_decisions(views, class_id: int = 0) -> list[ReplayStep]:
     """Step 2. Replay decisions in recorded iter order, reconstructing the working
     mask at each. Pool is sticky: dispensed callee-saves are returned to the
     volatile pool for later reuse (lowest-set-bit can then pick them).
 
-    NOTE (r0 boundary): r0 is excluded from `working` and from dispense, so
+    NOTE (class-0 r0 boundary): r0 is excluded from `working` and from dispense, so
     `predicted_reg` is never 0. MWCC does assign r0 to some short-lived/degree-0
     virtuals, which this model cannot predict (same limitation as the forward
     simulator). Consumers treat a recorded r0 as a model boundary (Check 1 skips
     recorded-r0 decisions; the analyze pipeline abstains on r0 divergences),
     not as a genuine mismatch.
     """
+    policy = register_class_policy(class_id)
     ordered = sorted(views, key=lambda d: d.iter_idx)
     iter_by_ig = {v.ig_idx: v.iter_idx for v in ordered if v.ig_idx >= 0}
-    pool = set(INITIAL_VOLATILE_REGS)
+    pool = set(policy.initial_volatile_regs)
     steps: list[ReplayStep] = []
 
     for v in ordered:
@@ -674,9 +719,11 @@ def replay_decisions(views) -> list[ReplayStep]:
                 # future virtual (iter >= current) -> not assigned yet -> no block
             else:
                 # interferer has no decision row of its own
-                if 0 <= i_reg <= 12:
+                if i_reg in policy.initial_volatile_regs:
                     fixed_blockers.add(i_reg)        # genuine precolored physical
-                elif 13 <= i_reg <= 31:
+                elif i_reg in policy.model_boundary_regs:
+                    fixed_blockers.add(i_reg)
+                elif i_reg in policy.callee_save_regs:
                     # callee-save held by a node missing from the decision table
                     # => the table is incomplete; record it but mark the step
                     # unreliable so consumers fail closed instead of trusting an
@@ -685,7 +732,7 @@ def replay_decisions(views) -> list[ReplayStep]:
                     unreliable = True
                 # else (i_reg < 0 or > 31): placeholder / virtual leak -> ignore
         blockers = processed_blockers | fixed_blockers
-        working = (pool - blockers) - RESERVED_REGS - {0}
+        working = (pool - blockers) - set(policy.reserved_regs)
 
         if working:
             predicted = min(working)                 # lowest set bit
@@ -693,7 +740,7 @@ def replay_decisions(views) -> list[ReplayStep]:
         else:
             predicted = -1
             dispensed = True
-            for r in NONVOLATILE_ALLOC_ORDER:        # top-down r31..r13
+            for r in policy.nonvolatile_alloc_order:
                 if r not in pool and r not in blockers:
                     predicted = r
                     pool.add(r)                      # sticky: returns to pool
@@ -729,16 +776,16 @@ def format_report(report: FirstDivergenceReport) -> str:
         nodes = ", ".join(str(n) for n in f.coalesced_nodes)
         lines.append(f"First divergence: class {f.class_id}, Case D — "
                      f"node(s) {nodes} coalesced into root {f.coalesced_root} "
-                     f"[r{f.coalesced_root_phys}]")
+                     f"[{_reg_name(f.class_id, f.coalesced_root_phys)}]")
     elif f.case in (DivergenceCase.NONE, DivergenceCase.ABSTAINED):
         lines.append(f"class {f.class_id}: {f.local_target}")
     else:
         lines.append(f"First divergence: class {f.class_id}, iter {f.iter_idx}, "
                      f"ig_idx {f.ig_idx}")
-        lines.append(f"  baseline: ig {f.ig_idx} -> r{f.baseline_reg}")
-        lines.append(f"  target:   ig {f.ig_idx} -> r{f.target_reg}")
+        lines.append(f"  baseline: ig {f.ig_idx} -> {_reg_name(f.class_id, f.baseline_reg)}")
+        lines.append(f"  target:   ig {f.ig_idx} -> {_reg_name(f.class_id, f.target_reg)}")
         lines.append(f"  cause: Case {f.case.value}"
-                     + (f" — r{f.target_reg} held by interferer ig {f.blocker_ig}"
+                     + (f" — {_reg_name(f.class_id, f.target_reg)} held by interferer ig {f.blocker_ig}"
                         if f.case is DivergenceCase.A_BLOCKED else ""))
     lines.append(f"  local target: {f.local_target}")
     if f.cap_hit:
