@@ -1041,6 +1041,201 @@ def test_generate_node_set_split_patches_emits_typed_fpr_reassoc_candidate(
     assert "    holder = b + a;\n" in patch.patched_source
 
 
+def test_generate_node_set_split_patches_emits_prologue_reorder_candidate() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void fn_test(void) {\n"
+        "    f32 y_spacing;\n"
+        "    f32 y_offset;\n"
+        "    f32 col_offset;\n"
+        "    f32 row_offset;\n"
+        "    f32 col;\n"
+        "    f32 rowf;\n"
+        "    col_offset = y_spacing * col;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    use(col_offset, row_offset);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test", 1, 33, target_reg="f28", var_name="row_offset"
+    )
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+    patch = next(
+        p
+        for p in patches
+        if p.candidate_id.startswith(
+            "node-split-prologue-reorder-row_offset-ig33-"
+        )
+    )
+
+    assert patch.patched_source.index(
+        "row_offset = y_offset * rowf;"
+    ) < patch.patched_source.index("col_offset = y_spacing * col;")
+
+
+def test_generate_node_set_split_patches_prologue_reorder_scans_neighboring_assignments_for_request_var(
+) -> None:
+    source = (
+        "typedef float f32;\n"
+        "void fn_test(void) {\n"
+        "    f32 y_spacing;\n"
+        "    f32 y_offset;\n"
+        "    f32 col;\n"
+        "    f32 rowf;\n"
+        "    f32 col_offset;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    col_offset = y_spacing * col;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test", 1, 33, target_reg="f28", var_name="row_offset_adj"
+    )
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+    patch = next(
+        p
+        for p in patches
+        if p.candidate_id.startswith(
+            "node-split-prologue-reorder-row_offset_adj-ig33-"
+        )
+    )
+
+    assert patch.patched_source.index(
+        "row_offset = y_offset * rowf;"
+    ) < patch.patched_source.index("col_offset = y_spacing * col;")
+
+
+def test_generate_node_set_split_patches_emits_block_scope_candidate() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void fn_test(void) {\n"
+        "    f32 a;\n"
+        "    f32 b;\n"
+        "    f32 c;\n"
+        "    a = b;\n"
+        "    c = a;\n"
+        "    use(c);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest("fn_test", 1, 33, target_reg="f28", var_name="a")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+    patch = next(
+        p
+        for p in patches
+        if p.candidate_id.startswith("node-split-block-scope-a-ig33-")
+    )
+
+    assert "{\n    a = b;\n    c = a;\n}" in patch.patched_source
+
+
+def test_generate_node_set_split_patches_reorder_and_scope_reject_mixed_statement_lines() -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int x;\n"
+        "    int a;\n"
+        "    int b;\n"
+        "    int c;\n"
+        "    x = call(); a = b;\n"
+        "    c = a;\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest("fn_test", 0, 40, target_reg="r30", var_name="a")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-prologue-reorder-a-ig40-")
+        for p in patches
+    )
+    assert not any(
+        p.candidate_id.startswith("node-split-block-scope-a-ig40-")
+        for p in patches
+    )
+
+
+def test_generate_node_set_split_patches_reorder_and_scope_reject_trailing_same_line_statement() -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int x;\n"
+        "    int a;\n"
+        "    int b;\n"
+        "    int c;\n"
+        "    a = b; x = call();\n"
+        "    c = a;\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest("fn_test", 0, 40, target_reg="r30", var_name="a")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-prologue-reorder-a-ig40-")
+        for p in patches
+    )
+    assert not any(
+        p.candidate_id.startswith("node-split-block-scope-a-ig40-")
+        for p in patches
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "void fn_test(void) { int a; int b; a = b; if (a) { b = a; } }\n",
+        "void fn_test(void) { int a; int b; a = call(); b = a; }\n",
+        "void fn_test(void) { int a; int b; a = obj.x; b = a; }\n",
+        "void fn_test(void) { int a; int b; a = b; label: b = a; }\n",
+        "void fn_test(void) { int a; int b; a = b; #if 0\n b = a;\n#endif\n }\n",
+    ],
+)
+def test_generate_node_set_split_patches_reorder_and_scope_reject_unsafe_regions(
+    source: str,
+) -> None:
+    req = NodeSetSplitRequest("fn_test", 0, 40, target_reg="r30", var_name="a")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-prologue-reorder-a-ig40-")
+        for p in patches
+    )
+    assert not any(
+        p.candidate_id.startswith("node-split-block-scope-a-ig40-")
+        for p in patches
+    )
+
+
+def test_generate_node_set_split_patches_prologue_reorder_rejects_adjacent_dependency() -> None:
+    source = "void fn_test(void) { int a; int b; a = b; b = a; }\n"
+    req = NodeSetSplitRequest("fn_test", 0, 40, target_reg="r30", var_name="a")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+
+    assert not any(
+        patch.candidate_id.startswith("node-split-prologue-reorder-a-ig40-")
+        for patch in patches
+    )
+
+
 @pytest.mark.parametrize(
     "source",
     [

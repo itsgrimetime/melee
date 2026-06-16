@@ -413,6 +413,24 @@ def generate_node_set_split_patches(
         target_ig,
         request.class_id,
     )
+    _append_prologue_reorder_patches(
+        patches,
+        seen_sources,
+        source,
+        fn_name,
+        var_name,
+        target_ig,
+        request.class_id,
+    )
+    _append_block_scope_patches(
+        patches,
+        seen_sources,
+        source,
+        fn_name,
+        var_name,
+        target_ig,
+        request.class_id,
+    )
 
     return patches
 
@@ -2527,6 +2545,288 @@ def _append_reassociation_patches(
         seen_sources.clear()
         seen_sources.update(seen_sources_snapshot)
         return
+
+
+def _append_prologue_reorder_patches(
+    patches: list[CandidatePatch],
+    seen_sources: set[str],
+    source: str,
+    function: str,
+    var_name: str,
+    target_ig: int,
+    class_id: int,
+) -> None:
+    patch_count = len(patches)
+    seen_sources_snapshot = set(seen_sources)
+    try:
+        records = _simple_assignment_records(source, function, class_id)
+        for first, second in _node_set_prologue_reorder_pairs(
+            source,
+            records,
+            var_name,
+        ):
+            patched_source = _swap_node_set_assignment_lines(source, first, second)
+            if patched_source is None:
+                continue
+            candidate_id = (
+                f"node-split-prologue-reorder-{var_name}-ig{target_ig}-"
+                f"b{first.block_id}-s{first.start}-t{second.start}"
+            )
+            _append_unique_patch(
+                patches,
+                seen_sources,
+                source,
+                patched_source,
+                candidate_id=candidate_id,
+                summary=(
+                    f"Swap adjacent simple assignments around {var_name} "
+                    f"targeting ig{target_ig}."
+                ),
+            )
+    except Exception:
+        del patches[patch_count:]
+        seen_sources.clear()
+        seen_sources.update(seen_sources_snapshot)
+        return
+
+
+def _node_set_prologue_reorder_pairs(
+    source: str,
+    records: list[_SimpleAssignmentRecord],
+    var_name: str,
+) -> list[tuple[_SimpleAssignmentRecord, _SimpleAssignmentRecord]]:
+    pairs: list[tuple[_SimpleAssignmentRecord, _SimpleAssignmentRecord]] = []
+    seen_pairs: set[tuple[int, int]] = set()
+    for target_idx, target in enumerate(records):
+        if target.lhs != var_name:
+            continue
+        start_idx = target_idx
+        while (
+            start_idx > 0
+            and _node_set_records_are_adjacent_lines(
+                source,
+                records[start_idx - 1],
+                records[start_idx],
+            )
+            and records[start_idx - 1].block_id == target.block_id
+        ):
+            start_idx -= 1
+        end_idx = target_idx
+        while (
+            end_idx + 1 < len(records)
+            and _node_set_records_are_adjacent_lines(
+                source,
+                records[end_idx],
+                records[end_idx + 1],
+            )
+            and records[end_idx + 1].block_id == target.block_id
+        ):
+            end_idx += 1
+
+        for record_idx in range(start_idx, end_idx):
+            first = records[record_idx]
+            second = records[record_idx + 1]
+            pair_key = (first.start, second.start)
+            if pair_key in seen_pairs:
+                continue
+            if first.block_id != second.block_id:
+                continue
+            if not _node_set_can_swap_adjacent_assignments(first, second):
+                continue
+            pairs.append((first, second))
+            seen_pairs.add(pair_key)
+    return pairs
+
+
+def _append_block_scope_patches(
+    patches: list[CandidatePatch],
+    seen_sources: set[str],
+    source: str,
+    function: str,
+    var_name: str,
+    target_ig: int,
+    class_id: int,
+) -> None:
+    patch_count = len(patches)
+    seen_sources_snapshot = set(seen_sources)
+    try:
+        records = _simple_assignment_records(source, function, class_id)
+        windows = _shortest_node_set_block_scope_windows(
+            source,
+            records,
+            var_name,
+        )
+        for window_idx, (start_idx, end_idx) in enumerate(windows):
+            first = records[start_idx]
+            last = records[end_idx]
+            patched_source = _wrap_node_set_assignment_window(
+                source,
+                first,
+                last,
+            )
+            if patched_source is None:
+                continue
+            candidate_id = (
+                f"node-split-block-scope-{var_name}-ig{target_ig}-"
+                f"b{first.block_id}-s{first.start}-w{end_idx - start_idx + 1}-"
+                f"c{window_idx}"
+            )
+            _append_unique_patch(
+                patches,
+                seen_sources,
+                source,
+                patched_source,
+                candidate_id=candidate_id,
+                summary=(
+                    f"Wrap adjacent simple assignments using {var_name} "
+                    f"in a block targeting ig{target_ig}."
+                ),
+            )
+    except Exception:
+        del patches[patch_count:]
+        seen_sources.clear()
+        seen_sources.update(seen_sources_snapshot)
+        return
+
+
+def _node_set_can_swap_adjacent_assignments(
+    first: _SimpleAssignmentRecord,
+    second: _SimpleAssignmentRecord,
+) -> bool:
+    if first.lhs == second.lhs:
+        return False
+    return first.lhs not in second.reads and second.lhs not in first.reads
+
+
+def _shortest_node_set_block_scope_windows(
+    source: str,
+    records: list[_SimpleAssignmentRecord],
+    var_name: str,
+) -> list[tuple[int, int]]:
+    best_len: int | None = None
+    windows: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for target_idx, target in enumerate(records):
+        if target.lhs != var_name:
+            continue
+        for read_idx, read_record in enumerate(records):
+            if read_idx == target_idx or var_name not in read_record.reads:
+                continue
+            start_idx = min(target_idx, read_idx)
+            end_idx = max(target_idx, read_idx)
+            window_len = end_idx - start_idx + 1
+            if best_len is not None and window_len > best_len:
+                continue
+            if not _node_set_assignment_window_is_adjacent(
+                source,
+                records[start_idx:end_idx + 1],
+            ):
+                continue
+            window = (start_idx, end_idx)
+            if window in seen:
+                continue
+            if best_len is None or window_len < best_len:
+                best_len = window_len
+                windows = []
+                seen.clear()
+            windows.append(window)
+            seen.add(window)
+    return windows
+
+
+def _node_set_assignment_window_is_adjacent(
+    source: str,
+    records: list[_SimpleAssignmentRecord],
+) -> bool:
+    if not records:
+        return False
+    block_id = records[0].block_id
+    if any(record.block_id != block_id for record in records):
+        return False
+    return all(
+        _node_set_records_are_adjacent_lines(source, first, second)
+        for first, second in zip(records, records[1:])
+    )
+
+
+def _node_set_records_are_adjacent_lines(
+    source: str,
+    first: _SimpleAssignmentRecord,
+    second: _SimpleAssignmentRecord,
+) -> bool:
+    if not (
+        _node_set_record_starts_on_plain_line(source, first)
+        and _node_set_record_starts_on_plain_line(source, second)
+    ):
+        return False
+    first_line_start = _node_set_record_line_start(source, first)
+    second_line_start = _node_set_record_line_start(source, second)
+    if first_line_start == second_line_start:
+        return False
+    if first.line_end > second_line_start:
+        return False
+    return source[first.line_end:second_line_start].strip() == ""
+
+
+def _swap_node_set_assignment_lines(
+    source: str,
+    first: _SimpleAssignmentRecord,
+    second: _SimpleAssignmentRecord,
+) -> str | None:
+    first_line_start = _node_set_record_line_start(source, first)
+    second_line_start = _node_set_record_line_start(source, second)
+    if first_line_start == second_line_start or first.line_end > second_line_start:
+        return None
+    return (
+        source[:first_line_start]
+        + source[second_line_start:second.line_end]
+        + source[first.line_end:second_line_start]
+        + source[first_line_start:first.line_end]
+        + source[second.line_end:]
+    )
+
+
+def _wrap_node_set_assignment_window(
+    source: str,
+    first: _SimpleAssignmentRecord,
+    last: _SimpleAssignmentRecord,
+) -> str | None:
+    if not (
+        _node_set_record_starts_on_plain_line(source, first)
+        and _node_set_record_starts_on_plain_line(source, last)
+    ):
+        return None
+    line_start = _node_set_record_line_start(source, first)
+    if line_start > last.line_end:
+        return None
+    indent = source[line_start:first.start]
+    window_source = source[line_start:last.line_end]
+    return (
+        source[:line_start]
+        + indent
+        + "{\n"
+        + window_source
+        + "}\n"
+        + source[last.line_end:]
+    )
+
+
+def _node_set_record_line_start(
+    source: str,
+    record: _SimpleAssignmentRecord,
+) -> int:
+    return source.rfind("\n", 0, record.start) + 1
+
+
+def _node_set_record_starts_on_plain_line(
+    source: str,
+    record: _SimpleAssignmentRecord,
+) -> bool:
+    line_start = _node_set_record_line_start(source, record)
+    return (
+        source[line_start:record.start].strip() == ""
+        and source[record.end:record.line_end].strip() == ""
+    )
 
 
 def _iter_reassociation_assignments(
