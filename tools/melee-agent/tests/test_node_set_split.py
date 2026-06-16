@@ -1113,6 +1113,214 @@ def test_generate_node_set_split_patches_prologue_reorder_scans_neighboring_assi
     ) < patch.patched_source.index("col_offset = y_spacing * col;")
 
 
+def test_generate_node_set_split_patches_emits_assignment_chain_candidate() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void fn_test(void) {\n"
+        "    f32 y_offset;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = y_offset * rowf - 0.4f;\n"
+        "    use(row_offset_adj);\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest(
+        "fn_test", 1, 33, target_reg="f28", var_name="row_offset_adj"
+    )
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+    patch = next(
+        p
+        for p in patches
+        if p.candidate_id.startswith(
+            "node-split-assignment-chain-row_offset_adj-ig33-"
+        )
+    )
+
+    assert "row_offset_adj = row_offset - 0.4f;" in patch.patched_source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "typedef float f32;\n"
+            "void fn_test(void) { f32 y_offset; f32 rowf; f32 row_offset; f32 out; "
+            "row_offset = y_offset * rowf; y_offset = 1.0f; out = y_offset * rowf - 0.4f; }\n"
+        ),
+        (
+            "typedef float f32;\n"
+            "void fn_test(void) { f32 y_offset; double rowf; f32 row_offset; f32 out; "
+            "row_offset = y_offset * rowf; out = y_offset * rowf - 0.4f; }\n"
+        ),
+        (
+            "void fn_test(void) { int a; unsigned int b; int tmp; int out; "
+            "tmp = a + b; out = a + b + 1; }\n"
+        ),
+        (
+            "typedef float f32;\n"
+            "void fn_test(void) { f32 y_offset; f32 rowf; f32 row_offset; f32 out; "
+            "row_offset = y_offset * rowf; if (rowf) { y_offset = 1.0f; } "
+            "out = y_offset * rowf - 0.4f; }\n"
+        ),
+        (
+            "typedef float f32;\n"
+            "void fn_test(void) { f32 y_offset; f32 rowf; f32 row_offset; f32 tmp; f32 out; "
+            "row_offset = y_offset * rowf; tmp = (y_offset = 1.0f); "
+            "out = y_offset * rowf - 0.4f; }\n"
+        ),
+        (
+            "typedef float f32;\n"
+            "void fn_test(void) { f32 y_offset; f32 rowf; f32 row_offset; f32 tmp; f32 out; "
+            "row_offset = y_offset * rowf; tmp = ++y_offset; "
+            "out = y_offset * rowf - 0.4f; }\n"
+        ),
+        (
+            "typedef float f32;\n"
+            "void fn_test(void) { f32 y_offset; f32 rowf; f32 row_offset; f32 out; "
+            "row_offset = y_offset * rowf; { f32 y_offset; use(y_offset); } "
+            "out = y_offset * rowf - 0.4f; }\n"
+        ),
+        (
+            "typedef float f32;\n"
+            "void fn_test(void) { f32 y_offset; f32 rowf; f32 row_offset; f32 out; "
+            "row_offset = y_offset * rowf; if (rowf) { f32 y_offset; use(y_offset); } "
+            "out = y_offset * rowf - 0.4f; }\n"
+        ),
+        (
+            "typedef float f32;\n"
+            "void fn_test(void) { f32 y_offset; f32 rowf; f32 row_offset; f32 out; "
+            "row_offset = y_offset * rowf; (y_offset) = 1.0f; "
+            "out = y_offset * rowf - 0.4f; }\n"
+        ),
+        (
+            "typedef float f32;\n"
+            "void fn_test(void) { f32 y_offset; f32 rowf; f32 row_offset; f32 out; "
+            "row_offset = y_offset * rowf; (y_offset)++; "
+            "out = y_offset * rowf - 0.4f; }\n"
+        ),
+    ],
+)
+def test_generate_node_set_split_patches_assignment_chain_rejects_unsafe_rewrites(
+    source: str,
+) -> None:
+    req = NodeSetSplitRequest("fn_test", 1, 33, target_reg="f28", var_name="out")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-assignment-chain-out-ig33-")
+        for p in patches
+    )
+
+
+def test_generate_node_set_split_patches_assignment_chain_rejects_gpr_signedness_mix() -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int a;\n"
+        "    unsigned int b;\n"
+        "    int tmp;\n"
+        "    int out;\n"
+        "    tmp = a + b;\n"
+        "    out = a + b + 1;\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest("fn_test", 0, 40, target_reg="r30", var_name="out")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-assignment-chain-out-ig40-")
+        for p in patches
+    )
+
+
+def test_generate_node_set_split_patches_assignment_chain_rejects_subtraction_boundary() -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int a;\n"
+        "    int b;\n"
+        "    int c;\n"
+        "    int tmp;\n"
+        "    int out;\n"
+        "    tmp = a + b;\n"
+        "    out = c - a + b;\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest("fn_test", 0, 40, target_reg="r30", var_name="out")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-assignment-chain-out-ig40-")
+        for p in patches
+    )
+
+
+def test_generate_node_set_split_patches_assignment_chain_rejects_additive_regrouping() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void fn_test(void) {\n"
+        "    f32 a;\n"
+        "    f32 b;\n"
+        "    f32 c;\n"
+        "    f32 tmp;\n"
+        "    f32 out;\n"
+        "    tmp = a + b;\n"
+        "    out = c + a + b;\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest("fn_test", 1, 40, target_reg="f30", var_name="out")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-assignment-chain-out-ig40-")
+        for p in patches
+    )
+
+
+@pytest.mark.parametrize(
+    "operator",
+    ["<<", "<"],
+)
+def test_generate_node_set_split_patches_assignment_chain_rejects_precedence_sensitive_operators(
+    operator: str,
+) -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int a;\n"
+        "    int b;\n"
+        "    int tmp;\n"
+        "    int out;\n"
+        f"    tmp = a {operator} b;\n"
+        f"    out = a {operator} b + 1;\n"
+        "}\n"
+    )
+    req = NodeSetSplitRequest("fn_test", 0, 40, target_reg="r30", var_name="out")
+
+    patches = generate_node_set_split_patches(
+        source, "fn_test", req, max_read_sites=1
+    )
+
+    assert not any(
+        p.candidate_id.startswith("node-split-assignment-chain-out-ig40-")
+        for p in patches
+    )
+
+
 def test_generate_node_set_split_patches_emits_block_scope_candidate() -> None:
     source = (
         "typedef float f32;\n"

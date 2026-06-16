@@ -422,6 +422,15 @@ def generate_node_set_split_patches(
         target_ig,
         request.class_id,
     )
+    _append_assignment_chain_patches(
+        patches,
+        seen_sources,
+        source,
+        fn_name,
+        var_name,
+        target_ig,
+        request.class_id,
+    )
     _append_block_scope_patches(
         patches,
         seen_sources,
@@ -1132,6 +1141,17 @@ def _node_set_strip_numeric_literals(text: str) -> str:
     return _NODE_SET_NUMERIC_LITERAL_RE.sub(" ", text)
 
 
+def _node_set_rhs_is_arithmetic_chainable(rhs: str) -> bool:
+    text = _node_set_strip_numeric_literals(
+        _node_set_strip_scalar_casts(rhs)
+    )
+    if re.search(r"<<|>>|<=|>=|==|!=|&&|\|\|", text) is not None:
+        return False
+    if any(ch in text for ch in "<>&|^~!?[]{}."):
+        return False
+    return re.fullmatch(r"[\sA-Za-z_0-9()+\-*/%]+", text) is not None
+
+
 def _node_set_assignment_invalidates_lhs(
     rhs: str,
     rhs_status: str,
@@ -1308,6 +1328,28 @@ def _node_set_type_allowed_for_class(type_name: str, class_id: int) -> bool:
     if class_id == 0:
         return type_name in _NODE_SET_ALLOWED_GPR_TYPES
     return type_name in _NODE_SET_ALLOWED_FPR_TYPES | _NODE_SET_ALLOWED_GPR_TYPES
+
+
+def _same_safe_scalar_type_class(type_a: str, type_b: str, class_id: int) -> bool:
+    norm_a = _normalize_node_set_scalar_type(type_a)
+    norm_b = _normalize_node_set_scalar_type(type_b)
+    if norm_a is None or norm_b is None:
+        return False
+    if class_id == 1:
+        return norm_a == norm_b and norm_a in {"f32", "f64"}
+    if class_id == 0:
+        return norm_a == norm_b and norm_a in {
+            "s8",
+            "s16",
+            "s32",
+            "s64",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+            "ptr",
+        }
+    return False
 
 
 def _normalize_node_set_scalar_type(type_str: str | None) -> str | None:
@@ -2588,6 +2630,312 @@ def _append_prologue_reorder_patches(
         seen_sources.clear()
         seen_sources.update(seen_sources_snapshot)
         return
+
+
+def _append_assignment_chain_patches(
+    patches: list[CandidatePatch],
+    seen_sources: set[str],
+    source: str,
+    function: str,
+    var_name: str,
+    target_ig: int,
+    class_id: int,
+) -> None:
+    if class_id not in {0, 1}:
+        return
+
+    patch_count = len(patches)
+    seen_sources_snapshot = set(seen_sources)
+    try:
+        records = _simple_assignment_records(source, function, class_id)
+        type_map = _node_set_scalar_type_map(source, function)
+        for earlier_idx, earlier in enumerate(records):
+            if not _node_set_record_uses_same_safe_scalar_type_class(
+                earlier,
+                type_map,
+                class_id,
+            ):
+                continue
+            for later in records[earlier_idx + 1:]:
+                if later.lhs != var_name:
+                    continue
+                if earlier.block_id != later.block_id:
+                    continue
+                if not _same_safe_scalar_type_class(
+                    earlier.lhs_type,
+                    later.lhs_type,
+                    class_id,
+                ):
+                    continue
+                if not _node_set_record_uses_same_safe_scalar_type_class(
+                    later,
+                    type_map,
+                    class_id,
+                ):
+                    continue
+                watched_names = {earlier.lhs, *earlier.reads}
+                if _node_set_has_intervening_write(
+                    source,
+                    earlier.end,
+                    later.start,
+                    watched_names,
+                ):
+                    continue
+                for occurrence_idx, (occ_start, occ_end) in enumerate(
+                    _node_set_assignment_chain_occurrences(source, earlier, later)
+                ):
+                    patched_source = (
+                        source[:occ_start]
+                        + earlier.lhs
+                        + source[occ_end:]
+                    )
+                    candidate_id = (
+                        f"node-split-assignment-chain-{var_name}-"
+                        f"ig{target_ig}-b{earlier.block_id}-"
+                        f"s{earlier.start}-t{later.start}-o{occurrence_idx}"
+                    )
+                    _append_unique_patch(
+                        patches,
+                        seen_sources,
+                        source,
+                        patched_source,
+                        candidate_id=candidate_id,
+                        summary=(
+                            f"Rewrite {later.lhs} RHS to reuse {earlier.lhs} "
+                            f"targeting ig{target_ig}."
+                        ),
+                    )
+    except Exception:
+        del patches[patch_count:]
+        seen_sources.clear()
+        seen_sources.update(seen_sources_snapshot)
+        return
+
+
+def _node_set_scalar_type_map(source: str, function: str) -> dict[str, str]:
+    span = find_function(source, function)
+    if span is None:
+        return {}
+
+    types = _node_set_param_scalar_types(source, function)
+    stripped = _strip_c_comments(source)
+    for stmt_start, stmt_end, _block_id in _iter_node_set_statement_ranges(
+        stripped,
+        span.body_open + 1,
+        span.body_close,
+    ):
+        decl_parts = _parse_node_set_scalar_decl_parts(
+            stripped[stmt_start:stmt_end]
+        )
+        if decl_parts is None:
+            continue
+        name, type_name, _initializer = decl_parts
+        existing = types.get(name)
+        if existing is not None and existing != type_name:
+            return {}
+        types[name] = type_name
+    return types
+
+
+def _node_set_record_uses_same_safe_scalar_type_class(
+    record: _SimpleAssignmentRecord,
+    type_map: Mapping[str, str],
+    class_id: int,
+) -> bool:
+    for read_name in record.reads:
+        read_type = type_map.get(read_name)
+        if read_type is None:
+            return False
+        if not _same_safe_scalar_type_class(record.lhs_type, read_type, class_id):
+            return False
+    return True
+
+
+def _node_set_has_intervening_write(
+    source: str,
+    start: int,
+    end: int,
+    names: set[str],
+) -> bool:
+    if not names or start >= end:
+        return False
+    stripped = _strip_c_comments(source)
+    if _node_set_text_writes_any_name(stripped[start:end], names):
+        return True
+    for stmt_start, stmt_end, _block_id in _iter_node_set_statement_ranges(
+        stripped,
+        start,
+        end,
+    ):
+        stmt_text = stripped[stmt_start:stmt_end]
+        assignment = _parse_node_set_simple_assignment(stmt_text)
+        if assignment is not None and assignment[0] in names:
+            return True
+        compound_update = _parse_node_set_compound_update(stmt_text)
+        if compound_update is not None and compound_update[0] in names:
+            return True
+        decl_parts = _parse_node_set_scalar_decl_parts(stmt_text)
+        if decl_parts is not None:
+            name, _type_name, _initializer = decl_parts
+            if name in names:
+                return True
+        if any(
+            invalidated_name in names
+            for invalidated_name in _node_set_statement_invalidated_names(stmt_text)
+        ):
+            return True
+    return False
+
+
+def _node_set_text_writes_any_name(text: str, names: set[str]) -> bool:
+    if not names:
+        return False
+    for name in names:
+        pattern = re.escape(name)
+        watched_lvalue = (
+            rf"(?:\(\s*)*"
+            rf"(?<![A-Za-z_0-9]){pattern}(?![A-Za-z_0-9])"
+            rf"(?:\s*\))*"
+        )
+        if re.search(
+            rf"{watched_lvalue}\s*(?:[+\-*/%&|^]|<<|>>)?=(?!=)",
+            text,
+        ) is not None:
+            return True
+        if re.search(
+            rf"(?:\+\+|--)\s*{watched_lvalue}",
+            text,
+        ) is not None:
+            return True
+        if re.search(
+            rf"{watched_lvalue}\s*(?:\+\+|--)",
+            text,
+        ) is not None:
+            return True
+        if re.search(
+            rf"(?<![A-Za-z_0-9])"
+            rf"(?:const\s+|register\s+|static\s+)*"
+            rf"(?:struct\s+)?[A-Za-z_][A-Za-z_0-9]*"
+            rf"(?:\s+[A-Za-z_][A-Za-z_0-9]*)*"
+            rf"(?:\s*\*+\s*)?"
+            rf"\s+{pattern}(?![A-Za-z_0-9])"
+            rf"\s*(?:[;=,\[])",
+            text,
+        ) is not None:
+            return True
+    return False
+
+
+def _node_set_assignment_chain_occurrences(
+    source: str,
+    earlier: _SimpleAssignmentRecord,
+    later: _SimpleAssignmentRecord,
+):
+    if not earlier.rhs:
+        return
+    if not _node_set_rhs_is_arithmetic_chainable(earlier.rhs):
+        return
+    rhs_span = _node_set_assignment_rhs_span(source, later)
+    if rhs_span is None:
+        return
+    rhs_start, rhs_end = rhs_span
+    stripped_rhs = _strip_c_comments(source[rhs_start:rhs_end])
+    search_start = 0
+    while True:
+        rel_start = stripped_rhs.find(earlier.rhs, search_start)
+        if rel_start < 0:
+            return
+        rel_end = rel_start + len(earlier.rhs)
+        if _node_set_rhs_occurrence_is_rewritable(
+            stripped_rhs,
+            rel_start,
+            rel_end,
+            earlier_rhs=earlier.rhs,
+        ):
+            yield rhs_start + rel_start, rhs_start + rel_end
+        search_start = max(rel_end, rel_start + 1)
+
+
+def _node_set_assignment_rhs_span(
+    source: str,
+    record: _SimpleAssignmentRecord,
+) -> tuple[int, int] | None:
+    equals = source.find("=", record.start + len(record.lhs), record.end)
+    semicolon = source.rfind(";", record.start, record.end)
+    if equals < 0 or semicolon < 0 or equals >= semicolon:
+        return None
+    return _trim_span(source, equals + 1, semicolon)
+
+
+def _node_set_rhs_occurrence_is_rewritable(
+    rhs: str,
+    start: int,
+    end: int,
+    *,
+    earlier_rhs: str,
+) -> bool:
+    before_idx = _previous_nonspace_offset(rhs, start - 1)
+    after_idx = end
+    while after_idx < len(rhs) and rhs[after_idx].isspace():
+        after_idx += 1
+
+    if before_idx is not None and rhs[before_idx] in _IDENT_CHARS + ".":
+        return False
+    if after_idx < len(rhs) and rhs[after_idx] in _IDENT_CHARS + ".":
+        return False
+    return (
+        _node_set_assignment_chain_before_boundary_is_safe(
+            rhs,
+            before_idx,
+            earlier_rhs=earlier_rhs,
+        )
+        and _node_set_assignment_chain_after_boundary_is_safe(
+            rhs, after_idx if after_idx < len(rhs) else None
+        )
+    )
+
+
+def _node_set_assignment_chain_before_boundary_is_safe(
+    rhs: str,
+    boundary: int | None,
+    *,
+    earlier_rhs: str,
+) -> bool:
+    if boundary is None:
+        return True
+    if rhs[boundary] != "+":
+        return False
+    if _node_set_rhs_has_top_level_additive_operator(earlier_rhs):
+        return False
+    return _node_set_paren_depth_at(rhs, boundary) == 0
+
+
+def _node_set_assignment_chain_after_boundary_is_safe(
+    rhs: str,
+    boundary: int | None,
+) -> bool:
+    if boundary is None:
+        return True
+    if rhs[boundary] not in "+-":
+        return False
+    return _node_set_paren_depth_at(rhs, boundary) == 0
+
+
+def _node_set_rhs_has_top_level_additive_operator(rhs: str) -> bool:
+    for idx, ch in enumerate(rhs):
+        if ch in "+-" and _node_set_paren_depth_at(rhs, idx) == 0:
+            return True
+    return False
+
+
+def _node_set_paren_depth_at(text: str, offset: int) -> int:
+    depth = 0
+    for ch in text[:offset]:
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth > 0:
+            depth -= 1
+    return depth
 
 
 def _node_set_prologue_reorder_pairs(
