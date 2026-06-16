@@ -4,7 +4,9 @@ from __future__ import annotations
 import difflib
 import re
 import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
+from hashlib import sha1
 from typing import Any, Mapping
 
 from .mutators import (
@@ -51,6 +53,61 @@ _SIMPLE_DECL_LINE_RE = re.compile(
     r"(?P<name>[A-Za-z_][A-Za-z_0-9]*)"
     r"\s*(?:=[^;]*)?;\s*$"
 )
+_NODE_SET_PRIORITY_FAMILIES = (
+    "combo",
+    "prologue-reorder",
+    "assignment-chain",
+    "operand-alias",
+    "block-scope",
+)
+_NODE_SET_SCALAR_DECL_RE = re.compile(
+    r"^\s*(?P<type>.+?)(?P<name>[A-Za-z_][A-Za-z_0-9]*)"
+    r"\s*(?:=[^;]*)?;\s*$",
+    re.DOTALL,
+)
+_NODE_SET_SIMPLE_ASSIGNMENT_RE = re.compile(
+    r"^\s*(?P<lhs>[A-Za-z_][A-Za-z_0-9]*)\s*=\s*(?P<rhs>.+);\s*$",
+)
+_NODE_SET_SCALAR_CAST_RE = re.compile(
+    r"\(\s*"
+    r"(?P<type>[A-Za-z_][A-Za-z_0-9]*(?:\s+[A-Za-z_][A-Za-z_0-9]*)*)"
+    r"\s*\)"
+)
+_NODE_SET_NUMERIC_LITERAL_RE = re.compile(
+    r"\b(?:"
+    r"0[xX][0-9A-Fa-f]+"
+    r"|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?"
+    r")[fFlLuU]*\b"
+)
+_NODE_SET_CONTROL_WORDS = (
+    "if",
+    "for",
+    "while",
+    "switch",
+    "else",
+    "do",
+    "return",
+    "goto",
+    "break",
+    "continue",
+)
+_NODE_SET_ALLOWED_GPR_TYPES = {
+    "s8",
+    "s16",
+    "s32",
+    "s64",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "ptr",
+}
+_NODE_SET_ALLOWED_FPR_TYPES = {"f32", "f64"}
+_NODE_SET_KNOWN_SCALAR_CALLS = {
+    "HSD_JObjGetTranslationX",
+    "HSD_JObjGetTranslationY",
+    "HSD_JObjGetTranslationZ",
+}
 
 
 def _deadline_expired(deadline: float | None) -> bool:
@@ -127,6 +184,19 @@ class _IntroduceBindingSite:
     occurrence_end: int
     binding_type: str
     mode: str
+
+
+@dataclass(frozen=True)
+class _SimpleAssignmentRecord:
+    lhs: str
+    rhs: str
+    start: int
+    end: int
+    line_end: int
+    line: str
+    block_id: int
+    reads: tuple[str, ...]
+    lhs_type: str
 
 
 def request_from_node_set_delta(
@@ -552,6 +622,741 @@ def _generate_node_set_request_patches(
         max_bind_sites=max_read_sites,
         max_read_sites=max_read_sites,
     )
+
+
+def _node_set_candidate_family(candidate_id: str) -> str:
+    if candidate_id.startswith("node-split-combo-"):
+        return "combo"
+    prefix = "node-split-"
+    if not candidate_id.startswith(prefix):
+        return "other"
+    remainder = candidate_id[len(prefix):]
+    for family in (
+        "prologue-reorder",
+        "assignment-chain",
+        "operand-alias",
+        "block-scope",
+        "decl-order",
+        "loop-rename",
+        "reassoc",
+        "introduce-binding",
+        "alias",
+        "lifetime",
+    ):
+        if remainder.startswith(f"{family}-"):
+            return family
+    return remainder.split("-", 1)[0] if remainder else "other"
+
+
+def _order_node_set_patches_for_search(
+    patches: list[CandidatePatch],
+    *,
+    cap: int | None = None,
+    priority_families: tuple[str, ...] = _NODE_SET_PRIORITY_FAMILIES,
+) -> list[CandidatePatch]:
+    by_family: dict[str, list[CandidatePatch]] = defaultdict(list)
+    family_order: list[str] = []
+    for patch in patches:
+        family = _node_set_candidate_family(patch.candidate_id)
+        if family not in by_family:
+            family_order.append(family)
+        by_family[family].append(patch)
+
+    ordered: list[CandidatePatch] = []
+    round_families = [
+        family for family in priority_families if family in by_family
+    ] + [
+        family for family in family_order if family not in priority_families
+    ]
+    while round_families:
+        next_round: list[str] = []
+        for family in round_families:
+            bucket = by_family[family]
+            if not bucket:
+                continue
+            ordered.append(bucket.pop(0))
+            if cap is not None and len(ordered) >= cap:
+                return ordered
+            if bucket:
+                next_round.append(family)
+        round_families = next_round
+    return ordered
+
+
+def _simple_assignment_records(
+    source: str,
+    function: str,
+    class_id: int,
+) -> list[_SimpleAssignmentRecord]:
+    span = find_function(source, function)
+    if span is None:
+        return []
+
+    stripped = _strip_c_comments(source)
+    body_start = span.body_open + 1
+    body_end = span.body_close
+    if _node_set_region_has_comment(source, body_start, body_end):
+        return []
+    if _node_set_region_has_global_unsafe_tokens(stripped, body_start, body_end):
+        return []
+
+    param_types = _node_set_param_scalar_types(source, function)
+    all_declared_types = dict(param_types)
+    for stmt_start, stmt_end, _block_id in _iter_node_set_statement_ranges(
+        stripped,
+        body_start,
+        body_end,
+    ):
+        decl_parts = _parse_node_set_scalar_decl_parts(
+            stripped[stmt_start:stmt_end]
+        )
+        if decl_parts is not None:
+            name, type_name, _initializer = decl_parts
+            if name in all_declared_types and all_declared_types[name] != type_name:
+                return []
+            all_declared_types[name] = type_name
+
+    if _node_set_region_takes_address_of_name(
+        stripped,
+        set(all_declared_types),
+        body_start,
+        body_end,
+    ):
+        return []
+
+    records: list[_SimpleAssignmentRecord] = []
+    scope_types: list[dict[str, str]] = [dict(param_types)]
+    scope_invalid: list[set[str]] = [set()]
+    for event in _iter_node_set_scan_events(
+        stripped,
+        body_start,
+        body_end,
+    ):
+        event_kind = event[0]
+        if event_kind == "enter":
+            scope_types.append({})
+            scope_invalid.append(set())
+            continue
+        if event_kind == "exit":
+            if len(scope_types) > 1:
+                scope_types.pop()
+                scope_invalid.pop()
+            continue
+
+        _kind, stmt_start, stmt_end, block_id = event
+        stmt_text = stripped[stmt_start:stmt_end]
+        decl_parts = _parse_node_set_scalar_decl_parts(stmt_text)
+        if decl_parts is not None:
+            name, type_name, initializer = decl_parts
+            if name in scope_types[-1] and scope_types[-1][name] != type_name:
+                return []
+            visible_before_decl = _node_set_visible_types(scope_types)
+            invalid_before_decl = _node_set_visible_invalid_names(
+                scope_types,
+                scope_invalid,
+            )
+            scope_types[-1][name] = type_name
+            if initializer is None:
+                scope_invalid[-1].discard(name)
+            else:
+                rhs_status, _reads = _node_set_safe_rhs_reads(
+                    initializer,
+                    visible_before_decl,
+                    invalid_before_decl,
+                )
+                if rhs_status == "safe" or not _node_set_assignment_invalidates_lhs(
+                    initializer,
+                    rhs_status,
+                    visible_before_decl,
+                    invalid_before_decl,
+                ):
+                    scope_invalid[-1].discard(name)
+                else:
+                    scope_invalid[-1].add(name)
+            continue
+
+        assignment = _parse_node_set_simple_assignment(stmt_text)
+        if assignment is None:
+            compound_update = _parse_node_set_compound_update(stmt_text)
+            if compound_update is not None:
+                lhs, rhs = compound_update
+                lhs_type = _node_set_lookup_visible_type(scope_types, lhs)
+                visible_types = _node_set_visible_types(scope_types)
+                invalid_names = _node_set_visible_invalid_names(
+                    scope_types,
+                    scope_invalid,
+                )
+                rhs_status, _reads = _node_set_safe_rhs_reads(
+                    rhs,
+                    visible_types,
+                    invalid_names,
+                )
+                if (
+                    lhs_type in _NODE_SET_ALLOWED_FPR_TYPES
+                    and rhs_status == "safe"
+                    and lhs not in invalid_names
+                ):
+                    _node_set_mark_valid(scope_types, scope_invalid, lhs)
+                else:
+                    _node_set_mark_invalid(scope_types, scope_invalid, lhs)
+                continue
+
+            for name in _node_set_statement_invalidated_names(stmt_text):
+                _node_set_mark_invalid(scope_types, scope_invalid, name)
+            continue
+
+        lhs, rhs = assignment
+        lhs_type = _node_set_lookup_visible_type(scope_types, lhs)
+        if lhs_type is None:
+            continue
+        visible_types = _node_set_visible_types(scope_types)
+        invalid_names = _node_set_visible_invalid_names(scope_types, scope_invalid)
+        rhs_status, reads = _node_set_safe_rhs_reads(
+            rhs,
+            visible_types,
+            invalid_names,
+        )
+        if rhs_status != "safe":
+            if _node_set_assignment_invalidates_lhs(
+                rhs,
+                rhs_status,
+                visible_types,
+                invalid_names,
+            ):
+                _node_set_mark_invalid(scope_types, scope_invalid, lhs)
+            else:
+                _node_set_mark_valid(scope_types, scope_invalid, lhs)
+            continue
+
+        _node_set_mark_valid(scope_types, scope_invalid, lhs)
+        if not _node_set_type_allowed_for_class(lhs_type, class_id):
+            continue
+        line_start = source.rfind("\n", 0, stmt_start) + 1
+        next_line = source.find("\n", stmt_end)
+        line_end = len(source) if next_line < 0 else next_line + 1
+        records.append(_SimpleAssignmentRecord(
+            lhs=lhs,
+            rhs=rhs.strip(),
+            start=stmt_start,
+            end=stmt_end,
+            line_end=line_end,
+            line=source[line_start:line_end],
+            block_id=block_id,
+            reads=reads,
+            lhs_type=lhs_type,
+        ))
+    return records
+
+
+def _node_set_region_has_comment(source: str, start: int, end: int) -> bool:
+    i = start
+    while i < end:
+        ch = source[i]
+        if ch in {'"', "'"}:
+            quote = ch
+            i += 1
+            while i < end:
+                if source[i] == "\\" and i + 1 < end:
+                    i += 2
+                    continue
+                if source[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == "/" and i + 1 < end and source[i + 1] in {"/", "*"}:
+            return True
+        i += 1
+    return False
+
+
+def _node_set_region_has_global_unsafe_tokens(
+    stripped: str,
+    start: int,
+    end: int,
+) -> bool:
+    text = stripped[start:end]
+    if re.search(r"(?m)^\s*#", text) is not None:
+        return True
+    if re.search(r"\bvolatile\b", text) is not None:
+        return True
+    if re.search(r"\b(?:case|default)\b[^;{}]*:", text) is not None:
+        return True
+    if re.search(r"(?:^|[;{}])\s*[A-Za-z_][A-Za-z_0-9]*\s*:", text) is not None:
+        return True
+    return False
+
+
+def _iter_node_set_statement_ranges(
+    stripped: str,
+    start: int,
+    end: int,
+):
+    for event in _iter_node_set_scan_events(stripped, start, end):
+        if event[0] == "stmt":
+            _kind, stmt_start, stmt_end, block_id = event
+            yield stmt_start, stmt_end, block_id
+
+
+def _iter_node_set_scan_events(
+    stripped: str,
+    start: int,
+    end: int,
+):
+    block_stack = [0]
+    next_block_id = 1
+    cursor = start
+    while cursor < end:
+        while cursor < end and stripped[cursor].isspace():
+            cursor += 1
+        if cursor >= end:
+            return
+        if stripped[cursor] == "{":
+            block_id = next_block_id
+            block_stack.append(block_id)
+            next_block_id += 1
+            yield "enter", block_id
+            cursor += 1
+            continue
+        if stripped[cursor] == "}":
+            if len(block_stack) > 1:
+                block_stack.pop()
+                yield "exit", block_stack[-1]
+            cursor += 1
+            continue
+        if _node_set_control_starts_at(stripped, cursor):
+            cursor = _skip_node_set_control_statement(stripped, cursor, end)
+            continue
+
+        statement_end = _find_statement_semicolon(stripped, cursor, end)
+        if statement_end is None:
+            return
+        if stripped[statement_end] != ";":
+            cursor = statement_end + 1
+            continue
+        yield "stmt", cursor, statement_end + 1, block_stack[-1]
+        cursor = statement_end + 1
+
+
+def _node_set_control_starts_at(stripped: str, offset: int) -> bool:
+    return any(
+        _keyword_at(stripped, offset, keyword)
+        for keyword in _NODE_SET_CONTROL_WORDS
+    )
+
+
+def _skip_node_set_control_statement(
+    stripped: str,
+    start: int,
+    end: int,
+) -> int:
+    boundary = _find_statement_semicolon(stripped, start, end)
+    if boundary is None:
+        return end
+    if stripped[boundary] == "{":
+        return _skip_balanced_node_set_block(stripped, boundary, end)
+    return boundary + 1
+
+
+def _skip_balanced_node_set_block(stripped: str, open_brace: int, end: int) -> int:
+    depth = 0
+    cursor = open_brace
+    while cursor < end:
+        ch = stripped[cursor]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return cursor + 1
+        cursor += 1
+    return end
+
+
+def _node_set_param_scalar_types(source: str, function: str) -> dict[str, str]:
+    extracted = _extract_function_text(source, function)
+    if extracted is None:
+        return {}
+    params_text, _body_text, _line = extracted
+    types: dict[str, str] = {}
+    for decl in _parse_params(params_text):
+        type_name = _normalize_node_set_scalar_type(decl.type_str)
+        if type_name is not None:
+            types[decl.name] = type_name
+    return types
+
+
+def _parse_node_set_scalar_decl(statement: str) -> tuple[str, str] | None:
+    parts = _parse_node_set_scalar_decl_parts(statement)
+    if parts is None:
+        return None
+    name, type_name, _initializer = parts
+    return name, type_name
+
+
+def _parse_node_set_scalar_decl_parts(
+    statement: str,
+) -> tuple[str, str, str | None] | None:
+    text = statement.strip()
+    if not text.endswith(";"):
+        return None
+    text = text[:-1]
+    left, sep, initializer = text.partition("=")
+    if any(ch in left for ch in "[]{}(),"):
+        return None
+    match = _NODE_SET_SCALAR_DECL_RE.match(left + ";")
+    if match is None:
+        return None
+    type_part = match.group("type")
+    if not type_part or (
+        not type_part[-1].isspace() and type_part[-1] != "*"
+    ):
+        return None
+    type_name = _normalize_node_set_scalar_type(type_part)
+    if type_name is None:
+        return None
+    return match.group("name"), type_name, initializer.strip() if sep else None
+
+
+def _parse_node_set_simple_assignment(statement: str) -> tuple[str, str] | None:
+    if "\n" in statement.strip():
+        return None
+    match = _NODE_SET_SIMPLE_ASSIGNMENT_RE.match(statement)
+    if match is None:
+        return None
+    return match.group("lhs"), match.group("rhs")
+
+
+def _parse_node_set_compound_update(statement: str) -> tuple[str, str] | None:
+    if "\n" in statement.strip():
+        return None
+    match = re.match(
+        r"^\s*(?P<lhs>[A-Za-z_][A-Za-z_0-9]*)\s*"
+        r"(?P<op>[+\-*/%&|^]|<<|>>)=\s*(?P<rhs>.+);\s*$",
+        statement,
+    )
+    if match is None:
+        return None
+    return match.group("lhs"), match.group("rhs")
+
+
+def _node_set_statement_is_barrier(statement: str) -> bool:
+    text = statement.strip()
+    if not text:
+        return False
+    if "=" in text:
+        return True
+    if any(token in text for token in ("[", "]", ".", "->", "?", ":", ",")):
+        return True
+    if any(op in text for op in ("++", "--", "&&", "||")):
+        return True
+    if re.search(r"\b[A-Za-z_][A-Za-z_0-9]*\s*\(", text) is not None:
+        return True
+    if "&" in text or re.search(r"(^|[^A-Za-z_0-9])\*", text) is not None:
+        return True
+    return any(
+        re.search(rf"\b{keyword}\b", text) is not None
+        for keyword in _NODE_SET_CONTROL_WORDS
+    )
+
+
+def _node_set_safe_rhs_reads(
+    rhs: str,
+    visible_types: Mapping[str, str],
+    invalid_names: set[str] | None = None,
+) -> tuple[str, tuple[str, ...]]:
+    invalid_names = invalid_names or set()
+    text = _node_set_strip_scalar_casts(rhs).strip()
+    if not text:
+        return "unsafe", ()
+    token_text = _node_set_strip_numeric_literals(text)
+    if '"' in text or "'" in text:
+        return "unsafe", ()
+    if _node_set_rhs_has_call(token_text):
+        return "call", ()
+    if any(token in token_text for token in ("[", "]", ".", "->", "?", ":", ",")):
+        return "unsafe", ()
+    if any(op in token_text for op in ("++", "--", "&&", "||")):
+        return "unsafe", ()
+    if re.search(r"<<=|>>=|[+\-*/%&|^]=", token_text) is not None:
+        return "unsafe", ()
+    if re.search(r"(?<![=!<>])=(?!=)", token_text) is not None:
+        return "unsafe", ()
+    if "&" in token_text or "|" in token_text or "^" in token_text:
+        return "unsafe", ()
+    if _node_set_rhs_has_unary_deref(token_text):
+        return "unsafe", ()
+    if any(
+        re.search(rf"\b{keyword}\b", token_text) is not None
+        for keyword in _NODE_SET_CONTROL_WORDS
+    ):
+        return "unsafe", ()
+
+    reads = tuple(dict.fromkeys(_node_set_identifier_reads(token_text)))
+    if any(name not in visible_types for name in reads):
+        return "unsafe", ()
+    if any(name in invalid_names for name in reads):
+        return "unsafe", ()
+    return "safe", reads
+
+
+def _node_set_strip_scalar_casts(text: str) -> str:
+    def replace_cast(match: re.Match[str]) -> str:
+        type_name = match.group("type")
+        if _normalize_node_set_scalar_type(type_name) is None:
+            return match.group(0)
+        return " "
+
+    return _NODE_SET_SCALAR_CAST_RE.sub(replace_cast, text)
+
+
+def _node_set_strip_numeric_literals(text: str) -> str:
+    return _NODE_SET_NUMERIC_LITERAL_RE.sub(" ", text)
+
+
+def _node_set_assignment_invalidates_lhs(
+    rhs: str,
+    rhs_status: str,
+    visible_types: Mapping[str, str],
+    invalid_names: set[str],
+) -> bool:
+    if rhs_status == "safe":
+        return False
+    if rhs_status != "call":
+        return True
+    return not _node_set_known_scalar_call_rhs_is_valid(
+        rhs,
+        visible_types,
+        invalid_names,
+    )
+
+
+def _node_set_known_scalar_call_rhs_is_valid(
+    rhs: str,
+    visible_types: Mapping[str, str],
+    invalid_names: set[str],
+) -> bool:
+    text = _node_set_strip_scalar_casts(rhs).strip()
+    call_names = re.findall(r"\b([A-Za-z_][A-Za-z_0-9]*)\s*\(", text)
+    if not call_names or any(name not in _NODE_SET_KNOWN_SCALAR_CALLS for name in call_names):
+        return False
+
+    without_calls = text
+    for name in call_names:
+        without_calls = re.sub(
+            rf"\b{re.escape(name)}\s*\([^()]*\)",
+            " ",
+            without_calls,
+        )
+    read_text = _node_set_strip_numeric_literals(without_calls)
+    reads = tuple(dict.fromkeys(_node_set_identifier_reads(read_text)))
+    return all(
+        name in visible_types and name not in invalid_names
+        for name in reads
+    )
+
+
+def _node_set_rhs_has_call(text: str) -> bool:
+    return re.search(r"\b[A-Za-z_][A-Za-z_0-9]*\s*\(", text) is not None
+
+
+def _node_set_rhs_has_unary_deref(text: str) -> bool:
+    for match in re.finditer(r"\*", text):
+        offset = match.start()
+        prev = _previous_nonspace_offset(text, offset - 1)
+        next_offset = offset + 1
+        while next_offset < len(text) and text[next_offset].isspace():
+            next_offset += 1
+        if next_offset >= len(text):
+            continue
+        if prev is None or text[prev] in "(,+-/%&|^!~?:=":
+            return True
+    return False
+
+
+def _node_set_identifier_reads(text: str) -> list[str]:
+    return re.findall(r"\b[A-Za-z_][A-Za-z_0-9]*\b", text)
+
+
+def _node_set_visible_types(scope_types: list[dict[str, str]]) -> dict[str, str]:
+    visible: dict[str, str] = {}
+    for scope in scope_types:
+        visible.update(scope)
+    return visible
+
+
+def _node_set_visible_invalid_names(
+    scope_types: list[dict[str, str]],
+    scope_invalid: list[set[str]],
+) -> set[str]:
+    invalid: set[str] = set()
+    visible_names = set(_node_set_visible_types(scope_types))
+    for name in visible_names:
+        scope_idx = _node_set_lookup_scope_index(scope_types, name)
+        if scope_idx is not None and name in scope_invalid[scope_idx]:
+            invalid.add(name)
+    return invalid
+
+
+def _node_set_lookup_visible_type(
+    scope_types: list[dict[str, str]],
+    name: str,
+) -> str | None:
+    scope_idx = _node_set_lookup_scope_index(scope_types, name)
+    if scope_idx is None:
+        return None
+    return scope_types[scope_idx][name]
+
+
+def _node_set_lookup_scope_index(
+    scope_types: list[dict[str, str]],
+    name: str,
+) -> int | None:
+    for idx in range(len(scope_types) - 1, -1, -1):
+        if name in scope_types[idx]:
+            return idx
+    return None
+
+
+def _node_set_mark_invalid(
+    scope_types: list[dict[str, str]],
+    scope_invalid: list[set[str]],
+    name: str,
+) -> None:
+    scope_idx = _node_set_lookup_scope_index(scope_types, name)
+    if scope_idx is not None:
+        scope_invalid[scope_idx].add(name)
+
+
+def _node_set_mark_valid(
+    scope_types: list[dict[str, str]],
+    scope_invalid: list[set[str]],
+    name: str,
+) -> None:
+    scope_idx = _node_set_lookup_scope_index(scope_types, name)
+    if scope_idx is not None:
+        scope_invalid[scope_idx].discard(name)
+
+
+def _node_set_statement_invalidated_names(statement: str) -> tuple[str, ...]:
+    text = statement.strip()
+    names: list[str] = []
+    for pattern in (
+        r"^\s*(?P<name>[A-Za-z_][A-Za-z_0-9]*)\s*(?:\+\+|--)\s*;",
+        r"^\s*(?:\+\+|--)\s*(?P<name>[A-Za-z_][A-Za-z_0-9]*)\s*;",
+        r"^\s*(?P<name>[A-Za-z_][A-Za-z_0-9]*)\s*(?:<<|>>|[+\-*/%&|^])=",
+    ):
+        match = re.match(pattern, text)
+        if match is not None:
+            names.append(match.group("name"))
+    return tuple(dict.fromkeys(names))
+
+
+def _node_set_region_takes_address_of_name(
+    stripped: str,
+    names: set[str],
+    start: int,
+    end: int,
+) -> bool:
+    if not names:
+        return False
+    cursor = start
+    while cursor < end:
+        ampersand = stripped.find("&", cursor, end)
+        if ampersand < 0:
+            return False
+        cursor = ampersand + 1
+        if ampersand > start and stripped[ampersand - 1] == "&":
+            continue
+        if cursor < end and stripped[cursor] == "&":
+            cursor += 1
+            continue
+        probe = cursor
+        while probe < end and stripped[probe].isspace():
+            probe += 1
+        while probe < end and stripped[probe] == "(":
+            probe += 1
+            while probe < end and stripped[probe].isspace():
+                probe += 1
+        for name in names:
+            if _name_at(stripped, name, probe):
+                return True
+    return False
+
+
+def _node_set_type_allowed_for_class(type_name: str, class_id: int) -> bool:
+    if class_id == 1:
+        return type_name in _NODE_SET_ALLOWED_FPR_TYPES
+    if class_id == 0:
+        return type_name in _NODE_SET_ALLOWED_GPR_TYPES
+    return type_name in _NODE_SET_ALLOWED_FPR_TYPES | _NODE_SET_ALLOWED_GPR_TYPES
+
+
+def _normalize_node_set_scalar_type(type_str: str | None) -> str | None:
+    if type_str is None:
+        return None
+    normalized = " ".join(type_str.replace("*", " * ").split())
+    if not normalized or any(ch in normalized for ch in "[]{}();,="):
+        return None
+    tokens = normalized.split()
+    if "volatile" in tokens:
+        return None
+    if "*" in tokens:
+        return "ptr"
+    tokens = [
+        token for token in tokens
+        if token not in {"const", "register", "static"}
+    ]
+    if not tokens:
+        return None
+    compact = " ".join(tokens)
+    aliases = {
+        "f32": "f32",
+        "float": "f32",
+        "f64": "f64",
+        "double": "f64",
+        "s8": "s8",
+        "signed char": "s8",
+        "char": "s8",
+        "s16": "s16",
+        "short": "s16",
+        "short int": "s16",
+        "signed short": "s16",
+        "signed short int": "s16",
+        "s32": "s32",
+        "int": "s32",
+        "signed": "s32",
+        "signed int": "s32",
+        "long": "s32",
+        "long int": "s32",
+        "signed long": "s32",
+        "signed long int": "s32",
+        "BOOL": "s32",
+        "bool": "s32",
+        "s64": "s64",
+        "long long": "s64",
+        "long long int": "s64",
+        "signed long long": "s64",
+        "signed long long int": "s64",
+        "u8": "u8",
+        "unsigned char": "u8",
+        "u16": "u16",
+        "unsigned short": "u16",
+        "unsigned short int": "u16",
+        "u32": "u32",
+        "unsigned": "u32",
+        "unsigned int": "u32",
+        "unsigned long": "u32",
+        "unsigned long int": "u32",
+        "u64": "u64",
+        "unsigned long long": "u64",
+        "unsigned long long int": "u64",
+    }
+    return aliases.get(compact)
+
+
+def _node_set_short_digest(text: str) -> str:
+    return sha1(text.encode("utf-8")).hexdigest()[:8]
 
 
 def evaluate_node_set_split_signature(

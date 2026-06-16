@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+import src.mwcc_debug.node_set_split as node_set_split
 from src.mwcc_debug import tiebreak as tb
 from src.mwcc_debug.colorgraph_parser import ColorgraphDecision, ColorgraphSection
 from src.mwcc_debug.node_set_split import (
@@ -509,6 +510,205 @@ def test_generate_node_set_split_patches_emits_alias_and_lifetime_candidates() -
     assert "node-split-lifetime-holder-ig40-use0" in ids
     assert len({patch.patched_source for patch in patches}) == len(patches)
     assert all("@@" in patch.hunk for patch in patches)
+
+
+def test_node_set_patch_order_prioritizes_new_families_before_high_volume_legacy() -> None:
+    source = "void fn_test(void) { int x; }\n"
+    patches = [
+        CandidatePatch(f"node-split-alias-holder-ig40-use{i}", source, "old alias", ((0, 0),))
+        for i in range(8)
+    ] + [
+        CandidatePatch("node-split-prologue-reorder-holder-ig40-b0-s10", source + "/*a*/", "new reorder", ((0, 0),)),
+        CandidatePatch("node-split-assignment-chain-holder-ig40-b0-s20-o0", source + "/*b*/", "new chain", ((0, 0),)),
+        CandidatePatch("node-split-operand-alias-holder-ig40-b0-s30-o0", source + "/*c*/", "new alias", ((0, 0),)),
+        CandidatePatch("node-split-block-scope-holder-ig40-b0-s40-w2", source + "/*d*/", "new scope", ((0, 0),)),
+        CandidatePatch("node-split-combo-holder-ig40-prologue-reorder+operand-alias-c0-a1b2c3", source + "/*e*/", "combo", ((0, 0),)),
+    ]
+
+    ordered = node_set_split._order_node_set_patches_for_search(patches)
+    first_families = [
+        node_set_split._node_set_candidate_family(patch.candidate_id)
+        for patch in ordered[:5]
+    ]
+
+    assert first_families == [
+        "combo",
+        "prologue-reorder",
+        "assignment-chain",
+        "operand-alias",
+        "block-scope",
+    ]
+
+
+def test_node_set_simple_assignment_records_require_immediate_block_and_safe_rhs() -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    f32 a;\n"
+        "    f32 b;\n"
+        "    f32 c;\n"
+        "    a = b;\n"
+        "    {\n"
+        "        b = c;\n"
+        "    }\n"
+        "    c = call(a);\n"
+        "}\n"
+    )
+
+    records = node_set_split._simple_assignment_records(source, "fn_test", class_id=1)
+
+    by_lhs = {record.lhs: record for record in records}
+    assert by_lhs["a"].block_id == 0
+    assert by_lhs["b"].block_id != by_lhs["a"].block_id
+    assert "c" not in by_lhs
+
+
+def test_node_set_simple_assignment_records_extracts_mndiagram_style_fpr_prologue() -> None:
+    source = (
+        "typedef float f32;\n"
+        "typedef unsigned char u8;\n"
+        "typedef signed int s32;\n"
+        "typedef struct Diagram { void* jobj; } Diagram;\n"
+        "void fn_test(Diagram* arg0, u8 arg1, u8 arg2) {\n"
+        "    Diagram* data;\n"
+        "    void* jobj;\n"
+        "    s32 digit_count;\n"
+        "    f32 x_spacing;\n"
+        "    f32 y_spacing;\n"
+        "    f32 y_offset;\n"
+        "    f32 col_offset;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    u8 col = arg1;\n"
+        "    u8 row = arg2;\n"
+        "\n"
+        "    data = arg0->jobj;\n"
+        "    jobj = make_jobj(data);\n"
+        "    digit_count = get_digit_count();\n"
+        "    x_spacing = 0.5f;\n"
+        "    y_spacing = 2.0f;\n"
+        "    y_offset = 3.0f;\n"
+        "    col_offset = y_spacing * (f32) col;\n"
+        "    row_offset = y_offset * (f32) row;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "\n"
+        "    if (digit_count != 0) {\n"
+        "        use(jobj, row_offset_adj);\n"
+        "    }\n"
+        "}\n"
+    )
+
+    records = node_set_split._simple_assignment_records(
+        source, "fn_test", class_id=1
+    )
+
+    by_lhs = {record.lhs: record for record in records}
+    assert "col_offset" in by_lhs
+    assert "row_offset" in by_lhs
+    assert "row_offset_adj" in by_lhs
+    assert "row_offset" in by_lhs["row_offset_adj"].reads
+
+
+def test_node_set_simple_assignment_records_rejects_out_of_scope_inner_local_read() -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int a;\n"
+        "    {\n"
+        "        int b;\n"
+        "    }\n"
+        "    a = b;\n"
+        "}\n"
+    )
+
+    records = node_set_split._simple_assignment_records(source, "fn_test", class_id=0)
+
+    assert records == []
+
+
+def test_node_set_simple_assignment_records_rejects_else_block_local_after_scope_exit() -> None:
+    source = (
+        "void fn_test(int cond) {\n"
+        "    int a;\n"
+        "    if (cond) {\n"
+        "    } else {\n"
+        "        int b;\n"
+        "    }\n"
+        "    a = b;\n"
+        "}\n"
+    )
+
+    records = node_set_split._simple_assignment_records(source, "fn_test", class_id=0)
+
+    assert records == []
+
+
+def test_node_set_simple_assignment_records_skips_else_block_assignments() -> None:
+    source = (
+        "void fn_test(int cond) {\n"
+        "    int a;\n"
+        "    int b;\n"
+        "    if (cond) {\n"
+        "        a = b;\n"
+        "    } else {\n"
+        "        b = a;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    records = node_set_split._simple_assignment_records(source, "fn_test", class_id=0)
+
+    assert records == []
+
+
+def test_node_set_simple_assignment_records_rejects_multiline_assignment() -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int a;\n"
+        "    int b;\n"
+        "    a =\n"
+        "        b;\n"
+        "}\n"
+    )
+
+    records = node_set_split._simple_assignment_records(source, "fn_test", class_id=0)
+
+    assert records == []
+
+
+def test_node_set_simple_assignment_records_rejects_unsafe_initialized_declaration() -> None:
+    source = (
+        "void fn_test(void) {\n"
+        "    int* p;\n"
+        "    int a = *p;\n"
+        "    int b;\n"
+        "    b = a;\n"
+        "}\n"
+    )
+
+    records = node_set_split._simple_assignment_records(source, "fn_test", class_id=0)
+
+    assert records == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "void fn_test(void) { int a; int b; switch (a) { case 0: b = a; } }\n",
+        "void fn_test(void) { int a; int b; a = b; /* preserve order */ b = a; }\n",
+        "void fn_test(void) { int a; int b; a = (b, 1); b = a; }\n",
+        "void fn_test(void) { int a; int b; a = b ? 1 : 2; b = a; }\n",
+        "void fn_test(void) { int a; int b; a = b && 1; b = a; }\n",
+        "void fn_test(void) { volatile int a; int b; a = b; b = a; }\n",
+        "void fn_test(void) { int a; int b; take(&a); b = a; }\n",
+        "void fn_test(void) { int a; int b; a++; b = a; }\n",
+        "void fn_test(void) { int a; int b[2]; a = b[0]; b[1] = a; }\n",
+        "void fn_test(void) { int a; int* p; a = *p; use(a); }\n",
+        "void fn_test(void) { int a; int b; a += b; b = a; }\n",
+    ],
+)
+def test_node_set_simple_assignment_records_reject_spec_unsafe_regions(source: str) -> None:
+    records = node_set_split._simple_assignment_records(source, "fn_test", class_id=0)
+
+    assert records == []
 
 
 def test_generate_node_set_split_patches_emits_decl_order_candidates() -> None:
