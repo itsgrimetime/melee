@@ -12,6 +12,7 @@ unit-testable in isolation.
 """
 from __future__ import annotations
 
+import re
 import enum
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Mapping, NamedTuple, Optional
@@ -59,6 +60,13 @@ class SourceIdea:                    # the ADVISORY layer (Task 9 fills it)
     blocker_alternates: tuple[str, ...] = ()
     blocker_rejected: tuple[str, ...] = ()
     blocker_first_def: Optional[str] = None
+    source_kind: Optional[str] = None
+    source_expression: Optional[str] = None
+    source_file: Optional[str] = None
+    source_line: Optional[int] = None
+    source_col: Optional[int] = None
+    source_confidence: Optional[str] = None
+    candidate_spans: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -609,6 +617,102 @@ def _first_def_summary(ig_idx: int, pre_pass) -> Optional[str]:
     return f"B{first.block_idx}: {first.opcode} {first.operands}"
 
 
+def _source_attribution_for_ig(
+    ig_idx: int,
+    *,
+    class_id: int,
+    source_text: str,
+    fn_name: str,
+    pre_pass,
+    source_file: str | None,
+):
+    if not source_text or pre_pass is None:
+        return None
+    reg_kind = "f" if class_id == 1 else "r"
+    try:
+        from .virtual_attribution import (
+            _find_first_def_site,
+            _source_from_first_def,
+            _source_from_fpr_expression_assignment,
+        )
+        site = _find_first_def_site(ig_idx, pre_pass, reg_kind=reg_kind)
+        if site is None:
+            return None
+        if reg_kind == "f":
+            expr_source = _source_from_fpr_expression_assignment(
+                site,
+                function=fn_name,
+                pre_pass=pre_pass,
+                source_text=source_text,
+                source_file=source_file,
+            )
+            if expr_source is not None:
+                return expr_source
+        return _source_from_first_def(site, source_file=source_file)
+    except Exception:
+        return None
+
+
+_GPR_OPERAND_RE = re.compile(r"\br(?P<num>\d+)\b")
+
+
+def _operand_virtuals_from_source(source) -> tuple[int, ...]:
+    text = ""
+    first_def = getattr(source, "first_def", None)
+    if first_def is not None:
+        text = str(getattr(first_def, "operands", "") or "")
+    if not text:
+        text = str(getattr(source, "expression", "") or "")
+    seen: set[int] = set()
+    out: list[int] = []
+    for match in _GPR_OPERAND_RE.finditer(text):
+        num = int(match.group("num"))
+        if num < 32 or num in seen:
+            continue
+        seen.add(num)
+        out.append(num)
+    return tuple(out)
+
+
+def _candidate_spans_for_source(
+    source,
+    *,
+    target_ig: int,
+    bindings: list,
+    pre_pass,
+    source_file: str | None,
+) -> tuple[str, ...]:
+    spans: list[str] = []
+    src_file = source_file or getattr(source, "source_file", None)
+    source_line = getattr(source, "source_line", None)
+    if src_file and source_line is not None:
+        col = getattr(source, "source_col", None)
+        loc = f"{src_file}:{source_line}"
+        if col is not None:
+            loc += f":{col}"
+        expr = getattr(source, "expression", None) or getattr(source, "name", None)
+        spans.append(f"{loc} {expr}".strip())
+
+    for virtual in _operand_virtuals_from_source(source):
+        if virtual == target_ig:
+            continue
+        binding, _alts, _rejected, first_def = _source_context_for_ig(
+            virtual, bindings, pre_pass
+        )
+        if binding is not None:
+            name = getattr(binding, "var_name", f"r{virtual}")
+            line = getattr(binding, "decl_line", None)
+            conf = getattr(binding, "confidence", None)
+            loc = f"{src_file}:{line}" if src_file and line is not None else ""
+            detail = f"operand r{virtual} -> {name}"
+            if conf:
+                detail += f" [{conf}]"
+            spans.append(f"{loc} {detail}".strip())
+        elif first_def is not None:
+            spans.append(f"operand r{virtual}: first def {first_def}")
+    return tuple(spans)
+
+
 def _source_context_for_ig(
     ig_idx: int,
     bindings: list,
@@ -632,7 +736,7 @@ def _source_context_for_ig(
 
 
 def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
-                        pre_pass) -> SourceIdea:
+                        pre_pass, source_file: str | None = None) -> SourceIdea:
     """Step 4/5 advisory layer (NEVER gated). Emits the ig->var best guess +
     confidence-ranked alternates, plus case-level structural ideas. The
     structural ideas are always present; the var binding degrades to None when
@@ -641,6 +745,16 @@ def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
     best, alternates, rejected, first_def = _source_context_for_ig(
         fact.ig_idx, all_bindings, pre_pass
     )
+    source_attr = None if best is not None else _source_attribution_for_ig(
+        fact.ig_idx,
+        class_id=fact.class_id,
+        source_text=source_text,
+        fn_name=fn_name,
+        pre_pass=pre_pass,
+        source_file=source_file,
+    )
+    if source_attr is not None:
+        first_def = first_def or _first_def_summary(fact.ig_idx, pre_pass)
     blocker_best = None
     blocker_alternates: tuple[str, ...] = ()
     blocker_rejected: tuple[str, ...] = ()
@@ -654,6 +768,32 @@ def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
         ) = _source_context_for_ig(fact.blocker_ig, all_bindings, pre_pass)
 
     ideas: list[str] = [fact.local_target]
+    source_name = getattr(source_attr, "name", None) if source_attr is not None else None
+    source_expr = (
+        getattr(source_attr, "expression", None)
+        if source_attr is not None else None
+    )
+    if (
+        source_attr is not None
+        and fact.class_id == 1
+        and fact.case in (DivergenceCase.C_DISPENSE_ORDER, DivergenceCase.C2_STICKY_POOL)
+    ):
+        label = source_name or source_expr or f"ig {fact.ig_idx}"
+        ideas.append(
+            f"FPR temp maps to {label}; try splitting, hoisting, sinking, or "
+            "reordering this float expression relative to the paired FPR temp, "
+            "then rerun first-divergence/explain-virtual."
+        )
+    if (
+        source_attr is not None
+        and getattr(source_attr, "kind", None) == "implicit-temp"
+    ):
+        ideas.append(
+            "implicit address temp: prioritize indexed-pointer-loop/address-temp "
+            "source levers (name the address expression, split base/index locals, "
+            "or convert between indexed access and pointer walk) before more "
+            "declaration-order cycling."
+        )
     if fact.case is DivergenceCase.A_BLOCKED and best is not None:
         ideas.append(f"shorten {best.var_name}'s live range so it doesn't overlap the blocker")
     if fact.case is DivergenceCase.A_BLOCKED and blocker_best is not None:
@@ -669,10 +809,26 @@ def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
     if fact.case is DivergenceCase.D_COALESCED and best is not None:
         ideas.append(f"split {best.var_name} so MWCC can't merge it into its coalesce root")
 
+    candidate_spans = (
+        ()
+        if source_attr is None
+        else _candidate_spans_for_source(
+            source_attr,
+            target_ig=fact.ig_idx,
+            bindings=all_bindings,
+            pre_pass=pre_pass,
+            source_file=source_file,
+        )
+    )
+
     return SourceIdea(
         ig_idx=fact.ig_idx,
-        var_name=(best.var_name if best is not None else None),
-        confidence=(best.confidence if best is not None else None),
+        var_name=(best.var_name if best is not None else source_name),
+        confidence=(
+            best.confidence if best is not None
+            else getattr(source_attr, "confidence", None)
+            if source_attr is not None else None
+        ),
         alternates=alternates,
         ideas=tuple(ideas),
         rejected=rejected,
@@ -687,6 +843,28 @@ def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
         blocker_alternates=blocker_alternates,
         blocker_rejected=blocker_rejected,
         blocker_first_def=blocker_first_def,
+        source_kind=(
+            getattr(source_attr, "kind", None)
+            if source_attr is not None else None
+        ),
+        source_expression=source_expr,
+        source_file=(
+            getattr(source_attr, "source_file", None)
+            if source_attr is not None else None
+        ),
+        source_line=(
+            getattr(source_attr, "source_line", None)
+            if source_attr is not None else None
+        ),
+        source_col=(
+            getattr(source_attr, "source_col", None)
+            if source_attr is not None else None
+        ),
+        source_confidence=(
+            getattr(source_attr, "confidence", None)
+            if source_attr is not None else None
+        ),
+        candidate_spans=candidate_spans,
     )
 
 
@@ -806,6 +984,20 @@ def format_report(report: FirstDivergenceReport) -> str:
                 lines.append(f"    first def: {s.first_def}")
         else:
             lines.append(f"  ig {s.ig_idx} -> var {s.var_name} [confidence: {s.confidence}]")
+        if s.source_kind or s.source_expression:
+            loc = ""
+            if s.source_file and s.source_line is not None:
+                loc = f" {s.source_file}:{s.source_line}"
+                if s.source_col is not None:
+                    loc += f":{s.source_col}"
+            expr = s.source_expression or s.var_name or "?"
+            conf = s.source_confidence or s.confidence or "unknown"
+            kind = s.source_kind or "source"
+            lines.append(f"  source:{loc} {expr} ({kind}, {conf})")
+        if s.candidate_spans:
+            lines.append("  candidate spans:")
+            for span in s.candidate_spans:
+                lines.append(f"    - {span}")
         if s.alternates:
             lines.append(f"  alternates: {', '.join(s.alternates)}")
         if s.rejected:

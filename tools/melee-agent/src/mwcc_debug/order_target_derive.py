@@ -86,6 +86,36 @@ class DeriveInputs:
     direct_evidence_register_only: bool | None = None
     # #705: honest coupling summary attached on the FPR node-set fallback.
     coupled_residual: dict | None = None
+    # #737: bounded force-vector verifier telemetry. The collector can return
+    # this before forced readbacks when the union probe times out or fails.
+    force_vector_probe: dict | None = None
+
+
+def _force_vector_probe_evidence(probe: dict | None) -> str:
+    if not isinstance(probe, dict):
+        return ""
+    union = probe.get("union")
+    if not isinstance(union, dict):
+        return ""
+    entries = union.get("entries") or probe.get("entries") or []
+    raws: list[str] = []
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get("raw"):
+                raws.append(str(entry["raw"]))
+    entries_text = ", ".join(raws[:8])
+    if len(raws) > 8:
+        entries_text += f", ... ({len(raws)} total)"
+    suffix = f" while verifying [{entries_text}]" if entries_text else ""
+    timeout = union.get("timeout_seconds")
+    if union.get("timed_out") is True:
+        if timeout is not None:
+            return f"force-vector union timed out after {timeout:g}s{suffix}"
+        return f"force-vector union timed out{suffix}"
+    status = union.get("status")
+    if status:
+        return f"force-vector union returned {status}{suffix}"
+    return ""
 
 
 def _target(inp: DeriveInputs, routing: Routing, *,
@@ -107,6 +137,7 @@ def _target(inp: DeriveInputs, routing: Routing, *,
         baseline_pcdump_sha256=inp.baseline_pcdump_sha256,
         routing=routing.value,
         class_evidence=class_evidence,
+        force_vector_probe=inp.force_vector_probe,
     )
 
 
@@ -159,6 +190,23 @@ def derive_order_target(inp: DeriveInputs) -> OrderTarget:
             ),
         )
 
+    # Step 4b can be known before Step 4a when the bounded union verifier
+    # timed out or failed and the collector deliberately skipped forced
+    # readbacks. Route that as not_order_class/inconclusive with the probe
+    # payload instead of misclassifying empty readback positions as a force
+    # application failure.
+    if not inp.forced_class_clean:
+        probe_evidence = _force_vector_probe_evidence(inp.force_vector_probe)
+        return _target(
+            inp, Routing.NOT_ORDER_CLASS,
+            class_evidence=(
+                probe_evidence
+                or "forced-ORDER build did not byte-eliminate the class residual; "
+                "order is a symptom of instruction-content/emission divergence "
+                "upstream of select (e.g. coalescing/VN/liveness/statement-copy skew)"
+            ),
+        )
+
     # Step 4a — verify application, POSITION-EXACT (B2). The ig at 0-based
     # list index i must sit at DECISIONS position i. Present-but-elsewhere is
     # a silent misapply; a force that did not apply must never produce a target.
@@ -178,17 +226,6 @@ def derive_order_target(inp: DeriveInputs) -> OrderTarget:
                 "forced igs did not apply at their forced positions ("
                 + "; ".join(misapplied)
                 + ") — silent no-op / stale DLL / cap overflow"
-            ),
-        )
-
-    # Step 4b — class-partition gate.
-    if not inp.forced_class_clean:
-        return _target(
-            inp, Routing.NOT_ORDER_CLASS,
-            class_evidence=(
-                "forced-ORDER build did not byte-eliminate the class residual; "
-                "order is a symptom of instruction-content/emission divergence "
-                "upstream of select (e.g. coalescing/VN/liveness/statement-copy skew)"
             ),
         )
 

@@ -1789,6 +1789,7 @@ def _collect_order_target_inputs(
                 force_cap_exceeded=False,
                 direct_evidence_register_only=direct_evidence_register_only,
                 coupled_residual=None,
+                force_vector_probe=None,
             )
             base.update(over)
             return DeriveInputs(**base)
@@ -1934,6 +1935,14 @@ def _collect_order_target_inputs(
             return _inert(
                 phys_target=phys_target, force_iter_first=window,
                 force_cap_exceeded=True,
+                force_vector_probe=probe,
+            )
+        if not forced_class_clean:
+            return _inert(
+                phys_target=phys_target,
+                force_iter_first=window,
+                forced_class_clean=False,
+                force_vector_probe=probe,
             )
 
         # ---- Steps 4-5: forced readback x2 (positions, ranks, igset, sha) --
@@ -2059,6 +2068,9 @@ def _run_force_vector_auto_verify(
             output_path=output_path,
             ordinal=ordinal,
         )
+        probe["timeout_seconds"] = per_probe_timeout_s
+        probe["status_label"] = f"force-vector {label}"
+        probe["command"] = " ".join(shlex.quote(part) for part in cmd)
         if label == "union":
             payload["union"] = probe
         else:
@@ -3555,19 +3567,24 @@ def first_divergence_cmd(
         # Advisory (non-gated): resolve the unit source + pre-coloring pass the
         # same way `virtual-to-var` does, then attach symbol-bridge ideas.
         # Degrades to structural-only ideas on any resolution failure.
-        src_text, pre = "", None
+        src_text, pre, src_file = "", None, None
         try:
             fn = next((f for f in parse_pcdump(text) if f.name == function), None)
             if fn is not None:
                 pre = fn.last_precolor_pass()
-            unit = _find_unit_for_function(function, DEFAULT_MELEE_ROOT)
-            if unit is not None:
-                src_text = (DEFAULT_MELEE_ROOT / "src" / f"{unit}.c").read_text()
+            source_path = _source_path_for_function(function, DEFAULT_MELEE_ROOT)
+            if source_path is not None:
+                src_text = source_path.read_text()
+                try:
+                    src_file = str(source_path.relative_to(DEFAULT_MELEE_ROOT))
+                except ValueError:
+                    src_file = str(source_path)
         except Exception:
-            src_text, pre = "", None
+            src_text, pre, src_file = "", None, None
         report = fd.FirstDivergenceReport(
             fact=report.fact,
-            source=fd.attach_source_ideas(report.fact, src_text, function, pre),
+            source=fd.attach_source_ideas(
+                report.fact, src_text, function, pre, source_file=src_file),
         )
     typer.echo(fd.format_report(report))
 
@@ -6867,6 +6884,40 @@ def _find_unit_for_function(func_name: str, melee_root: Path) -> Optional[str]:
                     and _report_function_virtual_address(function) == target_addr
                 ):
                     return unit.get("name", "").removeprefix("main/")
+    return None
+
+
+def _source_path_for_function(func_name: str, melee_root: Path) -> Optional[Path]:
+    unit = _find_unit_for_function(func_name, melee_root)
+    if unit is not None:
+        path = melee_root / "src" / f"{unit}.c"
+        if path.is_file():
+            return path
+
+    src_root = melee_root / "src"
+    if not src_root.is_dir():
+        return None
+
+    exact_matches: list[Path] = []
+    for path in sorted(src_root.rglob("*.c")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if find_source_function(text, func_name) is not None:
+            exact_matches.append(path)
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+
+    prefix = func_name.split("_", 1)[0].lower()
+    if not prefix:
+        return None
+    prefix_matches = [
+        path for path in sorted(src_root.rglob("*.c"))
+        if path.stem.lower() == prefix
+    ]
+    if len(prefix_matches) == 1:
+        return prefix_matches[0]
     return None
 
 
@@ -15087,6 +15138,16 @@ def order_target_cmd(
     checkdiff_timeout: Annotated[
         float, typer.Option("--checkdiff-timeout", help="Per-checkdiff timeout."),
     ] = 60.0,
+    force_vector_timeout: Annotated[
+        float,
+        typer.Option(
+            "--force-vector-timeout",
+            help=(
+                "Wall-clock timeout in seconds for the order-target "
+                "force-vector union verifier."
+            ),
+        ),
+    ] = 30.0,
     json_out: Annotated[
         bool, typer.Option("--json", help="Emit the full artifact as JSON."),
     ] = False,
@@ -15115,6 +15176,7 @@ def order_target_cmd(
     inputs = _collect_order_target_inputs(
         function=function, unit=resolved_unit, class_id=class_id,
         melee_root=melee_root, checkdiff_timeout=checkdiff_timeout,
+        force_vector_timeout=force_vector_timeout,
     )
     target = derive_order_target(inputs)
 
@@ -31986,6 +32048,16 @@ def mutate_simplify_order_cmd(
 
     print(f"Compiled:        {result.total_compiles} variant(s)")
     print(f"Compile fails:   {result.compile_failure_count}")
+    compile_failures = list(getattr(result, "compile_failures", ()) or ())
+    if compile_failures:
+        print("Compile failure diagnostics:")
+        for failure in compile_failures[:5]:
+            provenance = getattr(failure, "provenance", "?")
+            returncode = getattr(failure, "returncode", "?")
+            diagnostic = getattr(failure, "diagnostic", "")
+            print(f"  - {provenance} (rc={returncode}): {diagnostic}")
+        if len(compile_failures) > 5:
+            print(f"  ... {len(compile_failures) - 5} more failure(s)")
     print(f"Gate rejected:   {result.gate_rejected_count}")
     print(f"Progress hits:   {len(result.progress)}")
     print(f"Elapsed:         {result.elapsed_seconds:.1f}s")

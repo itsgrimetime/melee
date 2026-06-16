@@ -119,6 +119,26 @@ def test_class_residual_not_eliminated_routes_not_order_class():
     assert t.exit_code() == 4
 
 
+def test_class_residual_timeout_carries_force_vector_probe_diagnostic():
+    probe = {
+        "union": {
+            "status": "inconclusive",
+            "timed_out": True,
+            "timeout_seconds": 15.0,
+            "status_label": "force-vector union",
+            "entries": [{"raw": "class1:ig39:iter-first"}],
+        },
+    }
+    t = derive_order_target(_inputs(
+        forced_class_clean=False,
+        force_vector_probe=probe,
+    ))
+    assert t.routing == Routing.NOT_ORDER_CLASS.value
+    assert t.force_vector_probe == probe
+    assert "timed out after 15" in t.class_evidence
+    assert "class1:ig39:iter-first" in t.class_evidence
+
+
 def test_ig_set_drift_routes_unstable_target():
     t = derive_order_target(_inputs(forced_ig_set={46, 28, 29}))  # 31 vanished
     assert t.routing == Routing.UNSTABLE_TARGET.value

@@ -73,3 +73,21 @@ def test_order_target_json_emits_full_artifact(tmp_path, monkeypatch):
     payload = json.loads(result.output)
     assert payload["routing"] == "directed"
     assert payload["order_target"] == {"28": 2, "29": 3}
+
+
+def test_order_target_passes_force_vector_timeout(monkeypatch):
+    seen = {}
+
+    def fake_collect(**kw):
+        seen.update(kw)
+        return _directed_inputs()
+
+    monkeypatch.setattr(debugcli, "_collect_order_target_inputs", fake_collect)
+    result = runner.invoke(debugcli.debug_app, [
+        "target", "order-target", "-f", "mnDiagram_OnFrame",
+        "-u", "melee/mn/mndiagram",
+        "--force-vector-timeout", "12.5",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert seen["force_vector_timeout"] == 12.5

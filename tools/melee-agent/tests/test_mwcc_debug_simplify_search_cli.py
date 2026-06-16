@@ -654,6 +654,63 @@ def test_no_preserve_precolor_exact_hit_uses_qualified_headline(
     assert "insert-alias k@0" in result.stdout
 
 
+def test_compile_failure_summaries_are_rendered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stage_fake_melee_root(tmp_path, monkeypatch)
+
+    from src.mwcc_debug import simplify_search as _ss
+
+    def fake_search(*_args, **_kwargs):
+        return _ss.SearchResult(
+            exact_match=None,
+            progress=[],
+            gate_rejected_count=0,
+            gate_rejection_reasons=[],
+            rejected_scored=[],
+            compile_failure_count=2,
+            compile_failures=[
+                _ss.CompileFailureSummary(
+                    provenance="decl-orders swap row <-> col",
+                    returncode=1,
+                    diagnostic="sample.c:42: error: illegal implicit declaration",
+                ),
+                _ss.CompileFailureSummary(
+                    provenance="insert-alias addr temp",
+                    returncode=124,
+                    diagnostic="dump local timed out after 10s",
+                ),
+            ],
+            total_compiles=2,
+            elapsed_seconds=0.0,
+        )
+
+    monkeypatch.setattr(_ss, "search", fake_search)
+
+    from src.cli import debug as cli_debug
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(
+        cli_debug.mutate_app,
+        [
+            "simplify-order",
+            "--fn", "fn_test",
+            "--want-first", "42,32",
+            "--max-candidates", "2",
+        ],
+    )
+
+    assert result.exit_code == 0, (
+        f"stdout: {result.stdout}\nstderr: {result.stderr}\n"
+        f"exc: {result.exception}"
+    )
+    assert "Compile failure diagnostics:" in result.stdout
+    assert "decl-orders swap row <-> col" in result.stdout
+    assert "sample.c:42: error" in result.stdout
+    assert "insert-alias addr temp" in result.stdout
+    assert "timed out" in result.stdout
+
+
 def test_invalid_class_id_surfaces_available_classes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

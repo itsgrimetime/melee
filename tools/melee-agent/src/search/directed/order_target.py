@@ -77,6 +77,10 @@ class OrderTarget:
     # Routing (the class partition):
     routing: str                # one of Routing values
     class_evidence: str = ""
+    # Optional diagnostic from the collector's bounded force-vector verifier.
+    # Present mainly on not_order_class/inconclusive routings so callers can
+    # see exactly which force vector was tried and whether it timed out.
+    force_vector_probe: dict | None = None
     # Kill-switch assertion (c): the recorded pair that must flip, + provenance.
     named_pair: list = field(default_factory=list)
     named_pair_provenance: str = ""

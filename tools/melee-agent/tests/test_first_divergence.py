@@ -649,6 +649,109 @@ def test_attach_source_ideas_includes_blocker_context(monkeypatch):
     assert "B2: lwz r46,pl_804D6470(r0)" in rendered
 
 
+def test_attach_source_ideas_uses_fpr_expression_source(monkeypatch):
+    class _Source:
+        kind = "local"
+        confidence = "fpr-expression-order"
+        name = "row_offset"
+        expression = "y_offset * row"
+        source_file = "sample.c"
+        source_line = 12
+        source_col = 18
+        first_def = None
+
+    monkeypatch.setattr(fd, "_list_bindings_safe", lambda *a, **k: [])
+    monkeypatch.setattr(
+        fd,
+        "_source_attribution_for_ig",
+        lambda *a, **k: _Source(),
+        raising=False,
+    )
+    fact = fd.AllocatorFact(
+        class_id=1, ig_idx=39, case=fd.DivergenceCase.C2_STICKY_POOL,
+        iter_idx=3, baseline_reg=28, target_reg=26,
+        coalesced_nodes=(), coalesced_root=None, coalesced_root_phys=None,
+        blocker_ig=None, blocker_dependency=False,
+        working_mask=frozenset(), cap_hit=False,
+        earlier_unmapped_warning=False, local_target="shift FPR dispense order")
+
+    idea = fd.attach_source_ideas(
+        fact, source_text="...", fn_name="fn", pre_pass=object(),
+        source_file="sample.c")
+
+    assert idea.source_kind == "local"
+    assert idea.source_expression == "y_offset * row"
+    assert any("FPR" in text and "row_offset" in text for text in idea.ideas)
+
+    rendered = fd.format_report(fd.FirstDivergenceReport(fact=fact, source=idea))
+    assert "sample.c:12:18" in rendered
+    assert "y_offset * row" in rendered
+
+
+def test_attach_source_ideas_reports_implicit_address_temp_spans(monkeypatch):
+    class _Binding:
+        def __init__(self, name, virtual, line):
+            self.var_name = name
+            self.virtual = virtual
+            self.confidence = "best-guess"
+            self.scope_path = ("fn",)
+            self.decl_line = line
+            self.kind = "local"
+            self.type_str = "s32"
+
+    class _Site:
+        pass
+
+    site = _Site()
+    site.block_idx = 14
+    site.opcode = "add"
+    site.operands = "r44,r51,r34"
+
+    class _Source:
+        kind = "implicit-temp"
+        confidence = "pcode-first-def"
+        name = None
+        expression = "add r44,r51,r34"
+        source_file = "sample.c"
+        source_line = None
+        source_col = None
+        first_def = site
+
+    monkeypatch.setattr(fd, "_list_bindings_safe", lambda *a, **k: [
+        _Binding("base", 51, 40),
+        _Binding("index", 34, 41),
+    ])
+    monkeypatch.setattr(
+        fd,
+        "_source_attribution_for_ig",
+        lambda *a, **k: _Source(),
+        raising=False,
+    )
+    fact = fd.AllocatorFact(
+        class_id=0, ig_idx=44, case=fd.DivergenceCase.C_DISPENSE_ORDER,
+        iter_idx=29, baseline_reg=27, target_reg=25,
+        coalesced_nodes=(), coalesced_root=None, coalesced_root_phys=None,
+        blocker_ig=None, blocker_dependency=False,
+        working_mask=frozenset(), cap_hit=False,
+        earlier_unmapped_warning=False,
+        local_target="shift address temp simplify order")
+
+    idea = fd.attach_source_ideas(
+        fact, source_text="...", fn_name="fn", pre_pass=object(),
+        source_file="sample.c")
+
+    assert idea.source_kind == "implicit-temp"
+    assert "sample.c:40" in idea.candidate_spans[0]
+    assert "base" in idea.candidate_spans[0]
+    assert "sample.c:41" in idea.candidate_spans[1]
+    assert any("indexed-pointer-loop" in text for text in idea.ideas)
+
+    rendered = fd.format_report(fd.FirstDivergenceReport(fact=fact, source=idea))
+    assert "candidate spans:" in rendered
+    assert "base" in rendered
+    assert "index" in rendered
+
+
 def test_list_bindings_safe_passes_args_in_order(monkeypatch):
     """Regression for the --source mis-wiring: _list_bindings_safe must call
     list_bindings(source, fn_name, pre_pass) in that order. The original bug

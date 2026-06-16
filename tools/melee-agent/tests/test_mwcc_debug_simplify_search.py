@@ -19,6 +19,7 @@ from src.mwcc_debug.simplify_search import (
     BaselineSignature,
     CombinedScore,
     DEFAULT_COMBINED_ALPHA,
+    CompileFailureSummary,
     FunctionContext,
     GateResult,
     PrecolorDistance,
@@ -722,6 +723,11 @@ def test_search_swallows_compile_failures(
 
     assert result.exact_match is not None
     assert result.compile_failure_count == 1
+    assert result.compile_failures[0] == CompileFailureSummary(
+        provenance="broken",
+        returncode=1,
+        diagnostic="syntax error",
+    )
 
 
 def test_search_dedups_identical_variant_text_across_sources(

@@ -215,6 +215,15 @@ class RejectedCandidate:
 
 
 @dataclass(frozen=True)
+class CompileFailureSummary:
+    """Retained diagnostic for a source variant that failed to compile."""
+
+    provenance: str
+    returncode: int
+    diagnostic: str
+
+
+@dataclass(frozen=True)
 class SearchResult:
     """Output of `search()`.
 
@@ -237,6 +246,8 @@ class SearchResult:
         If memory ever becomes a concern we'd cap and drop the worst-scoring
         overflow.
       compile_failure_count: How many variants failed to compile.
+      compile_failures: Sample of failed-compile diagnostics, including variant
+        provenance, so CLI users can distinguish bad probes from silent search.
       total_compiles: How many variants were sent through the compile path
         (includes failures and gate-rejected). Bounded by `max_candidates`.
       elapsed_seconds: Wall-clock duration of the search.
@@ -248,6 +259,7 @@ class SearchResult:
     gate_rejection_reasons: list[str] = field(default_factory=list)
     rejected_scored: list[RejectedCandidate] = field(default_factory=list)
     compile_failure_count: int = 0
+    compile_failures: list[CompileFailureSummary] = field(default_factory=list)
     total_compiles: int = 0
     elapsed_seconds: float = 0.0
 
@@ -618,6 +630,15 @@ def _extract_signature_for(
     return baseline_signature(events, class_id=class_id)
 
 
+def _compile_failure_diagnostic(exc: CompileFailure) -> str:
+    text = exc.stderr or exc.stdout or str(exc)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines:
+        if "error:" in line.lower() or "warning:" in line.lower():
+            return line
+    return lines[0] if lines else f"compile failed with exit {exc.returncode}"
+
+
 def search(
     sources: list[VariantSource],
     ctx: FunctionContext,
@@ -672,6 +693,7 @@ def search(
     seen_reasons: set[str] = set()
     rejected_scored: list[RejectedCandidate] = []
     compile_failures = 0
+    compile_failure_details: list[CompileFailureSummary] = []
     compiled = 0
     # Cross-source dedup: if two adapters (or the same adapter twice) emit
     # the same `variant.text`, only compile it once. Per-adapter dedup
@@ -701,8 +723,13 @@ def search(
 
             try:
                 pcdump_text = _compile_variant(variant, ctx=ctx, melee_root=melee_root, timeout=timeout)
-            except CompileFailure:
+            except CompileFailure as exc:
                 compile_failures += 1
+                compile_failure_details.append(CompileFailureSummary(
+                    provenance=variant.provenance,
+                    returncode=exc.returncode,
+                    diagnostic=_compile_failure_diagnostic(exc),
+                ))
                 continue
 
             sig = _extract_signature_for(pcdump_text, ctx.function, class_id=class_id)
@@ -771,6 +798,7 @@ def search(
         gate_rejection_reasons=rejection_reasons,
         rejected_scored=rejected_scored,
         compile_failure_count=compile_failures,
+        compile_failures=compile_failure_details,
         total_compiles=compiled,
         elapsed_seconds=time.time() - start,
     )
