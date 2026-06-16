@@ -1477,11 +1477,9 @@ int grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
     }
     f = grIceMt_801F993C(seg[0], seg[1]);
     mgobj = Ground_801C2BA4(seg[1]);
-    ((mgobj) ? ((void) 0)
-             : __assert((char*) &grIm_803E4068 + 0x690, 0xAB9, "mgobj"));
+    HSD_ASSERT(0xAB9, mgobj);
     jobj = mgobj->hsd_obj;
-    ((jobj) ? ((void) 0)
-            : __assert((char*) &grIm_803E4068 + 0x690, 0xABA, "jobj"));
+    HSD_ASSERT(0xABA, jobj);
     cur = HSD_JObjGetTranslationY(jobj);
     if (ABS(cur) < 10.0f) {
         gp = GET_GROUND(Ground_801C2BA4(seg[1]));
@@ -1523,9 +1521,7 @@ int grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
         id = seg[0];
         if (id != -1) {
             mgobj = Ground_801C2BA4(id);
-            ((mgobj)
-                 ? ((void) 0)
-                 : __assert((char*) &grIm_803E4068 + 0x690, 0xAF3, "mgobj"));
+            HSD_ASSERT(0xAF3, mgobj);
             Ground_801C4A08(mgobj);
         }
         seg[0] = seg[1];
@@ -1533,12 +1529,9 @@ int grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
         if (seg[1] != -1) {
             f2 = grIceMt_801F993C(seg[0], seg[1]);
             mgobj = grIceMt_801F71E8(seg[1]);
-            ((mgobj)
-                 ? ((void) 0)
-                 : __assert((char*) &grIm_803E4068 + 0x690, 0xAFE, "mgobj"));
+            HSD_ASSERT(0xAFE, mgobj);
             jobj = mgobj->hsd_obj;
-            ((jobj) ? ((void) 0)
-                    : __assert((char*) &grIm_803E4068 + 0x690, 0xAFF, "jobj"));
+            HSD_ASSERT(0xAFF, jobj);
             HSD_JObjSetTranslateY(jobj, cur - f2);
             Ground_801C32AC(seg[1]);
             Ground_801C2FE0(mgobj);
@@ -1574,9 +1567,7 @@ int grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
         id = seg[1];
         if (id != -1) {
             mgobj = Ground_801C2BA4(id);
-            ((mgobj)
-                 ? ((void) 0)
-                 : __assert((char*) &grIm_803E4068 + 0x690, 0xB13, "mgobj"));
+            HSD_ASSERT(0xB13, mgobj);
             Ground_801C4A08(mgobj);
         }
         seg[1] = seg[0];
@@ -1584,12 +1575,9 @@ int grIceMt_801F9ACC(Ground_GObj* gobj, float y, GrIceMtSegmentLookup ev,
         if (seg[0] != -1) {
             f2 = grIceMt_801F993C(seg[0], seg[1]);
             mgobj = grIceMt_801F71E8(seg[0]);
-            ((mgobj)
-                 ? ((void) 0)
-                 : __assert((char*) &grIm_803E4068 + 0x690, 0xB1E, "mgobj"));
+            HSD_ASSERT(0xB1E, mgobj);
             jobj = mgobj->hsd_obj;
-            ((jobj) ? ((void) 0)
-                    : __assert((char*) &grIm_803E4068 + 0x690, 0xB1F, "jobj"));
+            HSD_ASSERT(0xB1F, jobj);
             HSD_JObjSetTranslateY(jobj, f2 + (cur + f));
             Ground_801C32AC(seg[0]);
             Ground_801C2FE0(mgobj);
