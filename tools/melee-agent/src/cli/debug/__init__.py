@@ -14245,48 +14245,50 @@ def ceiling(
     if high_casts and src.exists():
         orig_src = src.read_text()
         try:
-            for w in high_casts:
-                # Build the drop pattern: remove "(cast_type) " prefix on the
-                # cast's line.  We match the exact text the linter found.
-                cast_text = f"({w.cast_type}) {w.inner_expr}"
-                if cast_text not in orig_src:
-                    # Fallback: maybe there's no space after the cast type.
-                    cast_text = f"({w.cast_type}){w.inner_expr}"
-                if cast_text not in orig_src:
+            with _source_restore_guard(src, orig_src):
+                for w in high_casts:
+                    # Build the drop pattern: remove "(cast_type) " prefix on
+                    # the cast's line. We match the exact text the linter found.
+                    cast_text = f"({w.cast_type}) {w.inner_expr}"
+                    if cast_text not in orig_src:
+                        # Fallback: maybe there's no space after the cast type.
+                        cast_text = f"({w.cast_type}){w.inner_expr}"
+                    if cast_text not in orig_src:
+                        cast_verify_results.append({
+                            "line": w.line,
+                            "cast_type": w.cast_type,
+                            "inner_expr": w.inner_expr,
+                            "call_target": w.call_target,
+                            "pct_before": baseline,
+                            "pct_after": None,
+                            "delta": None,
+                            "note": "could not locate cast text in source",
+                        })
+                        continue
+                    patched = orig_src.replace(cast_text, w.inner_expr, 1)
+                    src.write_text(patched)
+                    pct_after = _build_and_match(unit, function, melee_root)
+                    src.write_text(orig_src)  # revert immediately
+                    delta = (
+                        (pct_after - baseline)
+                        if pct_after is not None else None
+                    )
                     cast_verify_results.append({
                         "line": w.line,
                         "cast_type": w.cast_type,
                         "inner_expr": w.inner_expr,
                         "call_target": w.call_target,
                         "pct_before": baseline,
-                        "pct_after": None,
-                        "delta": None,
-                        "note": "could not locate cast text in source",
+                        "pct_after": pct_after,
+                        "delta": delta,
+                        "note": (
+                            "WIN" if (delta is not None and delta > 0.0)
+                            else "no change" if (delta is not None and delta == 0.0)
+                            else "regression" if (delta is not None and delta < 0.0)
+                            else "build failed"
+                        ),
                     })
-                    continue
-                patched = orig_src.replace(cast_text, w.inner_expr, 1)
-                src.write_text(patched)
-                pct_after = _build_and_match(unit, function, melee_root)
-                src.write_text(orig_src)  # revert immediately
-                delta = (pct_after - baseline) if pct_after is not None else None
-                cast_verify_results.append({
-                    "line": w.line,
-                    "cast_type": w.cast_type,
-                    "inner_expr": w.inner_expr,
-                    "call_target": w.call_target,
-                    "pct_before": baseline,
-                    "pct_after": pct_after,
-                    "delta": delta,
-                    "note": (
-                        "WIN" if (delta is not None and delta > 0.0)
-                        else "no change" if (delta is not None and delta == 0.0)
-                        else "regression" if (delta is not None and delta < 0.0)
-                        else "build failed"
-                    ),
-                })
         finally:
-            # Guarantee revert even if an exception was raised mid-loop.
-            src.write_text(orig_src)
             subprocess.run(
                 ["ninja", f"build/GALE01/src/{unit}.o",
                  "build/GALE01/report.json"],
@@ -14405,26 +14407,29 @@ def ceiling(
                     src.write_text(orig)  # revert immediately
 
             try:
-                (
-                    decl_results,
-                    decl_best_pct,
-                    decl_best_label,
-                    _stopped_early,
-                ) = _run_decl_candidates(
-                    candidates,
-                    reorder=lambda perm: reorder_decls_in_function_scope(
-                        orig,
-                        function,
-                        selected_scope,
-                        perm,
-                    ),
-                    build_and_match=_bm,
-                    baseline=baseline,
-                    max_seconds=max_seconds,
-                    emit=(lambda msg: print(msg, flush=True)) if not json_out else (lambda msg: None),
-                )
+                with _source_restore_guard(src, orig):
+                    (
+                        decl_results,
+                        decl_best_pct,
+                        decl_best_label,
+                        _stopped_early,
+                    ) = _run_decl_candidates(
+                        candidates,
+                        reorder=lambda perm: reorder_decls_in_function_scope(
+                            orig,
+                            function,
+                            selected_scope,
+                            perm,
+                        ),
+                        build_and_match=_bm,
+                        baseline=baseline,
+                        max_seconds=max_seconds,
+                        emit=(
+                            (lambda msg: print(msg, flush=True))
+                            if not json_out else (lambda msg: None)
+                        ),
+                    )
             finally:
-                src.write_text(orig)
                 subprocess.run(
                     ["ninja", f"build/GALE01/src/{unit}.o",
                      "build/GALE01/report.json"],
@@ -22117,6 +22122,18 @@ def _register_active_source_restore(path: Path, original: str) -> None:
 
 def _unregister_active_source_restore(path: Path) -> None:
     _ACTIVE_SOURCE_RESTORES.pop(path, None)
+
+
+@contextmanager
+def _source_restore_guard(path: Path, original: str) -> Iterator[None]:
+    _register_active_source_restore(path, original)
+    try:
+        yield
+    finally:
+        error = _restore_source_snapshot(path, original)
+        _unregister_active_source_restore(path)
+        if error is not None:
+            raise RuntimeError(error)
 
 
 def _fresh_pcdump_cache_path_for_restore(
