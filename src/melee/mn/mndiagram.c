@@ -88,8 +88,8 @@ u8 mnDiagram_803EE74C[0x1C] = {
 AnimLoopSettings mnDiagram_803EE768 = { 0.0f, 9.0f, -0.1f };
 
 /// Storage for the trailing fields of the mnDiagram_AnimTable overlay (reached
-/// via &mnDiagram_803EE728): the exit/arrow/cursor loop settings, the user_data
-/// assertion strings, and the joint-archive names loaded into the
+/// via &mnDiagram_803EE728): the exit/arrow/cursor loop settings, the
+/// user_data assertion strings, and the joint-archive names loaded into the
 /// mnDiagram_804A07E4..0854 descriptor objects.
 struct {
     /* 0x000 */ f32 anim[9];
@@ -211,6 +211,10 @@ mnDiagram_ArchiveData mnDiagram_804A0824;
 mnDiagram_ArchiveDataExt mnDiagram_804A0854;
 mnDiagram_ArchiveData mnDiagram_804A0844;
 mnDiagram_ArchiveData mnDiagram_804A0834;
+
+/* GObj for the VS Records screen; small uninitialized global (.sbss), set in
+ * mnDiagram_Create and read via @sda21 throughout the file. */
+HSD_GObj* mnDiagram_screen_gobj;
 
 static s32 mnDiagram_804D4FA0 = 0xFF;
 
