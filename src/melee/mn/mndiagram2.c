@@ -87,8 +87,11 @@ typedef struct {
 
 /* Diagram2 struct is defined in mn/types.h */
 
-/* mnDiagram_ArchiveData type, mnDiagram2_804D6C18, and mnDiagram_804A0834
- * (defined in mndiagram.c) declared in mndiagram2.static.h */
+/* mnDiagram_ArchiveData type and mnDiagram_804A0834 (defined in mndiagram.c)
+ * declared in mndiagram2.static.h */
+
+/* GObj for the VS Records stat screen; small uninitialized global (.sbss). */
+HSD_GObj* mnDiagram2_804D6C18;
 
 /// @brief Checks if stat type uses time format (H:MM:SS).
 /// @param stat_type The stat type index (VSRecordsStatType)

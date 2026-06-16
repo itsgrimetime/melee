@@ -26,6 +26,9 @@
 /* mnDiagram_804A0844 / mnDiagram_804A0854 (defined in mndiagram.c) declared in
  * mndiagram3.static.h */
 
+/* GObj for the VS Records popup screen; small uninitialized global (.sbss). */
+HSD_GObj* mnDiagram3_804D6C20;
+
 AnimLoopSettings mnDiagram3_803EEC10 = { 10.0F, 19.0F, -0.1F };
 AnimLoopSettings mnDiagram3_803EEC1C = { 0.0F, 199.0F, 0.0F };
 
