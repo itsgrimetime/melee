@@ -9,6 +9,7 @@
 
 /* 3EEAD0 */ extern u8 mnDiagram2_803EEAD0[0x90];
 /* 3EEB60 */ extern AnimLoopSettings mnDiagram2_803EEB60[2];
+/* 4A0834 */ extern mnDiagram_ArchiveData mnDiagram_804A0834;
 /* 4D4FB8 */ extern GXColor mnDiagram2_804D4FB8;
 /* 4D4FBC */ extern GXColor mnDiagram2_804D4FBC;
 /* 4D4FC0 */ extern SDATA char mnDiagram2_804D4FC0[];

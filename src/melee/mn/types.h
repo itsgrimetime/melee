@@ -448,6 +448,14 @@ typedef struct {
     /* 0x0C */ HSD_ShapeAnimJoint* shape_anim;
 } mnDiagram_ArchiveData;
 
+/// Variant of mnDiagram_ArchiveData with a trailing reserved word. The records
+/// popup descriptor (mnDiagram_804A0854) is 0x14 — four bytes past the four
+/// joint pointers; only the embedded archive is referenced.
+typedef struct {
+    /* 0x00 */ mnDiagram_ArchiveData archive;
+    /* 0x10 */ void* x10;
+} mnDiagram_ArchiveDataExt;
+
 /// User data for VS Records diagram screen (mnDiagram)
 struct Diagram {
     /* 0x00 */ u8 saved_menu; ///< Saved menu ID on entry

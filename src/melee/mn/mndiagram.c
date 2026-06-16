@@ -137,6 +137,12 @@ mnDiagram_ArchiveData mnDiagram_804A07F4;
 mnDiagram_ArchiveData mnDiagram_804A0804;
 mnDiagram_ArchiveData mnDiagram_804A0814;
 mnDiagram_ArchiveData mnDiagram_804A0824;
+/* These three are referenced only from mndiagram2.c / mndiagram3.c (via the
+ * static headers), so MWCC emits them after the used objects above, in reverse
+ * declaration order — declare them high-to-low to land 0834, 0844, 0854. */
+mnDiagram_ArchiveDataExt mnDiagram_804A0854;
+mnDiagram_ArchiveData mnDiagram_804A0844;
+mnDiagram_ArchiveData mnDiagram_804A0834;
 
 static s32 mnDiagram_804D4FA0 = 0xFF;
 

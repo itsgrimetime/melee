@@ -23,8 +23,8 @@
 #include <melee/mn/mnmain.h>
 #include <melee/mn/mnname.h>
 
-mnDiagram_ArchiveData mnDiagram_804A0844;
-mnDiagram_ArchiveData mnDiagram_804A0854;
+/* mnDiagram_804A0844 / mnDiagram_804A0854 (defined in mndiagram.c) declared in
+ * mndiagram3.static.h */
 
 AnimLoopSettings mnDiagram3_803EEC10 = { 10.0F, 19.0F, -0.1F };
 AnimLoopSettings mnDiagram3_803EEC1C = { 0.0F, 199.0F, 0.0F };
@@ -462,7 +462,7 @@ void mnDiagram3_8024714C(void* arg0)
     mnDiagram3_80247008((int) arg0);
 
     gobj = mnDiagram3_804D6C20;
-    archive = &mnDiagram_804A0854;
+    archive = &mnDiagram_804A0854.archive;
     data = gobj->user_data;
 
     {

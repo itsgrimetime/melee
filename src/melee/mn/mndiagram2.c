@@ -87,9 +87,8 @@ typedef struct {
 
 /* Diagram2 struct is defined in mn/types.h */
 
-/* mnDiagram_ArchiveData type + mnDiagram2_804D6C18 declared in
- * mndiagram2.static.h */
-mnDiagram_ArchiveData mnDiagram_804A0834;
+/* mnDiagram_ArchiveData type, mnDiagram2_804D6C18, and mnDiagram_804A0834
+ * (defined in mndiagram.c) declared in mndiagram2.static.h */
 
 /// @brief Checks if stat type uses time format (H:MM:SS).
 /// @param stat_type The stat type index (VSRecordsStatType)
