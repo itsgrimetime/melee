@@ -87,6 +87,74 @@ u8 mnDiagram_803EE74C[0x1C] = {
 
 AnimLoopSettings mnDiagram_803EE768 = { 0.0f, 9.0f, -0.1f };
 
+/// Storage for the trailing fields of the mnDiagram_AnimTable overlay (reached
+/// via &mnDiagram_803EE728): the exit/arrow/cursor loop settings, the user_data
+/// assertion strings, and the joint-archive names loaded into the
+/// mnDiagram_804A07E4..0854 descriptor objects.
+struct {
+    /* 0x000 */ f32 anim[9];
+    /* 0x024 */ char user_data_error[0x18];
+    /* 0x03C */ char file_name[0xC];
+    /* 0x048 */ char user_data_name[0xC];
+    /* 0x054 */ char ConB1_joint[0x18];
+    /* 0x06C */ char ConB1_animjoint[0x1C];
+    /* 0x088 */ char ConB1_matanim_joint[0x20];
+    /* 0x0A8 */ char ConB1_shapeanim_joint[0x24];
+    /* 0x0CC */ char CursorB1_joint[0x1C];
+    /* 0x0E8 */ char FaceB_joint[0x18];
+    /* 0x100 */ char FaceB_animjoint[0x1C];
+    /* 0x11C */ char FaceB_matanim_joint[0x20];
+    /* 0x13C */ char FaceB_shapeanim_joint[0x24];
+    /* 0x160 */ char NmB_joint[0x18];
+    /* 0x178 */ char NmB_animjoint[0x1C];
+    /* 0x194 */ char NmB_matanim_joint[0x20];
+    /* 0x1B4 */ char NmB_shapeanim_joint[0x20];
+    /* 0x1D4 */ char SubB1_joint[0x18];
+    /* 0x1EC */ char SubB1_animjoint[0x1C];
+    /* 0x208 */ char SubB1_matanim_joint[0x20];
+    /* 0x228 */ char SubB1_shapeanim_joint[0x24];
+    /* 0x24C */ char ConB2_joint[0x18];
+    /* 0x264 */ char ConB2_animjoint[0x1C];
+    /* 0x280 */ char ConB2_matanim_joint[0x20];
+    /* 0x2A0 */ char ConB2_shapeanim_joint[0x24];
+    /* 0x2C4 */ char ConB3_joint[0x18];
+    /* 0x2DC */ char ConB3_animjoint[0x1C];
+    /* 0x2F8 */ char ConB3_matanim_joint[0x20];
+    /* 0x318 */ char ConB3_shapeanim_joint[0x24];
+    /* 0x33C */ char CursorB3_joint[0x20];
+} mnDiagram_803EE774 = {
+    { 10.0f, 19.0f, -0.1f, 0.0f, 199.0f, 0.0f, 0.0f, 10.0f, -0.1f },
+    "Can't get user_data.\n",
+    "mndiagram.c",
+    "user_data",
+    "MenMainConB1_Top_joint",
+    "MenMainConB1_Top_animjoint",
+    "MenMainConB1_Top_matanim_joint",
+    "MenMainConB1_Top_shapeanim_joint",
+    "MenMainCursorB1_Top_joint",
+    "MenMainFaceB_Top_joint",
+    "MenMainFaceB_Top_animjoint",
+    "MenMainFaceB_Top_matanim_joint",
+    "MenMainFaceB_Top_shapeanim_joint",
+    "MenMainNmB_Top_joint",
+    "MenMainNmB_Top_animjoint",
+    "MenMainNmB_Top_matanim_joint",
+    "MenMainNmB_Top_shapeanim_joint",
+    "MenMainSubB1_Top_joint",
+    "MenMainSubB1_Top_animjoint",
+    "MenMainSubB1_Top_matanim_joint",
+    "MenMainSubB1_Top_shapeanim_joint",
+    "MenMainConB2_Top_joint",
+    "MenMainConB2_Top_animjoint",
+    "MenMainConB2_Top_matanim_joint",
+    "MenMainConB2_Top_shapeanim_joint",
+    "MenMainConB3_Top_joint",
+    "MenMainConB3_Top_animjoint",
+    "MenMainConB3_Top_matanim_joint",
+    "MenMainConB3_Top_shapeanim_joint",
+    "MenMainCursorB3_Top_joint",
+};
+
 /// Overlay over &mnDiagram_803EE728 to reach the trailing animation/text-layout
 /// data the popup/cursor procs read at fixed offsets.
 typedef struct mnDiagram_AnimTable {
@@ -2333,7 +2401,7 @@ void mnDiagram_ExitAnimProc(HSD_GObj* gobj)
     data = gobj->user_data;
     mnDiagram_UpdateArrowsForCursor(gobj);
     jobj = data->jobj;
-    table = mnDiagram_803EE774;
+    table = mnDiagram_803EE774.anim;
     if (mn_8022ED6C(jobj, (AnimLoopSettings*) table) >= table[1]) {
         HSD_GObjPLink_80390228(gobj);
     }

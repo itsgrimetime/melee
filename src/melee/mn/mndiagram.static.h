@@ -16,7 +16,6 @@
 extern char mnDiagram_804D4FA4;
 extern char mnDiagram_804D4FA8[7];
 extern char mnDiagram_804D4FB0[5];
-extern f32 mnDiagram_803EE774[];
 extern f32 mnDiagram_803EE758[];
 extern HSD_GObj* mnDiagram_screen_gobj;
 extern f64 mnDiagram_804DBF78;
