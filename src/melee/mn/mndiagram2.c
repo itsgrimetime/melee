@@ -259,6 +259,11 @@ void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
 
 /// @brief Clears and repopulates stat rows based on current selection.
 /// @details Reads is_name_mode to determine which entity index to use.
+static inline Diagram2* mnDiagram2_GetGlobalUserData(void)
+{
+    return mnDiagram2_804D6C18->user_data;
+}
+
 static inline void mnDiagram2_RefreshStatRows(void)
 {
     HSD_GObj* d = mnDiagram2_804D6C18;
@@ -299,13 +304,13 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
     HSD_GObj* d2;
     PAD_STACK(40);
 
-    data = mnDiagram2_804D6C18->user_data;
+    data = mnDiagram2_GetGlobalUserData();
     result = mn_804A04F0.buttons = mn_80229624(4);
 
     if (result & 0x20) {
         lbAudioAx_80024030(0);
         mn_804A04F0.entering_menu = 0;
-        data2 = mnDiagram2_804D6C18->user_data;
+        data2 = mnDiagram2_GetGlobalUserData();
         x46 = data2->selected_fighter_idx;
         gmMainLib_8015CC34()->x12 = x46;
         x47 = data2->selected_name_idx;
@@ -318,7 +323,7 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
 
     if (result & 0xC0) {
         lbAudioAx_80024030(1);
-        data2 = mnDiagram2_804D6C18->user_data;
+        data2 = mnDiagram2_GetGlobalUserData();
         x46 = data2->selected_fighter_idx;
         gmMainLib_8015CC34()->x12 = x46;
         x47 = data2->selected_name_idx;
@@ -621,8 +626,8 @@ int mnDiagram2_GetStatValue(int is_name_mode, u8 stat_type, u8 entity_idx)
 void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                               u8 row_idx, u8 entity_idx)
 {
-    Vec3 sp20;
     u8 str[8];
+    Vec3 sp20;
     Diagram2* data;
     HSD_JObj* jobj;
     char* base;
@@ -698,7 +703,7 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                         (u32) mnDiagram2_GetStatValue(mode, stat_type,
                                                       entity_idx) < 0x19)
                     {
-                        HSD_JObj* jobj = mnDiagram_CreateFighterIcon(
+                        jobj = mnDiagram_CreateFighterIcon(
                             mnDiagram2_GetStatValue(mode, stat_type,
                                                     entity_idx),
                             0);
