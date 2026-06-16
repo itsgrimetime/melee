@@ -7085,7 +7085,28 @@ def _tmp_asm_path_for_function(function: str) -> Path:
     return Path("/tmp") / f"{safe_name}.s"
 
 
-_PERMUTER_DEFAULT_PRESERVE_MACROS = r"PAD_STACK|FORCE_PAD_STACK(?:_[0-9]+)?"
+_PERMUTER_DEFAULT_PRESERVE_MACROS = (
+    r"PAD_STACK|FORCE_PAD_STACK(?:_[0-9]+)?|PERM_.*"
+)
+_PERMUTER_PERM_MACRO_RE = re.compile(r"\bPERM_[A-Za-z0-9_]*\b")
+
+
+def _source_contains_perm_macros(text: str) -> bool:
+    return _PERMUTER_PERM_MACRO_RE.search(text) is not None
+
+
+def _read_bootstrap_source_file(source_file: Path, function: str) -> str:
+    source_file = source_file.expanduser()
+    if not source_file.is_file():
+        raise typer.BadParameter(f"source file not found: {source_file}")
+    text = source_file.read_text(encoding="utf-8")
+    if find_source_function(text, function) is None:
+        typer.echo(
+            f"source file does not contain function {function!r}: {source_file}",
+            err=True,
+        )
+        raise typer.Exit(2)
+    return text
 
 
 @contextmanager
@@ -7199,6 +7220,7 @@ def _promote_permuter_import_dir(
         shutil.move(str(imported_dir), str(dest_dir))
         return dest_dir
 
+    imported_names = {child.name for child in imported_dir.iterdir()}
     for child in imported_dir.iterdir():
         if (
             child.name == "settings.toml"
@@ -7207,6 +7229,10 @@ def _promote_permuter_import_dir(
         ):
             continue
         _replace_path_from(child, dest_dir / child.name)
+    if "base.c" in imported_names and "base.o" not in imported_names:
+        stale_base_o = dest_dir / "base.o"
+        if stale_base_o.exists():
+            stale_base_o.unlink()
     shutil.rmtree(imported_dir, ignore_errors=True)
     return dest_dir
 
@@ -7321,26 +7347,35 @@ def _bootstrap_permuter_dir(
     if not python_bin.exists():
         python_bin = Path(sys.executable)
     requested_source = source_file.expanduser() if source_file is not None else src_path
-    with _staged_permuter_import_source(src_path, source_file) as (
-        import_source,
-        source_staged,
+    source_text = (
+        _read_bootstrap_source_file(requested_source, function)
+        if source_file is not None else src_path.read_text(encoding="utf-8")
+    )
+    source_contains_perm_macros = _source_contains_perm_macros(source_text)
+    with _acquire_checkdiff_repo_lock(
+        melee_root,
+        label="permuter bootstrap source staging",
     ):
-        import_cmd = [
-            str(python_bin),
-            str(import_py),
-            str(import_source),
-            str(asm_path),
-            "--function",
-            function,
-        ]
-        if preserve_macros is not None:
-            import_cmd.extend(["--preserve-macros", preserve_macros])
-        import_proc = subprocess.run(
-            import_cmd,
-            cwd=perm_root,
-            capture_output=True,
-            text=True,
-        )
+        with _staged_permuter_import_source(src_path, source_file) as (
+            import_source,
+            source_staged,
+        ):
+            import_cmd = [
+                str(python_bin),
+                str(import_py),
+                str(import_source),
+                str(asm_path),
+                "--function",
+                function,
+            ]
+            if preserve_macros is not None:
+                import_cmd.extend(["--preserve-macros", preserve_macros])
+            import_proc = subprocess.run(
+                import_cmd,
+                cwd=perm_root,
+                capture_output=True,
+                text=True,
+            )
     if import_proc.returncode != 0:
         typer.echo(import_proc.stderr or import_proc.stdout, err=True)
         raise typer.Exit(import_proc.returncode or 1)
@@ -7376,7 +7411,7 @@ def _bootstrap_permuter_dir(
     base_path = fn_dir / "base.c"
     if base_path.exists():
         target_asm_text = _read_bootstrap_target_asm(fn_dir, melee_root)
-        source_for_inline = requested_source.read_text(encoding="utf-8")
+        source_for_inline = source_text
         dependency_text = _bootstrap_dependency_context(
             source_for_inline,
             source_path=requested_source,
@@ -7401,7 +7436,28 @@ def _bootstrap_permuter_dir(
                 stale_base_o.unlink()
                 invalidated_base_object = True
 
+    base_o_path = fn_dir / "base.o"
+    base_text_before_fix = (
+        base_path.read_text(encoding="utf-8") if base_path.exists() else None
+    )
     fix_result = fix_perm_dir(fn_dir)
+    if base_text_before_fix is not None and base_path.exists():
+        base_text_after_fix = base_path.read_text(encoding="utf-8")
+        if base_text_after_fix != base_text_before_fix and base_o_path.exists():
+            base_o_path.unlink()
+            invalidated_base_object = True
+
+    base_contains_perm_macros = (
+        _source_contains_perm_macros(base_path.read_text(encoding="utf-8"))
+        if base_path.exists() else False
+    )
+    if invalidated_base_object:
+        base_object_status = "invalidated-after-base-patch"
+    elif base_o_path.exists():
+        base_object_status = "present"
+    else:
+        base_object_status = "absent"
+
     settings_path = fn_dir / "settings.toml"
     recommended_randomize_funcs = (
         [function, *injected_inline_callees] if injected_inline_callees else None
@@ -7442,6 +7498,10 @@ def _bootstrap_permuter_dir(
         "source": str(requested_source),
         "import_source": str(src_path),
         "source_staged": source_staged,
+        "preserve_macros": preserve_macros,
+        "source_contains_perm_macros": source_contains_perm_macros,
+        "base_contains_perm_macros": base_contains_perm_macros,
+        "base_object_status": base_object_status,
         "asm": str(asm_path),
         "perm_root": str(perm_root),
         "function_dir": str(fn_dir),
@@ -8120,6 +8180,7 @@ def permute_bootstrap(
         Optional[Path],
         typer.Option(
             "--source-file",
+            "--annotated-source-file",
             help=(
                 "Import this edited source instead of the repo TU. The file is "
                 "temporarily staged over the real TU so decomp-permuter still "
@@ -8176,6 +8237,15 @@ def permute_bootstrap(
     settings_action = payload["settings"]["action"]
     print(f"Wrote/imported {fn_dir}")
     print(f"  source: {src_path}")
+    if payload["source"] != payload["import_source"]:
+        print(f"  annotated source: {payload['source']}")
+    print(f"  preserve macros: {payload['preserve_macros']}")
+    print(
+        "  PERM macros: "
+        f"source={'yes' if payload['source_contains_perm_macros'] else 'no'}, "
+        f"base={'yes' if payload['base_contains_perm_macros'] else 'no'}"
+    )
+    print(f"  base.o: {payload['base_object_status']}")
     print(f"  target asm: {asm_path}")
     print(
         f"  compile.sh: {fix_result['action']}"

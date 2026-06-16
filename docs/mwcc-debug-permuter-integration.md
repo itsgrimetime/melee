@@ -67,6 +67,22 @@ For `decl-order`: also prints a recommendation to try
 `debug mutate decl-orders` first, which is deterministic and ~100x faster
 than letting permuter rediscover decl-order via random mutation.
 
+For guided PERM campaigns, put `PERM_LINESWAP`, `PERM_GENERAL`, or other
+decomp-permuter `PERM_*` macros in a temporary copy of the source TU, then
+import that annotated file through bootstrap:
+
+```bash
+melee-agent debug permute bootstrap \
+  -f mnDiagram_SortNamesByKOs \
+  --annotated-source-file /tmp/mnDiagram_SortNamesByKOs.perm.c
+```
+
+Do not hand-edit PERM macros into `base.c` after import; import.py must see the
+annotated source so generated candidates expand the PERM syntax before compile.
+As a smoke check, bootstrap `mnDiagram_SortNamesByKOs` from an annotated source,
+run a bounded candidate-generation pass, and confirm candidates are not failing
+with raw `PERM_LINESWAP` or `PERM_GENERAL` compiler errors.
+
 ### Workflow
 
 ```bash

@@ -5200,6 +5200,10 @@ def test_debug_permute_bootstrap_imports_and_writes_settings(
     assert "func_name = \"fn_80000000\"" in (fn_dir / "settings.toml").read_text()
 
 
+def test_debug_permute_bootstrap_default_preserve_macros_include_perm_family():
+    assert "PERM_.*" in debug_cli._PERMUTER_DEFAULT_PRESERVE_MACROS
+
+
 def test_debug_permute_bootstrap_recovers_melee_root_from_install_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5322,6 +5326,389 @@ def test_debug_permute_bootstrap_source_file_stages_variant_and_restores(
     assert "PAD_STACK(64)" in (
         perm_root / "nonmatchings" / "fn_80000000" / "base.c"
     ).read_text()
+
+
+def test_debug_permute_bootstrap_annotated_source_stages_perm_file_and_restores(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    annotated_path = tmp_path / "annotated.c"
+    src_path.parent.mkdir(parents=True)
+    original = "void fn_80000000(void) { int a; a = 1; }\n"
+    annotated = (
+        "void fn_80000000(void) {\n"
+        "    PERM_LINESWAP(\n"
+        "        int a;\n"
+        "        a = PERM_GENERAL(1, 2);\n"
+        "    )\n"
+        "}\n"
+    )
+    src_path.write_text(original)
+    annotated_path.write_text(annotated)
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+
+    calls: list[list[str]] = []
+    observed_import_source: list[str] = []
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        calls.append(argv)
+        if "import.py" in argv[1]:
+            observed_import_source.append(src_path.read_text())
+            fn_dir = perm_root / "nonmatchings" / "fn_80000000"
+            fn_dir.mkdir(parents=True)
+            (fn_dir / "base.c").write_text(src_path.read_text())
+            (fn_dir / "compile.sh").write_text("#!/usr/bin/env bash\n")
+            (fn_dir / "target.o").write_bytes(b"target")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--annotated-source-file",
+            str(annotated_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    import_cmd = next(call for call in calls if "import.py" in call[1])
+    assert observed_import_source == [annotated]
+    assert src_path.read_text() == original
+    assert import_cmd[2] == str(src_path)
+    assert "PERM_.*" in import_cmd[import_cmd.index("--preserve-macros") + 1]
+    assert payload["source"] == str(annotated_path)
+    assert payload["source_staged"] is True
+    assert payload["preserve_macros"] == debug_cli._PERMUTER_DEFAULT_PRESERVE_MACROS
+    assert payload["source_contains_perm_macros"] is True
+    assert payload["base_contains_perm_macros"] is True
+    assert payload["base_object_status"] == "absent"
+
+
+def test_debug_permute_bootstrap_text_reports_annotated_perm_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    annotated_path = tmp_path / "annotated.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void) { int a; a = 1; }\n")
+    annotated_path.write_text(
+        "void fn_80000000(void) {\n"
+        "    PERM_GENERAL(int a = 1;, int a = 2;)\n"
+        "}\n"
+    )
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        if "import.py" in argv[1]:
+            fn_dir = perm_root / "nonmatchings" / "fn_80000000"
+            fn_dir.mkdir(parents=True)
+            (fn_dir / "base.c").write_text(src_path.read_text())
+            (fn_dir / "compile.sh").write_text("#!/usr/bin/env bash\n")
+            (fn_dir / "target.o").write_bytes(b"target")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--annotated-source-file",
+            str(annotated_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert f"annotated source: {annotated_path}" in result.stdout
+    assert f"preserve macros: {debug_cli._PERMUTER_DEFAULT_PRESERVE_MACROS}" in result.stdout
+    assert "PERM macros: source=yes, base=yes" in result.stdout
+    assert "base.o: absent" in result.stdout
+
+
+def test_debug_permute_bootstrap_post_import_repairs_do_not_append_perm_macros(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    annotated_path = tmp_path / "annotated.c"
+    src_path.parent.mkdir(parents=True)
+    source_text = textwrap.dedent(
+        """\
+        int helper_inline(int value)
+        {
+            return value + 1;
+        }
+
+        int fn_80000000(int value)
+        {
+            return PERM_GENERAL(helper_inline(value), helper_inline(value + 1));
+        }
+        """
+    )
+    src_path.write_text(source_text.replace("PERM_GENERAL(", "("))
+    annotated_path.write_text(source_text)
+    imported_base = textwrap.dedent(
+        """\
+        int helper_inline(int value);
+
+        int fn_80000000(int value)
+        {
+            return PERM_GENERAL(helper_inline(value), helper_inline(value + 1));
+        }
+        """
+    )
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        if "import.py" in argv[1]:
+            fn_dir = perm_root / "nonmatchings" / "fn_80000000"
+            fn_dir.mkdir(parents=True)
+            (fn_dir / "base.c").write_text(imported_base)
+            (fn_dir / "target.s").write_text(
+                "<fn_80000000>:\n+000: 38 60 00 01 \tli      r3,1\n",
+                encoding="utf-8",
+            )
+            (fn_dir / "compile.sh").write_text("#!/usr/bin/env bash\n")
+            (fn_dir / "base.o").write_bytes(b"stale")
+            (fn_dir / "target.o").write_bytes(b"target")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--annotated-source-file",
+            str(annotated_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    base_text = (
+        perm_root / "nonmatchings" / "fn_80000000" / "base.c"
+    ).read_text(encoding="utf-8")
+    assert payload["injected_inline_callees"] == ["helper_inline"]
+    assert payload["base_object_status"] == "invalidated-after-base-patch"
+    assert base_text.count("PERM_GENERAL") == imported_base.count("PERM_GENERAL")
+    assert "inline int helper_inline(int value)" in base_text
+
+
+def test_debug_permute_bootstrap_invalidates_base_object_after_fix_perm_base_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void) { void* p; p = NULL; }\n")
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        if "import.py" in argv[1]:
+            fn_dir = perm_root / "nonmatchings" / "fn_80000000"
+            fn_dir.mkdir(parents=True)
+            (fn_dir / "base.c").write_text(
+                "#pragma _permuter latedefine start\n"
+                "#pragma _permuter latedefine end\n"
+                "void fn_80000000(void) { void* p; p = NULL; }\n"
+            )
+            (fn_dir / "compile.sh").write_text("#!/usr/bin/env bash\n")
+            (fn_dir / "base.o").write_bytes(b"stale")
+            (fn_dir / "target.o").write_bytes(b"target")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    fn_dir = perm_root / "nonmatchings" / "fn_80000000"
+    assert "#pragma _permuter define NULL 0" in (fn_dir / "base.c").read_text()
+    assert not (fn_dir / "base.o").exists()
+    assert payload["invalidated_base_object"] is True
+    assert payload["base_object_status"] == "invalidated-after-base-patch"
+
+
+def test_debug_permute_bootstrap_restores_annotated_source_after_import_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    annotated_path = tmp_path / "annotated.c"
+    src_path.parent.mkdir(parents=True)
+    original = "void fn_80000000(void) { int a; a = 1; }\n"
+    annotated = "void fn_80000000(void) { PERM_GENERAL(int a = 1;, int a = 2;) }\n"
+    src_path.write_text(original)
+    annotated_path.write_text(annotated)
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+    observed_import_source: list[str] = []
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        if "import.py" in argv[1]:
+            observed_import_source.append(src_path.read_text())
+            return subprocess.CompletedProcess(argv, 1, "", "import failed")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--annotated-source-file",
+            str(annotated_path),
+        ],
+    )
+
+    assert result.exit_code == 1, result.stdout + result.stderr
+    assert observed_import_source == [annotated]
+    assert src_path.read_text() == original
+
+
+def test_debug_permute_bootstrap_rejects_wrong_function_annotated_source_before_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    annotated_path = tmp_path / "wrong.c"
+    src_path.parent.mkdir(parents=True)
+    original = "void fn_80000000(void) {}\n"
+    src_path.write_text(original)
+    annotated_path.write_text("void other_fn(void) {}\n")
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+
+    calls: list[list[str]] = []
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--annotated-source-file",
+            str(annotated_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2, result.stdout + result.stderr
+    assert not any("import.py" in call[1] for call in calls)
+    assert src_path.read_text() == original
 
 
 def test_permuter_bootstrap_injects_same_tu_callees_missing_from_target_calls() -> None:
@@ -6143,6 +6530,7 @@ def test_debug_permute_bootstrap_promotes_fresh_worktree_import(
     destination = perm_root / "nonmatchings" / "fn_80000000"
     destination.mkdir(parents=True)
     (destination / "base.c").write_text("stale perm root base\n")
+    (destination / "base.o").write_bytes(b"stale base object")
     (destination / "settings.toml").write_text("custom = true\n")
     output_dir = destination / "output-1-1"
     output_dir.mkdir()
@@ -6186,6 +6574,8 @@ def test_debug_permute_bootstrap_promotes_fresh_worktree_import(
     payload = json.loads(result.stdout)
     assert payload["function_dir"] == str(destination)
     assert (destination / "base.c").read_text() == "fresh_token from import\n"
+    assert not (destination / "base.o").exists()
+    assert payload["base_object_status"] == "absent"
     assert (destination / "compile.sh").exists()
     assert (destination / "target.o").read_bytes() == b"target"
     settings = tomllib.loads((destination / "settings.toml").read_text())
