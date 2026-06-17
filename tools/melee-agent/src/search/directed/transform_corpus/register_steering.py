@@ -25,6 +25,9 @@ _REGISTER_STEERING_COUNTER_RE = re.compile(r"\b(s16|s32)\b")
 _NODE_SET_SPLIT_SYNTHETIC_NAME_RE = re.compile(r"_split_\d+_\d+$")
 
 
+_GENERATED_FPR_PRODUCT_TEMP_RE = re.compile(r"_product_fpr(?:_\d+)?$")
+
+
 _REGISTER_STEERING_FPR_TYPES = frozenset({"float", "f32", "double", "f64"})
 
 
@@ -203,6 +206,10 @@ def _register_steering_has_duplicate_top_level_names(
 
 def _node_set_split_synthetic_name(name: str) -> bool:
     return _NODE_SET_SPLIT_SYNTHETIC_NAME_RE.search(name) is not None
+
+
+def _generated_fpr_product_temp_name(name: str) -> bool:
+    return _GENERATED_FPR_PRODUCT_TEMP_RE.search(name) is not None
 
 
 def _steering_first_use_allowed(line: str, name: str) -> bool:
@@ -1288,7 +1295,12 @@ def _iter_fpr_product_assignments(
         if product is None:
             continue
         product_expr, operand_names, cast_operand_names = product
-        if lhs in operand_names or _node_set_split_synthetic_name(lhs):
+        if (
+            lhs in operand_names
+            or _node_set_split_synthetic_name(lhs)
+            or _generated_fpr_product_temp_name(lhs)
+            or any(_generated_fpr_product_temp_name(name) for name in operand_names)
+        ):
             continue
         if _single_fpr_decl_for_name(body_text, lhs) is None:
             continue
@@ -1693,7 +1705,13 @@ def _iter_fpr_dependent_product_recompute_anchors(
         referenced_primary = dependent_match.group("lhs") or dependent_match.group("lhs_right")
         if referenced_primary != primary:
             continue
-        if _node_set_split_synthetic_name(primary) or _node_set_split_synthetic_name(dependent):
+        if (
+            _node_set_split_synthetic_name(primary)
+            or _node_set_split_synthetic_name(dependent)
+            or _generated_fpr_product_temp_name(primary)
+            or _generated_fpr_product_temp_name(dependent)
+            or any(_generated_fpr_product_temp_name(name) for name in operand_names)
+        ):
             continue
         if _register_steering_fpr_product_decls(body_text, primary, dependent) is None:
             continue

@@ -97,6 +97,10 @@ def _fresh_index_temp(searchable: str, base: str) -> str | None:
     return _fresh_byte_temp(searchable, f"{_base_leaf_name(base)}_idx")
 
 
+def _fresh_base_alias_temp(searchable: str, base: str) -> str | None:
+    return _fresh_byte_temp(searchable, f"{_base_leaf_name(base)}_base")
+
+
 def _index_is_parenthesized(index: str) -> bool:
     stripped = index.strip()
     return stripped.startswith("(") and stripped.endswith(")")
@@ -233,6 +237,32 @@ def _iter_general_indexed_byte_expr_anchors(
                     "temp_local": temp_name,
                 },
             )
+            base_alias_name = _fresh_base_alias_temp(searchable, base)
+            if base_alias_name is not None:
+                replacement_line = line.replace(
+                    original_indexed,
+                    _indexed_expr(base_alias_name, match.group("index")),
+                    1,
+                )
+                if replacement_line != line:
+                    yield Anchor(
+                        mutator_key="steer_indexed_byte_base_alias",
+                        span=(body_start, body_start + end),
+                        payload={
+                            "span_text": span_text,
+                            "replacement_text": (
+                                f"    {decl_type}* {base_alias_name};\n"
+                                f"{body_text[:start]}"
+                                f"{indent}{base_alias_name} = {base};\n"
+                                f"{replacement_line}"
+                            ),
+                            "strategy": "indexed-byte-base-alias",
+                            "array_base": base,
+                            "index_expr": index_expr,
+                            "target_local": _base_leaf_name(base),
+                            "temp_local": base_alias_name,
+                        },
+                    )
             if not _safe_index_temp_expr(index_expr):
                 continue
             index_temp_name = _fresh_index_temp(searchable, base)
@@ -281,6 +311,7 @@ def _iter_indexed_byte_address_temp_anchors(source_text: str, _function: str, sp
     byte_decls = _byte_decl_lines(body_text)
     if not byte_decls:
         return
+    byte_arrays = _byte_array_types(source_text)
 
     searchable = _blank_literals_and_comments(body_text)
     records = _text_line_records_with_newline(body_text)
@@ -310,6 +341,7 @@ def _iter_indexed_byte_address_temp_anchors(source_text: str, _function: str, sp
         if "&" in line or "*" in base:
             continue
         original_indexed = _indexed_expr(base, match.group("index"))
+        base_decl_type = byte_arrays.get(_base_leaf_name(base), decl[0])
 
         if not _index_is_parenthesized(index_expr):
             replacement_line = line.replace(
@@ -378,6 +410,33 @@ def _iter_indexed_byte_address_temp_anchors(source_text: str, _function: str, sp
                 "temp_local": temp_name,
             },
         )
+
+        base_alias_name = _fresh_base_alias_temp(searchable, base)
+        if base_alias_name is not None:
+            replacement_indexed = _indexed_expr(base_alias_name, match.group("index"))
+            span_text = body_text[decl_end_with_newline:end]
+            if body_text.count(span_text) != 1:
+                continue
+            prefix = body_text[decl_end_with_newline:start]
+            replacement_text = (
+                f"{match.group('indent')}{base_decl_type}* {base_alias_name};\n"
+                f"{prefix}"
+                f"{match.group('indent')}{base_alias_name} = {base};\n"
+                f"{match.group('indent')}{lhs} = {replacement_indexed};"
+            )
+            yield Anchor(
+                mutator_key="steer_indexed_byte_base_alias",
+                span=(body_start + decl_end_with_newline, body_start + end),
+                payload={
+                    "span_text": span_text,
+                    "replacement_text": replacement_text,
+                    "strategy": "indexed-byte-base-alias",
+                    "array_base": base,
+                    "index_expr": index_expr,
+                    "target_local": lhs,
+                    "temp_local": base_alias_name,
+                },
+            )
 
         if not _safe_index_temp_expr(index_expr):
             continue

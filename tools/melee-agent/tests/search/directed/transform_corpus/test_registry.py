@@ -119,6 +119,7 @@ def test_indexed_byte_address_temp_metadata_is_executable() -> None:
         "steer_indexed_byte_same_line_expr",
         "steer_indexed_byte_value_temp",
         "steer_indexed_byte_index_temp",
+        "steer_indexed_byte_base_alias",
     )
     assert family.semantic_risk == "medium"
     assert "non-struct byte-array" in family.source_region_selector

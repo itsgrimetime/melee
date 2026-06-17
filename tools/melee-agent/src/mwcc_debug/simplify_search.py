@@ -639,6 +639,14 @@ def _compile_failure_diagnostic(exc: CompileFailure) -> str:
     return lines[0] if lines else f"compile failed with exit {exc.returncode}"
 
 
+def _pcdump_missing_function_diagnostic(function: str) -> str:
+    return (
+        f"pcdump-missing-function: function {function!r} was not found in "
+        "the compiled pcdump; check requested name/alias against the "
+        "report symbol"
+    )
+
+
 def search(
     sources: list[VariantSource],
     ctx: FunctionContext,
@@ -739,6 +747,11 @@ def search(
                 # as a compile-equivalent failure rather than a gate
                 # rejection, since the gate had no data to evaluate.
                 compile_failures += 1
+                compile_failure_details.append(CompileFailureSummary(
+                    provenance=variant.provenance,
+                    returncode=4,
+                    diagnostic=_pcdump_missing_function_diagnostic(ctx.function),
+                ))
                 continue
 
             # Always compute the score regardless of gate result. Gate-rejected

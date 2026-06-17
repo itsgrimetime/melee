@@ -813,6 +813,11 @@ def _steer_indexed_byte_index_temp(anchor: Anchor, source_text: str) -> Optional
     return _replace_validated_span(anchor, source_text)
 
 
+def _steer_indexed_byte_base_alias(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Introduce a byte-array base alias for one indexed byte-array access."""
+    return _replace_validated_span(anchor, source_text)
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -883,6 +888,7 @@ _DISPATCH = {
     "steer_indexed_byte_same_line_expr": _steer_indexed_byte_same_line_expr,
     "steer_indexed_byte_value_temp": _steer_indexed_byte_value_temp,
     "steer_indexed_byte_index_temp": _steer_indexed_byte_index_temp,
+    "steer_indexed_byte_base_alias": _steer_indexed_byte_base_alias,
     "swap_independent_adjacent_statements": _swap_independent_adjacent_statements,
     "scheduler_anchor_iv_init_before_bias": _replace_validated_span,
     "scheduler_split_float_cast_temp": _replace_validated_span,

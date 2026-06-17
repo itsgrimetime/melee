@@ -794,6 +794,50 @@ def test_search_swallows_compile_failures(
     )
 
 
+def test_search_records_pcdump_missing_function_as_compile_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    baseline = baseline_signature(
+        _events_for_class(simplify_order=[33, 99]), class_id=0,
+    )
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.simplify_search.compile_source_variant",
+        lambda diff_input, *, function, melee_root, timeout: (
+            _pcdump_for([42, 32]).replace(
+                "Starting function fn_test",
+                "Starting function other_function",
+            )
+        ),
+    )
+
+    def src(_ctx):
+        yield SourceVariant(text="GOOD", provenance="candidate-1",
+                            parent_baseline=ctx.source_path)
+
+    result = search(
+        sources=[src],
+        ctx=ctx,
+        baseline=baseline,
+        target=(42, 32),
+        max_candidates=10,
+        timeout=10,
+    )
+
+    assert result.exact_match is None
+    assert result.compile_failure_count == 1
+    assert result.compile_failures[0] == CompileFailureSummary(
+        provenance="candidate-1",
+        returncode=4,
+        diagnostic=(
+            "pcdump-missing-function: function 'fn_test' was not found in "
+            "the compiled pcdump; check requested name/alias against the "
+            "report symbol"
+        ),
+    )
+
+
 def test_search_dedups_identical_variant_text_across_sources(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

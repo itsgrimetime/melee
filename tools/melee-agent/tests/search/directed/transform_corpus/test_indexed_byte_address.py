@@ -1,6 +1,8 @@
 """Tests for non-struct indexed byte-array address-temp steering probes."""
 from __future__ import annotations
 
+from src.search.directed.anchors import Anchor
+from src.search.directed.mutators import apply_mutator
 from src.search.directed.transform_corpus import generate_transform_probes
 
 
@@ -103,6 +105,76 @@ def test_indexed_byte_address_temp_generates_index_lifetime_temp() -> None:
     assert "mnDiagram_804A076C.sorted_names[j + 1]" not in index_temp.candidate_text
 
 
+def test_indexed_byte_address_temp_generates_base_alias_probe() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "struct MnDiagramData { u8 sorted_names[25]; };\n"
+        "extern struct MnDiagramData mnDiagram_804A076C;\n"
+        "void mnDiagram_SortNamesByKOs(int i, int j) {\n"
+        "    u8 candidate;\n"
+        "    u8 max_idx;\n"
+        "    candidate = mnDiagram_804A076C.sorted_names[j + 1];\n"
+        "    max_idx = mnDiagram_804A076C.sorted_names[j];\n"
+        "    use(candidate, max_idx);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_SortNamesByKOs",
+        unit="melee/mn/mndiagram",
+        force_phys={34: 27, 44: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=12,
+    )
+
+    base_alias = next(
+        probe for probe in probes
+        if probe.mutator_key == "steer_indexed_byte_base_alias"
+        and probe.payload["target_local"] == "candidate"
+    )
+    assert base_alias.payload["strategy"] == "indexed-byte-base-alias"
+    assert base_alias.payload["array_base"] == "mnDiagram_804A076C.sorted_names"
+    assert base_alias.payload["index_expr"] == "j + 1"
+    assert "    u8* sorted_names_base_probe;\n" in base_alias.candidate_text
+    assert (
+        "    sorted_names_base_probe = mnDiagram_804A076C.sorted_names;\n"
+        in base_alias.candidate_text
+    )
+    assert "    candidate = sorted_names_base_probe[j + 1];" in base_alias.candidate_text
+    assert "candidate = mnDiagram_804A076C.sorted_names[j + 1]" not in (
+        base_alias.candidate_text
+    )
+
+
+def test_indexed_byte_base_alias_dispatch_applies_validated_span() -> None:
+    source = (
+        "void fn(void) {\n"
+        "    u8 candidate;\n"
+        "    candidate = data.sorted_names[j];\n"
+        "}\n"
+    )
+    span_text = "    candidate = data.sorted_names[j];"
+    replacement_text = (
+        "    u8* sorted_names_base_probe;\n"
+        "    sorted_names_base_probe = data.sorted_names;\n"
+        "    candidate = sorted_names_base_probe[j];"
+    )
+    anchor = Anchor(
+        mutator_key="steer_indexed_byte_base_alias",
+        span=(source.index(span_text), source.index(span_text) + len(span_text)),
+        payload={
+            "span_text": span_text,
+            "replacement_text": replacement_text,
+        },
+    )
+
+    result = apply_mutator("steer_indexed_byte_base_alias", anchor, source)
+
+    assert result is not None
+    assert replacement_text in result
+
+
 def test_indexed_byte_address_temp_handles_condition_expression_reads() -> None:
     source = (
         "typedef unsigned char u8;\n"
@@ -172,3 +244,16 @@ def test_indexed_byte_address_temp_handles_condition_expression_reads() -> None:
     assert "GetNameText(mnDiagram_804A076C.sorted_names[sorted_names_idx_probe])" in (
         index_temp.candidate_text
     )
+
+    base_alias = next(
+        probe
+        for probe in indexed_probes
+        if probe.mutator_key == "steer_indexed_byte_base_alias"
+    )
+    assert base_alias.payload["strategy"] == "indexed-byte-base-alias"
+    assert "    u8* sorted_names_base_probe;\n" in base_alias.candidate_text
+    assert (
+        "        sorted_names_base_probe = mnDiagram_804A076C.sorted_names;\n"
+        in base_alias.candidate_text
+    )
+    assert "GetNameText(sorted_names_base_probe[j])" in base_alias.candidate_text

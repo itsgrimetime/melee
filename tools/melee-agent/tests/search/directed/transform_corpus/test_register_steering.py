@@ -209,6 +209,48 @@ def test_coloring_register_steering_rejects_split_decl_init_before_later_decl() 
     assert all("    col = arg1;\n    u8 row" not in probe.candidate_text for probe in steering)
 
 
+def test_coloring_register_steering_skips_generated_fpr_product_temps() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void mnDiagram_80241E78(f32 y_spacing, f32 y_offset, int col, int row) {\n"
+        "    f32 col_offset;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    f32 col_offset_product_fpr;\n"
+        "    col_offset_product_fpr = y_spacing * (f32) col;\n"
+        "    col_offset = col_offset_product_fpr;\n"
+        "    row_offset = y_offset * (f32) row;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    use(col_offset, row_offset_adj);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_80241E78",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=16,
+    )
+
+    steering = [
+        probe for probe in probes if probe.family_id == "coloring_register_steering"
+    ]
+    assert steering
+    assert not [
+        probe for probe in steering
+        if probe.payload.get("product_local") == "col_offset_product_fpr"
+        or "col_offset_product_fpr_product_fpr" in probe.candidate_text
+    ]
+    assert any(
+        probe.mutator_key == "steer_fpr_product_temp_split"
+        and probe.payload.get("product_local") == "row_offset"
+        and "row_offset_product_fpr" in probe.candidate_text
+        for probe in steering
+    )
+
+
 def _node_set_delta_payload() -> dict:
     return {
         "kind": "node-set-delta",

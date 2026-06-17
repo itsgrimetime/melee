@@ -93,6 +93,7 @@ DEFAULT_TRANSFORM_FAMILIES: tuple[TransformFamily, ...] = (
             "steer_indexed_byte_same_line_expr",
             "steer_indexed_byte_value_temp",
             "steer_indexed_byte_index_temp",
+            "steer_indexed_byte_base_alias",
         ),
         semantic_risk="medium",
         source_region_selector=(
@@ -104,8 +105,8 @@ DEFAULT_TRANSFORM_FAMILIES: tuple[TransformFamily, ...] = (
             "source-visible element pointers"
         ),
         generated_probe_form=(
-            "emit same-line indexed-expression spellings or a byte value temp "
-            "while preserving the indexed array access"
+            "emit same-line indexed-expression spellings, byte/index temps, "
+            "or base-alias locals while preserving the indexed array access"
         ),
         keywords=("indexed", "byte", "array", "address-temp", "base", "index"),
     ),

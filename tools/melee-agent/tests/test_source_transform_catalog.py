@@ -33,7 +33,7 @@ def test_catalog_has_expected_headline_counts() -> None:
 
     assert summary["surfaces"] == 13
     assert summary["techniques"] == 169
-    assert summary["concrete_forms"] == 120
+    assert summary["concrete_forms"] == 124
 
 
 def test_control_flow_catalog_tracks_default_operator_tuple() -> None:
@@ -94,6 +94,10 @@ def test_directed_catalog_tracks_dispatch_and_families() -> None:
         "steer_reuse_dead_top_level_loop_counter",
         "steer_split_reused_loop_counter",
         "steer_fpr_dependent_product_recompute",
+        "steer_fpr_product_temp_split",
+        "steer_fpr_paired_product_temp_split",
+        "steer_indexed_byte_index_temp",
+        "steer_indexed_byte_base_alias",
         "introduce_named_zero_local",
         "swap_independent_adjacent_statements",
         "rewrite_raw_index_struct_field",
@@ -108,7 +112,7 @@ def test_directed_catalog_tracks_dispatch_and_families() -> None:
     assert materialized_probe_keys.isdisjoint(dispatch_keys)
     assert set(entry.concrete_forms) == set(DIRECTED_MUTATOR_KEYS)
     assert entry.technique_count == 41
-    assert entry.concrete_form_count == 67
+    assert entry.concrete_form_count == 71
     assert "coloring_register_steering" in entry.techniques
     assert "same_type_local_lifetime_reuse" in entry.techniques
     assert "independent_statement_order" in entry.techniques
