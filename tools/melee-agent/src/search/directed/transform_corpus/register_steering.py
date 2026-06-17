@@ -156,6 +156,7 @@ class _RegisterSteeringDependentProductCase:
     product_expr: str
     dependent_parts: _RegisterSteeringDependentProduct
     primary_decl: _RegisterSteeringDecl
+    alias_local: str | None = None
 
 
 def _line_brace_delta(line: str) -> int:
@@ -1274,6 +1275,41 @@ def _dependent_source_replacement(
     )
 
 
+def _dependent_expr_from_source(
+    source_expr: str,
+    dependent_parts: _RegisterSteeringDependentProduct,
+) -> str:
+    source = (
+        source_expr
+        if re.match(r"^[A-Za-z_]\w*$", source_expr.strip())
+        else f"({source_expr})"
+    )
+    if dependent_parts.const_on_left:
+        return (
+            f"{dependent_parts.const_text} {dependent_parts.op} "
+            f"{source}"
+        )
+    return f"{source} {dependent_parts.op} {dependent_parts.const_text}"
+
+
+def _call_statement_uses_local(line: str, local: str) -> bool:
+    stripped = line.strip()
+    if not stripped.endswith(";") or "=" in stripped:
+        return False
+    if re.match(r"[A-Za-z_]\w*\s*\(", stripped) is None:
+        return False
+    return re.search(r"\b" + re.escape(local) + r"\b", stripped) is not None
+
+
+def _replace_call_statement_local(line: str, local: str, replacement: str) -> str:
+    return re.sub(
+        r"\b" + re.escape(local) + r"\b",
+        replacement,
+        line,
+        count=1,
+    )
+
+
 def _strip_wrapping_parens(text: str) -> str:
     stripped = text.strip()
     while stripped.startswith("(") and stripped.endswith(")"):
@@ -1844,6 +1880,125 @@ def _iter_fpr_dependent_product_cases(
                 primary_decl=primary_decl,
             )
         )
+
+    for idx, (start, _end, _end_with_newline, line) in enumerate(
+        searchable_records[:-2]
+    ):
+        _alias_start, _alias_end, _alias_end_with_newline, alias_line = (
+            searchable_records[idx + 1]
+        )
+        _dependent_start, dependent_end, _dependent_end_with_newline, dependent_line = (
+            searchable_records[idx + 2]
+        )
+        if idx >= len(records) or idx + 2 >= len(records):
+            continue
+        if any(
+            (depths[line_idx] if line_idx < len(depths) else 0) != 1
+            for line_idx in (idx, idx + 1, idx + 2)
+        ):
+            continue
+        if any(
+            preprocessor_depths[line_idx] != 0
+            for line_idx in (idx, idx + 1, idx + 2)
+        ):
+            continue
+        primary_match = _REGISTER_STEERING_ASSIGN_RE.match(line)
+        alias_assign = _REGISTER_STEERING_ASSIGN_RE.match(alias_line)
+        dependent_assign = _REGISTER_STEERING_ASSIGN_RE.match(dependent_line)
+        if (
+            primary_match is None
+            or alias_assign is None
+            or dependent_assign is None
+        ):
+            continue
+        if (
+            records[idx][3] != line
+            or records[idx + 1][3] != alias_line
+            or records[idx + 2][3] != dependent_line
+        ):
+            continue
+        indent = primary_match.group("indent")
+        if (
+            alias_assign.group("indent") != indent
+            or dependent_assign.group("indent") != indent
+        ):
+            continue
+        primary = primary_match.group("lhs")
+        product = _register_steering_product_expr(primary_match.group("rhs"))
+        if product is None:
+            continue
+        product_expr, operand_names, cast_operand_names = product
+        alias_local = alias_assign.group("lhs")
+        if alias_assign.group("rhs").strip() != primary:
+            continue
+        dependent = dependent_assign.group("lhs")
+        if len({primary, alias_local, dependent}) != 3:
+            continue
+        if primary in operand_names or dependent in operand_names:
+            continue
+        if not _register_steering_product_has_fpr_operand_proof(
+            body_text,
+            function_header_text,
+            operand_names,
+            cast_operand_names,
+        ):
+            continue
+        dependent_parts = _dependent_product_parts(
+            dependent_assign.group("rhs").strip(),
+            primary=alias_local,
+            product_expr=product_expr,
+        )
+        if dependent_parts is None:
+            continue
+        if (
+            _node_set_split_synthetic_name(primary)
+            or _node_set_split_synthetic_name(dependent)
+            or _node_set_split_synthetic_name(alias_local)
+            or _generated_fpr_product_temp_name(primary)
+            or _generated_fpr_product_temp_name(dependent)
+            or any(_generated_fpr_product_temp_name(name) for name in operand_names)
+        ):
+            continue
+        decls = _register_steering_fpr_product_decls(body_text, primary, dependent)
+        if decls is None:
+            continue
+        primary_decl, _dependent_decl = decls
+        all_decls = _register_steering_decl_records(body_text)
+        if all_decls is None:
+            all_decls = _register_steering_narrow_decl_records_for(
+                body_text,
+                {alias_local},
+            )
+        if all_decls is None:
+            continue
+        alias_decls = [decl for decl in all_decls if decl.name == alias_local]
+        if (
+            len(alias_decls) != 1
+            or alias_decls[0].depth != 1
+            or alias_decls[0].type_name not in _REGISTER_STEERING_FPR_TYPES
+        ):
+            continue
+        if _counter_identifier_region_rejects(
+            searchable,
+            body_text,
+            primary,
+            dependent,
+            alias_local,
+        ):
+            continue
+        cases.append(
+            _RegisterSteeringDependentProductCase(
+                start=start,
+                next_end=dependent_end,
+                indent=indent,
+                primary=primary,
+                dependent=dependent,
+                product_expr=product_expr,
+                dependent_parts=dependent_parts,
+                primary_decl=primary_decl,
+                alias_local=alias_local,
+            )
+        )
     return tuple(cases)
 
 
@@ -1926,74 +2081,230 @@ def _iter_fpr_product_temp_plus_dependent_anchors(
                     payload=payload,
                 )
 
-            dependent_recompute = _dependent_product_replacement(
-                indent=case.indent,
-                dependent=case.dependent,
-                product_expr=case.product_expr,
-                dependent_parts=case.dependent_parts,
-            )
-            if dependent_recompute is not None:
-                anchors.append(
-                    replacement_for(
-                        strategy="fpr-product-temp-plus-dependent-recompute-first",
-                        dependent_text=(
-                            f"{dependent_recompute}\n"
-                            f"{case.indent}{case.primary} = {case.product_expr};"
-                        ),
-                    )
-                )
-
-            reuse_temp = _fpr_product_reuse_temp_name(occupied, case.primary)
-            if reuse_temp is not None:
-                dependent_from_reuse = _dependent_source_replacement(
+            if case.alias_local is None:
+                dependent_recompute = _dependent_product_replacement(
                     indent=case.indent,
                     dependent=case.dependent,
-                    source_expr=reuse_temp,
+                    product_expr=case.product_expr,
                     dependent_parts=case.dependent_parts,
                 )
-                if dependent_from_reuse is not None:
+                if dependent_recompute is not None:
                     anchors.append(
                         replacement_for(
-                            strategy=(
-                                "fpr-product-temp-plus-dependent-product-reuse-temp"
-                            ),
-                            extra_decl=(
-                                f"{case.indent}{case.primary_decl.type_name} "
-                                f"{reuse_temp};\n"
-                            ),
+                            strategy="fpr-product-temp-plus-dependent-recompute-first",
                             dependent_text=(
-                                f"{case.indent}{reuse_temp} = {case.product_expr};\n"
-                                f"{case.indent}{case.primary} = {reuse_temp};\n"
-                                f"{dependent_from_reuse}"
+                                f"{dependent_recompute}\n"
+                                f"{case.indent}{case.primary} = "
+                                f"{case.product_expr};"
                             ),
-                            temp_local=reuse_temp,
                         )
                     )
 
-            lifetime_temp = _fpr_lifetime_temp_name(occupied, case.primary)
-            if lifetime_temp is not None:
-                dependent_from_lifetime = _dependent_source_replacement(
-                    indent=case.indent,
-                    dependent=case.dependent,
-                    source_expr=lifetime_temp,
-                    dependent_parts=case.dependent_parts,
-                )
-                if dependent_from_lifetime is not None:
-                    anchors.append(
-                        replacement_for(
-                            strategy="fpr-product-temp-plus-dependent-local-temp-split",
-                            extra_decl=(
-                                f"{case.indent}{case.primary_decl.type_name} "
-                                f"{lifetime_temp};\n"
-                            ),
-                            dependent_text=(
-                                f"{case.indent}{case.primary} = {case.product_expr};\n"
-                                f"{case.indent}{lifetime_temp} = {case.primary};\n"
-                                f"{dependent_from_lifetime}"
-                            ),
-                            temp_local=lifetime_temp,
-                        )
+                reuse_temp = _fpr_product_reuse_temp_name(occupied, case.primary)
+                if reuse_temp is not None:
+                    dependent_from_reuse = _dependent_source_replacement(
+                        indent=case.indent,
+                        dependent=case.dependent,
+                        source_expr=reuse_temp,
+                        dependent_parts=case.dependent_parts,
                     )
+                    if dependent_from_reuse is not None:
+                        anchors.append(
+                            replacement_for(
+                                strategy=(
+                                    "fpr-product-temp-plus-dependent-"
+                                    "product-reuse-temp"
+                                ),
+                                extra_decl=(
+                                    f"{case.indent}{case.primary_decl.type_name} "
+                                    f"{reuse_temp};\n"
+                                ),
+                                dependent_text=(
+                                    f"{case.indent}{reuse_temp} = "
+                                    f"{case.product_expr};\n"
+                                    f"{case.indent}{case.primary} = "
+                                    f"{reuse_temp};\n"
+                                    f"{dependent_from_reuse}"
+                                ),
+                                temp_local=reuse_temp,
+                            )
+                        )
+
+                lifetime_temp = _fpr_lifetime_temp_name(occupied, case.primary)
+                if lifetime_temp is not None:
+                    dependent_from_lifetime = _dependent_source_replacement(
+                        indent=case.indent,
+                        dependent=case.dependent,
+                        source_expr=lifetime_temp,
+                        dependent_parts=case.dependent_parts,
+                    )
+                    if dependent_from_lifetime is not None:
+                        anchors.append(
+                            replacement_for(
+                                strategy=(
+                                    "fpr-product-temp-plus-dependent-"
+                                    "local-temp-split"
+                                ),
+                                extra_decl=(
+                                    f"{case.indent}{case.primary_decl.type_name} "
+                                    f"{lifetime_temp};\n"
+                                ),
+                                dependent_text=(
+                                    f"{case.indent}{case.primary} = "
+                                    f"{case.product_expr};\n"
+                                    f"{case.indent}{lifetime_temp} = "
+                                    f"{case.primary};\n"
+                                    f"{dependent_from_lifetime}"
+                                ),
+                                temp_local=lifetime_temp,
+                            )
+                        )
+            call_records: list[tuple[int, int, str, str]] = []
+            records = _text_line_records_with_newline(body_text)
+            searchable_records = _text_line_records_with_newline(searchable)
+            for call_idx, (call_start, call_end, _call_end_with_newline, search_line) in enumerate(
+                searchable_records
+            ):
+                if call_idx >= len(records) or call_start <= case.next_end:
+                    continue
+                if records[call_idx][3] != search_line:
+                    continue
+                line = records[call_idx][3]
+                if _call_statement_uses_local(search_line, case.primary):
+                    call_records.append((call_start, call_end, line, case.primary))
+                elif _call_statement_uses_local(search_line, case.dependent):
+                    call_records.append((call_start, call_end, line, case.dependent))
+            if call_records:
+                last_call_end = call_records[-1][1]
+                call_span_text = body_text[insert_after:last_call_end]
+                if body_text.count(call_span_text) == 1:
+                    fixed_line_replacement = (
+                        f"{fixed_text}\n" if fixed.line.endswith("\n") else fixed_text
+                    )
+                    call_expr_text = call_span_text.replace(
+                        fixed.line,
+                        fixed_line_replacement,
+                        1,
+                    )
+                    for _call_start, _call_end, line, local in call_records:
+                        if local == case.primary:
+                            replacement_expr = case.product_expr
+                        else:
+                            replacement_expr = _dependent_expr_from_source(
+                                case.product_expr,
+                                case.dependent_parts,
+                            )
+                        call_expr_text = call_expr_text.replace(
+                            line,
+                            _replace_call_statement_local(
+                                line,
+                                local,
+                                replacement_expr,
+                            ),
+                            1,
+                        )
+                    if call_expr_text != call_span_text:
+                        anchors.append(
+                            Anchor(
+                                mutator_key="steer_fpr_product_temp_plus_dependent",
+                                span=(insert_after, last_call_end),
+                                payload={
+                                    "span_text": call_span_text,
+                                    "replacement_text": (
+                                        f"{fixed.indent}{fixed_type} {fixed_temp};\n"
+                                        f"{call_expr_text}"
+                                    ),
+                                    "strategy": (
+                                        "fpr-product-temp-plus-dependent-"
+                                        "call-expr-duplicate"
+                                    ),
+                                    "fixed_product_local": fixed.lhs,
+                                    "fixed_product_expr": fixed.product_expr,
+                                    "fixed_temp_local": fixed_temp,
+                                    "product_local": case.primary,
+                                    "dependent_local": case.dependent,
+                                    "product_expr": case.product_expr,
+                                },
+                            )
+                        )
+
+                    primary_call_temp = _fresh_register_steering_name(
+                        occupied,
+                        f"{case.primary}_call",
+                    )
+                    temp_occupied = occupied
+                    if primary_call_temp is not None:
+                        temp_occupied += f"\n{primary_call_temp}\n"
+                    dependent_call_temp = _fresh_register_steering_name(
+                        temp_occupied,
+                        f"{case.dependent}_call",
+                    )
+                    if primary_call_temp is not None and dependent_call_temp is not None:
+                        call_temp_text = call_span_text.replace(
+                            fixed.line,
+                            fixed_line_replacement,
+                            1,
+                        )
+                        for _call_start, _call_end, line, local in call_records:
+                            indent_match = re.match(r"(?P<indent>[ \t]*)", line)
+                            call_indent = (
+                                indent_match.group("indent")
+                                if indent_match is not None else ""
+                            )
+                            if local == case.primary:
+                                temp_name = primary_call_temp
+                                assignment_expr = case.product_expr
+                            else:
+                                temp_name = dependent_call_temp
+                                assignment_expr = _dependent_expr_from_source(
+                                    case.primary,
+                                    case.dependent_parts,
+                                )
+                            call_temp_text = call_temp_text.replace(
+                                line,
+                                (
+                                    f"{call_indent}{temp_name} = {assignment_expr};\n"
+                                    f"{_replace_call_statement_local(line, local, temp_name)}"
+                                ),
+                                1,
+                            )
+                        if call_temp_text != call_span_text:
+                            anchors.append(
+                                Anchor(
+                                    mutator_key=(
+                                        "steer_fpr_product_temp_plus_dependent"
+                                    ),
+                                    span=(insert_after, last_call_end),
+                                    payload={
+                                        "span_text": call_span_text,
+                                        "replacement_text": (
+                                            f"{fixed.indent}{fixed_type} "
+                                            f"{fixed_temp};\n"
+                                            f"{fixed.indent}"
+                                            f"{case.primary_decl.type_name} "
+                                            f"{primary_call_temp};\n"
+                                            f"{fixed.indent}"
+                                            f"{case.primary_decl.type_name} "
+                                            f"{dependent_call_temp};\n"
+                                            f"{call_temp_text}"
+                                        ),
+                                        "strategy": (
+                                            "fpr-product-temp-plus-dependent-"
+                                            "call-temp-split"
+                                        ),
+                                        "fixed_product_local": fixed.lhs,
+                                        "fixed_product_expr": fixed.product_expr,
+                                        "fixed_temp_local": fixed_temp,
+                                        "product_local": case.primary,
+                                        "dependent_local": case.dependent,
+                                        "product_expr": case.product_expr,
+                                        "temp_locals": (
+                                            primary_call_temp,
+                                            dependent_call_temp,
+                                        ),
+                                    },
+                                )
+                            )
             break
     return anchors
 

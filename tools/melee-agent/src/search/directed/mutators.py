@@ -848,6 +848,21 @@ def _steer_indexed_byte_totals_index_temp(anchor: Anchor, source_text: str) -> O
     return _replace_validated_span(anchor, source_text)
 
 
+def _steer_indexed_byte_init_loop_split(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Split a combined byte-index initialization and totals loop."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_direct_global_dst(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Spell a byte-array destination from the global instead of an alias."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_max_current_value_temp(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Introduce a byte temp for the current max indexed value."""
+    return _replace_validated_span(anchor, source_text)
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -925,6 +940,9 @@ _DISPATCH = {
     "steer_indexed_byte_init_pointer_alias": _steer_indexed_byte_init_pointer_alias,
     "steer_indexed_byte_condition_index_alias": _steer_indexed_byte_condition_index_alias,
     "steer_indexed_byte_totals_index_temp": _steer_indexed_byte_totals_index_temp,
+    "steer_indexed_byte_init_loop_split": _steer_indexed_byte_init_loop_split,
+    "steer_indexed_byte_direct_global_dst": _steer_indexed_byte_direct_global_dst,
+    "steer_indexed_byte_max_current_value_temp": _steer_indexed_byte_max_current_value_temp,
     "swap_independent_adjacent_statements": _swap_independent_adjacent_statements,
     "scheduler_anchor_iv_init_before_bias": _replace_validated_span,
     "scheduler_split_float_cast_temp": _replace_validated_span,

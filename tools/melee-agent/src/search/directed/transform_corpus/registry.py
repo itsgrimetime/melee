@@ -100,6 +100,9 @@ DEFAULT_TRANSFORM_FAMILIES: tuple[TransformFamily, ...] = (
             "steer_indexed_byte_init_pointer_alias",
             "steer_indexed_byte_condition_index_alias",
             "steer_indexed_byte_totals_index_temp",
+            "steer_indexed_byte_init_loop_split",
+            "steer_indexed_byte_direct_global_dst",
+            "steer_indexed_byte_max_current_value_temp",
         ),
         semantic_risk="medium",
         source_region_selector=(

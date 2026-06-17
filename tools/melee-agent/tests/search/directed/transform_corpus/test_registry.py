@@ -126,6 +126,9 @@ def test_indexed_byte_address_temp_metadata_is_executable() -> None:
         "steer_indexed_byte_init_pointer_alias",
         "steer_indexed_byte_condition_index_alias",
         "steer_indexed_byte_totals_index_temp",
+        "steer_indexed_byte_init_loop_split",
+        "steer_indexed_byte_direct_global_dst",
+        "steer_indexed_byte_max_current_value_temp",
     )
     assert family.semantic_risk == "medium"
     assert "non-struct byte-array" in family.source_region_selector

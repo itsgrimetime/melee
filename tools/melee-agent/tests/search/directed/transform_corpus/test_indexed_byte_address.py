@@ -409,7 +409,7 @@ def test_indexed_byte_address_temp_emits_sort_ig34_lifetime_and_index_levers() -
         "extern struct MnDiagramData mnDiagram_804A076C;\n"
         "char* GetNameText(int slot);\n"
         "void mnDiagram_SortNamesByKOs(void) {\n"
-        "    struct MnDiagramData* assets = &mnDiagram_804A076C;\n"
+        "    struct MnDiagramData* assets = (struct MnDiagramData*) &mnDiagram_804A076C;\n"
         "    u32 totals[120];\n"
         "    int max_idx;\n"
         "    int j;\n"
@@ -496,3 +496,86 @@ def test_indexed_byte_address_temp_emits_sort_ig34_lifetime_and_index_levers() -
     ) in totals_temps.candidate_text
     assert "totals[sorted_names_totals_idx_probe]" in totals_temps.candidate_text
     assert "totals[sorted_names_totals_idx_probe_2]" in totals_temps.candidate_text
+
+
+def test_indexed_byte_address_temp_emits_sort_loop_shape_and_value_probes() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef unsigned int u32;\n"
+        "struct MnDiagramData { u8 sorted_names[120]; };\n"
+        "extern struct MnDiagramData mnDiagram_804A076C;\n"
+        "char* GetNameText(int slot);\n"
+        "u32 SumNameKOs(int slot);\n"
+        "void mnDiagram_SortNamesByKOs(void) {\n"
+        "    struct MnDiagramData* assets = (struct MnDiagramData*) &mnDiagram_804A076C;\n"
+        "    u32 totals[120];\n"
+        "    int max_idx;\n"
+        "    int j;\n"
+        "    int i;\n"
+        "    int n;\n"
+        "    u32* tp;\n"
+        "    u8* dst_iter;\n"
+        "    u8* dst = assets->sorted_names;\n"
+        "    dst_iter = dst;\n"
+        "    tp = totals;\n"
+        "    for (n = 0; n < 120; n++, dst_iter++, tp++) {\n"
+        "        *dst_iter = (u8) n;\n"
+        "        *tp = SumNameKOs(n & 0xFF);\n"
+        "    }\n"
+        "    for (i = 0; i < 119; i++) {\n"
+        "        max_idx = i;\n"
+        "        for (j = i + 1; j < 120; j++) {\n"
+        "            if ((GetNameText(mnDiagram_804A076C.sorted_names[j]) != 0) &&\n"
+        "                (totals[mnDiagram_804A076C.sorted_names[max_idx]] <\n"
+        "                 totals[mnDiagram_804A076C.sorted_names[j]])) {\n"
+        "                max_idx = j;\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_SortNamesByKOs",
+        unit="melee/mn/mndiagram",
+        force_phys={34: 27, 44: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=80,
+    )
+
+    by_strategy = {
+        probe.payload["strategy"]: probe
+        for probe in probes
+        if "strategy" in probe.payload
+    }
+    assert {
+        "indexed-byte-init-loop-split",
+        "indexed-byte-direct-global-dst",
+        "indexed-byte-max-current-value-temp",
+    } <= set(by_strategy)
+
+    loop_split = by_strategy["indexed-byte-init-loop-split"]
+    assert loop_split.mutator_key == "steer_indexed_byte_init_loop_split"
+    assert "    for (n = 0; n < 120; n++, dst_iter++) {\n" in (
+        loop_split.candidate_text
+    )
+    assert "        *dst_iter = (u8) n;\n" in loop_split.candidate_text
+    assert "    for (n = 0; n < 120; n++, tp++) {\n" in loop_split.candidate_text
+    assert "        *tp = SumNameKOs(n & 0xFF);\n" in loop_split.candidate_text
+
+    direct_global = by_strategy["indexed-byte-direct-global-dst"]
+    assert direct_global.mutator_key == "steer_indexed_byte_direct_global_dst"
+    assert "    u8* dst = mnDiagram_804A076C.sorted_names;\n" in (
+        direct_global.candidate_text
+    )
+    assert "    u8* dst = assets->sorted_names;\n" not in direct_global.candidate_text
+
+    max_value = by_strategy["indexed-byte-max-current-value-temp"]
+    assert max_value.mutator_key == "steer_indexed_byte_max_current_value_temp"
+    assert "    u8 sorted_names_max_value_probe;\n" in max_value.candidate_text
+    assert (
+        "            sorted_names_max_value_probe = "
+        "mnDiagram_804A076C.sorted_names[max_idx];\n"
+    ) in max_value.candidate_text
+    assert "totals[sorted_names_max_value_probe]" in max_value.candidate_text

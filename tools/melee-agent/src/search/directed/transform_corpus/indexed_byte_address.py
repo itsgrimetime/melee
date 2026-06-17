@@ -37,6 +37,34 @@ _POINTER_ALIAS_ASSIGN_RE = re.compile(
 )
 
 
+_GLOBAL_ALIAS_DECL_RE = re.compile(
+    r"^[ \t]*(?P<type>(?:struct\s+)?[A-Za-z_]\w*)\s*\*\s*"
+    r"(?P<alias>[A-Za-z_]\w*)\s*=\s*"
+    r"(?:\([^)]*\)\s*)?&\s*"
+    r"(?P<global>[A-Za-z_]\w*)\s*;\s*$"
+)
+
+
+_BYTE_POINTER_FIELD_DECL_RE = re.compile(
+    r"^(?P<indent>[ \t]+)(?P<type>u8|s8)\s*\*\s*"
+    r"(?P<name>[A-Za-z_]\w*)\s*=\s*"
+    r"(?P<alias>[A-Za-z_]\w*)->(?P<field>[A-Za-z_]\w*)\s*;\s*$"
+)
+
+
+_FOR_LOOP_RE = re.compile(
+    r"^(?P<indent>[ \t]+)for\s*\(\s*"
+    r"(?P<index>[A-Za-z_]\w*)\s*=\s*(?P<start>[^;]+?)\s*;\s*"
+    r"(?P=index)\s*<\s*(?P<limit>[^;]+?)\s*;\s*"
+    r"(?P<increments>[^)]*?)\s*\)\s*\{\s*$"
+)
+
+
+_POINTER_STORE_RE = re.compile(
+    r"^(?P<indent>[ \t]+)\*(?P<pointer>[A-Za-z_]\w*)\s*=\s*(?P<expr>.+?)\s*;\s*$"
+)
+
+
 _TOTALS_INDEXED_BYTE_RE = re.compile(
     r"(?P<outer>[A-Za-z_]\w*)\s*\[\s*"
     r"(?P<base>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)"
@@ -192,6 +220,16 @@ def _safe_index_temp_expr(index_expr: str) -> bool:
     return bool(re.search(r"\b[A-Za-z_]\w*\b|\d", index_expr))
 
 
+def _canonical_index_expr(index_expr: str) -> str:
+    stripped = index_expr.strip()
+    while stripped.startswith("(") and stripped.endswith(")"):
+        inner = stripped[1:-1].strip()
+        if not inner:
+            break
+        stripped = inner
+    return stripped
+
+
 def _line_can_host_value_temp(line: str) -> bool:
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
@@ -335,6 +373,188 @@ def _replace_totals_indexed_value_references(
         return region_text, ()
     pieces.append(region_text[cursor:])
     return "".join(pieces), tuple(indices)
+
+
+def _prefix_with_inserted_decls(prefix: str, declarations: str) -> str:
+    leading_len = len(prefix) - len(prefix.lstrip("\n"))
+    return f"{prefix[:leading_len]}{declarations}{prefix[leading_len:]}"
+
+
+def _global_aliases(body_text: str) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    searchable = _blank_literals_and_comments(body_text)
+    for _start, _end, _end_with_newline, line in _text_line_records_with_newline(
+        searchable
+    ):
+        match = _GLOBAL_ALIAS_DECL_RE.match(line)
+        if match is not None:
+            aliases[match.group("alias")] = match.group("global")
+    return aliases
+
+
+def _direct_global_base_for_field(
+    source_text: str,
+    global_name: str,
+    field: str,
+) -> str | None:
+    searchable = _blank_literals_and_comments(source_text)
+    exact = f"{global_name}.{field}"
+    if re.search(r"\b" + re.escape(exact) + r"\b", searchable):
+        return exact
+    matches = {
+        match.group("base")
+        for match in re.finditer(
+            r"\b(?P<base>[A-Za-z_]\w*\." + re.escape(field) + r")\b",
+            searchable,
+        )
+    }
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _iter_direct_global_dst_anchors(
+    *,
+    source_text: str,
+    body_text: str,
+    body_start: int,
+):
+    byte_arrays = _byte_array_types(source_text)
+    aliases = _global_aliases(body_text)
+    if not byte_arrays or not aliases:
+        return
+    searchable = _blank_literals_and_comments(body_text)
+    records = _text_line_records_with_newline(body_text)
+    searchable_records = _text_line_records_with_newline(searchable)
+    depths = _line_depths_from_blanked_text(searchable)
+    for idx, (start, end, _end_with_newline, search_line) in enumerate(
+        searchable_records
+    ):
+        if idx >= len(records):
+            continue
+        if (depths[idx] if idx < len(depths) else 0) != 0:
+            continue
+        match = _BYTE_POINTER_FIELD_DECL_RE.match(search_line)
+        if match is None:
+            continue
+        global_name = aliases.get(match.group("alias"))
+        field = match.group("field")
+        if global_name is None or field not in byte_arrays:
+            continue
+        direct_base = _direct_global_base_for_field(source_text, global_name, field)
+        if direct_base is None:
+            continue
+        line = records[idx][3]
+        if body_text.count(line) != 1:
+            continue
+        replacement_line = (
+            f"{match.group('indent')}{match.group('type')}* "
+            f"{match.group('name')} = {direct_base};"
+        )
+        yield Anchor(
+            mutator_key="steer_indexed_byte_direct_global_dst",
+            span=(body_start + start, body_start + end),
+            payload={
+                "span_text": line,
+                "replacement_text": replacement_line,
+                "strategy": "indexed-byte-direct-global-dst",
+                "array_base": direct_base,
+                "target_local": match.group("name"),
+                "source_local": match.group("alias"),
+            },
+        )
+
+
+def _increment_for_local(increments: tuple[str, ...], local: str) -> str | None:
+    for increment in increments:
+        if re.search(r"\b" + re.escape(local) + r"\b", increment):
+            return increment
+    return None
+
+
+def _iter_init_loop_split_anchors(
+    *,
+    body_text: str,
+    body_start: int,
+):
+    searchable = _blank_literals_and_comments(body_text)
+    records = _text_line_records_with_newline(body_text)
+    searchable_records = _text_line_records_with_newline(searchable)
+    for idx, (start, _end, _end_with_newline, search_line) in enumerate(
+        searchable_records[:-3]
+    ):
+        if idx + 3 >= len(records):
+            continue
+        header_match = _FOR_LOOP_RE.match(search_line)
+        if header_match is None:
+            continue
+        first_store = _POINTER_STORE_RE.match(searchable_records[idx + 1][3])
+        second_store = _POINTER_STORE_RE.match(searchable_records[idx + 2][3])
+        if first_store is None or second_store is None:
+            continue
+        close_line = searchable_records[idx + 3][3]
+        if re.match(r"^[ \t]*}\s*$", close_line) is None:
+            continue
+        first_pointer = first_store.group("pointer")
+        second_pointer = second_store.group("pointer")
+        if first_pointer == second_pointer:
+            continue
+        increments = tuple(
+            increment.strip()
+            for increment in header_match.group("increments").split(",")
+            if increment.strip()
+        )
+        loop_index = header_match.group("index")
+        index_increment = _increment_for_local(increments, loop_index)
+        first_increment = _increment_for_local(increments, first_pointer)
+        second_increment = _increment_for_local(increments, second_pointer)
+        if (
+            index_increment is None
+            or first_increment is None
+            or second_increment is None
+        ):
+            continue
+        start_expr = header_match.group("start").strip()
+        limit_expr = header_match.group("limit").strip()
+        indent = header_match.group("indent")
+        span_end = searchable_records[idx + 3][1]
+        span_text = body_text[start:span_end]
+        if body_text.count(span_text) != 1:
+            continue
+        first_header = (
+            f"{indent}for ({loop_index} = {start_expr}; "
+            f"{loop_index} < {limit_expr}; {index_increment}, "
+            f"{first_increment}) {{\n"
+        )
+        second_header = (
+            f"{indent}for ({loop_index} = {start_expr}; "
+            f"{loop_index} < {limit_expr}; {index_increment}, "
+            f"{second_increment}) {{\n"
+        )
+        first_store_line = records[idx + 1][3]
+        if not first_store_line.endswith("\n"):
+            first_store_line += "\n"
+        second_store_line = records[idx + 2][3]
+        if not second_store_line.endswith("\n"):
+            second_store_line += "\n"
+        replacement_text = (
+            f"{first_header}"
+            f"{first_store_line}"
+            f"{indent}}}\n"
+            f"{second_header}"
+            f"{second_store_line}"
+            f"{indent}}}"
+        )
+        yield Anchor(
+            mutator_key="steer_indexed_byte_init_loop_split",
+            span=(body_start + start, body_start + span_end),
+            payload={
+                "span_text": span_text,
+                "replacement_text": replacement_text,
+                "strategy": "indexed-byte-init-loop-split",
+                "index_local": loop_index,
+                "first_pointer_local": first_pointer,
+                "second_pointer_local": second_pointer,
+            },
+        )
 
 
 def _iter_init_pointer_alias_anchors(
@@ -503,8 +723,7 @@ def _iter_general_indexed_byte_expr_anchors(
                                     payload={
                                         "span_text": span_text,
                                         "replacement_text": (
-                                            f"{declarations}"
-                                            f"{body_text[:condition_start]}"
+                                            f"{_prefix_with_inserted_decls(body_text[:condition_start], declarations)}"
                                             f"{assignments}"
                                             f"{replaced_condition}"
                                         ),
@@ -568,8 +787,7 @@ def _iter_general_indexed_byte_expr_anchors(
                                 payload={
                                     "span_text": span_text,
                                     "replacement_text": (
-                                        f"{declarations}"
-                                        f"{body_text[:condition_start]}"
+                                        f"{_prefix_with_inserted_decls(body_text[:condition_start], declarations)}"
                                         f"{assignments}"
                                         f"{replaced_condition}"
                                     ),
@@ -581,6 +799,62 @@ def _iter_general_indexed_byte_expr_anchors(
                                     "temp_locals": totals_temp_names,
                                 },
                             )
+                max_index_expr = next(
+                    (
+                        index_expr
+                        for index_expr in totals_indices
+                        if _canonical_index_expr(index_expr) == "max_idx"
+                    ),
+                    None,
+                )
+                if max_index_expr is not None:
+                    max_value_temp = _fresh_named_temp(
+                        searchable,
+                        f"{_base_leaf_name(base)}_max_value",
+                    )
+                    if max_value_temp is not None:
+                        replaced_condition, replaced_indices = (
+                            _replace_indexed_value_references(
+                                region_text=condition_text,
+                                region_searchable=condition_searchable,
+                                base=base,
+                                temp_by_index={max_index_expr: max_value_temp},
+                            )
+                        )
+                        if replaced_indices and replaced_condition != condition_text:
+                            indent_match = re.match(
+                                r"(?P<indent>[ \t]*)",
+                                condition_text,
+                            )
+                            indent = (
+                                indent_match.group("indent")
+                                if indent_match is not None else ""
+                            )
+                            span_text = body_text[:condition_end]
+                            if body_text.count(span_text) == 1:
+                                declarations = f"    {decl_type} {max_value_temp};\n"
+                                yield Anchor(
+                                    mutator_key=(
+                                        "steer_indexed_byte_max_current_value_temp"
+                                    ),
+                                    span=(body_start, body_start + condition_end),
+                                    payload={
+                                        "span_text": span_text,
+                                        "replacement_text": (
+                                            f"{_prefix_with_inserted_decls(body_text[:condition_start], declarations)}"
+                                            f"{indent}{max_value_temp} = "
+                                            f"{base}[{max_index_expr}];\n"
+                                            f"{replaced_condition}"
+                                        ),
+                                        "strategy": (
+                                            "indexed-byte-max-current-value-temp"
+                                        ),
+                                        "array_base": base,
+                                        "index_expr": max_index_expr,
+                                        "target_local": _base_leaf_name(base),
+                                        "temp_local": max_value_temp,
+                                    },
+                                )
                 value_temp_names = _fresh_byte_temps(
                     searchable,
                     _base_leaf_name(base),
@@ -620,8 +894,7 @@ def _iter_general_indexed_byte_expr_anchors(
                                 payload={
                                     "span_text": span_text,
                                     "replacement_text": (
-                                        f"{declarations}"
-                                        f"{body_text[:condition_start]}"
+                                        f"{_prefix_with_inserted_decls(body_text[:condition_start], declarations)}"
                                         f"{assignments}"
                                         f"{replaced_condition}"
                                     ),
@@ -651,14 +924,14 @@ def _iter_general_indexed_byte_expr_anchors(
                         )
                         span_text = body_text[:condition_end]
                         if body_text.count(span_text) == 1:
+                            declarations = f"    {decl_type}* {base_alias_name};\n"
                             yield Anchor(
                                 mutator_key="steer_indexed_byte_base_alias",
                                 span=(body_start, body_start + condition_end),
                                 payload={
                                     "span_text": span_text,
                                     "replacement_text": (
-                                        f"    {decl_type}* {base_alias_name};\n"
-                                        f"{body_text[:condition_start]}"
+                                        f"{_prefix_with_inserted_decls(body_text[:condition_start], declarations)}"
                                         f"{indent}{base_alias_name} = {base};\n"
                                         f"{replaced_condition}"
                                     ),
@@ -803,6 +1076,17 @@ def _iter_indexed_byte_address_temp_anchors(source_text: str, _function: str, sp
     body_text = source_text[body_start:body_end]
     if re.search(r"(?m)^[ \t]*#", body_text):
         return
+
+    yield from _iter_init_loop_split_anchors(
+        body_text=body_text,
+        body_start=body_start,
+    )
+
+    yield from _iter_direct_global_dst_anchors(
+        source_text=source_text,
+        body_text=body_text,
+        body_start=body_start,
+    )
 
     yield from _iter_init_pointer_alias_anchors(
         source_text=source_text,
