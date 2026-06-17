@@ -22105,6 +22105,93 @@ def _restore_source_snapshot(path: Path, original: str) -> str | None:
     return None
 
 
+class _SourceRestoreBytesError(RuntimeError):
+    def __init__(self, message: str, backup_path: Path | None = None):
+        super().__init__(message)
+        self.backup_path = backup_path
+
+
+def _preserve_source_restore_backup(
+    path: Path,
+    original: bytes,
+    *,
+    melee_root: Path,
+) -> tuple[Path | None, str | None]:
+    try:
+        backup_dir = melee_root / "build" / "source-restore-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", path.name).strip(".-")
+        fd, raw_backup = tempfile.mkstemp(
+            prefix=f"{safe_name or 'source'}-",
+            suffix=".bak",
+            dir=backup_dir,
+        )
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(original)
+        return Path(raw_backup), None
+    except Exception as exc:
+        return None, f"failed to preserve source restore backup: {type(exc).__name__}: {exc}"
+
+
+@contextmanager
+def _source_restore_byte_guard(
+    path: Path | None,
+    *,
+    melee_root: Path,
+) -> Iterator[None]:
+    if path is None or not path.exists():
+        yield
+        return
+
+    original = path.read_bytes()
+    registered_signal_restore = False
+    try:
+        try:
+            _register_active_source_restore(path, original.decode("utf-8"))
+            registered_signal_restore = True
+        except UnicodeDecodeError:
+            pass
+
+        yield
+    finally:
+        if registered_signal_restore:
+            _unregister_active_source_restore(path)
+        try:
+            current = path.read_bytes() if path.exists() else None
+        except Exception:
+            current = None
+        if current == original:
+            return
+
+        restore_error: str | None = None
+        try:
+            path.write_bytes(original)
+            restored = path.read_bytes()
+        except Exception as exc:
+            restore_error = (
+                f"failed to restore {path}: {type(exc).__name__}: {exc}"
+            )
+        else:
+            if restored != original:
+                restore_error = (
+                    f"failed to restore {path}: restored byte hash mismatch"
+                )
+
+        if restore_error:
+            backup_path, backup_error = _preserve_source_restore_backup(
+                path,
+                original,
+                melee_root=melee_root,
+            )
+            if backup_error:
+                restore_error = f"{restore_error}; {backup_error}"
+            elif backup_path is not None:
+                restore_error = (
+                    f"{restore_error}; original bytes preserved at {backup_path}"
+                )
+            raise _SourceRestoreBytesError(restore_error, backup_path)
+
+
 def _restore_active_sources_for_signal(signum: int, _frame: object) -> None:
     errors: list[str] = []
     for path, original in list(_ACTIVE_SOURCE_RESTORES.items()):
@@ -23201,6 +23288,162 @@ def _rank_select_order_candidates_real_first(
     for idx, variant in enumerate(ranked, start=1):
         variant["rank"] = idx
     return ranked
+
+
+def _select_order_source_idea_payload(source: object | None) -> dict | None:
+    if source is None:
+        return None
+    return {
+        "ig_idx": getattr(source, "ig_idx", None),
+        "var_name": getattr(source, "var_name", None),
+        "confidence": getattr(source, "confidence", None),
+        "alternates": list(getattr(source, "alternates", ()) or ()),
+        "ideas": list(getattr(source, "ideas", ()) or ()),
+        "rejected": list(getattr(source, "rejected", ()) or ()),
+        "first_def": getattr(source, "first_def", None),
+        "blocker_ig": getattr(source, "blocker_ig", None),
+        "blocker_var_name": getattr(source, "blocker_var_name", None),
+        "blocker_confidence": getattr(source, "blocker_confidence", None),
+        "blocker_alternates": list(
+            getattr(source, "blocker_alternates", ()) or ()
+        ),
+        "blocker_rejected": list(getattr(source, "blocker_rejected", ()) or ()),
+        "blocker_first_def": getattr(source, "blocker_first_def", None),
+    }
+
+
+def _select_order_candidate_residual_first_divergence(
+    *,
+    variant: dict,
+    candidate_pcdump: str,
+    function: str,
+    class_id: int,
+    force_phys: Mapping[int, int],
+    source_retained: str | None = None,
+) -> dict:
+    from ...mwcc_debug import first_divergence as fd
+
+    try:
+        events = parse_hook_events(candidate_pcdump)
+        fev = find_function(events, function)
+        if fev is None:
+            return {
+                "status": "abstain",
+                "reason": f"function {function!r} not found in candidate pcdump",
+                "candidate_label": variant.get("label"),
+                "rank": variant.get("rank"),
+                "class_id": class_id,
+                "force_phys": {str(k): v for k, v in sorted(force_phys.items())},
+                "source_retained": source_retained,
+            }
+        target = fd.TargetColoring(class_id=class_id, force_phys=dict(force_phys))
+        report = fd.analyze_first_divergence(fev, target)
+    except Exception as exc:
+        return {
+            "status": "abstain",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "candidate_label": variant.get("label"),
+            "rank": variant.get("rank"),
+            "class_id": class_id,
+            "force_phys": {str(k): v for k, v in sorted(force_phys.items())},
+            "source_retained": source_retained,
+        }
+
+    source_text = ""
+    if source_retained:
+        retained_path = Path(source_retained)
+        if retained_path.exists():
+            try:
+                source_text = retained_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except Exception:
+                source_text = ""
+    pre_pass = None
+    try:
+        fn = next(
+            (item for item in parse_pcdump(candidate_pcdump) if item.name == function),
+            None,
+        )
+        if fn is not None:
+            pre_pass = fn.last_precolor_pass()
+    except Exception:
+        pre_pass = None
+    try:
+        source_ideas = fd.attach_source_ideas(
+            report.fact,
+            source_text,
+            function,
+            pre_pass,
+        )
+    except Exception:
+        source_ideas = None
+
+    fact = report.fact
+    source_payload = _select_order_source_idea_payload(source_ideas)
+    source_idea_list = (
+        source_payload.get("ideas") if isinstance(source_payload, dict) else None
+    ) or []
+    next_source_lever = (
+        source_idea_list[0]
+        if source_idea_list
+        else getattr(fact, "local_target", None)
+    )
+    objective = variant.get("objective") or {}
+    return {
+        "status": "ok",
+        "candidate_label": variant.get("label"),
+        "rank": variant.get("rank"),
+        "class_id": class_id,
+        "force_phys": {str(k): v for k, v in sorted(force_phys.items())},
+        "source_retained": source_retained,
+        "objective": objective,
+        "opcode_shape_preserved": objective.get("opcode_shape_preserved"),
+        "frame_delta": objective.get("frame_delta"),
+        "next_source_lever": next_source_lever,
+        "first_divergence": {
+            "candidate_label": variant.get("label"),
+            "rank": variant.get("rank"),
+            "case": getattr(fact.case, "value", str(fact.case)),
+            "ig_idx": fact.ig_idx,
+            "iter_idx": fact.iter_idx,
+            "baseline_reg": fact.baseline_reg,
+            "target_reg": fact.target_reg,
+            "coalesced_nodes": list(fact.coalesced_nodes),
+            "coalesced_root": fact.coalesced_root,
+            "coalesced_root_phys": fact.coalesced_root_phys,
+            "blocker_ig": fact.blocker_ig,
+            "blocker_dependency": fact.blocker_dependency,
+            "working_mask": (
+                sorted(fact.working_mask)
+                if fact.working_mask is not None else None
+            ),
+            "cap_hit": fact.cap_hit,
+            "earlier_unmapped_warning": fact.earlier_unmapped_warning,
+            "local_target": fact.local_target,
+        },
+        "source_ideas": source_payload,
+    }
+
+
+def _format_select_order_residual(residual: Mapping[str, Any]) -> str:
+    if residual.get("status") != "ok":
+        return (
+            f"   residual: {residual.get('status')} "
+            f"{residual.get('reason', '')}"
+        ).rstrip()
+    first = residual.get("first_divergence") or {}
+    actual = first.get("baseline_reg")
+    target = first.get("target_reg")
+    actual_text = f"r{actual}" if isinstance(actual, int) else "?"
+    target_text = f"r{target}" if isinstance(target, int) else "?"
+    lever = residual.get("next_source_lever") or first.get("local_target") or "?"
+    return (
+        f"   residual: Case {first.get('case', '?')} "
+        f"ig{first.get('ig_idx', '?')} {actual_text}->{target_text}; "
+        f"next: {lever}"
+    )
 
 
 def _select_order_source_attributions_for_leads(
@@ -27987,6 +28230,28 @@ def debug_select_order_search_cmd(
             ),
         ),
     ] = None,
+    force_phys: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys",
+            help=(
+                "Proof mapping for residual first-divergence scoring, e.g. "
+                "IG:PHYS or comma-separated IG:PHYS entries. Alias of "
+                "--transform-force-phys for select-order proof workflows."
+            ),
+        ),
+    ] = None,
+    residual_first_divergence_top: Annotated[
+        Optional[int],
+        typer.Option(
+            "--residual-first-divergence-top",
+            help=(
+                "Attach first-divergence residual analysis to the top N ranked "
+                "successful candidates. Omit for automatic top-3 on force-phys "
+                "misses; pass 0 to disable."
+            ),
+        ),
+    ] = None,
     frame_reservation_bytes: Annotated[
         Optional[int],
         typer.Option(
@@ -28061,10 +28326,28 @@ def debug_select_order_search_cmd(
     if not target_orders:
         typer.echo("--target is required.", err=True)
         raise typer.Exit(2)
+    if (
+        residual_first_divergence_top is not None
+        and residual_first_divergence_top < 0
+    ):
+        raise typer.BadParameter("--residual-first-divergence-top must be >= 0")
     try:
-        proof_force_map = parse_transform_force_phys(transform_force_phys)
+        force_phys_map = parse_transform_force_phys(force_phys)
+        transform_force_map = parse_transform_force_phys(transform_force_phys)
     except TransformProbeConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    if (
+        force_phys is not None
+        and transform_force_phys is not None
+        and force_phys_map != transform_force_map
+    ):
+        raise typer.BadParameter(
+            "--force-phys and --transform-force-phys specify different maps"
+        )
+    proof_force_map = (
+        force_phys_map if force_phys is not None else transform_force_map
+    )
+    effective_force_phys = force_phys if force_phys is not None else transform_force_phys
 
     baseline_path = _resolve_pcdump_path(
         pcdump,
@@ -28116,9 +28399,9 @@ def debug_select_order_search_cmd(
                 source_path_for_probes = candidate_source
 
     auto_transform_families: tuple[str, ...] = ()
-    if class_id == 1 and transform_force_phys and not transform_family:
+    if class_id == 1 and effective_force_phys and not transform_family:
         auto_transform_families = _FPR_SELECT_ORDER_TRANSFORM_FAMILIES
-    elif class_id == 0 and transform_force_phys and not transform_family:
+    elif class_id == 0 and effective_force_phys and not transform_family:
         auto_transform_families = _GPR_SELECT_ORDER_TRANSFORM_FAMILIES
 
     if (
@@ -28129,7 +28412,7 @@ def debug_select_order_search_cmd(
 
     window_order_fallback: dict | None = None
     window_order_source_attributions: dict[int, Any] = {}
-    if transform_force_phys:
+    if effective_force_phys:
         window_order_fallback = _register_tiebreak_window_order_fallback(
             function=function,
             class_id=class_id,
@@ -28185,7 +28468,7 @@ def debug_select_order_search_cmd(
                 unit=unit,
                 include=True,
                 families=list(auto_transform_families),
-                force_phys=transform_force_phys,
+                force_phys=effective_force_phys,
                 max_probes=max_count,
             )
         if (
@@ -28200,7 +28483,7 @@ def debug_select_order_search_cmd(
                 unit=unit,
                 include=include_transform_corpus,
                 families=transform_family,
-                force_phys=transform_force_phys,
+                force_phys=effective_force_phys,
                 max_probes=max_count,
             )
         return out[:max_count]
@@ -28249,6 +28532,8 @@ def debug_select_order_search_cmd(
     beam_campaign_dir: Path | None = None
     beam_ledger_path: Path | None = None
     beam_ledger: dict | None = None
+    candidate_pcdump_by_key: dict[int, str] = {}
+    candidate_pcdump_key = 0
 
     def _score_candidate(
         *,
@@ -28264,75 +28549,81 @@ def debug_select_order_search_cmd(
         unit_source: Path | None = None,
         full_unit_source: bool = False,
     ) -> None:
+        nonlocal candidate_pcdump_key
         try:
             if full_unit_source and unit_source is None:
                 raise ValueError(
                     "full-unit transform probe requires a resolved unit source"
                 )
             candidate_source_text: str | None = None
-            if path.suffix == ".txt":
-                candidate_text = path.read_text(encoding="utf-8", errors="replace")
-            elif path.suffix == ".c":
-                candidate_source_text, _ = (
-                    _prevalidate_lifetime_layout_source_candidate(
-                        path,
-                        function=function,
+            match_percent = None
+            match_percent_error = None
+            live_restore_path = source_path_for_probes if path.suffix == ".c" else None
+            with _source_restore_byte_guard(
+                live_restore_path,
+                melee_root=DEFAULT_MELEE_ROOT,
+            ):
+                if path.suffix == ".txt":
+                    candidate_text = path.read_text(encoding="utf-8", errors="replace")
+                elif path.suffix == ".c":
+                    candidate_source_text, _ = (
+                        _prevalidate_lifetime_layout_source_candidate(
+                            path,
+                            function=function,
+                        )
                     )
-                )
-                try:
-                    compile_kwargs = dict(
-                        diff_input=DiffInput(
-                            label=label,
-                            token=str(path),
-                            kind="source",
-                            path=path,
-                        ),
+                    try:
+                        compile_kwargs = dict(
+                            diff_input=DiffInput(
+                                label=label,
+                                token=str(path),
+                                kind="source",
+                                path=path,
+                            ),
+                            function=function,
+                            melee_root=DEFAULT_MELEE_ROOT,
+                            timeout=timeout,
+                        )
+                        if unit_source is not None:
+                            compile_kwargs["unit_source"] = unit_source
+                        candidate_text = compile_source_variant(**compile_kwargs)
+                    except CompileFailure as exc:
+                        detail = str(exc)
+                        if (
+                            exc.returncode == 3
+                            and "not found in pcdump" in detail
+                        ):
+                            raise _MalformedSourceCandidate(
+                                (
+                                    f"{detail}; compiled probe pcdump omitted the "
+                                    f"target function. Source retained at {path}"
+                                ),
+                                source_hunk=_compact_source_hunk_for_function(
+                                    candidate_source_text,
+                                    function,
+                                ),
+                            ) from exc
+                        raise
+                else:
+                    raise ValueError(f"expected .txt pcdump or .c source, got {path}")
+                if score_match_percent and path.suffix == ".c":
+                    status = (
+                        _make_real_score_status("select-order-search", label)
+                        if not json_out
+                        else None
+                    )
+                    match_kwargs = dict(
+                        path=path,
                         function=function,
                         melee_root=DEFAULT_MELEE_ROOT,
                         timeout=timeout,
+                        status=status,
                     )
-                    if unit_source is not None:
-                        compile_kwargs["unit_source"] = unit_source
-                    candidate_text = compile_source_variant(**compile_kwargs)
-                except CompileFailure as exc:
-                    detail = str(exc)
-                    if (
-                        exc.returncode == 3
-                        and "not found in pcdump" in detail
-                    ):
-                        raise _MalformedSourceCandidate(
-                            (
-                                f"{detail}; compiled probe pcdump omitted the "
-                                f"target function. Source retained at {path}"
-                            ),
-                            source_hunk=_compact_source_hunk_for_function(
-                                candidate_source_text,
-                                function,
-                            ),
-                        ) from exc
-                    raise
-            else:
-                raise ValueError(f"expected .txt pcdump or .c source, got {path}")
-            match_percent = None
-            match_percent_error = None
-            if score_match_percent and path.suffix == ".c":
-                status = (
-                    _make_real_score_status("select-order-search", label)
-                    if not json_out
-                    else None
-                )
-                match_kwargs = dict(
-                    path=path,
-                    function=function,
-                    melee_root=DEFAULT_MELEE_ROOT,
-                    timeout=timeout,
-                    status=status,
-                )
-                if full_unit_source:
-                    match_kwargs["full_unit_source"] = True
-                match_percent, match_percent_error = (
-                    _select_order_source_match_percent(**match_kwargs)
-                )
+                    if full_unit_source:
+                        match_kwargs["full_unit_source"] = True
+                    match_percent, match_percent_error = (
+                        _select_order_source_match_percent(**match_kwargs)
+                    )
             try:
                 candidate_sig = pressure_signature_from_pcdump(
                     candidate_text,
@@ -28391,6 +28682,9 @@ def debug_select_order_search_cmd(
                 variant["match_percent_error"] = match_percent_error
             if source_retained is not None:
                 variant["source_retained"] = str(source_retained)
+            candidate_pcdump_key += 1
+            variant["_pcdump_key"] = candidate_pcdump_key
+            candidate_pcdump_by_key[candidate_pcdump_key] = candidate_text
             variants.append(variant)
             return variant
         except Exception as exc:
@@ -28428,6 +28722,8 @@ def debug_select_order_search_cmd(
                 failed["source_retained"] = str(path)
             if malformed_source and exc.source_hunk:
                 failed["source_hunk"] = exc.source_hunk
+            if isinstance(exc, _SourceRestoreBytesError) and exc.backup_path is not None:
+                failed["restore_backup_path"] = str(exc.backup_path)
             variants.append(failed)
             return failed
 
@@ -28640,6 +28936,57 @@ def debug_select_order_search_cmd(
     else:
         ranked_variants = rank_select_order_candidates(variants)
         ranking = "target select-order objective, final match percent tiebreaker"
+
+    if residual_first_divergence_top is None:
+        residual_count = (
+            3
+            if proof_force_map
+            and not any(
+                variant.get("status") == "ok"
+                and (variant.get("objective") or {}).get("force_phys_satisfied") is True
+                for variant in ranked_variants
+            )
+            else 0
+        )
+    else:
+        residual_count = residual_first_divergence_top
+    if residual_count and proof_force_map:
+        residual_variants = [
+            variant for variant in ranked_variants
+            if variant.get("status") == "ok"
+        ][:residual_count]
+        for variant in residual_variants:
+            pcdump_key = variant.get("_pcdump_key")
+            candidate_pcdump = (
+                candidate_pcdump_by_key.get(pcdump_key)
+                if isinstance(pcdump_key, int) else None
+            )
+            if candidate_pcdump is None:
+                variant["residual_analysis"] = {
+                    "status": "abstain",
+                    "reason": "candidate pcdump was not retained for residual analysis",
+                    "candidate_label": variant.get("label"),
+                    "rank": variant.get("rank"),
+                    "class_id": class_id,
+                    "force_phys": {
+                        str(k): v for k, v in sorted(proof_force_map.items())
+                    },
+                    "source_retained": variant.get("source_retained"),
+                }
+                continue
+            variant["residual_analysis"] = (
+                _select_order_candidate_residual_first_divergence(
+                    variant=variant,
+                    candidate_pcdump=candidate_pcdump,
+                    function=function,
+                    class_id=class_id,
+                    force_phys=proof_force_map,
+                    source_retained=variant.get("source_retained"),
+                )
+            )
+    for variant in ranked_variants:
+        variant.pop("_pcdump_key", None)
+
     if json_out:
         print(json.dumps({
             "function": function,
@@ -28700,6 +29047,9 @@ def debug_select_order_search_cmd(
         print("Variants:")
         for variant in ranked_variants:
             print(render_select_order_variant(variant))
+            residual = variant.get("residual_analysis")
+            if isinstance(residual, Mapping):
+                print(_format_select_order_residual(residual))
     elif probes:
         print("Probes:")
         for probe in probes:

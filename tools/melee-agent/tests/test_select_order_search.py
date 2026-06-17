@@ -1893,6 +1893,226 @@ def test_select_order_search_marks_source_pcdump_omission_as_malformed_source(
     assert "objective" not in variant
 
 
+def test_select_order_search_no_score_restores_live_source_after_probe_compile_mutates_it(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    live_source = melee_root / "src" / "melee" / "mn" / "sample.c"
+    live_source.parent.mkdir(parents=True)
+    original = "void fn_80000000(void) { /* original */ }\n"
+    live_source.write_text(original)
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text(BASELINE)
+
+    def fake_probes(*args, **kwargs) -> list[LifetimeLayoutProbe]:
+        return [
+            LifetimeLayoutProbe(
+                label="generated-probe-mutates-live-source",
+                operator="block-scope",
+                description="Synthetic generated probe.",
+                source_text="void fn_80000000(void) { /* candidate */ }\n",
+            )
+        ]
+
+    def fake_compile(*args, **kwargs) -> str:
+        assert live_source.read_text() == original
+        live_source.write_text("void fn_80000000(void) { /* mutated */ }\n")
+        return TARGET_ORDER
+
+    debug_cli._ACTIVE_SOURCE_RESTORES.clear()
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        fake_probes,
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(live_source),
+            "--no-score-match-percent",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert live_source.read_text() == original
+
+
+def test_select_order_search_force_phys_residuals_annotate_top_retained_sources(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    live_source = melee_root / "src" / "melee" / "mn" / "sample.c"
+    live_source.parent.mkdir(parents=True)
+    live_source.write_text("void fn_80000000(void) { /* seed */ }\n")
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text(BASELINE)
+    residual_calls: list[dict] = []
+
+    def fake_probes(*args, **kwargs) -> list[LifetimeLayoutProbe]:
+        return [
+            LifetimeLayoutProbe(
+                label="force-phys-hit",
+                operator="block-scope",
+                description="Synthetic force-phys hit.",
+                source_text="void fn_80000000(void) { /* force-phys-hit */ }\n",
+            ),
+            LifetimeLayoutProbe(
+                label="force-phys-miss",
+                operator="block-scope",
+                description="Synthetic force-phys miss.",
+                source_text="void fn_80000000(void) { /* force-phys-miss */ }\n",
+            ),
+        ]
+
+    def fake_compile(diff_input, **kwargs) -> str:
+        source = diff_input.path.read_text()
+        if "force-phys-hit" in source:
+            return TARGET_ORDER_RIGHT_PHYS
+        return TARGET_ORDER_WRONG_PHYS
+
+    def fake_residual_helper(*args, **kwargs) -> dict:
+        variant = kwargs.get("variant")
+        if variant is None:
+            variant = next(
+                (arg for arg in args if isinstance(arg, dict) and "label" in arg),
+                {},
+            )
+        label = kwargs.get("label") or variant.get("label")
+        source_retained = (
+            kwargs.get("source_retained")
+            or kwargs.get("retained_source_path")
+            or variant.get("source_retained")
+        )
+        rank = kwargs.get("rank") or variant.get("rank")
+        summary = {
+            "first_divergence": {
+                "kind": "register-choice",
+                "candidate_label": label,
+                "rank": rank,
+                "ig_idx": 32,
+            },
+            "source_retained": str(source_retained),
+        }
+        residual_calls.append(summary)
+        return summary
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        fake_probes,
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    for helper_name in (
+        "_select_order_candidate_residual_first_divergence",
+        "_select_order_residual_first_divergence",
+        "_select_order_residual_analysis_for_candidate",
+    ):
+        monkeypatch.setattr(
+            debug_cli,
+            helper_name,
+            fake_residual_helper,
+            raising=False,
+        )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(live_source),
+            "--force-phys",
+            "32:29,33:30",
+            "--residual-first-divergence-top",
+            "2",
+            "--no-score-match-percent",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    variants = payload["variants"]
+    assert [variant["label"] for variant in variants[:2]] == [
+        "force-phys-hit",
+        "force-phys-miss",
+    ]
+    for variant in variants[:2]:
+        assert variant["status"] == "ok"
+        assert variant["source_retained"].endswith(f"{variant['label']}.c")
+        residual = variant["residual_analysis"]
+        assert residual["first_divergence"]["candidate_label"] == variant["label"]
+        assert residual["first_divergence"]["rank"] == variant["rank"]
+        assert residual["source_retained"] == variant["source_retained"]
+    assert [call["first_divergence"]["candidate_label"] for call in residual_calls] == [
+        "force-phys-hit",
+        "force-phys-miss",
+    ]
+
+
+def test_select_order_search_force_phys_aliases_compare_normalized_maps(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    candidate = tmp_path / "candidate.txt"
+    baseline.write_text(BASELINE)
+    candidate.write_text(TARGET_ORDER_RIGHT_PHYS)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--candidate",
+            f"same-map-different-order:block-scope={candidate}",
+            "--force-phys",
+            "32:29,33:30",
+            "--transform-force-phys",
+            "33:30,32:29",
+            "--residual-first-divergence-top",
+            "0",
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    variant = json.loads(result.stdout)["variants"][0]
+    assert variant["objective"]["force_phys_satisfied"] is True
+
+
 def test_select_order_search_help_smoke() -> None:
     result = runner.invoke(
         app,
@@ -1906,3 +2126,4 @@ def test_select_order_search_help_smoke() -> None:
     assert "--transform-family" in result.stdout
     assert "--transform-force-phys" in result.stdout
     assert "--directed-force-phys" in result.stdout
+    assert "--force-phys" in result.stdout
