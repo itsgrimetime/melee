@@ -173,6 +173,46 @@ def test_generate_transform_probes_edits_requested_function_when_bodies_repeat()
     )
 
 
+def test_coloring_register_steering_case_c_key_is_directly_emitted() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(unsigned char row) {\n"
+        "    f32 base;\n"
+        "    f32 y_offset;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    rowf = (f32) row;\n"
+        "    y_offset = HSD_JObjGetTranslationY(jobj2) - base;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=32,
+    )
+
+    case_c = [
+        probe for probe in probes
+        if probe.mutator_key == "steer_fpr_case_c_temp_order"
+    ]
+    assert case_c
+    assert {
+        probe.payload["strategy"] for probe in case_c
+    } >= {
+        "fpr-case-c-left-operand-temp",
+        "fpr-case-c-rhs-owner-temp",
+        "fpr-case-c-product-owner-temp",
+    }
+
+
 def test_generate_transform_probes_materializes_mined_family_mutators() -> None:
     source = (
         "typedef unsigned char u8;\n"

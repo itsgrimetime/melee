@@ -916,6 +916,148 @@ def test_coloring_register_steering_emits_dependent_product_lifetime_variants() 
     }
 
 
+def test_coloring_register_steering_emits_case_c_fpr_temp_order_probes() -> None:
+    combined_source = (
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(unsigned char row) {\n"
+        "    f32 base;\n"
+        "    f32 y_offset;\n"
+        "    f32 y_spacing;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    f32 col_fpr;\n"
+        "    f32 col_offset;\n"
+        "    int digit_count;\n"
+        "    rowf = (f32) row;\n"
+        "    y_offset = HSD_JObjGetTranslationY(jobj2) - base;\n"
+        "    digit_count = mn_GetDigitCount(value);\n"
+        "    col_fpr = (f32) row;\n"
+        "    col_offset = y_spacing * col_fpr;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset);\n"
+        "}\n"
+    )
+    split_source = (
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(unsigned char row) {\n"
+        "    f32 base;\n"
+        "    f32 y_offset;\n"
+        "    f32 y_spacing;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    f32 col_fpr;\n"
+        "    f32 col_offset;\n"
+        "    int digit_count;\n"
+        "    rowf = (f32) row;\n"
+        "    y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        "    y_offset -= base;\n"
+        "    digit_count = mn_GetDigitCount(value);\n"
+        "    col_fpr = (f32) row;\n"
+        "    col_offset = y_spacing * col_fpr;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset);\n"
+        "}\n"
+    )
+
+    for source in (combined_source, split_source):
+        probes = generate_transform_probes(
+            source,
+            function="mnDiagram_DrawCellNumber",
+            unit="melee/mn/mndiagram",
+            force_phys={39: 26, 33: 28},
+            families=("coloring_register_steering",),
+            max_per_family=32,
+        )
+
+        by_strategy = {
+            probe.payload["strategy"]: probe
+            for probe in probes
+            if probe.mutator_key == "steer_fpr_case_c_temp_order"
+        }
+        assert {
+            "fpr-case-c-left-operand-temp",
+            "fpr-case-c-rhs-owner-temp",
+            "fpr-case-c-product-owner-temp",
+        } <= set(by_strategy)
+        assert all(
+            probe.payload["target_local"] == "y_offset"
+            for probe in by_strategy.values()
+        )
+        assert all(
+            "    col_offset = y_spacing * col_fpr;\n" in probe.candidate_text
+            for probe in by_strategy.values()
+        )
+
+        left = by_strategy["fpr-case-c-left-operand-temp"]
+        assert "    f32 y_offset_left_fpr;\n" in left.candidate_text
+        assert "    y_offset_left_fpr = HSD_JObjGetTranslationY(jobj2);\n" in (
+            left.candidate_text
+        )
+        assert "    y_offset = y_offset_left_fpr - base;\n" in left.candidate_text
+
+        rhs_owner = by_strategy["fpr-case-c-rhs-owner-temp"]
+        assert "    f32 y_offset_rhs_fpr;\n" in rhs_owner.candidate_text
+        assert (
+            "    y_offset_rhs_fpr = HSD_JObjGetTranslationY(jobj2) - base;\n"
+            in rhs_owner.candidate_text
+        )
+        assert "    y_offset = y_offset_rhs_fpr;\n" in rhs_owner.candidate_text
+
+        product_owner = by_strategy["fpr-case-c-product-owner-temp"]
+        assert "    f32 y_offset_owner_fpr;\n" in product_owner.candidate_text
+        assert "    y_offset_owner_fpr = y_offset;\n" in product_owner.candidate_text
+        assert "    row_offset = y_offset_owner_fpr * rowf;\n" in (
+            product_owner.candidate_text
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "adjustment"),
+    (
+        ("indexed rhs", "table[i]"),
+        ("member rhs", "obj->x"),
+        ("side-effect rhs", "++idx"),
+        ("second call rhs", "GetBase()"),
+    ),
+)
+def test_coloring_register_steering_rejects_unsafe_case_c_fpr_temp_order(
+    case: str,
+    adjustment: str,
+) -> None:
+    source = (
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(unsigned char row) {\n"
+        "    f32 base;\n"
+        "    f32 y_offset;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    rowf = (f32) row;\n"
+        f"    y_offset = HSD_JObjGetTranslationY(jobj2) - {adjustment};\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=32,
+    )
+
+    assert "steer_fpr_case_c_temp_order" not in {
+        probe.mutator_key for probe in probes
+    }, case
+
+
 def test_coloring_register_steering_uses_source_function_aliases() -> None:
     source = (
         "typedef float f32;\n"

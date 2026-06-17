@@ -579,3 +579,108 @@ def test_indexed_byte_address_temp_emits_sort_loop_shape_and_value_probes() -> N
         "mnDiagram_804A076C.sorted_names[max_idx];\n"
     ) in max_value.candidate_text
     assert "totals[sorted_names_max_value_probe]" in max_value.candidate_text
+
+
+def test_indexed_byte_address_temp_emits_implicit_address_case_c_probes() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef unsigned int u32;\n"
+        "struct MnDiagramData { u8 sorted_names[120]; };\n"
+        "extern struct MnDiagramData mnDiagram_804A076C;\n"
+        "u32 mnDiagram_SumNameKOs(int slot);\n"
+        "void mnDiagram_SortNamesByKOs(void) {\n"
+        "    struct MnDiagramData* assets = (struct MnDiagramData*) &mnDiagram_804A076C;\n"
+        "    u32 totals[120];\n"
+        "    u8* dst_iter;\n"
+        "    u8* dst = assets->sorted_names;\n"
+        "    u32* tp;\n"
+        "    int i;\n"
+        "    int n;\n"
+        "    u8 temp;\n"
+        "    dst_iter = dst;\n"
+        "    tp = totals;\n"
+        "    for (n = 0; n < 120; n++, dst_iter++, tp++) {\n"
+        "        *dst_iter = (u8) n;\n"
+        "        *tp = mnDiagram_SumNameKOs(n & 0xFF);\n"
+        "    }\n"
+        "    dst[i] = temp;\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_SortNamesByKOs",
+        unit="melee/mn/mndiagram",
+        force_phys={34: 27, 44: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=24,
+    )
+
+    indexed_probes = [
+        probe
+        for probe in probes
+        if probe.family_id == "indexed_byte_address_temp_steering"
+    ]
+    strategies = [
+        probe.payload["strategy"]
+        for probe in indexed_probes
+        if "strategy" in probe.payload
+    ]
+    assert {
+        "indexed-byte-implicit-direct-store-base",
+        "indexed-byte-implicit-store-index-temp",
+        "indexed-byte-implicit-init-loop-indexed-store",
+    } <= set(strategies)
+    assert strategies.index("indexed-byte-implicit-direct-store-base") < (
+        strategies.index("indexed-byte-implicit-init-loop-indexed-store")
+    )
+    assert strategies.index("indexed-byte-implicit-store-index-temp") < (
+        strategies.index("indexed-byte-implicit-init-loop-indexed-store")
+    )
+
+    by_strategy = {
+        probe.payload["strategy"]: probe
+        for probe in indexed_probes
+        if "strategy" in probe.payload
+    }
+
+    direct_store = by_strategy["indexed-byte-implicit-direct-store-base"]
+    assert (
+        direct_store.mutator_key
+        == "steer_indexed_byte_implicit_direct_store_base"
+    )
+    assert "    mnDiagram_804A076C.sorted_names[i] = temp;" in (
+        direct_store.candidate_text
+    )
+    assert "    dst[i] = temp;" not in direct_store.candidate_text
+    assert "&mnDiagram_804A076C.sorted_names[i]" not in direct_store.candidate_text
+
+    index_temp = by_strategy["indexed-byte-implicit-store-index-temp"]
+    assert (
+        index_temp.mutator_key == "steer_indexed_byte_implicit_store_index_temp"
+    )
+    assert "    int sorted_names_store_idx_probe;\n" in index_temp.candidate_text
+    assert "    sorted_names_store_idx_probe = i;\n" in index_temp.candidate_text
+    assert "    dst[sorted_names_store_idx_probe] = temp;" in (
+        index_temp.candidate_text
+    )
+    assert "&mnDiagram_804A076C.sorted_names[i]" not in index_temp.candidate_text
+
+    loop_rewrite = by_strategy["indexed-byte-implicit-init-loop-indexed-store"]
+    assert (
+        loop_rewrite.mutator_key
+        == "steer_indexed_byte_implicit_init_loop_indexed_store"
+    )
+    assert "    tp = totals;\n" in loop_rewrite.candidate_text
+    assert "    for (n = 0; n < 120; n++, tp++) {\n" in (
+        loop_rewrite.candidate_text
+    )
+    assert "        dst[n] = (u8) n;\n" in loop_rewrite.candidate_text
+    assert "        *tp = mnDiagram_SumNameKOs(n & 0xFF);\n" in (
+        loop_rewrite.candidate_text
+    )
+    assert "n++, dst_iter++, tp++" not in loop_rewrite.candidate_text
+    assert "    dst_iter = dst;\n" not in loop_rewrite.candidate_text
+    assert "&mnDiagram_804A076C.sorted_names[i]" not in (
+        loop_rewrite.candidate_text
+    )

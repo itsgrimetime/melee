@@ -100,6 +100,7 @@ def test_coloring_register_steering_metadata_is_executable() -> None:
         "steer_fpr_product_temp_split",
         "steer_fpr_paired_product_temp_split",
         "steer_fpr_product_temp_plus_dependent",
+        "steer_fpr_case_c_temp_order",
         "steer_node_set_delta_coupled_split",
         "steer_node_set_delta_introduce_binding_split",
         "steer_node_set_delta_split",
@@ -128,6 +129,9 @@ def test_indexed_byte_address_temp_metadata_is_executable() -> None:
         "steer_indexed_byte_totals_index_temp",
         "steer_indexed_byte_init_loop_split",
         "steer_indexed_byte_direct_global_dst",
+        "steer_indexed_byte_implicit_direct_store_base",
+        "steer_indexed_byte_implicit_store_index_temp",
+        "steer_indexed_byte_implicit_init_loop_indexed_store",
         "steer_indexed_byte_max_current_value_temp",
     )
     assert family.semantic_risk == "medium"

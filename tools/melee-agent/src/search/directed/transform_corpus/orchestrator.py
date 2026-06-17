@@ -53,6 +53,7 @@ _DIRECT_REGISTER_STEERING_KEYS = frozenset({
     "steer_fpr_product_temp_split",
     "steer_fpr_paired_product_temp_split",
     "steer_fpr_product_temp_plus_dependent",
+    "steer_fpr_case_c_temp_order",
 })
 
 

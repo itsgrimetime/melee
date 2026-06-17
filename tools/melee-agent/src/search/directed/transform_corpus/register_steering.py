@@ -39,6 +39,11 @@ _REGISTER_STEERING_ASSIGN_RE = re.compile(
 )
 
 
+_REGISTER_STEERING_SUB_ASSIGN_RE = re.compile(
+    r"^(?P<indent>[ \t]+)(?P<lhs>[A-Za-z_]\w*)\s*-=\s*(?P<rhs>.+?)\s*;\s*$"
+)
+
+
 _REGISTER_STEERING_DEPENDENT_RE = re.compile(
     r"^(?P<lhs>[A-Za-z_]\w*)\s*(?P<op>[+-])\s*(?P<const>(?:\d+(?:\.\d*)?|\.\d+)(?:f)?)$|"
     r"^(?P<const_left>(?:\d+(?:\.\d*)?|\.\d+)(?:f)?)\s*(?P<op_left>[+-])\s*(?P<lhs_right>[A-Za-z_]\w*)$"
@@ -157,6 +162,19 @@ class _RegisterSteeringDependentProductCase:
     dependent_parts: _RegisterSteeringDependentProduct
     primary_decl: _RegisterSteeringDecl
     alias_local: str | None = None
+
+
+@dataclass(frozen=True)
+class _RegisterSteeringCaseCFprSetup:
+    idx: int
+    start: int
+    end: int
+    indent: str
+    target: str
+    target_type: str
+    call_expr: str
+    rhs_local: str
+    split_setup_text: str
 
 
 def _line_brace_delta(line: str) -> int:
@@ -1484,6 +1502,296 @@ def _iter_fpr_product_assignments(
     return tuple(products)
 
 
+def _case_c_simple_call_expr(expr: str) -> str | None:
+    stripped = expr.strip()
+    if any(token in stripped for token in ("++", "--", "=", "?", ":", ";")):
+        return None
+    if re.fullmatch(r"[A-Za-z_]\w*\s*\([^(){}]*\)", stripped) is None:
+        return None
+    return stripped
+
+
+def _case_c_simple_local_expr(expr: str) -> str | None:
+    stripped = expr.strip()
+    if re.fullmatch(r"[A-Za-z_]\w*", stripped) is None:
+        return None
+    return stripped
+
+
+def _split_top_level_subtraction(rhs: str) -> tuple[str, str] | None:
+    depth = 0
+    minus_indexes: list[int] = []
+    for index, char in enumerate(rhs):
+        if char == "(":
+            depth += 1
+            continue
+        if char == ")":
+            depth -= 1
+            if depth < 0:
+                return None
+            continue
+        if char == "-" and depth == 0:
+            if index > 0 and rhs[index - 1] == ">":
+                continue
+            minus_indexes.append(index)
+    if depth != 0 or len(minus_indexes) != 1:
+        return None
+    left = rhs[: minus_indexes[0]].strip()
+    right = rhs[minus_indexes[0] + 1 :].strip()
+    if not left or not right:
+        return None
+    return left, right
+
+
+def _case_c_combined_setup_rhs(rhs: str) -> tuple[str, str] | None:
+    parts = _split_top_level_subtraction(rhs)
+    if parts is None:
+        return None
+    call_expr = _case_c_simple_call_expr(parts[0])
+    rhs_local = _case_c_simple_local_expr(parts[1])
+    if call_expr is None or rhs_local is None:
+        return None
+    return call_expr, rhs_local
+
+
+def _iter_fpr_case_c_setups(
+    body_text: str,
+) -> tuple[_RegisterSteeringCaseCFprSetup, ...]:
+    if re.search(r"(?m)^[ \t]*#", body_text):
+        return ()
+    searchable = _blank_literals_and_comments(body_text)
+    records = _text_line_records_with_newline(body_text)
+    searchable_records = _text_line_records_with_newline(searchable)
+    depths = _line_depths_from_blanked_text(searchable)
+    preprocessor_depths = _preprocessor_depths_for_lines(searchable_records)
+    setups: list[_RegisterSteeringCaseCFprSetup] = []
+
+    for idx, (start, end, _end_with_newline, line) in enumerate(searchable_records):
+        if idx >= len(records):
+            continue
+        if (depths[idx] if idx < len(depths) else 0) != 1:
+            continue
+        if preprocessor_depths[idx] != 0 or records[idx][3] != line:
+            continue
+        assign = _REGISTER_STEERING_ASSIGN_RE.match(line)
+        if assign is None:
+            continue
+        indent = assign.group("indent")
+        target = assign.group("lhs")
+        call_expr: str | None = None
+        rhs_local: str | None = None
+        setup_end = end
+        split_setup_text: str | None = None
+
+        combined = _case_c_combined_setup_rhs(assign.group("rhs"))
+        if combined is not None:
+            call_expr, rhs_local = combined
+            split_setup_text = (
+                f"{indent}{target} = {call_expr};\n"
+                f"{indent}{target} -= {rhs_local};"
+            )
+        else:
+            call_expr = _case_c_simple_call_expr(assign.group("rhs"))
+            if call_expr is None or idx + 1 >= len(searchable_records):
+                continue
+            next_start, next_end, _next_ewn, next_line = searchable_records[idx + 1]
+            if next_start != records[idx + 1][0]:
+                continue
+            if (depths[idx + 1] if idx + 1 < len(depths) else 0) != 1:
+                continue
+            if preprocessor_depths[idx + 1] != 0 or records[idx + 1][3] != next_line:
+                continue
+            split_assign = _REGISTER_STEERING_SUB_ASSIGN_RE.match(next_line)
+            if split_assign is None:
+                continue
+            if (
+                split_assign.group("indent") != indent
+                or split_assign.group("lhs") != target
+            ):
+                continue
+            rhs_local = _case_c_simple_local_expr(split_assign.group("rhs"))
+            if rhs_local is None:
+                continue
+            setup_end = next_end
+            split_setup_text = body_text[start:setup_end]
+
+        if rhs_local == target:
+            continue
+        if (
+            _node_set_split_synthetic_name(target)
+            or _node_set_split_synthetic_name(rhs_local)
+            or _generated_fpr_product_temp_name(target)
+            or _generated_fpr_product_temp_name(rhs_local)
+        ):
+            continue
+        target_decl = _single_fpr_decl_for_name(body_text, target)
+        rhs_decl = _single_fpr_decl_for_name(body_text, rhs_local)
+        if target_decl is None or rhs_decl is None:
+            continue
+        if target_decl.end_with_newline > start or rhs_decl.end_with_newline > start:
+            continue
+        if _counter_identifier_region_rejects(searchable, body_text, target, rhs_local):
+            continue
+        setups.append(
+            _RegisterSteeringCaseCFprSetup(
+                idx=idx,
+                start=start,
+                end=setup_end,
+                indent=indent,
+                target=target,
+                target_type=target_decl.type_name,
+                call_expr=call_expr,
+                rhs_local=rhs_local,
+                split_setup_text=split_setup_text,
+            )
+        )
+    return tuple(setups)
+
+
+def _replace_case_c_product_operand(
+    product_expr: str,
+    target: str,
+    replacement: str,
+) -> str | None:
+    rewritten = re.sub(
+        r"\b" + re.escape(target) + r"\b",
+        replacement,
+        product_expr,
+        count=1,
+    )
+    return rewritten if rewritten != product_expr else None
+
+
+def _iter_fpr_case_c_temp_order_anchors(
+    body_text: str,
+    function_header_text: str = "",
+) -> list[Anchor]:
+    setups = _iter_fpr_case_c_setups(body_text)
+    if not setups:
+        return []
+    products = _iter_fpr_product_assignments(body_text, function_header_text)
+    if not products:
+        return []
+    searchable = _blank_literals_and_comments(body_text)
+    anchors: list[Anchor] = []
+
+    for setup in setups:
+        for product in products:
+            if product.start <= setup.end:
+                continue
+            if setup.target not in product.operand_names:
+                continue
+            if setup.indent != product.indent:
+                continue
+            between = body_text[setup.end:product.start]
+            between_searchable = searchable[setup.end:product.start]
+            if _region_assigns_any(between_searchable, (setup.target,)):
+                continue
+            insert_after = _insert_after_top_level_fpr_decls(body_text, setup.start)
+            if insert_after is None:
+                continue
+            span_text = body_text[insert_after:product.end]
+            if body_text.count(span_text) != 1:
+                continue
+            prefix = body_text[insert_after:setup.start]
+
+            def append_anchor(
+                *,
+                strategy: str,
+                temp_local: str,
+                pre_between_text: str,
+                replacement_product_line: str,
+                post_between_text: str = "",
+            ) -> None:
+                replacement_text = (
+                    f"{setup.indent}{setup.target_type} {temp_local};\n"
+                    f"{prefix}"
+                    f"{pre_between_text}"
+                    f"{between}"
+                    f"{post_between_text}"
+                    f"{replacement_product_line}"
+                )
+                if replacement_text == span_text:
+                    return
+                anchors.append(
+                    Anchor(
+                        mutator_key="steer_fpr_case_c_temp_order",
+                        span=(insert_after, product.end),
+                        payload={
+                            "span_text": span_text,
+                            "replacement_text": replacement_text,
+                            "strategy": strategy,
+                            "target_local": setup.target,
+                            "rhs_local": setup.rhs_local,
+                            "product_local": product.lhs,
+                            "product_expr": product.product_expr,
+                            "call_expr": setup.call_expr,
+                            "temp_local": temp_local,
+                            "source_type": setup.target_type,
+                        },
+                    )
+                )
+
+            left_temp = _fresh_register_steering_name(
+                searchable,
+                f"{setup.target}_left",
+            )
+            if left_temp is not None:
+                append_anchor(
+                    strategy="fpr-case-c-left-operand-temp",
+                    temp_local=left_temp,
+                    pre_between_text=(
+                        f"{setup.indent}{left_temp} = {setup.call_expr};\n"
+                        f"{setup.indent}{setup.target} = "
+                        f"{left_temp} - {setup.rhs_local};"
+                    ),
+                    replacement_product_line=product.line,
+                )
+
+            rhs_temp = _fresh_register_steering_name(
+                searchable,
+                f"{setup.target}_rhs",
+            )
+            if rhs_temp is not None:
+                append_anchor(
+                    strategy="fpr-case-c-rhs-owner-temp",
+                    temp_local=rhs_temp,
+                    pre_between_text=(
+                        f"{setup.indent}{rhs_temp} = "
+                        f"{setup.call_expr} - {setup.rhs_local};\n"
+                        f"{setup.indent}{setup.target} = {rhs_temp};"
+                    ),
+                    replacement_product_line=product.line,
+                )
+
+            owner_temp = _fresh_register_steering_name(
+                searchable,
+                f"{setup.target}_owner",
+            )
+            if owner_temp is None:
+                break
+            replacement_product_expr = _replace_case_c_product_operand(
+                product.product_expr,
+                setup.target,
+                owner_temp,
+            )
+            if replacement_product_expr is None:
+                break
+            append_anchor(
+                strategy="fpr-case-c-product-owner-temp",
+                temp_local=owner_temp,
+                pre_between_text=f"{setup.split_setup_text}",
+                post_between_text=(
+                    f"{setup.indent}{owner_temp} = {setup.target};\n"
+                ),
+                replacement_product_line=(
+                    f"{product.indent}{product.lhs} = {replacement_product_expr};"
+                ),
+            )
+            break
+    return anchors
+
+
 def _region_assigns_any(searchable: str, names: tuple[str, ...]) -> bool:
     return any(
         re.search(r"\b" + re.escape(name) + r"\b\s*(?:[-+*/%&|^]?=|<<=|>>=)", searchable)
@@ -2521,6 +2829,10 @@ def _iter_concrete_register_steering_body_anchors(
     body_text: str,
     function_header_text: str = "",
 ):
+    case_c_temp_order = _iter_fpr_case_c_temp_order_anchors(
+        body_text,
+        function_header_text,
+    )
     product_steering = _iter_fpr_product_steering_anchors(
         body_text,
         function_header_text,
@@ -2538,12 +2850,14 @@ def _iter_concrete_register_steering_body_anchors(
     widen_byte = _iter_byte_local_widen_anchors(body_text)
     decls = _register_steering_decl_records(body_text)
     if decls is None:
+        yield from case_c_temp_order
         yield from recompute_product
         yield from product_steering
         yield from product_temp_plus_dependent
         return
     top_decls = tuple(decl for decl in decls if decl.depth == 1)
     if _register_steering_has_duplicate_top_level_names(top_decls):
+        yield from case_c_temp_order
         yield from recompute_product
         yield from product_steering
         yield from product_temp_plus_dependent
@@ -2618,6 +2932,7 @@ def _iter_concrete_register_steering_body_anchors(
             ):
                 product_insert_after = idx + 1
                 break
+    yield from case_c_temp_order
     yield from legacy_steering[:product_insert_after]
     yield from product_steering
     yield from product_temp_plus_dependent

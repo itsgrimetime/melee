@@ -813,6 +813,11 @@ def _steer_fpr_product_temp_plus_dependent(anchor: Anchor, source_text: str) -> 
     return _replace_validated_span(anchor, source_text)
 
 
+def _steer_fpr_case_c_temp_order(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Split one Case C FPR setup/product chain through explicit temps."""
+    return _replace_validated_span(anchor, source_text)
+
+
 def _steer_indexed_byte_same_line_expr(anchor: Anchor, source_text: str) -> Optional[str]:
     """Rewrite one indexed byte-array access without materializing a pointer."""
     return _replace_validated_span(anchor, source_text)
@@ -855,6 +860,30 @@ def _steer_indexed_byte_init_loop_split(anchor: Anchor, source_text: str) -> Opt
 
 def _steer_indexed_byte_direct_global_dst(anchor: Anchor, source_text: str) -> Optional[str]:
     """Spell a byte-array destination from the global instead of an alias."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_implicit_direct_store_base(
+    anchor: Anchor,
+    source_text: str,
+) -> Optional[str]:
+    """Rewrite one indexed byte store from an alias to a proven direct base."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_implicit_store_index_temp(
+    anchor: Anchor,
+    source_text: str,
+) -> Optional[str]:
+    """Introduce a short-lived index temp immediately before a byte store."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_implicit_init_loop_indexed_store(
+    anchor: Anchor,
+    source_text: str,
+) -> Optional[str]:
+    """Rewrite one byte pointer init loop to use an implicit indexed store."""
     return _replace_validated_span(anchor, source_text)
 
 
@@ -933,6 +962,7 @@ _DISPATCH = {
     "steer_fpr_product_temp_split": _steer_fpr_product_temp_split,
     "steer_fpr_paired_product_temp_split": _steer_fpr_paired_product_temp_split,
     "steer_fpr_product_temp_plus_dependent": _steer_fpr_product_temp_plus_dependent,
+    "steer_fpr_case_c_temp_order": _steer_fpr_case_c_temp_order,
     "steer_indexed_byte_same_line_expr": _steer_indexed_byte_same_line_expr,
     "steer_indexed_byte_value_temp": _steer_indexed_byte_value_temp,
     "steer_indexed_byte_index_temp": _steer_indexed_byte_index_temp,
@@ -942,6 +972,15 @@ _DISPATCH = {
     "steer_indexed_byte_totals_index_temp": _steer_indexed_byte_totals_index_temp,
     "steer_indexed_byte_init_loop_split": _steer_indexed_byte_init_loop_split,
     "steer_indexed_byte_direct_global_dst": _steer_indexed_byte_direct_global_dst,
+    "steer_indexed_byte_implicit_direct_store_base": (
+        _steer_indexed_byte_implicit_direct_store_base
+    ),
+    "steer_indexed_byte_implicit_store_index_temp": (
+        _steer_indexed_byte_implicit_store_index_temp
+    ),
+    "steer_indexed_byte_implicit_init_loop_indexed_store": (
+        _steer_indexed_byte_implicit_init_loop_indexed_store
+    ),
     "steer_indexed_byte_max_current_value_temp": _steer_indexed_byte_max_current_value_temp,
     "swap_independent_adjacent_statements": _swap_independent_adjacent_statements,
     "scheduler_anchor_iv_init_before_bias": _replace_validated_span,
