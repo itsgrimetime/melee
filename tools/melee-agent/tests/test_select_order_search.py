@@ -797,6 +797,289 @@ def test_select_order_search_opt_in_lists_transform_corpus_probe_json(
     _assert_comma_transform_probe(probe)
 
 
+def test_select_order_search_force_phys_lists_window_order_probe_json(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "sample.c"
+    baseline.write_text(BASELINE)
+    source.write_text("void fn_80000000(void) { int dst_iter; dst_iter = 1; }\n")
+
+    fallback = {
+        "ran": True,
+        "reason": "window-order fallback leads found",
+        "leads": [{
+            "target_ig": 32,
+            "order_move": ["before", 33],
+            "move_distance": 4,
+            "perturbed_reg": 29,
+        }],
+    }
+
+    def fake_window_probes(*args, **kwargs) -> list[LifetimeLayoutProbe]:
+        return [
+            LifetimeLayoutProbe(
+                label="window-order-ig32-before-dst_iter-0",
+                operator="window-order-source-steering",
+                description="Synthetic window-order source move.",
+                source_text=source.read_text().replace(
+                    "dst_iter = 1;",
+                    "dst_iter = 2;",
+                ),
+                provenance={
+                    "kind": "window-order-fallback-source-move",
+                    "lead": fallback["leads"][0],
+                    "moved_local": "dst_iter",
+                },
+            )
+        ]
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_register_tiebreak_window_order_fallback",
+        lambda **kwargs: fallback,
+    )
+    monkeypatch.setattr(
+        "src.search.directed.window_order_source.generate_window_order_source_probes",
+        fake_window_probes,
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        lambda *args, **kwargs: [],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--transform-force-phys",
+            "32:29",
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["window_order_fallback"] == fallback
+    assert payload["window_order_probe_diagnostics"]["fallback_leads"] == 1
+    assert payload["window_order_probe_diagnostics"]["listed_source_probes"] == 1
+    assert any(
+        probe["operator"] == "window-order-source-steering"
+        for probe in payload["probes"]
+    )
+
+
+def test_select_order_source_attributions_for_leads_uses_virtual_report(
+    monkeypatch,
+) -> None:
+    class Source:
+        kind = "local"
+        name = "dst_iter"
+
+    report = object()
+    captured: dict[str, object] = {}
+
+    def fake_explain_virtuals(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return report
+
+    def fake_source_attr_of(actual_report, ig_idx: int):
+        assert actual_report is report
+        return Source() if ig_idx == 32 else None
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.virtual_attribution.explain_virtuals",
+        fake_explain_virtuals,
+    )
+    monkeypatch.setattr(
+        "src.search.solver.probe.source_attr_of",
+        fake_source_attr_of,
+    )
+
+    attrs = debug_cli._select_order_source_attributions_for_leads(
+        pcdump_text="pcdump",
+        function="fn_80000000",
+        class_id=0,
+        source_text="void fn_80000000(void) {}\n",
+        source_file="sample.c",
+        fallback={
+            "leads": [
+                {"target_ig": "32"},
+                {"target_ig": 44},
+                {"not_target": True},
+            ]
+        },
+    )
+
+    assert attrs[32].name == "dst_iter"
+    assert 44 not in attrs
+    assert captured["kwargs"]["virtuals"] == (32, 44)
+    assert captured["kwargs"]["reg_class"] == "gpr"
+
+
+def test_select_order_search_force_phys_reports_unmaterialized_window_leads(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "sample.c"
+    baseline.write_text(BASELINE)
+    source.write_text("void fn_80000000(void) { int dst_iter; dst_iter = 1; }\n")
+    fallback = {
+        "ran": True,
+        "reason": "window-order fallback leads found",
+        "leads": [{"target_ig": 32, "order_move": ["before", 33]}],
+    }
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_register_tiebreak_window_order_fallback",
+        lambda **kwargs: fallback,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_source_attributions_for_leads",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        lambda *args, **kwargs: [],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--transform-force-phys",
+            "32:29",
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    diagnostics = json.loads(result.stdout)["window_order_probe_diagnostics"]
+    assert diagnostics["fallback_leads"] == 1
+    assert diagnostics["source_attributed_leads"] == 0
+    assert diagnostics["listed_source_probes"] == 0
+
+
+def test_select_order_search_force_phys_transform_probes_keep_priority_over_window_budget(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "sample.c"
+    baseline.write_text(BASELINE)
+    source.write_text("void fn_80000000(void) { int dst_iter; dst_iter = 1; }\n")
+
+    fallback = {
+        "ran": True,
+        "reason": "window-order fallback leads found",
+        "leads": [{"target_ig": 32, "order_move": ["before", 33]}],
+    }
+
+    def fake_append_transform(probes, *, source_text: str | None, **kwargs):
+        if source_text is not None:
+            probes.append(
+                LifetimeLayoutProbe(
+                    label="indexed-byte",
+                    operator="transform-corpus:indexed_byte_address_temp_steering",
+                    description="Synthetic indexed-byte transform.",
+                    source_text=source_text.replace("dst_iter = 1;", "dst_iter = 2;"),
+                    provenance={
+                        "kind": "transform-corpus",
+                        "family_id": "indexed_byte_address_temp_steering",
+                    },
+                )
+            )
+        return probes
+
+    def fake_window_probes(source_text: str, *args, **kwargs) -> list[LifetimeLayoutProbe]:
+        return [
+            LifetimeLayoutProbe(
+                label=f"window-{idx}",
+                operator="window-order-source-steering",
+                description="Synthetic window-order source move.",
+                source_text=source_text.replace(
+                    "dst_iter = 1;",
+                    f"dst_iter = {idx + 10};",
+                ),
+                provenance={"kind": "window-order-fallback-source-move"},
+            )
+            for idx in range(4)
+        ]
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_register_tiebreak_window_order_fallback",
+        lambda **kwargs: fallback,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_append_transform_corpus_probes",
+        fake_append_transform,
+    )
+    monkeypatch.setattr(
+        "src.search.directed.window_order_source.generate_window_order_source_probes",
+        fake_window_probes,
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        lambda *args, **kwargs: [],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--transform-force-phys",
+            "32:29",
+            "--max-probes",
+            "2",
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    operators = [probe["operator"] for probe in json.loads(result.stdout)["probes"]]
+    assert operators == [
+        "transform-corpus:indexed_byte_address_temp_steering",
+        "window-order-source-steering",
+    ]
+
+
 def test_select_order_search_default_excludes_transform_corpus_probe_json(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -1230,6 +1513,151 @@ def test_select_order_search_beam_composes_and_ranks_by_real_score(
     assert variants[0]["objective"]["match_percent"] == 98.0
     assert variants[1]["chain"] == ["neutral"]
     assert variants[1]["objective"]["match_percent"] == 97.37545
+
+
+def test_select_order_search_force_phys_beam_composes_transform_and_window_order(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "sample.c"
+    campaign = tmp_path / "campaign"
+    baseline.write_text(BASELINE)
+    source.write_text("void fn_80000000(void) { /* seed */ }\n")
+
+    fallback = {
+        "ran": True,
+        "reason": "window-order fallback leads found",
+        "leads": [{
+            "target_ig": 32,
+            "order_move": ["before", 33],
+            "move_distance": 4,
+            "perturbed_reg": 29,
+        }],
+    }
+
+    def fake_append_transform(probes, *, source_text: str | None, **kwargs):
+        if source_text is None or "indexed" in source_text:
+            return probes
+        probes.append(
+            LifetimeLayoutProbe(
+                label="indexed-byte",
+                operator="transform-corpus:indexed_byte_address_temp_steering",
+                description="Synthetic indexed-byte transform.",
+                source_text=source_text.replace("seed", "seed indexed"),
+                provenance={
+                    "kind": "transform-corpus",
+                    "family_id": "indexed_byte_address_temp_steering",
+                    "probe_id": "indexed_byte_address_temp_steering@0",
+                    "mutator_key": "indexed-byte-test",
+                },
+            )
+        )
+        return probes
+
+    def fake_window_probes(source_text: str, *args, **kwargs) -> list[LifetimeLayoutProbe]:
+        if "indexed" not in source_text or "force-win" in source_text:
+            return []
+        return [
+            LifetimeLayoutProbe(
+                label="window-force",
+                operator="window-order-source-steering",
+                description="Synthetic force-phys window move.",
+                source_text=source_text.replace("indexed", "indexed force-win"),
+                provenance={
+                    "kind": "window-order-fallback-source-move",
+                    "lead": fallback["leads"][0],
+                    "moved_local": "dst_iter",
+                },
+            )
+        ]
+
+    def fake_compile(diff_input, **kwargs) -> str:
+        text = diff_input.path.read_text()
+        if "force-win" in text:
+            return TARGET_ORDER_RIGHT_PHYS
+        return TARGET_ORDER_WRONG_PHYS
+
+    def fake_match_percent(
+        path: pathlib.Path,
+        **kwargs,
+    ) -> tuple[float | None, str | None]:
+        text = path.read_text()
+        if "force-win" in text:
+            return 95.0, None
+        if "indexed" in text:
+            return 99.0, None
+        return 70.0, None
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_register_tiebreak_window_order_fallback",
+        lambda **kwargs: fallback,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_append_transform_corpus_probes",
+        fake_append_transform,
+    )
+    monkeypatch.setattr(
+        "src.search.directed.window_order_source.generate_window_order_source_probes",
+        fake_window_probes,
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(
+        "src.cli.debug._select_order_source_match_percent",
+        fake_match_percent,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--transform-force-phys",
+            "32:29",
+            "--beam-depth",
+            "2",
+            "--beam-width",
+            "1",
+            "--campaign-dir",
+            str(campaign),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ranking"] == (
+        "target select-order objective, final match percent tiebreaker"
+    )
+    assert payload["window_order_fallback"] == fallback
+    ledger = json.loads((campaign / "ledger.json").read_text())
+    chains = [entry["chain"] for entry in ledger["entries"]]
+    assert ["indexed-byte", "window-force"] in chains
+
+    variants = payload["variants"]
+    assert variants[0]["chain"] == ["indexed-byte", "window-force"]
+    assert variants[0]["objective"]["force_phys_satisfied_count"] == 1
+    assert variants[0]["objective"]["match_percent"] == 95.0
+    assert variants[1]["chain"] == ["indexed-byte"]
+    assert variants[1]["objective"]["force_phys_satisfied_count"] == 0
+    assert variants[1]["objective"]["match_percent"] == 99.0
 
 
 def test_select_order_search_marks_source_pcdump_omission_as_malformed_source(

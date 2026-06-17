@@ -23191,6 +23191,54 @@ def _rank_select_order_candidates_real_first(
     return ranked
 
 
+def _select_order_source_attributions_for_leads(
+    *,
+    pcdump_text: str,
+    function: str,
+    class_id: int,
+    source_text: str | None,
+    source_file: str | None,
+    fallback: Mapping[str, Any] | None,
+) -> dict[int, Any]:
+    if source_text is None or not isinstance(fallback, Mapping):
+        return {}
+    leads = fallback.get("leads")
+    if not isinstance(leads, list):
+        return {}
+    virtuals: list[int] = []
+    for lead in leads:
+        if not isinstance(lead, Mapping):
+            continue
+        try:
+            virtuals.append(int(lead["target_ig"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not virtuals:
+        return {}
+    reg_class = "fpr" if class_id == 1 else "gpr"
+    try:
+        from ...mwcc_debug.virtual_attribution import explain_virtuals
+        from ...search.solver import probe as solver_probe
+
+        report = explain_virtuals(
+            pcdump_text,
+            function,
+            virtuals=tuple(dict.fromkeys(virtuals)),
+            source_text=source_text,
+            source_file=source_file,
+            reg_class=reg_class,
+        )
+    except Exception:
+        return {}
+
+    attrs: dict[int, Any] = {}
+    for target_ig in virtuals:
+        source = solver_probe.source_attr_of(report, target_ig)
+        if source is not None:
+            attrs[target_ig] = source
+    return attrs
+
+
 def _select_order_safe_label(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
     return cleaned[:80] or "candidate"
@@ -28057,43 +28105,128 @@ def debug_select_order_search_cmd(
     elif class_id == 0 and transform_force_phys and not transform_family:
         auto_transform_families = _GPR_SELECT_ORDER_TRANSFORM_FAMILIES
 
-    probes: list[Any] = []
-    if source_text and auto_transform_families:
-        _append_transform_corpus_probes(
-            probes,
-            source_text=source_text,
-            function=function,
-            unit=unit,
-            include=True,
-            families=list(auto_transform_families),
-            force_phys=transform_force_phys,
-            max_probes=max_probes,
-        )
-    if source_text and len(probes) < max_probes:
-        probes.extend(
-            generate_lifetime_layout_probes(
-                source_text,
-                function,
-                frame_reservation_bytes=frame_reservation_bytes,
-                max_probes=max_probes - len(probes),
-            )
-        )
     if (
-        beam_depth <= 0
-        and source_file is not None
+        source_file is not None
         and (include_transform_corpus or transform_family)
     ):
         unit = _find_unit_for_function(function, DEFAULT_MELEE_ROOT)
-    if beam_depth <= 0:
-        _append_transform_corpus_probes(
-            probes,
-            source_text=source_text,
+
+    window_order_fallback: dict | None = None
+    window_order_source_attributions: dict[int, Any] = {}
+    if transform_force_phys:
+        window_order_fallback = _register_tiebreak_window_order_fallback(
             function=function,
-            unit=unit,
-            include=include_transform_corpus and not auto_transform_families,
-            families=transform_family,
-            force_phys=transform_force_phys,
-            max_probes=max_probes,
+            class_id=class_id,
+        )
+        window_order_source_attributions = _select_order_source_attributions_for_leads(
+            pcdump_text=baseline_text,
+            function=function,
+            class_id=class_id,
+            source_text=source_text,
+            source_file=(
+                str(source_path_for_probes)
+                if source_path_for_probes is not None else source_label
+            ),
+            fallback=window_order_fallback,
+        )
+
+    def _window_order_source_probes_for(
+        current_source: str,
+        *,
+        max_count: int,
+    ) -> list[Any]:
+        if (
+            max_count <= 0
+            or not isinstance(window_order_fallback, Mapping)
+            or not window_order_fallback.get("leads")
+        ):
+            return []
+        from ...search.directed.window_order_source import (
+            generate_window_order_source_probes,
+        )
+
+        return generate_window_order_source_probes(
+            current_source,
+            function=function,
+            fallback_leads=window_order_fallback.get("leads") or [],
+            source_attributions=window_order_source_attributions,
+            max_probes=max_count,
+        )
+
+    def _transform_corpus_probes_for(
+        current_source: str,
+        *,
+        max_count: int,
+    ) -> list[Any]:
+        if max_count <= 0:
+            return []
+        out: list[Any] = []
+        if auto_transform_families:
+            _append_transform_corpus_probes(
+                out,
+                source_text=current_source,
+                function=function,
+                unit=unit,
+                include=True,
+                families=list(auto_transform_families),
+                force_phys=transform_force_phys,
+                max_probes=max_count,
+            )
+        if (
+            len(out) < max_count
+            and (include_transform_corpus or bool(transform_family))
+            and not auto_transform_families
+        ):
+            _append_transform_corpus_probes(
+                out,
+                source_text=current_source,
+                function=function,
+                unit=unit,
+                include=include_transform_corpus,
+                families=transform_family,
+                force_phys=transform_force_phys,
+                max_probes=max_count,
+            )
+        return out[:max_count]
+
+    def _generated_select_order_probes_for(
+        current_source: str,
+        *,
+        include_lifetime: bool,
+        max_count: int,
+    ) -> list[Any]:
+        if max_count <= 0:
+            return []
+        out = _transform_corpus_probes_for(
+            current_source,
+            max_count=max_count,
+        )
+        remaining = max(0, max_count - len(out))
+        if remaining:
+            out.extend(
+                _window_order_source_probes_for(
+                    current_source,
+                    max_count=remaining,
+                )
+            )
+        remaining = max(0, max_count - len(out))
+        if include_lifetime and remaining:
+            out.extend(
+                generate_lifetime_layout_probes(
+                    current_source,
+                    function,
+                    frame_reservation_bytes=frame_reservation_bytes,
+                    max_probes=remaining,
+                )
+            )
+        return out[:max_count]
+
+    probes: list[Any] = []
+    if source_text:
+        probes = _generated_select_order_probes_for(
+            source_text,
+            include_lifetime=True,
+            max_count=max_probes,
         )
     variants: list[dict] = []
     generated_source_dir: Path | None = None
@@ -28322,6 +28455,24 @@ def debug_select_order_search_cmd(
                     full_unit_source=full_unit_source,
                 )
 
+    fallback_leads = (
+        window_order_fallback.get("leads")
+        if isinstance(window_order_fallback, Mapping) else []
+    )
+    window_order_probe_diagnostics = {
+        "fallback_leads": len(fallback_leads) if isinstance(fallback_leads, list) else 0,
+        "source_attributed_leads": len(window_order_source_attributions),
+        "listed_source_probes": sum(
+            1 for probe in probes
+            if getattr(probe, "operator", None) == "window-order-source-steering"
+        ),
+        "note": (
+            "Generic window-order source probes require a unique movable local "
+            "assignment. Product expressions and other unsafe statement moves "
+            "remain covered by transform-corpus register-steering probes."
+        ),
+    }
+
     if beam_depth > 0:
         if beam_width <= 0:
             raise typer.BadParameter("--beam-width must be positive")
@@ -28346,7 +28497,13 @@ def debug_select_order_search_cmd(
             "baseline_cache": baseline_cache,
             "beam_depth": beam_depth,
             "beam_width": beam_width,
-            "ranking": "final match percent first, then target select-order objective",
+            "ranking": (
+                "target select-order objective, final match percent tiebreaker"
+                if proof_force_map
+                else "final match percent first, then target select-order objective"
+            ),
+            "window_order_fallback": window_order_fallback,
+            "window_order_probe_diagnostics": window_order_probe_diagnostics,
             "entries": [],
             "deduped": [],
         }
@@ -28373,11 +28530,10 @@ def debug_select_order_search_cmd(
                 parent_source = str(parent["source_text"])
                 parent_label = str(parent["label"])
                 parent_chain = list(parent.get("chain") or [])
-                for probe in generate_lifetime_layout_probes(
+                for probe in _generated_select_order_probes_for(
                     parent_source,
-                    function,
-                    frame_reservation_bytes=frame_reservation_bytes,
-                    max_probes=max_probes,
+                    include_lifetime=True,
+                    max_count=max_probes,
                 ):
                     body_hash, diff_hash = _select_order_source_fingerprints(
                         base_source=source_text,
@@ -28436,9 +28592,14 @@ def debug_select_order_search_cmd(
                     beam_ledger["entries"].append(entry)
                     if variant.get("status") == "ok":
                         round_ok.append((variant, probe.source_text))
-            selected = _rank_select_order_candidates_real_first(
-                [variant for variant, _source in round_ok]
-            )[:beam_width]
+            if proof_force_map:
+                selected = rank_select_order_candidates(
+                    [variant for variant, _source in round_ok]
+                )[:beam_width]
+            else:
+                selected = _rank_select_order_candidates_real_first(
+                    [variant for variant, _source in round_ok]
+                )[:beam_width]
             selected_labels = {variant["label"] for variant in selected}
             frontier = [
                 {
@@ -28454,8 +28615,12 @@ def debug_select_order_search_cmd(
         beam_ledger_path.write_text(json.dumps(beam_ledger, indent=2))
 
     if beam_depth > 0:
-        ranked_variants = _rank_select_order_candidates_real_first(variants)
-        ranking = "final match percent first, then target select-order objective"
+        if proof_force_map:
+            ranked_variants = rank_select_order_candidates(variants)
+            ranking = "target select-order objective, final match percent tiebreaker"
+        else:
+            ranked_variants = _rank_select_order_candidates_real_first(variants)
+            ranking = "final match percent first, then target select-order objective"
     else:
         ranked_variants = rank_select_order_candidates(variants)
         ranking = "target select-order objective, final match percent tiebreaker"
@@ -28466,6 +28631,12 @@ def debug_select_order_search_cmd(
             "class_id": class_id,
             "ranking": ranking,
             "auto_transform_families": list(auto_transform_families),
+            "window_order_fallback": window_order_fallback,
+            "window_order_source_attributions": {
+                str(key): _solve_source_attribution_dict(value)
+                for key, value in window_order_source_attributions.items()
+            },
+            "window_order_probe_diagnostics": window_order_probe_diagnostics,
             "baseline": baseline.to_dict(),
             "baseline_cache": baseline_cache,
             "source": source_label,
