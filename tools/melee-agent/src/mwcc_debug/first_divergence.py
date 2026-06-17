@@ -67,6 +67,7 @@ class SourceIdea:                    # the ADVISORY layer (Task 9 fills it)
     source_col: Optional[int] = None
     source_confidence: Optional[str] = None
     candidate_spans: tuple[str, ...] = ()
+    negative_diagnostics: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -768,6 +769,7 @@ def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
         ) = _source_context_for_ig(fact.blocker_ig, all_bindings, pre_pass)
 
     ideas: list[str] = [fact.local_target]
+    negative_diagnostics: list[str] = []
     source_name = getattr(source_attr, "name", None) if source_attr is not None else None
     source_expr = (
         getattr(source_attr, "expression", None)
@@ -789,11 +791,20 @@ def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
         and getattr(source_attr, "kind", None) == "implicit-temp"
     ):
         ideas.append(
-            "implicit address temp: prioritize indexed-pointer-loop/address-temp "
-            "source levers (name the address expression, split base/index locals, "
-            "or convert between indexed access and pointer walk) before more "
-            "declaration-order cycling."
+            "implicit address temp: preserve implicit indexed array expressions; "
+            "try same-line index/base expression spelling, index-local scope, or "
+            "indexed-pointer-loop variants that keep the address temp implicit "
+            "before more declaration-order cycling."
         )
+        negative_diagnostics.extend((
+            "reject materialized element pointers such as candidate = &array[index]; "
+            "they make the address temp source-visible and usually perturb allocator shape",
+            "reject split base-plus-increment pointer walks when the target first-def "
+            "is an implicit add base,index; they add or move instructions instead of "
+            "preserving the indexed expression",
+            "reject line-count or statement-count changing probes until same-line "
+            "indexed-expression spelling probes have failed",
+        ))
     if fact.case is DivergenceCase.A_BLOCKED and best is not None:
         ideas.append(f"shorten {best.var_name}'s live range so it doesn't overlap the blocker")
     if fact.case is DivergenceCase.A_BLOCKED and blocker_best is not None:
@@ -865,6 +876,7 @@ def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
             if source_attr is not None else None
         ),
         candidate_spans=candidate_spans,
+        negative_diagnostics=tuple(negative_diagnostics),
     )
 
 
@@ -998,6 +1010,10 @@ def format_report(report: FirstDivergenceReport) -> str:
             lines.append("  candidate spans:")
             for span in s.candidate_spans:
                 lines.append(f"    - {span}")
+        if s.negative_diagnostics:
+            lines.append("  negative diagnostics:")
+            for diagnostic in s.negative_diagnostics:
+                lines.append(f"    - {diagnostic}")
         if s.alternates:
             lines.append(f"  alternates: {', '.join(s.alternates)}")
         if s.rejected:

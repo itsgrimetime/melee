@@ -19,7 +19,7 @@ def test_retro_dump_unknown_function_exit_3(monkeypatch, tmp_path):
     def fake_launch(**kw):
         return retro.DumpOutcome(exit_code=3, produced=[], missing=["frontend"])
     monkeypatch.setattr(retro, "_launch_dump", fake_launch)
-    monkeypatch.setattr(retro, "_ensure_setup", lambda: None)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
     r = runner.invoke(app, ["debug", "retro", "dump",
                             "src/melee/mn/mnvibration.c", "-f", "nope_80000000"])
     assert r.exit_code == 3
@@ -33,12 +33,46 @@ def test_retro_dump_default_phases_all(monkeypatch, tmp_path):
         seen.update(kw)
         return retro.DumpOutcome(exit_code=0, produced=["frontend"], missing=[])
     monkeypatch.setattr(retro, "_launch_dump", fake_launch)
-    monkeypatch.setattr(retro, "_ensure_setup", lambda: None)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
     r = runner.invoke(app, ["debug", "retro", "dump",
                             "src/melee/mn/mnvibration.c", "-f", "mnVibration_80248644"])
     assert r.exit_code == 0
     assert seen["phases"] == "all"
     assert seen["compiler"] == "1.2.5n"
+    assert seen["melee_root"] == retro._resolve_melee_root()
+
+
+def test_retro_dump_uses_explicit_melee_root_for_paths(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+
+    repo = tmp_path / "worktree"
+    (repo / "src" / "melee").mkdir(parents=True)
+    (repo / "tools" / "mwcc_retro" / "tables").mkdir(parents=True)
+    (repo / "tools" / "mwcc_retro" / "tables" / "gc_125n.json").write_text("{}\n")
+    (repo / "configure.py").write_text("# fake checkout marker\n")
+    seen = {}
+
+    def fake_launch(**kw):
+        seen.update(kw)
+        return retro.DumpOutcome(exit_code=0, produced=["frontend"], missing=[])
+
+    monkeypatch.setattr(retro, "_launch_dump", fake_launch)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
+
+    result = runner.invoke(app, [
+        "debug", "retro", "dump",
+        "src/melee/mn/mndiagram.c",
+        "-f", "mnDiagram_DrawCellNumber",
+        "--melee-root", str(repo),
+        "--output", "build/mwcc_retro/draw",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert seen["melee_root"] == repo.resolve()
+    assert seen["out_dir"] == repo.resolve() / "build" / "mwcc_retro" / "draw"
+    assert seen["table"] == repo.resolve() / "tools" / "mwcc_retro" / "tables" / "gc_125n.json"
+    provenance = json.loads((seen["out_dir"] / "provenance.json").read_text())
+    assert provenance["melee_root"] == str(repo.resolve())
 
 
 def test_retro_dump_125n_backend_gap_writes_source_attribution(
@@ -63,7 +97,7 @@ def test_retro_dump_125n_backend_gap_writes_source_attribution(
         return path
 
     monkeypatch.setattr(retro, "_launch_dump", fake_launch)
-    monkeypatch.setattr(retro, "_ensure_setup", lambda: None)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(retro, "_write_backend_source_attribution", fake_attribution)
 
     result = runner.invoke(app, [
@@ -100,6 +134,7 @@ def test_retro_backend_source_attribution_records_missing_pcdump(
         fn="mnVibration_80248644",
         compiler="1.2.5n",
         missing=["backend"],
+        melee_root=tmp_path,
     )
 
     payload = json.loads(path.read_text())
@@ -142,7 +177,7 @@ def test_retro_dump_gdb_py_threaded(monkeypatch, tmp_path):
         seen.update(kw)
         return retro.DumpOutcome(exit_code=0, produced=["hook"], missing=[])
     monkeypatch.setattr(retro, "_launch_dump", fake_launch)
-    monkeypatch.setattr(retro, "_ensure_setup", lambda: None)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
     r = runner.invoke(app, ["debug", "retro", "dump",
                             "src/melee/mn/mnvibration.c", "-f", "mnVibration_80248644",
                             "--gdb-py", str(hook)])
@@ -152,7 +187,7 @@ def test_retro_dump_gdb_py_threaded(monkeypatch, tmp_path):
 
 def test_retro_dump_gdb_py_missing_hook_exit_2(monkeypatch):
     import src.cli.debug.retro as retro
-    monkeypatch.setattr(retro, "_ensure_setup", lambda: None)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
     r = runner.invoke(app, ["debug", "retro", "dump",
                             "src/melee/mn/mnvibration.c", "-f", "x",
                             "--gdb-py", "/no/such/hook.py"])

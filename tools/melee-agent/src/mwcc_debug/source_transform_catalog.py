@@ -370,6 +370,12 @@ SOURCE_TRANSFORM_CATALOG: tuple[SourceTransformCatalogEntry, ...] = (
             "optional beam composition of generated lifetime-layout probes",
         ),
         reused_by=("debug target order-target follow-up workflows",),
+        notes=(
+            "Class-1 runs with --transform-force-phys automatically seed "
+            "coloring_register_steering probes so FPR expression select-order "
+            "search reaches steer_fpr_dependent_product_recompute without an "
+            "extra --include-transform-corpus incantation.",
+        ),
     ),
     SourceTransformCatalogEntry(
         surface="debug search structure",

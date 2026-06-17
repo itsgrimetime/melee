@@ -75,6 +75,29 @@ TARGET_ORDER = textwrap.dedent("""\
         blr
 """)
 
+FPR_BASELINE = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        fmuls f39,f32,f51
+        fmuls f33,f36,f48
+    SIMPLIFY GRAPH (class=1, n_colors=18, n_class_regs=32)
+      iter ig_idx degree arraySize flags notes
+        0 39 1 1 0x00
+        1 33 1 1 0x00
+    COLORGRAPH DECISIONS (class=1, result=1, n_nodes=2)
+      iter ig_idx phys degree nIntfr flags
+        0 39 f28 1 1 0x00
+          interferers: 33=f26
+        1 33 f26 1 1 0x00
+          interferers: 39=f28
+    FINAL CODE AFTER INSTRUCTION SCHEDULING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        blr
+""")
+
 TRANSFORM_ASSIGNMENT_SOURCE = textwrap.dedent("""\
     void fn_80000000(void)
     {
@@ -711,6 +734,66 @@ def test_select_order_search_default_excludes_transform_corpus_probe_json(
     assert not any(
         probe["operator"].startswith("transform-corpus:")
         for probe in payload["probes"]
+    )
+
+
+def test_select_order_search_auto_includes_fpr_expression_transform_probes(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "fpr-baseline.txt"
+    source = tmp_path / "demo.c"
+    baseline.write_text(FPR_BASELINE)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef unsigned char u8;
+            typedef float f32;
+            void fn_80000000(u8 row) {
+                f32 y_offset;
+                f32 rowf;
+                f32 row_offset;
+                f32 row_offset_adj;
+                rowf = (f32) row;
+                row_offset = y_offset * rowf;
+                row_offset_adj = row_offset - 0.4f;
+                use(row_offset, row_offset_adj);
+            }
+            """
+        )
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "f33<f39",
+            "--class",
+            "1",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--transform-force-phys",
+            "39:26,33:28",
+            "--no-compile-probes",
+            "--max-probes",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["auto_transform_families"] == ["coloring_register_steering"]
+    assert payload["probes"][0]["operator"] == (
+        "transform-corpus:coloring_register_steering"
+    )
+    assert payload["probes"][0]["mutator_key"] == (
+        "steer_fpr_dependent_product_recompute"
     )
 
 

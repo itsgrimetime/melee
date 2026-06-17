@@ -745,11 +745,19 @@ def test_attach_source_ideas_reports_implicit_address_temp_spans(monkeypatch):
     assert "base" in idea.candidate_spans[0]
     assert "sample.c:41" in idea.candidate_spans[1]
     assert any("indexed-pointer-loop" in text for text in idea.ideas)
+    assert any("preserve implicit indexed" in text for text in idea.ideas)
+    assert idea.negative_diagnostics == (
+        "reject materialized element pointers such as candidate = &array[index]; they make the address temp source-visible and usually perturb allocator shape",
+        "reject split base-plus-increment pointer walks when the target first-def is an implicit add base,index; they add or move instructions instead of preserving the indexed expression",
+        "reject line-count or statement-count changing probes until same-line indexed-expression spelling probes have failed",
+    )
 
     rendered = fd.format_report(fd.FirstDivergenceReport(fact=fact, source=idea))
     assert "candidate spans:" in rendered
     assert "base" in rendered
     assert "index" in rendered
+    assert "negative diagnostics:" in rendered
+    assert "materialized element pointers" in rendered
 
 
 def test_list_bindings_safe_passes_args_in_order(monkeypatch):

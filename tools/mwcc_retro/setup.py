@@ -74,11 +74,11 @@ def _retrowin32_binary(repo_dir: Path) -> Path:
     return _cargo_target_dir(repo_dir) / "lto" / "retrowin32"
 
 
-def ensure(force: bool = False) -> SetupResult:
-    rw_dir = VENDOR_DIR / "retrowin32"
-    cad_dir = VENDOR_DIR / "mwcc-debugger"
-    if force and VENDOR_DIR.exists():
-        shutil.rmtree(VENDOR_DIR)
+def _ensure_in_vendor(vendor_dir: Path, *, force: bool = False) -> SetupResult:
+    rw_dir = vendor_dir / "retrowin32"
+    cad_dir = vendor_dir / "mwcc-debugger"
+    if force and vendor_dir.exists():
+        shutil.rmtree(vendor_dir)
     _clone_pinned(RETROWIN32_REPO, RETROWIN32_BRANCH, RETROWIN32_PIN, rw_dir)
     _clone_pinned(CADMIC_REPO, None, CADMIC_PIN, cad_dir)
     binp = _retrowin32_binary(rw_dir)
@@ -98,3 +98,15 @@ def ensure(force: bool = False) -> SetupResult:
     if not cad_script.exists():
         raise SetupError(f"cadmic script missing: {cad_script}")
     return SetupResult(retrowin32_bin=binp, cadmic_script=cad_script, rebuilt=rebuilt)
+
+
+def ensure(force: bool = False) -> SetupResult:
+    return _ensure_in_vendor(VENDOR_DIR, force=force)
+
+
+def ensure_for_root(melee_root: Path, force: bool = False) -> SetupResult:
+    """Ensure the retro substrate under the active Melee checkout/worktree."""
+    return _ensure_in_vendor(
+        Path(melee_root) / "tools" / "mwcc_retro" / "vendor",
+        force=force,
+    )

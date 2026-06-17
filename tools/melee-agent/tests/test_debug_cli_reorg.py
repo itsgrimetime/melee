@@ -1965,6 +1965,125 @@ def test_name_magic_source_declarations_json_reports_sdata2_pool_order_blocker(
     assert payload["stop_condition"]["kind"] == "blocked"
 
 
+def test_name_magic_source_declarations_reports_post_link_route_for_ambiguous_sdata2(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.cli import debug as debug_cli
+
+    repo = tmp_path / "repo"
+    source = repo / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            void fn_80000000(void)
+            {
+                sink_float(0.0F);
+                sink_float(0.0F);
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    current_obj = repo / "build" / "GALE01" / "src" / "melee" / "demo.o"
+    target_obj = repo / "build" / "GALE01" / "obj" / "melee" / "demo.o"
+    current_obj.parent.mkdir(parents=True)
+    target_obj.parent.mkdir(parents=True)
+    current_obj.write_bytes(b"fake")
+    target_obj.write_bytes(b"fake")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", repo)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_checkdiff_no_name_magic_json",
+        lambda *args, **kwargs: (
+            {
+                "diff": [
+                    "-+120: R_PPC_EMB_SDA21\tmnDiagram_804DBFA0",
+                    "++120: R_PPC_EMB_SDA21\t@1538",
+                ],
+                "classification": {"primary": "data-symbol-or-relocation"},
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_name_magic_object_evidence",
+        lambda unit, melee_root: (
+            {
+                "anonymous_sdata2": {
+                    "@1538": {"size": 4, "float": 0.0, "value": 0}
+                },
+                "name_magic_suggestions": [
+                    {
+                        "anonymous": "@1538",
+                        "size": 4,
+                        "value": 0,
+                        "target": "mnDiagram_804DBFA0",
+                    }
+                ],
+            },
+            None,
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "name-magic-source-declarations",
+            "-f",
+            "fn_80000000",
+            "--source-file",
+            str(source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["probe_count"] == 0
+    assert payload["blocker"] == "no-name-magic-candidate"
+    assert payload["stop_condition"] == {
+        "kind": "blocked",
+        "blocker": "no-name-magic-candidate",
+        "reason": (
+            "sdata2 relocation has no safe unique source literal site; "
+            "use a post-link name-magic route from evidence.post_link_name_magic"
+        ),
+    }
+    post_link = payload["evidence"]["post_link_name_magic"]
+    assert post_link == [
+        {
+            "operator": "post-link-name-magic",
+            "anonymous_symbol": "@1538",
+            "target_symbol": "mnDiagram_804DBFA0",
+            "map": "@1538=mnDiagram_804DBFA0",
+            "verify_command": (
+                "melee-agent debug util verify-name-magic "
+                "-f fn_80000000 --map @1538=mnDiagram_804DBFA0"
+            ),
+            "apply_auto_viable": True,
+            "apply_auto_command": (
+                "melee-agent debug util verify-name-magic "
+                "-f fn_80000000 --apply-auto"
+            ),
+            "reason": (
+                "post-link rename preserves source shape and allocator "
+                "behavior when no unique source literal site is safe"
+            ),
+        }
+    ]
+
+
 def test_name_magic_source_declarations_candidate_requires_no_name_magic_match(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -13,9 +13,9 @@ retro_app = typer.Typer(
          "(front-end IRO tracing, backend PCode, regalloc, stack maps)."
 )
 
-# Repo root discovery (this file is tools/melee-agent/src/cli/debug/retro.py).
-_REPO = Path(__file__).resolve().parents[5]
-sys.path.insert(0, str(_REPO))
+# Package checkout discovery (this file is tools/melee-agent/src/cli/debug/retro.py).
+_PACKAGE_REPO = Path(__file__).resolve().parents[5]
+sys.path.insert(0, str(_PACKAGE_REPO))
 from tools.mwcc_retro import TABLES_DIR, setup as retro_setup  # noqa: E402
 
 
@@ -26,14 +26,56 @@ class DumpOutcome:
     missing: list[str] = field(default_factory=list)
 
 
-def _ensure_setup():
+def _looks_like_melee_root(path: Path) -> bool:
+    return (
+        (path / "src" / "melee").is_dir()
+        and (path / "tools" / "mwcc_retro").is_dir()
+        and ((path / "build.ninja").exists() or (path / "configure.py").exists())
+    )
+
+
+def _find_melee_root(start: Path) -> Path | None:
+    for candidate in [start, *start.parents]:
+        if _looks_like_melee_root(candidate):
+            return candidate
+    return None
+
+
+def _resolve_melee_root(explicit: Path | None = None) -> Path:
+    if explicit is not None:
+        root = explicit.expanduser().resolve()
+        if not _looks_like_melee_root(root):
+            raise typer.BadParameter(
+                f"--melee-root is not a Melee checkout: {root}",
+                param_hint="--melee-root",
+            )
+        return root
+    return (_find_melee_root(Path.cwd()) or _PACKAGE_REPO).resolve()
+
+
+def _retro_tables_dir(melee_root: Path) -> Path:
+    worktree_tables = melee_root / "tools" / "mwcc_retro" / "tables"
+    return worktree_tables if worktree_tables.is_dir() else TABLES_DIR
+
+
+def _resolve_output_dir(out: Path | None, *, melee_root: Path, src: str, fn: str) -> Path:
+    if out is not None:
+        return out.expanduser().resolve() if out.is_absolute() else melee_root / out
+    unit = Path(src).with_suffix("").as_posix().replace("/", "_")
+    return melee_root / "build" / "mwcc_retro" / unit / fn
+
+
+def _ensure_setup(melee_root: Path | None = None):
+    root = _resolve_melee_root(melee_root)
+    if hasattr(retro_setup, "ensure_for_root"):
+        return retro_setup.ensure_for_root(root, force=False)
     return retro_setup.ensure(force=False)
 
 
-def _ninja_cmd_for_unit(src_rel: str) -> str:
+def _ninja_cmd_for_unit(src_rel: str, *, melee_root: Path) -> str:
     """The mwcceppc command line for a unit, WITHOUT wibo/sjiswrap prefix."""
     from src.cli.debug import _ninja_cflags_for_unit
-    cflags, _mw = _ninja_cflags_for_unit(src_rel)
+    cflags, _mw = _ninja_cflags_for_unit(src_rel, melee_root=melee_root)
     unit = src_rel
     obj = f"build/GALE01/{Path(src_rel).with_suffix('.o')}"
     compiler = "build/compilers/GC/1.2.5n/mwcceppc.exe"
@@ -41,7 +83,8 @@ def _ninja_cmd_for_unit(src_rel: str) -> str:
 
 
 def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
-                 out_dir: Path, table: Path, gdb_py: str = "") -> DumpOutcome:
+                 out_dir: Path, table: Path, melee_root: Path,
+                 gdb_py: str = "") -> DumpOutcome:
     """Invoke the gdb-side launcher, then post-process the IRO trace.
 
     Runs `mwcc_retro_debugger.py main()` (host launcher), which drives
@@ -54,15 +97,20 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
 
     from tools.mwcc_retro import setup as _setup, trace_summary
 
-    res = _setup.ensure(force=False)
-    mwcc_dir = _REPO / "build" / "compilers" / "GC" / compiler
-    mwcc_args = _ninja_cmd_for_unit(src)
+    if hasattr(_setup, "ensure_for_root"):
+        res = _setup.ensure_for_root(melee_root, force=False)
+    else:
+        res = _setup.ensure(force=False)
+    mwcc_dir = melee_root / "build" / "compilers" / "GC" / compiler
+    mwcc_args = _ninja_cmd_for_unit(src, melee_root=melee_root)
     # strip the leading compiler path; the launcher prepends the emulator.
     mwcc_args = mwcc_args.split(" ", 1)[1] if " " in mwcc_args else mwcc_args
     mwcc_exe = str(mwcc_dir / "mwcceppc.exe")
     launcher = res.cadmic_script.parent.parent.parent / "mwcc_retro_debugger.py"
     if not launcher.exists():
-        launcher = _REPO / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+        launcher = melee_root / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+    if not launcher.exists():
+        launcher = _PACKAGE_REPO / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
     cmd = [
         "python3", str(launcher),
         "-e", str(res.retrowin32_bin),
@@ -75,10 +123,10 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
     if gdb_py:
         cmd += ["--gdb-py", str(Path(gdb_py).resolve())]
     cmd.append(fn)
-    # Run from the repo root so the emulated mwcceppc resolves the relative
+    # Run from the active repo root so the emulated mwcceppc resolves the relative
     # source path (the ninja command uses repo-relative paths, like wibo does).
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
-                          cwd=str(_REPO))
+                          cwd=str(melee_root))
     log = (out_dir / "launch.log")
     log.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
 
@@ -141,6 +189,7 @@ def _write_backend_source_attribution(
     fn: str,
     compiler: str,
     missing: list[str],
+    melee_root: Path,
 ) -> Path | None:
     """Write a source-attribution sidecar when 1.2.5n backend streams are absent."""
     if compiler != "1.2.5n" or "backend" not in missing:
@@ -176,11 +225,11 @@ def _write_backend_source_attribution(
         pcdump_path = debug_cli._resolve_pcdump_path(
             None,
             fn,
-            _REPO,
+            melee_root,
             require_fresh=False,
         )
         pcdump_text = pcdump_path.read_text(encoding="utf-8")
-        source_path = _REPO / src
+        source_path = melee_root / src
         source_text = (
             source_path.read_text(encoding="utf-8")
             if source_path.exists() else ""
@@ -250,6 +299,11 @@ def dump_cmd(
     phases: str = typer.Option("all", "--phases", help="all|frontend|backend"),
     compiler: str = typer.Option("1.2.5n", "--compiler", help="1.2.5n|1.1"),
     out: Path = typer.Option(None, "-O", "--output"),
+    melee_root: Path = typer.Option(
+        None,
+        "--melee-root",
+        help="Active Melee checkout/worktree root. Defaults to the current cwd tree.",
+    ),
     gdb_py: Path = typer.Option(
         None, "--gdb-py",
         help="Intervention hook (a .py with intervene(ctx)) handed the connected "
@@ -262,13 +316,15 @@ def dump_cmd(
     if gdb_py is not None and not gdb_py.is_file():
         typer.secho(f"--gdb-py hook not found: {gdb_py}", fg="red", err=True)
         raise typer.Exit(2)
-    _ensure_setup()
-    unit = Path(src).with_suffix("").as_posix().replace("/", "_")
-    out_dir = out or (_REPO / "build" / "mwcc_retro" / unit / fn)
+    active_root = _resolve_melee_root(melee_root)
+    _ensure_setup(active_root)
+    out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
     out_dir.mkdir(parents=True, exist_ok=True)
-    table = TABLES_DIR / ("gc_125n.json" if compiler == "1.2.5n" else "gc_11.json")
+    table = _retro_tables_dir(active_root) / (
+        "gc_125n.json" if compiler == "1.2.5n" else "gc_11.json"
+    )
     outcome = _launch_dump(src=src, fn=fn, phases=phases, compiler=compiler,
-                           out_dir=out_dir, table=table,
+                           out_dir=out_dir, table=table, melee_root=active_root,
                            gdb_py=str(gdb_py) if gdb_py else "")
     attribution_path = _write_backend_source_attribution(
         out_dir=out_dir,
@@ -276,8 +332,9 @@ def dump_cmd(
         fn=fn,
         compiler=compiler,
         missing=outcome.missing,
+        melee_root=active_root,
     )
-    _write_provenance(out_dir, src, fn, compiler, table, outcome)
+    _write_provenance(out_dir, src, fn, compiler, table, outcome, active_root)
     if attribution_path is not None:
         typer.echo(f"backend source attribution: {attribution_path}")
     if outcome.missing:
@@ -301,12 +358,13 @@ def verify_cmd(
     raise typer.Exit(0 if ok else 1)
 
 
-def _write_provenance(out_dir: Path, src, fn, compiler, table, outcome):
+def _write_provenance(out_dir: Path, src, fn, compiler, table, outcome, melee_root):
     from tools.mwcc_retro import RETROWIN32_PIN, CADMIC_PIN
     prov = {
         "true_compiler": compiler,
         "note": "dumps use a GC/1.1 name-spoof internally; true compiler above",
         "src": src, "function": fn,
+        "melee_root": str(melee_root),
         "table": str(table),
         "retrowin32_pin": RETROWIN32_PIN, "cadmic_pin": CADMIC_PIN,
         "exit_code": outcome.exit_code,

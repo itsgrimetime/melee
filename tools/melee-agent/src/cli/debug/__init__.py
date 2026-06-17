@@ -17782,14 +17782,15 @@ def setup_doctor(
     print("OK\tready for `melee-agent debug dump local`")
 
 
-def _ninja_cflags_for_unit(src_rel: str) -> tuple[str, str]:
+def _ninja_cflags_for_unit(src_rel: str, melee_root: Path | None = None) -> tuple[str, str]:
     """Extract (cflags, mw_version) for a source from build.ninja.
 
     Mirrors melee-harness/tools/mwcc_dump.py's find_build_block.
     Raises typer.Exit if the source has no build block.
     """
     import re as _re
-    build_ninja = DEFAULT_MELEE_ROOT / "build.ninja"
+    root = melee_root or DEFAULT_MELEE_ROOT
+    build_ninja = root / "build.ninja"
     try:
         text = build_ninja.read_text()
     except FileNotFoundError:
@@ -27063,6 +27064,10 @@ _FRAME_TRANSFORM_CORPUS_DEFAULT_FAMILIES = (
     "empty_do_while_barrier",
 )
 
+_FPR_SELECT_ORDER_TRANSFORM_FAMILIES = (
+    "coloring_register_steering",
+)
+
 
 def _probe_requires_full_unit_source(probe: Any) -> bool:
     if isinstance(probe, Mapping):
@@ -28034,16 +28039,31 @@ def debug_select_order_search_cmd(
             if candidate_source.exists():
                 source_path_for_probes = candidate_source
 
-    probes = (
-        generate_lifetime_layout_probes(
-            source_text,
-            function,
-            frame_reservation_bytes=frame_reservation_bytes,
+    auto_transform_families: tuple[str, ...] = ()
+    if class_id == 1 and transform_force_phys and not transform_family:
+        auto_transform_families = _FPR_SELECT_ORDER_TRANSFORM_FAMILIES
+
+    probes: list[Any] = []
+    if source_text and auto_transform_families:
+        _append_transform_corpus_probes(
+            probes,
+            source_text=source_text,
+            function=function,
+            unit=unit,
+            include=True,
+            families=list(auto_transform_families),
+            force_phys=transform_force_phys,
             max_probes=max_probes,
         )
-        if source_text
-        else []
-    )
+    if source_text and len(probes) < max_probes:
+        probes.extend(
+            generate_lifetime_layout_probes(
+                source_text,
+                function,
+                frame_reservation_bytes=frame_reservation_bytes,
+                max_probes=max_probes - len(probes),
+            )
+        )
     if (
         beam_depth <= 0
         and source_file is not None
@@ -28056,7 +28076,7 @@ def debug_select_order_search_cmd(
             source_text=source_text,
             function=function,
             unit=unit,
-            include=include_transform_corpus,
+            include=include_transform_corpus and not auto_transform_families,
             families=transform_family,
             force_phys=transform_force_phys,
             max_probes=max_probes,
@@ -28430,6 +28450,7 @@ def debug_select_order_search_cmd(
             "target_orders": [list(pair) for pair in target_orders],
             "class_id": class_id,
             "ranking": ranking,
+            "auto_transform_families": list(auto_transform_families),
             "baseline": baseline.to_dict(),
             "baseline_cache": baseline_cache,
             "source": source_label,
@@ -29762,6 +29783,7 @@ def _name_magic_source_evidence_payload(
     parsed: Any,
     checkdiff_payload: Mapping[str, Any],
     object_evidence: Mapping[str, Any],
+    function: str,
 ) -> dict[str, Any]:
     anonymous_sdata2 = object_evidence.get("anonymous_sdata2")
     if isinstance(anonymous_sdata2, Mapping):
@@ -29769,7 +29791,7 @@ def _name_magic_source_evidence_payload(
     else:
         anonymous_payload = []
     suggestions = object_evidence.get("name_magic_suggestions")
-    return {
+    payload = {
         "raw_relocations": [
             {
                 **dict(relocation.__dict__),
@@ -29784,6 +29806,69 @@ def _name_magic_source_evidence_payload(
             list(suggestions) if isinstance(suggestions, list) else []
         ),
     }
+    post_link = _name_magic_post_link_routes(
+        function=function,
+        parsed=parsed,
+        object_evidence=object_evidence,
+    )
+    if post_link:
+        payload["post_link_name_magic"] = post_link
+    return payload
+
+
+def _name_magic_post_link_routes(
+    *,
+    function: str,
+    parsed: Any,
+    object_evidence: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    suggestions = object_evidence.get("name_magic_suggestions")
+    exact_suggestions: set[tuple[str, str]] = set()
+    if isinstance(suggestions, list):
+        for suggestion in suggestions:
+            if not isinstance(suggestion, Mapping):
+                continue
+            anonymous = suggestion.get("anonymous") or suggestion.get("name")
+            target = suggestion.get("target")
+            if isinstance(anonymous, str) and isinstance(target, str):
+                exact_suggestions.add((anonymous, target))
+
+    routes: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for relocation in getattr(parsed, "relocations", []) or []:
+        current = getattr(relocation, "current_symbol", "")
+        target = getattr(relocation, "expected_symbol", "")
+        if not isinstance(current, str) or not current.startswith("@"):
+            continue
+        if not isinstance(target, str) or not target:
+            continue
+        key = (current, target)
+        if key in seen:
+            continue
+        seen.add(key)
+        route = {
+            "operator": "post-link-name-magic",
+            "anonymous_symbol": current,
+            "target_symbol": target,
+            "map": f"{current}={target}",
+            "verify_command": (
+                "melee-agent debug util verify-name-magic "
+                f"-f {function} --map {current}={target}"
+            ),
+            "apply_auto_viable": key in exact_suggestions,
+            "apply_auto_command": (
+                "melee-agent debug util verify-name-magic "
+                f"-f {function} --apply-auto"
+            )
+            if key in exact_suggestions
+            else None,
+            "reason": (
+                "post-link rename preserves source shape and allocator "
+                "behavior when no unique source literal site is safe"
+            ),
+        }
+        routes.append({k: v for k, v in route.items() if v is not None})
+    return routes
 
 
 def _name_magic_source_blocked_payload(
@@ -30116,6 +30201,7 @@ def mutate_name_magic_source_declarations_cmd(
         parsed=parsed,
         checkdiff_payload=checkdiff_payload,
         object_evidence=object_evidence,
+        function=function,
     )
 
     classification = checkdiff_payload.get("classification")
@@ -30160,6 +30246,28 @@ def mutate_name_magic_source_declarations_cmd(
             max_probes=max_probes,
         )
     probes = probes[:max_probes]
+
+    post_link_routes = evidence.get("post_link_name_magic")
+    sdata2_source_site_blocked = (
+        probe_blocker == NameMagicBlocker.UNSUPPORTED_SOURCE_SITE
+        and isinstance(post_link_routes, list)
+        and bool(post_link_routes)
+    )
+    if sdata2_source_site_blocked and not probes and not candidate_specs:
+        _emit(
+            _name_magic_source_blocked_payload(
+                function=function,
+                source=resolved_source,
+                blocker=NameMagicBlocker.NO_NAME_MAGIC_CANDIDATE.value,
+                reason=(
+                    "sdata2 relocation has no safe unique source literal site; "
+                    "use a post-link name-magic route from "
+                    "evidence.post_link_name_magic"
+                ),
+                evidence=evidence,
+            )
+        )
+        return
 
     if probe_blocker is not None and not probes and not candidate_specs:
         _emit(
