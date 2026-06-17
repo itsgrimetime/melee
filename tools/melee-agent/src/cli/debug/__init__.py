@@ -27988,11 +27988,19 @@ def debug_select_order_search_cmd(
         render_select_order_variant,
         score_select_order_candidate,
     )
+    from ...search.directed.transform_probe_adapter import (
+        TransformProbeConfigError,
+        parse_transform_force_phys,
+    )
 
     target_orders = _parse_virtual_order_csv(target)
     if not target_orders:
         typer.echo("--target is required.", err=True)
         raise typer.Exit(2)
+    try:
+        proof_force_map = parse_transform_force_phys(transform_force_phys)
+    except TransformProbeConfigError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     baseline_path = _resolve_pcdump_path(
         pcdump,
@@ -28206,6 +28214,7 @@ def debug_select_order_search_cmd(
                 class_id=class_id,
                 delta=delta,
                 match_percent=match_percent,
+                proof_force_phys=proof_force_map,
             )
             variant = {
                 "label": label,

@@ -75,6 +75,56 @@ TARGET_ORDER = textwrap.dedent("""\
         blr
 """)
 
+TARGET_ORDER_WRONG_PHYS = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mr r32,r3
+        mr r33,r4
+    SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=45)
+      iter ig_idx degree arraySize flags notes
+        0 32 1 1 0x00
+        1 33 1 1 0x00
+    COLORGRAPH DECISIONS (class=0, result=1, n_nodes=2)
+      iter ig_idx phys degree nIntfr flags
+        0 32 r30 1 1 0x00
+          interferers: 33=r29
+        1 33 r29 1 1 0x00
+          interferers: 32=r30
+    FINAL CODE AFTER INSTRUCTION SCHEDULING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        stwu r1,-48(r1)
+        stmw r29,24(r1)
+        blr
+""")
+
+TARGET_ORDER_RIGHT_PHYS = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mr r32,r3
+        mr r33,r4
+    SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=45)
+      iter ig_idx degree arraySize flags notes
+        0 32 1 1 0x00
+        1 33 1 1 0x00
+    COLORGRAPH DECISIONS (class=0, result=1, n_nodes=2)
+      iter ig_idx phys degree nIntfr flags
+        0 32 r29 1 1 0x00
+          interferers: 33=r30
+        1 33 r30 1 1 0x00
+          interferers: 32=r29
+    FINAL CODE AFTER INSTRUCTION SCHEDULING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        stwu r1,-48(r1)
+        stmw r29,24(r1)
+        blr
+""")
+
 FPR_BASELINE = textwrap.dedent("""\
     Starting function fn_80000000
     BEFORE REGISTER COLORING
@@ -277,6 +327,50 @@ def test_select_order_score_marks_missing_target_side_actionable() -> None:
     assert pair["distance_to_flip"] == 2
     assert pair["actionable_movement"] is True
     assert objective.to_dict()["actionable_movement_count"] == 1
+
+
+def test_select_order_score_tracks_force_phys_satisfaction() -> None:
+    wrong_phys = score_select_order_candidate(
+        BASELINE,
+        TARGET_ORDER_WRONG_PHYS,
+        function="fn_80000000",
+        target_orders=[(32, 33)],
+        proof_force_phys={32: 29, 33: 30},
+        match_percent=99.0,
+    )
+    right_phys = score_select_order_candidate(
+        BASELINE,
+        TARGET_ORDER_RIGHT_PHYS,
+        function="fn_80000000",
+        target_orders=[(32, 33)],
+        proof_force_phys={32: 29, 33: 30},
+        match_percent=12.0,
+    )
+
+    wrong_payload = wrong_phys.to_dict()
+    assert wrong_payload["target_order_satisfied"] is True
+    assert wrong_payload["force_phys_satisfied"] is False
+    assert wrong_payload["force_phys_satisfied_count"] == 0
+    assert wrong_payload["force_phys_mismatches"] == {
+        "32": {"expected": 29, "actual": 30},
+        "33": {"expected": 30, "actual": 29},
+    }
+
+    ranked = rank_select_order_candidates([
+        {
+            "label": "high-match-order-only",
+            "status": "ok",
+            "objective": wrong_phys.to_dict(),
+        },
+        {
+            "label": "force-phys-satisfied",
+            "status": "ok",
+            "objective": right_phys.to_dict(),
+        },
+    ])
+
+    assert ranked[0]["label"] == "force-phys-satisfied"
+    assert ranked[0]["objective"]["force_phys_satisfied"] is True
 
 
 def test_select_order_ranking_prefers_actionable_missing_side_over_unchanged() -> None:

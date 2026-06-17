@@ -148,6 +148,11 @@ class SelectOrderObjective:
     target_orders: tuple[SelectOrderPairObjective, ...]
     target_order_satisfied: bool
     target_order_improved: bool
+    force_phys_targets: tuple[tuple[int, int], ...]
+    force_phys_satisfied: bool | None
+    force_phys_satisfied_count: int
+    force_phys_missing: tuple[int, ...]
+    force_phys_mismatches: tuple[tuple[int, int, int], ...]
     satisfied_count: int
     improved_count: int
     actionable_movement_count: int
@@ -166,6 +171,17 @@ class SelectOrderObjective:
             "target_orders": [pair.to_dict() for pair in self.target_orders],
             "target_order_satisfied": self.target_order_satisfied,
             "target_order_improved": self.target_order_improved,
+            "force_phys_targets": {
+                str(virtual): phys
+                for virtual, phys in self.force_phys_targets
+            },
+            "force_phys_satisfied": self.force_phys_satisfied,
+            "force_phys_satisfied_count": self.force_phys_satisfied_count,
+            "force_phys_missing": list(self.force_phys_missing),
+            "force_phys_mismatches": {
+                str(virtual): {"expected": expected, "actual": actual}
+                for virtual, expected, actual in self.force_phys_mismatches
+            },
             "satisfied_count": self.satisfied_count,
             "improved_count": self.improved_count,
             "actionable_movement_count": self.actionable_movement_count,
@@ -192,6 +208,7 @@ def score_select_order_candidate(
     class_id: int = 0,
     delta: PressureDelta | None = None,
     match_percent: float | None = None,
+    proof_force_phys: dict[int, int] | None = None,
 ) -> SelectOrderObjective:
     """Score one candidate by whether requested virtuals are selected in order."""
     normalized_targets = tuple(
@@ -250,6 +267,30 @@ def score_select_order_candidate(
     target_virtuals = {
         virtual for pair in normalized_targets for virtual in pair
     }
+    force_phys_targets = tuple(
+        sorted((int(virtual), int(phys)) for virtual, phys in (proof_force_phys or {}).items())
+    )
+    force_phys_missing = tuple(
+        virtual for virtual, _phys in force_phys_targets
+        if virtual not in candidate_assigned
+    )
+    force_phys_mismatches = tuple(
+        (virtual, phys, candidate_assigned[virtual])
+        for virtual, phys in force_phys_targets
+        if virtual in candidate_assigned and candidate_assigned[virtual] != phys
+    )
+    force_phys_satisfied_count = sum(
+        1
+        for virtual, phys in force_phys_targets
+        if candidate_assigned.get(virtual) == phys
+    )
+    force_phys_satisfied = (
+        None
+        if not force_phys_targets
+        else force_phys_satisfied_count == len(force_phys_targets)
+        and not force_phys_missing
+        and not force_phys_mismatches
+    )
     spill_removed = delta.spill_removed if delta is not None else ()
     spill_added = delta.spill_added if delta is not None else ()
     target_spill_removed = tuple(
@@ -264,6 +305,11 @@ def score_select_order_candidate(
         and satisfied_count == len(pair_scores)
         and missing_count == 0,
         target_order_improved=improved_count > 0,
+        force_phys_targets=force_phys_targets,
+        force_phys_satisfied=force_phys_satisfied,
+        force_phys_satisfied_count=force_phys_satisfied_count,
+        force_phys_missing=force_phys_missing,
+        force_phys_mismatches=force_phys_mismatches,
         satisfied_count=satisfied_count,
         improved_count=improved_count,
         actionable_movement_count=actionable_movement_count,
@@ -329,6 +375,16 @@ def render_select_order_variant(variant: dict[str, Any]) -> str:
         f"missing={objective.get('missing_count', 0)} "
         f"opcode_shape_preserved={_fmt_optional_bool(objective.get('opcode_shape_preserved'))}"
     )
+    force_phys_targets = objective.get("force_phys_targets") or {}
+    if force_phys_targets:
+        lines.append(
+            "   force_phys: "
+            f"satisfied={_fmt_optional_bool(objective.get('force_phys_satisfied'))} "
+            f"matched={objective.get('force_phys_satisfied_count', 0)}/"
+            f"{len(force_phys_targets)} "
+            f"missing={_fmt_virtuals(objective.get('force_phys_missing') or [])} "
+            f"mismatches={len(objective.get('force_phys_mismatches') or {})}"
+        )
     target_spill_removed = objective.get("target_spill_removed") or []
     lines.append(
         "   target_spill_removed: "
@@ -773,7 +829,21 @@ def _objective_sort_key(objective: SelectOrderObjective) -> tuple[float, ...]:
         if pair.distance_to_flip is not None else 1000.0
         for pair in objective.target_orders
     )
+    force_phys_requested = objective.force_phys_satisfied is not None
     return (
+        float(objective.force_phys_satisfied is True) if force_phys_requested else 0.0,
+        (
+            float(objective.force_phys_satisfied_count)
+            if force_phys_requested else 0.0
+        ),
+        (
+            -float(len(objective.force_phys_missing))
+            if force_phys_requested else 0.0
+        ),
+        (
+            -float(len(objective.force_phys_mismatches))
+            if force_phys_requested else 0.0
+        ),
         float(objective.target_order_satisfied),
         float(objective.satisfied_count),
         float(objective.target_order_improved),

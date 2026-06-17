@@ -61,3 +61,62 @@ def test_indexed_byte_address_temp_generates_same_line_variants() -> None:
 
     comma = by_strategy["indexed-byte-comma-normalize"]
     assert "mnDiagram_804A076C.sorted_names[(0, j + 1)]" in comma.candidate_text
+
+
+def test_indexed_byte_address_temp_handles_condition_expression_reads() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef unsigned int u32;\n"
+        "struct MnDiagramData { u8 sorted_names[25]; };\n"
+        "struct MnDiagramAssets { u8 sorted_names[25]; };\n"
+        "extern struct MnDiagramData mnDiagram_804A076C;\n"
+        "char* GetNameText(int slot);\n"
+        "void mnDiagram_SortNamesByKOs(int i) {\n"
+        "    u32 totals[25];\n"
+        "    int max_idx;\n"
+        "    int j;\n"
+        "    max_idx = i;\n"
+        "    for (j = i + 1; j < 25; j++) {\n"
+        "        if ((GetNameText(mnDiagram_804A076C.sorted_names[j]) != 0) &&\n"
+        "            (totals[mnDiagram_804A076C.sorted_names[max_idx]] <\n"
+        "             totals[mnDiagram_804A076C.sorted_names[j]])) {\n"
+        "            max_idx = j;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_SortNamesByKOs",
+        unit="melee/mn/mndiagram",
+        force_phys={34: 27, 44: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=20,
+    )
+
+    indexed_probes = [
+        probe
+        for probe in probes
+        if probe.family_id == "indexed_byte_address_temp_steering"
+    ]
+    assert indexed_probes
+    strategies = {probe.payload["strategy"] for probe in indexed_probes}
+    assert "indexed-byte-parenthesize-index" in strategies
+    assert "indexed-byte-comma-normalize" in strategies
+    assert "indexed-byte-value-temp" in strategies
+
+    assert any(
+        "GetNameText(mnDiagram_804A076C.sorted_names[(j)])" in probe.candidate_text
+        for probe in indexed_probes
+    )
+    value_temp = next(
+        probe
+        for probe in indexed_probes
+        if probe.payload["strategy"] == "indexed-byte-value-temp"
+    )
+    assert "    u8 sorted_names_probe;\n" in value_temp.candidate_text
+    assert "        sorted_names_probe = mnDiagram_804A076C.sorted_names[j];\n" in (
+        value_temp.candidate_text
+    )
+    assert "GetNameText(sorted_names_probe)" in value_temp.candidate_text
