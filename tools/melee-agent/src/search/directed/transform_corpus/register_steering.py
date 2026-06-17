@@ -139,6 +139,13 @@ class _RegisterSteeringFprProduct:
     cast_operand_names: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _RegisterSteeringDependentProduct:
+    op: str
+    const_text: str
+    const_on_left: bool = False
+
+
 def _line_brace_delta(line: str) -> int:
     return line.count("{") - line.count("}")
 
@@ -1227,15 +1234,14 @@ def _dependent_product_replacement(
     indent: str,
     dependent: str,
     product_expr: str,
-    dependent_match,
+    dependent_parts: _RegisterSteeringDependentProduct,
 ) -> str | None:
-    if dependent_match.group("lhs") is not None:
-        op = dependent_match.group("op")
-        const_text = dependent_match.group("const")
-        return f"{indent}{dependent} = ({product_expr}) {op} {const_text};"
-    op = dependent_match.group("op_left")
-    const_text = dependent_match.group("const_left")
-    return f"{indent}{dependent} = {const_text} {op} ({product_expr});"
+    return _dependent_source_replacement(
+        indent=indent,
+        dependent=dependent,
+        source_expr=f"({product_expr})",
+        dependent_parts=dependent_parts,
+    )
 
 
 def _dependent_source_replacement(
@@ -1243,15 +1249,98 @@ def _dependent_source_replacement(
     indent: str,
     dependent: str,
     source_expr: str,
-    dependent_match,
+    dependent_parts: _RegisterSteeringDependentProduct,
 ) -> str | None:
-    if dependent_match.group("lhs") is not None:
-        op = dependent_match.group("op")
-        const_text = dependent_match.group("const")
-        return f"{indent}{dependent} = {source_expr} {op} {const_text};"
-    op = dependent_match.group("op_left")
-    const_text = dependent_match.group("const_left")
-    return f"{indent}{dependent} = {const_text} {op} {source_expr};"
+    if dependent_parts.const_on_left:
+        return (
+            f"{indent}{dependent} = {dependent_parts.const_text} "
+            f"{dependent_parts.op} {source_expr};"
+        )
+    return (
+        f"{indent}{dependent} = {source_expr} "
+        f"{dependent_parts.op} {dependent_parts.const_text};"
+    )
+
+
+def _strip_wrapping_parens(text: str) -> str:
+    stripped = text.strip()
+    while stripped.startswith("(") and stripped.endswith(")"):
+        balance = 0
+        wraps = True
+        for idx, char in enumerate(stripped):
+            if char == "(":
+                balance += 1
+            elif char == ")":
+                balance -= 1
+                if balance == 0 and idx != len(stripped) - 1:
+                    wraps = False
+                    break
+        if not wraps:
+            break
+        stripped = stripped[1:-1].strip()
+    return stripped
+
+
+def _canonical_product_expr(expr: str) -> str | None:
+    product = _register_steering_product_expr(_strip_wrapping_parens(expr))
+    if product is None:
+        return None
+    return re.sub(r"\s+", "", product[0])
+
+
+def _dependent_product_parts(
+    rhs: str,
+    *,
+    primary: str,
+    product_expr: str,
+) -> _RegisterSteeringDependentProduct | None:
+    dependent_match = _REGISTER_STEERING_DEPENDENT_RE.match(rhs.strip())
+    if dependent_match is not None:
+        referenced_primary = (
+            dependent_match.group("lhs") or dependent_match.group("lhs_right")
+        )
+        if referenced_primary == primary:
+            if dependent_match.group("lhs") is not None:
+                return _RegisterSteeringDependentProduct(
+                    op=dependent_match.group("op"),
+                    const_text=dependent_match.group("const"),
+                )
+            return _RegisterSteeringDependentProduct(
+                op=dependent_match.group("op_left"),
+                const_text=dependent_match.group("const_left"),
+                const_on_left=True,
+            )
+
+    const_pattern = r"(?:\d+(?:\.\d*)?|\.\d+)(?:f)?"
+    product_canonical = _canonical_product_expr(product_expr)
+    if product_canonical is None:
+        return None
+    repeated_match = re.fullmatch(
+        rf"(?P<expr>.+?)\s*(?P<op>[+-])\s*(?P<const>{const_pattern})",
+        rhs.strip(),
+    )
+    if repeated_match is not None:
+        repeated_canonical = _canonical_product_expr(repeated_match.group("expr"))
+        if repeated_canonical == product_canonical:
+            return _RegisterSteeringDependentProduct(
+                op=repeated_match.group("op"),
+                const_text=repeated_match.group("const"),
+            )
+    repeated_left_match = re.fullmatch(
+        rf"(?P<const>{const_pattern})\s*(?P<op>[+-])\s*(?P<expr>.+)",
+        rhs.strip(),
+    )
+    if repeated_left_match is not None:
+        repeated_canonical = _canonical_product_expr(
+            repeated_left_match.group("expr")
+        )
+        if repeated_canonical == product_canonical:
+            return _RegisterSteeringDependentProduct(
+                op=repeated_left_match.group("op"),
+                const_text=repeated_left_match.group("const"),
+                const_on_left=True,
+            )
+    return None
 
 
 def _single_fpr_decl_for_name(
@@ -1721,13 +1810,12 @@ def _iter_fpr_dependent_product_recompute_anchors(
             cast_operand_names,
         ):
             continue
-        dependent_match = _REGISTER_STEERING_DEPENDENT_RE.match(
-            dependent_assign.group("rhs").strip()
+        dependent_parts = _dependent_product_parts(
+            dependent_assign.group("rhs").strip(),
+            primary=primary,
+            product_expr=product_expr,
         )
-        if dependent_match is None:
-            continue
-        referenced_primary = dependent_match.group("lhs") or dependent_match.group("lhs_right")
-        if referenced_primary != primary:
+        if dependent_parts is None:
             continue
         if (
             _node_set_split_synthetic_name(primary)
@@ -1753,7 +1841,7 @@ def _iter_fpr_dependent_product_recompute_anchors(
             indent=indent,
             dependent=dependent,
             product_expr=product_expr,
-            dependent_match=dependent_match,
+            dependent_parts=dependent_parts,
         )
         if dependent_replacement is None:
             continue
@@ -1810,7 +1898,7 @@ def _iter_fpr_dependent_product_recompute_anchors(
                 indent=indent,
                 dependent=dependent,
                 source_expr=reuse_temp,
-                dependent_match=dependent_match,
+                dependent_parts=dependent_parts,
             )
             if dependent_from_reuse is not None:
                 anchors.append(
@@ -1840,7 +1928,7 @@ def _iter_fpr_dependent_product_recompute_anchors(
                 indent=indent,
                 dependent=dependent,
                 source_expr=lifetime_temp,
-                dependent_match=dependent_match,
+                dependent_parts=dependent_parts,
             )
             if dependent_from_lifetime is not None:
                 anchors.append(

@@ -24779,6 +24779,7 @@ def _node_set_split_steering_children(
 
     from ...mwcc_debug.source_shape import CandidatePatch
     from ...mwcc_debug.pressure_explorer import generate_lifetime_layout_probes
+    from ...mwcc_debug.diff_capture import function_pcdump_aliases
     from ...search.directed import transform_corpus
 
     children = []
@@ -24847,6 +24848,7 @@ def _node_set_split_steering_children(
         function=function,
         unit=unit,
         force_phys=force_phys,
+        function_aliases=function_pcdump_aliases(function, _compute_melee_root()),
         families=("coloring_register_steering",),
         max_per_family=probe_budget,
         node_set_delta=None,
@@ -27164,6 +27166,7 @@ def _append_transform_corpus_probes(
         return probes
 
     from ...search.directed.transform_corpus import generate_transform_probes
+    from ...mwcc_debug.diff_capture import function_pcdump_aliases
     from ...search.directed.transform_probe_adapter import (
         TransformProbeConfigError,
         adapted_transform_lifetime_probes,
@@ -27187,6 +27190,7 @@ def _append_transform_corpus_probes(
         function=function,
         unit=unit or "unknown",
         force_phys=force_map,
+        function_aliases=function_pcdump_aliases(function, _compute_melee_root()),
         families=requested_families,
         max_per_family=max(1, max_probes),
     )

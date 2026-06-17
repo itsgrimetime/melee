@@ -33,7 +33,9 @@ from src.mwcc_debug.simplify_search import (
     preserve_precolor,
     score_simplify_order,
     search,
+    _compile_failure_diagnostic,
 )
+from src.mwcc_debug.diff_capture import CompileFailure
 
 
 def _decision(
@@ -879,6 +881,28 @@ def test_search_records_pcdump_missing_function_as_compile_failure(
             "the compiled pcdump; check requested name/alias against the "
             "report symbol; tried: fn_test; pcdump functions: other_function"
         ),
+    )
+
+
+def test_compile_failure_summary_keeps_unfiltered_pcdump_function_names() -> None:
+    exc = CompileFailure(
+        side="V",
+        command=["python", "-m", "src.cli"],
+        stdout="",
+        stderr=(
+            "dump local could not find a pcdump function; attempted: friendly, alias\n"
+            "pcdump functions from unfiltered candidate: actual_name, helper_name\n"
+            "[friendly] rc=3\n"
+            "function 'friendly' not found in pcdump"
+        ),
+        returncode=3,
+    )
+
+    diagnostic = _compile_failure_diagnostic(exc)
+
+    assert diagnostic == (
+        "dump local could not find a pcdump function; attempted: friendly, alias; "
+        "pcdump functions from unfiltered candidate: actual_name, helper_name"
     )
 
 

@@ -103,6 +103,32 @@ def _allows_explicit_zero_return(source_text: str, function: str) -> bool:
     return _ZERO_RETURN_TYPE_RE.search(return_type) is not None
 
 
+def _function_lookup_names(
+    function: str,
+    function_aliases: IterableABC[str] | None,
+) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for name in (function, *(function_aliases or ())):
+        if name and name not in seen:
+            names.append(name)
+            seen.add(name)
+    return tuple(names)
+
+
+def _resolve_target_function(
+    source_text: str,
+    *,
+    function: str,
+    function_aliases: IterableABC[str] | None,
+):
+    for candidate in _function_lookup_names(function, function_aliases):
+        target = _target_function_body(source_text, candidate)
+        if target is not None:
+            return candidate, target
+    return None
+
+
 def _scheduler_order_target_assignments(
     target: SchedulerOrderTarget,
 ) -> tuple[str, ...]:
@@ -213,6 +239,7 @@ def generate_transform_probes(
     function: str,
     unit: str,
     force_phys: Mapping[int, int],
+    function_aliases: IterableABC[str] | None = None,
     families: IterableABC[str] | None = None,
     max_per_family: int = 3,
     node_set_delta: Mapping[str, Any] | None = None,
@@ -240,14 +267,22 @@ def generate_transform_probes(
         allowed.add("scheduler_order_source_realizer")
         if not force_phys and not requested_family_ids and node_set_delta is None:
             allowed = {"scheduler_order_source_realizer"}
-    target = _target_function_body(source_text, function)
-    if target is None:
+    resolved_target = _resolve_target_function(
+        source_text,
+        function=function,
+        function_aliases=function_aliases,
+    )
+    if resolved_target is None:
         return ()
+    source_function, target = resolved_target
     function_span, body_text = target
     body_start = function_span.body_open
     body_end = function_span.full_end
     function_header_text = source_text[function_span.sig_start:function_span.body_open]
-    allow_explicit_zero_return = _allows_explicit_zero_return(source_text, function)
+    allow_explicit_zero_return = _allows_explicit_zero_return(
+        source_text,
+        source_function,
+    )
     counts: dict[str, int] = {}
     probes: list[TransformProbe] = []
     seen_candidate_texts: set[str] = set()
@@ -344,7 +379,7 @@ def generate_transform_probes(
         for anchor, candidate_text, target_assignments in (
             _iter_node_set_delta_steering_probes(
                 source_text,
-                function=function,
+                function=source_function,
                 node_set_delta=node_set_delta,
                 remaining=remaining,
             )
@@ -366,7 +401,7 @@ def generate_transform_probes(
         )
         for anchor in iter_scheduler_order_source_anchors(
             source_text,
-            function=function,
+            function=source_function,
             target=parsed_scheduler_target,
             remaining=remaining,
         ):
@@ -424,7 +459,7 @@ def generate_transform_probes(
             )
     for local_anchor in _iter_register_steering_body_anchors(body_text):
         append_steering_probe_from_body_anchor(local_anchor)
-    for anchor in _iter_full_source_anchors(source_text, function=function):
+    for anchor in _iter_full_source_anchors(source_text, function=source_function):
         append_steering_probe_from_source_anchor(anchor)
         for family_id in _family_ids_for_anchor(anchor):
             if family_id not in allowed:

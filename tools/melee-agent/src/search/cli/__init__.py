@@ -1204,6 +1204,7 @@ def plan_transforms_cmd(
         generate_transform_probes,
         plan_transform_experiments,
     )
+    from src.mwcc_debug.diff_capture import function_pcdump_aliases
     from src.mwcc_debug.scheduler_order_realizer import parse_scheduler_order_target
 
     melee_root = _compute_melee_root()
@@ -1261,6 +1262,7 @@ def plan_transforms_cmd(
             function=function,
             unit=unit,
             force_phys=force_phys_map,
+            function_aliases=function_pcdump_aliases(function, melee_root),
             max_per_family=max_per_family,
             node_set_delta=node_set_delta,
             scheduler_order_target=scheduler_order_target,

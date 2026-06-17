@@ -62,6 +62,8 @@ DEFAULT_TRANSFORM_FAMILIES: tuple[TransformFamily, ...] = (
             "steer_split_reused_loop_counter",
             "steer_widen_byte_local_type",
             "steer_fpr_dependent_product_recompute",
+            "steer_fpr_dependent_product_reuse_temp",
+            "steer_fpr_dependent_local_temp_split",
             "steer_fpr_product_assignment_order",
             "steer_fpr_product_cast_temp_split",
             "steer_fpr_product_argument_duplicate",

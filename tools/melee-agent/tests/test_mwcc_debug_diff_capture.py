@@ -130,6 +130,16 @@ def test_compile_source_variant_reports_attempted_aliases_when_all_names_missing
     src.write_text("void mnDiagram_DrawCellNumber(void) {}\n", encoding="utf-8")
 
     def fake_run(cmd, *, cwd, timeout, env=None):
+        if "--function" not in cmd:
+            out_path = Path(cmd[cmd.index("--output") + 1])
+            out_path.write_text(
+                (
+                    "Starting function actual_candidate_name\n"
+                    "Starting function helper_function\n"
+                ),
+                encoding="utf-8",
+            )
+            return SimpleNamespace(returncode=0, stdout="", stderr="wrote")
         dump_function = cmd[cmd.index("--function") + 1]
         return SimpleNamespace(
             returncode=3,
@@ -154,6 +164,10 @@ def test_compile_source_variant_reports_attempted_aliases_when_all_names_missing
 
     diagnostic = str(exc.value)
     assert "attempted: mnDiagram_DrawCellNumber, mnDiagram_80241E78" in diagnostic
+    assert (
+        "pcdump functions from unfiltered candidate: "
+        "actual_candidate_name, helper_function"
+    ) in diagnostic
     assert "mnDiagram_DrawCellNumber" in diagnostic
     assert "mnDiagram_80241E78" in diagnostic
 

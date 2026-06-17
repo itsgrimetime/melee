@@ -678,10 +678,22 @@ def _pcdump_function_names(pcdump_text: str) -> tuple[str, ...]:
 def _compile_failure_diagnostic(exc: CompileFailure) -> str:
     text = exc.stderr or exc.stdout or str(exc)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
+    pcdump_names = next(
+        (line for line in lines if "pcdump functions" in line.lower()),
+        None,
+    )
+
+    def with_pcdump_names(primary: str) -> str:
+        if pcdump_names is None or pcdump_names == primary:
+            return primary
+        return f"{primary}; {pcdump_names}"
+
     for line in lines:
         if "error:" in line.lower() or "warning:" in line.lower():
-            return line
-    return lines[0] if lines else f"compile failed with exit {exc.returncode}"
+            return with_pcdump_names(line)
+    if lines:
+        return with_pcdump_names(lines[0])
+    return f"compile failed with exit {exc.returncode}"
 
 
 def _pcdump_missing_function_diagnostic(

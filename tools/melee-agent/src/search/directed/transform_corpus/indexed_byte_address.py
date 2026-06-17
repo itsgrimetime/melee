@@ -36,6 +36,11 @@ _BYTE_ARRAY_DECL_RE = re.compile(
 )
 
 
+_BYTE_POINTER_DECL_RE = re.compile(
+    r"\b(?P<type>u8|s8)\s*\*\s*(?P<name>[A-Za-z_]\w*)\b"
+)
+
+
 def _byte_decl_lines(
     body_text: str,
 ) -> dict[str, tuple[str, int, int, int]]:
@@ -65,14 +70,16 @@ def _byte_decl_lines(
 def _byte_array_types(source_text: str) -> dict[str, str]:
     result: dict[str, str] = {}
     rejected: set[str] = set()
-    for match in _BYTE_ARRAY_DECL_RE.finditer(_blank_literals_and_comments(source_text)):
-        name = match.group("name")
-        decl_type = match.group("type")
-        if name in result:
-            if result[name] != decl_type:
-                rejected.add(name)
-            continue
-        result[name] = decl_type
+    searchable = _blank_literals_and_comments(source_text)
+    for pattern in (_BYTE_ARRAY_DECL_RE, _BYTE_POINTER_DECL_RE):
+        for match in pattern.finditer(searchable):
+            name = match.group("name")
+            decl_type = match.group("type")
+            if name in result:
+                if result[name] != decl_type:
+                    rejected.add(name)
+                continue
+            result[name] = decl_type
     for name in rejected:
         result.pop(name, None)
     return result
@@ -87,6 +94,20 @@ def _fresh_byte_temp(searchable: str, lhs: str) -> str | None:
         if not _identifier_mentions(searchable, candidate):
             return candidate
     return None
+
+
+def _fresh_byte_temps(searchable: str, lhs: str, count: int) -> tuple[str, ...]:
+    temps: list[str] = []
+    occupied = searchable
+    for idx in range(1, 16):
+        candidate = f"{lhs}_probe" if idx == 1 else f"{lhs}_probe_{idx}"
+        if _identifier_mentions(occupied, candidate):
+            continue
+        temps.append(candidate)
+        occupied += f"\n{candidate}\n"
+        if len(temps) == count:
+            return tuple(temps)
+    return ()
 
 
 def _fresh_indexed_expr_temp(searchable: str, base: str) -> str | None:
@@ -186,6 +207,36 @@ def _replace_indexed_base_references(
     return "".join(pieces), tuple(indices)
 
 
+def _replace_indexed_value_references(
+    *,
+    region_text: str,
+    region_searchable: str,
+    base: str,
+    temp_by_index: dict[str, str],
+) -> tuple[str, tuple[str, ...]]:
+    pieces: list[str] = []
+    indices: list[str] = []
+    cursor = 0
+    for match in _INDEXED_BYTE_EXPR_RE.finditer(region_searchable):
+        if match.group("base") != base:
+            continue
+        index = match.group("index")
+        index_expr = index.strip()
+        if not _safe_indexed_expr(base, index_expr, region_text):
+            continue
+        temp = temp_by_index.get(index_expr)
+        if temp is None:
+            continue
+        pieces.append(region_text[cursor:match.start()])
+        pieces.append(temp)
+        cursor = match.end()
+        indices.append(index_expr)
+    if not pieces:
+        return region_text, ()
+    pieces.append(region_text[cursor:])
+    return "".join(pieces), tuple(indices)
+
+
 def _iter_general_indexed_byte_expr_anchors(
     *,
     source_text: str,
@@ -227,6 +278,71 @@ def _iter_general_indexed_byte_expr_anchors(
                 condition_start, condition_end = condition_span
                 condition_text = body_text[condition_start:condition_end]
                 condition_searchable = searchable[condition_start:condition_end]
+                condition_indices: list[str] = []
+                for condition_match in _INDEXED_BYTE_EXPR_RE.finditer(
+                    condition_searchable
+                ):
+                    if condition_match.group("base") != base:
+                        continue
+                    condition_index = condition_match.group("index").strip()
+                    if not _safe_indexed_expr(base, condition_index, condition_text):
+                        continue
+                    if condition_index not in condition_indices:
+                        condition_indices.append(condition_index)
+                value_temp_names = _fresh_byte_temps(
+                    searchable,
+                    _base_leaf_name(base),
+                    len(condition_indices),
+                )
+                if len(value_temp_names) == len(condition_indices) and len(
+                    condition_indices
+                ) > 1:
+                    temp_by_index = dict(zip(condition_indices, value_temp_names))
+                    replaced_condition, replaced_indices = (
+                        _replace_indexed_value_references(
+                            region_text=condition_text,
+                            region_searchable=condition_searchable,
+                            base=base,
+                            temp_by_index=temp_by_index,
+                        )
+                    )
+                    if len(replaced_indices) > 1 and replaced_condition != condition_text:
+                        indent_match = re.match(r"(?P<indent>[ \t]*)", condition_text)
+                        indent = (
+                            indent_match.group("indent")
+                            if indent_match is not None else ""
+                        )
+                        span_text = body_text[:condition_end]
+                        if body_text.count(span_text) == 1:
+                            declarations = "".join(
+                                f"    {decl_type} {temp_name};\n"
+                                for temp_name in value_temp_names
+                            )
+                            assignments = "".join(
+                                f"{indent}{temp_name} = {base}[{index_expr}];\n"
+                                for index_expr, temp_name in temp_by_index.items()
+                            )
+                            yield Anchor(
+                                mutator_key="steer_indexed_byte_value_temp",
+                                span=(body_start, body_start + condition_end),
+                                payload={
+                                    "span_text": span_text,
+                                    "replacement_text": (
+                                        f"{declarations}"
+                                        f"{body_text[:condition_start]}"
+                                        f"{assignments}"
+                                        f"{replaced_condition}"
+                                    ),
+                                    "strategy": (
+                                        "indexed-byte-condition-all-read-value-temps"
+                                    ),
+                                    "array_base": base,
+                                    "index_expr": replaced_indices[0],
+                                    "index_exprs": replaced_indices,
+                                    "target_local": _base_leaf_name(base),
+                                    "temp_locals": value_temp_names,
+                                },
+                            )
                 base_alias_name = _fresh_base_alias_temp(searchable, base)
                 if base_alias_name is not None:
                     replaced_condition, replaced_indices = _replace_indexed_base_references(

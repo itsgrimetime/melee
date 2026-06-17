@@ -275,8 +275,19 @@ def compile_source_variant(
                 failures.append(failure)
                 if not _dump_local_missing_pcdump_function(proc, dump_function):
                     raise failure
-        if failures:
-            raise _combined_compile_failure(diff_input.label, failures)
+            if failures:
+                available_names = _unfiltered_pcdump_function_names(
+                    compile_path=compile_path,
+                    out_path=out_path,
+                    melee_root=melee_root,
+                    timeout=timeout,
+                    unit_source_path=unit_source_path,
+                )
+                raise _combined_compile_failure(
+                    diff_input.label,
+                    failures,
+                    available_names=available_names,
+                )
         raise CompileFailure(
             side=diff_input.label,
             command=[],
@@ -302,9 +313,65 @@ def _dump_local_missing_pcdump_function(
     )
 
 
+_PCDUMP_FUNCTION_RE = re.compile(r"(?m)^Starting function\s+([A-Za-z_]\w*)\b")
+
+
+def _pcdump_function_names(pcdump_text: str) -> tuple[str, ...]:
+    return _dedupe_strings(
+        match.group(1) for match in _PCDUMP_FUNCTION_RE.finditer(pcdump_text)
+    )
+
+
+def _unfiltered_pcdump_function_names(
+    *,
+    compile_path: Path,
+    out_path: Path,
+    melee_root: Path,
+    timeout: int,
+    unit_source_path: Path | None,
+) -> tuple[str, ...]:
+    try:
+        out_path.unlink()
+    except FileNotFoundError:
+        pass
+    cmd = [
+        sys.executable,
+        "-m",
+        "src.cli",
+        "debug",
+        "dump",
+        "local",
+        str(compile_path),
+        "--output",
+        str(out_path),
+        "--no-cache-sync",
+    ]
+    if unit_source_path is not None:
+        cmd.extend(["--unit-source", str(unit_source_path)])
+    try:
+        proc = _run_with_process_group_timeout(
+            cmd,
+            cwd=melee_root,
+            timeout=timeout,
+            env=_env_with_child_hang_timeout(timeout),
+        )
+    except subprocess.TimeoutExpired:
+        return ()
+    if proc.returncode != 0 or not out_path.exists():
+        return ()
+    try:
+        return _pcdump_function_names(
+            out_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except OSError:
+        return ()
+
+
 def _combined_compile_failure(
     side: str,
     failures: list[CompileFailure],
+    *,
+    available_names: tuple[str, ...] = (),
 ) -> CompileFailure:
     last = failures[-1]
     attempted = [
@@ -316,13 +383,20 @@ def _combined_compile_failure(
     for failure, attempted_function in zip(failures, attempted, strict=False):
         output = (failure.stderr or failure.stdout).strip()
         details.append(f"[{attempted_function}] rc={failure.returncode}\n{output}")
+    available = ""
+    if available_names:
+        available = (
+            "\npcdump functions from unfiltered candidate: "
+            + ", ".join(available_names)
+        )
     return CompileFailure(
         side=side,
         command=last.command,
         stdout=last.stdout,
         stderr=(
             "dump local could not find a pcdump function; "
-            f"attempted: {', '.join(attempted)}\n" + "\n".join(details)
+            f"attempted: {', '.join(attempted)}"
+            f"{available}\n" + "\n".join(details)
         ),
         returncode=last.returncode,
     )

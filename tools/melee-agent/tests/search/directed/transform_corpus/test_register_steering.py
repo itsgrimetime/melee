@@ -916,6 +916,99 @@ def test_coloring_register_steering_emits_dependent_product_lifetime_variants() 
     }
 
 
+def test_coloring_register_steering_uses_source_function_aliases() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void mnDiagram_80241E78(u8 row) {\n"
+        "    f32 y_offset;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    rowf = (f32) row;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    use(row_offset, row_offset_adj);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        function_aliases=("mnDiagram_80241E78",),
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=12,
+    )
+
+    strategies = {
+        probe.payload["strategy"]
+        for probe in probes
+        if probe.mutator_key in {
+            "steer_fpr_dependent_product_reuse_temp",
+            "steer_fpr_dependent_local_temp_split",
+        }
+    }
+    assert strategies == {
+        "fpr-dependent-product-reuse-temp",
+        "fpr-dependent-local-temp-split",
+    }
+    assert all("mnDiagram_80241E78" in probe.candidate_text for probe in probes)
+    assert all("mnDiagram_DrawCellNumber" not in probe.candidate_text for probe in probes)
+
+
+def test_coloring_register_steering_handles_repeated_dependent_product() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row) {\n"
+        "    f32 y_offset;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    rowf = (f32) row;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = y_offset * rowf - 0.4f;\n"
+        "    use(row_offset, row_offset_adj);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=12,
+    )
+
+    by_strategy = {
+        probe.payload["strategy"]: probe
+        for probe in probes
+        if probe.mutator_key in {
+            "steer_fpr_dependent_product_reuse_temp",
+            "steer_fpr_dependent_local_temp_split",
+        }
+    }
+    assert "fpr-dependent-product-reuse-temp" in by_strategy
+    assert "fpr-dependent-local-temp-split" in by_strategy
+
+    reuse_temp = by_strategy["fpr-dependent-product-reuse-temp"]
+    assert "    row_offset_product_reuse_fpr = y_offset * rowf;\n" in (
+        reuse_temp.candidate_text
+    )
+    assert "    row_offset = row_offset_product_reuse_fpr;\n" in reuse_temp.candidate_text
+    assert "    row_offset_adj = row_offset_product_reuse_fpr - 0.4f;" in (
+        reuse_temp.candidate_text
+    )
+
+    local_split = by_strategy["fpr-dependent-local-temp-split"]
+    assert "    row_offset = y_offset * rowf;\n" in local_split.candidate_text
+    assert "    row_offset_lifetime_fpr = row_offset;\n" in local_split.candidate_text
+    assert "    row_offset_adj = row_offset_lifetime_fpr - 0.4f;" in (
+        local_split.candidate_text
+    )
+
+
 def test_coloring_register_steering_emits_source_bound_fpr_product_variants() -> None:
     source = (
         "typedef unsigned char u8;\n"
