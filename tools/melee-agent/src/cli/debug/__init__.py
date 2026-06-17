@@ -22133,6 +22133,41 @@ def _preserve_source_restore_backup(
         return None, f"failed to preserve source restore backup: {type(exc).__name__}: {exc}"
 
 
+def _restore_source_bytes_snapshot(
+    path: Path,
+    original: bytes,
+    *,
+    melee_root: Path,
+) -> None:
+    restore_error: str | None = None
+    try:
+        path.write_bytes(original)
+        restored = path.read_bytes()
+    except Exception as exc:
+        restore_error = (
+            f"failed to restore {path}: {type(exc).__name__}: {exc}"
+        )
+    else:
+        if restored != original:
+            restore_error = (
+                f"failed to restore {path}: restored byte hash mismatch"
+            )
+
+    if restore_error is None:
+        return
+
+    backup_path, backup_error = _preserve_source_restore_backup(
+        path,
+        original,
+        melee_root=melee_root,
+    )
+    if backup_error:
+        restore_error = f"{restore_error}; {backup_error}"
+    elif backup_path is not None:
+        restore_error = f"{restore_error}; original bytes preserved at {backup_path}"
+    raise _SourceRestoreBytesError(restore_error, backup_path)
+
+
 @contextmanager
 def _source_restore_byte_guard(
     path: Path | None,
@@ -22163,33 +22198,33 @@ def _source_restore_byte_guard(
         if current == original:
             return
 
-        restore_error: str | None = None
-        try:
-            path.write_bytes(original)
-            restored = path.read_bytes()
-        except Exception as exc:
-            restore_error = (
-                f"failed to restore {path}: {type(exc).__name__}: {exc}"
-            )
-        else:
-            if restored != original:
-                restore_error = (
-                    f"failed to restore {path}: restored byte hash mismatch"
-                )
+        _restore_source_bytes_snapshot(
+            path,
+            original,
+            melee_root=melee_root,
+        )
 
-        if restore_error:
-            backup_path, backup_error = _preserve_source_restore_backup(
-                path,
-                original,
-                melee_root=melee_root,
-            )
-            if backup_error:
-                restore_error = f"{restore_error}; {backup_error}"
-            elif backup_path is not None:
-                restore_error = (
-                    f"{restore_error}; original bytes preserved at {backup_path}"
-                )
-            raise _SourceRestoreBytesError(restore_error, backup_path)
+
+class _SelectOrderCommandSourceRestore:
+    def __init__(self, path: Path | None, *, melee_root: Path):
+        self.path = path if path is not None and path.exists() else None
+        self.melee_root = melee_root
+        self.original = self.path.read_bytes() if self.path is not None else None
+
+    def restore(self) -> None:
+        if self.path is None or self.original is None:
+            return
+        try:
+            current = self.path.read_bytes() if self.path.exists() else None
+        except Exception:
+            current = None
+        if current == self.original:
+            return
+        _restore_source_bytes_snapshot(
+            self.path,
+            self.original,
+            melee_root=self.melee_root,
+        )
 
 
 def _restore_active_sources_for_signal(signum: int, _frame: object) -> None:
@@ -28397,6 +28432,10 @@ def debug_select_order_search_cmd(
             candidate_source = DEFAULT_MELEE_ROOT / "src" / f"{unit_for_path}.c"
             if candidate_source.exists():
                 source_path_for_probes = candidate_source
+    command_source_restore = _SelectOrderCommandSourceRestore(
+        source_path_for_probes,
+        melee_root=DEFAULT_MELEE_ROOT,
+    )
 
     auto_transform_families: tuple[str, ...] = ()
     if class_id == 1 and effective_force_phys and not transform_family:
@@ -28522,11 +28561,14 @@ def debug_select_order_search_cmd(
 
     probes: list[Any] = []
     if source_text:
-        probes = _generated_select_order_probes_for(
-            source_text,
-            include_lifetime=True,
-            max_count=max_probes,
-        )
+        try:
+            probes = _generated_select_order_probes_for(
+                source_text,
+                include_lifetime=True,
+                max_count=max_probes,
+            )
+        finally:
+            command_source_restore.restore()
     variants: list[dict] = []
     generated_source_dir: Path | None = None
     beam_campaign_dir: Path | None = None
@@ -28986,6 +29028,8 @@ def debug_select_order_search_cmd(
             )
     for variant in ranked_variants:
         variant.pop("_pcdump_key", None)
+
+    command_source_restore.restore()
 
     if json_out:
         print(json.dumps({

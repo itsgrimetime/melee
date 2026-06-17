@@ -549,7 +549,11 @@ def _iter_implicit_indexed_store_anchors(
         original_indexed = _indexed_expr(pointer_local, match.group("index"))
         direct_indexed = _indexed_expr(direct_base, match.group("index"))
         direct_line = line.replace(original_indexed, direct_indexed, 1)
-        if direct_line != line:
+        pointer_reassigned_before_store = _region_assigns_name(
+            searchable[:start],
+            pointer_local,
+        )
+        if direct_line != line and not pointer_reassigned_before_store:
             yield Anchor(
                 mutator_key="steer_indexed_byte_implicit_direct_store_base",
                 span=(body_start + start, body_start + end),
@@ -566,6 +570,32 @@ def _iter_implicit_indexed_store_anchors(
         index_temp_name = _fresh_named_temp(searchable, f"{field}_store_idx")
         if index_temp_name is None:
             continue
+        direct_indexed_with_temp = _indexed_expr(direct_base, index_temp_name)
+        direct_temp_line = line.replace(original_indexed, direct_indexed_with_temp, 1)
+        if direct_temp_line != line and not pointer_reassigned_before_store:
+            span_text = body_text[:end]
+            if body_text.count(span_text) != 1:
+                continue
+            declaration = f"    int {index_temp_name};\n"
+            replacement_text = (
+                f"{_prefix_with_inserted_decls(body_text[:start], declaration)}"
+                f"{match.group('indent')}{index_temp_name} = {index_expr};\n"
+                f"{direct_temp_line}"
+            )
+            yield Anchor(
+                mutator_key="steer_indexed_byte_implicit_store_index_temp",
+                span=(body_start, body_start + end),
+                payload={
+                    "span_text": span_text,
+                    "replacement_text": replacement_text,
+                    "strategy": "indexed-byte-implicit-direct-store-index-temp",
+                    "array_base": direct_base,
+                    "index_expr": index_expr,
+                    "target_local": pointer_local,
+                    "temp_local": index_temp_name,
+                },
+            )
+
         indexed_with_temp = _indexed_expr(pointer_local, index_temp_name)
         temp_line = line.replace(original_indexed, indexed_with_temp, 1)
         if temp_line == line:
@@ -619,6 +649,146 @@ def _last_pointer_alias_assignment_before(
         ):
             return start, end, end_with_newline, match.group("rhs")
     return None
+
+
+def _region_assigns_name(searchable: str, name: str) -> bool:
+    pattern = re.compile(
+        r"(?m)^[ \t]*" + re.escape(name) + r"\s*(?:[-+*/%&|^]?=|<<=|>>=)"
+    )
+    return pattern.search(searchable) is not None
+
+
+def _iter_sticky_base_owner_anchors(
+    *,
+    source_text: str,
+    body_text: str,
+    body_start: int,
+):
+    pointer_fields = _byte_pointer_field_aliases(
+        source_text=source_text,
+        body_text=body_text,
+    )
+    if not pointer_fields:
+        return
+    byte_pointers = _byte_array_types(source_text)
+    if not byte_pointers:
+        return
+    searchable = _blank_literals_and_comments(body_text)
+    records = _text_line_records_with_newline(body_text)
+    searchable_records = _text_line_records_with_newline(searchable)
+    for store_idx, (store_start, store_end, _store_end_with_newline, search_line) in enumerate(
+        searchable_records
+    ):
+        if store_idx >= len(records):
+            continue
+        store_match = _INDEXED_BYTE_STORE_RE.match(search_line)
+        if store_match is None:
+            continue
+        pointer_local = store_match.group("base")
+        pointer_info = pointer_fields.get(pointer_local)
+        if pointer_info is None:
+            continue
+        decl_type, direct_base, field = pointer_info
+        index_expr = store_match.group("index").strip()
+        line = records[store_idx][3]
+        if (
+            not _safe_indexed_expr(pointer_local, index_expr, line)
+            or not _safe_index_temp_expr(index_expr)
+            or body_text.count(line) != 1
+        ):
+            continue
+        init_match_info = None
+        for idx, (start, _end, _end_with_newline, loop_line) in enumerate(
+            searchable_records[:store_idx]
+        ):
+            if idx + 3 >= store_idx or idx + 3 >= len(records):
+                continue
+            header_match = _FOR_LOOP_RE.match(loop_line)
+            if header_match is None:
+                continue
+            first_store = _POINTER_STORE_RE.match(searchable_records[idx + 1][3])
+            second_store = _POINTER_STORE_RE.match(searchable_records[idx + 2][3])
+            if first_store is None or second_store is None:
+                continue
+            close_line = searchable_records[idx + 3][3]
+            if re.match(r"^[ \t]*}\s*$", close_line) is None:
+                continue
+            first_pointer = first_store.group("pointer")
+            second_pointer = second_store.group("pointer")
+            if first_pointer == second_pointer:
+                continue
+            pointer_init = _last_pointer_alias_assignment_before(
+                searchable_records=searchable_records,
+                before_idx=idx,
+                pointer_local=first_pointer,
+                byte_pointers=byte_pointers,
+            )
+            if pointer_init is None:
+                continue
+            init_start, init_end, _init_end_with_newline, base_local = pointer_init
+            if base_local != pointer_local:
+                continue
+            increments = tuple(
+                increment.strip()
+                for increment in header_match.group("increments").split(",")
+                if increment.strip()
+            )
+            loop_index = header_match.group("index")
+            if (
+                _increment_for_local(increments, loop_index) is None
+                or _increment_for_local(increments, first_pointer) is None
+                or _increment_for_local(increments, second_pointer) is None
+            ):
+                continue
+            init_line = searchable[init_start:init_end]
+            init_match = _POINTER_ALIAS_ASSIGN_RE.match(init_line)
+            if init_match is None:
+                continue
+            init_match_info = (init_start, init_end, init_match, first_pointer)
+        if init_match_info is None:
+            continue
+        init_start, init_end, init_match, first_pointer = init_match_info
+        if _region_assigns_name(searchable[init_end:store_start], pointer_local):
+            continue
+        temp_name = _fresh_named_temp(searchable, f"{field}_sticky_base")
+        if temp_name is None:
+            continue
+        span_text = body_text[init_start:store_end]
+        if body_text.count(span_text) != 1:
+            continue
+        original_indexed = _indexed_expr(pointer_local, store_match.group("index"))
+        replacement_store = line.replace(
+            original_indexed,
+            _indexed_expr(temp_name, store_match.group("index")),
+            1,
+        )
+        if replacement_store == line:
+            continue
+        declaration = f"{init_match.group('indent')}{decl_type}* {temp_name};\n"
+        for initializer, strategy in (
+            (pointer_local, "indexed-byte-sticky-base-owner-from-dst"),
+            (direct_base, "indexed-byte-sticky-base-owner-from-direct-base"),
+        ):
+            replacement_text = (
+                f"{declaration}"
+                f"{init_match.group('indent')}{temp_name} = {initializer};\n"
+                f"{init_match.group('indent')}{first_pointer} = {temp_name};"
+                f"{body_text[init_end:store_start]}"
+                f"{replacement_store}"
+            )
+            yield Anchor(
+                mutator_key="steer_indexed_byte_base_alias",
+                span=(body_start + init_start, body_start + store_end),
+                payload={
+                    "span_text": span_text,
+                    "replacement_text": replacement_text,
+                    "strategy": strategy,
+                    "array_base": initializer,
+                    "index_expr": index_expr,
+                    "target_local": pointer_local,
+                    "temp_local": temp_name,
+                },
+            )
 
 
 def _iter_implicit_init_loop_indexed_store_anchors(
@@ -688,6 +858,38 @@ def _iter_implicit_init_loop_indexed_store_anchors(
         if body_text.count(span_text) != 1:
             continue
         between_text = body_text[init_end_with_newline:start]
+        _decl_type, _direct_base, field = pointer_fields[base_local]
+        index_temp_name = _fresh_named_temp(searchable, f"{field}_init_idx")
+        if index_temp_name is not None and _safe_index_temp_expr(loop_index):
+            first_store_start = searchable_records[idx + 1][0]
+            first_store_end = searchable_records[idx + 1][1]
+            first_store_span_text = body_text[:first_store_end]
+            if body_text.count(first_store_span_text) == 1:
+                declaration = f"    int {index_temp_name};\n"
+                first_store_indent = first_store.group("indent")
+                replacement_text = (
+                    f"{_prefix_with_inserted_decls(body_text[:first_store_start], declaration)}"
+                    f"{first_store_indent}{index_temp_name} = {loop_index};\n"
+                    f"{first_store_indent}{base_local}[{index_temp_name}] = "
+                    f"{first_store.group('expr')};"
+                )
+                yield Anchor(
+                    mutator_key=(
+                        "steer_indexed_byte_implicit_init_loop_indexed_store"
+                    ),
+                    span=(body_start, body_start + first_store_end),
+                    payload={
+                        "span_text": first_store_span_text,
+                        "replacement_text": replacement_text,
+                        "strategy": "indexed-byte-implicit-init-loop-index-temp",
+                        "array_base": base_local,
+                        "index_expr": loop_index,
+                        "target_local": first_pointer,
+                        "temp_local": index_temp_name,
+                        "totals_pointer_local": second_pointer,
+                    },
+                )
+
         first_store_indent = first_store.group("indent")
         first_store_line = (
             f"{first_store_indent}{base_local}[{loop_index}] = "
@@ -1328,6 +1530,12 @@ def _iter_indexed_byte_address_temp_anchors(source_text: str, _function: str, sp
         return
 
     yield from _iter_implicit_indexed_store_anchors(
+        source_text=source_text,
+        body_text=body_text,
+        body_start=body_start,
+    )
+
+    yield from _iter_sticky_base_owner_anchors(
         source_text=source_text,
         body_text=body_text,
         body_start=body_start,

@@ -1015,6 +1015,303 @@ def test_coloring_register_steering_emits_case_c_fpr_temp_order_probes() -> None
         )
 
 
+def test_coloring_register_steering_emits_case_c_cast_owner_sticky_pool_probes() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row, u8 col) {\n"
+        "    f32 base;\n"
+        "    f32 y_offset;\n"
+        "    f32 y_spacing;\n"
+        "    f32 col_fpr;\n"
+        "    f32 col_offset;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        "    y_offset -= base;\n"
+        "    col_fpr = (f32) col;\n"
+        "    col_offset = y_spacing * col_fpr;\n"
+        "    row_offset = y_offset * (f32) row;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset_adj);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=48,
+    )
+
+    by_strategy = {
+        probe.payload["strategy"]: probe
+        for probe in probes
+        if probe.mutator_key == "steer_fpr_case_c_temp_order"
+    }
+    assert {
+        "fpr-case-c-cast-owner-before-setup",
+        "fpr-case-c-cast-owner-after-setup",
+        "fpr-case-c-cast-plus-dependent-owner",
+    } <= set(by_strategy)
+
+    before_setup = by_strategy["fpr-case-c-cast-owner-before-setup"]
+    assert before_setup.payload["target_local"] == "y_offset"
+    assert before_setup.payload["cast_operand"] == "row"
+    assert "    f32 row_cast_owner_fpr;\n" in before_setup.candidate_text
+    assert (
+        before_setup.candidate_text.index(
+            "    row_cast_owner_fpr = (f32) row;\n"
+        )
+        < before_setup.candidate_text.index(
+            "    y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        )
+    )
+    assert "    row_offset = y_offset * row_cast_owner_fpr;\n" in (
+        before_setup.candidate_text
+    )
+
+    after_setup = by_strategy["fpr-case-c-cast-owner-after-setup"]
+    assert (
+        after_setup.candidate_text.index(
+            "    y_offset -= base;\n"
+        )
+        < after_setup.candidate_text.index(
+            "    row_cast_owner_fpr = (f32) row;\n"
+        )
+        < after_setup.candidate_text.index(
+            "    col_fpr = (f32) col;\n"
+        )
+    )
+    assert "    row_offset = y_offset * row_cast_owner_fpr;\n" in (
+        after_setup.candidate_text
+    )
+
+    dependent_owner = by_strategy["fpr-case-c-cast-plus-dependent-owner"]
+    assert "    f32 row_offset_owner_fpr;\n" in dependent_owner.candidate_text
+    assert "    row_offset = y_offset * row_cast_owner_fpr;\n" in (
+        dependent_owner.candidate_text
+    )
+    assert "    row_offset_owner_fpr = row_offset;\n" in (
+        dependent_owner.candidate_text
+    )
+    assert "    row_offset_adj = row_offset_owner_fpr - 0.4f;" in (
+        dependent_owner.candidate_text
+    )
+    assert "&row_offset" not in dependent_owner.candidate_text
+
+
+def test_coloring_register_steering_emits_case_c_upstream_statement_motion_probes() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row, u8 col) {\n"
+        "    f32 base;\n"
+        "    f32 y_offset;\n"
+        "    f32 y_spacing;\n"
+        "    f32 col_fpr;\n"
+        "    f32 col_offset;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        "    y_offset -= base;\n"
+        "    col_fpr = (f32) col;\n"
+        "    col_offset = y_spacing * col_fpr;\n"
+        "    row_offset = y_offset * (f32) row;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset_adj);\n"
+        "    use_col(col_offset);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=64,
+    )
+
+    by_strategy = {
+        probe.payload["strategy"]: probe
+        for probe in probes
+        if probe.mutator_key == "steer_fpr_case_c_temp_order"
+    }
+    assert {
+        "fpr-case-c-upstream-block-before-setup",
+        "fpr-case-c-upstream-block-after-dependent",
+    } <= set(by_strategy)
+
+    before_setup = by_strategy["fpr-case-c-upstream-block-before-setup"]
+    assert before_setup.payload["moved_locals"] == ("col_fpr", "col_offset")
+    assert (
+        before_setup.candidate_text.index("    col_fpr = (f32) col;\n")
+        < before_setup.candidate_text.index(
+            "    y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        )
+    )
+    assert (
+        before_setup.candidate_text.index("    col_offset = y_spacing * col_fpr;\n")
+        < before_setup.candidate_text.index("    row_offset = y_offset * (f32) row;\n")
+    )
+
+    after_dependent = by_strategy["fpr-case-c-upstream-block-after-dependent"]
+    assert after_dependent.payload["moved_locals"] == ("col_fpr", "col_offset")
+    assert (
+        after_dependent.candidate_text.index(
+            "    row_offset_adj = row_offset - 0.4f;\n"
+        )
+        < after_dependent.candidate_text.index("    col_fpr = (f32) col;\n")
+        < after_dependent.candidate_text.index(
+            "    HSD_JObjSetTranslateY(jobj, row_offset_adj);\n"
+        )
+    )
+    assert "    use_col(col_offset);\n" in after_dependent.candidate_text
+
+    recompute_same_order = next(
+        probe
+        for probe in probes
+        if probe.payload.get("strategy") == "fpr-dependent-product-recompute-same-order"
+    )
+    assert "    row_offset = y_offset * (f32) row;\n" in (
+        recompute_same_order.candidate_text
+    )
+    assert "    row_offset_adj = (y_offset * (f32) row) - 0.4f;" in (
+        recompute_same_order.candidate_text
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "moved_line"),
+    (
+        ("call", "    col_fpr = GetColumnFpr(col);\n"),
+        ("indexed", "    col_fpr = column_values[col];\n"),
+        ("member", "    col_fpr = obj->col;\n"),
+        ("increment", "    col_fpr = (f32) ++col;\n"),
+        ("control", "    if (col != 0) {\n"),
+    ),
+)
+def test_coloring_register_steering_rejects_unsafe_case_c_upstream_statement_motion(
+    case: str,
+    moved_line: str,
+) -> None:
+    close_line = "    }\n" if case == "control" else ""
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row, u8 col) {\n"
+        "    f32 base;\n"
+        "    f32 y_offset;\n"
+        "    f32 y_spacing;\n"
+        "    f32 col_fpr;\n"
+        "    f32 col_offset;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        "    y_offset -= base;\n"
+        f"{moved_line}"
+        "    col_offset = y_spacing * col_fpr;\n"
+        f"{close_line}"
+        "    row_offset = y_offset * (f32) row;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset_adj);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=64,
+    )
+
+    strategies = {
+        probe.payload.get("strategy")
+        for probe in probes
+        if probe.mutator_key == "steer_fpr_case_c_temp_order"
+    }
+    assert "fpr-case-c-upstream-block-before-setup" not in strategies
+    assert "fpr-case-c-upstream-block-after-dependent" not in strategies
+
+
+def test_coloring_register_steering_does_not_move_required_product_operand_after_use() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row) {\n"
+        "    f32 base;\n"
+        "    f32 y_offset;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        "    y_offset -= base;\n"
+        "    rowf = (f32) row;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset_adj);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=64,
+    )
+
+    strategies = {
+        probe.payload.get("strategy")
+        for probe in probes
+        if probe.mutator_key == "steer_fpr_case_c_temp_order"
+    }
+    assert "fpr-case-c-upstream-block-after-dependent" not in strategies
+
+
+def test_coloring_register_steering_rejects_case_c_cast_owner_after_operand_reassign() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row, u8 col) {\n"
+        "    f32 base;\n"
+        "    f32 y_offset;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        "    y_offset -= base;\n"
+        "    row = col;\n"
+        "    row_offset = y_offset * (f32) row;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset_adj);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=64,
+    )
+
+    strategies = {
+        probe.payload.get("strategy")
+        for probe in probes
+        if probe.mutator_key == "steer_fpr_case_c_temp_order"
+    }
+    assert "fpr-case-c-cast-owner-before-setup" not in strategies
+    assert "fpr-case-c-cast-owner-after-setup" not in strategies
+    assert "fpr-case-c-cast-plus-dependent-owner" not in strategies
+
+
 @pytest.mark.parametrize(
     ("case", "adjustment"),
     (

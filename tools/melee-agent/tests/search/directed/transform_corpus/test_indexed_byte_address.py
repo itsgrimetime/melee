@@ -684,3 +684,241 @@ def test_indexed_byte_address_temp_emits_implicit_address_case_c_probes() -> Non
     assert "&mnDiagram_804A076C.sorted_names[i]" not in (
         loop_rewrite.candidate_text
     )
+
+
+def test_indexed_byte_address_temp_emits_sticky_pool_source_probes_early() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef unsigned int u32;\n"
+        "struct MnDiagramData { u8 sorted_names[120]; };\n"
+        "extern struct MnDiagramData mnDiagram_804A076C;\n"
+        "u32 mnDiagram_SumNameKOs(int slot);\n"
+        "void mnDiagram_SortNamesByKOs(void) {\n"
+        "    struct MnDiagramData* assets = (struct MnDiagramData*) &mnDiagram_804A076C;\n"
+        "    u32 totals[120];\n"
+        "    u8* dst_iter;\n"
+        "    u8* dst = assets->sorted_names;\n"
+        "    u32* tp;\n"
+        "    int i;\n"
+        "    int n;\n"
+        "    u8 temp;\n"
+        "    dst_iter = dst;\n"
+        "    tp = totals;\n"
+        "    for (n = 0; n < 120; n++, dst_iter++, tp++) {\n"
+        "        *dst_iter = (u8) n;\n"
+        "        *tp = mnDiagram_SumNameKOs(n & 0xFF);\n"
+        "    }\n"
+        "    dst[i] = temp;\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_SortNamesByKOs",
+        unit="melee/mn/mndiagram",
+        force_phys={34: 27, 44: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=6,
+    )
+
+    indexed_probes = [
+        probe
+        for probe in probes
+        if probe.family_id == "indexed_byte_address_temp_steering"
+    ]
+    strategies = [
+        probe.payload["strategy"]
+        for probe in indexed_probes
+        if "strategy" in probe.payload
+    ]
+    assert {
+        "indexed-byte-sticky-base-owner-from-dst",
+        "indexed-byte-sticky-base-owner-from-direct-base",
+        "indexed-byte-implicit-direct-store-index-temp",
+        "indexed-byte-implicit-init-loop-index-temp",
+    } <= set(strategies)
+    assert "indexed-byte-implicit-init-loop-indexed-store" not in strategies
+
+    by_strategy = {
+        probe.payload["strategy"]: probe
+        for probe in indexed_probes
+        if "strategy" in probe.payload
+    }
+
+    dst_owner = by_strategy["indexed-byte-sticky-base-owner-from-dst"]
+    assert dst_owner.mutator_key == "steer_indexed_byte_base_alias"
+    assert "    u8* sorted_names_sticky_base_probe;\n" in dst_owner.candidate_text
+    assert "    sorted_names_sticky_base_probe = dst;\n" in dst_owner.candidate_text
+    assert "    dst_iter = sorted_names_sticky_base_probe;\n" in (
+        dst_owner.candidate_text
+    )
+    assert "    for (n = 0; n < 120; n++, dst_iter++, tp++) {\n" in (
+        dst_owner.candidate_text
+    )
+    assert "        *dst_iter = (u8) n;\n" in dst_owner.candidate_text
+    assert "    sorted_names_sticky_base_probe[i] = temp;\n" in (
+        dst_owner.candidate_text
+    )
+    assert "    dst[i] = temp;" not in dst_owner.candidate_text
+
+    direct_owner = by_strategy["indexed-byte-sticky-base-owner-from-direct-base"]
+    assert direct_owner.mutator_key == "steer_indexed_byte_base_alias"
+    assert "    u8* sorted_names_sticky_base_probe;\n" in (
+        direct_owner.candidate_text
+    )
+    assert (
+        "    sorted_names_sticky_base_probe = mnDiagram_804A076C.sorted_names;\n"
+        in direct_owner.candidate_text
+    )
+    assert "    dst_iter = sorted_names_sticky_base_probe;\n" in (
+        direct_owner.candidate_text
+    )
+    assert "    sorted_names_sticky_base_probe[i] = temp;\n" in (
+        direct_owner.candidate_text
+    )
+
+    direct_index_temp = by_strategy[
+        "indexed-byte-implicit-direct-store-index-temp"
+    ]
+    assert (
+        direct_index_temp.mutator_key
+        == "steer_indexed_byte_implicit_store_index_temp"
+    )
+    assert "    int sorted_names_store_idx_probe;\n" in (
+        direct_index_temp.candidate_text
+    )
+    assert "    sorted_names_store_idx_probe = i;\n" in (
+        direct_index_temp.candidate_text
+    )
+    assert (
+        "    mnDiagram_804A076C.sorted_names[sorted_names_store_idx_probe] = temp;"
+        in direct_index_temp.candidate_text
+    )
+    assert "    dst[sorted_names_store_idx_probe] = temp;" not in (
+        direct_index_temp.candidate_text
+    )
+
+    init_index_temp = by_strategy["indexed-byte-implicit-init-loop-index-temp"]
+    assert (
+        init_index_temp.mutator_key
+        == "steer_indexed_byte_implicit_init_loop_indexed_store"
+    )
+    assert "    int sorted_names_init_idx_probe;\n" in (
+        init_index_temp.candidate_text
+    )
+    assert "    dst_iter = dst;\n" in init_index_temp.candidate_text
+    assert "    for (n = 0; n < 120; n++, dst_iter++, tp++) {\n" in (
+        init_index_temp.candidate_text
+    )
+    assert "        sorted_names_init_idx_probe = n;\n" in (
+        init_index_temp.candidate_text
+    )
+    assert "        dst[sorted_names_init_idx_probe] = (u8) n;\n" in (
+        init_index_temp.candidate_text
+    )
+    assert "        *tp = mnDiagram_SumNameKOs(n & 0xFF);\n" in (
+        init_index_temp.candidate_text
+    )
+    assert "        *dst_iter = (u8) n;" not in init_index_temp.candidate_text
+
+    for probe in by_strategy.values():
+        assert "&mnDiagram_804A076C.sorted_names[i]" not in probe.candidate_text
+
+
+def test_indexed_byte_address_temp_rejects_direct_base_after_pointer_reassign() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef unsigned int u32;\n"
+        "struct MnDiagramData { u8 sorted_names[120]; };\n"
+        "extern struct MnDiagramData mnDiagram_804A076C;\n"
+        "u32 mnDiagram_SumNameKOs(int slot);\n"
+        "void mnDiagram_SortNamesByKOs(u8* other) {\n"
+        "    struct MnDiagramData* assets = (struct MnDiagramData*) &mnDiagram_804A076C;\n"
+        "    u32 totals[120];\n"
+        "    u8* dst_iter;\n"
+        "    u8* dst = assets->sorted_names;\n"
+        "    u32* tp;\n"
+        "    int i;\n"
+        "    int n;\n"
+        "    u8 temp;\n"
+        "    dst_iter = dst;\n"
+        "    tp = totals;\n"
+        "    for (n = 0; n < 120; n++, dst_iter++, tp++) {\n"
+        "        *dst_iter = (u8) n;\n"
+        "        *tp = mnDiagram_SumNameKOs(n & 0xFF);\n"
+        "    }\n"
+        "    dst = other;\n"
+        "    dst[i] = temp;\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_SortNamesByKOs",
+        unit="melee/mn/mndiagram",
+        force_phys={34: 27, 44: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=12,
+    )
+
+    strategies = {
+        probe.payload.get("strategy")
+        for probe in probes
+        if probe.family_id == "indexed_byte_address_temp_steering"
+    }
+    assert "indexed-byte-implicit-direct-store-base" not in strategies
+    assert "indexed-byte-implicit-direct-store-index-temp" not in strategies
+    assert "indexed-byte-sticky-base-owner-from-dst" not in strategies
+    assert "indexed-byte-sticky-base-owner-from-direct-base" not in strategies
+    assert "indexed-byte-implicit-store-index-temp" in strategies
+
+
+def test_indexed_byte_address_temp_sticky_base_uses_selected_init_for_reassign_guard() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef unsigned int u32;\n"
+        "struct MnDiagramData { u8 sorted_names[120]; };\n"
+        "extern struct MnDiagramData mnDiagram_804A076C;\n"
+        "u32 mnDiagram_SumNameKOs(int slot);\n"
+        "void mnDiagram_SortNamesByKOs(u8* other) {\n"
+        "    struct MnDiagramData* assets = (struct MnDiagramData*) &mnDiagram_804A076C;\n"
+        "    u32 totals[120];\n"
+        "    u8* dst_iter;\n"
+        "    u8* dst = assets->sorted_names;\n"
+        "    u8* other_iter;\n"
+        "    u32* tp;\n"
+        "    int i;\n"
+        "    int n;\n"
+        "    u8 temp;\n"
+        "    dst_iter = dst;\n"
+        "    tp = totals;\n"
+        "    for (n = 0; n < 120; n++, dst_iter++, tp++) {\n"
+        "        *dst_iter = (u8) n;\n"
+        "        *tp = mnDiagram_SumNameKOs(n & 0xFF);\n"
+        "    }\n"
+        "    dst = other;\n"
+        "    other_iter = other;\n"
+        "    for (n = 0; n < 2; n++, other_iter++, tp++) {\n"
+        "        *other_iter = (u8) n;\n"
+        "        *tp = mnDiagram_SumNameKOs(n & 0xFF);\n"
+        "    }\n"
+        "    dst[i] = temp;\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_SortNamesByKOs",
+        unit="melee/mn/mndiagram",
+        force_phys={34: 27, 44: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=16,
+    )
+
+    strategies = {
+        probe.payload.get("strategy")
+        for probe in probes
+        if probe.family_id == "indexed_byte_address_temp_steering"
+    }
+    assert "indexed-byte-sticky-base-owner-from-dst" not in strategies
+    assert "indexed-byte-sticky-base-owner-from-direct-base" not in strategies

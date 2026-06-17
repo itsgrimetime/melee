@@ -1953,6 +1953,127 @@ def test_select_order_search_no_score_restores_live_source_after_probe_compile_m
     assert live_source.read_text() == original
 
 
+def test_select_order_search_restores_live_source_after_probe_generation_mutates_it(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    live_source = melee_root / "src" / "melee" / "mn" / "sample.c"
+    live_source.parent.mkdir(parents=True)
+    original = "void fn_80000000(void) { /* original */ }\n"
+    residue = "void fn_80000000(void) { /* generated residue */ }\n"
+    live_source.write_text(original)
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text(BASELINE)
+
+    def fake_find_unit(function: str, root: pathlib.Path) -> str:
+        assert function == "fn_80000000"
+        assert root == melee_root
+        return "melee/mn/sample"
+
+    def fake_probes(*args, **kwargs) -> list[LifetimeLayoutProbe]:
+        assert live_source.read_text() == original
+        live_source.write_text(residue)
+        return [
+            LifetimeLayoutProbe(
+                label="generated-probe-mutates-before-scoring",
+                operator="block-scope",
+                description="Synthetic generated probe.",
+                source_text="void fn_80000000(void) { /* candidate */ }\n",
+            )
+        ]
+
+    def fake_compile(*args, **kwargs) -> str:
+        return TARGET_ORDER
+
+    def fake_match_percent(*args, **kwargs) -> tuple[float | None, str | None]:
+        return 91.5, None
+
+    debug_cli._ACTIVE_SOURCE_RESTORES.clear()
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_unit_for_function", fake_find_unit)
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        fake_probes,
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(
+        "src.cli.debug._select_order_source_match_percent",
+        fake_match_percent,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert live_source.read_text() == original
+
+
+def test_select_order_search_restores_live_source_when_probe_generation_then_exits(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    live_source = melee_root / "src" / "melee" / "mn" / "sample.c"
+    live_source.parent.mkdir(parents=True)
+    original = "void fn_80000000(void) { /* original */ }\n"
+    residue = "void fn_80000000(void) { /* generated residue */ }\n"
+    live_source.write_text(original)
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text(BASELINE)
+
+    def fake_find_unit(function: str, root: pathlib.Path) -> str:
+        assert function == "fn_80000000"
+        assert root == melee_root
+        return "melee/mn/sample"
+
+    def fake_probes(*args, **kwargs) -> list[LifetimeLayoutProbe]:
+        assert live_source.read_text() == original
+        live_source.write_text(residue)
+        return []
+
+    debug_cli._ACTIVE_SOURCE_RESTORES.clear()
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_find_unit_for_function", fake_find_unit)
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        fake_probes,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2, result.stdout + result.stderr
+    assert live_source.read_text() == original
+
+
 def test_select_order_search_force_phys_residuals_annotate_top_retained_sources(
     tmp_path: pathlib.Path,
     monkeypatch,

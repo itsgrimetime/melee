@@ -1662,6 +1662,90 @@ def _replace_case_c_product_operand(
     return rewritten if rewritten != product_expr else None
 
 
+def _case_c_identifier_names(text: str) -> set[str]:
+    return {
+        match.group(0)
+        for match in re.finditer(r"\b[A-Za-z_]\w*\b", text)
+    }
+
+
+def _case_c_movable_assignment_block(
+    *,
+    body_text: str,
+    function_header_text: str,
+    block_text: str,
+    forbidden_names: set[str],
+) -> tuple[str, tuple[str, ...]] | None:
+    if not block_text.strip():
+        return None
+    if re.search(r"(?m)^[ \t]*#", block_text):
+        return None
+    decls = _register_steering_decl_records(body_text)
+    if decls is None:
+        return None
+    local_names = {
+        decl.name for decl in decls
+        if decl.depth == 1 and _is_scalar_type(decl.type_name)
+    }
+    allowed_names = (
+        local_names
+        | _register_steering_scalar_parameter_names(function_header_text)
+        | _register_steering_fpr_parameter_names(function_header_text)
+        | _REGISTER_STEERING_RECOMPUTE_DECL_STARTERS
+    )
+    allowed_names |= {"f32", "f64", "float", "double"}
+    searchable = _blank_literals_and_comments(block_text)
+    records = _text_line_records_with_newline(block_text)
+    searchable_records = _text_line_records_with_newline(searchable)
+    depths = _line_depths_from_blanked_text(searchable)
+    moved: list[str] = []
+    for idx, (start, _end, _end_with_newline, search_line) in enumerate(
+        searchable_records
+    ):
+        if idx >= len(records):
+            return None
+        line = records[idx][3]
+        if not line.strip():
+            continue
+        if (
+            line != search_line
+            or (depths[idx] if idx < len(depths) else 0) != 0
+            or _line_has_label(line)
+            or _macro_like_statement(line)
+        ):
+            return None
+        stripped = search_line.strip()
+        head = stripped.split(None, 1)[0] if stripped else ""
+        if head in _REGISTER_STEERING_RECOMPUTE_NON_DECL_HEADS:
+            return None
+        assign = _REGISTER_STEERING_ASSIGN_RE.match(search_line)
+        if assign is None:
+            return None
+        lhs = assign.group("lhs")
+        rhs = assign.group("rhs")
+        if lhs in forbidden_names or lhs not in local_names:
+            return None
+        if (
+            "volatile" in search_line
+            or any(token in rhs for token in ("->", ".", "[", "]", "&", "++", "--", "?", ":", ","))
+            or re.search(r"(?<![=!<>])=(?!=)", rhs)
+            or re.search(r"\b[A-Za-z_]\w*\s*\(", rhs)
+        ):
+            return None
+        identifiers = _case_c_identifier_names(rhs)
+        if identifiers & forbidden_names:
+            return None
+        if not identifiers <= allowed_names:
+            return None
+        moved.append(lhs)
+    if not moved:
+        return None
+    movable_body = block_text[1:] if block_text.startswith("\n") else block_text
+    if not movable_body.endswith("\n"):
+        movable_body += "\n"
+    return movable_body, tuple(moved)
+
+
 def _iter_fpr_case_c_temp_order_anchors(
     body_text: str,
     function_header_text: str = "",
@@ -1672,6 +1756,10 @@ def _iter_fpr_case_c_temp_order_anchors(
     products = _iter_fpr_product_assignments(body_text, function_header_text)
     if not products:
         return []
+    dependent_cases = _iter_fpr_dependent_product_cases(
+        body_text,
+        function_header_text,
+    )
     searchable = _blank_literals_and_comments(body_text)
     anchors: list[Anchor] = []
 
@@ -1694,6 +1782,7 @@ def _iter_fpr_case_c_temp_order_anchors(
             if body_text.count(span_text) != 1:
                 continue
             prefix = body_text[insert_after:setup.start]
+            setup_text = body_text[setup.start:setup.end]
 
             def append_anchor(
                 *,
@@ -1728,6 +1817,250 @@ def _iter_fpr_case_c_temp_order_anchors(
                             "call_expr": setup.call_expr,
                             "temp_local": temp_local,
                             "source_type": setup.target_type,
+                        },
+                    )
+                )
+
+            def append_cast_owner_anchors() -> None:
+                for cast_operand in product.cast_operand_names:
+                    if cast_operand == setup.target:
+                        continue
+                    if _region_assigns_any(between_searchable, (cast_operand,)):
+                        continue
+                    cast = _cast_term_for_operand(product.product_expr, cast_operand)
+                    if cast is None:
+                        continue
+                    cast_text, cast_type = cast
+                    cast_temp = _fresh_register_steering_name(
+                        searchable,
+                        f"{cast_operand}_cast_owner",
+                    )
+                    if cast_temp is None:
+                        continue
+                    replacement_product_expr = product.product_expr.replace(
+                        cast_text,
+                        cast_temp,
+                        1,
+                    )
+                    if replacement_product_expr == product.product_expr:
+                        continue
+                    replacement_product_line = (
+                        f"{product.indent}{product.lhs} = "
+                        f"{replacement_product_expr};"
+                    )
+                    common_payload: dict[str, Any] = {
+                        "span_text": span_text,
+                        "target_local": setup.target,
+                        "rhs_local": setup.rhs_local,
+                        "product_local": product.lhs,
+                        "product_expr": product.product_expr,
+                        "call_expr": setup.call_expr,
+                        "cast_operand": cast_operand,
+                        "cast_text": cast_text,
+                        "temp_local": cast_temp,
+                        "source_type": cast_type,
+                    }
+
+                    before_replacement = (
+                        f"{product.indent}{cast_type} {cast_temp};\n"
+                        f"{prefix}"
+                        f"{setup.indent}{cast_temp} = {cast_text};\n"
+                        f"{setup_text}"
+                        f"{between}"
+                        f"{replacement_product_line}"
+                    )
+                    if before_replacement != span_text:
+                        anchors.append(
+                            Anchor(
+                                mutator_key="steer_fpr_case_c_temp_order",
+                                span=(insert_after, product.end),
+                                payload={
+                                    **common_payload,
+                                    "replacement_text": before_replacement,
+                                    "strategy": (
+                                        "fpr-case-c-cast-owner-before-setup"
+                                    ),
+                                },
+                            )
+                        )
+
+                    after_replacement = (
+                        f"{product.indent}{cast_type} {cast_temp};\n"
+                        f"{prefix}"
+                        f"{setup_text}\n"
+                        f"{setup.indent}{cast_temp} = {cast_text};"
+                        f"{between}"
+                        f"{replacement_product_line}"
+                    )
+                    if after_replacement != span_text:
+                        anchors.append(
+                            Anchor(
+                                mutator_key="steer_fpr_case_c_temp_order",
+                                span=(insert_after, product.end),
+                                payload={
+                                    **common_payload,
+                                    "replacement_text": after_replacement,
+                                    "strategy": (
+                                        "fpr-case-c-cast-owner-after-setup"
+                                    ),
+                                },
+                            )
+                        )
+
+                    dependent_case = next(
+                        (
+                            case for case in dependent_cases
+                            if case.start == product.start
+                            and case.primary == product.lhs
+                            and case.indent == product.indent
+                        ),
+                        None,
+                    )
+                    if dependent_case is None:
+                        continue
+                    product_decl_type = _fpr_product_decl_type(body_text, product)
+                    if product_decl_type is None:
+                        continue
+                    occupied = f"{searchable}\n{cast_temp}\n"
+                    owner_temp = _fresh_register_steering_name(
+                        occupied,
+                        f"{product.lhs}_owner",
+                    )
+                    if owner_temp is None:
+                        continue
+                    dependent_line = _dependent_source_replacement(
+                        indent=dependent_case.indent,
+                        dependent=dependent_case.dependent,
+                        source_expr=owner_temp,
+                        dependent_parts=dependent_case.dependent_parts,
+                    )
+                    if dependent_line is None:
+                        continue
+                    dependent_span_text = body_text[
+                        insert_after:dependent_case.next_end
+                    ]
+                    if body_text.count(dependent_span_text) != 1:
+                        continue
+                    dependent_replacement = (
+                        f"{product.indent}{cast_type} {cast_temp};\n"
+                        f"{product.indent}{product_decl_type} {owner_temp};\n"
+                        f"{prefix}"
+                        f"{setup.indent}{cast_temp} = {cast_text};\n"
+                        f"{setup_text}"
+                        f"{between}"
+                        f"{replacement_product_line}\n"
+                        f"{product.indent}{owner_temp} = {product.lhs};\n"
+                        f"{dependent_line}"
+                    )
+                    if dependent_replacement == dependent_span_text:
+                        continue
+                    payload = {
+                        **common_payload,
+                        "span_text": dependent_span_text,
+                        "replacement_text": dependent_replacement,
+                        "strategy": "fpr-case-c-cast-plus-dependent-owner",
+                        "dependent_local": dependent_case.dependent,
+                        "owner_temp_local": owner_temp,
+                    }
+                    anchors.append(
+                        Anchor(
+                            mutator_key="steer_fpr_case_c_temp_order",
+                            span=(insert_after, dependent_case.next_end),
+                            payload=payload,
+                        )
+                    )
+
+            def append_statement_motion_anchors() -> None:
+                dependent_case = next(
+                    (
+                        case for case in dependent_cases
+                        if case.start == product.start
+                        and case.primary == product.lhs
+                        and case.indent == product.indent
+                    ),
+                    None,
+                )
+                forbidden_names = {
+                    setup.target,
+                    setup.rhs_local,
+                    product.lhs,
+                }
+                if dependent_case is not None:
+                    forbidden_names.add(dependent_case.dependent)
+                movable = _case_c_movable_assignment_block(
+                    body_text=body_text,
+                    function_header_text=function_header_text,
+                    block_text=between,
+                    forbidden_names=forbidden_names,
+                )
+                if movable is None:
+                    return
+                movable_body, moved_locals = movable
+                setup_block = f"{setup_text}\n"
+                before_replacement = (
+                    f"{prefix}"
+                    f"{movable_body}"
+                    f"{setup_block}"
+                    f"{product.line}"
+                )
+                if before_replacement != span_text:
+                    anchors.append(
+                        Anchor(
+                            mutator_key="steer_fpr_case_c_temp_order",
+                            span=(insert_after, product.end),
+                            payload={
+                                "span_text": span_text,
+                                "replacement_text": before_replacement,
+                                "strategy": (
+                                    "fpr-case-c-upstream-block-before-setup"
+                                ),
+                                "target_local": setup.target,
+                                "rhs_local": setup.rhs_local,
+                                "product_local": product.lhs,
+                                "product_expr": product.product_expr,
+                                "call_expr": setup.call_expr,
+                                "moved_locals": moved_locals,
+                            },
+                        )
+                    )
+                if dependent_case is None:
+                    return
+                if set(moved_locals) & set(product.operand_names):
+                    return
+                dependent_span_text = body_text[
+                    insert_after:dependent_case.next_end
+                ]
+                if body_text.count(dependent_span_text) != 1:
+                    return
+                dependent_line = body_text[product.end + 1:dependent_case.next_end]
+                if not dependent_line.strip():
+                    return
+                after_replacement = (
+                    f"{prefix}"
+                    f"{setup_block}"
+                    f"{product.line}\n"
+                    f"{dependent_line}\n"
+                    f"{movable_body.rstrip(chr(10))}"
+                )
+                if after_replacement == dependent_span_text:
+                    return
+                anchors.append(
+                    Anchor(
+                        mutator_key="steer_fpr_case_c_temp_order",
+                        span=(insert_after, dependent_case.next_end),
+                        payload={
+                            "span_text": dependent_span_text,
+                            "replacement_text": after_replacement,
+                            "strategy": (
+                                "fpr-case-c-upstream-block-after-dependent"
+                            ),
+                            "target_local": setup.target,
+                            "rhs_local": setup.rhs_local,
+                            "product_local": product.lhs,
+                            "dependent_local": dependent_case.dependent,
+                            "product_expr": product.product_expr,
+                            "call_expr": setup.call_expr,
+                            "moved_locals": moved_locals,
                         },
                     )
                 )
@@ -1788,6 +2121,8 @@ def _iter_fpr_case_c_temp_order_anchors(
                     f"{product.indent}{product.lhs} = {replacement_product_expr};"
                 ),
             )
+            append_statement_motion_anchors()
+            append_cast_owner_anchors()
             break
     return anchors
 
