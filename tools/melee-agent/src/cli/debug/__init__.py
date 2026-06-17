@@ -110,6 +110,18 @@ from ...mwcc_debug.signature_audit import (
 from ...mwcc_debug.value_numbering import detect_divide_rematerialization_ceiling
 
 
+def _looks_like_melee_root(path: Path) -> bool:
+    return (path / "configure.py").is_file() and (path / "src" / "melee").is_dir()
+
+
+def _compute_melee_root() -> Path:
+    cwd = Path.cwd().resolve()
+    for candidate in (cwd, *cwd.parents):
+        if _looks_like_melee_root(candidate):
+            return candidate
+    return DEFAULT_MELEE_ROOT
+
+
 @dataclasses.dataclass(frozen=True)
 class _MatchIterFirstReg:
     kind: str

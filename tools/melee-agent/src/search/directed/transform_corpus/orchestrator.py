@@ -52,6 +52,7 @@ _DIRECT_REGISTER_STEERING_KEYS = frozenset({
     "steer_fpr_product_argument_duplicate",
     "steer_fpr_product_temp_split",
     "steer_fpr_paired_product_temp_split",
+    "steer_fpr_product_temp_plus_dependent",
 })
 
 

@@ -26,7 +26,7 @@ def test_indexed_byte_address_temp_generates_same_line_variants() -> None:
         unit="melee/mn/mndiagram",
         force_phys={34: 27, 44: 25},
         families=("indexed_byte_address_temp_steering",),
-        max_per_family=8,
+        max_per_family=12,
     )
 
     indexed_probes = [
@@ -204,7 +204,7 @@ def test_indexed_byte_address_temp_handles_condition_expression_reads() -> None:
         unit="melee/mn/mndiagram",
         force_phys={34: 27, 44: 25},
         families=("indexed_byte_address_temp_steering",),
-        max_per_family=8,
+        max_per_family=12,
     )
 
     indexed_probes = [
@@ -398,3 +398,101 @@ def test_indexed_byte_address_temp_handles_pointer_base_conditions() -> None:
     strategies = {probe.payload["strategy"] for probe in probes}
     assert "indexed-byte-base-alias-condition-all-reads" in strategies
     assert "indexed-byte-condition-all-read-value-temps" in strategies
+
+
+def test_indexed_byte_address_temp_emits_sort_ig34_lifetime_and_index_levers() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef unsigned int u32;\n"
+        "typedef struct HSD_Text HSD_Text;\n"
+        "struct MnDiagramData { u8 sorted_names[120]; HSD_Text* text[120]; };\n"
+        "extern struct MnDiagramData mnDiagram_804A076C;\n"
+        "char* GetNameText(int slot);\n"
+        "void mnDiagram_SortNamesByKOs(void) {\n"
+        "    struct MnDiagramData* assets = &mnDiagram_804A076C;\n"
+        "    u32 totals[120];\n"
+        "    int max_idx;\n"
+        "    int j;\n"
+        "    int i;\n"
+        "    int n;\n"
+        "    HSD_Text* tp;\n"
+        "    u8* dst_iter;\n"
+        "    u8* dst = assets->sorted_names;\n"
+        "    HSD_Text** text = assets->text;\n"
+        "    dst_iter = dst;\n"
+        "    tp = *text;\n"
+        "    for (n = 0; n < 120; n++, dst_iter++, tp++) {\n"
+        "        *dst_iter = (u8) n;\n"
+        "    }\n"
+        "    for (i = 0; i < 119; i++) {\n"
+        "        max_idx = i;\n"
+        "        for (j = i + 1; j < 120; j++) {\n"
+        "            if ((GetNameText(mnDiagram_804A076C.sorted_names[j]) != 0) &&\n"
+        "                (totals[mnDiagram_804A076C.sorted_names[max_idx]] <\n"
+        "                 totals[mnDiagram_804A076C.sorted_names[j]])) {\n"
+        "                max_idx = j;\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_SortNamesByKOs",
+        unit="melee/mn/mndiagram",
+        force_phys={34: 27, 44: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=40,
+    )
+
+    by_strategy = {
+        probe.payload["strategy"]: probe
+        for probe in probes
+        if "strategy" in probe.payload
+    }
+    assert {
+        "indexed-byte-init-pointer-alias",
+        "indexed-byte-condition-index-aliases",
+        "indexed-byte-totals-index-int-temps",
+    } <= set(by_strategy)
+
+    init_alias = by_strategy["indexed-byte-init-pointer-alias"]
+    assert init_alias.mutator_key == "steer_indexed_byte_init_pointer_alias"
+    assert "    u8* dst_iter_init_probe;\n" in init_alias.candidate_text
+    assert "    dst_iter_init_probe = dst;\n" in init_alias.candidate_text
+    assert "    dst_iter = dst_iter_init_probe;\n" in init_alias.candidate_text
+
+    index_aliases = by_strategy["indexed-byte-condition-index-aliases"]
+    assert index_aliases.mutator_key == "steer_indexed_byte_condition_index_alias"
+    assert "    int sorted_names_j_idx_probe;\n" in index_aliases.candidate_text
+    assert "    int sorted_names_max_idx_idx_probe;\n" in (
+        index_aliases.candidate_text
+    )
+    assert "        sorted_names_j_idx_probe = j;\n" in index_aliases.candidate_text
+    assert "        sorted_names_max_idx_idx_probe = max_idx;\n" in (
+        index_aliases.candidate_text
+    )
+    assert "mnDiagram_804A076C.sorted_names[sorted_names_j_idx_probe]" in (
+        index_aliases.candidate_text
+    )
+    assert "mnDiagram_804A076C.sorted_names[sorted_names_max_idx_idx_probe]" in (
+        index_aliases.candidate_text
+    )
+
+    totals_temps = by_strategy["indexed-byte-totals-index-int-temps"]
+    assert totals_temps.mutator_key == "steer_indexed_byte_totals_index_temp"
+    assert "    int sorted_names_totals_idx_probe;\n" in totals_temps.candidate_text
+    assert "    int sorted_names_totals_idx_probe_2;\n" in (
+        totals_temps.candidate_text
+    )
+    assert (
+        "        sorted_names_totals_idx_probe = "
+        "mnDiagram_804A076C.sorted_names[max_idx];\n"
+    ) in totals_temps.candidate_text
+    assert (
+        "        sorted_names_totals_idx_probe_2 = "
+        "mnDiagram_804A076C.sorted_names[j];\n"
+    ) in totals_temps.candidate_text
+    assert "totals[sorted_names_totals_idx_probe]" in totals_temps.candidate_text
+    assert "totals[sorted_names_totals_idx_probe_2]" in totals_temps.candidate_text

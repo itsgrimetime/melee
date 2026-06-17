@@ -99,6 +99,7 @@ def test_coloring_register_steering_metadata_is_executable() -> None:
         "steer_fpr_product_argument_duplicate",
         "steer_fpr_product_temp_split",
         "steer_fpr_paired_product_temp_split",
+        "steer_fpr_product_temp_plus_dependent",
         "steer_node_set_delta_coupled_split",
         "steer_node_set_delta_introduce_binding_split",
         "steer_node_set_delta_split",
@@ -122,6 +123,9 @@ def test_indexed_byte_address_temp_metadata_is_executable() -> None:
         "steer_indexed_byte_value_temp",
         "steer_indexed_byte_index_temp",
         "steer_indexed_byte_base_alias",
+        "steer_indexed_byte_init_pointer_alias",
+        "steer_indexed_byte_condition_index_alias",
+        "steer_indexed_byte_totals_index_temp",
     )
     assert family.semantic_risk == "medium"
     assert "non-struct byte-array" in family.source_region_selector

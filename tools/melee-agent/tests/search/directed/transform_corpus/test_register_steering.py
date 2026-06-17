@@ -1121,6 +1121,76 @@ def test_coloring_register_steering_emits_product_temp_split_variants() -> None:
     assert "    col_offset = col_offset_product_fpr;" in paired.candidate_text
 
 
+def test_coloring_register_steering_composes_fixed_product_temp_with_dependent_row_variants() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row, u8 col) {\n"
+        "    f32 y_offset;\n"
+        "    f32 y_spacing;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    f32 col_offset;\n"
+        "    rowf = (f32) row;\n"
+        "    col_offset = y_spacing * (f32) col;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset);\n"
+        "    HSD_JObjSetTranslateY(jobj, row_offset_adj);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=32,
+    )
+
+    by_strategy = {
+        probe.payload["strategy"]: probe
+        for probe in probes
+        if probe.mutator_key == "steer_fpr_product_temp_plus_dependent"
+    }
+    assert {
+        "fpr-product-temp-plus-dependent-recompute-first",
+        "fpr-product-temp-plus-dependent-product-reuse-temp",
+        "fpr-product-temp-plus-dependent-local-temp-split",
+    } <= set(by_strategy)
+
+    reuse_temp = by_strategy["fpr-product-temp-plus-dependent-product-reuse-temp"]
+    assert reuse_temp.payload["fixed_product_local"] == "col_offset"
+    assert reuse_temp.payload["product_local"] == "row_offset"
+    assert reuse_temp.payload["dependent_local"] == "row_offset_adj"
+    assert "    f32 col_offset_product_fpr;\n" in reuse_temp.candidate_text
+    assert "    f32 row_offset_product_reuse_fpr;\n" in reuse_temp.candidate_text
+    assert "    col_offset_product_fpr = y_spacing * (f32) col;\n" in (
+        reuse_temp.candidate_text
+    )
+    assert "    col_offset = col_offset_product_fpr;\n" in reuse_temp.candidate_text
+    assert "    row_offset_product_reuse_fpr = y_offset * rowf;\n" in (
+        reuse_temp.candidate_text
+    )
+    assert "    row_offset = row_offset_product_reuse_fpr;\n" in (
+        reuse_temp.candidate_text
+    )
+    assert "    row_offset_adj = row_offset_product_reuse_fpr - 0.4f;" in (
+        reuse_temp.candidate_text
+    )
+
+    local_split = by_strategy["fpr-product-temp-plus-dependent-local-temp-split"]
+    assert "    f32 row_offset_lifetime_fpr;\n" in local_split.candidate_text
+    assert "    row_offset_lifetime_fpr = row_offset;\n" in (
+        local_split.candidate_text
+    )
+    assert "    row_offset_adj = row_offset_lifetime_fpr - 0.4f;" in (
+        local_split.candidate_text
+    )
+
+
 @pytest.mark.parametrize(
     ("case", "body"),
     (

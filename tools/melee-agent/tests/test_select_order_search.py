@@ -1227,6 +1227,48 @@ def test_select_order_search_force_phys_transform_probes_keep_priority_over_wind
     ]
 
 
+def test_debug_cli_transform_corpus_probes_resolve_function_aliases(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_aliases(function: str, melee_root: pathlib.Path) -> tuple[str, ...]:
+        captured["alias_function"] = function
+        captured["alias_root"] = melee_root
+        return ("fn_80000000",)
+
+    def fake_generate(source_text: str, **kwargs) -> tuple[object, ...]:
+        captured["source_text"] = source_text
+        captured["function_aliases"] = kwargs["function_aliases"]
+        captured["force_phys"] = kwargs["force_phys"]
+        return ()
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.function_pcdump_aliases",
+        fake_aliases,
+    )
+    monkeypatch.setattr(
+        "src.search.directed.transform_corpus.generate_transform_probes",
+        fake_generate,
+    )
+
+    probes: list[LifetimeLayoutProbe] = []
+    result = debug_cli._append_transform_corpus_probes(
+        probes,
+        source_text="void fn_80000000(void) {}\n",
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        include=True,
+        families=["coloring_register_steering"],
+        force_phys="33:28",
+        max_probes=4,
+    )
+
+    assert result is probes
+    assert captured["alias_function"] == "mnDiagram_DrawCellNumber"
+    assert captured["function_aliases"] == ("fn_80000000",)
+    assert captured["force_phys"] == {33: 28}
+    assert isinstance(captured["alias_root"], pathlib.Path)
+
+
 def test_select_order_search_default_excludes_transform_corpus_probe_json(
     tmp_path: pathlib.Path,
 ) -> None:

@@ -808,6 +808,11 @@ def _steer_fpr_paired_product_temp_split(anchor: Anchor, source_text: str) -> Op
     return _replace_validated_span(anchor, source_text)
 
 
+def _steer_fpr_product_temp_plus_dependent(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Split one FPR product temp while steering another dependent product."""
+    return _replace_validated_span(anchor, source_text)
+
+
 def _steer_indexed_byte_same_line_expr(anchor: Anchor, source_text: str) -> Optional[str]:
     """Rewrite one indexed byte-array access without materializing a pointer."""
     return _replace_validated_span(anchor, source_text)
@@ -825,6 +830,21 @@ def _steer_indexed_byte_index_temp(anchor: Anchor, source_text: str) -> Optional
 
 def _steer_indexed_byte_base_alias(anchor: Anchor, source_text: str) -> Optional[str]:
     """Introduce a byte-array base alias for one indexed byte-array access."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_init_pointer_alias(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Introduce a pointer alias at an indexed-byte initialization boundary."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_condition_index_alias(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Introduce condition-scoped index aliases for indexed byte-array reads."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_totals_index_temp(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Introduce integer temps for byte values used as totals indexes."""
     return _replace_validated_span(anchor, source_text)
 
 
@@ -897,10 +917,14 @@ _DISPATCH = {
     "steer_fpr_product_argument_duplicate": _steer_fpr_product_argument_duplicate,
     "steer_fpr_product_temp_split": _steer_fpr_product_temp_split,
     "steer_fpr_paired_product_temp_split": _steer_fpr_paired_product_temp_split,
+    "steer_fpr_product_temp_plus_dependent": _steer_fpr_product_temp_plus_dependent,
     "steer_indexed_byte_same_line_expr": _steer_indexed_byte_same_line_expr,
     "steer_indexed_byte_value_temp": _steer_indexed_byte_value_temp,
     "steer_indexed_byte_index_temp": _steer_indexed_byte_index_temp,
     "steer_indexed_byte_base_alias": _steer_indexed_byte_base_alias,
+    "steer_indexed_byte_init_pointer_alias": _steer_indexed_byte_init_pointer_alias,
+    "steer_indexed_byte_condition_index_alias": _steer_indexed_byte_condition_index_alias,
+    "steer_indexed_byte_totals_index_temp": _steer_indexed_byte_totals_index_temp,
     "swap_independent_adjacent_statements": _swap_independent_adjacent_statements,
     "scheduler_anchor_iv_init_before_bias": _replace_validated_span,
     "scheduler_split_float_cast_temp": _replace_validated_span,
