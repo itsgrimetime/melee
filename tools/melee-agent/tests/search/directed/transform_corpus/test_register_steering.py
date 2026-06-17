@@ -855,6 +855,59 @@ def test_coloring_register_steering_emits_source_bound_fpr_product_variants() ->
     )
 
 
+def test_coloring_register_steering_emits_product_temp_split_variants() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row, u8 col) {\n"
+        "    f32 y_offset;\n"
+        "    f32 y_spacing;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 col_offset;\n"
+        "    rowf = (f32) row;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    col_offset = y_spacing * (f32) col;\n"
+        "    HSD_JObjSetTranslateX(jobj, row_offset, col_offset);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=16,
+    )
+
+    split = next(
+        probe for probe in probes
+        if probe.mutator_key == "steer_fpr_product_temp_split"
+        and probe.payload["product_local"] == "row_offset"
+    )
+    assert split.payload["strategy"] == "fpr-product-temp-split"
+    assert split.payload["product_expr"] == "y_offset * rowf"
+    assert "    f32 row_offset_product_fpr;\n" in split.candidate_text
+    assert "    row_offset_product_fpr = y_offset * rowf;\n" in split.candidate_text
+    assert "    row_offset = row_offset_product_fpr;" in split.candidate_text
+
+    paired = next(
+        probe for probe in probes
+        if probe.mutator_key == "steer_fpr_paired_product_temp_split"
+    )
+    assert paired.payload["strategy"] == "fpr-paired-product-temp-split"
+    assert paired.payload["product_locals"] == ("row_offset", "col_offset")
+    assert "    f32 row_offset_product_fpr;\n" in paired.candidate_text
+    assert "    f32 col_offset_product_fpr;\n" in paired.candidate_text
+    assert "    row_offset_product_fpr = y_offset * rowf;\n" in paired.candidate_text
+    assert "    col_offset_product_fpr = y_spacing * (f32) col;\n" in (
+        paired.candidate_text
+    )
+    assert "    row_offset = row_offset_product_fpr;\n" in paired.candidate_text
+    assert "    col_offset = col_offset_product_fpr;" in paired.candidate_text
+
+
 @pytest.mark.parametrize(
     ("case", "body"),
     (

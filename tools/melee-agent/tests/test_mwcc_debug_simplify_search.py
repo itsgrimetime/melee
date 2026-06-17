@@ -596,6 +596,70 @@ def test_search_respects_max_candidates(
     assert result.exact_match is None
 
 
+def test_search_does_not_enter_later_sources_after_max_candidates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    baseline = baseline_signature(
+        _events_for_class(simplify_order=[32, 42]), class_id=0,
+    )
+    _stub_compiles(monkeypatch, pcdumps_by_text={"ONLY": _pcdump_for([32, 42])})
+    entered_late_source = {"called": False}
+
+    def first_source(_ctx):
+        yield SourceVariant(
+            text="ONLY",
+            provenance="first",
+            parent_baseline=ctx.source_path,
+        )
+
+    def late_source(_ctx):
+        entered_late_source["called"] = True
+        raise AssertionError("late source must not run after max_candidates")
+        yield
+
+    result = search(
+        sources=[first_source, late_source],
+        ctx=ctx,
+        baseline=baseline,
+        target=(42, 32),
+        max_candidates=1,
+        timeout=10,
+    )
+
+    assert result.total_compiles == 1
+    assert entered_late_source["called"] is False
+
+
+def test_search_does_not_pull_same_source_after_max_candidates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    baseline = baseline_signature(
+        _events_for_class(simplify_order=[32, 42]), class_id=0,
+    )
+    _stub_compiles(monkeypatch, pcdumps_by_text={"ONLY": _pcdump_for([32, 42])})
+
+    def source(_ctx):
+        yield SourceVariant(
+            text="ONLY",
+            provenance="first",
+            parent_baseline=ctx.source_path,
+        )
+        raise AssertionError("source must not be pulled after max_candidates")
+
+    result = search(
+        sources=[source],
+        ctx=ctx,
+        baseline=baseline,
+        target=(42, 32),
+        max_candidates=1,
+        timeout=10,
+    )
+
+    assert result.total_compiles == 1
+
+
 def test_search_ranks_progress_candidates_by_prefix_length(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

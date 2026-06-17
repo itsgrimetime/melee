@@ -788,6 +788,16 @@ def _steer_fpr_product_argument_duplicate(anchor: Anchor, source_text: str) -> O
     return _replace_validated_span(anchor, source_text)
 
 
+def _steer_fpr_product_temp_split(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Split one FPR product assignment through an explicit product temp."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_fpr_paired_product_temp_split(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Split paired FPR product assignments through explicit product temps."""
+    return _replace_validated_span(anchor, source_text)
+
+
 def _steer_indexed_byte_same_line_expr(anchor: Anchor, source_text: str) -> Optional[str]:
     """Rewrite one indexed byte-array access without materializing a pointer."""
     return _replace_validated_span(anchor, source_text)
@@ -795,6 +805,11 @@ def _steer_indexed_byte_same_line_expr(anchor: Anchor, source_text: str) -> Opti
 
 def _steer_indexed_byte_value_temp(anchor: Anchor, source_text: str) -> Optional[str]:
     """Introduce a byte value temp for one indexed byte-array access."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_index_temp(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Introduce an integer index temp for one indexed byte-array access."""
     return _replace_validated_span(anchor, source_text)
 
 
@@ -863,8 +878,11 @@ _DISPATCH = {
     "steer_fpr_product_assignment_order": _steer_fpr_product_assignment_order,
     "steer_fpr_product_cast_temp_split": _steer_fpr_product_cast_temp_split,
     "steer_fpr_product_argument_duplicate": _steer_fpr_product_argument_duplicate,
+    "steer_fpr_product_temp_split": _steer_fpr_product_temp_split,
+    "steer_fpr_paired_product_temp_split": _steer_fpr_paired_product_temp_split,
     "steer_indexed_byte_same_line_expr": _steer_indexed_byte_same_line_expr,
     "steer_indexed_byte_value_temp": _steer_indexed_byte_value_temp,
+    "steer_indexed_byte_index_temp": _steer_indexed_byte_index_temp,
     "swap_independent_adjacent_statements": _swap_independent_adjacent_statements,
     "scheduler_anchor_iv_init_before_bias": _replace_validated_span,
     "scheduler_split_float_cast_temp": _replace_validated_span,

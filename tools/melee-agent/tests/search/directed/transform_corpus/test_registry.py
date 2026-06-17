@@ -95,6 +95,8 @@ def test_coloring_register_steering_metadata_is_executable() -> None:
         "steer_fpr_product_assignment_order",
         "steer_fpr_product_cast_temp_split",
         "steer_fpr_product_argument_duplicate",
+        "steer_fpr_product_temp_split",
+        "steer_fpr_paired_product_temp_split",
         "steer_node_set_delta_coupled_split",
         "steer_node_set_delta_introduce_binding_split",
         "steer_node_set_delta_split",
@@ -116,6 +118,7 @@ def test_indexed_byte_address_temp_metadata_is_executable() -> None:
     assert family.mutator_keys == (
         "steer_indexed_byte_same_line_expr",
         "steer_indexed_byte_value_temp",
+        "steer_indexed_byte_index_temp",
     )
     assert family.semantic_risk == "medium"
     assert "non-struct byte-array" in family.source_region_selector

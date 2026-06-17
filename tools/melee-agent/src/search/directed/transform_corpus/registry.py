@@ -65,6 +65,8 @@ DEFAULT_TRANSFORM_FAMILIES: tuple[TransformFamily, ...] = (
             "steer_fpr_product_assignment_order",
             "steer_fpr_product_cast_temp_split",
             "steer_fpr_product_argument_duplicate",
+            "steer_fpr_product_temp_split",
+            "steer_fpr_paired_product_temp_split",
             "steer_node_set_delta_coupled_split",
             "steer_node_set_delta_introduce_binding_split",
             "steer_node_set_delta_split",
@@ -90,6 +92,7 @@ DEFAULT_TRANSFORM_FAMILIES: tuple[TransformFamily, ...] = (
         mutator_keys=(
             "steer_indexed_byte_same_line_expr",
             "steer_indexed_byte_value_temp",
+            "steer_indexed_byte_index_temp",
         ),
         semantic_risk="medium",
         source_region_selector=(

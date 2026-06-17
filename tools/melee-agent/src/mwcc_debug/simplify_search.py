@@ -704,10 +704,13 @@ def search(
     seen_variant_texts: set[str] = set()
 
     for source in sources:
-        if exact_match is not None:
+        if exact_match is not None or compiled >= max_candidates:
             break
-        for variant in source(ctx):
-            if exact_match is not None:
+        variants = iter(source(ctx))
+        while exact_match is None and compiled < max_candidates:
+            try:
+                variant = next(variants)
+            except StopIteration:
                 break
             # Dedup BEFORE incrementing `compiled` so duplicate texts don't
             # consume `max_candidates` slots — otherwise a noisy adapter
@@ -715,8 +718,6 @@ def search(
             if variant.text in seen_variant_texts:
                 continue
             seen_variant_texts.add(variant.text)
-            if compiled >= max_candidates:
-                break
             compiled += 1
             if progress_callback is not None:
                 progress_callback(compiled, max_candidates, variant.provenance)

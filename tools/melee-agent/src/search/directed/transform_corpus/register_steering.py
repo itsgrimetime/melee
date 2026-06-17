@@ -1489,6 +1489,140 @@ def _iter_fpr_product_argument_duplicate_anchors(
     return anchors
 
 
+def _fpr_product_decl_type(
+    body_text: str,
+    product: _RegisterSteeringFprProduct,
+) -> str | None:
+    decl = _single_fpr_decl_for_name(body_text, product.lhs)
+    return decl.type_name if decl is not None else None
+
+
+def _fpr_product_temp_name(
+    searchable: str,
+    product: _RegisterSteeringFprProduct,
+) -> str | None:
+    return _fresh_register_steering_name(searchable, f"{product.lhs}_product")
+
+
+def _insert_after_top_level_fpr_decls(
+    body_text: str,
+    before_offset: int,
+) -> int | None:
+    decl_candidates = [
+        decl for decl in _all_top_level_fpr_decls(body_text)
+        if decl.end_with_newline <= before_offset
+    ]
+    if not decl_candidates:
+        return None
+    return max(decl.end_with_newline for decl in decl_candidates)
+
+
+def _iter_fpr_product_temp_split_anchors(
+    body_text: str,
+    products: tuple[_RegisterSteeringFprProduct, ...],
+) -> list[Anchor]:
+    searchable = _blank_literals_and_comments(body_text)
+    anchors: list[Anchor] = []
+    for product in products:
+        decl_type = _fpr_product_decl_type(body_text, product)
+        if decl_type is None:
+            continue
+        insert_after = _insert_after_top_level_fpr_decls(body_text, product.start)
+        if insert_after is None:
+            continue
+        temp_name = _fpr_product_temp_name(searchable, product)
+        if temp_name is None:
+            continue
+        span_text = body_text[insert_after:product.end]
+        if body_text.count(span_text) != 1:
+            continue
+        prefix = body_text[insert_after:product.start]
+        replacement_text = (
+            f"{product.indent}{decl_type} {temp_name};\n"
+            f"{prefix}"
+            f"{product.indent}{temp_name} = {product.product_expr};\n"
+            f"{product.indent}{product.lhs} = {temp_name};"
+        )
+        anchors.append(
+            Anchor(
+                mutator_key="steer_fpr_product_temp_split",
+                span=(insert_after, product.end),
+                payload={
+                    "span_text": span_text,
+                    "replacement_text": replacement_text,
+                    "strategy": "fpr-product-temp-split",
+                    "product_local": product.lhs,
+                    "product_expr": product.product_expr,
+                    "temp_local": temp_name,
+                },
+            )
+        )
+    return anchors
+
+
+def _iter_fpr_paired_product_temp_split_anchors(
+    body_text: str,
+    products: tuple[_RegisterSteeringFprProduct, ...],
+) -> list[Anchor]:
+    searchable = _blank_literals_and_comments(body_text)
+    anchors: list[Anchor] = []
+    for index, first in enumerate(products):
+        for second in products[index + 1:]:
+            if first.indent != second.indent or second.start <= first.end:
+                continue
+            first_type = _fpr_product_decl_type(body_text, first)
+            second_type = _fpr_product_decl_type(body_text, second)
+            if first_type is None or second_type is None:
+                continue
+            first_temp = _fpr_product_temp_name(searchable, first)
+            if first_temp is None:
+                continue
+            searchable_with_first = searchable + f"\n{first_temp}\n"
+            second_temp = _fpr_product_temp_name(searchable_with_first, second)
+            if second_temp is None or second_temp == first_temp:
+                continue
+            insert_after = _insert_after_top_level_fpr_decls(
+                body_text,
+                first.start,
+            )
+            if insert_after is None:
+                continue
+            span_text = body_text[insert_after:second.end]
+            if body_text.count(span_text) != 1:
+                continue
+            prefix = body_text[insert_after:first.start]
+            between = body_text[first.end:second.start]
+            replacement_text = (
+                f"{first.indent}{first_type} {first_temp};\n"
+                f"{first.indent}{second_type} {second_temp};\n"
+                f"{prefix}"
+                f"{first.indent}{first_temp} = {first.product_expr};\n"
+                f"{first.indent}{first.lhs} = {first_temp};"
+                f"{between}"
+                f"{second.indent}{second_temp} = {second.product_expr};\n"
+                f"{second.indent}{second.lhs} = {second_temp};"
+            )
+            anchors.append(
+                Anchor(
+                    mutator_key="steer_fpr_paired_product_temp_split",
+                    span=(insert_after, second.end),
+                    payload={
+                        "span_text": span_text,
+                        "replacement_text": replacement_text,
+                        "strategy": "fpr-paired-product-temp-split",
+                        "product_locals": (first.lhs, second.lhs),
+                        "product_exprs": (
+                            first.product_expr,
+                            second.product_expr,
+                        ),
+                        "temp_locals": (first_temp, second_temp),
+                    },
+                )
+            )
+            break
+    return anchors
+
+
 def _iter_fpr_product_steering_anchors(
     body_text: str,
     function_header_text: str = "",
@@ -1497,6 +1631,8 @@ def _iter_fpr_product_steering_anchors(
     if not products:
         return []
     return [
+        *_iter_fpr_product_temp_split_anchors(body_text, products),
+        *_iter_fpr_paired_product_temp_split_anchors(body_text, products),
         *_iter_fpr_product_order_anchors(body_text, products),
         *_iter_fpr_product_cast_split_anchors(body_text, products),
         *_iter_fpr_product_argument_duplicate_anchors(body_text, products),

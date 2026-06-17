@@ -93,6 +93,10 @@ def _fresh_indexed_expr_temp(searchable: str, base: str) -> str | None:
     return _fresh_byte_temp(searchable, _base_leaf_name(base))
 
 
+def _fresh_index_temp(searchable: str, base: str) -> str | None:
+    return _fresh_byte_temp(searchable, f"{_base_leaf_name(base)}_idx")
+
+
 def _index_is_parenthesized(index: str) -> bool:
     stripped = index.strip()
     return stripped.startswith("(") and stripped.endswith(")")
@@ -108,6 +112,18 @@ def _safe_indexed_expr(base: str, index_expr: str, line: str) -> bool:
     if "[" in index_expr or "]" in index_expr:
         return False
     return re.search(r"&\s*" + re.escape(base) + r"\s*\[", line) is None
+
+
+def _safe_index_temp_expr(index_expr: str) -> bool:
+    if "[" in index_expr or "]" in index_expr:
+        return False
+    if any(token in index_expr for token in ("++", "--", "?", ":", ",")):
+        return False
+    if re.search(r"(?<![=!<>])=(?!=)", index_expr):
+        return False
+    if re.search(r"\b[A-Za-z_]\w*\s*\(", index_expr):
+        return False
+    return bool(re.search(r"\b[A-Za-z_]\w*\b|\d", index_expr))
 
 
 def _line_can_host_value_temp(line: str) -> bool:
@@ -217,6 +233,36 @@ def _iter_general_indexed_byte_expr_anchors(
                     "temp_local": temp_name,
                 },
             )
+            if not _safe_index_temp_expr(index_expr):
+                continue
+            index_temp_name = _fresh_index_temp(searchable, base)
+            if index_temp_name is None:
+                continue
+            replacement_line = line.replace(
+                original_indexed,
+                _indexed_expr(base, index_temp_name),
+                1,
+            )
+            if replacement_line == line:
+                continue
+            yield Anchor(
+                mutator_key="steer_indexed_byte_index_temp",
+                span=(body_start, body_start + end),
+                payload={
+                    "span_text": span_text,
+                    "replacement_text": (
+                        f"    int {index_temp_name};\n"
+                        f"{body_text[:start]}"
+                        f"{indent}{index_temp_name} = {index_expr};\n"
+                        f"{replacement_line}"
+                    ),
+                    "strategy": "indexed-byte-index-temp",
+                    "array_base": base,
+                    "index_expr": index_expr,
+                    "target_local": _base_leaf_name(base),
+                    "temp_local": index_temp_name,
+                },
+            )
 
 
 def _iter_indexed_byte_address_temp_anchors(source_text: str, _function: str, span):
@@ -284,7 +330,6 @@ def _iter_indexed_byte_address_temp_anchors(source_text: str, _function: str, sp
                         "target_local": lhs,
                     },
                 )
-
         comma_line = line.replace(
             original_indexed,
             _indexed_expr(base, f"(0, {index_expr})"),
@@ -331,5 +376,35 @@ def _iter_indexed_byte_address_temp_anchors(source_text: str, _function: str, sp
                 "index_expr": index_expr,
                 "target_local": lhs,
                 "temp_local": temp_name,
+            },
+        )
+
+        if not _safe_index_temp_expr(index_expr):
+            continue
+        index_temp_name = _fresh_index_temp(searchable, base)
+        if index_temp_name is None:
+            continue
+        replacement_indexed = _indexed_expr(base, index_temp_name)
+        span_text = body_text[decl_end_with_newline:end]
+        if body_text.count(span_text) != 1:
+            continue
+        prefix = body_text[decl_end_with_newline:start]
+        replacement_text = (
+            f"{match.group('indent')}int {index_temp_name};\n"
+            f"{prefix}"
+            f"{match.group('indent')}{index_temp_name} = {index_expr};\n"
+            f"{match.group('indent')}{lhs} = {replacement_indexed};"
+        )
+        yield Anchor(
+            mutator_key="steer_indexed_byte_index_temp",
+            span=(body_start + decl_end_with_newline, body_start + end),
+            payload={
+                "span_text": span_text,
+                "replacement_text": replacement_text,
+                "strategy": "indexed-byte-index-temp",
+                "array_base": base,
+                "index_expr": index_expr,
+                "target_local": lhs,
+                "temp_local": index_temp_name,
             },
         )
