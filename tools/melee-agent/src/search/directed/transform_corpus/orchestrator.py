@@ -11,6 +11,7 @@ from src.search.directed.transform_corpus.contract_signature import _iter_unused
 from src.search.directed.transform_corpus.float_literal import _iter_global_float_literal_anchors
 from src.search.directed.transform_corpus.fp_reassoc import _iter_fp_subtraction_reassociation_anchors
 from src.search.directed.transform_corpus.helper_extract import _iter_helper_shape_anchors
+from src.search.directed.transform_corpus.indexed_byte_address import _iter_indexed_byte_address_temp_anchors
 from src.search.directed.transform_corpus.local_reuse import _iter_same_type_local_lifetime_reuse_anchors
 from src.search.directed.transform_corpus.models import TransformExperimentPlan, TransformProbe
 from src.search.directed.transform_corpus.named_zero_local import _iter_named_zero_local_anchors
@@ -44,6 +45,9 @@ _DIRECT_REGISTER_STEERING_KEYS = frozenset({
     "steer_split_reused_loop_counter",
     "steer_widen_byte_local_type",
     "steer_fpr_dependent_product_recompute",
+    "steer_fpr_product_assignment_order",
+    "steer_fpr_product_cast_temp_split",
+    "steer_fpr_product_argument_duplicate",
 })
 
 
@@ -176,6 +180,7 @@ def _iter_full_source_anchors(source_text: str, *, function: str):
         function,
         span,
     )
+    yield from _iter_indexed_byte_address_temp_anchors(source_text, function, span)
     yield from _iter_independent_statement_order_anchors(source_text, span)
     yield from _iter_ranked_cursor_iv_unification_anchors(source_text, function, span)
 

@@ -797,6 +797,64 @@ def test_select_order_search_auto_includes_fpr_expression_transform_probes(
     )
 
 
+def test_select_order_search_auto_includes_indexed_byte_transform_probes(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "gpr-baseline.txt"
+    source = tmp_path / "demo.c"
+    baseline.write_text(BASELINE)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef unsigned char u8;
+            struct MnDiagramData { u8 sorted_names[25]; };
+            extern struct MnDiagramData mnDiagram_804A076C;
+            void fn_80000000(int j) {
+                u8 candidate;
+                candidate = mnDiagram_804A076C.sorted_names[j + 1];
+                use(candidate);
+            }
+            """
+        )
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--class",
+            "0",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--transform-force-phys",
+            "34:27,44:25",
+            "--no-compile-probes",
+            "--max-probes",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["auto_transform_families"] == [
+        "indexed_byte_address_temp_steering"
+    ]
+    assert payload["probes"][0]["operator"] == (
+        "transform-corpus:indexed_byte_address_temp_steering"
+    )
+    assert payload["probes"][0]["mutator_key"] == (
+        "steer_indexed_byte_same_line_expr"
+    )
+
+
 def test_select_order_signal_restore_handler_restores_active_source(
     tmp_path: pathlib.Path,
 ) -> None:

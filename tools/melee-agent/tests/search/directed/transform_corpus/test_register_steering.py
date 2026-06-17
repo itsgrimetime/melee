@@ -796,6 +796,65 @@ def test_coloring_register_steering_recomputes_rowf_product_same_order_when_budg
     ) in recompute[1].candidate_text
 
 
+def test_coloring_register_steering_emits_source_bound_fpr_product_variants() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row, u8 col) {\n"
+        "    f32 y_offset;\n"
+        "    f32 y_spacing;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    f32 col_offset;\n"
+        "    rowf = (f32) row;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    col_offset = y_spacing * (f32) col;\n"
+        "    HSD_JObjSetTranslateX(jobj, row_offset, col_offset);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=12,
+    )
+
+    by_key = {probe.mutator_key: probe for probe in probes}
+    assert "steer_fpr_product_assignment_order" in by_key
+    assert "steer_fpr_product_cast_temp_split" in by_key
+    assert "steer_fpr_product_argument_duplicate" in by_key
+
+    assignment_order = by_key["steer_fpr_product_assignment_order"]
+    assert assignment_order.payload["strategy"] == "fpr-product-assignment-order"
+    assert (
+        "    col_offset = y_spacing * (f32) col;\n"
+        "    row_offset = y_offset * rowf;"
+    ) in assignment_order.candidate_text
+
+    cast_split = by_key["steer_fpr_product_cast_temp_split"]
+    assert cast_split.payload["product_local"] == "col_offset"
+    assert "    f32 col_fpr;\n" in cast_split.candidate_text
+    assert "    col_fpr = (f32) col;\n" in cast_split.candidate_text
+    assert "    col_offset = y_spacing * col_fpr;" in cast_split.candidate_text
+
+    duplicate_arg = next(
+        probe
+        for probe in probes
+        if probe.mutator_key == "steer_fpr_product_argument_duplicate"
+        and probe.payload["product_local"] == "row_offset"
+    )
+    assert duplicate_arg.payload["product_local"] == "row_offset"
+    assert (
+        "HSD_JObjSetTranslateX(jobj, y_offset * rowf, col_offset);"
+        in duplicate_arg.candidate_text
+    )
+
+
 @pytest.mark.parametrize(
     ("case", "body"),
     (

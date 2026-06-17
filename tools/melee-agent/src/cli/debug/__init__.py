@@ -27068,6 +27068,10 @@ _FPR_SELECT_ORDER_TRANSFORM_FAMILIES = (
     "coloring_register_steering",
 )
 
+_GPR_SELECT_ORDER_TRANSFORM_FAMILIES = (
+    "indexed_byte_address_temp_steering",
+)
+
 
 def _probe_requires_full_unit_source(probe: Any) -> bool:
     if isinstance(probe, Mapping):
@@ -28042,6 +28046,8 @@ def debug_select_order_search_cmd(
     auto_transform_families: tuple[str, ...] = ()
     if class_id == 1 and transform_force_phys and not transform_family:
         auto_transform_families = _FPR_SELECT_ORDER_TRANSFORM_FAMILIES
+    elif class_id == 0 and transform_force_phys and not transform_family:
+        auto_transform_families = _GPR_SELECT_ORDER_TRANSFORM_FAMILIES
 
     probes: list[Any] = []
     if source_text and auto_transform_families:

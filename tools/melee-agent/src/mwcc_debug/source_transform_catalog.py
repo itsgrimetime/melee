@@ -174,6 +174,11 @@ DIRECTED_MUTATOR_KEYS: tuple[str, ...] = (
     "steer_split_reused_loop_counter",
     "steer_widen_byte_local_type",
     "steer_fpr_dependent_product_recompute",
+    "steer_fpr_product_assignment_order",
+    "steer_fpr_product_cast_temp_split",
+    "steer_fpr_product_argument_duplicate",
+    "steer_indexed_byte_same_line_expr",
+    "steer_indexed_byte_value_temp",
     "steer_node_set_delta_coupled_split",
     "steer_node_set_delta_introduce_binding_split",
     "steer_node_set_delta_split",
@@ -375,6 +380,9 @@ SOURCE_TRANSFORM_CATALOG: tuple[SourceTransformCatalogEntry, ...] = (
             "coloring_register_steering probes so FPR expression select-order "
             "search reaches steer_fpr_dependent_product_recompute without an "
             "extra --include-transform-corpus incantation.",
+            "Class-0 runs with --transform-force-phys automatically seed "
+            "indexed_byte_address_temp_steering probes so implicit indexed "
+            "byte-array address temps get source candidates before pointer walks.",
         ),
     ),
     SourceTransformCatalogEntry(
@@ -418,7 +426,8 @@ SOURCE_TRANSFORM_CATALOG: tuple[SourceTransformCatalogEntry, ...] = (
             "debug mutate lifetime-layout, debug coalesce-search, and debug select-order-search append transform-corpus probes only when --include-transform-corpus or --transform-family opts in.",
             "debug mutate frame-transform-search can append transform-corpus probes with the same opt-in flags and defaults to frame-relevant mined families when no family filter is supplied.",
             "helper_shape is backed by guarded scalar helper inline/extract probes.",
-            "coloring_register_steering aliases guarded declaration/lifetime edits and FPR product recompute probes for mndiagram force-phys register-coloring residuals.",
+            "coloring_register_steering aliases guarded declaration/lifetime edits plus FPR product recompute/order/cast/argument probes for mndiagram force-phys register-coloring residuals.",
+            "indexed_byte_address_temp_steering is backed by same-line indexed byte-array spellings and byte value-temp probes that avoid source-visible element pointers.",
             "node_set_delta materialized probes wrap guarded node-set-split CandidatePatch sources and are transform-corpus probe keys, not standalone apply_mutator dispatch keys.",
             "same_type_local_lifetime_reuse is backed by reuse_same_type_local_lifetime for simple non-overlapping same-type locals.",
             "independent_statement_order is backed by dependency-proven adjacent same-block assignment swaps.",

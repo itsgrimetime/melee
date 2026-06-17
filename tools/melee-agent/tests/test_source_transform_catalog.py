@@ -32,8 +32,8 @@ def test_catalog_has_expected_headline_counts() -> None:
     summary = catalog_summary()
 
     assert summary["surfaces"] == 13
-    assert summary["techniques"] == 168
-    assert summary["concrete_forms"] == 115
+    assert summary["techniques"] == 169
+    assert summary["concrete_forms"] == 120
 
 
 def test_control_flow_catalog_tracks_default_operator_tuple() -> None:
@@ -107,8 +107,8 @@ def test_directed_catalog_tracks_dispatch_and_families() -> None:
     assert set(DIRECTED_MUTATOR_KEYS) == dispatch_keys | materialized_probe_keys
     assert materialized_probe_keys.isdisjoint(dispatch_keys)
     assert set(entry.concrete_forms) == set(DIRECTED_MUTATOR_KEYS)
-    assert entry.technique_count == 40
-    assert entry.concrete_form_count == 62
+    assert entry.technique_count == 41
+    assert entry.concrete_form_count == 67
     assert "coloring_register_steering" in entry.techniques
     assert "same_type_local_lifetime_reuse" in entry.techniques
     assert "independent_statement_order" in entry.techniques

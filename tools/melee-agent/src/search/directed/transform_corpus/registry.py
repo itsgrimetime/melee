@@ -62,6 +62,9 @@ DEFAULT_TRANSFORM_FAMILIES: tuple[TransformFamily, ...] = (
             "steer_split_reused_loop_counter",
             "steer_widen_byte_local_type",
             "steer_fpr_dependent_product_recompute",
+            "steer_fpr_product_assignment_order",
+            "steer_fpr_product_cast_temp_split",
+            "steer_fpr_product_argument_duplicate",
             "steer_node_set_delta_coupled_split",
             "steer_node_set_delta_introduce_binding_split",
             "steer_node_set_delta_split",
@@ -80,6 +83,28 @@ DEFAULT_TRANSFORM_FAMILIES: tuple[TransformFamily, ...] = (
             "split, or aliased source edits as register-steering probes"
         ),
         keywords=("coloring", "register", "force-phys", "decl", "loop", "lifetime"),
+    ),
+    TransformFamily(
+        family_id="indexed_byte_address_temp_steering",
+        label="indexed byte address-temp steering",
+        mutator_keys=(
+            "steer_indexed_byte_same_line_expr",
+            "steer_indexed_byte_value_temp",
+        ),
+        semantic_risk="medium",
+        source_region_selector=(
+            "non-struct byte-array indexed loads whose base+index address temp "
+            "is compiler-created"
+        ),
+        expected_compiler_effect=(
+            "steer implicit base+index address temps without materializing "
+            "source-visible element pointers"
+        ),
+        generated_probe_form=(
+            "emit same-line indexed-expression spellings or a byte value temp "
+            "while preserving the indexed array access"
+        ),
+        keywords=("indexed", "byte", "array", "address-temp", "base", "index"),
     ),
     TransformFamily(
         family_id="ranked_cursor_iv_unification",
@@ -799,12 +824,17 @@ def plan_transform_experiments(
                     "adjacent local declaration order",
                     "local initializer and counter-width boundaries",
                     "loop-counter and same-type lifetime reuse windows",
+                    "non-struct indexed byte-array loads",
                 ),
                 target_assignments=_assignment_labels(force_phys),
-                family_ids=("coloring_register_steering",),
+                family_ids=(
+                    "coloring_register_steering",
+                    "indexed_byte_address_temp_steering",
+                ),
                 rationale=(
-                    "Probe source-level register-coloring levers for the "
-                    "mndiagram force-phys residual class."
+                    "Probe source-level register-coloring and implicit "
+                    "indexed-byte address-temp levers for the mndiagram "
+                    "force-phys residual class."
                 ),
             )
             clusters = (ranked_cluster, coloring_cluster)
@@ -819,12 +849,17 @@ def plan_transform_experiments(
                     "adjacent local declaration order",
                     "local initializer and counter-width boundaries",
                     "loop-counter and same-type lifetime reuse windows",
+                    "non-struct indexed byte-array loads",
                 ),
                 target_assignments=_assignment_labels(force_phys),
-                family_ids=("coloring_register_steering",),
+                family_ids=(
+                    "coloring_register_steering",
+                    "indexed_byte_address_temp_steering",
+                ),
                 rationale=(
-                    "Probe source-level register-coloring levers for the "
-                    "mndiagram force-phys residual class."
+                    "Probe source-level register-coloring and implicit "
+                    "indexed-byte address-temp levers for the mndiagram "
+                    "force-phys residual class."
                 ),
             ),
         )
@@ -863,6 +898,7 @@ def plan_transform_experiments(
                     "fp_subtraction_operand_reassociation",
                     "data_table_indirection_shape",
                     "raw_index_struct_field_shape",
+                    "indexed_byte_address_temp_steering",
                     "zero_compare_logical_not",
                     "abs_macro_expression_fold",
                     "minmax_macro_ternary_shape",

@@ -33,6 +33,38 @@ def _run(cmd: list[str], cwd: Path | None = None) -> str:
     return p.stdout
 
 
+def _missing_tools(names: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(name for name in names if shutil.which(name) is None)
+
+
+def _require_tools(
+    names: tuple[str, ...],
+    *,
+    context: str,
+    existing_binary: Path | None = None,
+) -> None:
+    missing = _missing_tools(names)
+    if not missing:
+        return
+    install_hint = ""
+    if missing == ("cmake",):
+        install_hint = " Install with: brew install cmake."
+    elif "cmake" in missing:
+        install_hint = (
+            " Install missing Homebrew tools first, for example: "
+            "brew install cmake."
+        )
+    binary_hint = (
+        f" Existing retrowin32 binary not found at {existing_binary}."
+        if existing_binary is not None
+        else ""
+    )
+    raise SetupError(
+        f"{context} requires missing tool(s): {', '.join(missing)}."
+        f"{binary_hint}{install_hint}"
+    )
+
+
 def _clone_pinned(repo: str, branch: str | None, pin: str, dest: Path) -> None:
     if dest.exists():
         head = _run(["git", "-C", str(dest), "rev-parse", "HEAD"]).strip()
@@ -79,11 +111,17 @@ def _ensure_in_vendor(vendor_dir: Path, *, force: bool = False) -> SetupResult:
     cad_dir = vendor_dir / "mwcc-debugger"
     if force and vendor_dir.exists():
         shutil.rmtree(vendor_dir)
+    _require_tools(("git",), context="mwcc-retro setup clone")
     _clone_pinned(RETROWIN32_REPO, RETROWIN32_BRANCH, RETROWIN32_PIN, rw_dir)
     _clone_pinned(CADMIC_REPO, None, CADMIC_PIN, cad_dir)
     binp = _retrowin32_binary(rw_dir)
     rebuilt = False
     if force or not binp.exists():
+        _require_tools(
+            ("cargo", "cmake"),
+            context="retrowin32 build",
+            existing_binary=binp,
+        )
         try:
             _run(["cargo", "build", "-p", "retrowin32", "-F",
                   "x86-unicorn", "--profile", "lto"], cwd=rw_dir)

@@ -123,6 +123,19 @@ class _RegisterSteeringDecl:
     name_span: tuple[int, int]
 
 
+@dataclass(frozen=True)
+class _RegisterSteeringFprProduct:
+    idx: int
+    start: int
+    end: int
+    line: str
+    indent: str
+    lhs: str
+    product_expr: str
+    operand_names: tuple[str, str]
+    cast_operand_names: tuple[str, ...]
+
+
 def _line_brace_delta(line: str) -> int:
     return line.count("{") - line.count("}")
 
@@ -1218,6 +1231,278 @@ def _dependent_product_replacement(
     return f"{indent}{dependent} = {const_text} {op} ({product_expr});"
 
 
+def _single_fpr_decl_for_name(
+    body_text: str,
+    name: str,
+) -> _RegisterSteeringDecl | None:
+    decls = _register_steering_decl_records(body_text)
+    if decls is None:
+        decls = _register_steering_narrow_decl_records_for(body_text, {name})
+    if decls is None:
+        return None
+    matches = [
+        decl for decl in decls
+        if decl.name == name
+        and decl.depth == 1
+        and decl.type_name in _REGISTER_STEERING_FPR_TYPES
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _all_top_level_fpr_decls(
+    body_text: str,
+) -> tuple[_RegisterSteeringDecl, ...]:
+    decls = _register_steering_decl_records(body_text)
+    if decls is None:
+        return ()
+    return tuple(
+        decl for decl in decls
+        if decl.depth == 1 and decl.type_name in _REGISTER_STEERING_FPR_TYPES
+    )
+
+
+def _iter_fpr_product_assignments(
+    body_text: str,
+    function_header_text: str,
+) -> tuple[_RegisterSteeringFprProduct, ...]:
+    if re.search(r"(?m)^[ \t]*#", body_text):
+        return ()
+    searchable = _blank_literals_and_comments(body_text)
+    records = _text_line_records_with_newline(body_text)
+    searchable_records = _text_line_records_with_newline(searchable)
+    depths = _line_depths_from_blanked_text(searchable)
+    preprocessor_depths = _preprocessor_depths_for_lines(searchable_records)
+    products: list[_RegisterSteeringFprProduct] = []
+    for idx, (start, end, _end_with_newline, line) in enumerate(searchable_records):
+        if idx >= len(records):
+            continue
+        if (depths[idx] if idx < len(depths) else 0) != 1:
+            continue
+        if preprocessor_depths[idx] != 0 or records[idx][3] != line:
+            continue
+        match = _REGISTER_STEERING_ASSIGN_RE.match(line)
+        if match is None:
+            continue
+        lhs = match.group("lhs")
+        product = _register_steering_product_expr(match.group("rhs"))
+        if product is None:
+            continue
+        product_expr, operand_names, cast_operand_names = product
+        if lhs in operand_names or _node_set_split_synthetic_name(lhs):
+            continue
+        if _single_fpr_decl_for_name(body_text, lhs) is None:
+            continue
+        if not _register_steering_product_has_fpr_operand_proof(
+            body_text,
+            function_header_text,
+            operand_names,
+            cast_operand_names,
+        ):
+            continue
+        if _counter_address_take_rejects(searchable, lhs):
+            continue
+        if body_text.count(records[idx][3]) != 1:
+            continue
+        products.append(
+            _RegisterSteeringFprProduct(
+                idx=idx,
+                start=start,
+                end=end,
+                line=records[idx][3],
+                indent=match.group("indent"),
+                lhs=lhs,
+                product_expr=product_expr,
+                operand_names=operand_names,
+                cast_operand_names=cast_operand_names,
+            )
+        )
+    return tuple(products)
+
+
+def _region_assigns_any(searchable: str, names: tuple[str, ...]) -> bool:
+    return any(
+        re.search(r"\b" + re.escape(name) + r"\b\s*(?:[-+*/%&|^]?=|<<=|>>=)", searchable)
+        for name in names
+    )
+
+
+def _fresh_register_steering_name(searchable: str, stem: str) -> str | None:
+    base = re.sub(r"\W+", "_", stem).strip("_") or "tmp"
+    for candidate in (f"{base}_fpr", *(f"{base}_fpr_{idx}" for idx in range(2, 8))):
+        if not _identifier_mentions(searchable, candidate):
+            return candidate
+    return None
+
+
+def _cast_term_for_operand(product_expr: str, operand: str) -> tuple[str, str] | None:
+    pattern = re.compile(
+        r"(?P<text>\(\s*(?P<type>float|f32|double|f64)\s*\)\s*"
+        + re.escape(operand)
+        + r"\b)"
+    )
+    match = pattern.search(product_expr)
+    if match is None:
+        return None
+    cast_type = match.group("type")
+    return match.group("text"), ("f32" if cast_type == "float" else cast_type)
+
+
+def _iter_fpr_product_order_anchors(
+    body_text: str,
+    products: tuple[_RegisterSteeringFprProduct, ...],
+) -> list[Anchor]:
+    searchable = _blank_literals_and_comments(body_text)
+    anchors: list[Anchor] = []
+    for index, first in enumerate(products):
+        for second in products[index + 1:]:
+            if second.indent != first.indent or second.start <= first.end:
+                continue
+            between = searchable[first.end:second.start]
+            if _identifier_mentions(between, second.lhs):
+                continue
+            if _region_assigns_any(between, second.operand_names):
+                continue
+            span_text = body_text[first.start:second.end]
+            if body_text.count(span_text) != 1:
+                continue
+            prefix = body_text[first.start:second.start].rstrip("\n")
+            replacement_text = f"{second.line}\n{prefix}"
+            if replacement_text == span_text:
+                continue
+            anchors.append(
+                Anchor(
+                    mutator_key="steer_fpr_product_assignment_order",
+                    span=(first.start, second.end),
+                    payload={
+                        "span_text": span_text,
+                        "replacement_text": replacement_text,
+                        "strategy": "fpr-product-assignment-order",
+                        "first_product_local": first.lhs,
+                        "moved_product_local": second.lhs,
+                    },
+                )
+            )
+            break
+    return anchors
+
+
+def _iter_fpr_product_cast_split_anchors(
+    body_text: str,
+    products: tuple[_RegisterSteeringFprProduct, ...],
+) -> list[Anchor]:
+    searchable = _blank_literals_and_comments(body_text)
+    fpr_decls = _all_top_level_fpr_decls(body_text)
+    anchors: list[Anchor] = []
+    for product in products:
+        if not product.cast_operand_names:
+            continue
+        decl_candidates = [
+            decl for decl in fpr_decls
+            if decl.end_with_newline <= product.start
+        ]
+        if not decl_candidates:
+            continue
+        insert_after = max(decl.end_with_newline for decl in decl_candidates)
+        for operand in product.cast_operand_names:
+            cast = _cast_term_for_operand(product.product_expr, operand)
+            if cast is None:
+                continue
+            cast_text, cast_type = cast
+            temp_name = _fresh_register_steering_name(searchable, operand)
+            if temp_name is None:
+                continue
+            replacement_product = product.product_expr.replace(cast_text, temp_name, 1)
+            span_text = body_text[insert_after:product.end]
+            if body_text.count(span_text) != 1:
+                continue
+            prefix = body_text[insert_after:product.start]
+            replacement_text = (
+                f"{product.indent}{cast_type} {temp_name};\n"
+                f"{prefix}"
+                f"{product.indent}{temp_name} = {cast_text};\n"
+                f"{product.indent}{product.lhs} = {replacement_product};"
+            )
+            anchors.append(
+                Anchor(
+                    mutator_key="steer_fpr_product_cast_temp_split",
+                    span=(insert_after, product.end),
+                    payload={
+                        "span_text": span_text,
+                        "replacement_text": replacement_text,
+                        "strategy": "fpr-product-cast-temp-split",
+                        "product_local": product.lhs,
+                        "cast_operand": operand,
+                        "temp_local": temp_name,
+                        "product_expr": product.product_expr,
+                    },
+                )
+            )
+            break
+    return anchors
+
+
+def _iter_fpr_product_argument_duplicate_anchors(
+    body_text: str,
+    products: tuple[_RegisterSteeringFprProduct, ...],
+) -> list[Anchor]:
+    records = _text_line_records_with_newline(body_text)
+    searchable = _blank_literals_and_comments(body_text)
+    searchable_records = _text_line_records_with_newline(searchable)
+    depths = _line_depths_from_blanked_text(searchable)
+    anchors: list[Anchor] = []
+    for product in products:
+        for idx, (start, end, _end_with_newline, search_line) in enumerate(searchable_records):
+            if start <= product.end or idx >= len(records):
+                continue
+            if (depths[idx] if idx < len(depths) else 0) != 1:
+                continue
+            line = records[idx][3]
+            stripped = search_line.strip()
+            if not re.match(r"[A-Za-z_]\w*\s*\(.*\)\s*;\s*$", stripped):
+                continue
+            if not _identifier_mentions(search_line, product.lhs):
+                continue
+            if body_text.count(line) != 1:
+                continue
+            replacement_line = re.sub(
+                r"\b" + re.escape(product.lhs) + r"\b",
+                product.product_expr,
+                line,
+                count=1,
+            )
+            if replacement_line == line:
+                continue
+            anchors.append(
+                Anchor(
+                    mutator_key="steer_fpr_product_argument_duplicate",
+                    span=(start, end),
+                    payload={
+                        "span_text": line,
+                        "replacement_text": replacement_line,
+                        "strategy": "fpr-product-argument-duplicate",
+                        "product_local": product.lhs,
+                        "product_expr": product.product_expr,
+                    },
+                )
+            )
+            break
+    return anchors
+
+
+def _iter_fpr_product_steering_anchors(
+    body_text: str,
+    function_header_text: str = "",
+) -> list[Anchor]:
+    products = _iter_fpr_product_assignments(body_text, function_header_text)
+    if not products:
+        return []
+    return [
+        *_iter_fpr_product_order_anchors(body_text, products),
+        *_iter_fpr_product_cast_split_anchors(body_text, products),
+        *_iter_fpr_product_argument_duplicate_anchors(body_text, products),
+    ]
+
+
 def _iter_fpr_dependent_product_recompute_anchors(
     body_text: str,
     function_header_text: str = "",
@@ -1327,6 +1612,10 @@ def _iter_concrete_register_steering_body_anchors(
     body_text: str,
     function_header_text: str = "",
 ):
+    product_steering = _iter_fpr_product_steering_anchors(
+        body_text,
+        function_header_text,
+    )
     recompute_product = _iter_fpr_dependent_product_recompute_anchors(
         body_text,
         function_header_text,
@@ -1337,10 +1626,12 @@ def _iter_concrete_register_steering_body_anchors(
     decls = _register_steering_decl_records(body_text)
     if decls is None:
         yield from recompute_product
+        yield from product_steering
         return
     top_decls = tuple(decl for decl in decls if decl.depth == 1)
     if _register_steering_has_duplicate_top_level_names(top_decls):
         yield from recompute_product
+        yield from product_steering
         return
     # #699: previously this bailed the WHOLE function when ANY top-level decl had
     # an unsupported type (e.g. an aggregate-by-value `Foo bar;`), suppressing the
@@ -1373,14 +1664,39 @@ def _iter_concrete_register_steering_body_anchors(
             )
         ]
 
-    yield from _interleave_anchor_groups(
+    legacy_steering = list(_interleave_anchor_groups(
         recompute_product,
         _span_clear(rotate),
         _span_clear(demote),
         _span_clear(reuse_dead),
         _span_clear(split),
         widen_byte,
-    )
+    ))
+    product_insert_after = len(legacy_steering)
+    if product_steering:
+        wanted_recompute = min(2, len(recompute_product))
+        need_rotate = bool(rotate)
+        need_demote = bool(demote)
+        seen_recompute = 0
+        seen_rotate = False
+        seen_demote = False
+        for idx, anchor in enumerate(legacy_steering):
+            if anchor.mutator_key == "steer_fpr_dependent_product_recompute":
+                seen_recompute += 1
+            elif anchor.mutator_key == "steer_rotate_local_decl_window":
+                seen_rotate = True
+            elif anchor.mutator_key == "steer_demote_local_decl_to_first_use":
+                seen_demote = True
+            if (
+                seen_recompute >= wanted_recompute
+                and (not need_rotate or seen_rotate)
+                and (not need_demote or seen_demote)
+            ):
+                product_insert_after = idx + 1
+                break
+    yield from legacy_steering[:product_insert_after]
+    yield from product_steering
+    yield from legacy_steering[product_insert_after:]
 
 
 def _next_nonempty_line(

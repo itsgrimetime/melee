@@ -773,6 +773,31 @@ def _steer_fpr_dependent_product_recompute(anchor: Anchor, source_text: str) -> 
     return _replace_validated_span(anchor, source_text)
 
 
+def _steer_fpr_product_assignment_order(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Move one independent FPR product assignment earlier in its local block."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_fpr_product_cast_temp_split(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Split a cast operand of one FPR product into an explicit local temp."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_fpr_product_argument_duplicate(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Duplicate one source-bound FPR product expression at a call argument."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_same_line_expr(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Rewrite one indexed byte-array access without materializing a pointer."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_indexed_byte_value_temp(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Introduce a byte value temp for one indexed byte-array access."""
+    return _replace_validated_span(anchor, source_text)
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -835,6 +860,11 @@ _DISPATCH = {
     "steer_split_reused_loop_counter": _steer_split_reused_loop_counter,
     "steer_widen_byte_local_type": _steer_widen_byte_local_type,
     "steer_fpr_dependent_product_recompute": _steer_fpr_dependent_product_recompute,
+    "steer_fpr_product_assignment_order": _steer_fpr_product_assignment_order,
+    "steer_fpr_product_cast_temp_split": _steer_fpr_product_cast_temp_split,
+    "steer_fpr_product_argument_duplicate": _steer_fpr_product_argument_duplicate,
+    "steer_indexed_byte_same_line_expr": _steer_indexed_byte_same_line_expr,
+    "steer_indexed_byte_value_temp": _steer_indexed_byte_value_temp,
     "swap_independent_adjacent_statements": _swap_independent_adjacent_statements,
     "scheduler_anchor_iv_init_before_bias": _replace_validated_span,
     "scheduler_split_float_cast_temp": _replace_validated_span,

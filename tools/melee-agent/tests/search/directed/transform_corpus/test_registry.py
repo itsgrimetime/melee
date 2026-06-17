@@ -32,6 +32,7 @@ def test_default_corpus_names_required_transform_families() -> None:
     assert "abs_macro_expression_fold" in family_ids
     assert "callback_cast_elision" in family_ids
     assert "zero_compare_logical_not" in family_ids
+    assert "indexed_byte_address_temp_steering" in family_ids
     assert "function_codegen_pragma_shape" in family_ids
     assert "redundant_pointer_cast_elision" in family_ids
     assert "unused_trailing_parameter" in family_ids
@@ -91,6 +92,9 @@ def test_coloring_register_steering_metadata_is_executable() -> None:
         "steer_split_reused_loop_counter",
         "steer_widen_byte_local_type",
         "steer_fpr_dependent_product_recompute",
+        "steer_fpr_product_assignment_order",
+        "steer_fpr_product_cast_temp_split",
+        "steer_fpr_product_argument_duplicate",
         "steer_node_set_delta_coupled_split",
         "steer_node_set_delta_introduce_binding_split",
         "steer_node_set_delta_split",
@@ -100,6 +104,23 @@ def test_coloring_register_steering_metadata_is_executable() -> None:
     assert "register-coloring" in family.expected_compiler_effect
     assert "record-only" not in family.generated_probe_form
     assert {"coloring", "register", "force-phys"} <= set(family.keywords)
+
+
+def test_indexed_byte_address_temp_metadata_is_executable() -> None:
+    family = next(
+        family
+        for family in DEFAULT_TRANSFORM_FAMILIES
+        if family.family_id == "indexed_byte_address_temp_steering"
+    )
+
+    assert family.mutator_keys == (
+        "steer_indexed_byte_same_line_expr",
+        "steer_indexed_byte_value_temp",
+    )
+    assert family.semantic_risk == "medium"
+    assert "non-struct byte-array" in family.source_region_selector
+    assert "implicit base+index address temps" in family.expected_compiler_effect
+    assert "record-only" not in family.generated_probe_form
 
 
 def test_independent_statement_order_metadata_is_executable() -> None:
@@ -335,9 +356,13 @@ def test_plan_transform_experiments_names_mndiagram_coloring_cluster() -> None:
     }
     cluster = plan.clusters[0]
     assert cluster.target_assignments == ("ig35->r29", "ig58->r4")
-    assert cluster.family_ids == ("coloring_register_steering",)
+    assert cluster.family_ids == (
+        "coloring_register_steering",
+        "indexed_byte_address_temp_steering",
+    )
     assert [family.family_id for family in plan.families] == [
-        "coloring_register_steering"
+        "coloring_register_steering",
+        "indexed_byte_address_temp_steering",
     ]
     assert "register-coloring" in cluster.rationale
 
@@ -365,6 +390,7 @@ def test_plan_transform_experiments_keeps_ranked_fighter_force_phys_coloring() -
 
     assert [family.family_id for family in plan.families] == [
         "coloring_register_steering",
+        "indexed_byte_address_temp_steering",
         "ranked_cursor_iv_unification",
     ]
     clusters = {cluster.cluster_id: cluster for cluster in plan.clusters}
@@ -373,7 +399,10 @@ def test_plan_transform_experiments_keeps_ranked_fighter_force_phys_coloring() -
         "mndiagram_coloring_register_steering",
     }
     coloring = clusters["mndiagram_coloring_register_steering"]
-    assert coloring.family_ids == ("coloring_register_steering",)
+    assert coloring.family_ids == (
+        "coloring_register_steering",
+        "indexed_byte_address_temp_steering",
+    )
     assert coloring.target_assignments == ("ig35->r29", "ig58->r4")
 
 
