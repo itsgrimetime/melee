@@ -249,6 +249,7 @@ def test_indexed_byte_address_temp_handles_condition_expression_reads() -> None:
         probe
         for probe in indexed_probes
         if probe.mutator_key == "steer_indexed_byte_base_alias"
+        and probe.payload["strategy"] == "indexed-byte-base-alias"
     )
     assert base_alias.payload["strategy"] == "indexed-byte-base-alias"
     assert "    u8* sorted_names_base_probe;\n" in base_alias.candidate_text
@@ -257,3 +258,52 @@ def test_indexed_byte_address_temp_handles_condition_expression_reads() -> None:
         in base_alias.candidate_text
     )
     assert "GetNameText(sorted_names_base_probe[j])" in base_alias.candidate_text
+
+
+def test_indexed_byte_address_temp_generates_consistent_condition_base_alias() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "typedef unsigned int u32;\n"
+        "struct MnDiagramData { u8 sorted_names[25]; };\n"
+        "extern struct MnDiagramData mnDiagram_804A076C;\n"
+        "char* GetNameText(int slot);\n"
+        "void mnDiagram_SortNamesByKOs(int i) {\n"
+        "    u32 totals[25];\n"
+        "    int max_idx;\n"
+        "    int j;\n"
+        "    max_idx = i;\n"
+        "    for (j = i + 1; j < 25; j++) {\n"
+        "        if ((GetNameText(mnDiagram_804A076C.sorted_names[j]) != 0) &&\n"
+        "            (totals[mnDiagram_804A076C.sorted_names[max_idx]] <\n"
+        "             totals[mnDiagram_804A076C.sorted_names[j]])) {\n"
+        "            max_idx = j;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_SortNamesByKOs",
+        unit="melee/mn/mndiagram",
+        force_phys={34: 27, 44: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=20,
+    )
+
+    base_alias = next(
+        probe
+        for probe in probes
+        if probe.payload["strategy"] == "indexed-byte-base-alias-condition-all-reads"
+    )
+    assert base_alias.mutator_key == "steer_indexed_byte_base_alias"
+    assert "    u8* sorted_names_base_probe;\n" in base_alias.candidate_text
+    assert (
+        "        sorted_names_base_probe = mnDiagram_804A076C.sorted_names;\n"
+        in base_alias.candidate_text
+    )
+    assert "GetNameText(sorted_names_base_probe[j])" in base_alias.candidate_text
+    assert "totals[sorted_names_base_probe[max_idx]]" in base_alias.candidate_text
+    assert "totals[sorted_names_base_probe[j]]" in base_alias.candidate_text
+    assert "GetNameText(mnDiagram_804A076C.sorted_names" not in base_alias.candidate_text
+    assert "totals[mnDiagram_804A076C.sorted_names" not in base_alias.candidate_text

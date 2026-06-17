@@ -186,6 +186,80 @@ def test_search_integration_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert "No variants made progress" in result.stdout
 
 
+def test_search_integration_accepts_baseline_pcdump_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    src_dir = melee_root / "src" / "melee" / "mn"
+    src_dir.mkdir(parents=True)
+    src_path = src_dir / "mndiagram.c"
+    src_path.write_text(
+        "void mnDiagram_DrawCellNumber(void) {\n"
+        "    int a;\n"
+        "    int b;\n"
+        "    a = b + 1;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    report = melee_root / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        "units": [
+            {
+                "name": "main/melee/mn/mndiagram",
+                "functions": [
+                    {
+                        "name": "mnDiagram_DrawCellNumber",
+                        "metadata": {"virtual_address": "0x80241E78"},
+                    },
+                ],
+            },
+        ],
+    }), encoding="utf-8")
+
+    fake_pcdump = (
+        "Starting function mnDiagram_80241E78\n"
+        "COLORGRAPH DECISIONS (class=0, result=1, n_nodes=2)\n"
+        "iter ig_idx assigned degree n_interferers flags\n"
+        "  0  32  r30  0  0  0x0\n"
+        "  1  33  r30  0  0  0x0\n"
+        "[COALESCE] enter class=0 n_virtuals=40\n"
+        "[COALESCE] exit class=0 n_virtuals=40 distinct_roots=40 forced=0\n"
+        "SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=40)\n"
+        "iter ig_idx degree array_size flags\n"
+        "  0  32  1  1  0x0\n"
+        "  1  33  1  1  0x0\n"
+    )
+
+    def fake_compile(diff_input, *, function, melee_root, timeout):
+        assert function == "mnDiagram_DrawCellNumber"
+        return fake_pcdump
+
+    from src.mwcc_debug import diff_capture, simplify_search
+    monkeypatch.setattr(simplify_search, "compile_source_variant", fake_compile)
+    monkeypatch.setattr(diff_capture, "compile_source_variant", fake_compile)
+
+    from src.cli import debug as cli_debug
+    monkeypatch.setattr(cli_debug, "DEFAULT_MELEE_ROOT", melee_root)
+
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(
+        cli_debug.mutate_app,
+        [
+            "simplify-order",
+            "--fn", "mnDiagram_DrawCellNumber",
+            "--want-first", "32,33",
+            "--max-candidates", "1",
+        ],
+    )
+
+    assert result.exit_code == 0, f"stdout: {result.stdout}\nexc: {result.exception}"
+    assert "Function:        mnDiagram_DrawCellNumber" in result.stdout
+    assert "baseline pcdump has no events" not in result.stderr
+
+
 def test_help_mentions_with_permuter_flag() -> None:
     """The new --with-permuter / --permuter-dir flags should appear in help.
 

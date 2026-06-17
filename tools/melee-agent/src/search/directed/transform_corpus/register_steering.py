@@ -25,7 +25,7 @@ _REGISTER_STEERING_COUNTER_RE = re.compile(r"\b(s16|s32)\b")
 _NODE_SET_SPLIT_SYNTHETIC_NAME_RE = re.compile(r"_split_\d+_\d+$")
 
 
-_GENERATED_FPR_PRODUCT_TEMP_RE = re.compile(r"_product_fpr(?:_\d+)?$")
+_GENERATED_FPR_PRODUCT_TEMP_RE = re.compile(r"_product(?:_reuse)?_fpr(?:_\d+)?$")
 
 
 _REGISTER_STEERING_FPR_TYPES = frozenset({"float", "f32", "double", "f64"})
@@ -1238,6 +1238,22 @@ def _dependent_product_replacement(
     return f"{indent}{dependent} = {const_text} {op} ({product_expr});"
 
 
+def _dependent_source_replacement(
+    *,
+    indent: str,
+    dependent: str,
+    source_expr: str,
+    dependent_match,
+) -> str | None:
+    if dependent_match.group("lhs") is not None:
+        op = dependent_match.group("op")
+        const_text = dependent_match.group("const")
+        return f"{indent}{dependent} = {source_expr} {op} {const_text};"
+    op = dependent_match.group("op_left")
+    const_text = dependent_match.group("const_left")
+    return f"{indent}{dependent} = {const_text} {op} {source_expr};"
+
+
 def _single_fpr_decl_for_name(
     body_text: str,
     name: str,
@@ -1516,6 +1532,14 @@ def _fpr_product_temp_name(
     return _fresh_register_steering_name(searchable, f"{product.lhs}_product")
 
 
+def _fpr_product_reuse_temp_name(searchable: str, primary: str) -> str | None:
+    return _fresh_register_steering_name(searchable, f"{primary}_product_reuse")
+
+
+def _fpr_lifetime_temp_name(searchable: str, primary: str) -> str | None:
+    return _fresh_register_steering_name(searchable, f"{primary}_lifetime")
+
+
 def _insert_after_top_level_fpr_decls(
     body_text: str,
     before_offset: int,
@@ -1741,24 +1765,106 @@ def _iter_fpr_dependent_product_recompute_anchors(
             f"{dependent_replacement}\n"
             f"{indent}{primary} = {product_expr};"
         )
-        for strategy, replacement_text in (
-            ("fpr-dependent-product-recompute-first", first_text),
-            ("fpr-dependent-product-recompute-same-order", same_order_text),
-        ):
-            anchors.append(
-                Anchor(
-                    mutator_key="steer_fpr_dependent_product_recompute",
-                    span=(start, next_end),
-                    payload={
-                        "span_text": span_text,
-                        "replacement_text": replacement_text,
-                        "strategy": strategy,
-                        "product_local": primary,
-                        "dependent_local": dependent,
-                        "product_expr": product_expr,
-                    },
-                )
+        recompute_first_anchor = Anchor(
+            mutator_key="steer_fpr_dependent_product_recompute",
+            span=(start, next_end),
+            payload={
+                "span_text": span_text,
+                "replacement_text": first_text,
+                "strategy": "fpr-dependent-product-recompute-first",
+                "product_local": primary,
+                "dependent_local": dependent,
+                "product_expr": product_expr,
+            },
+        )
+        recompute_same_order_anchor = Anchor(
+            mutator_key="steer_fpr_dependent_product_recompute",
+            span=(start, next_end),
+            payload={
+                "span_text": span_text,
+                "replacement_text": same_order_text,
+                "strategy": "fpr-dependent-product-recompute-same-order",
+                "product_local": primary,
+                "dependent_local": dependent,
+                "product_expr": product_expr,
+            },
+        )
+        anchors.append(recompute_first_anchor)
+        decls = _register_steering_fpr_product_decls(body_text, primary, dependent)
+        if decls is None:
+            anchors.append(recompute_same_order_anchor)
+            continue
+        primary_decl, _dependent_decl = decls
+        insert_after = _insert_after_top_level_fpr_decls(body_text, start)
+        if insert_after is None:
+            anchors.append(recompute_same_order_anchor)
+            continue
+        span_with_decl_insertion = body_text[insert_after:next_end]
+        if body_text.count(span_with_decl_insertion) != 1:
+            anchors.append(recompute_same_order_anchor)
+            continue
+        prefix = body_text[insert_after:start]
+        reuse_temp = _fpr_product_reuse_temp_name(searchable, primary)
+        if reuse_temp is not None:
+            dependent_from_reuse = _dependent_source_replacement(
+                indent=indent,
+                dependent=dependent,
+                source_expr=reuse_temp,
+                dependent_match=dependent_match,
             )
+            if dependent_from_reuse is not None:
+                anchors.append(
+                    Anchor(
+                        mutator_key="steer_fpr_dependent_product_reuse_temp",
+                        span=(insert_after, next_end),
+                        payload={
+                            "span_text": span_with_decl_insertion,
+                            "replacement_text": (
+                                f"{indent}{primary_decl.type_name} {reuse_temp};\n"
+                                f"{prefix}"
+                                f"{indent}{reuse_temp} = {product_expr};\n"
+                                f"{indent}{primary} = {reuse_temp};\n"
+                                f"{dependent_from_reuse}"
+                            ),
+                            "strategy": "fpr-dependent-product-reuse-temp",
+                            "product_local": primary,
+                            "dependent_local": dependent,
+                            "product_expr": product_expr,
+                            "temp_local": reuse_temp,
+                        },
+                    )
+                )
+        lifetime_temp = _fpr_lifetime_temp_name(searchable, primary)
+        if lifetime_temp is not None:
+            dependent_from_lifetime = _dependent_source_replacement(
+                indent=indent,
+                dependent=dependent,
+                source_expr=lifetime_temp,
+                dependent_match=dependent_match,
+            )
+            if dependent_from_lifetime is not None:
+                anchors.append(
+                    Anchor(
+                        mutator_key="steer_fpr_dependent_local_temp_split",
+                        span=(insert_after, next_end),
+                        payload={
+                            "span_text": span_with_decl_insertion,
+                            "replacement_text": (
+                                f"{indent}{primary_decl.type_name} {lifetime_temp};\n"
+                                f"{prefix}"
+                                f"{indent}{primary} = {product_expr};\n"
+                                f"{indent}{lifetime_temp} = {primary};\n"
+                                f"{dependent_from_lifetime}"
+                            ),
+                            "strategy": "fpr-dependent-local-temp-split",
+                            "product_local": primary,
+                            "dependent_local": dependent,
+                            "product_expr": product_expr,
+                            "temp_local": lifetime_temp,
+                        },
+                    )
+                )
+        anchors.append(recompute_same_order_anchor)
     return anchors
 
 
@@ -1818,24 +1924,33 @@ def _iter_concrete_register_steering_body_anchors(
             )
         ]
 
-    legacy_steering = list(_interleave_anchor_groups(
-        recompute_product,
+    priority_recompute = recompute_product[:3]
+    recompute_rest = recompute_product[3:]
+    legacy_steering = [
+        *priority_recompute,
+        *_interleave_anchor_groups(
+        recompute_rest,
         _span_clear(rotate),
         _span_clear(demote),
         _span_clear(reuse_dead),
         _span_clear(split),
         widen_byte,
-    ))
+        ),
+    ]
     product_insert_after = len(legacy_steering)
     if product_steering:
-        wanted_recompute = min(2, len(recompute_product))
+        wanted_recompute = min(3, len(recompute_product))
         need_rotate = bool(rotate)
         need_demote = bool(demote)
         seen_recompute = 0
         seen_rotate = False
         seen_demote = False
         for idx, anchor in enumerate(legacy_steering):
-            if anchor.mutator_key == "steer_fpr_dependent_product_recompute":
+            if anchor.mutator_key in {
+                "steer_fpr_dependent_product_recompute",
+                "steer_fpr_dependent_product_reuse_temp",
+                "steer_fpr_dependent_local_temp_split",
+            }:
                 seen_recompute += 1
             elif anchor.mutator_key == "steer_rotate_local_decl_window":
                 seen_rotate = True

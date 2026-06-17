@@ -773,6 +773,16 @@ def _steer_fpr_dependent_product_recompute(anchor: Anchor, source_text: str) -> 
     return _replace_validated_span(anchor, source_text)
 
 
+def _steer_fpr_dependent_product_reuse_temp(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Reuse one explicit FPR product temp across dependent assignments."""
+    return _replace_validated_span(anchor, source_text)
+
+
+def _steer_fpr_dependent_local_temp_split(anchor: Anchor, source_text: str) -> Optional[str]:
+    """Split one FPR local lifetime before its dependent assignment."""
+    return _replace_validated_span(anchor, source_text)
+
+
 def _steer_fpr_product_assignment_order(anchor: Anchor, source_text: str) -> Optional[str]:
     """Move one independent FPR product assignment earlier in its local block."""
     return _replace_validated_span(anchor, source_text)
@@ -880,6 +890,8 @@ _DISPATCH = {
     "steer_split_reused_loop_counter": _steer_split_reused_loop_counter,
     "steer_widen_byte_local_type": _steer_widen_byte_local_type,
     "steer_fpr_dependent_product_recompute": _steer_fpr_dependent_product_recompute,
+    "steer_fpr_dependent_product_reuse_temp": _steer_fpr_dependent_product_reuse_temp,
+    "steer_fpr_dependent_local_temp_split": _steer_fpr_dependent_local_temp_split,
     "steer_fpr_product_assignment_order": _steer_fpr_product_assignment_order,
     "steer_fpr_product_cast_temp_split": _steer_fpr_product_cast_temp_split,
     "steer_fpr_product_argument_duplicate": _steer_fpr_product_argument_duplicate,

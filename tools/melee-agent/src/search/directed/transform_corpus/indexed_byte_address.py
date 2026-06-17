@@ -141,6 +141,51 @@ def _line_can_host_value_temp(line: str) -> bool:
     return re.match(r"[A-Za-z_]\w*\s*=", stripped) is not None
 
 
+def _condition_span_from_line(
+    records: list[tuple[int, int, int, str]],
+    start_idx: int,
+) -> tuple[int, int] | None:
+    if start_idx >= len(records):
+        return None
+    start, _end, _end_with_newline, first_line = records[start_idx]
+    if re.match(r"^[ \t]*(?:if|while)\s*\(", first_line) is None:
+        return None
+    balance = 0
+    for idx in range(start_idx, len(records)):
+        _line_start, line_end, _line_end_with_newline, line = records[idx]
+        balance += line.count("(") - line.count(")")
+        if balance <= 0 and "{" in line:
+            return start, line_end
+    return None
+
+
+def _replace_indexed_base_references(
+    *,
+    region_text: str,
+    region_searchable: str,
+    base: str,
+    alias: str,
+) -> tuple[str, tuple[str, ...]]:
+    pieces: list[str] = []
+    indices: list[str] = []
+    cursor = 0
+    for match in _INDEXED_BYTE_EXPR_RE.finditer(region_searchable):
+        if match.group("base") != base:
+            continue
+        index = match.group("index")
+        index_expr = index.strip()
+        if not _safe_indexed_expr(base, index_expr, region_text):
+            continue
+        pieces.append(region_text[cursor:match.start()])
+        pieces.append(_indexed_expr(alias, index))
+        cursor = match.end()
+        indices.append(index_expr)
+    if not pieces:
+        return region_text, ()
+    pieces.append(region_text[cursor:])
+    return "".join(pieces), tuple(indices)
+
+
 def _iter_general_indexed_byte_expr_anchors(
     *,
     source_text: str,
@@ -153,6 +198,7 @@ def _iter_general_indexed_byte_expr_anchors(
     searchable = _blank_literals_and_comments(body_text)
     records = _text_line_records_with_newline(body_text)
     searchable_records = _text_line_records_with_newline(searchable)
+    emitted_condition_aliases: set[tuple[int, int, str]] = set()
     for idx, (start, end, _end_with_newline, search_line) in enumerate(
         searchable_records
     ):
@@ -170,6 +216,54 @@ def _iter_general_indexed_byte_expr_anchors(
             if decl_type is None or not _safe_indexed_expr(base, index_expr, line):
                 continue
             original_indexed = _indexed_expr(base, match.group("index"))
+            condition_span = _condition_span_from_line(searchable_records, idx)
+            condition_key = (
+                condition_span[0],
+                condition_span[1],
+                base,
+            ) if condition_span is not None else None
+            if condition_key is not None and condition_key not in emitted_condition_aliases:
+                emitted_condition_aliases.add(condition_key)
+                condition_start, condition_end = condition_span
+                condition_text = body_text[condition_start:condition_end]
+                condition_searchable = searchable[condition_start:condition_end]
+                base_alias_name = _fresh_base_alias_temp(searchable, base)
+                if base_alias_name is not None:
+                    replaced_condition, replaced_indices = _replace_indexed_base_references(
+                        region_text=condition_text,
+                        region_searchable=condition_searchable,
+                        base=base,
+                        alias=base_alias_name,
+                    )
+                    if len(replaced_indices) > 1 and replaced_condition != condition_text:
+                        indent_match = re.match(r"(?P<indent>[ \t]*)", condition_text)
+                        indent = (
+                            indent_match.group("indent")
+                            if indent_match is not None else ""
+                        )
+                        span_text = body_text[:condition_end]
+                        if body_text.count(span_text) == 1:
+                            yield Anchor(
+                                mutator_key="steer_indexed_byte_base_alias",
+                                span=(body_start, body_start + condition_end),
+                                payload={
+                                    "span_text": span_text,
+                                    "replacement_text": (
+                                        f"    {decl_type}* {base_alias_name};\n"
+                                        f"{body_text[:condition_start]}"
+                                        f"{indent}{base_alias_name} = {base};\n"
+                                        f"{replaced_condition}"
+                                    ),
+                                    "strategy": (
+                                        "indexed-byte-base-alias-condition-all-reads"
+                                    ),
+                                    "array_base": base,
+                                    "index_expr": replaced_indices[0],
+                                    "index_exprs": replaced_indices,
+                                    "target_local": _base_leaf_name(base),
+                                    "temp_local": base_alias_name,
+                                },
+                            )
             if not _index_is_parenthesized(index_expr):
                 replacement_line = line.replace(
                     original_indexed,

@@ -820,7 +820,7 @@ def test_coloring_register_steering_recomputes_rowf_product_same_order_when_budg
         unit="melee/mn/mndiagram",
         force_phys={33: 28, 37: 26},
         families=("coloring_register_steering",),
-        max_per_family=4,
+        max_per_family=12,
     )
 
     recompute = [
@@ -828,14 +828,92 @@ def test_coloring_register_steering_recomputes_rowf_product_same_order_when_budg
         for probe in probes
         if probe.mutator_key == "steer_fpr_dependent_product_recompute"
     ]
-    assert [probe.payload["strategy"] for probe in recompute[:2]] == [
+    assert {
+        probe.payload["strategy"]
+        for probe in recompute
+    } >= {
         "fpr-dependent-product-recompute-first",
         "fpr-dependent-product-recompute-same-order",
-    ]
+    }
     assert (
         "    row_offset = y_offset * rowf;\n"
         "    row_offset_adj = (y_offset * rowf) - 0.4f;"
     ) in recompute[1].candidate_text
+
+
+def test_coloring_register_steering_emits_dependent_product_lifetime_variants() -> None:
+    source = (
+        "typedef float f32;\n"
+        "void mnDiagram_DrawCellNumber(u8 row) {\n"
+        "    f32 y_offset;\n"
+        "    f32 rowf;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    rowf = (f32) row;\n"
+        "    row_offset = y_offset * rowf;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    use(row_offset, row_offset_adj);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+        max_per_family=12,
+    )
+
+    by_strategy = {
+        probe.payload["strategy"]: probe
+        for probe in probes
+        if probe.mutator_key in {
+            "steer_fpr_dependent_product_reuse_temp",
+            "steer_fpr_dependent_local_temp_split",
+        }
+    }
+    assert "fpr-dependent-product-reuse-temp" in by_strategy
+    assert "fpr-dependent-local-temp-split" in by_strategy
+
+    reuse_temp = by_strategy["fpr-dependent-product-reuse-temp"]
+    assert "    f32 row_offset_product_reuse_fpr;\n" in reuse_temp.candidate_text
+    assert "    row_offset_product_reuse_fpr = y_offset * rowf;\n" in (
+        reuse_temp.candidate_text
+    )
+    assert "    row_offset = row_offset_product_reuse_fpr;\n" in reuse_temp.candidate_text
+    assert (
+        "    row_offset_adj = row_offset_product_reuse_fpr - 0.4f;"
+        in reuse_temp.candidate_text
+    )
+
+    local_split = by_strategy["fpr-dependent-local-temp-split"]
+    assert "    f32 row_offset_lifetime_fpr;\n" in local_split.candidate_text
+    assert "    row_offset = y_offset * rowf;\n" in local_split.candidate_text
+    assert "    row_offset_lifetime_fpr = row_offset;\n" in local_split.candidate_text
+    assert "    row_offset_adj = row_offset_lifetime_fpr - 0.4f;" in (
+        local_split.candidate_text
+    )
+
+    default_budget_probes = generate_transform_probes(
+        source,
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        force_phys={39: 26, 33: 28},
+        families=("coloring_register_steering",),
+    )
+    default_budget_strategies = {
+        probe.payload["strategy"]
+        for probe in default_budget_probes
+        if probe.mutator_key in {
+            "steer_fpr_dependent_product_reuse_temp",
+            "steer_fpr_dependent_local_temp_split",
+        }
+    }
+    assert default_budget_strategies == {
+        "fpr-dependent-product-reuse-temp",
+        "fpr-dependent-local-temp-split",
+    }
 
 
 def test_coloring_register_steering_emits_source_bound_fpr_product_variants() -> None:
@@ -1186,9 +1264,12 @@ def test_coloring_register_steering_rejects_unsafe_fpr_product_recompute(
         max_per_family=12,
     )
 
-    assert "steer_fpr_dependent_product_recompute" not in {
-        probe.mutator_key for probe in probes
-    }, case
+    dependent_product_keys = {
+        "steer_fpr_dependent_product_recompute",
+        "steer_fpr_dependent_product_reuse_temp",
+        "steer_fpr_dependent_local_temp_split",
+    }
+    assert dependent_product_keys.isdisjoint({probe.mutator_key for probe in probes}), case
 
 
 def test_coloring_register_steering_rejects_volatile_parameter_bare_operand() -> None:
@@ -1212,9 +1293,12 @@ def test_coloring_register_steering_rejects_volatile_parameter_bare_operand() ->
         max_per_family=12,
     )
 
-    assert "steer_fpr_dependent_product_recompute" not in {
-        probe.mutator_key for probe in probes
+    dependent_product_keys = {
+        "steer_fpr_dependent_product_recompute",
+        "steer_fpr_dependent_product_reuse_temp",
+        "steer_fpr_dependent_local_temp_split",
     }
+    assert dependent_product_keys.isdisjoint({probe.mutator_key for probe in probes})
 
 
 def test_steer_fpr_dependent_product_recompute_rejects_stale_span() -> None:

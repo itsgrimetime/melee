@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import signal
@@ -69,8 +70,6 @@ def resolve_diff_input(
 
 
 def _find_unit_for_function(function: str, melee_root: Path) -> str:
-    import json
-
     report_path = melee_root / "build" / "GALE01" / "report.json"
     if not report_path.exists():
         raise ValueError(
@@ -85,12 +84,93 @@ def _find_unit_for_function(function: str, melee_root: Path) -> str:
     raise ValueError(f"cannot resolve base TU for {function}: function not in report.json")
 
 
+def _parse_virtual_address(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text, 0)
+        except ValueError:
+            return None
+    return None
+
+
+def _function_virtual_address(fn: dict) -> int | None:
+    metadata = fn.get("metadata")
+    if isinstance(metadata, dict):
+        parsed = _parse_virtual_address(metadata.get("virtual_address"))
+        if parsed is not None:
+            return parsed
+    return _parse_virtual_address(fn.get("virtual_address"))
+
+
+def _dedupe_strings(values: Iterator[str] | tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        result.append(value)
+        seen.add(value)
+    return tuple(result)
+
+
+def function_pcdump_aliases(function: str, melee_root: Path) -> tuple[str, ...]:
+    """Return alternate pcdump names for *function* from report metadata.
+
+    Source-level tools sometimes use a friendly report name while the local
+    mwcc pcdump still names the function by address. Keep this helper
+    best-effort: missing or stale reports should not make callers fail before
+    they try the requested name.
+    """
+    report_path = melee_root / "build" / "GALE01" / "report.json"
+    if not report_path.exists():
+        return ()
+    try:
+        data = json.loads(report_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return ()
+    target_address: int | None = None
+    same_address_names: list[str] = []
+    for unit in data.get("units", []):
+        functions = unit.get("functions", [])
+        if not isinstance(functions, list):
+            continue
+        for fn in functions:
+            if not isinstance(fn, dict) or fn.get("name") != function:
+                continue
+            target_address = _function_virtual_address(fn)
+            break
+        if target_address is not None:
+            for fn in functions:
+                if not isinstance(fn, dict):
+                    continue
+                name = fn.get("name")
+                if (
+                    isinstance(name, str)
+                    and name != function
+                    and _function_virtual_address(fn) == target_address
+                ):
+                    same_address_names.append(name)
+            break
+    if target_address is None:
+        return ()
+    aliases = [*same_address_names, f"fn_{target_address:08X}"]
+    if "_" in function and not function.startswith("fn_"):
+        aliases.append(f"{function.split('_', 1)[0]}_{target_address:08X}")
+    return _dedupe_strings(alias for alias in aliases if alias != function)
+
+
 def read_or_compile_input(
     diff_input: DiffInput,
     *,
     function: str,
     melee_root: Path,
     timeout: int,
+    function_aliases: tuple[str, ...] = (),
 ) -> str:
     if diff_input.kind == "pcdump":
         return diff_input.path.read_text(encoding="utf-8", errors="replace")
@@ -99,6 +179,7 @@ def read_or_compile_input(
         function=function,
         melee_root=melee_root,
         timeout=timeout,
+        function_aliases=function_aliases,
     )
 
 
@@ -109,6 +190,7 @@ def compile_source_variant(
     melee_root: Path,
     timeout: int,
     unit_source: Path | None = None,
+    function_aliases: tuple[str, ...] = (),
 ) -> str:
     with temporary_directory(prefix="mwcc_diff_") as td:
         out_path = Path(td) / f"{diff_input.label.lower()}.pcdump.txt"
@@ -125,55 +207,125 @@ def compile_source_variant(
             if not unit_source_path.is_absolute():
                 unit_source_path = melee_root / unit_source_path
             unit_source_path = unit_source_path.resolve()
+        dump_functions = _dedupe_strings((
+            function,
+            *function_aliases,
+            *function_pcdump_aliases(function, melee_root),
+        ))
+        failures: list[CompileFailure] = []
         with source_context as compile_path:
-            cmd = [
-                sys.executable,
-                "-m",
-                "src.cli",
-                "debug",
-                "dump",
-                "local",
-                str(compile_path),
-                "--output",
-                str(out_path),
-                "--no-cache-sync",
-                "--function",
-                function,
-            ]
-            if unit_source_path is not None:
-                cmd.extend(["--unit-source", str(unit_source_path)])
-            try:
-                proc = _run_with_process_group_timeout(
-                    cmd,
-                    cwd=melee_root,
-                    timeout=timeout,
-                    env=_env_with_child_hang_timeout(timeout),
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise CompileFailure(
+            for dump_function in dump_functions:
+                try:
+                    out_path.unlink()
+                except FileNotFoundError:
+                    pass
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "src.cli",
+                    "debug",
+                    "dump",
+                    "local",
+                    str(compile_path),
+                    "--output",
+                    str(out_path),
+                    "--no-cache-sync",
+                    "--function",
+                    dump_function,
+                ]
+                if unit_source_path is not None:
+                    cmd.extend(["--unit-source", str(unit_source_path)])
+                try:
+                    proc = _run_with_process_group_timeout(
+                        cmd,
+                        cwd=melee_root,
+                        timeout=timeout,
+                        env=_env_with_child_hang_timeout(timeout),
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise CompileFailure(
+                        side=diff_input.label,
+                        command=cmd,
+                        stdout=exc.stdout or "",
+                        stderr=(
+                            (exc.stderr or "")
+                            + f"\ndump local timed out after {timeout}s"
+                        ),
+                        returncode=124,
+                    ) from exc
+                if proc.returncode == 0 and out_path.exists():
+                    return out_path.read_text(encoding="utf-8", errors="replace")
+                if proc.returncode == 0:
+                    failure = CompileFailure(
+                        side=diff_input.label,
+                        command=cmd,
+                        stdout=proc.stdout,
+                        stderr=proc.stderr + "\ndump local completed without writing output",
+                        returncode=4,
+                    )
+                    failures.append(failure)
+                    raise failure
+                failure = CompileFailure(
                     side=diff_input.label,
                     command=cmd,
-                    stdout=exc.stdout or "",
-                    stderr=(exc.stderr or "") + f"\ndump local timed out after {timeout}s",
-                    returncode=124,
-                ) from exc
-        if proc.returncode != 0:
-            raise CompileFailure(
-                side=diff_input.label,
-                command=cmd,
-                stdout=proc.stdout,
-                stderr=proc.stderr,
-                returncode=proc.returncode,
-            )
-        if not out_path.exists():
-            raise CompileFailure(
-                side=diff_input.label,
-                command=cmd,
-                stdout=proc.stdout,
-                stderr=proc.stderr + "\ndump local completed without writing output",
-                returncode=4,
-            )
-        return out_path.read_text(encoding="utf-8", errors="replace")
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                    returncode=proc.returncode,
+                )
+                failures.append(failure)
+                if not _dump_local_missing_pcdump_function(proc, dump_function):
+                    raise failure
+        if failures:
+            raise _combined_compile_failure(diff_input.label, failures)
+        raise CompileFailure(
+            side=diff_input.label,
+            command=[],
+            stdout="",
+            stderr="dump local had no function names to try",
+            returncode=4,
+        )
+
+
+def _dump_local_missing_pcdump_function(
+    proc: subprocess.CompletedProcess[str],
+    dump_function: str,
+) -> bool:
+    if proc.returncode != 3:
+        return False
+    text = f"{proc.stderr}\n{proc.stdout}".lower()
+    if "not found in pcdump" in text:
+        return True
+    return (
+        "function" in text
+        and dump_function.lower() in text
+        and "not found" in text
+    )
+
+
+def _combined_compile_failure(
+    side: str,
+    failures: list[CompileFailure],
+) -> CompileFailure:
+    last = failures[-1]
+    attempted = [
+        failure.command[failure.command.index("--function") + 1]
+        for failure in failures
+        if "--function" in failure.command
+    ]
+    details = []
+    for failure, attempted_function in zip(failures, attempted, strict=False):
+        output = (failure.stderr or failure.stdout).strip()
+        details.append(f"[{attempted_function}] rc={failure.returncode}\n{output}")
+    return CompileFailure(
+        side=side,
+        command=last.command,
+        stdout=last.stdout,
+        stderr=(
+            "dump local could not find a pcdump function; "
+            f"attempted: {', '.join(attempted)}\n" + "\n".join(details)
+        ),
+        returncode=last.returncode,
+    )
 
 
 def _fresh_pcdump_cache_path_for_restore(

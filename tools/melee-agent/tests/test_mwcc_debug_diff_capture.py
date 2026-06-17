@@ -79,6 +79,85 @@ def test_compile_source_variant_invokes_pcdump_local(monkeypatch: pytest.MonkeyP
     assert "--function" in cmd
 
 
+def test_compile_source_variant_retries_pcdump_function_alias_on_missing_function(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src" / "melee" / "mn" / "sample.c"
+    src.parent.mkdir(parents=True)
+    src.write_text("void mnDiagram_DrawCellNumber(void) {}\n", encoding="utf-8")
+    attempted: list[str] = []
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        dump_function = cmd[cmd.index("--function") + 1]
+        attempted.append(dump_function)
+        if dump_function == "mnDiagram_DrawCellNumber":
+            return SimpleNamespace(
+                returncode=3,
+                stdout="",
+                stderr=(
+                    "function 'mnDiagram_DrawCellNumber' not found in pcdump"
+                ),
+            )
+        out_path = Path(cmd[cmd.index("--output") + 1])
+        out_path.write_text("Starting function mnDiagram_80241E78\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="wrote")
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture._run_with_process_group_timeout",
+        fake_run,
+    )
+
+    diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
+    text = compile_source_variant(
+        diff_input,
+        function="mnDiagram_DrawCellNumber",
+        function_aliases=("mnDiagram_80241E78",),
+        melee_root=tmp_path,
+        timeout=30,
+    )
+
+    assert attempted == ["mnDiagram_DrawCellNumber", "mnDiagram_80241E78"]
+    assert text == "Starting function mnDiagram_80241E78\n"
+
+
+def test_compile_source_variant_reports_attempted_aliases_when_all_names_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src" / "melee" / "mn" / "sample.c"
+    src.parent.mkdir(parents=True)
+    src.write_text("void mnDiagram_DrawCellNumber(void) {}\n", encoding="utf-8")
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        dump_function = cmd[cmd.index("--function") + 1]
+        return SimpleNamespace(
+            returncode=3,
+            stdout="",
+            stderr=f"function {dump_function!r} not found in pcdump",
+        )
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture._run_with_process_group_timeout",
+        fake_run,
+    )
+
+    diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
+    with pytest.raises(CompileFailure) as exc:
+        compile_source_variant(
+            diff_input,
+            function="mnDiagram_DrawCellNumber",
+            function_aliases=("mnDiagram_80241E78",),
+            melee_root=tmp_path,
+            timeout=30,
+        )
+
+    diagnostic = str(exc.value)
+    assert "attempted: mnDiagram_DrawCellNumber, mnDiagram_80241E78" in diagnostic
+    assert "mnDiagram_DrawCellNumber" in diagnostic
+    assert "mnDiagram_80241E78" in diagnostic
+
+
 def test_compile_source_variant_can_compile_direct_same_tu_probe_with_unit_source(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

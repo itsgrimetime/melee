@@ -32201,16 +32201,21 @@ def mutate_simplify_order_cmd(
         typer.echo(f"source not found: {source_path}", err=True)
         raise typer.Exit(2)
 
+    from ...mwcc_debug.diff_capture import (
+        DiffInput,
+        compile_source_variant,
+        function_pcdump_aliases,
+    )
+
     ctx = FunctionContext(
         function=function,
         unit=unit,
         source_path=source_path,
         melee_root=melee_root,
+        pcdump_function_aliases=function_pcdump_aliases(function, melee_root),
     )
 
     # Compile the baseline once to get its BaselineSignature.
-    from ...mwcc_debug.diff_capture import DiffInput, compile_source_variant
-
     diff_input = DiffInput(
         label="baseline",
         token=str(source_path),
@@ -32229,11 +32234,16 @@ def mutate_simplify_order_cmd(
         raise typer.Exit(3)
 
     baseline_events = parse_hook_events(baseline_pcdump)
-    base_for_fn = next((e for e in baseline_events if e.name == function), None)
+    baseline_lookup_names = (function, *ctx.pcdump_function_aliases)
+    base_for_fn = next(
+        (e for e in baseline_events if e.name in baseline_lookup_names),
+        None,
+    )
     if base_for_fn is None:
+        tried = ", ".join(baseline_lookup_names)
         typer.echo(
             f"baseline pcdump has no events for {function}; "
-            "is the function actually compiled into this TU?",
+            f"tried: {tried}; is the function actually compiled into this TU?",
             err=True,
         )
         raise typer.Exit(3)

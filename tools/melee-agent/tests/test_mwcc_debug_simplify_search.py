@@ -380,15 +380,17 @@ def _stub_compiles(
     monkeypatch: pytest.MonkeyPatch,
     *,
     pcdumps_by_text: dict[str, str],
-) -> list[str]:
+) -> tuple[list[str], list[tuple[str, ...]]]:
     """Patch compile_source_variant in simplify_search to return canned text.
 
     Returns a list mutated by the stub recording each text it was called
     with (so tests can assert ordering / early-exit / count caps)."""
     calls: list[str] = []
+    alias_calls: list[tuple[str, ...]] = []
 
-    def fake_compile(diff_input, *, function, melee_root, timeout):
+    def fake_compile(diff_input, *, function, melee_root, timeout, function_aliases=()):
         calls.append(diff_input.path.read_text(encoding="utf-8"))
+        alias_calls.append(tuple(function_aliases))
         text = pcdumps_by_text.get(calls[-1])
         if text is None:
             raise AssertionError(
@@ -401,17 +403,18 @@ def _stub_compiles(
         "src.mwcc_debug.simplify_search.compile_source_variant",
         fake_compile,
     )
-    return calls
+    return calls, alias_calls
 
 
 def _pcdump_for(
     simplify_order: list[int],
     interference_edges: list[tuple[int, int]] | None = None,
     assigned_by_ig: dict[int, int] | None = None,
+    function_name: str = "fn_test",
 ) -> str:
     """Build a minimal hook-events pcdump string that the colorgraph
     parser can read into FunctionEvents."""
-    lines = ["Starting function fn_test"]
+    lines = [f"Starting function {function_name}"]
     # Construct the colorgraph header with at-least the simplify members.
     adj: dict[int, list[tuple[int, int]]] = {}
     for a, b in interference_edges or []:
@@ -468,6 +471,47 @@ def test_search_returns_exact_match_when_variant_hits_target(
     assert result.exact_match.provenance == "hit"
     # Stop early — no more variants compiled past the exact-match.
     assert result.total_compiles == 1
+
+
+def test_search_uses_pcdump_function_aliases_for_friendly_report_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    source = tmp_path / "src" / "melee" / "mn" / "mndiagram.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void mnDiagram_DrawCellNumber(void) {}\n", encoding="utf-8")
+    ctx = FunctionContext(
+        function="mnDiagram_DrawCellNumber",
+        unit="melee/mn/mndiagram",
+        source_path=source,
+        melee_root=tmp_path,
+        pcdump_function_aliases=("mnDiagram_80241E78",),
+    )
+    baseline = baseline_signature(
+        _events_for_class(simplify_order=[32, 42]), class_id=0,
+    )
+
+    _calls, alias_calls = _stub_compiles(
+        monkeypatch,
+        pcdumps_by_text={
+            "VARIANT_A": _pcdump_for([42, 32], function_name="mnDiagram_80241E78"),
+        },
+    )
+
+    def src(_ctx):
+        yield SourceVariant(text="VARIANT_A", provenance="hit", parent_baseline=ctx.source_path)
+
+    result = search(
+        sources=[src],
+        ctx=ctx,
+        baseline=baseline,
+        target=(42, 32),
+        max_candidates=10,
+        timeout=10,
+    )
+
+    assert result.exact_match is not None
+    assert result.exact_match.provenance == "hit"
+    assert alias_calls == [("mnDiagram_80241E78",)]
 
 
 def test_search_force_phys_scores_assignment_when_simplify_order_is_unusable(
@@ -833,7 +877,7 @@ def test_search_records_pcdump_missing_function_as_compile_failure(
         diagnostic=(
             "pcdump-missing-function: function 'fn_test' was not found in "
             "the compiled pcdump; check requested name/alias against the "
-            "report symbol"
+            "report symbol; tried: fn_test; pcdump functions: other_function"
         ),
     )
 

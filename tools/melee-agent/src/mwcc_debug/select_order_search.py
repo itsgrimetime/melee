@@ -153,6 +153,7 @@ class SelectOrderObjective:
     force_phys_satisfied_count: int
     force_phys_missing: tuple[int, ...]
     force_phys_mismatches: tuple[tuple[int, int, int], ...]
+    force_phys_distance: int | None
     satisfied_count: int
     improved_count: int
     actionable_movement_count: int
@@ -182,6 +183,7 @@ class SelectOrderObjective:
                 str(virtual): {"expected": expected, "actual": actual}
                 for virtual, expected, actual in self.force_phys_mismatches
             },
+            "force_phys_distance": self.force_phys_distance,
             "satisfied_count": self.satisfied_count,
             "improved_count": self.improved_count,
             "actionable_movement_count": self.actionable_movement_count,
@@ -291,6 +293,11 @@ def score_select_order_candidate(
         and not force_phys_missing
         and not force_phys_mismatches
     )
+    force_phys_distance = (
+        None
+        if not force_phys_targets
+        else _force_phys_distance(force_phys_missing, force_phys_mismatches)
+    )
     spill_removed = delta.spill_removed if delta is not None else ()
     spill_added = delta.spill_added if delta is not None else ()
     target_spill_removed = tuple(
@@ -310,6 +317,7 @@ def score_select_order_candidate(
         force_phys_satisfied_count=force_phys_satisfied_count,
         force_phys_missing=force_phys_missing,
         force_phys_mismatches=force_phys_mismatches,
+        force_phys_distance=force_phys_distance,
         satisfied_count=satisfied_count,
         improved_count=improved_count,
         actionable_movement_count=actionable_movement_count,
@@ -328,6 +336,17 @@ def score_select_order_candidate(
         sort_key=(),
     )
     return replace(objective, sort_key=_objective_sort_key(objective))
+
+
+def _force_phys_distance(
+    missing: tuple[int, ...],
+    mismatches: tuple[tuple[int, int, int], ...],
+) -> int:
+    missing_penalty = 1000
+    return (
+        missing_penalty * len(missing)
+        + sum(abs(actual - expected) for _virtual, expected, actual in mismatches)
+    )
 
 
 def rank_select_order_candidates(variants: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -383,7 +402,8 @@ def render_select_order_variant(variant: dict[str, Any]) -> str:
             f"matched={objective.get('force_phys_satisfied_count', 0)}/"
             f"{len(force_phys_targets)} "
             f"missing={_fmt_virtuals(objective.get('force_phys_missing') or [])} "
-            f"mismatches={len(objective.get('force_phys_mismatches') or {})}"
+            f"mismatches={len(objective.get('force_phys_mismatches') or {})} "
+            f"distance={objective.get('force_phys_distance')}"
         )
     target_spill_removed = objective.get("target_spill_removed") or []
     lines.append(
@@ -830,6 +850,10 @@ def _objective_sort_key(objective: SelectOrderObjective) -> tuple[float, ...]:
         for pair in objective.target_orders
     )
     force_phys_requested = objective.force_phys_satisfied is not None
+    force_phys_distance = (
+        float(objective.force_phys_distance)
+        if objective.force_phys_distance is not None else 0.0
+    )
     return (
         float(objective.force_phys_satisfied is True) if force_phys_requested else 0.0,
         (
@@ -844,6 +868,7 @@ def _objective_sort_key(objective: SelectOrderObjective) -> tuple[float, ...]:
             -float(len(objective.force_phys_mismatches))
             if force_phys_requested else 0.0
         ),
+        -force_phys_distance if force_phys_requested else 0.0,
         float(objective.target_order_satisfied),
         float(objective.satisfied_count),
         float(objective.target_order_improved),

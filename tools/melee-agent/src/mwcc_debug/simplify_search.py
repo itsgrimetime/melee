@@ -32,7 +32,12 @@ from typing import Callable, Iterable
 
 from .colorgraph_parser import FunctionEvents, parse_hook_events
 from .colorgraph_parser import find_function as find_event_function
-from .diff_capture import CompileFailure, DiffInput, compile_source_variant
+from .diff_capture import (
+    CompileFailure,
+    DiffInput,
+    compile_source_variant,
+    function_pcdump_aliases,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +167,7 @@ class FunctionContext:
     unit: str
     source_path: Path
     melee_root: Path
+    pcdump_function_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -616,7 +622,11 @@ def combined_score(
 
 
 def _extract_signature_for(
-    pcdump_text: str, function: str, *, class_id: int,
+    pcdump_text: str,
+    function: str,
+    *,
+    class_id: int,
+    function_aliases: tuple[str, ...] = (),
 ) -> BaselineSignature | None:
     """Parse pcdump text and pull the BaselineSignature for `function`.
 
@@ -624,10 +634,45 @@ def _extract_signature_for(
     treat it as a compile-failure-equivalent).
     """
     events_list = parse_hook_events(pcdump_text)
-    events = find_event_function(events_list, function)
+    events = None
+    for candidate_name in _function_lookup_names(function, function_aliases):
+        events = find_event_function(events_list, candidate_name)
+        if events is not None:
+            break
     if events is None:
         return None
     return baseline_signature(events, class_id=class_id)
+
+
+def _function_lookup_names(
+    function: str,
+    function_aliases: tuple[str, ...],
+) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for name in (function, *function_aliases):
+        if name and name not in seen:
+            names.append(name)
+            seen.add(name)
+    return tuple(names)
+
+
+def _context_function_aliases(
+    ctx: FunctionContext,
+    melee_root: Path,
+) -> tuple[str, ...]:
+    aliases = [
+        *ctx.pcdump_function_aliases,
+        *function_pcdump_aliases(ctx.function, melee_root),
+    ]
+    return tuple(
+        name for name in _function_lookup_names(ctx.function, tuple(aliases))[1:]
+    )
+
+
+def _pcdump_function_names(pcdump_text: str) -> tuple[str, ...]:
+    events = parse_hook_events(pcdump_text)
+    return tuple(event.name for event in events if event.name)
 
 
 def _compile_failure_diagnostic(exc: CompileFailure) -> str:
@@ -639,11 +684,20 @@ def _compile_failure_diagnostic(exc: CompileFailure) -> str:
     return lines[0] if lines else f"compile failed with exit {exc.returncode}"
 
 
-def _pcdump_missing_function_diagnostic(function: str) -> str:
+def _pcdump_missing_function_diagnostic(
+    function: str,
+    *,
+    function_aliases: tuple[str, ...] = (),
+    available_names: tuple[str, ...] = (),
+) -> str:
+    names = ", ".join(_function_lookup_names(function, function_aliases))
+    available = ""
+    if available_names:
+        available = "; pcdump functions: " + ", ".join(available_names[:8])
     return (
         f"pcdump-missing-function: function {function!r} was not found in "
         "the compiled pcdump; check requested name/alias against the "
-        "report symbol"
+        f"report symbol; tried: {names}{available}"
     )
 
 
@@ -710,6 +764,7 @@ def search(
     # whitespace would still be considered distinct, but that's intentional
     # since MWCC's frontend can be whitespace-sensitive in subtle ways.
     seen_variant_texts: set[str] = set()
+    function_aliases = _context_function_aliases(ctx, melee_root)
 
     for source in sources:
         if exact_match is not None or compiled >= max_candidates:
@@ -731,7 +786,13 @@ def search(
                 progress_callback(compiled, max_candidates, variant.provenance)
 
             try:
-                pcdump_text = _compile_variant(variant, ctx=ctx, melee_root=melee_root, timeout=timeout)
+                pcdump_text = _compile_variant(
+                    variant,
+                    ctx=ctx,
+                    melee_root=melee_root,
+                    timeout=timeout,
+                    function_aliases=function_aliases,
+                )
             except CompileFailure as exc:
                 compile_failures += 1
                 compile_failure_details.append(CompileFailureSummary(
@@ -741,7 +802,12 @@ def search(
                 ))
                 continue
 
-            sig = _extract_signature_for(pcdump_text, ctx.function, class_id=class_id)
+            sig = _extract_signature_for(
+                pcdump_text,
+                ctx.function,
+                class_id=class_id,
+                function_aliases=function_aliases,
+            )
             if sig is None:
                 # Pcdump exists but doesn't mention the function — treat
                 # as a compile-equivalent failure rather than a gate
@@ -750,7 +816,11 @@ def search(
                 compile_failure_details.append(CompileFailureSummary(
                     provenance=variant.provenance,
                     returncode=4,
-                    diagnostic=_pcdump_missing_function_diagnostic(ctx.function),
+                    diagnostic=_pcdump_missing_function_diagnostic(
+                        ctx.function,
+                        function_aliases=function_aliases,
+                        available_names=_pcdump_function_names(pcdump_text),
+                    ),
                 ))
                 continue
 
@@ -824,6 +894,7 @@ def _compile_variant(
     ctx: FunctionContext,
     melee_root: Path,
     timeout: int,
+    function_aliases: tuple[str, ...],
 ) -> str:
     """Write the variant to a temp .c file and shell out to dump local."""
     with tempfile.TemporaryDirectory(prefix="mwcc_simplify_") as td:
@@ -835,9 +906,20 @@ def _compile_variant(
             kind="source",
             path=tmp_src,
         )
-        return compile_source_variant(
-            diff_input,
-            function=ctx.function,
-            melee_root=melee_root,
-            timeout=timeout,
-        )
+        try:
+            return compile_source_variant(
+                diff_input,
+                function=ctx.function,
+                melee_root=melee_root,
+                timeout=timeout,
+                function_aliases=function_aliases,
+            )
+        except TypeError as exc:
+            if "function_aliases" not in str(exc):
+                raise
+            return compile_source_variant(
+                diff_input,
+                function=ctx.function,
+                melee_root=melee_root,
+                timeout=timeout,
+            )

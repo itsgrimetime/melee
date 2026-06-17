@@ -125,6 +125,81 @@ TARGET_ORDER_RIGHT_PHYS = textwrap.dedent("""\
         blr
 """)
 
+TARGET_ORDER_FAR_WRONG_PHYS = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mr r32,r3
+        mr r33,r4
+    SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=45)
+      iter ig_idx degree arraySize flags notes
+        0 32 1 1 0x00
+        1 33 1 1 0x00
+    COLORGRAPH DECISIONS (class=0, result=1, n_nodes=2)
+      iter ig_idx phys degree nIntfr flags
+        0 32 r3 1 1 0x00
+          interferers: 33=r4
+        1 33 r4 1 1 0x00
+          interferers: 32=r3
+    FINAL CODE AFTER INSTRUCTION SCHEDULING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        stwu r1,-48(r1)
+        stmw r29,24(r1)
+        blr
+""")
+
+WRONG_ORDER_NEAR_PHYS = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mr r32,r3
+        mr r33,r4
+    SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=45)
+      iter ig_idx degree arraySize flags notes
+        0 33 1 1 0x00
+        1 32 1 1 0x00
+    COLORGRAPH DECISIONS (class=0, result=1, n_nodes=2)
+      iter ig_idx phys degree nIntfr flags
+        0 33 r31 1 1 0x00
+          interferers: 32=r28
+        1 32 r28 1 1 0x00
+          interferers: 33=r31
+    FINAL CODE AFTER INSTRUCTION SCHEDULING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        stwu r1,-48(r1)
+        stmw r29,24(r1)
+        blr
+""")
+
+ONE_FORCE_PHYS_HIT = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        mr r32,r3
+        mr r33,r4
+    SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=45)
+      iter ig_idx degree arraySize flags notes
+        0 33 1 1 0x00
+        1 32 1 1 0x00
+    COLORGRAPH DECISIONS (class=0, result=1, n_nodes=2)
+      iter ig_idx phys degree nIntfr flags
+        0 33 r30 1 1 0x00
+          interferers: 32=r3
+        1 32 r3 1 1 0x00
+          interferers: 33=r30
+    FINAL CODE AFTER INSTRUCTION SCHEDULING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        stwu r1,-48(r1)
+        stmw r29,24(r1)
+        blr
+""")
+
 FPR_BASELINE = textwrap.dedent("""\
     Starting function fn_80000000
     BEFORE REGISTER COLORING
@@ -371,6 +446,78 @@ def test_select_order_score_tracks_force_phys_satisfaction() -> None:
 
     assert ranked[0]["label"] == "force-phys-satisfied"
     assert ranked[0]["objective"]["force_phys_satisfied"] is True
+
+
+def test_select_order_ranking_prefers_near_force_phys_over_order_only() -> None:
+    order_only_far = score_select_order_candidate(
+        BASELINE,
+        TARGET_ORDER_FAR_WRONG_PHYS,
+        function="fn_80000000",
+        target_orders=[(32, 33)],
+        proof_force_phys={32: 29, 33: 30},
+        match_percent=99.0,
+    )
+    phys_nearer = score_select_order_candidate(
+        BASELINE,
+        WRONG_ORDER_NEAR_PHYS,
+        function="fn_80000000",
+        target_orders=[(32, 33)],
+        proof_force_phys={32: 29, 33: 30},
+        match_percent=12.0,
+    )
+
+    assert order_only_far.to_dict()["target_order_satisfied"] is True
+    assert phys_nearer.to_dict()["target_order_satisfied"] is False
+    assert order_only_far.to_dict()["force_phys_distance"] > (
+        phys_nearer.to_dict()["force_phys_distance"]
+    )
+
+    ranked = rank_select_order_candidates([
+        {
+            "label": "order-only-far",
+            "status": "ok",
+            "objective": order_only_far.to_dict(),
+        },
+        {
+            "label": "phys-nearer",
+            "status": "ok",
+            "objective": phys_nearer.to_dict(),
+        },
+    ])
+
+    assert ranked[0]["label"] == "phys-nearer"
+
+
+def test_select_order_ranking_prefers_force_phys_hit_count_before_distance() -> None:
+    one_hit = score_select_order_candidate(
+        BASELINE,
+        ONE_FORCE_PHYS_HIT,
+        function="fn_80000000",
+        target_orders=[(32, 33)],
+        proof_force_phys={32: 29, 33: 30},
+        match_percent=12.0,
+    )
+    zero_hit_near = score_select_order_candidate(
+        BASELINE,
+        WRONG_ORDER_NEAR_PHYS,
+        function="fn_80000000",
+        target_orders=[(32, 33)],
+        proof_force_phys={32: 29, 33: 30},
+        match_percent=99.0,
+    )
+
+    assert one_hit.to_dict()["force_phys_satisfied_count"] == 1
+    assert zero_hit_near.to_dict()["force_phys_satisfied_count"] == 0
+    assert one_hit.to_dict()["force_phys_distance"] > (
+        zero_hit_near.to_dict()["force_phys_distance"]
+    )
+
+    ranked = rank_select_order_candidates([
+        {"label": "zero-hit-near", "status": "ok", "objective": zero_hit_near.to_dict()},
+        {"label": "one-hit-far", "status": "ok", "objective": one_hit.to_dict()},
+    ])
+
+    assert ranked[0]["label"] == "one-hit-far"
 
 
 def test_select_order_ranking_prefers_actionable_missing_side_over_unchanged() -> None:
