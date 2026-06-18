@@ -25061,19 +25061,34 @@ def _safe_filename(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "candidate"
 
 
+def _retain_node_set_split_source(
+    candidate_path: Path,
+    *,
+    candidate_id: str,
+    probe_root: Path,
+    reason: str,
+) -> Path:
+    source_text = candidate_path.read_text(encoding="utf-8")
+    digest = hashlib.sha1(source_text.encode("utf-8")).hexdigest()[:12]
+    retained_dir = probe_root / reason
+    retained_dir.mkdir(parents=True, exist_ok=True)
+    retained_path = retained_dir / f"{_safe_filename(candidate_id)}-{digest}.c"
+    retained_path.write_text(source_text, encoding="utf-8")
+    return retained_path
+
+
 def _retain_node_set_split_failed_source(
     candidate_path: Path,
     *,
     candidate_id: str,
     probe_root: Path,
 ) -> Path:
-    source_text = candidate_path.read_text(encoding="utf-8")
-    digest = hashlib.sha1(source_text.encode("utf-8")).hexdigest()[:12]
-    failed_dir = probe_root / "compile_failed"
-    failed_dir.mkdir(parents=True, exist_ok=True)
-    retained_path = failed_dir / f"{_safe_filename(candidate_id)}-{digest}.c"
-    retained_path.write_text(source_text, encoding="utf-8")
-    return retained_path
+    return _retain_node_set_split_source(
+        candidate_path,
+        candidate_id=candidate_id,
+        probe_root=probe_root,
+        reason="compile_failed",
+    )
 
 
 def _node_set_split_blocked_summary(
@@ -25944,6 +25959,7 @@ def solve_node_set_split_cmd(
                 })
                 continue
 
+            source_retained: str | None = None
             if objective.get("status") == "realized":
                 score_timeout = _node_set_split_remaining_timeout(
                     started_at=started_at,
@@ -25978,6 +25994,18 @@ def solve_node_set_split_cmd(
                     deadline=deadline,
                 )
             else:
+                if objective.get("status") == "wrong-register":
+                    try:
+                        retained_path = _retain_node_set_split_source(
+                            candidate_path,
+                            candidate_id=patch.candidate_id,
+                            probe_root=probe_root,
+                            reason="wrong_register",
+                        )
+                        source_retained = str(retained_path)
+                        objective["source_path"] = source_retained
+                    except OSError as retain_exc:
+                        objective["source_retention_error"] = str(retain_exc)
                 score = CandidateScore(
                     patch.candidate_id,
                     compile_ok=True,
@@ -25999,10 +26027,13 @@ def solve_node_set_split_cmd(
                     )
                     if steering_children:
                         patches[patch_index:patch_index] = steering_children
-            scored_candidates.append({
+            scored_entry = {
                 "score": score,
                 "objective": objective,
-            })
+            }
+            if source_retained is not None:
+                scored_entry["source_retained"] = source_retained
+            scored_candidates.append(scored_entry)
 
     summary = summarize_node_set_split_scores(
         function,

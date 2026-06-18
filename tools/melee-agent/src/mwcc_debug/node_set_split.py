@@ -384,7 +384,11 @@ def generate_node_set_split_patches(
                 )
             except MutationUnsupported:
                 alias_source = None
-            if alias_source is not None:
+            alias_name = f"{var_name}_split_{target_ig}_{read_idx}"
+            if (
+                alias_source is not None
+                and _synthetic_local_uses_within_decl_scope(alias_source, alias_name)
+            ):
                 _append_unique_patch(
                     patches,
                     seen_sources,
@@ -412,7 +416,11 @@ def generate_node_set_split_patches(
                 )
             except MutationUnsupported:
                 lifetime_source = None
-            if lifetime_source is not None:
+            sink_name = f"{var_name}_split_sink_{target_ig}_{read_idx}"
+            if (
+                lifetime_source is not None
+                and _synthetic_local_uses_within_decl_scope(lifetime_source, sink_name)
+            ):
                 _append_unique_patch(
                     patches,
                     seen_sources,
@@ -508,6 +516,7 @@ def generate_node_set_introduce_binding_patches(
     *,
     max_bind_sites: int = 4,
     max_read_sites: int = 4,
+    include_split_combos: bool = True,
 ) -> list[CandidatePatch]:
     """Generate candidates that bind an unbindable expression to a local."""
     if not is_node_set_request_introducible(request):
@@ -570,6 +579,7 @@ def generate_node_set_introduce_binding_patches(
             fn_name,
             bound_request,
             max_read_sites=max_read_sites,
+            include_combos=include_split_combos,
         ):
             candidate_id = (
                 f"node-split-introduce-binding-ig{request.target_ig}-"
@@ -588,6 +598,61 @@ def generate_node_set_introduce_binding_patches(
                 ),
             )
     return patches
+
+
+def _synthetic_local_uses_within_decl_scope(source: str, local_name: str) -> bool:
+    """Return false when a generated local is referenced outside its block.
+
+    The node-set mutators generate unique synthetic locals. A source candidate
+    is invalid if such a local is declared inside a nested block but a rewrite
+    references it after that block closes.
+    """
+    if not _SIMPLE_IDENTIFIER_RE.match(local_name):
+        return False
+    stripped = _strip_c_comments(source)
+    decl_match = re.search(
+        r"(?m)^[ \t]*(?:volatile[ \t]+)?"
+        r"(?:[A-Za-z_][A-Za-z_0-9]*[ \t]*\**[ \t]+)+"
+        + re.escape(local_name)
+        + r"\s*(?:=[^;]*)?;",
+        stripped,
+    )
+    if decl_match is None:
+        return False
+
+    block_open = _innermost_open_brace_before(stripped, decl_match.start())
+    if block_open is None:
+        block_start = 0
+        block_end = len(stripped)
+    else:
+        block_close = _find_matching_token(
+            stripped,
+            block_open,
+            "{",
+            "}",
+            len(stripped),
+        )
+        if block_close is None:
+            return False
+        block_start = block_open
+        block_end = block_close + 1
+
+    for offset in _iter_name_offsets(stripped, local_name, 0, len(stripped)):
+        if offset < decl_match.start():
+            return False
+        if offset < block_start or offset >= block_end:
+            return False
+    return True
+
+
+def _innermost_open_brace_before(text: str, offset: int) -> int | None:
+    stack: list[int] = []
+    for index, ch in enumerate(text[:offset]):
+        if ch == "{":
+            stack.append(index)
+        elif ch == "}" and stack:
+            stack.pop()
+    return stack[-1] if stack else None
 
 
 def generate_coupled_node_set_split_patches(
@@ -706,6 +771,7 @@ def _generate_node_set_request_patches(
         request,
         max_bind_sites=max_read_sites,
         max_read_sites=max_read_sites,
+        include_split_combos=False,
     )
 
 
@@ -1980,6 +2046,7 @@ def summarize_node_set_split_scores(
             objective_counts.get(objective_status, 0) + 1
         )
     wrong_register_count = objective_counts.get("wrong-register", 0)
+    compile_failed_count = objective_counts.get("compile-failed", 0)
     wrong_register_exhausted = (
         bool(patches)
         and bool(rows)
@@ -1987,6 +2054,14 @@ def summarize_node_set_split_scores(
         and pending_count == 0
         and wrong_register_count == len(rows)
         and all(row.get("compile_ok") is True for row in rows)
+    )
+    wrong_register_or_compile_failed_exhausted = (
+        bool(patches)
+        and bool(rows)
+        and stop_reason is None
+        and pending_count == 0
+        and wrong_register_count > 0
+        and wrong_register_count + compile_failed_count == len(rows)
     )
     stop_condition = None
     if stop_reason is not None:
@@ -2010,8 +2085,15 @@ def summarize_node_set_split_scores(
         "objective_counts": objective_counts,
         "wrong_register_count": wrong_register_count,
         "wrong_register_exhausted": wrong_register_exhausted,
+        "wrong_register_or_compile_failed_exhausted": (
+            wrong_register_or_compile_failed_exhausted
+        ),
         "terminal_reason": (
-            "all-wrong-register" if wrong_register_exhausted else None
+            "all-wrong-register"
+            if wrong_register_exhausted
+            else "wrong-register-or-compile-failed"
+            if wrong_register_or_compile_failed_exhausted
+            else None
         ),
         "realized_count": sum(
             1 for row in rows if row["objective_status"] == "realized"
@@ -2033,7 +2115,10 @@ def summarize_node_set_split_scores(
             stop_reason=stop_reason,
             candidate_limit=candidate_limit,
             budget_seconds=budget_seconds,
-            wrong_register_exhausted=wrong_register_exhausted,
+            wrong_register_exhausted=(
+                wrong_register_exhausted
+                or wrong_register_or_compile_failed_exhausted
+            ),
             coupled=coupled_requests is not None,
         ),
         "candidates": rows,
@@ -2055,7 +2140,10 @@ def summarize_node_set_split_scores(
             patches=patches,
             rows=rows,
             coupled_requests=coupled_requests,
-            wrong_register_exhausted=wrong_register_exhausted,
+            wrong_register_exhausted=(
+                wrong_register_exhausted
+                or wrong_register_or_compile_failed_exhausted
+            ),
             stop_reason=stop_reason,
             pending_count=pending_count,
             candidate_limit=candidate_limit,
@@ -2325,7 +2413,7 @@ def _source_scope_path_for_name(
             containing.sort(
                 key=lambda decl: (
                     decl.line_no != source_line,
-                    len(decl.scope_path),
+                    -len(decl.scope_path),
                 )
             )
             return containing[0].scope_path
@@ -4885,6 +4973,79 @@ def _patch_hunk(source: str, patched_source: str, candidate_id: str) -> str:
     ))
 
 
+def _register_name_for_class(class_id: Any, reg_num: Any) -> str | None:
+    parsed = _as_int(reg_num)
+    if parsed is None:
+        return None
+    parsed_class = _as_int(class_id)
+    if parsed_class == 1:
+        return f"f{parsed}"
+    return f"r{parsed}"
+
+
+def _first_int(value: Any) -> int | None:
+    if isinstance(value, (list, tuple)) and value:
+        return _as_int(value[0])
+    return _as_int(value)
+
+
+def _first_str(value: Any) -> str | None:
+    if isinstance(value, (list, tuple)) and value:
+        item = value[0]
+        return str(item) if item is not None else None
+    return str(value) if value is not None else None
+
+
+def _source_retained_for_row(
+    entry: Any,
+    objective: Any,
+    diagnostics_path: Any,
+) -> str | None:
+    if isinstance(entry, Mapping):
+        retained = entry.get("source_retained")
+        if retained is not None:
+            return str(retained)
+    if isinstance(objective, Mapping):
+        retained = objective.get("source_path")
+        if retained is not None:
+            return str(retained)
+    if diagnostics_path is not None:
+        return str(diagnostics_path)
+    return None
+
+
+def _coupled_register_rows(objective: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(objective, Mapping):
+        return None
+    per_ig = objective.get("per_ig")
+    if not isinstance(per_ig, list):
+        return None
+    class_id = objective.get("class_id")
+    rows: list[dict[str, Any]] = []
+    for item in per_ig:
+        if not isinstance(item, Mapping):
+            continue
+        achieved_reg = _as_int(item.get("assigned_reg"))
+        target_reg_num = _first_int(
+            item.get("target_reg_num")
+            if item.get("target_reg_num") is not None
+            else item.get("target_reg_nums")
+        )
+        rows.append({
+            "target_ig": _as_int(item.get("target_ig")),
+            "target_reg": _first_str(
+                item.get("target_reg")
+                if item.get("target_reg") is not None
+                else item.get("target_regs")
+            ),
+            "target_reg_num": target_reg_num,
+            "achieved_reg": achieved_reg,
+            "achieved_register": _register_name_for_class(class_id, achieved_reg),
+            "target_reg_hit": bool(item.get("target_reg_hit")),
+        })
+    return rows or None
+
+
 def _score_row(entry: Any) -> dict[str, Any]:
     score = entry.get("score") if isinstance(entry, Mapping) else entry
     objective = (
@@ -4912,12 +5073,23 @@ def _score_row(entry: Any) -> dict[str, Any]:
         if isinstance(entry, Mapping) and entry.get("diagnostics_path") is not None
         else getattr(score, "diagnostics_path", None)
     )
+    source_retained = _source_retained_for_row(
+        entry,
+        objective,
+        diagnostics_path,
+    )
     objective_error = (
         objective.get("error")
         if isinstance(objective, Mapping) and objective.get("error") is not None
         else None
     )
-    return {
+    class_id = objective.get("class_id") if isinstance(objective, Mapping) else None
+    achieved_reg = (
+        _as_int(objective.get("assigned_reg"))
+        if isinstance(objective, Mapping)
+        else None
+    )
+    row = {
         "candidate_id": candidate_id,
         "compile_ok": compile_ok,
         "checkdiff_delta": checkdiff_delta,
@@ -4930,6 +5102,18 @@ def _score_row(entry: Any) -> dict[str, Any]:
         "objective_error": str(objective_error) if objective_error is not None else None,
         "objective": dict(objective) if isinstance(objective, Mapping) else objective,
     }
+    if source_retained is not None:
+        row["source_retained"] = source_retained
+    if isinstance(objective, Mapping):
+        row["target_ig"] = _as_int(objective.get("target_ig"))
+        row["target_reg"] = _first_str(objective.get("target_reg"))
+        row["target_reg_num"] = _first_int(objective.get("target_reg_num"))
+        row["achieved_reg"] = achieved_reg
+        row["achieved_register"] = _register_name_for_class(class_id, achieved_reg)
+        coupled_registers = _coupled_register_rows(objective)
+        if coupled_registers is not None:
+            row["coupled_registers"] = coupled_registers
+    return row
 
 
 def _objective_status(objective: Any) -> str | None:

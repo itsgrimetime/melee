@@ -3539,6 +3539,7 @@ def _iter_node_set_delta_steering_probes(
                 request,
                 max_bind_sites=2,
                 max_read_sites=2,
+                include_split_combos=False,
             )
         else:
             mutator_key = "steer_node_set_delta_split"
@@ -3547,6 +3548,7 @@ def _iter_node_set_delta_steering_probes(
                 function,
                 request,
                 max_read_sites=2,
+                include_combos=False,
             )
         for patch in patches:
             append_patch(mutator_key, patch, [request])

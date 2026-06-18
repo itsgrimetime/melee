@@ -50,6 +50,61 @@ def test_generate_transform_probes_materializes_source_edits() -> None:
     assert all(probe.target_assignments for probe in probes)
 
 
+def test_generate_transform_probes_node_set_delta_skips_recursive_combos(
+    monkeypatch,
+) -> None:
+    import src.mwcc_debug.node_set_split as node_set_split
+
+    source = (
+        "typedef struct Entry { int stat_value; } Entry;\n"
+        "void mnDiagram2_Create(Entry* entries, int i) {\n"
+        "    int out;\n"
+        "    out = entries[i].stat_value;\n"
+        "    sink(out);\n"
+        "}\n"
+    )
+    delta = {
+        "kind": "node-set-delta",
+        "function": "mnDiagram2_Create",
+        "class_id": 0,
+        "missing_virtuals": [
+            {
+                "target_ig": 42,
+                "current_register": "r29",
+                "desired_registers": ["r27"],
+                "source": {
+                    "kind": "field-load",
+                    "expression": "entries[i].stat_value",
+                },
+            }
+        ],
+    }
+
+    def fail_combo_generation(*_args, **_kwargs):
+        raise AssertionError("plan-transform node-set probes must be bounded")
+
+    monkeypatch.setattr(
+        node_set_split,
+        "_append_combo_patches",
+        fail_combo_generation,
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="mnDiagram2_Create",
+        unit="melee/mn/mndiagram2",
+        force_phys={42: 27},
+        node_set_delta=delta,
+        max_per_family=2,
+    )
+
+    assert probes
+    assert any(
+        probe.mutator_key == "steer_node_set_delta_introduce_binding_split"
+        for probe in probes
+    )
+
+
 def test_generate_transform_probes_only_uses_target_function_body() -> None:
     source = (
         "void helper(void) {\n"

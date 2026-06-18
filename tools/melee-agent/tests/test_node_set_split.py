@@ -287,6 +287,53 @@ def test_generate_node_set_introduce_binding_patches_splits_field_expression() -
     assert all(patch.touched_ranges == ((0, len(source)),) for patch in patches)
 
 
+def test_generate_node_set_introduce_binding_patches_can_skip_recursive_combos(
+    monkeypatch,
+) -> None:
+    source = (
+        "typedef struct Entry { int stat_value; } Entry;\n"
+        "void fn_test(Entry* entries, int i) {\n"
+        "    int out;\n"
+        "    out = entries[i].stat_value;\n"
+        "    use(out);\n"
+        "}\n"
+    )
+    req = request_from_node_set_delta({
+        "function": "fn_test",
+        "class_id": 0,
+        "missing_virtuals": [{
+            "target_ig": 42,
+            "current_register": "r29",
+            "desired_registers": ["r27"],
+            "source": {
+                "kind": "field-load",
+                "expression": "entries[i].stat_value",
+            },
+        }],
+    }, source_text=source)
+
+    def fail_combo_generation(*_args, **_kwargs):
+        raise AssertionError("recursive combo generation should be disabled")
+
+    monkeypatch.setattr(
+        node_set_split,
+        "_append_combo_patches",
+        fail_combo_generation,
+    )
+
+    patches = generate_node_set_introduce_binding_patches(
+        source,
+        "fn_test",
+        req,
+        max_bind_sites=1,
+        max_read_sites=1,
+        include_split_combos=False,
+    )
+
+    assert patches
+    assert patches[0].candidate_id.endswith("-bind-site0")
+
+
 def test_generate_node_set_introduce_binding_patches_handles_initialized_declaration() -> None:
     source = (
         "typedef struct Entry { int stat_value; } Entry;\n"
@@ -386,6 +433,34 @@ def test_generate_node_set_introduce_binding_patches_handles_fpr_expression() ->
     assert "f32 x_spacing_bind_33_0;" in candidate_text
     assert "x_spacing_bind_33_0 = x_spacing + col_offset;" in candidate_text
     assert "digit_offset = x_spacing_bind_33_0;" in candidate_text
+
+
+def test_node_set_split_rejects_split_local_used_outside_decl_block() -> None:
+    valid_source = (
+        "void fn_test(int j) {\n"
+        "    if (j != 0) {\n"
+        "        int j_split_34_0;\n"
+        "        j_split_34_0 = j;\n"
+        "        use(j_split_34_0);\n"
+        "    }\n"
+        "}\n"
+    )
+    invalid_source = (
+        "void fn_test(int j) {\n"
+        "    if (j != 0) {\n"
+        "        int j_split_34_0;\n"
+        "        j_split_34_0 = j;\n"
+        "    }\n"
+        "    use(j_split_34_0);\n"
+        "}\n"
+    )
+
+    assert node_set_split._synthetic_local_uses_within_decl_scope(
+        valid_source, "j_split_34_0"
+    )
+    assert not node_set_split._synthetic_local_uses_within_decl_scope(
+        invalid_source, "j_split_34_0"
+    )
 
 
 @pytest.mark.parametrize(
@@ -2645,6 +2720,48 @@ def test_summarize_node_set_split_scores_uses_objective_and_threshold() -> None:
     assert blocked["status"] == "blocked"
 
 
+def test_summarize_node_set_split_scores_surfaces_wrong_register_residuals() -> None:
+    req = NodeSetSplitRequest("fn_test", 1, 33, target_reg="f28", var_name="x")
+    patches = [CandidatePatch("c0", "src0", "c0", ((0, 0),), hunk="@@ c0")]
+    score = CandidateScore(
+        "c0",
+        compile_ok=True,
+        checkdiff_pct=None,
+        checkdiff_delta=None,
+        pcdump_score_delta=None,
+        diagnostics_path=None,
+        status="objective-failed",
+    )
+
+    summary = summarize_node_set_split_scores(
+        "fn_test",
+        req,
+        patches,
+        [{
+            "score": score,
+            "source_retained": "/tmp/c0.c",
+            "objective": {
+                "status": "wrong-register",
+                "class_id": 1,
+                "target_ig": 33,
+                "target_reg": "f28",
+                "target_reg_num": 28,
+                "assigned_reg": 26,
+                "source_path": "/tmp/c0.c",
+            },
+        }],
+        threshold=1.0,
+    )
+
+    row = summary["candidates"][0]
+    assert row["source_retained"] == "/tmp/c0.c"
+    assert row["target_ig"] == 33
+    assert row["target_reg"] == "f28"
+    assert row["target_reg_num"] == 28
+    assert row["achieved_reg"] == 26
+    assert row["achieved_register"] == "f26"
+
+
 def test_summarize_node_set_split_scores_reports_candidate_limit() -> None:
     req = NodeSetSplitRequest("fn_test", 0, 40, target_reg="r30", var_name="holder")
     patches = [
@@ -3175,6 +3292,61 @@ def test_node_set_split_anchors_repeated_local_to_source_scope() -> None:
                for patch in alias_lifetime)
 
 
+def test_node_set_split_source_line_prefers_innermost_shadowing_scope() -> None:
+    source = (
+        "void fn_test(int cond) {\n"
+        "    int j;\n"
+        "    j = 1;\n"
+        "    outer_use(j);\n"
+        "    if (cond) {\n"
+        "        int j;\n"
+        "        j = 2;\n"
+        "        inner_use(j);\n"
+        "    }\n"
+        "}\n"
+    )
+    delta = {
+        "function": "fn_test",
+        "class_id": 0,
+        "missing_virtuals": [
+            {
+                "target_ig": 34,
+                "current_register": "r24",
+                "desired_registers": ["r27"],
+                "source": {
+                    "kind": "local",
+                    "name": "j",
+                    "expression": "j",
+                    "source_line": 8,
+                },
+            }
+        ],
+    }
+
+    req = request_from_node_set_delta(delta, source_text=source)
+    assert req is not None
+    assert req.source_scope_path is not None
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+
+    alias_lifetime = [
+        patch for patch in patches
+        if patch.candidate_id.startswith("node-split-alias-j-ig34")
+        or patch.candidate_id.startswith("node-split-lifetime-j-ig34")
+    ]
+    assert alias_lifetime
+    assert all("outer_use(j_split_34_" not in patch.patched_source
+               for patch in alias_lifetime)
+    assert all("inner_use(j_split_34_" in patch.patched_source
+               or "j_split_sink_34_" in patch.patched_source
+               for patch in alias_lifetime)
+
+
 def test_node_set_split_unscoped_repeated_local_skips_broad_families() -> None:
     source = (
         "void fn_test(int* first, int* second) {\n"
@@ -3460,6 +3632,54 @@ def test_summarize_coupled_all_wrong_register_marks_exhaustive_terminal() -> Non
     next_steps = " ".join(summary["next_steps"])
     assert "do not rerun node-set-split with the same delta" in next_steps
     assert "switch to coloring-register steering" in next_steps
+
+
+def test_summarize_wrong_register_compile_failed_mix_marks_terminal() -> None:
+    req = NodeSetSplitRequest("fn_test", 0, 34, target_reg="r27", var_name="holder")
+    patches = [
+        CandidatePatch("c0", "src0", "c0", ((0, 0),), hunk="@@ c0"),
+        CandidatePatch("c1", "src1", "c1", ((0, 0),), hunk="@@ c1"),
+    ]
+    wrong_score = CandidateScore(
+        "c0",
+        compile_ok=True,
+        checkdiff_pct=None,
+        checkdiff_delta=None,
+        pcdump_score_delta=None,
+        diagnostics_path=None,
+        status="objective-failed",
+    )
+    failed_score = CandidateScore(
+        "c1",
+        compile_ok=False,
+        checkdiff_pct=None,
+        checkdiff_delta=None,
+        pcdump_score_delta=None,
+        diagnostics_path="/tmp/c1.c",
+        status="compile-failed",
+    )
+
+    summary = summarize_node_set_split_scores(
+        "fn_test",
+        req,
+        patches,
+        [
+            {"score": wrong_score, "objective": {"status": "wrong-register"}},
+            {
+                "score": failed_score,
+                "objective": {
+                    "status": "compile-failed",
+                    "source_path": "/tmp/c1.c",
+                },
+            },
+        ],
+        threshold=1.0,
+    )
+
+    assert summary["wrong_register_exhausted"] is False
+    assert summary["wrong_register_or_compile_failed_exhausted"] is True
+    assert summary["terminal_reason"] == "wrong-register-or-compile-failed"
+    assert "do not rerun node-set-split" in " ".join(summary["next_steps"])
 
 
 def test_summarize_coupled_all_wrong_register_emits_no_shippable_classification() -> None:

@@ -670,7 +670,30 @@ def test_solve_node_set_split_coupled_reports_wrong_register_exhausted(
     }
     assert payload["wrong_register_exhausted"] is True
     assert payload["terminal_reason"] == "all-wrong-register"
-    assert payload["candidates"][0]["objective_status"] == "wrong-register"
+    wrong_register = payload["candidates"][0]
+    assert wrong_register["objective_status"] == "wrong-register"
+    assert wrong_register["source_retained"]
+    retained = Path(wrong_register["source_retained"])
+    assert retained.exists()
+    assert "out = other + holder;" in retained.read_text(encoding="utf-8")
+    assert wrong_register["coupled_registers"] == [
+        {
+            "target_ig": 34,
+            "target_reg": "r27",
+            "target_reg_num": 27,
+            "achieved_reg": 26,
+            "achieved_register": "r26",
+            "target_reg_hit": False,
+        },
+        {
+            "target_ig": 44,
+            "target_reg": "r25",
+            "target_reg_num": 25,
+            "achieved_reg": 24,
+            "achieved_register": "r24",
+            "target_reg_hit": False,
+        },
+    ]
     assert any(
         "+steer-" in row["candidate_id"] for row in payload["candidates"]
     )
