@@ -133,6 +133,7 @@ class NodeSetSplitRequest:
     source_type: str | None = None
     source_kind: str | None = None
     target_regs: tuple[str, ...] = ()
+    source_scope_path: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         regs = tuple(
@@ -340,6 +341,7 @@ def generate_node_set_split_patches(
     request: NodeSetSplitRequest,
     *,
     max_read_sites: int = 4,
+    include_combos: bool = True,
 ) -> list[CandidatePatch]:
     """Generate bounded alias and lifetime source candidates for a request."""
     if request.var_name is None or request.blocked_reason is not None:
@@ -350,55 +352,81 @@ def generate_node_set_split_patches(
     fn_name = function or request.function
     patches: list[CandidatePatch] = []
     seen_sources: set[str] = set()
+    scope_paths = _source_scope_paths_for_name(source, fn_name, var_name)
+    ambiguous_scope_paths = scope_paths if len(scope_paths) > 1 else ()
+    if request.source_scope_path is not None:
+        alias_scope_paths: tuple[tuple[str, ...] | None, ...] = (
+            request.source_scope_path,
+        )
+    elif ambiguous_scope_paths:
+        alias_scope_paths = tuple(ambiguous_scope_paths)
+    else:
+        alias_scope_paths = (None,)
 
-    for read_idx in range(max(0, max_read_sites)):
-        alias_id = f"node-split-alias-{var_name}-ig{target_ig}-use{read_idx}"
-        try:
-            alias_source = mutate_insert_alias_before_use(
-                source,
-                fn_name,
-                var_name,
-                at_stmt_index=read_idx,
-                new_name=f"{var_name}_split_{target_ig}_{read_idx}",
+    for scope_idx, scope_path in enumerate(alias_scope_paths):
+        scope_suffix = (
+            f"-scope{scope_idx}" if scope_path is not None and len(alias_scope_paths) > 1
+            else ""
+        )
+        for read_idx in range(max(0, max_read_sites)):
+            alias_id = (
+                f"node-split-alias-{var_name}-ig{target_ig}"
+                f"{scope_suffix}-use{read_idx}"
             )
-        except MutationUnsupported:
-            alias_source = None
-        if alias_source is not None:
-            _append_unique_patch(
-                patches,
-                seen_sources,
-                source,
-                alias_source,
-                candidate_id=alias_id,
-                summary=(
-                    f"Introduce alias for {var_name} before read site "
-                    f"{read_idx} targeting ig{target_ig}."
-                ),
-            )
+            try:
+                alias_source = mutate_insert_alias_before_use(
+                    source,
+                    fn_name,
+                    var_name,
+                    at_stmt_index=read_idx,
+                    new_name=f"{var_name}_split_{target_ig}_{read_idx}",
+                    scope_filter=scope_path,
+                )
+            except MutationUnsupported:
+                alias_source = None
+            if alias_source is not None:
+                _append_unique_patch(
+                    patches,
+                    seen_sources,
+                    source,
+                    alias_source,
+                    candidate_id=alias_id,
+                    summary=(
+                        f"Introduce alias for {var_name} before read site "
+                        f"{read_idx} targeting ig{target_ig}."
+                    ),
+                )
 
-        lifetime_id = f"node-split-lifetime-{var_name}-ig{target_ig}-use{read_idx}"
-        try:
-            lifetime_source = mutate_preserve_lifetime_after_use(
-                source,
-                fn_name,
-                var_name,
-                at_stmt_index=read_idx,
-                sink_name=f"{var_name}_split_sink_{target_ig}_{read_idx}",
+            lifetime_id = (
+                f"node-split-lifetime-{var_name}-ig{target_ig}"
+                f"{scope_suffix}-use{read_idx}"
             )
-        except MutationUnsupported:
-            lifetime_source = None
-        if lifetime_source is not None:
-            _append_unique_patch(
-                patches,
-                seen_sources,
-                source,
-                lifetime_source,
-                candidate_id=lifetime_id,
-                summary=(
-                    f"Preserve {var_name} lifetime after read site "
-                    f"{read_idx} targeting ig{target_ig}."
-                ),
-            )
+            try:
+                lifetime_source = mutate_preserve_lifetime_after_use(
+                    source,
+                    fn_name,
+                    var_name,
+                    at_stmt_index=read_idx,
+                    sink_name=f"{var_name}_split_sink_{target_ig}_{read_idx}",
+                    scope_filter=scope_path,
+                )
+            except MutationUnsupported:
+                lifetime_source = None
+            if lifetime_source is not None:
+                _append_unique_patch(
+                    patches,
+                    seen_sources,
+                    source,
+                    lifetime_source,
+                    candidate_id=lifetime_id,
+                    summary=(
+                        f"Preserve {var_name} lifetime after read site "
+                        f"{read_idx} targeting ig{target_ig}."
+                    ),
+                )
+
+    if ambiguous_scope_paths:
+        return _order_node_set_patches_for_search(patches)
 
     _append_decl_order_patches(
         patches,
@@ -461,13 +489,14 @@ def generate_node_set_split_patches(
         target_ig,
         request.class_id,
     )
-    _append_combo_patches(
-        patches,
-        seen_sources,
-        source,
-        fn_name,
-        request,
-    )
+    if include_combos:
+        _append_combo_patches(
+            patches,
+            seen_sources,
+            source,
+            fn_name,
+            request,
+        )
 
     return _order_node_set_patches_for_search(patches)
 
@@ -669,6 +698,7 @@ def _generate_node_set_request_patches(
             function,
             request,
             max_read_sites=max_read_sites,
+            include_combos=False,
         )
     return generate_node_set_introduce_binding_patches(
         source,
@@ -2178,6 +2208,17 @@ def _request_from_missing_virtual(
     var_name = _bindable_source_name(source_map)
     source_expression = _optional_str(source_map.get("expression"))
     source_kind = _optional_str(source_map.get("kind"))
+    source_line = _as_int(source_map.get("source_line"))
+    source_scope_path = (
+        _source_scope_path_for_name(
+            source_text,
+            function,
+            var_name,
+            source_line=source_line,
+        )
+        if source_text is not None and var_name is not None and function
+        else None
+    )
     source_type = _source_binding_type(
         source_map,
         source_text=source_text,
@@ -2211,6 +2252,7 @@ def _request_from_missing_virtual(
         source_type=source_type,
         source_kind=source_kind,
         target_regs=_target_registers(entry),
+        source_scope_path=source_scope_path,
     )
 
 
@@ -2235,7 +2277,99 @@ def _source_declares_name(source_text: str, function: str, var_name: str) -> boo
     params_text, body_text, _line = extracted
     names = {decl.name for decl in _parse_params(params_text)}
     names.update(decl.name for decl in walk_local_decls(body_text))
+    try:
+        from . import ast_walker
+
+        names.update(
+            decl.name
+            for decl in ast_walker.walk_function(source_text, function, path=None)
+        )
+    except Exception:
+        pass
     return var_name in names
+
+
+def _source_scope_path_for_name(
+    source_text: str | None,
+    function: str,
+    var_name: str | None,
+    *,
+    source_line: int | None,
+) -> tuple[str, ...] | None:
+    if not source_text or not function or not var_name:
+        return None
+    try:
+        from . import ast_walker
+
+        decls = [
+            decl for decl in ast_walker.walk_function(source_text, function, path=None)
+            if decl.name == var_name
+        ]
+    except Exception:
+        return None
+    if not decls:
+        return None
+    if source_line is not None:
+        containing = [
+            decl for decl in decls
+            if decl.line_no == source_line
+            or (
+                decl.scope_byte_range[0]
+                <= _line_start_byte(source_text, source_line)
+                < decl.scope_byte_range[1]
+            )
+        ]
+        if len(containing) == 1:
+            return containing[0].scope_path
+        if containing:
+            containing.sort(
+                key=lambda decl: (
+                    decl.line_no != source_line,
+                    len(decl.scope_path),
+                )
+            )
+            return containing[0].scope_path
+    if len(decls) == 1:
+        return decls[0].scope_path
+    return None
+
+
+def _source_scope_paths_for_name(
+    source_text: str | None,
+    function: str,
+    var_name: str | None,
+) -> tuple[tuple[str, ...], ...]:
+    if not source_text or not function or not var_name:
+        return ()
+    try:
+        from . import ast_walker
+
+        decls = [
+            decl for decl in ast_walker.walk_function(source_text, function, path=None)
+            if decl.name == var_name
+        ]
+    except Exception:
+        return ()
+    seen: set[tuple[str, ...]] = set()
+    paths: list[tuple[str, ...]] = []
+    for decl in decls:
+        if decl.scope_path in seen:
+            continue
+        seen.add(decl.scope_path)
+        paths.append(decl.scope_path)
+    return tuple(paths)
+
+
+def _line_start_byte(source_text: str, line_no: int) -> int:
+    if line_no <= 1:
+        return 0
+    line = 1
+    for idx, ch in enumerate(source_text):
+        if ch == "\n":
+            line += 1
+            if line == line_no:
+                return len(source_text[:idx + 1].encode("utf-8"))
+    return len(source_text.encode("utf-8"))
 
 
 def _source_binding_type(
@@ -4778,6 +4912,11 @@ def _score_row(entry: Any) -> dict[str, Any]:
         if isinstance(entry, Mapping) and entry.get("diagnostics_path") is not None
         else getattr(score, "diagnostics_path", None)
     )
+    objective_error = (
+        objective.get("error")
+        if isinstance(objective, Mapping) and objective.get("error") is not None
+        else None
+    )
     return {
         "candidate_id": candidate_id,
         "compile_ok": compile_ok,
@@ -4788,6 +4927,7 @@ def _score_row(entry: Any) -> dict[str, Any]:
         ),
         "score_reason": getattr(score, "score_reason", None),
         "objective_status": _objective_status(objective),
+        "objective_error": str(objective_error) if objective_error is not None else None,
         "objective": dict(objective) if isinstance(objective, Mapping) else objective,
     }
 

@@ -1261,6 +1261,7 @@ def test_solve_node_set_split_retains_compile_failed_candidate_source(
     payload = json.loads(result.output)
     row = payload["candidates"][0]
     assert row["objective_status"] == "compile-failed"
+    assert row["objective_error"] == "synthetic compile failure"
     diagnostics_path = Path(row["diagnostics_path"])
     probe_root = (
         tmp_path
@@ -1470,6 +1471,81 @@ def test_solve_node_set_split_coupled_generation_honors_budget(
     assert payload["evaluated_count"] == 0
     assert payload["in_place_recolor"]["status"] == "incomplete"
     assert payload["in_place_recolor"]["terminal"] is False
+    assert compile_labels == []
+
+
+def test_solve_node_set_split_coupled_zero_patches_skips_baseline_compile(
+    monkeypatch,
+    tmp_path,
+):
+    source = _node_split_repo(
+        tmp_path,
+        monkeypatch,
+        source_text=(
+            "void fn_test(void) {\n"
+            "    int holder;\n"
+            "    int other;\n"
+            "    use(holder, other);\n"
+            "}\n"
+        ),
+    )
+    delta_path = tmp_path / "node-set-delta.json"
+    delta_path.write_text(json.dumps({
+        "kind": "node-set-delta",
+        "function": "fn_test",
+        "class_id": 0,
+        "missing_virtuals": [
+            {
+                "target_ig": 34,
+                "current_register": "r24",
+                "desired_registers": ["r27"],
+                "source": {"name": "holder", "expression": "holder"},
+            },
+            {
+                "target_ig": 44,
+                "current_register": "r27",
+                "desired_registers": ["r25"],
+                "source": {"name": "other", "expression": "other"},
+            },
+        ],
+    }), encoding="utf-8")
+    compile_labels = []
+
+    def fake_generate(*_args, **_kwargs):
+        return []
+
+    def fake_compile_signature(path, **kwargs):
+        compile_labels.append(kwargs["label"])
+        raise AssertionError("baseline compile must not run with zero patches")
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.node_set_split.generate_coupled_node_set_split_patches",
+        fake_generate,
+    )
+    monkeypatch.setattr(
+        debugcli,
+        "_node_set_split_compile_signature_and_pcdump",
+        fake_compile_signature,
+        raising=False,
+    )
+
+    result = runner.invoke(debugcli.debug_app, [
+        "solve", "node-set-split",
+        "--coupled",
+        "--node-set-delta", str(delta_path),
+        "--source-file", str(source),
+        "--max-candidates", "80",
+        "--json",
+    ])
+
+    assert result.exit_code == 3, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "blocked"
+    assert payload["stop_condition"]["kind"] == "no-coupled-probes"
+    assert payload["generated_count"] == 0
+    assert payload["scored_count"] == 0
+    assert payload["evaluated_count"] == 0
+    assert payload["in_place_recolor"]["status"] == "search-active"
     assert compile_labels == []
 
 
@@ -2031,6 +2107,58 @@ def test_derive_node_set_delta_payload_uses_fpr_prefix_for_class_one():
     assert entry["current_virtual"] == "f33"
     assert entry["current_register"] == "f31"
     assert entry["desired_registers"] == ["f28"]
+
+
+def test_derive_node_set_delta_payload_drops_low_confidence_source_binding():
+    ig = IG(
+        class_id=0,
+        select_order=[34],
+        nodes={
+            34: IGNode(
+                ig_idx=34,
+                neighbors={44},
+                precolored={},
+                array_size=2,
+                incomplete=False,
+                observed_reg=24,
+            )
+        },
+        decision_igs={34},
+    )
+    source = SimpleNamespace(
+        kind="local",
+        name="dst_iter",
+        type="u8*",
+        source_file="src/melee/mn/mndiagram.c",
+        source_line=911,
+        source_col=9,
+        expression="dst_iter",
+        base_virtual=None,
+        base_var=None,
+        field_offset=None,
+        field_name=None,
+        confidence="low-confidence",
+    )
+    report = SimpleNamespace(
+        virtuals=(
+            SimpleNamespace(ig_idx=34, live_range=(33, 63), source=source),
+        )
+    )
+
+    payload = debugcli._derive_node_set_delta_payload(
+        function="mnDiagram_SortNamesByKOs",
+        class_id=0,
+        ig=ig,
+        phys_target={34: 27},
+        phys_conflicts=[],
+        report=report,
+    )
+
+    entry = payload["missing_virtuals"][0]
+    assert entry["target_ig"] == 34
+    assert entry["source"] is None
+    assert "dst_iter" not in entry["source_action"]
+    assert "Split ig34" in entry["source_action"]
 
 
 def test_node_set_delta_conflict_index_parser_ignores_malformed_rows():

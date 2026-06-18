@@ -3116,6 +3116,112 @@ def test_generate_coupled_single_request_degenerates_to_single_ig() -> None:
     assert all(p.patched_source != _TWO_VAR_SOURCE for p in patches)
 
 
+def test_node_set_split_anchors_repeated_local_to_source_scope() -> None:
+    source = (
+        "void fn_test(int* first, int* second) {\n"
+        "    int i;\n"
+        "    for (i = 0; i < 2; i++) {\n"
+        "        int j;\n"
+        "        j = first[i];\n"
+        "        first_use(j);\n"
+        "    }\n"
+        "    for (i = 0; i < 2; i++) {\n"
+        "        int j;\n"
+        "        j = second[i];\n"
+        "        second_use(j);\n"
+        "    }\n"
+        "}\n"
+    )
+    delta = {
+        "function": "fn_test",
+        "class_id": 0,
+        "missing_virtuals": [
+            {
+                "target_ig": 34,
+                "current_register": "r24",
+                "desired_registers": ["r27"],
+                "source": {
+                    "kind": "local",
+                    "name": "j",
+                    "expression": "j",
+                    "source_line": 9,
+                },
+            }
+        ],
+    }
+
+    req = request_from_node_set_delta(delta, source_text=source)
+    assert req is not None
+    assert req.var_name == "j"
+    assert req.source_scope_path is not None
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        req,
+        max_read_sites=1,
+    )
+
+    alias_lifetime = [
+        patch for patch in patches
+        if patch.candidate_id.startswith("node-split-alias-j-ig34")
+        or patch.candidate_id.startswith("node-split-lifetime-j-ig34")
+    ]
+    assert alias_lifetime
+    assert all("first_use(j_split_34_" not in patch.patched_source
+               for patch in alias_lifetime)
+    assert all("second_use(j_split_34_" in patch.patched_source
+               or "j_split_sink_34_" in patch.patched_source
+               for patch in alias_lifetime)
+
+
+def test_node_set_split_unscoped_repeated_local_skips_broad_families() -> None:
+    source = (
+        "void fn_test(int* first, int* second) {\n"
+        "    int i;\n"
+        "    for (i = 0; i < 2; i++) {\n"
+        "        int j;\n"
+        "        j = first[i];\n"
+        "        first_use(j);\n"
+        "    }\n"
+        "    for (i = 0; i < 2; i++) {\n"
+        "        int j;\n"
+        "        j = second[i];\n"
+        "        second_use(j);\n"
+        "    }\n"
+        "}\n"
+    )
+    request = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        34,
+        current_reg="r24",
+        target_reg="r27",
+        var_name="j",
+    )
+
+    patches = generate_node_set_split_patches(
+        source,
+        "fn_test",
+        request,
+        max_read_sites=1,
+    )
+
+    assert patches
+    assert all(
+        patch.candidate_id.startswith("node-split-alias-j-ig34")
+        or patch.candidate_id.startswith("node-split-lifetime-j-ig34")
+        for patch in patches
+    )
+    assert all(
+        not (
+            "first_use(j_split_34_" in patch.patched_source
+            and "second_use(j_split_34_" in patch.patched_source
+        )
+        for patch in patches
+    )
+
+
 def test_generate_coupled_empty_requests_returns_empty() -> None:
     assert generate_coupled_node_set_split_patches(
         _TWO_VAR_SOURCE, "fn_test", []
@@ -3691,6 +3797,7 @@ def test_cli_coupled_blocks_when_fewer_than_two_bindable(tmp_path, monkeypatch) 
     summary = _json.loads(result.output)
     assert summary["status"] == "blocked"
     assert "coupled mode needs >=2" in (summary.get("blocked_reason") or "")
+    assert summary["stop_condition"]["kind"] == "no-coupled-probes"
     assert len(summary["coupled_requests"]) == 1
     assert summary["shared_source_var"] is None
     classification = summary["in_place_recolor"]

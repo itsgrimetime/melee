@@ -23462,6 +23462,157 @@ def _select_order_candidate_residual_first_divergence(
     }
 
 
+def _select_order_force_phys_hits(variant: Mapping[str, Any]) -> set[int]:
+    objective = variant.get("objective")
+    if not isinstance(objective, Mapping):
+        return set()
+    targets = objective.get("force_phys_targets")
+    if not isinstance(targets, Mapping):
+        return set()
+    missing = {
+        int(item) for item in objective.get("force_phys_missing") or []
+        if isinstance(item, (int, str)) and str(item).lstrip("-").isdigit()
+    }
+    mismatches_raw = objective.get("force_phys_mismatches")
+    mismatches: set[int] = set()
+    if isinstance(mismatches_raw, Mapping):
+        for key in mismatches_raw:
+            if isinstance(key, (int, str)) and str(key).lstrip("-").isdigit():
+                mismatches.add(int(key))
+    hits: set[int] = set()
+    for key in targets:
+        if isinstance(key, (int, str)) and str(key).lstrip("-").isdigit():
+            ig_idx = int(key)
+            if ig_idx not in missing and ig_idx not in mismatches:
+                hits.add(ig_idx)
+    return hits
+
+
+def _select_order_frame_preserved(objective: Mapping[str, Any]) -> bool:
+    frame_delta = objective.get("frame_delta")
+    return frame_delta in (None, 0)
+
+
+def _select_order_variant_source_hunk(
+    variant: Mapping[str, Any],
+    *,
+    function: str | None,
+) -> str | None:
+    if not function:
+        return None
+    source_path = variant.get("source_retained") or variant.get("path")
+    if not isinstance(source_path, str) or not source_path.endswith(".c"):
+        return None
+    try:
+        path = Path(source_path)
+        if not path.exists():
+            return None
+        return _compact_source_hunk_for_function(
+            path.read_text(encoding="utf-8", errors="replace"),
+            function,
+        )
+    except OSError:
+        return None
+
+
+def _select_order_diagnostic_buckets(
+    ranked_variants: list[dict],
+    *,
+    force_phys: Mapping[int, int],
+    function: str | None = None,
+    global_top: list[Mapping[str, Any]] | None = None,
+    max_per_bucket: int = 3,
+) -> dict[str, list[dict[str, Any]]]:
+    if not force_phys:
+        return {}
+
+    standard_keys = [
+        "global-top",
+        "best-exact-distance",
+        "best-one-target-hits",
+        "best-opcode-frame-preserving",
+        "best-frame-preserving-only",
+        *[f"force-phys-hit-{ig_idx}" for ig_idx in sorted(force_phys)],
+    ]
+    buckets: dict[str, list[dict[str, Any]]] = {
+        key: [] for key in standard_keys
+    }
+
+    def add(bucket: str, variant: Mapping[str, Any]) -> None:
+        entries = buckets.setdefault(bucket, [])
+        label = variant.get("label")
+        if any(entry.get("label") == label for entry in entries):
+            return
+        if len(entries) >= max_per_bucket:
+            return
+        objective = variant.get("objective")
+        probe = variant.get("probe")
+        entries.append({
+            "label": label,
+            "rank": variant.get("rank"),
+            "chain": list(variant.get("chain") or []),
+            "path": variant.get("path"),
+            "source_retained": variant.get("source_retained"),
+            "probe": dict(probe) if isinstance(probe, Mapping) else None,
+            "source_hunk": _select_order_variant_source_hunk(
+                variant,
+                function=function,
+            ),
+            "force_phys_satisfied_count": (
+                objective.get("force_phys_satisfied_count")
+                if isinstance(objective, Mapping) else None
+            ),
+            "force_phys_distance": (
+                objective.get("force_phys_distance")
+                if isinstance(objective, Mapping) else None
+            ),
+            "opcode_shape_preserved": (
+                objective.get("opcode_shape_preserved")
+                if isinstance(objective, Mapping) else None
+            ),
+            "frame_delta": (
+                objective.get("frame_delta")
+                if isinstance(objective, Mapping) else None
+            ),
+        })
+
+    for variant in global_top or []:
+        add("global-top", variant)
+    for variant in ranked_variants:
+        if variant.get("status") != "ok":
+            continue
+        objective = variant.get("objective")
+        if not isinstance(objective, Mapping):
+            continue
+        if objective.get("force_phys_distance") == 0:
+            add("best-exact-distance", variant)
+        hits = _select_order_force_phys_hits(variant)
+        if len(hits) == 1:
+            add("best-one-target-hits", variant)
+        if objective.get("opcode_shape_preserved") is True and (
+            _select_order_frame_preserved(objective)
+        ):
+            add("best-opcode-frame-preserving", variant)
+        elif _select_order_frame_preserved(objective):
+            add("best-frame-preserving-only", variant)
+        for ig_idx in sorted(hits):
+            add(f"force-phys-hit-{ig_idx}", variant)
+
+    return buckets
+
+
+def _select_order_residual_variant_labels_from_buckets(
+    buckets: Mapping[str, list[Mapping[str, Any]]],
+) -> set[str]:
+    labels: set[str] = set()
+    for entries in buckets.values():
+        for entry in entries:
+            label = entry.get("label")
+            if isinstance(label, str):
+                labels.add(label)
+    return labels
+
+
 def _format_select_order_residual(residual: Mapping[str, Any]) -> str:
     if residual.get("status") != "ok":
         return (
@@ -24075,6 +24226,24 @@ def _solve_source_attribution_dict(source) -> dict | None:
     }
 
 
+_NODE_SET_UNSAFE_SOURCE_CONFIDENCES = {
+    "low-confidence",
+    "ambiguous",
+    "ambiguous-nested",
+    "unsupported",
+    "rejected",
+}
+
+
+def _node_set_delta_safe_source_attr(source) -> object | None:
+    if source is None:
+        return None
+    confidence = getattr(source, "confidence", None)
+    if confidence in _NODE_SET_UNSAFE_SOURCE_CONFIDENCES:
+        return None
+    return source
+
+
 def _node_set_delta_source_action(entry: dict) -> str:
     source = entry.get("source") if isinstance(entry.get("source"), dict) else None
     live_range = entry.get("live_range")
@@ -24153,9 +24322,10 @@ def _derive_node_set_delta_payload(
                     desired_regs.append(value)
         node = ig.nodes.get(target_ig) if ig is not None else None
         attr = virtuals_by_ig.get(target_ig)
-        source = _solve_source_attribution_dict(
+        safe_source = _node_set_delta_safe_source_attr(
             attr.source if attr is not None else None
         )
+        source = _solve_source_attribution_dict(safe_source)
         live_range = (
             list(attr.live_range)
             if attr is not None and attr.live_range is not None else None
@@ -25421,6 +25591,7 @@ def solve_node_set_split_cmd(
                 [],
                 [],
                 threshold,
+                stop_reason="no-coupled-probes",
                 coupled_requests=coupled_requests,
             )
             _emit_node_set_split_summary(summary, json_out=json_out)
@@ -25560,6 +25731,10 @@ def solve_node_set_split_cmd(
             [],
             [],
             threshold,
+            stop_reason=(
+                "no-coupled-probes"
+                if coupled_requests is not None else "no-source-probes"
+            ),
             coupled_requests=coupled_requests,
         )
         _emit_node_set_split_summary(summary, json_out=json_out)
@@ -28992,11 +29167,37 @@ def debug_select_order_search_cmd(
         )
     else:
         residual_count = residual_first_divergence_top
+
+    residual_top_variants: list[dict] = []
     if residual_count and proof_force_map:
-        residual_variants = [
+        residual_top_variants = [
             variant for variant in ranked_variants
             if variant.get("status") == "ok"
         ][:residual_count]
+    diagnostic_buckets: dict[str, list[dict[str, Any]]] = {}
+    if proof_force_map:
+        diagnostic_buckets = _select_order_diagnostic_buckets(
+            ranked_variants,
+            force_phys=proof_force_map,
+            function=function,
+            global_top=residual_top_variants,
+        )
+    residual_labels = _select_order_residual_variant_labels_from_buckets(
+        diagnostic_buckets
+    )
+    residual_labels.update(
+        label for label in (
+            variant.get("label") for variant in residual_top_variants
+        )
+        if isinstance(label, str)
+    )
+    if residual_labels and proof_force_map:
+        residual_variants = [
+            variant for variant in ranked_variants
+            if variant.get("status") == "ok"
+            and isinstance(variant.get("label"), str)
+            and variant["label"] in residual_labels
+        ]
         for variant in residual_variants:
             pcdump_key = variant.get("_pcdump_key")
             candidate_pcdump = (
@@ -29044,6 +29245,7 @@ def debug_select_order_search_cmd(
                 for key, value in window_order_source_attributions.items()
             },
             "window_order_probe_diagnostics": window_order_probe_diagnostics,
+            "diagnostic_buckets": diagnostic_buckets,
             "baseline": baseline.to_dict(),
             "baseline_cache": baseline_cache,
             "source": source_label,

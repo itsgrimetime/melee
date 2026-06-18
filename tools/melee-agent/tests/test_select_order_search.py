@@ -1847,6 +1847,16 @@ def test_select_order_search_force_phys_beam_composes_transform_and_window_order
     assert variants[1]["chain"] == ["indexed-byte"]
     assert variants[1]["objective"]["force_phys_satisfied_count"] == 0
     assert variants[1]["objective"]["match_percent"] == 99.0
+    bucket_entry = next(
+        entry for entry in payload["diagnostic_buckets"]["force-phys-hit-32"]
+        if entry["label"] == variants[0]["label"]
+    )
+    assert bucket_entry["chain"] == ["indexed-byte", "window-force"]
+    assert bucket_entry["probe"]["chain"] == ["indexed-byte", "window-force"]
+    assert bucket_entry["probe"]["provenance"]["kind"] == (
+        "window-order-fallback-source-move"
+    )
+    assert "void fn_80000000" in bucket_entry["source_hunk"]
 
 
 def test_select_order_search_marks_source_pcdump_omission_as_malformed_source(
@@ -2195,6 +2205,96 @@ def test_select_order_search_force_phys_residuals_annotate_top_retained_sources(
         "force-phys-hit",
         "force-phys-miss",
     ]
+
+
+def test_select_order_search_force_phys_residuals_include_diagnostic_buckets(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    exact = tmp_path / "exact.txt"
+    one_hit = tmp_path / "one-hit.txt"
+    miss = tmp_path / "miss.txt"
+    baseline.write_text(BASELINE)
+    exact.write_text(TARGET_ORDER_RIGHT_PHYS)
+    one_hit.write_text(ONE_FORCE_PHYS_HIT)
+    miss.write_text(TARGET_ORDER_WRONG_PHYS)
+    residual_calls: list[str] = []
+
+    def fake_residual_helper(*args, **kwargs) -> dict:
+        variant = kwargs.get("variant")
+        if variant is None:
+            variant = next(
+                (arg for arg in args if isinstance(arg, dict) and "label" in arg),
+                {},
+            )
+        label = variant.get("label")
+        residual_calls.append(label)
+        return {
+            "status": "ok",
+            "candidate_label": label,
+            "rank": variant.get("rank"),
+            "first_divergence": {
+                "candidate_label": label,
+                "rank": variant.get("rank"),
+                "case": "register-choice",
+            },
+        }
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_candidate_residual_first_divergence",
+        fake_residual_helper,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--candidate",
+            f"exact:block-scope={exact}",
+            "--candidate",
+            f"one-hit:block-scope={one_hit}",
+            "--candidate",
+            f"miss:block-scope={miss}",
+            "--force-phys",
+            "32:29,33:30",
+            "--residual-first-divergence-top",
+            "1",
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    variants = {variant["label"]: variant for variant in payload["variants"]}
+    assert variants["exact"]["residual_analysis"]["candidate_label"] == "exact"
+    assert variants["one-hit"]["residual_analysis"]["candidate_label"] == "one-hit"
+    buckets = payload["diagnostic_buckets"]
+    assert set(buckets) >= {
+        "global-top",
+        "best-exact-distance",
+        "best-one-target-hits",
+        "best-opcode-frame-preserving",
+        "best-frame-preserving-only",
+        "force-phys-hit-32",
+        "force-phys-hit-33",
+    }
+    one_hit_entry = next(
+        item for item in buckets["force-phys-hit-33"]
+        if item["label"] == "one-hit"
+    )
+    assert one_hit_entry["probe"] is None
+    assert one_hit_entry["source_hunk"] is None
+    assert "one-hit" in residual_calls
 
 
 def test_select_order_search_force_phys_aliases_compare_normalized_maps(
