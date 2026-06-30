@@ -1,0 +1,11 @@
+                                                                                
+ Usage: melee-agent debug permute remote ps [OPTIONS]                           
+                                                                                
+ Dashboard of active remote permuter sessions across all coders.                
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --timeout        FLOAT  Per-target SSH probe timeout in seconds.             │
+│                         [default: 15.0]                                      │
+│ --help                  Show this message and exit.                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

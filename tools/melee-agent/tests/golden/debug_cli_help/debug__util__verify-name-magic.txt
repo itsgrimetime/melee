@@ -1,0 +1,55 @@
+                                                                                
+ Usage: melee-agent debug util verify-name-magic [OPTIONS]                      
+                                                                                
+ Compile, optionally rename anonymous SDA2 constants, then checkdiff.           
+                                                                                
+ Separates 'this is just constant-label noise' from 'this is real               
+ codegen diff.' The agent runs this to confirm whether anonymous-vs-            
+ named SDA2 relocations are the only diff, or whether there's still             
+ a real .text mismatch.                                                         
+                                                                                
+ Common case: MWCC's int-to-float cast emits a magic constant                   
+ (0x4330000080000000 signed, 0x4330000000000000 unsigned) into the              
+ .sdata2 literal pool under an anonymous `@N` name. The target .o               
+ references the same bytes via a named symbol (from symbols.txt).               
+ Reloc-target diff blocks byte matching even though the data is                 
+ identical. `--map s32=<symname>,u32=<symname>` renames the @N                  
+ symbols so checkdiff sees matching reloc targets. Or pass                      
+ `--apply-auto` to do the lookup + rename automatically from the                
+ production .o, no map required.                                                
+                                                                                
+ Flow:                                                                          
+   1. Build the function's TU object (`ninja build/GALE01/src/<unit>.o`)        
+   2. If `--map` given, rename anonymous @N .sdata2 symbols via objcopy.        
+      If `--apply-auto` given, auto-resolve via value lookup against the        
+      production .o and apply renames + globalize in one step.                  
+      If neither given, list anonymous symbols and suggest the map format.      
+   3. Run `tools/checkdiff.py <function> --format plain` and forward            
+      its output verbatim.                                                      
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function    -f      TEXT  Function name [required]                      │
+│    --map         -m      TEXT  Mapping of magic constant → named symbol.     │
+│                                E.g.,                                         │
+│                                's32=mnVibration_804DC018,u32=mnVibration_80… │
+│                                Keys: 's32' (signed int-to-float bias), 'u32' │
+│                                (unsigned), any hex literal, or '@N' for      │
+│                                direct anonymous-symbol rename. If omitted,   │
+│                                the .o is built and anonymous magic symbols   │
+│                                are LISTED with a suggested map (useful for   │
+│                                figuring out what to pass).                   │
+│    --apply-auto                Automatically resolve and apply the full      │
+│                                anonymous → production-symbol rename, no      │
+│                                --map needed. Cross-references the production │
+│                                .o (`build/GALE01/obj/<unit>.o`) by value,    │
+│                                renames every anonymous @N .sdata2 symbol     │
+│                                whose backing bytes match a named symbol in   │
+│                                the production .o, then globalizes            │
+│                                (STB_GLOBAL) the new symbols. Makes the       │
+│                                'named SDA2 magic constants' matching blocker │
+│                                invisible to subsequent checkdiff runs        │
+│                                without manually constructing a map. Mutually │
+│                                exclusive with --map.                         │
+│    --help                      Show this message and exit.                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

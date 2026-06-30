@@ -1,0 +1,9 @@
+                                                                                
+ Usage: melee-agent debug permute local-orphans [OPTIONS]                       
+                                                                                
+ Detect orphaned local wibo/MWCC compile processes.                             
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

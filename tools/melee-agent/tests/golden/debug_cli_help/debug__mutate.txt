@@ -1,0 +1,32 @@
+                                                                                
+ Usage: melee-agent debug mutate [OPTIONS] COMMAND [ARGS]...                    
+                                                                                
+ Apply focused source mutations on specific variables or decls.                 
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ decl-orders                     Tier 7b: enumerate local-decl orderings,     │
+│                                 find ones that improve match%.               │
+│ type-change                     Change a local variable's declared type.     │
+│ insert-alias                    Insert a fresh local copy of a variable      │
+│                                 before the N-th                              │
+│                                 reading statement and rewrite that statement │
+│                                 to use the alias.                            │
+│ lifetime-layout                 Explore lifetime/layout source probes and    │
+│                                 attribute pressure deltas.                   │
+│ control-flow-shape-search       Compile and score conservative control-flow  │
+│                                 shape source probes.                         │
+│ indexed-struct-search           Compile and score indexed struct pointer     │
+│                                 dematerialization probes.                    │
+│ name-magic-source-declarations  Generate source declarations/references for  │
+│                                 name-magic relocation mismatches.            │
+│ frame-transform-search          Compile and score directed source transforms │
+│                                 for frame-size divergence.                   │
+│ simplify-order                  Search for source variants that produce a    │
+│                                 desired simplify order.                      │
+│ search                          Tier 3: multi-start search over targeted     │
+│                                 mutation seeds.                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

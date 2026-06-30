@@ -1,0 +1,40 @@
+                                                                                
+ Usage: melee-agent debug search [OPTIONS] COMMAND [ARGS]...                    
+                                                                                
+ Fast+directed match-search substrate (Spec 1).                                 
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ structure                           Run structure-search axes and rank       │
+│                                     candidate variants.                      │
+│ plan-transforms                     Plan source-transform families and       │
+│                                     instantiate bounded probes.              │
+│ baseline-escape                     Generate post-ceiling baseline escape    │
+│                                     candidates for retained allocator        │
+│                                     stalls.                                  │
+│ source-model-synthesis              Generate and classify post-meta-ceiling  │
+│                                     source-family probes.                    │
+│ post-source-context-next-dimension  Discover the next explicit handoff after │
+│                                     Draw source-context exhaustion.          │
+│ post-source-ceiling-axis            Rank backend/codegen axes after terminal │
+│                                     source-family exhaustion.                │
+│ source-family-continuation          Summarize post-meta source-family        │
+│                                     continuation evidence.                   │
+│ retained-frontiers                  Rank retained frontiers and suppress     │
+│                                     lanes closed by terminal evidence.       │
+│ triage                              Triage directed-search candidates by     │
+│                                     source delta and proof movement.         │
+│ combine                             Recombine complementary directed-search  │
+│                                     candidate source hunks.                  │
+│ minimize                            Delta-reduce candidate subhunks while    │
+│                                     preserving proof assignments.            │
+│ run                                 Run a search over source variants for    │
+│                                     FUNCTION in UNIT.                        │
+│ directed                            Run the directed (pcdump-guided) search  │
+│                                     layer for FUNCTION in UNIT.              │
+│ status                              Show status of the search substrate      │
+│                                     (store, config).                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,32 @@
+                                                                                
+ Usage: melee-agent debug inspect trace-copy [OPTIONS] [PCDUMP]                 
+                                                                                
+ Trace where a pcode copy appears and why it disappears.                        
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Auto-resolves from cache when    │
+│                         omitted.                                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function     -f      TEXT     Function containing the pcode copy.       │
+│                                    [required]                                │
+│    --from                 TEXT     Source virtual register for the copy,     │
+│                                    e.g. r50.                                 │
+│    --to                   TEXT     Destination virtual register for the      │
+│                                    copy, e.g. r108.                          │
+│    --list-copies                   Discover and trace all virtual-register   │
+│                                    copies in the function.                   │
+│    --involving            TEXT     Discovery filter: only copies with this   │
+│                                    source or destination virtual.            │
+│    --near-block           INTEGER  Discovery filter: only copies observed in │
+│                                    this basic block.                         │
+│    --class                TEXT     Register class for virtual-to-IG lookup   │
+│                                    (gpr/int or fp/fpr).                      │
+│    --source-file          PATH     C source file used to map call-return     │
+│                                    copy chains back to source expressions.   │
+│                                    Defaults to the repo source for the       │
+│                                    function when available.                  │
+│    --json                          Emit as JSON.                             │
+│    --help                          Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

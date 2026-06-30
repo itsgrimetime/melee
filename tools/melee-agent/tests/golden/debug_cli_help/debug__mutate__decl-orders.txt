@@ -1,0 +1,65 @@
+                                                                                
+ Usage: melee-agent debug mutate decl-orders [OPTIONS] FUNCTION                 
+                                                                                
+ Tier 7b: enumerate local-decl orderings, find ones that improve match%.        
+                                                                                
+ Most "stuck near 99%" cases have a 1-line declaration-reorder fix that         
+ permuter eventually finds at ~2000 iterations. This command brute-forces       
+ the small decl-order search space directly.                                    
+                                                                                
+ Strategies (in order of cost):                                                 
+                                                                                
+   promote (default): for each of N locals, try promoting to position 0         
+     → N candidates, ~N×6sec                                                    
+   demote: each → position N-1 → N candidates                                   
+   swap: each adjacent pair swap → N-1 candidates                               
+   all: promote + demote + swap → ~3N candidates                                
+   full: all N! permutations (refuses for N>7 — would take hours)               
+                                                                                
+ Default reverts after enumeration. Pass --keep-best to apply the best          
+ winning ordering.                                                              
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    function      TEXT  Function name to enumerate orderings for [required] │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --strategy                 TEXT     Which orderings to try: 'promote' (move  │
+│                                     each var to first plus bounded           │
+│                                     group/pair promotions), 'demote' (move   │
+│                                     each to last; N), 'swap' (adjacent pair  │
+│                                     swaps; N-1), 'all'                       │
+│                                     (promote+demote+swap), or 'full' (every  │
+│                                     permutation; N! — refuses for N>7).      │
+│                                     [default: promote]                       │
+│ --threshold                FLOAT    Minimum improvement (percentage points)  │
+│                                     to consider a win. Default 0.05 —        │
+│                                     catches the +0.05-0.09% chain wins that  │
+│                                     matching agents observed permuter        │
+│                                     producing.                               │
+│                                     [default: 0.05]                          │
+│ --keep-best                         If the best ordering improves match% by  │
+│                                     ≥threshold, leave it applied. Default    │
+│                                     reverts to original.                     │
+│ --iterate                           After finding the best ordering, apply   │
+│                                     it and re-run the enumeration from the   │
+│                                     new baseline. Repeats until no           │
+│                                     improvement found (or --iterate-max      │
+│                                     reached). Stacks small wins below the    │
+│                                     per-iteration threshold. Implies         │
+│                                     --keep-best.                             │
+│ --iterate-max              INTEGER  Cap on --iterate rounds. Prevents        │
+│                                     infinite loops if a win-finding cycle    │
+│                                     emerges. Default 10.                     │
+│                                     [default: 10]                            │
+│ --iterate-threshold        FLOAT    Per-round threshold when --iterate is    │
+│                                     set. Smaller than --threshold lets the   │
+│                                     loop stack micro-wins (0.04% type) that  │
+│                                     don't qualify as a single big win.       │
+│                                     [default: 0.01]                          │
+│ --scope                    TEXT     Optional scope_path display string. When │
+│                                     omitted, enumerates the function-top     │
+│                                     scope first.                             │
+│ --json                              Emit results as JSON.                    │
+│ --help                              Show this message and exit.              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

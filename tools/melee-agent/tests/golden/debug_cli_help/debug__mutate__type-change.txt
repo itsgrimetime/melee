@@ -1,0 +1,18 @@
+                                                                                
+ Usage: melee-agent debug mutate type-change [OPTIONS]                          
+                                                                                
+ Change a local variable's declared type.                                       
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function     -f      TEXT  Function containing the variable. [required] │
+│ *  --var                  TEXT  Local variable name to retype. [required]    │
+│ *  --type                 TEXT  New type string (e.g., 'u32'). [required]    │
+│    --source-file          PATH  Source file to mutate instead of resolving   │
+│                                 from report.json.                            │
+│    --apply                      Write the mutated source back to the file.   │
+│                                 Default: print to stdout.                    │
+│    --diff                       Print a focused unified diff instead of the  │
+│                                 full mutated source.                         │
+│    --help                       Show this message and exit.                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

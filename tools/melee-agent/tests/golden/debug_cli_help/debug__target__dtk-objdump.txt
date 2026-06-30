@@ -1,0 +1,26 @@
+                                                                                
+ Usage: melee-agent debug target dtk-objdump [OPTIONS] O_FILE                   
+                                                                                
+ Emit GNU objdump-shaped PPC disassembly using the project dtk binary.          
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    o_file      PATH  Object file to disassemble for decomp-permuter        │
+│                        scoring.                                              │
+│                        [required]                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --melee-root                        PATH  Melee repo root containing         │
+│                                           build/tools/dtk. Auto-detected by  │
+│                                           default.                           │
+│ --object-root                       PATH  Root used to resolve relative      │
+│                                           object paths appended by           │
+│                                           decomp-permuter, for example a     │
+│                                           remote decomp-permuter checkout.   │
+│ --name-magic     --no-name-magic          Apply checkdiff-style anonymous @N │
+│                                           relocation renames against the     │
+│                                           matching target.o before           │
+│                                           disassembly.                       │
+│                                           [default: name-magic]              │
+│ --help                                    Show this message and exit.        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

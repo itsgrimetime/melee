@@ -1,0 +1,65 @@
+                                                                                
+ Usage: melee-agent debug search directed [OPTIONS]                             
+                                                                                
+ Run the directed (pcdump-guided) search layer for FUNCTION in UNIT.            
+                                                                                
+ In dry mode (--dry), uses in-memory fakes and no real mwcc compilation.        
+ Prints a JSON result with 'gate', 'directed_telemetry', and 'accounting'.      
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                       TEXT     Function name to    │
+│                                                          match.              │
+│                                                          [required]          │
+│ *  --unit              -u                       TEXT     Translation unit    │
+│                                                          path (e.g.          │
+│                                                          melee/gr/gricemt).  │
+│                                                          [required]          │
+│    --store                                      PATH     Artifact store      │
+│                                                          directory. Defaults │
+│                                                          to                  │
+│                                                          build/directed-sto… │
+│    --seed,--source-f…                           PATH     Use this source     │
+│                                                          file as the initial │
+│                                                          directed-search     │
+│                                                          seed.               │
+│    --dry                   --no-dry                      Use in-memory       │
+│                                                          fakes; no mwcc      │
+│                                                          runs. For testing.  │
+│                                                          [default: no-dry]   │
+│    --max-iters                                  INTEGER  Maximum scheduler   │
+│                                                          iterations.         │
+│                                                          [default: 8]        │
+│    --directed-force-…                           TEXT     Directed force-phys │
+│                                                          proof vector, e.g.  │
+│                                                          0:58:4,0:44:4 or    │
+│                                                          class0:ig58:phys=r… │
+│    --directed-from-d…      --no-directed-fr…             Derive the directed │
+│                                                          proof with debug    │
+│                                                          target              │
+│                                                          force-phys-from-di… │
+│                                                          [default:           │
+│                                                          no-directed-from-d… │
+│    --directed-class                             INTEGER  Default register    │
+│                                                          class for unscoped  │
+│                                                          directed proof      │
+│                                                          entries.            │
+│                                                          [default: 0]        │
+│    --verify                --no-verify                   With                │
+│                                                          --directed-from-di… │
+│                                                          require             │
+│                                                          force-vector        │
+│                                                          verification.       │
+│                                                          [default:           │
+│                                                          no-verify]          │
+│    --directed-checkd…                           FLOAT    Timeout in seconds  │
+│                                                          for directed proof  │
+│                                                          derivation.         │
+│                                                          [default: 60.0]     │
+│    --directed-pcdump…                           INTEGER  Timeout in seconds  │
+│                                                          for directed local  │
+│                                                          pcdump compilation. │
+│                                                          [default: 120]      │
+│    --help                                                Show this message   │
+│                                                          and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

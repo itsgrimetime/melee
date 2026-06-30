@@ -1,0 +1,36 @@
+                                                                                
+ Usage: melee-agent debug measure inline-leverage [OPTIONS]                     
+                                                                                
+ Measure whether real inline boundaries are structural codegen levers.          
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --module                     TEXT     Module prefix to sample from           │
+│                                       report.json, e.g. mn.                  │
+│ --file                       PATH     One source TU. First slice requires    │
+│                                       --function with --file.                │
+│ --function           -f      TEXT     One function. Bypasses the fuzzy==100  │
+│                                       corpus filter.                         │
+│ --all                                 Explicit opt-in to scan across         │
+│                                       report.json units.                     │
+│ --limit                      INTEGER  Maximum matched functions to inspect   │
+│                                       before pair limiting.                  │
+│                                       [default: 20]                          │
+│ --max-pairs                  INTEGER  Maximum (function, inline) pairs to    │
+│                                       emit.                                  │
+│ --epsilon                    FLOAT    Fuzzy delta threshold separating       │
+│                                       fuzzy_only from neutral.               │
+│                                       [default: 0.05]                        │
+│ --run-id                     TEXT     Ledger/report run label.               │
+│ --db                         PATH     Optional SQLite ledger path for        │
+│                                       retained evidence.                     │
+│ --dry-run                             Detect/de-inline candidates without    │
+│                                       compiling variants.                    │
+│ --checkdiff-timeout          FLOAT    Timeout in seconds for each checkdiff  │
+│                                       scoring run.                           │
+│                                       [default: 600.0]                       │
+│ --evidence-dir               PATH     Optional directory for retained        │
+│                                       source/checkdiff evidence.             │
+│ --json                                Emit machine-readable JSON.            │
+│ --help                                Show this message and exit.            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

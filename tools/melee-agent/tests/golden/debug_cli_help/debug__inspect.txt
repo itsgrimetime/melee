@@ -1,0 +1,68 @@
+                                                                                
+ Usage: melee-agent debug inspect [OPTIONS] COMMAND [ARGS]...                   
+                                                                                
+ Read, compare, and explain MWCC pcdumps.                                       
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ analyze             Summarize a pcdump.txt: per-virtual register live        │
+│                     ranges, use counts,                                      │
+│                     interferences, and 'could have been' candidate sets.     │
+│ simulate            Simulate MWCC's coloring algorithm on a function and     │
+│                     diff against actuals.                                    │
+│ first-divergence    Find the earliest allocator decision diverging from a    │
+│                     same-source target.                                      │
+│ diff                Compare two source or pcdump inputs through the          │
+│                     mwcc-debug pipeline.                                     │
+│ asm                 Show the current compiled assembly for a function.       │
+│ frame-reservations  Inspect stack-frame gaps and implicit reserved ranges.   │
+│ guide               Tier 4: human-readable diagnostic for stuck-function     │
+│                     debugging.                                               │
+│ stuck               One-shot diagnostic for a stuck function.                │
+│ diagnose            Current-tooling diagnosis: is there a quick win we       │
+│                     haven't tried?                                           │
+│ rank-callees        Predict the callee-save cascade for a function before    │
+│                     compiling.                                               │
+│ var-to-virtual      Bridge: given a source variable name, predict its MWCC   │
+│                     virtual.                                                 │
+│ virtual-to-ig       Map a visible pcode virtual register to allocator graph  │
+│                     identity.                                                │
+│ trace-copy          Trace where a pcode copy appears and why it disappears.  │
+│ stack-homes         Explain final-only FPR stack-home targets and            │
+│                     source-shape leads.                                      │
+│ tiebreak            Register-coloring tiebreak surrogate: predict            │
+│                     assignments from the                                     │
+│                     interference graph (G1, validated 100% on non-truncated  │
+│                     functions) and run                                       │
+│                     what-ifs (add/remove an interference edge, or move a     │
+│                     node in select order)                                    │
+│                     to find a source-actionable lever for a coloring         │
+│                     tiebreak. Abstains                                       │
+│                     (exit 3) when the function's G1 isn't perfect (e.g.      │
+│                     interferer-list                                          │
+│                     truncation corrupts the dispense), so what-ifs are never │
+│                     trusted blindly.                                         │
+│ explain-diff        Unified diff diagnosis: read checkdiff JSON (or          │
+│                     auto-generate it for a                                   │
+│                     function) and produce a structured, ranked list of       │
+│                     recommendations with                                     │
+│                     specific source-level actions and estimated costs.       │
+│ explain-virtual     Explain virtual-register source/interference             │
+│                     attribution.                                             │
+│ explain-schedule    Explain observed scheduler windows for known             │
+│                     force-schedule targets.                                  │
+│ virtual-to-var      Bridge inverse: given a virtual register, predict the    │
+│                     source                                                   │
+│                     variable name (decl-order heuristic), including the      │
+│                     variable's                                               │
+│                     scope path (function-top vs nested-block). When no       │
+│                     source variable                                          │
+│                     binds to the requested virtual (compiler-introduced      │
+│                     temps, spill                                             │
+│                     nodes, etc.), falls back to showing the first defining   │
+│                     IR op                                                    │
+│                     so you can correlate to the C source manually.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

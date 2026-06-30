@@ -1,0 +1,46 @@
+                                                                                
+ Usage: melee-agent debug inspect diagnose [OPTIONS] FUNCTION                   
+                                                                                
+ Current-tooling diagnosis: is there a quick win we haven't tried?              
+                                                                                
+ Combines two checks:                                                           
+   1. suggest casts — static cast linter (free, milliseconds)                   
+   2. mutate decl-orders — brute-force decl-order space (~70s)                  
+                                                                                
+ Verdict categories:                                                            
+   - WIN AVAILABLE — a quick fix exists (casts to drop, or a decl-              
+     order that improves match%)                                                
+   - INTRINSIC VALUE-NUMBERING CEILING — target rematerializes a                
+     signed magic divide while this compile CSEs the quotient; current          
+     source/allocator levers are not expected to add the missing                
+     arithmetic instructions                                                    
+   - NO FAST TRANSFORM FOUND — current fast heuristics found no                 
+     improvement; recommends force-phys reachability testing and/or             
+     source-shape search as next steps                                          
+                                                                                
+ This is the command to run when you're staring at a stuck function             
+ and asking what evidence-backed workflow to run next.                          
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    function      TEXT  Function name to check [required]                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --skip-decl-orders               Skip the mutate decl-orders step (saves ~1  │
+│                                  min but produces a less confident verdict). │
+│ --decl-strategy           TEXT   Strategy passed to mutate decl-orders.      │
+│                                  'promote' is fast (N candidates); 'all'     │
+│                                  covers promote+demote+swap (~3N             │
+│                                  candidates).                                │
+│                                  [default: promote]                          │
+│ --force-phys              TEXT   Optional force-phys proof vector to explain │
+│                                  as a coupled source-shape problem. Accepts  │
+│                                  IG:PHYS or CLASS:IG:PHYS CSV.               │
+│ --json                           Emit verdict as JSON.                       │
+│ --max-seconds             FLOAT  Wall-clock budget for the decl-order        │
+│                                  enumeration phase (0 = unlimited). Stops    │
+│                                  early with a clear message instead of       │
+│                                  appearing hung.                             │
+│                                  [default: 0.0]                              │
+│ --help                           Show this message and exit.                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

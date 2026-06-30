@@ -1,0 +1,25 @@
+                                                                                
+ Usage: melee-agent debug permute remote [OPTIONS] COMMAND [ARGS]...            
+                                                                                
+ Run decomp-permuter jobs on configured SSH remotes.                            
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ targets  List configured remote permuter targets.                            │
+│ doctor   Check whether a remote target is ready to run decomp-permuter.      │
+│ submit   Submit a local decomp-permuter function directory to a remote       │
+│          target.                                                             │
+│ list     List local remote permuter job metadata with live active/dead       │
+│          status.                                                             │
+│ status   Show remote permuter job activity and stale cleanup guidance.       │
+│ triage   Summarize all local remote permuter jobs for convergence triage.    │
+│ fetch    Fetch remote permuter outputs into the local permuter directory.    │
+│ tail     Print a remote permuter job log snapshot.                           │
+│ stop     Stop a remote permuter tmux session.                                │
+│ ps       Dashboard of active remote permuter sessions across all coders.     │
+│ reap     Stop remote permuter jobs that are byte-matched or plateaued.       │
+│ prune    Delete stale remote-runs directories on remote coders.              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

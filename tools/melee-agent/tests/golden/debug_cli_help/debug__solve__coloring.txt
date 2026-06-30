@@ -1,0 +1,57 @@
+                                                                                
+ Usage: melee-agent debug solve coloring [OPTIONS]                              
+                                                                                
+ Inverse register coloring: enumerate §1.5-filtered node-set/content            
+ perturbations, predict their coloring with the SELECT surrogate, map winners   
+ to C moves, emit a ranked worksheet. Exit 0=actionable candidate, 3=abstain,   
+ 4=budgeted no-candidate (incl. window-order).                                  
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                        TEXT     [required]         │
+│    --class                                       TEXT     Register class:    │
+│                                                           gpr (default) or   │
+│                                                           fpr.               │
+│                                                           [default: gpr]     │
+│    --pcdump                                      PATH                        │
+│    --max-perturb                                 INTEGER  [default: 2]       │
+│    --frontier                                    INTEGER  [default: 32]      │
+│    --kinds                                       TEXT     Enumerated kinds   │
+│                                                           (advertised        │
+│                                                           vocabulary; 'edge' │
+│                                                           expands to         │
+│                                                           edge-add+edge-rem… │
+│                                                           [default:          │
+│                                                           node-add,edge,ord… │
+│    --experimental-ki…                            TEXT     e.g. coalesce      │
+│                                                           (spec §1d).        │
+│    --catalog-dir                                 PATH     Lever catalog dir  │
+│                                                           (default: the      │
+│                                                           tracked D0         │
+│                                                           catalog).          │
+│    --force-vector-pr…      --no-force-vector…             Run singleton and  │
+│                                                           prefix             │
+│                                                           force-vector       │
+│                                                           diagnostic probes  │
+│                                                           after the union    │
+│                                                           verify. Off by     │
+│                                                           default; solve     │
+│                                                           coloring only      │
+│                                                           needs the union    │
+│                                                           result for         │
+│                                                           reachability.      │
+│                                                           [default:          │
+│                                                           no-force-vector-p… │
+│    --force-vector-ti…                            FLOAT    Per-probe          │
+│                                                           wall-clock timeout │
+│                                                           in seconds for     │
+│                                                           force-vector       │
+│                                                           auto-verify.       │
+│                                                           Defaults to        │
+│                                                           MWCC_DEBUG_FORCE_… │
+│                                                           MWCC_DEBUG_HANG_T… │
+│                                                           or 300s.           │
+│    --json                                                                    │
+│    --help                                                 Show this message  │
+│                                                           and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

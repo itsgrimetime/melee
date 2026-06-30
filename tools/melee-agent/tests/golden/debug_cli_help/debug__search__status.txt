@@ -1,0 +1,9 @@
+                                                                                
+ Usage: melee-agent debug search status [OPTIONS]                               
+                                                                                
+ Show status of the search substrate (store, config).                           
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

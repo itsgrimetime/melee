@@ -1,0 +1,30 @@
+                                                                                
+ Usage: melee-agent debug inspect tiebreak [OPTIONS]                            
+                                                                                
+ Register-coloring tiebreak surrogate: predict assignments from the             
+ interference graph (G1, validated 100% on non-truncated functions) and run     
+ what-ifs (add/remove an interference edge, or move a node in select order) to  
+ find a source-actionable lever for a coloring tiebreak. Abstains (exit 3) when 
+ the function's G1 isn't perfect (e.g. interferer-list truncation corrupts the  
+ dispense), so what-ifs are never trusted blindly.                              
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function       -f      TEXT  [required]                                 │
+│    --pcdump                 PATH                                             │
+│    --class                  TEXT  Register class to analyze: auto, gpr/r/0,  │
+│                                   or fpr/f/1.                                │
+│                                   [default: auto]                            │
+│    --ig                     TEXT  Function/class-scoped COLORGRAPH ig_idx    │
+│                                   values to report, e.g. 88,f48,1:48. Same   │
+│                                   ig_idx values can appear in other          │
+│                                   functions.                                 │
+│    --what-if                TEXT  Perturbation: 'add-interferer T:N',        │
+│                                   'remove-edge A:B', 'move T:before:M', or   │
+│                                   'move T:after:M' (before/after differ by   │
+│                                   one select slot). Predicts T's register    │
+│                                   under it.                                  │
+│    --validate-only                                                           │
+│    --json                                                                    │
+│    --help                         Show this message and exit.                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

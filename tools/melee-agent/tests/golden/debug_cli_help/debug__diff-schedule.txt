@@ -1,0 +1,22 @@
+                                                                                
+ Usage: melee-agent debug diff-schedule [OPTIONS]                               
+                                                                                
+ Diff real vs forced scheduler-window decisions.                                
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function        -f      TEXT  Function to analyze. [required]           │
+│ *  --force-schedule          TEXT  Target scheduler swap list to compare,    │
+│                                    e.g. 'lwz:0x94>0x90,lwz:0xAC>0xA8'.       │
+│                                    [required]                                │
+│ *  --against                 PATH  Forced-path pcdump.txt to compare against │
+│                                    the real path.                            │
+│                                    [required]                                │
+│    --pcdump                  PATH  Real-path pcdump.txt. Auto-resolves from  │
+│                                    cache when omitted.                       │
+│    --source-file             PATH  C source file used for advisory IR/source │
+│                                    provenance. Defaults to the repo source   │
+│                                    for the function when available.          │
+│    --json                          Emit as JSON.                             │
+│    --help                          Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

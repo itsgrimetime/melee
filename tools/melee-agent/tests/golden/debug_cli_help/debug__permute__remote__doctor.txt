@@ -1,0 +1,19 @@
+                                                                                
+ Usage: melee-agent debug permute remote doctor [OPTIONS]                       
+                                                                                
+ Check whether a remote target is ready to run decomp-permuter.                 
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --target             TEXT  Configured remote target name. [required]      │
+│    --function   -f      TEXT  Also check this local permuter function dir.   │
+│    --perm-root          PATH  Root containing nonmatchings/<function>. If    │
+│                               this is a matcher worktree, repair resolves    │
+│                               the decomp-permuter code checkout from         │
+│                               $MELEE_DECOMP_PERMUTER_ROOT or                 │
+│                               ~/code/decomp-permuter.                        │
+│                               [default: /Users/mike/code/decomp-permuter]    │
+│    --repair                   Bootstrap/repair project-owned remote tooling  │
+│                               before checking.                               │
+│    --help                     Show this message and exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

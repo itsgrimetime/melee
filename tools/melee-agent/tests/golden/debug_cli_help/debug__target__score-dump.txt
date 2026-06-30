@@ -1,0 +1,38 @@
+                                                                                
+ Usage: melee-agent debug target score-dump [OPTIONS] [PCDUMP]                  
+                                                                                
+ Tier 4: score a pcdump's coloring decisions against a target spec.             
+                                                                                
+ Lower scores are better (perfect match = 0). Designed to be called by          
+ decomp-permuter as a custom scorer.                                            
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Omit to auto-resolve via         │
+│                         --function from the cache.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function              -f      TEXT  Function name to score (required)   │
+│                                          [required]                          │
+│ *  --target                -t      PATH  Target spec file (YAML or JSON,     │
+│                                          required). See                      │
+│                                          src/mwcc_debug/scoring.py for       │
+│                                          format.                             │
+│                                          [required]                          │
+│    --breakdown                           Print the score components in       │
+│                                          addition to the total.              │
+│    --json                                Emit score as JSON.                 │
+│    --expression-baseline           PATH  Baseline pcdump used to derive      │
+│                                          expression anchors for the target   │
+│                                          virtuals. JSON output then reports  │
+│                                          expression_score so virtual         │
+│                                          renumbering does not look like      │
+│                                          false progress.                     │
+│    --expression-source             PATH  C source used for FPR expression    │
+│                                          attribution. Relative paths are     │
+│                                          resolved from the Melee root.       │
+│    --expression-reg-class          TEXT  Register class for expression       │
+│                                          anchors: fpr or gpr.                │
+│                                          [default: fpr]                      │
+│    --help                                Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

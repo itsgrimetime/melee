@@ -1,0 +1,24 @@
+                                                                                
+ Usage: melee-agent debug inspect frame-reservations [OPTIONS] [PCDUMP]         
+                                                                                
+ Inspect stack-frame gaps and implicit reserved ranges.                         
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Omit to auto-resolve via         │
+│                         --function from the cache.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function            -f      TEXT  Function name to inspect [required]   │
+│    --expected-asm                PATH  Path to expected target asm. Omit to  │
+│                                        extract via `melee-agent extract get  │
+│                                        <function> --full`.                   │
+│    --no-expected                       Inspect only the current pcdump       │
+│                                        without extracting target asm.        │
+│    --probe-results-json          PATH  Path to lifetime-layout --json output │
+│                                        or a variants array. Attaches         │
+│                                        stack-home and frame-transform        │
+│                                        validation.                           │
+│    --json                              Emit the report as JSON.              │
+│    --help                              Show this message and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,38 @@
+                                                                                
+ Usage: melee-agent debug inspect stuck [OPTIONS] FUNCTION                      
+                                                                                
+ One-shot diagnostic for a stuck function.                                      
+                                                                                
+ Composes inspect analyze + inspect guide + suggest casts and recommends the    
+ next                                                                           
+ workflow step. Replaces what used to be 4-5 separate commands.                 
+                                                                                
+ Output sections (in order):                                                    
+   1. Function status — match%, TU, virtual count                               
+   2. Pcdump cache — fresh/stale/missing                                        
+   3. Coloring summary — virtuals, SPILLED markers, pass info                   
+   4. Guidance issues — red-flag patterns from `debug inspect guide`            
+   5. Suspicious casts — HIGH+MEDIUM cast warnings                              
+   6. Asm hunks (if --asm-hunks N) — text-level diff samples                    
+   7. Next steps — ranked by cost/likelihood                                    
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    function      TEXT  Function name to diagnose [required]                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --target     -t      PATH     Optional target spec (YAML/JSON) for guide     │
+│                               comparisons. If omitted, surfaces red-flag     │
+│                               patterns without a specific target.            │
+│ --no-pcdump                   Skip the pcdump auto-generation step if the    │
+│                               cache is missing. Use when you already know    │
+│                               there's no pcdump and want a static-only       │
+│                               digest.                                        │
+│ --json                        Emit structured digest as JSON.                │
+│ --asm-hunks          INTEGER  Also show the top N asm-diff hunks from        │
+│                               checkdiff. 0 (default) omits. Saves switching  │
+│                               tools when allocator-level analysis doesn't    │
+│                               explain the mismatch.                          │
+│                               [default: 0]                                   │
+│ --help                        Show this message and exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

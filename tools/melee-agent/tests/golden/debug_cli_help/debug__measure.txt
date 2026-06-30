@@ -1,0 +1,13 @@
+                                                                                
+ Usage: melee-agent debug measure [OPTIONS] COMMAND [ARGS]...                   
+                                                                                
+ Run source-shape measurement harnesses over matched functions.                 
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ inline-leverage  Measure whether real inline boundaries are structural       │
+│                  codegen levers.                                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,16 @@
+                                                                                
+ Usage: melee-agent debug retro [OPTIONS] COMMAND [ARGS]...                     
+                                                                                
+ Retail-binary MWCC introspection via retrowin32 + gdb (front-end IRO tracing,  
+ backend PCode, regalloc, stack maps).                                          
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ setup   Clone + build retrowin32 and cadmic at pinned SHAs (idempotent).     │
+│ dump    Dump retail compiler internals for FN in SRC.                        │
+│ verify  Cross-check a retro dump against the existing DLL pcdump (control    │
+│         TU).                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

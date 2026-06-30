@@ -1,0 +1,10 @@
+                                                                                
+ Usage: melee-agent debug retro setup [OPTIONS]                                 
+                                                                                
+ Clone + build retrowin32 and cadmic at pinned SHAs (idempotent).               
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --force                                                                      │
+│ --help           Show this message and exit.                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

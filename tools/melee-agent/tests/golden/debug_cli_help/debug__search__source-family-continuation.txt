@@ -1,0 +1,28 @@
+                                                                                
+ Usage: melee-agent debug search source-family-continuation [OPTIONS]           
+                                                                                
+ Summarize post-meta source-family continuation evidence.                       
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --source-model-json,--cl…                PATH  Classified                 │
+│                                                   source-model-synthesis     │
+│                                                   JSON.                      │
+│                                                   [required]                 │
+│    --function                 -f            TEXT  Expected function for      │
+│                                                   guard checking.            │
+│    --artifact                               PATH  Continuation artifact JSON │
+│                                                   such as                    │
+│                                                   combine/reconcile/focus    │
+│                                                   output.                    │
+│    --score-json                             PATH  Raw score-source JSON to   │
+│                                                   include as continuation    │
+│                                                   evidence.                  │
+│    --out                                    PATH  Optional path to write the │
+│                                                   continuation JSON.         │
+│    --json                         --text          Emit machine-readable      │
+│                                                   JSON.                      │
+│                                                   [default: json]            │
+│    --help                                         Show this message and      │
+│                                                   exit.                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,23 @@
+                                                                                
+ Usage: melee-agent debug suggest register-tiebreak [OPTIONS]                   
+                                                                                
+ Suggest source levers for compiler-temp register tiebreaks.                    
+                                                                                
+ Thin caller of `debug solve coloring` (spec §7, Q6): this routes through       
+ the surrogate solver instead of the old heuristic so there are not two         
+ diverging lever vocabularies. Use it when a register assignment is             
+ reachable but no source variable is bound to the target IG.                    
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function              -f      TEXT   Function to analyze. [required]    │
+│    --class                         TEXT   Register class: auto (default),    │
+│                                           gpr, or fpr.                       │
+│                                           [default: auto]                    │
+│    --json                                 Emit guidance as JSON.             │
+│    --force-vector-timeout          FLOAT  Per-probe wall-clock timeout for   │
+│                                           the diagnostic force-vector        │
+│                                           reachability check.                │
+│                                           [default: 30.0]                    │
+│    --help                                 Show this message and exit.        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

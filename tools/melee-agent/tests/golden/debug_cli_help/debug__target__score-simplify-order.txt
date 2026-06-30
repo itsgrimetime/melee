@@ -1,0 +1,50 @@
+                                                                                
+ Usage: melee-agent debug target score-simplify-order [OPTIONS] OBJECT_FILE     
+                                                                                
+ Permuter scorer: lex-encoded simplify-order + precolor distance.               
+                                                                                
+ Outputs a single integer to stdout (lower = better, 0 = perfect).              
+ Designed to be invoked by decomp-permuter as a `.command`                      
+ in settings.toml — see `debug permute setup-simplify-order-scorer`             
+ for the workflow that wires this up.                                           
+                                                                                
+ The candidate's pcdump is read from the sibling `<object_file>.pcdump.txt`     
+ file that the wrapper compile.sh deposits during compilation. If that          
+ sidecar is missing the scorer emits the sentinel PENALTY_INF score so          
+ permuter treats the iteration as a compile failure rather than crashing.       
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    object_file      PATH  Path to the candidate .o file (positional). When │
+│                             invoked from decomp-permuter's                   │
+│                             CustomCommandScorer, this is the .o permuter     │
+│                             just compiled.                                   │
+│                             [required]                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function         -f      TEXT  Function name to score within the        │
+│                                     candidate's TU (required).               │
+│                                     [required]                               │
+│ *  --target           -t      PATH  Path to a simplify-order target YAML     │
+│                                     spec. See SimplifyOrderTargetSpec in     │
+│                                     src/mwcc_debug/simplify_order_scoring.py │
+│                                     for the schema.                          │
+│                                     [required]                               │
+│    --json                           Emit the score + breakdown as a single   │
+│                                     JSON object. When unset, prints only the │
+│                                     integer score (permuter contract).       │
+│    --breakdown                      Print human-readable score breakdown to  │
+│                                     stdout. Implies non-permuter-contract    │
+│                                     output.                                  │
+│    --debug                          Emit diagnostic output to stderr (does   │
+│                                     not affect stdout, so permuter still     │
+│                                     parses the integer).                     │
+│    --strict-polarity                Exit non-zero when the polarity check is │
+│                                     WRONG_POLARITY. Use in screening scripts │
+│                                     to refuse high-volatile-target campaigns │
+│                                     before they burn cloud compute.          │
+│                                     UNCERTAIN polarity is allowed in strict  │
+│                                     mode — only the structurally-impossible  │
+│                                     case is rejected.                        │
+│    --help                           Show this message and exit.              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
