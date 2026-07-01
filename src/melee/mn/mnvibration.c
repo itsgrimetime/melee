@@ -698,7 +698,7 @@ void fn_802487A8(HSD_GObj* gobj)
     HSD_JObj* active_child;
     MnVibrationData* data;
     HSD_JObj* disconnected_child;
-    u8 sp[64];
+    u8 sp[56];
 
     data = gobj->user_data;
     if ((u8) mn_804A04F0.cur_menu != 0x13) {
@@ -731,7 +731,7 @@ void fn_802487A8(HSD_GObj* gobj)
         if (GetRumbleSettingOfPort(port) != 0) {
             mn_8022EC18(sp44, &mnVibration_803EECF8, MOBJ_MASK);
         } else {
-            HSD_JObjReqAnimAll(sp44, 0.0f);
+            HSD_JObjReqAnimAll(sp44, mnVibration_804DC030);
             mn_8022F3D8(sp44, 0xFF, MOBJ_MASK);
             HSD_JObjAnimAll(sp44);
         }
@@ -771,6 +771,7 @@ void fn_802487A8(HSD_GObj* gobj)
             } else {
                 HSD_JObjClearFlagsAll(
                     data->jobjs[mnVibration_804D4FE8[port_idx]], JOBJ_HIDDEN);
+                active_child = NULL;
                 data->x0[port_idx + 2] = 0;
                 toggle_jobj =
                     ((MnVibrationData*) mnVibration_804D6C28->user_data)
@@ -782,9 +783,7 @@ void fn_802487A8(HSD_GObj* gobj)
                     HSD_JObj* temp_jobj3;
                     temp_jobj3 =
                         ((MnVibrationData*) gobj->user_data)->jobjs[23];
-                    if (temp_jobj3 == NULL) {
-                        active_child = NULL;
-                    } else {
+                    if (temp_jobj3 != NULL) {
                         active_child = temp_jobj3->child;
                     }
                 }
