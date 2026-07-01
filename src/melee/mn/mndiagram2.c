@@ -321,7 +321,6 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
     }
 
     if (result & 0xC0) {
-        var_r28 = 0;
         lbAudioAx_80024030(1);
         data2 = mnDiagram2_804D6C18->user_data;
         x46 = data2->selected_fighter_idx;
@@ -346,6 +345,7 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
             return;
         }
         lbAudioAx_80024030(1);
+        var_r28 = 0;
         if (data->is_name_mode == 0) {
             var_r28 = 1;
         }
