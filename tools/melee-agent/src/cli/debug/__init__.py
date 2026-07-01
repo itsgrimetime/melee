@@ -123,6 +123,100 @@ def _compute_melee_root() -> Path:
     return DEFAULT_MELEE_ROOT
 
 
+_CONTROL_FLOW_INCLUDE_RE = re.compile(
+    r"^\s*#\s*include\s+[<\"](?P<path>[^>\"]+)[>\"]",
+    re.MULTILINE,
+)
+
+
+def _control_flow_prototype_context(
+    source_path: Path,
+    melee_root: Path,
+    *,
+    source_text: str | None = None,
+    max_depth: int = 2,
+    max_headers: int = 64,
+    max_bytes: int = 2_000_000,
+) -> str:
+    """Return source plus bounded local include text for prototype discovery."""
+    root = melee_root.resolve()
+    source_path = source_path.resolve()
+    try:
+        source = (
+            source_text
+            if source_text is not None
+            else source_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except OSError:
+        return source_text or ""
+
+    chunks = [source]
+    queue: list[tuple[Path, str, int]] = [(source_path, source, 0)]
+    seen = {source_path}
+    header_count = 0
+    total_bytes = len(source.encode("utf-8", errors="replace"))
+
+    while queue and header_count < max_headers and total_bytes < max_bytes:
+        current_path, text, depth = queue.pop(0)
+        if depth >= max_depth:
+            continue
+        for match in _CONTROL_FLOW_INCLUDE_RE.finditer(text):
+            include_path = _resolve_control_flow_include(
+                match.group("path"),
+                including_path=current_path,
+                melee_root=root,
+            )
+            if include_path is None or include_path in seen:
+                continue
+            try:
+                include_text = include_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except OSError:
+                continue
+            include_bytes = len(include_text.encode("utf-8", errors="replace"))
+            if total_bytes + include_bytes > max_bytes:
+                continue
+            seen.add(include_path)
+            header_count += 1
+            total_bytes += include_bytes
+            rel = _repo_relative_for_control_flow_context(include_path, root)
+            chunks.append(
+                f"\n/* control-flow prototype context: {rel} */\n{include_text}"
+            )
+            queue.append((include_path, include_text, depth + 1))
+            if header_count >= max_headers or total_bytes >= max_bytes:
+                break
+    return "\n".join(chunks)
+
+
+def _resolve_control_flow_include(
+    include: str,
+    *,
+    including_path: Path,
+    melee_root: Path,
+) -> Path | None:
+    roots = (
+        including_path.parent,
+        melee_root / "src",
+        melee_root / "src" / "sysdolphin",
+        melee_root / "include",
+    )
+    for root in roots:
+        candidate = (root / include).resolve()
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _repo_relative_for_control_flow_context(path: Path, melee_root: Path) -> str:
+    try:
+        return str(path.relative_to(melee_root))
+    except ValueError:
+        return str(path)
+
+
 
 
 

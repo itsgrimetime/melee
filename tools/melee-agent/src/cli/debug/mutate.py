@@ -3425,6 +3425,7 @@ def mutate_control_flow_shape_search_cmd(
     """Compile and score conservative control-flow shape source probes."""
     from src.cli.debug import (
         _control_flow_compile_source_variant,
+        _control_flow_prototype_context,
         _find_unit_for_function,
         _make_real_score_status,
         _parse_lifetime_layout_candidate,
@@ -3444,6 +3445,7 @@ def mutate_control_flow_shape_search_cmd(
     melee_root = DEFAULT_MELEE_ROOT
     resolved_source: Path | None = None
     source_text: str | None = None
+    prototype_context: str | None = None
     candidate_specs = candidates or []
     operator_filter = tuple(operators or ())
     suggestion_items: list[Mapping[str, Any]] | None = None
@@ -3512,6 +3514,11 @@ def mutate_control_flow_shape_search_cmd(
             encoding="utf-8",
             errors="replace",
         )
+        prototype_context = _control_flow_prototype_context(
+            resolved_source,
+            melee_root,
+            source_text=source_text,
+        )
     else:
         unit = _find_unit_for_function(function, melee_root)
         if unit is not None:
@@ -3521,6 +3528,11 @@ def mutate_control_flow_shape_search_cmd(
                 source_text = candidate_source.read_text(
                     encoding="utf-8",
                     errors="replace",
+                )
+                prototype_context = _control_flow_prototype_context(
+                    resolved_source,
+                    melee_root,
+                    source_text=source_text,
                 )
 
     if source_text is None and not candidate_specs:
@@ -3552,6 +3564,7 @@ def mutate_control_flow_shape_search_cmd(
                 suggestion_items,
                 operator_filter=operator_filter or None,
                 max_probes_per_family=max(1, max_probes),
+                prototype_context=prototype_context,
             )
         else:
             probes, scan_status = scan_control_flow_shape_probes(
@@ -3559,6 +3572,7 @@ def mutate_control_flow_shape_search_cmd(
                 function,
                 operator_filter=operator_filter or None,
                 max_probes=max_probes,
+                prototype_context=prototype_context,
             )
         probes = probes[:max_probes]
 

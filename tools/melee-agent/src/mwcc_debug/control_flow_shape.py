@@ -123,6 +123,7 @@ def scan_control_flow_shape_probes(
     operator_filter: Iterable[str] | None = None,
     max_probes: int = 12,
     suggestions: Sequence[Mapping[str, Any]] | None = None,
+    prototype_context: str | None = None,
 ) -> tuple[list[LifetimeLayoutProbe], dict[str, object]]:
     selected = tuple(dict.fromkeys(operator_filter or DEFAULT_CONTROL_FLOW_OPERATORS))
     unsupported = [op for op in selected if op not in DEFAULT_CONTROL_FLOW_OPERATORS]
@@ -141,6 +142,7 @@ def scan_control_flow_shape_probes(
             suggestions,
             operator_filter=selected,
             max_probes_per_family=max(1, max_probes),
+            prototype_context=prototype_context,
         )
 
     parsed = _parse_function(source, function)
@@ -278,6 +280,7 @@ def materialize_control_flow_suggestions(
     *,
     operator_filter: Iterable[str] | None = None,
     max_probes_per_family: int = 4,
+    prototype_context: str | None = None,
 ) -> tuple[list[LifetimeLayoutProbe], dict[str, Any]]:
     """Materialize bounded probes or terminal proofs for ranked suggestions."""
     selected = frozenset(operator_filter or DEFAULT_CONTROL_FLOW_OPERATORS)
@@ -331,6 +334,7 @@ def materialize_control_flow_suggestions(
             suggestion_kind=kind,
             family_id=family_id,
             max_probes=max(1, max_probes_per_family),
+            prototype_context=prototype_context,
         )
         family_probes = family_probes[: max(1, max_probes_per_family)]
         status = "materialized" if family_probes else "terminal"
@@ -411,6 +415,7 @@ def _terminal_proof(
     reason: str,
     source_model_proof: Mapping[str, Any] | None = None,
     exhausted_dimensions: Sequence[Mapping[str, Any]] | None = None,
+    next_handoff: str | None = None,
 ) -> dict[str, Any]:
     proof: dict[str, Any] = {
         "family_id": family_id,
@@ -425,6 +430,8 @@ def _terminal_proof(
         proof["exhausted_dimensions"] = [
             dict(item) for item in exhausted_dimensions
         ]
+    if next_handoff:
+        proof["next_handoff"] = next_handoff
     return proof
 
 
@@ -437,6 +444,7 @@ def _materialize_suggestion_family(
     suggestion_kind: str,
     family_id: str,
     max_probes: int,
+    prototype_context: str | None = None,
 ) -> tuple[list[LifetimeLayoutProbe], dict[str, Any] | None, list[dict[str, Any]]]:
     if operator == "pointer-base-call-loop" and suggestion_kind == "call-hoist":
         return _materialize_call_hoist_family(
@@ -445,6 +453,7 @@ def _materialize_suggestion_family(
             suggestion,
             family_id=family_id,
             max_probes=max_probes,
+            prototype_context=prototype_context,
         )
     if (
         operator == "pointer-walk-loop"
@@ -469,6 +478,7 @@ def _materialize_suggestion_family(
         function,
         operator_filter=(operator,),
         max_probes=max_probes,
+        prototype_context=prototype_context,
     )
     tagged = [
         _retag_suggestion_probe(
@@ -530,6 +540,7 @@ def _materialize_call_hoist_family(
     *,
     family_id: str,
     max_probes: int,
+    prototype_context: str | None = None,
 ) -> tuple[list[LifetimeLayoutProbe], dict[str, Any] | None, list[dict[str, Any]]]:
     evidence = suggestion.get("evidence")
     symbol = evidence.get("symbol") if isinstance(evidence, Mapping) else None
@@ -548,9 +559,10 @@ def _materialize_call_hoist_family(
 
     probes: list[LifetimeLayoutProbe] = []
     exhausted_dimensions: list[dict[str, Any]] = []
+    return_type = _visible_call_return_type(prototype_context or source, symbol)
     source_model: dict[str, Any] = {
         "symbol": symbol,
-        "call_return_type": "int",
+        "call_return_type": return_type or "unknown",
         "loop_counter_args": [],
         "call_result_used": False,
         "branch_returns_after_call": False,
@@ -591,6 +603,16 @@ def _materialize_call_hoist_family(
                 "source_lines": list(loop["source_lines"]),
             }
         )
+        if return_type == "void":
+            exhausted_dimensions.append(
+                {
+                    "dimension_id": "call-result-temp",
+                    "reason": "void-return-callee",
+                    "symbol": symbol,
+                    "source_lines": list(loop["source_lines"]),
+                }
+            )
+            continue
         probes.extend(
             _call_hoist_return_value_probes(
                 source,
@@ -619,6 +641,26 @@ def _materialize_call_hoist_family(
         )
         return [], proof, list(proof["exhausted_dimensions"])
 
+    if return_type == "void" and not probes:
+        proof = _terminal_proof(
+            family_id=family_id,
+            operator="pointer-base-call-loop",
+            suggestion_kind="call-hoist",
+            blocker="void-return-call-hoist-not-source-actionable",
+            reason=(
+                f"`{symbol}` returns void, so call-hoist result-temp and "
+                "declaration probes are not source-actionable."
+            ),
+            source_model_proof=source_model,
+            exhausted_dimensions=exhausted_dimensions,
+            next_handoff=(
+                f"Keep `{symbol}` as an in-loop side-effect call; next try "
+                "source-level construction and child-attachment ordering around "
+                f"the `{symbol}(...)` call sites instead of result-temp call-hoist."
+            ),
+        )
+        return [], proof, exhausted_dimensions
+
     if not exhausted_dimensions:
         exhausted_dimensions.append(
             {
@@ -639,6 +681,48 @@ def _materialize_call_hoist_family(
         exhausted_dimensions=exhausted_dimensions,
     )
     return probes[:max_probes], proof, exhausted_dimensions
+
+
+def _visible_call_return_type(source_context: str, symbol: str) -> str | None:
+    code = _mask_c_non_code_text(source_context)
+    pattern = re.compile(
+        rf"(?P<prefix>(?:^|[;\n}}])\s*(?:static\s+|extern\s+|inline\s+)*"
+        rf"[A-Za-z_][\w\s\*]*?)\b{re.escape(symbol)}\s*\(",
+        re.MULTILINE,
+    )
+    for match in pattern.finditer(code):
+        prefix = match.group("prefix")
+        cleaned_prefix = re.sub(r"^[;\n}\s]+", "", " ".join(prefix.split()))
+        first_word = cleaned_prefix.split()[0] if cleaned_prefix.split() else ""
+        if first_word in {
+            "case",
+            "return",
+            "if",
+            "for",
+            "while",
+            "switch",
+            "sizeof",
+        }:
+            continue
+        close_idx = _find_matching_paren_char(code, match.end() - 1)
+        if close_idx is None:
+            continue
+        suffix = code[close_idx + 1 :].lstrip()
+        if not suffix or suffix[0] not in ";{":
+            continue
+        return _normalize_return_type(cleaned_prefix)
+    return None
+
+
+def _normalize_return_type(prefix: str) -> str | None:
+    words = [
+        word
+        for word in prefix.replace("*", " * ").split()
+        if word not in {"static", "extern", "inline"}
+    ]
+    if not words:
+        return None
+    return " ".join(words).replace(" *", "*")
 
 
 def _call_hoist_return_value_probes(
@@ -2564,6 +2648,19 @@ def _find_matching_brace_char(source: str, open_idx: int) -> int | None:
         if char == "{":
             depth += 1
         elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return idx
+    return None
+
+
+def _find_matching_paren_char(source: str, open_idx: int) -> int | None:
+    depth = 0
+    for idx in range(open_idx, len(source)):
+        char = source[idx]
+        if char == "(":
+            depth += 1
+        elif char == ")":
             depth -= 1
             if depth == 0:
                 return idx

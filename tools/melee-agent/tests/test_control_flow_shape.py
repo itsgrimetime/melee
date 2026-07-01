@@ -244,7 +244,7 @@ def test_call_hoist_materializes_return_value_temp_and_terminal_true_hoist() -> 
     source = textwrap.dedent(
         """\
         typedef int s32;
-        void HSD_PadRumbleAdd(int, int, int, int, void*);
+        int HSD_PadRumbleAdd(int, int, int, int, void*);
         void fn_80000000(void)
         {
             s32 i;
@@ -275,6 +275,46 @@ def test_call_hoist_materializes_return_value_temp_and_terminal_true_hoist() -> 
     }
     assert "loop-counter-dependent-call-args" in reasons
     assert proof["source_model_proof"]["branch_returns_after_call"] is True
+
+
+def test_call_hoist_void_return_terminal_without_result_temp() -> None:
+    source = textwrap.dedent(
+        """\
+        typedef int s32;
+        typedef struct HSD_JObj HSD_JObj;
+        void HSD_JObjAddChild(HSD_JObj*, HSD_JObj*);
+        void fn_80000000(HSD_JObj* parent, HSD_JObj* child)
+        {
+            s32 i;
+            for (i = 0; i < 4; i++) {
+                HSD_JObjAddChild(parent, child);
+            }
+        }
+        """
+    )
+
+    probes, status = materialize_control_flow_suggestions(
+        source,
+        "fn_80000000",
+        [
+            {
+                "kind": "call-hoist",
+                "operator": "pointer-base-call-loop",
+                "evidence": {"symbol": "HSD_JObjAddChild"},
+            }
+        ],
+        max_probes_per_family=4,
+    )
+
+    assert probes == []
+    family = status["families"][0]
+    proof = family["terminal_proof"]
+    assert family["status"] == "terminal"
+    assert proof["terminal_blocker"] == "void-return-call-hoist-not-source-actionable"
+    assert proof["source_model_proof"]["call_return_type"] == "void"
+    assert "child-attachment ordering" in proof["next_handoff"]
+    reasons = {item["reason"] for item in proof["exhausted_dimensions"]}
+    assert "void-return-callee" in reasons
 
 
 def test_call_hoist_result_probes_wrap_after_prior_statement_for_c89() -> None:
