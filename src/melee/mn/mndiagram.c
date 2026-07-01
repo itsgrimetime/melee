@@ -81,7 +81,7 @@ typedef struct mnDiagram_PopupAnimTableHead {
 mnDiagram_804A0750_t mnDiagram_804A0750;
 mnDiagram_804A076C_t mnDiagram_804A076C;
 
-static mnDiagram_PopupAnimTableHead mnDiagram_PopupAnimTable = {
+static mnDiagram_PopupAnimTableHead mnDiagram_803EE728 = {
     {
         { 4.0F, 1.0F, 0.0F },
         { -3.0F, 0.8F, 0.0F },
@@ -102,7 +102,7 @@ static f32 mnDiagram_PopupExitAnimFrames[] = {
     10.0f, 19.0f, -0.1f, 0.0f, 199.0f, 0.0f, 0.0f, 10.0f, -0.1f,
 };
 
-/// Overlay over &mnDiagram_PopupAnimTable to reach the trailing
+/// Overlay over &mnDiagram_803EE728 to reach the trailing
 /// animation/text-layout data the popup/cursor procs read at fixed offsets.
 typedef struct mnDiagram_AnimTable {
     /* 0x00 */ Point3d points[3];
@@ -116,8 +116,7 @@ typedef struct mnDiagram_AnimTable {
     /* 0x94 */ char x94[0x14];
 } mnDiagram_AnimTable;
 
-#define GET_DIAGRAM_ANIM_TABLE()                                              \
-    ((mnDiagram_AnimTable*) &mnDiagram_PopupAnimTable)
+#define GET_DIAGRAM_ANIM_TABLE() ((mnDiagram_AnimTable*) &mnDiagram_803EE728)
 
 static s32 mnDiagram_804D4FA0 = 0xFF;
 
@@ -276,7 +275,7 @@ s32 mnDiagram_GetAveragePlayerCount(int is_name_mode, u8 player_index)
 int mnDiagram_GetNameTotalKOs(u8 field_index)
 {
     int total = 0;
-    int i;
+    s32 i;
     for (i = 0; i < 0x78; i++) {
         if (GetNameText(i & 0xFF)) {
             total += GetPersistentNameData(field_index)->vs_kos[(u8) i];
@@ -686,7 +685,7 @@ u8 mnDiagram_GetLeastPlayedFighter(u8 name_idx)
 {
     int i;
     int min_fighter;
-    int count;
+    s32 count;
 
     if (mnDiagram_AllPlayTimesZero(name_idx)) {
         return 0x19;
@@ -744,7 +743,7 @@ void mnDiagram_8023FA6C(void)
     u8* dst_iter;
     u8* candidate;
     int i, j;
-    PAD_STACK(12);
+    u8 sp[12];
 
     dst_iter = dst;
     for (i = 0; i < 0x19; i++, dst_iter++) {
@@ -807,7 +806,7 @@ void mnDiagram_8023FC28(void)
     u32* tp;
     int n;
     int j;
-    PAD_STACK(12);
+    u8 sp[12];
 
     dst_iter = dst;
     tp = totals;
@@ -820,7 +819,7 @@ void mnDiagram_8023FC28(void)
         max_idx = i;
         for (j = i + 1; j < 0x78; j++) {
             if ((GetNameText(mnDiagram_804A076C.sorted_names[j]) != NULL) &&
-                ((totals[mnDiagram_804A076C.sorted_names[max_idx]] <
+                ((totals[mnDiagram_804A076C.sorted_names[(max_idx)]] <
                   totals[mnDiagram_804A076C.sorted_names[j]]) ||
                  ((GetNameText(
                        (0, mnDiagram_804A076C.sorted_names[max_idx])) ==
@@ -849,7 +848,7 @@ void mnDiagram_8023FC28(void)
 int mnDiagram_CountUnlockedFighters(void)
 {
     int i;
-    int count;
+    s32 count;
     i = 0;
     count = 0;
     for (; i < 0x19; i++) {
@@ -1026,8 +1025,8 @@ loop:
     return found;
 }
 
-static inline int mnDiagram_GetVisibleNameCursorFrom(u8* sorted, int start,
-                                                     int rank)
+static inline u8 mnDiagram_GetVisibleNameCursorFrom(u8* sorted, int start,
+                                                    int rank)
 {
     u8* p;
     u8* p2;
@@ -1153,7 +1152,7 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
     s32 cur;
     s32 count2;
     u8 operand_pad[4];
-    PAD_STACK(64);
+    u8 sp[64];
     mn_804A04F0.buttons = input;
     count2 = 0;
     if (input & 0x10) {
@@ -1750,14 +1749,14 @@ void mnDiagram_80240D94(void* arg0, s32 arg1, s32 arg2, s32 arg3)
 {
     mnDiagram_PopupData* data = ((HSD_GObj*) arg0)->user_data;
     mnDiagram_AnimTable* tbl = GET_DIAGRAM_ANIM_TABLE();
-    Point3d pos;
     float new_var;
+    Point3d pos;
     char buf[8];
     u32 kos;
     u32 sd_count;
 
     HSD_Text* text = HSD_SisLib_803A6754(0, 1);
-    PAD_STACK(24);
+    u8 sp[24];
     data->text[0] = text;
     lb_8000B1CC(data->jobjs[8], &tbl->points[0], &pos);
     text->font_size.x = 0.0521f;
@@ -2049,19 +2048,18 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
     mnDiagram_AnimTable* tbl = GET_DIAGRAM_ANIM_TABLE();
     HSD_JObj* jobj;
     u8* sorted = mnDiagram_804A0750.sorted_fighters;
-    s32 i;
+    int count;
+    int i;
     u8* ptr;
-    s32 count;
     s32 result;
     u8* ptr2;
     HSD_JObj* jobj2;
-    PAD_STACK(8);
+    u8 sp[8];
 
     // Right arrow (jobjs[3])
     jobj = data->jobjs[3];
     mn_8022ED6C(jobj, &tbl->arrow_anim);
-    result = data->is_name_mode;
-    if (result != 0) {
+    if (data->is_name_mode != 0) {
         // Name mode - check if 10 more names exist
         count = 10;
         i = data->name_cursor_pos;
@@ -2349,11 +2347,11 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
     s32 digit_count;
     s32 digit;
     s32 i;
-    f32 x_spacing;
-    f32 y_spacing;
     f32 base;
     f32 row_offset;
     f32 col_offset;
+    f32 x_spacing;
+    f32 y_spacing;
     u8 col = arg1;
     u8 row = arg2;
     f32 y_offset;
@@ -2388,8 +2386,7 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
         digit = mn_GetDigitAt(arg3, i);
         jobj = HSD_JObjLoadJoint(joint_data[0]);
         HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2], joint_data[3]);
-        base = (f32) digit;
-        HSD_JObjReqAnimAll(jobj, base);
+        HSD_JObjReqAnimAll(jobj, (base = (f32) digit));
         HSD_JObjAnimAll(jobj);
         if (col < 7) {
             HSD_JObjSetTranslateX(jobj, (x_spacing * (f32) i) + col_offset);

@@ -27,7 +27,8 @@
 void mnDiagram3_80245BA4(HSD_GObj* gobj)
 {
     Vec3 sp6C;
-    u8 sp58[0x14];
+    u32 max_distance;
+    u8 sp58[0x10];
     u8 sp48[0x10];
     u8 sp38[0x10];
     u8 sp28[0x10];
@@ -45,7 +46,6 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     HSD_Text* value_text;
     HSD_JObj* icon;
     s32 entity;
-    u32 max_distance;
     u32 max_time;
     u32 max_percentage;
 
@@ -77,7 +77,10 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
 
         {
             u16* stat_table;
-            stat_table = (u16*) (base + ((int) stat_type << 1));
+            char* stat_ptr;
+            stat_ptr = base;
+            stat_ptr += (int) stat_type << 1;
+            stat_table = (u16*) stat_ptr;
             icon_x_offset = mnDiagram3_804DC010;
             row_spacing = row1_y;
             (void) row_spacing;
@@ -87,7 +90,8 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
             divider = mnDiagram3_804DC008;
             max_time = 0x5B8D7F;
             neg_spacing = -row_spacing;
-            stat_table += 0x36;
+            stat_ptr += 0x6C;
+            stat_table = (u16*) stat_ptr;
 
             for (i = 0; i < 5; i++) {
                 if (data->is_name_mode != 0) {
@@ -381,7 +385,7 @@ void mnDiagram3_80246F2C(Diagram3* data, int arg1)
 void mnDiagram3_80247008(int arg0)
 {
     mnDiagram_ArchiveData* archive = &mnDiagram_804A0844;
-    HSD_GObj* gobj;
+    register HSD_GObj* gobj;
     HSD_JObj* jobj;
     Diagram3* user_data;
     int i;
@@ -487,9 +491,9 @@ void mnDiagram3_8024714C(void* arg0)
         HSD_JObjSetTranslateX_Fake(popup_jobj, HSD_JObjGetTranslationX(row0));
 
         row0 = data->jobjs[8];
-        HSD_JObjSetTranslateY_Fake(popup_jobj,
-                                   row_spacing * mnDiagram3_804DC00C +
-                                       HSD_JObjGetTranslationY(row0));
+        row_spacing =
+            row_spacing * mnDiagram3_804DC00C + HSD_JObjGetTranslationY(row0);
+        HSD_JObjSetTranslateY_Fake(popup_jobj, row_spacing);
 
         row0 = data->jobjs[8];
         HSD_JObjSetTranslateZ_Fake(popup_jobj, HSD_JObjGetTranslationZ(row0));
@@ -507,10 +511,12 @@ void mnDiagram3_8024714C(void* arg0)
 
         row_spacing = HSD_JObjGetTranslationY(d->jobjs[9]) -
                       HSD_JObjGetTranslationY(row0);
-        neg_spacing = -row_spacing;
+
+        neg_spacing = row_spacing;
 
         lb_8000B1CC(d->jobjs[8], &mnDiagram3_803EEC28.x0, &sp48);
 
+        neg_spacing = -neg_spacing;
         row_spacing = mnDiagram3_804DBFF8;
         stat_idx = (u8) scroll;
         i = 0;
@@ -581,16 +587,14 @@ void fn_802461BC(HSD_GObj* gobj)
         HSD_GObjPLink_80390228(data->popup_gobj);
         data = mnDiagram3_804D6C20->user_data;
         {
-            HSD_Text** check_cur = data->row_labels;
-            HSD_Text** text_cur = data->row_labels;
+            Diagram3* check_data = data;
+            Diagram3* text_data = data;
             i = 0;
             do {
-                if (*check_cur != NULL) {
-                    HSD_SisLib_803A5CC4(*text_cur);
-                    *check_cur = NULL;
+                if (check_data->row_labels[i] != NULL) {
+                    HSD_SisLib_803A5CC4(text_data->row_labels[i]);
+                    check_data->row_labels[i] = NULL;
                 }
-                check_cur++;
-                text_cur++;
             } while (++i < 0xA);
         }
         mn_80229894(0x1C, 0, 3);

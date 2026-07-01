@@ -300,13 +300,16 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
     HSD_GObj* d2;
     PAD_STACK(40);
 
-    data = mnDiagram2_804D6C18->user_data;
+    {
+        Diagram2* initial_data = mnDiagram2_804D6C18->user_data;
+        data = initial_data;
+    }
     result = mn_804A04F0.buttons = mn_80229624(4);
 
     if (result & 0x20) {
         lbAudioAx_80024030(0);
         mn_804A04F0.entering_menu = 0;
-        data2 = mnDiagram2_804D6C18->user_data;
+        data2 = (d2 = mnDiagram2_804D6C18)->user_data;
         x46 = data2->selected_fighter_idx;
         gmMainLib_8015CC34()->x12 = x46;
         x47 = data2->selected_name_idx;
@@ -318,6 +321,7 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
     }
 
     if (result & 0xC0) {
+        var_r28 = 0;
         lbAudioAx_80024030(1);
         data2 = mnDiagram2_804D6C18->user_data;
         x46 = data2->selected_fighter_idx;
@@ -342,7 +346,6 @@ void mnDiagram2_HandleInput(HSD_GObj* gobj)
             return;
         }
         lbAudioAx_80024030(1);
-        var_r28 = 0;
         if (data->is_name_mode == 0) {
             var_r28 = 1;
         }
@@ -624,8 +627,8 @@ int mnDiagram2_GetStatValue(int is_name_mode, u8 stat_type, u8 entity_idx)
 void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
                               u8 row_idx, u8 entity_idx)
 {
-    Vec3 sp20;
     u8 str[8];
+    Vec3 sp20;
     Diagram2* data;
     HSD_JObj* jobj;
     char* base;
@@ -634,8 +637,9 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
     f32 f31;
     f32 f30;
     int mode = is_name_mode;
+    Diagram2* user_data = gobj->user_data;
 
-    data = gobj->user_data;
+    data = user_data;
     base = (char*) &mnDiagram2_803EEAD0;
 
     jobj = data->row0_ref;
@@ -1005,12 +1009,12 @@ void mnDiagram2_InitUserData(void* arg, int unused)
 /// @param arg0 Unused parameter
 void mnDiagram2_Create(int arg0)
 {
+    int entity_val;
     Diagram2* user_data;
     mnDiagram_ArchiveData* archive = &mnDiagram_804A0834;
     HSD_GObj* gobj;
     Diagram2* new_var;
     int j;
-    int entity_val;
     u32 is_name;
     u8 entity_idx;
     int scroll;
@@ -1041,9 +1045,8 @@ void mnDiagram2_Create(int arg0)
 
     HSD_GObj_SetupProc(gobj, mnDiagram2_Think, 0);
 
-    is_name = user_data->is_name_mode;
     new_var = user_data;
-    if (is_name) {
+    if ((is_name = user_data->is_name_mode) != 0) {
         entity_idx = new_var->selected_name_idx;
     } else {
         entity_idx = new_var->selected_fighter_idx;
@@ -1111,13 +1114,12 @@ void mnDiagram2_Init(void)
 /// @return Fighter ID at the given rank, or 25 if no data
 u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
 {
-    int zero;
+    mnDiagram2_SortEntry* base;
+    int j;
+    mnDiagram2_SortEntry* ptr;
     mnDiagram2_SortEntry entries[25];
     mnDiagram2_SortEntry temp;
-    mnDiagram2_SortEntry* base;
-    mnDiagram2_SortEntry* ptr;
     int i;
-    int j;
     int k;
     int maxIdx;
     int neg1;
@@ -1126,7 +1128,6 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
     ptr = entries;
     base = ptr;
     i = 0;
-    zero = 0;
     neg1 = -1;
 
     for (i = 0; i < 25; i++) {
@@ -1134,7 +1135,7 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
         ptr->name = name;
         if (mn_IsFighterUnlocked(name) != 0) {
             ptr->xC = mnDiagram2_GetStatValue(0, stat_type, name);
-            ptr->x8 = zero;
+            ptr->x8 = 0;
         } else {
             ptr->xC = neg1;
             ptr->x8 = neg1;
@@ -1169,7 +1170,6 @@ u8 mnDiagram2_GetRankedFighter(u8 stat_type, u8 rank)
             }
             *base = temp;
         }
-        base++;
     }
 
     // Return

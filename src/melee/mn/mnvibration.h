@@ -10,6 +10,11 @@
 
 extern f32 mnVibration_804DC020;
 extern f32 mnVibration_804DC030;
+extern f32 mnVibration_804DC050;
+extern f32 mnVibration_804DC054;
+extern f32 mnVibration_804DC058;
+extern f32 mnVibration_804DC05C;
+extern f32 mnVibration_804DC060;
 extern SDATA char mnVibration_804D4FF4[];
 extern SDATA char mnVibration_804D4FFC[];
 

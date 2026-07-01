@@ -188,7 +188,7 @@ MnVibrationJointAssets mnVibration_804A0898;
 
 /// --- Function Implementation ---
 
-static inline s32 mnVibration_GetNameSlot(MnVibrationData* data, s32 j)
+static inline u8 mnVibration_GetNameSlot(MnVibrationData* data, s32 j)
 {
     u8 scroll_offset = data->scroll_offset;
     s32 count = GetNameCount();
@@ -237,12 +237,12 @@ HSD_JObj* mnVibration_802474C4(s32 count)
 
 void fn_80247510(HSD_GObj* gobj)
 {
+    HSD_JObj* cursor_jobj;
     MnVibrationData* data = mnVibration_804D6C28->user_data;
     s32 var_ctr;
     s32 i;
     u64 inputs;
     u64 inputs_repeat;
-    HSD_JObj* cursor_jobj;
     HSD_JObj* panel_jobj;
     u8 cursor_row;
     u8 scroll_offset;
@@ -250,8 +250,9 @@ void fn_80247510(HSD_GObj* gobj)
     s32 name_idx_tmp;
     u8 name_idx;
     u8 rumble_setting;
+    HSD_JObj* loaded_joint;
     HSD_JObj* jobj;
-    PAD_STACK(128);
+    u8 sp[112];
 
     if (mn_804D6BC8.cooldown != 0) {
         Menu_DecrementAnimTimer();
@@ -262,15 +263,19 @@ void fn_80247510(HSD_GObj* gobj)
 
     // Handle B button - exit menu
     inputs = gm_801A36A0(4);
-    if (inputs & PAD_CANCEL) {
+    if (inputs & (2LL << 32)) {
         MnVibrationData* exit_data;
         lbAudioAx_80024030(0);
         mn_804A04F0.entering_menu = 0;
         mn_80229894(4, 0, 3);
         // Clean up text objects - reload data pointer
         exit_data = mnVibration_804D6C28->user_data;
-        for (i = 0; i < 8; i++) {
-            HSD_SisLib_803A5CC4(exit_data->texts[i]);
+        {
+            s32 text_idx;
+            for (text_idx = 0; text_idx < 8; text_idx++) {
+                HSD_SisLib_803A5CC4(exit_data->texts[text_idx]);
+            }
+            i = text_idx;
         }
         if (exit_data->title_text != NULL) {
             HSD_SisLib_803A5CC4(exit_data->title_text);
@@ -292,7 +297,7 @@ void fn_80247510(HSD_GObj* gobj)
     for (i = 0; i < 4; i++) {
         if (data->x0[i + 2] == 0) {
             inputs = gm_801A36A0(i);
-            if (inputs & PAD_CONFIRM) {
+            if (inputs & (1LL << 32)) {
                 HSD_JObj* temp_jobj;
                 lbAudioAx_80024030(1);
                 if (GetRumbleSettingOfPort(i) != 0) {
@@ -355,56 +360,55 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Check for up/down navigation
-    for (i = 0; i < 4; i++) {
-        inputs = gm_801A36A0(i);
-        if ((inputs & PAD_ANY_LEFT) && data->x0[i + 2] == 1) {
-            lbAudioAx_80024030(2);
-            data->x0[i + 2] = 0;
-            panel_jobj = data->jobjs[mnVibration_804D4FE8[(u8) i]];
-            HSD_JObjReqAnimAll(panel_jobj, (f32) data->x0[i + 2]);
-            HSD_JObjAnimAll(panel_jobj);
-        } else if (inputs & PAD_ANY_RIGHT) {
-            if (data->x0[i + 2] == 0) {
+    {
+        s32 j;
+        for (j = 0; j < 4; j++) {
+            inputs = gm_801A36A0(j);
+            if ((inputs & (0x40LL << 32)) && data->x0[j + 2] == 1) {
+                u8 state;
                 lbAudioAx_80024030(2);
-                data->x0[i + 2] = 1;
-                panel_jobj = data->jobjs[mnVibration_804D4FE8[(u8) i]];
-                HSD_JObjReqAnimAll(panel_jobj, (f32) data->x0[i + 2]);
+                data->x0[j + 2] = 0;
+                state = data->x0[j + 2];
+                panel_jobj = data->jobjs[mnVibration_804D4FE8[(u8) j]];
+                HSD_JObjReqAnimAll(panel_jobj, (f32) state);
                 HSD_JObjAnimAll(panel_jobj);
+            } else {
+                inputs = gm_801A36A0(j);
+                if ((inputs & (0x80LL << 32)) && data->x0[j + 2] == 0) {
+                    u8 state;
+                    lbAudioAx_80024030(2);
+                    data->x0[j + 2] = 1;
+                    state = data->x0[j + 2];
+                    panel_jobj = data->jobjs[mnVibration_804D4FE8[(u8) j]];
+                    HSD_JObjReqAnimAll(panel_jobj, (f32) state);
+                    HSD_JObjAnimAll(panel_jobj);
+                }
             }
         }
+        i = j;
     }
 
     // Collect repeated inputs from all controllers with L held
     inputs_repeat = 0;
     for (i = 0; i < 4; i++) {
-        s32 selected = data->x0[i + 2];
+        u8 selected = data->x0[i + 2];
         if (selected == 1) {
             inputs_repeat |= gm_801A36C0(i);
         }
     }
 
     // Handle A button to toggle rumble setting for selected name
-    if (inputs_repeat & PAD_CONFIRM) {
+    if (inputs_repeat & (1LL << 32)) {
         lbAudioAx_80024030(1);
         cursor_row = data->x0[1];
-        scroll_offset = data->scroll_offset;
-        name_count = GetNameCount();
-        if (name_count < 8 && cursor_row >= name_count) {
-            name_idx = 0xFF;
-        } else {
-            name_idx_tmp = scroll_offset + cursor_row;
-            if (name_count <= name_idx_tmp) {
-                name_idx = 0xFF;
-            } else {
-                name_idx = (u8) name_idx_tmp;
-            }
-        }
-        if (GetPersistentNameData(name_idx)->x1A1 == 1) {
+        name_idx = mnVibration_GetNameSlot(data, cursor_row);
+        rumble_setting = mnVibration_GetNameRumble(name_idx);
+        if (rumble_setting == 1) {
             GetPersistentNameData(name_idx)->x1A1 = 0;
         } else {
             GetPersistentNameData(name_idx)->x1A1 = 1;
         }
-        rumble_setting = mnVibration_GetNameRumble((s32) name_idx);
+        rumble_setting = mnVibration_GetNameRumble(name_idx);
         jobj = mnVibration_802474C4(data->x0[1]);
         HSD_JObjReqAnimAll(jobj, (f32) rumble_setting);
         HSD_JObjAnimAll(jobj);
@@ -412,22 +416,11 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Handle up navigation
-    if (inputs_repeat & PAD_ANY_UP) {
+    if (inputs_repeat & (0x10LL << 32)) {
         cursor_row = data->x0[1];
         if (cursor_row != 0) {
-            name_idx_tmp = cursor_row - 1;
-            scroll_offset = data->scroll_offset;
-            name_count = GetNameCount();
-            if (name_count < 8 && name_idx_tmp >= name_count) {
-                name_idx = 0xFF;
-            } else {
-                name_idx_tmp = scroll_offset + name_idx_tmp;
-                if (name_count <= name_idx_tmp) {
-                    name_idx = 0xFF;
-                } else {
-                    name_idx = (u8) name_idx_tmp;
-                }
-            }
+            u8 name_row = cursor_row - 1;
+            name_idx = mnVibration_GetNameSlot(data, name_row);
             if (name_idx != 0xFF) {
                 MnVibrationData* data2;
                 HSD_JObj* jobj17;
@@ -465,23 +458,12 @@ void fn_80247510(HSD_GObj* gobj)
     }
 
     // Handle down navigation
-    else if (inputs_repeat & PAD_ANY_DOWN)
+    else if (inputs_repeat & (0x20LL << 32))
     {
         cursor_row = data->x0[1];
         if (cursor_row < 7) {
-            name_idx_tmp = cursor_row + 1;
-            scroll_offset = data->scroll_offset;
-            name_count = GetNameCount();
-            if (name_count < 8 && name_idx_tmp >= name_count) {
-                name_idx = 0xFF;
-            } else {
-                name_idx_tmp = scroll_offset + name_idx_tmp;
-                if (name_count <= name_idx_tmp) {
-                    name_idx = 0xFF;
-                } else {
-                    name_idx = (u8) name_idx_tmp;
-                }
-            }
+            u8 name_row = cursor_row + 1;
+            name_idx = mnVibration_GetNameSlot(data, name_row);
             if (name_idx != 0xFF) {
                 MnVibrationData* data2;
                 HSD_JObj* jobj17;
@@ -511,18 +493,7 @@ void fn_80247510(HSD_GObj* gobj)
                 HSD_JObjSetTranslateZ(cursor_jobj, temp_z);
             }
         } else if (GetNameCount() > 8) {
-            scroll_offset = data->scroll_offset;
-            name_count = GetNameCount();
-            if (name_count < 8 && name_count <= 8) {
-                name_idx = 0xFF;
-            } else {
-                name_idx_tmp = scroll_offset + 8;
-                if (name_count <= name_idx_tmp) {
-                    name_idx = 0xFF;
-                } else {
-                    name_idx = (u8) name_idx_tmp;
-                }
-            }
+            name_idx = mnVibration_GetNameSlot(data, 8);
             if (name_idx != 0xFF) {
                 lbAudioAx_80024030(2);
                 data->scroll_offset++;
@@ -691,7 +662,7 @@ void mnVibration_80248644(HSD_GObj* arg0)
     }
     for (j = 0; j < 8; j++) {
         name_idx = mnVibration_GetNameSlot(data, j);
-        if ((s32) (u8) name_idx != 0xFF) {
+        if (name_idx != 0xFF) {
             mnVibration_80248444(arg0, (u8) name_idx, (u8) j);
         }
     }
@@ -699,12 +670,18 @@ void mnVibration_80248644(HSD_GObj* arg0)
 
 void fn_80248748(HSD_GObj* gobj)
 {
-    MnVibrationData* data = gobj->user_data;
+    MnVibrationData* data;
+    HSD_JObj* jobj;
+    AnimLoopSettings* table;
     f32 frame;
-    PAD_STACK(8);
+    int pad;
 
-    frame = mn_8022ED6C(data->jobjs[1], &mnVibration_803EECEC);
-    if (frame >= mnVibration_803EECEC.end_frame) {
+    data = gobj->user_data;
+    jobj = data->jobjs[1];
+    table = &mnVibration_803EECEC;
+    pad = 0;
+    frame = mn_8022ED6C(jobj, table);
+    if (frame >= table->end_frame) {
         HSD_GObjPLink_80390228(gobj);
     }
 }
@@ -715,13 +692,13 @@ void fn_802487A8(HSD_GObj* gobj)
     HSD_JObj* toggle_jobj;
     HSD_JObj* port_child;
     s32 port;
-    u16* toggle_idx;
     s32 port_idx;
     u8 pad_err;
+    u8 state;
     HSD_JObj* active_child;
     MnVibrationData* data;
     HSD_JObj* disconnected_child;
-    PAD_STACK(56);
+    u8 sp[64];
 
     data = gobj->user_data;
     if ((u8) mn_804A04F0.cur_menu != 0x13) {
@@ -761,14 +738,14 @@ void fn_802487A8(HSD_GObj* gobj)
         port += 1;
     } while (port < 4);
     port_idx = 0;
-    toggle_idx = &mnVibration_804D4FE8[port_idx];
     do {
         pad_err = HSD_PadCopyStatus[(u8) port_idx].err;
         if ((((s8) pad_err != 0) && (data->x6[port_idx] != 0)) ||
             (((s8) pad_err == 0) && (data->x6[port_idx] == 0)))
         {
             if ((s8) pad_err != 0) {
-                HSD_JObjSetFlagsAll(data->jobjs[*toggle_idx], JOBJ_HIDDEN);
+                HSD_JObjSetFlagsAll(
+                    data->jobjs[mnVibration_804D4FE8[port_idx]], JOBJ_HIDDEN);
                 {
                     void* temp_jobj2;
                     temp_jobj2 =
@@ -792,19 +769,22 @@ void fn_802487A8(HSD_GObj* gobj)
                 mnVibration_802480B4(disconnected_child, port_idx, 0);
                 data->x6[port_idx] = 0;
             } else {
-                HSD_JObjClearFlagsAll(data->jobjs[*toggle_idx], JOBJ_HIDDEN);
-                active_child = NULL;
+                HSD_JObjClearFlagsAll(
+                    data->jobjs[mnVibration_804D4FE8[port_idx]], JOBJ_HIDDEN);
                 data->x0[port_idx + 2] = 0;
                 toggle_jobj =
                     ((MnVibrationData*) mnVibration_804D6C28->user_data)
-                        ->jobjs[mnVibration_804D4FE8[port_idx]];
-                HSD_JObjReqAnimAll(toggle_jobj, (f32) data->x0[port_idx + 2]);
+                        ->jobjs[mnVibration_804D4FE8[(u8) port_idx]];
+                state = data->x0[port_idx + 2];
+                HSD_JObjReqAnimAll(toggle_jobj, (f32) state);
                 HSD_JObjAnimAll(toggle_jobj);
                 {
                     HSD_JObj* temp_jobj3;
                     temp_jobj3 =
                         ((MnVibrationData*) gobj->user_data)->jobjs[23];
-                    if (temp_jobj3 != NULL) {
+                    if (temp_jobj3 == NULL) {
+                        active_child = NULL;
+                    } else {
                         active_child = temp_jobj3->child;
                     }
                 }
@@ -823,7 +803,6 @@ void fn_802487A8(HSD_GObj* gobj)
             }
         }
         port_idx += 1;
-        toggle_idx += 1;
     } while ((s32) port_idx < 4);
 }
 
@@ -834,36 +813,35 @@ static inline f32 mnVibration_GetCursorYSpacing(f32 base_y, HSD_JObj* jobj)
 
 void fn_80248A78(HSD_GObj* arg0)
 {
-    MnVibrationData* data;
+    f32 temp_y;
+    MnVibrationData* temp_r30;
     f32 frame;
-    HSD_JObj* cursor_jobj;
-    HSD_GObj* cursor_gobj;
-    MnVibrationAssets* assets;
-    MnVibrationData* data2;
     MnVibrationData* data3;
     HSD_JObj* loaded_joint;
     HSD_JObj* jobj;
     HSD_JObj* jobj2;
     HSD_JObj* jobj3;
     HSD_JObj* jobj4;
+    HSD_JObj* cursor_jobj;
     HSD_JObj* jobj17;
     HSD_JObj* jobj18;
     f32 base_y;
     f32 spacing;
     f32 temp_x;
-    f32 temp_y;
     f32 temp_z;
     u8 cursor_row;
-    PAD_STACK(64);
+    HSD_GObj* cursor_gobj;
+    u8 sp[64];
 
-    data = arg0->user_data;
     {
-        HSD_JObj* temp_jobj = data->jobjs[1];
-        frame =
-            mn_8022ED6C(temp_jobj, (AnimLoopSettings*) &mnVibration_803EECE0);
+        MnVibrationData* data = arg0->user_data;
+        temp_r30 = data;
     }
-    if (frame == 10.0f) {
-        jobj = ((MnVibrationData*) arg0->user_data)->jobjs[23];
+    frame = mn_8022ED6C(temp_r30->jobjs[1],
+                        (AnimLoopSettings*) &mnVibration_803EECE0);
+    if (mnVibration_804DC050 == frame) {
+        HSD_JObj* top_jobj = ((MnVibrationData*) arg0->user_data)->jobjs[23];
+        jobj = top_jobj;
         if (jobj == NULL) {
             jobj = NULL;
         } else {
@@ -881,10 +859,10 @@ void fn_80248A78(HSD_GObj* arg0)
             }
         }
         HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
-        if ((u8) data->x6[0] != 0) {
-            HSD_JObjClearFlagsAll(data->jobjs[22], JOBJ_HIDDEN);
+        if ((u8) temp_r30->x6[0] != 0) {
+            HSD_JObjClearFlagsAll(temp_r30->jobjs[22], JOBJ_HIDDEN);
         }
-    } else if (frame == 11.0f) {
+    } else if (mnVibration_804DC054 == frame) {
         jobj = ((MnVibrationData*) arg0->user_data)->jobjs[23];
         if (jobj == NULL) {
             jobj = NULL;
@@ -897,10 +875,10 @@ void fn_80248A78(HSD_GObj* arg0)
             jobj = jobj->next;
         }
         HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
-        if ((u8) data->x6[1] != 0) {
-            HSD_JObjClearFlagsAll(data->jobjs[21], JOBJ_HIDDEN);
+        if ((u8) temp_r30->x6[1] != 0) {
+            HSD_JObjClearFlagsAll(temp_r30->jobjs[21], JOBJ_HIDDEN);
         }
-    } else if (frame == 12.0f) {
+    } else if (mnVibration_804DC058 == frame) {
         jobj = ((MnVibrationData*) arg0->user_data)->jobjs[23];
         if (jobj == NULL) {
             jobj2 = NULL;
@@ -918,10 +896,10 @@ void fn_80248A78(HSD_GObj* arg0)
             jobj4 = jobj3->next;
         }
         HSD_JObjClearFlagsAll(jobj4, JOBJ_HIDDEN);
-        if ((u8) data->x6[2] != 0) {
-            HSD_JObjClearFlagsAll(data->jobjs[20], JOBJ_HIDDEN);
+        if ((u8) temp_r30->x6[2] != 0) {
+            HSD_JObjClearFlagsAll(temp_r30->jobjs[20], JOBJ_HIDDEN);
         }
-    } else if (frame == 13.0f) {
+    } else if (mnVibration_804DC05C == frame) {
         jobj = ((MnVibrationData*) arg0->user_data)->jobjs[23];
         if (jobj == NULL) {
             jobj2 = NULL;
@@ -944,11 +922,13 @@ void fn_80248A78(HSD_GObj* arg0)
             jobj = jobj4->next;
         }
         HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
-        if ((u8) data->x6[3] != 0) {
-            HSD_JObjClearFlagsAll(data->jobjs[19], JOBJ_HIDDEN);
+        if ((u8) temp_r30->x6[3] != 0) {
+            HSD_JObjClearFlagsAll(temp_r30->jobjs[19], JOBJ_HIDDEN);
         }
-    } else if (frame == 14.0f) {
+    } else if (mnVibration_804DC060 == frame) {
         if (GetNameCount() != 0) {
+            MnVibrationAssets* assets;
+            MnVibrationData* data2;
             mnVibration_80248644(arg0);
             assets = &mnVibration_804A0868;
             data2 = arg0->user_data;
@@ -966,8 +946,8 @@ void fn_80248A78(HSD_GObj* arg0)
             cursor_row = data2->x0[1];
             base_y = mnVibration_JObjGetTranslationY(jobj17);
             jobj18 = data3->jobjs[18];
+            spacing = mnVibration_JObjGetTranslationY(jobj18) - base_y;
             jobj17 = data3->jobjs[17];
-            spacing = mnVibration_GetCursorYSpacing(base_y, jobj18);
             temp_x = mnVibration_JObjGetTranslationX(jobj17);
             mnVibration_JObjSetTranslateX(cursor_jobj, temp_x);
             jobj17 = data3->jobjs[17];
