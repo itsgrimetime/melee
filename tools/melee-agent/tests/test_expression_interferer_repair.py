@@ -279,6 +279,51 @@ def _live_y_offset_scaled_source(function: str = "mnDiagram_DrawCellNumber") -> 
     )
 
 
+def _split_y_offset_void_scaled_source(function: str = "mnDiagram_80241E78") -> str:
+    return (
+        "typedef float f32;\n"
+        "typedef unsigned char u8;\n"
+        "typedef int s32;\n"
+        "typedef struct Diagram { void** jobjs; } Diagram;\n"
+        "extern f32 HSD_JObjGetTranslationY(void* jobj);\n"
+        "extern void HSD_JObjSetTranslateX(void* jobj, f32 value);\n"
+        "extern void HSD_JObjSetTranslateY(void* jobj, f32 value);\n"
+        "extern int mn_GetDigitCount(int value);\n"
+        f"void {function}(void* gobj, u8 arg1, u8 arg2, int value)\n"
+        "{\n"
+        "    f32 y_offset;\n"
+        "    f32 row_offset;\n"
+        "    f32 row_offset_adj;\n"
+        "    f32 col_offset;\n"
+        "    void* jobj;\n"
+        "    void* jobj2;\n"
+        "    Diagram* data;\n"
+        "    s32 digit_count;\n"
+        "    f32 y_spacing;\n"
+        "    f32 base;\n"
+        "    u8 col = arg1;\n"
+        "    u8 row = arg2;\n"
+        "\n"
+        "    data = gobj;\n"
+        "    jobj = data->jobjs[9];\n"
+        "    base = HSD_JObjGetTranslationY(jobj);\n"
+        "    jobj2 = data->jobjs[10];\n"
+        "    y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        "    (void) y_offset;\n"
+        "    y_offset -= base;\n"
+        "    digit_count = mn_GetDigitCount(value);\n"
+        "    col_offset = y_spacing * (f32) col;\n"
+        "    row_offset = y_offset * (f32) row;\n"
+        "    row_offset_adj = row_offset - 0.4f;\n"
+        "    if (row < 10) HSD_JObjSetTranslateY(jobj, row_offset);\n"
+        "    else HSD_JObjSetTranslateY(jobj, row_offset_adj);\n"
+        "    if (col < 7) HSD_JObjSetTranslateX(jobj, base + col_offset);\n"
+        "    else HSD_JObjSetTranslateX(jobj, base + col_offset + 0.4f);\n"
+        "    sink(digit_count);\n"
+        "}\n"
+    )
+
+
 def _generation_by_id(source: str, *, max_candidates: int = -1) -> dict[str, dict]:
     generation = generate_source_repair_candidates(
         source,
@@ -984,6 +1029,47 @@ def test_source_generation_second_gen_handles_live_y_offset_scaled_shape() -> No
     assert "row_offset = row_offset_first_owner_fpr * rowf;" in row_text
 
 
+def test_source_generation_handles_split_y_offset_void_row_anchor() -> None:
+    generation = generate_source_repair_candidates(
+        _split_y_offset_void_scaled_source(),
+        function="mnDiagram_80241E78",
+        include_source=True,
+        max_candidates=-1,
+    )
+
+    assert generation["status"] == "generated"
+    assert "missing_patterns" not in generation
+    by_id = {
+        candidate["candidate_id"]: candidate
+        for candidate in generation["candidates"]
+    }
+    assert {
+        "row-first-def-owner-copy",
+        "row-scaled-def-owner-copy",
+        "product-col-cast-owner-materialize",
+        "product-y-spacing-owner-materialize",
+        "product-combined-operand-owners",
+        "product-col-offset-sink-owner",
+    } <= set(by_id)
+    assert all(candidate["source_hunks"] for candidate in by_id.values())
+    row_text = by_id["row-first-def-owner-copy"]["source_text"]
+    assert "y_offset = HSD_JObjGetTranslationY(jobj2);" in row_text
+    assert "(void) y_offset;" in row_text
+    assert "y_offset -= base;" in row_text
+    assert "row_offset_first_owner_fpr = y_offset;" in row_text
+    assert "row_offset = row_offset_first_owner_fpr * (f32) row;" in row_text
+
+
+def test_source_generation_does_not_report_row_first_def_missing_for_split_void_anchor() -> None:
+    generation = generate_source_repair_candidates(
+        _split_y_offset_void_scaled_source(),
+        function="mnDiagram_80241E78",
+    )
+
+    assert generation["status"] == "generated"
+    assert "missing_patterns" not in generation
+
+
 def test_source_generation_emits_product_operand_owner_candidates() -> None:
     by_id = _generation_by_id(_live_y_offset_scaled_source())
 
@@ -1082,6 +1168,77 @@ def test_source_generation_includes_row_fsubs_owner_repair_candidates() -> None:
             "requires_expression_score_validation": True,
             "known_negative_control": "row_sub_assign_split",
             "target_expression_virtual": 37,
+            "expected_phys": 26,
+        }
+
+
+def test_source_generation_includes_split_row_fsubs_owner_repair_candidates() -> None:
+    candidate = ExpressionRepairCandidate(
+        candidate_id="issue1141-split-row-col-swap",
+        expression_score=_expression_score(
+            _anchor(
+                33,
+                "col_offset",
+                expected=28,
+                actual=26,
+                expression="y_spacing * (f32) col",
+                first_def_opcode="fmuls",
+                first_def_operands="f33,f36,f48",
+            ),
+            _anchor(
+                39,
+                "row_offset",
+                expected=26,
+                actual=28,
+                expression="HSD_JObjGetTranslationY(jobj2) - base",
+                first_def_opcode="fsubs",
+                first_def_operands="f39,f32,f51",
+            ),
+        ),
+        structural_guard={"accepted": True},
+    )
+    terminal_summary = build_terminal_summary(
+        [candidate],
+        ProtectedExpressionPolicy(focus_name="col_offset"),
+    )
+
+    generation = generate_source_repair_candidates(
+        _split_y_offset_void_scaled_source(),
+        function="mnDiagram_80241E78",
+        terminal_summary=terminal_summary,
+        include_source=True,
+        max_candidates=-1,
+    )
+
+    by_id = {
+        candidate["candidate_id"]: candidate
+        for candidate in generation["candidates"]
+    }
+    assert {
+        "row-fsubs-call-result-owner",
+        "row-fsubs-owner-temp",
+    } <= set(by_id)
+    call_owner = by_id["row-fsubs-call-result-owner"]
+    owner_temp = by_id["row-fsubs-owner-temp"]
+    assert call_owner["family"] == "row_fsubs_owner_repair"
+    assert owner_temp["family"] == "row_fsubs_owner_repair"
+    assert (
+        "row_offset_call_owner_fpr = HSD_JObjGetTranslationY(jobj2);\n"
+        "    y_offset = row_offset_call_owner_fpr;\n"
+        "    (void) y_offset;\n"
+        "    y_offset -= base;"
+    ) in call_owner["source_text"]
+    assert (
+        "y_offset = HSD_JObjGetTranslationY(jobj2);\n"
+        "    (void) y_offset;\n"
+        "    row_offset_fsubs_owner_fpr = y_offset - base;\n"
+        "    y_offset = row_offset_fsubs_owner_fpr;"
+    ) in owner_temp["source_text"]
+    for row in (call_owner, owner_temp):
+        assert row["validation_metadata"] == {
+            "requires_expression_score_validation": True,
+            "known_negative_control": "row_sub_assign_split",
+            "target_expression_virtual": 39,
             "expected_phys": 26,
         }
 
@@ -1803,5 +1960,67 @@ def test_cli_can_write_expression_interferer_source_generation_probes(
         assert score_source["cflags_from"] == "src/melee/mn/mndiagram.c"
         assert "debug target score-source" in score_source["command"]
         assert "--checkdiff-guard" in score_source["command"]
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+
+
+def test_cli_can_write_split_row_expression_interferer_source_generation_probes(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "retained-split.c"
+    source_path.write_text(
+        _split_y_offset_void_scaled_source(function="mnDiagram_80241E78"),
+        encoding="utf-8",
+    )
+    repo_root = Path(__file__).resolve().parents[3]
+    out_dir = (
+        repo_root
+        / "build"
+        / "diagnostics"
+        / f"pytest-expression-generation-split-{tmp_path.name}"
+    )
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "debug",
+                "suggest",
+                "expression-interferer-repair",
+                "--function",
+                "mnDiagram_80241E78",
+                "--source-file",
+                str(source_path),
+                "--source-function",
+                "mnDiagram_80241E78",
+                "--write-probes",
+                str(out_dir),
+                "--cflags-from",
+                "src/melee/mn/mndiagram.c",
+                "--max-source-candidates",
+                "-1",
+                "--json",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output)
+        generation = summary["source_generation"]
+        assert generation["status"] == "generated"
+        by_id = {
+            candidate["candidate_id"]: candidate
+            for candidate in generation["candidates"]
+        }
+        assert Path(by_id["row-first-def-owner-copy"]["path"]).is_file()
+        assert Path(by_id["row-fsubs-call-result-owner"]["path"]).is_file()
+        for candidate in by_id.values():
+            if "path" not in candidate:
+                continue
+            assert candidate["score_source"]["status"] == "ready"
+            command = candidate["score_source"]["command"]
+            assert "debug target score-source" in command
+            assert "-f mnDiagram_80241E78" in command
+            assert "--cflags-from src/melee/mn/mndiagram.c" in command
+            assert "--checkdiff-guard" in command
     finally:
         shutil.rmtree(out_dir, ignore_errors=True)

@@ -1118,6 +1118,100 @@ def test_control_flow_shape_search_json_scores_suggestion_family_candidates(
     assert "target_score" not in variant
 
 
+def test_control_flow_shape_search_void_call_hoist_uses_included_prototype(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "mn" / "demo.c"
+    header = melee_root / "src" / "sysdolphin" / "baselib" / "jobj.h"
+    source.parent.mkdir(parents=True)
+    header.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            #include "baselib/jobj.h"
+            typedef int s32;
+
+            void fn_80000000(HSD_JObj* parent, HSD_JObj* child)
+            {
+                s32 i;
+                for (i = 0; i < 4; i++) {
+                    HSD_JObjAddChild(parent, child);
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    header.write_text(
+        textwrap.dedent(
+            """\
+            typedef struct HSD_JObj HSD_JObj;
+            void HSD_JObjAddChild(HSD_JObj* jobj, HSD_JObj* child);
+            """
+        ),
+        encoding="utf-8",
+    )
+    suggestions = tmp_path / "suggestions.json"
+    suggestions.write_text(
+        json.dumps(
+            {
+                "function": "fn_80000000",
+                "suggestions": [
+                    {
+                        "kind": "call-hoist",
+                        "operator": "pointer-base-call-loop",
+                        "evidence": {"symbol": "HSD_JObjAddChild"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/demo",
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "control-flow-shape-search",
+            "-f",
+            "fn_80000000",
+            "--suggestions-json",
+            str(suggestions),
+            "--operator",
+            "pointer-base-call-loop",
+            "--max-probes",
+            "4",
+            "--no-compile-probes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["probe_count"] == 0
+    assert payload["generated_source_dir"] is None
+    assert payload["blocker"] == "control-flow-shape-families-terminal"
+    assert payload["stop_condition"]["kind"] == "terminal"
+    assert payload["family_results"][0]["status"] == "terminal"
+    proof = payload["terminal_proofs"][0]
+    assert proof["terminal_blocker"] == (
+        "void-return-call-hoist-not-source-actionable"
+    )
+    assert proof["source_model_proof"]["call_return_type"] == "void"
+    assert "child-attachment ordering" in proof["next_handoff"]
+    assert {
+        item["reason"] for item in proof["exhausted_dimensions"]
+    } >= {"void-return-callee", "call-result-not-used-in-condition"}
+
+
 def _helper_u8_index_table_source() -> str:
     return textwrap.dedent(
         """\
@@ -1548,6 +1642,142 @@ def test_control_flow_shape_search_json_compares_baseline_checkdiff(
     assert variant["checkdiff_delta"]["normalized_diff_lines"] == 3
     assert payload["stop_condition"]["blocker"] == (
         "no-control-flow-shape-candidate-improved-checkdiff"
+    )
+
+
+def test_control_flow_shape_search_json_reports_build_failed_candidates_not_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.diff_capture import CompileFailure
+
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "mn" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef int s32;
+            typedef struct HSD_JObj HSD_JObj;
+            int HSD_PadRumbleAdd(int, int, int, int, void*);
+            void HSD_JObjAnimAll(HSD_JObj*);
+            void fn_80000000(HSD_JObj* panel_jobj2)
+            {
+                s32 i;
+                for (i = 0; i < 4; i++) {
+                    if (i == 2) {
+                        return;
+                    } else {
+                        HSD_JObjAnimAll(panel_jobj2);
+                        HSD_PadRumbleAdd(i, 0, 14, 0, 0);
+                        return;
+                    }
+                }
+            }
+            """
+        )
+    )
+    suggestions = tmp_path / "suggestions.json"
+    suggestions.write_text(
+        json.dumps(
+            {
+                "function": "fn_80000000",
+                "suggestions": [
+                    {
+                        "kind": "call-hoist",
+                        "operator": "pointer-base-call-loop",
+                        "evidence": {"symbol": "HSD_PadRumbleAdd"},
+                    }
+                ],
+            }
+        )
+    )
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "function": "fn_80000000",
+                "fuzzy_match_percent": 92.36562,
+                "classification": {
+                    "structural_truth_gate": {"normalized_diff_lines": 49}
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/demo",
+    )
+
+    def fake_compile(diff_input, *, function, melee_root, timeout):
+        raise CompileFailure(
+            "candidate",
+            ["compile"],
+            "",
+            "compiler diagnostic",
+            1,
+        )
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_control_flow_compile_source_variant",
+        fake_compile,
+        raising=False,
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "control-flow-shape-search",
+            "-f",
+            "fn_80000000",
+            "--suggestions-json",
+            str(suggestions),
+            "--baseline-checkdiff-json",
+            str(baseline),
+            "--operator",
+            "pointer-base-call-loop",
+            "--max-probes",
+            "2",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "control-flow-shape-candidates-build-failed"
+    assert payload["stop_condition"]["kind"] == "blocked"
+    assert payload["probe_count"] == 2
+    assert {variant["status"] for variant in payload["variants"]} == {
+        "build-failed"
+    }
+    assert all(
+        item["terminal_blocker"] != "control-flow-shape-candidates-exhausted"
+        for item in payload["terminal_proofs"]
+    )
+    proof = next(
+        item
+        for item in payload["terminal_proofs"]
+        if item["terminal_blocker"] == "control-flow-shape-candidates-build-failed"
+    )
+    assert proof["candidate_count"] == 2
+    assert proof["scored_count"] == 0
+    assert proof["build_failed_count"] == 2
+    assert proof["failed_count"] == 0
+    assert proof["ok_unscored_count"] == 0
+    assert proof["baseline"] == {
+        "match_percent": 92.36562,
+        "normalized_diff_lines": 49,
+    }
+    assert all(
+        item["source_retained"] and item["error"]
+        for item in proof["candidate_summaries"]
+    )
+    assert (
+        "rather than moving to another source-shape family" in proof["next_handoff"]
     )
 
 

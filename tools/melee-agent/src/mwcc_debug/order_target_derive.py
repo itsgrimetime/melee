@@ -9,7 +9,7 @@ routing, never an error) and returns an OrderTarget. Keeping it pure makes the
 partition logic unit-testable without any mwcc compilation.
 
 Ordering matters and matches §4.2:
-  1. register-only precondition (a structural diff is NOT in this pool -> raise)
+  1. register-only precondition (a structural diff is NOT in this pool -> not_order_class)
   2. phys conflict -> not_order_class (before any forced compile)
   3. minimal-set search exhausted under the 64-cap -> force_cap_blocked
      (the collector sets force_cap_exceeded ONLY after probing the <=64 window;
@@ -145,10 +145,14 @@ def _target(inp: DeriveInputs, routing: Routing, *,
 def derive_order_target(inp: DeriveInputs) -> OrderTarget:
     # Step 1 — register-only precondition. A structural diff is not in this pool.
     if inp.checkdiff_primary not in REGISTER_ONLY_PRIMARIES:
-        raise ValueError(
-            f"{inp.function}: checkdiff primary is {inp.checkdiff_primary!r}, "
-            f"not register-only ({sorted(REGISTER_ONLY_PRIMARIES)}); "
-            f"not in the order-distance pool"
+        return _target(
+            inp,
+            Routing.NOT_ORDER_CLASS,
+            class_evidence=(
+                f"checkdiff primary is {inp.checkdiff_primary!r}, "
+                f"not register-only ({sorted(REGISTER_ONLY_PRIMARIES)}); "
+                f"not in the order-distance pool"
+            ),
         )
 
     # Step 2 — phys conflict classifier (BEFORE any forced compile).

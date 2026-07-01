@@ -1,5 +1,3 @@
-import pytest
-
 from src.mwcc_debug.order_target_derive import derive_order_target, DeriveInputs
 from src.search.directed.order_target import Routing
 
@@ -53,9 +51,13 @@ def test_clean_two_role_routes_directed():
     assert t.exit_code() == 0
 
 
-def test_structural_diff_aborts_before_pool():
-    with pytest.raises(ValueError, match="register-only"):
-        derive_order_target(_inputs(checkdiff_primary="control-flow-source-shape"))
+def test_structural_diff_routes_not_order_class_before_pool():
+    t = derive_order_target(_inputs(checkdiff_primary="control-flow-source-shape"))
+
+    assert t.routing == Routing.NOT_ORDER_CLASS.value
+    assert t.exit_code() == 4
+    assert "control-flow-source-shape" in t.class_evidence
+    assert "not register-only" in t.class_evidence
 
 
 def test_backend_ceiling_primary_is_admitted():

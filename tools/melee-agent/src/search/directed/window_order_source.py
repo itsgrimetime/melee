@@ -54,6 +54,7 @@ _FIELD_AT_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?P<base>[A-Za-z_]\w*)\s*(?P<op>->|\.)\s*"
     r"field_at_0x(?P<offset>[0-9A-Fa-f]+)(?![A-Za-z0-9_])"
 )
+_MEMBER_ACCESS_TOKEN_RE = re.compile(r"\s*(?P<token>[A-Za-z_]\w*|->|\.)")
 _LI_EXPRESSION_RE = re.compile(
     r"\bli\b\s+r\d+\s*,\s*(?P<imm>-?(?:0x[0-9A-Fa-f]+|\d+))\s*$",
     re.IGNORECASE,
@@ -179,6 +180,27 @@ class _FieldLoadSourceCandidate:
     line_text: str
     accessor_name: str | None = None
     accessor_return_type: str | None = None
+    base_expression: str | None = None
+    base_type: str | None = None
+    field_load_chain: tuple[Mapping[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class _ParamAliasCandidate:
+    param_name: str
+    alias_name: str
+    type_text: str
+    kind: str
+    line_start: int
+    line_end: int
+    line_source_span: tuple[int, int]
+    line_text: str
+    rank_priority: int
+    peer_param_name: str | None = None
+    peer_alias_name: str | None = None
+    peer_line_source_span: tuple[int, int] | None = None
+    peer_line_text: str | None = None
+    use_lines: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1535,6 +1557,329 @@ def _function_local_type(
     return None
 
 
+def _line_number_at(source_text: str, index: int) -> int:
+    return source_text.count("\n", 0, max(0, min(index, len(source_text)))) + 1
+
+
+def _identifier_use_lines(
+    source_text: str,
+    name: str,
+    *,
+    search_span: tuple[int, int],
+) -> tuple[int, ...]:
+    if not _SIMPLE_IDENTIFIER_RE.fullmatch(name):
+        return ()
+    start, end = search_span
+    start = max(0, min(start, len(source_text)))
+    end = max(start, min(end, len(source_text)))
+    pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
+    lines: list[int] = []
+    for match in pattern.finditer(source_text[start:end]):
+        line = _line_number_at(source_text, start + match.start())
+        if line not in lines:
+            lines.append(line)
+    return tuple(lines)
+
+
+def _param_alias_candidate_dict(candidate: _ParamAliasCandidate) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "kind": candidate.kind,
+        "rank_priority": candidate.rank_priority,
+        "line_start": candidate.line_start,
+        "line_end": candidate.line_end,
+        "line_source_start": candidate.line_source_span[0],
+        "line_source_end": candidate.line_source_span[1],
+        "line_source_span": list(candidate.line_source_span),
+        "span_text": candidate.line_text.strip(),
+        "param_name": candidate.param_name,
+        "alias_name": candidate.alias_name,
+        "type_text": candidate.type_text,
+        "use_lines": list(candidate.use_lines),
+    }
+    if candidate.peer_param_name is not None:
+        payload["peer_param_name"] = candidate.peer_param_name
+    if candidate.peer_alias_name is not None:
+        payload["peer_alias_name"] = candidate.peer_alias_name
+    if candidate.peer_line_source_span is not None:
+        payload["peer_line_source_span"] = list(candidate.peer_line_source_span)
+    if candidate.peer_line_text is not None:
+        payload["peer_span_text"] = candidate.peer_line_text.strip()
+    return payload
+
+
+def _param_alias_materialization_kind(candidate_kind: str) -> str:
+    if candidate_kind == "adjacent-param-alias-decl-swap":
+        return "declaration-order"
+    if candidate_kind == "delayed-param-alias-init":
+        return "delayed-init"
+    return candidate_kind
+
+
+_PARAM_ALIAS_DECL_RE = re.compile(
+    r"^(?P<indent>\s*)"
+    r"(?P<type>(?:struct\s+)?[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*|\s*\*)*)"
+    r"\s+(?P<alias>[A-Za-z_]\w*)\s*=\s*"
+    r"(?:(?P<cast>\(\s*(?:struct\s+)?[A-Za-z_]\w*"
+    r"(?:\s+[A-Za-z_]\w*|\s*\*)*\s*\))\s*)?"
+    r"(?P<param>[A-Za-z_]\w*)\s*;\s*(?://.*)?$"
+)
+
+
+def _param_alias_source_candidates(
+    source_text: str,
+    *,
+    function: str,
+    param_name: str,
+    search_span: tuple[int, int] | None,
+) -> tuple[list[_ParamAliasCandidate], dict[str, Any], str | None]:
+    if not _SIMPLE_IDENTIFIER_RE.fullmatch(param_name):
+        return [], {"param_name": param_name}, "param-source-name-invalid"
+    if search_span is None:
+        return [], {"param_name": param_name}, "source-ast-unavailable"
+
+    records = _line_records_in_span(source_text, search_span)
+    alias_records: list[dict[str, Any]] = []
+    for index, (line_start, line_end, line) in enumerate(records):
+        match = _PARAM_ALIAS_DECL_RE.match(line)
+        if match is None or match.group("param") != param_name:
+            continue
+        type_text = _safe_decl_type_text(match.group("type"))
+        alias_name = match.group("alias")
+        if type_text is None or alias_name == param_name:
+            continue
+        alias_records.append({
+            "index": index,
+            "line_start_index": line_start,
+            "line_end_index": line_end,
+            "line": line,
+            "line_start": _line_number_at(source_text, line_start),
+            "line_end": _line_number_at(source_text, line_end),
+            "type_text": type_text,
+            "alias_name": alias_name,
+        })
+
+    candidates: list[_ParamAliasCandidate] = []
+    seen: set[tuple[str, int, str | None]] = set()
+
+    def add(candidate: _ParamAliasCandidate) -> None:
+        key = (
+            candidate.kind,
+            candidate.line_source_span[0],
+            candidate.peer_alias_name,
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(candidate)
+
+    for alias in alias_records:
+        line_span = (int(alias["line_start_index"]), int(alias["line_end_index"]))
+        use_lines = _identifier_use_lines(
+            source_text,
+            str(alias["alias_name"]),
+            search_span=(line_span[1], search_span[1]),
+        )
+        add(_ParamAliasCandidate(
+            param_name=param_name,
+            alias_name=str(alias["alias_name"]),
+            type_text=str(alias["type_text"]),
+            kind="delayed-param-alias-init",
+            line_start=int(alias["line_start"]),
+            line_end=int(alias["line_end"]),
+            line_source_span=line_span,
+            line_text=str(alias["line"]),
+            rank_priority=10,
+            use_lines=use_lines,
+        ))
+
+        alias_index = int(alias["index"])
+        for neighbor_index in (alias_index - 1, alias_index + 1):
+            if neighbor_index < 0 or neighbor_index >= len(records):
+                continue
+            n_start, n_end, n_line = records[neighbor_index]
+            n_match = _PARAM_ALIAS_DECL_RE.match(n_line)
+            if n_match is None:
+                continue
+            n_param = n_match.group("param")
+            n_alias = n_match.group("alias")
+            if n_param == param_name or not _SIMPLE_IDENTIFIER_RE.fullmatch(n_param):
+                continue
+            if _safe_decl_type_text(n_match.group("type")) is None:
+                continue
+            add(_ParamAliasCandidate(
+                param_name=param_name,
+                alias_name=str(alias["alias_name"]),
+                type_text=str(alias["type_text"]),
+                kind="adjacent-param-alias-decl-swap",
+                line_start=int(alias["line_start"]),
+                line_end=int(alias["line_end"]),
+                line_source_span=line_span,
+                line_text=str(alias["line"]),
+                rank_priority=0,
+                peer_param_name=n_param,
+                peer_alias_name=n_alias,
+                peer_line_source_span=(n_start, n_end),
+                peer_line_text=n_line,
+                use_lines=use_lines,
+            ))
+
+    candidates.sort(key=lambda item: (
+        item.rank_priority,
+        item.line_source_span[0],
+        item.peer_line_source_span[0] if item.peer_line_source_span else 10**9,
+        item.kind,
+    ))
+    metadata = {
+        "handler": "param-alias-source-candidates",
+        "param_name": param_name,
+        "candidate_kinds": sorted({candidate.kind for candidate in candidates}),
+        "inspected_alias_declarations": len(alias_records),
+    }
+    if not candidates:
+        return [], metadata, "param-alias-source-candidates-not-found"
+    return candidates[:4], metadata, None
+
+
+def _materialize_param_alias_candidate(
+    source_text: str,
+    *,
+    function: str,
+    candidate: _ParamAliasCandidate,
+) -> tuple[_LocalLifetimeProbeCandidate | None, dict[str, Any]]:
+    payload = _param_alias_candidate_dict(candidate)
+    handler = candidate.kind
+    if candidate.kind == "adjacent-param-alias-decl-swap":
+        if (
+            candidate.peer_line_source_span is None
+            or candidate.peer_line_text is None
+        ):
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "param-alias-peer-missing",
+                "handler": handler,
+            }
+        first_start, first_end = candidate.peer_line_source_span
+        second_start, second_end = candidate.line_source_span
+        first_text = candidate.peer_line_text
+        second_text = candidate.line_text
+        if first_start > second_start:
+            first_start, first_end, second_start, second_end = (
+                second_start,
+                second_end,
+                first_start,
+                first_end,
+            )
+            first_text, second_text = second_text, first_text
+        between = source_text[first_end:second_start]
+        if between.strip():
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "param-alias-peer-not-adjacent",
+                "handler": handler,
+            }
+        candidate_text = source_text
+        for start, end, replacement in sorted(
+            [(first_start, first_end, second_text), (second_start, second_end, first_text)],
+            reverse=True,
+        ):
+            candidate_text = candidate_text[:start] + replacement + candidate_text[end:]
+        if candidate_text == source_text:
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "source-unchanged",
+                "handler": handler,
+            }
+        metadata = {
+            "handler": handler,
+            "param_alias_source_candidate": payload,
+            "param_name": candidate.param_name,
+            "alias_local": candidate.alias_name,
+            "peer_param_name": candidate.peer_param_name,
+            "peer_alias_name": candidate.peer_alias_name,
+        }
+        return (
+            _LocalLifetimeProbeCandidate(
+                source_text=candidate_text,
+                provenance_kind="window-order-param-alias-source-order",
+                metadata=metadata,
+            ),
+            {**payload, "status": "materialized", "handler": handler},
+        )
+
+    if candidate.kind == "delayed-param-alias-init":
+        insertion = _function_decl_insertion(source_text, function)
+        if insertion is None:
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "source-ast-unavailable",
+                "handler": handler,
+            }
+        decl_index, decl_indent = insertion
+        line_start, line_end = candidate.line_source_span
+        if decl_index < line_end:
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "param-alias-decl-insertion-before-alias",
+                "handler": handler,
+            }
+        alias_re = re.compile(
+            rf"(?<![A-Za-z0-9_]){re.escape(candidate.alias_name)}"
+            rf"(?![A-Za-z0-9_])"
+        )
+        if alias_re.search(source_text[line_end:decl_index]):
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "param-alias-use-before-delayed-init",
+                "handler": handler,
+            }
+        indent_match = re.match(r"[ \t]*", candidate.line_text)
+        indent = indent_match.group(0) if indent_match is not None else decl_indent
+        declaration = f"{indent}{candidate.type_text} {candidate.alias_name};"
+        assignment = f"{decl_indent}{candidate.alias_name} = {candidate.param_name};\n"
+        candidate_text = source_text
+        edits = [
+            (line_start, line_end, declaration),
+            (decl_index, decl_index, assignment),
+        ]
+        for start, end, replacement in sorted(edits, reverse=True):
+            candidate_text = candidate_text[:start] + replacement + candidate_text[end:]
+        if candidate_text == source_text:
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "source-unchanged",
+                "handler": handler,
+            }
+        metadata = {
+            "handler": handler,
+            "param_alias_source_candidate": payload,
+            "param_name": candidate.param_name,
+            "alias_local": candidate.alias_name,
+            "delayed_assignment_index": decl_index,
+        }
+        return (
+            _LocalLifetimeProbeCandidate(
+                source_text=candidate_text,
+                provenance_kind="window-order-param-alias-source-order",
+                metadata=metadata,
+            ),
+            {**payload, "status": "materialized", "handler": handler},
+        )
+
+    return None, {
+        **payload,
+        "status": "diagnostic_only",
+        "reason": "unsupported-param-alias-candidate-kind",
+        "handler": handler,
+    }
+
+
 def _function_declared_type(
     source_text: str,
     *,
@@ -1634,6 +1979,186 @@ def _field_load_base_and_offset(source_attr: Any) -> tuple[str | None, int | Non
         if match is not None:
             field_offset = int(match.group("offset"), 16)
     return (base_var if isinstance(base_var, str) and base_var else None), field_offset
+
+
+def _member_access_tokens(expression: object) -> tuple[str, ...] | None:
+    if not isinstance(expression, str):
+        return None
+    text = expression.strip()
+    if not text:
+        return None
+    tokens: list[str] = []
+    position = 0
+    expect_identifier = True
+    while position < len(text):
+        match = _MEMBER_ACCESS_TOKEN_RE.match(text, position)
+        if match is None:
+            return None
+        token = match.group("token")
+        if expect_identifier:
+            if _SIMPLE_IDENTIFIER_RE.fullmatch(token) is None:
+                return None
+        elif token not in {"->", "."}:
+            return None
+        tokens.append(token)
+        position = match.end()
+        expect_identifier = not expect_identifier
+    if expect_identifier:
+        return None
+    return tuple(tokens)
+
+
+def _normalize_member_access_expression(expression: object) -> str | None:
+    tokens = _member_access_tokens(expression)
+    return "".join(tokens) if tokens is not None else None
+
+
+def _member_access_expression_re(
+    base_expression: str,
+    field_name: str,
+) -> re.Pattern[str] | None:
+    tokens = _member_access_tokens(base_expression)
+    if tokens is None:
+        return None
+    parts: list[str] = [rf"(?<![A-Za-z0-9_]){re.escape(tokens[0])}"]
+    for token in tokens[1:]:
+        if token in {"->", "."}:
+            parts.append(rf"\s*{re.escape(token)}\s*")
+        else:
+            parts.append(rf"{re.escape(token)}")
+    parts.append(rf"\s*(?P<op>->|\.)\s*{_field_member_pattern(field_name)}")
+    parts.append(r"(?![A-Za-z0-9_])")
+    return re.compile("".join(parts))
+
+
+def _compact_source_expression(expression: object) -> str | None:
+    if not isinstance(expression, str):
+        return None
+    return re.sub(r"\s+", "", expression.strip())
+
+
+def _field_load_chain_metadata(
+    *,
+    base_attr: Any,
+    base_expression: str,
+    base_type: str | None,
+    resolved_expression: str | None = None,
+    field_name: str | None = None,
+    field_offset: int | None = None,
+) -> list[dict[str, Any]]:
+    chain: list[dict[str, Any]] = []
+    attr_expression = _attr_value(base_attr, "expression")
+    if isinstance(attr_expression, str) and attr_expression.strip():
+        chain.append({
+            "kind": _attr_value(base_attr, "kind"),
+            "expression": _normalize_member_access_expression(attr_expression)
+            or attr_expression.strip(),
+            "type": _attr_value(base_attr, "type") or base_type,
+            "field_offset": _parse_field_offset(_attr_value(base_attr, "field_offset")),
+            "field_name": _attr_value(base_attr, "field_name"),
+        })
+    chain.append({
+        "kind": "field-load",
+        "expression": resolved_expression
+        or (
+            f"{base_expression}->{field_name}"
+            if field_name is not None else base_expression
+        ),
+        "base_expression": base_expression,
+        "base_type": base_type,
+        "field_offset": field_offset,
+        "field_name": field_name,
+    })
+    return chain
+
+
+def _source_attr_base_expression_and_type(
+    source_text: str,
+    *,
+    function: str,
+    base_attr: Any,
+    search_span: tuple[int, int] | None,
+) -> tuple[str | None, str | None, dict[str, Any]]:
+    metadata: dict[str, Any] = {}
+    base_kind = _attr_value(base_attr, "kind")
+    base_name = _attr_value(base_attr, "name")
+    attr_type = _attr_value(base_attr, "type")
+    if (
+        base_kind in {"local", "param", "call-return", "copy/coalesce-source"}
+        and isinstance(base_name, str)
+        and _SIMPLE_IDENTIFIER_RE.fullmatch(base_name) is not None
+    ):
+        function_type = _base_type_in_function(
+            source_text,
+            function=function,
+            base_var=base_name,
+            search_span=search_span,
+        )
+        return (
+            base_name,
+            attr_type if isinstance(attr_type, str) else function_type,
+            metadata,
+        )
+
+    expression = _normalize_member_access_expression(_attr_value(base_attr, "expression"))
+    if expression is None:
+        return None, None, metadata
+    metadata["base_expression"] = expression
+
+    if isinstance(attr_type, str) and "*" in attr_type:
+        return expression, attr_type, metadata
+
+    inner_base_var, inner_offset = _field_load_base_and_offset(base_attr)
+    if inner_base_var is None or inner_offset is None:
+        return expression, None, metadata
+    inner_base_type = _attr_value(base_attr, "base_type")
+    if not isinstance(inner_base_type, str):
+        inner_base_type = _base_type_in_function(
+            source_text,
+            function=function,
+            base_var=inner_base_var,
+            search_span=search_span,
+        )
+    metadata["inner_base_var"] = inner_base_var
+    metadata["inner_base_type"] = inner_base_type
+    metadata["inner_field_offset"] = inner_offset
+    if not isinstance(inner_base_type, str):
+        return expression, None, metadata
+
+    try:
+        context = build_source_field_context(source_text, function=function)
+        resolved = source_for_field_offset(
+            context,
+            base_expression=inner_base_var,
+            base_type=inner_base_type,
+            offset=inner_offset,
+        )
+    except Exception:
+        resolved = None
+    if resolved is None:
+        return expression, None, metadata
+    metadata["resolved_base_source"] = {
+        "expression": resolved.expression,
+        "type": resolved.type,
+        "field_name": resolved.field_name,
+        "source_line": resolved.source_line,
+        "source_col": resolved.source_col,
+        "confidence": resolved.confidence,
+    }
+    if _compact_source_expression(resolved.expression) != _compact_source_expression(
+        expression
+    ):
+        if "field_at_" in expression and resolved.type:
+            metadata["synthetic_base_expression"] = expression
+            metadata["base_expression"] = resolved.expression
+            return (
+                _normalize_member_access_expression(resolved.expression)
+                or resolved.expression,
+                resolved.type,
+                metadata,
+            )
+        return expression, None, metadata
+    return expression, resolved.type, metadata
 
 
 def _first_def_payload(source_attr: Any) -> Any:
@@ -1764,54 +2289,114 @@ def _resolved_pcode_field_load_source_attr(
     if base_attr is None:
         return None, metadata, "field-load-base-source-unresolved"
 
-    base_kind = _attr_value(base_attr, "kind")
-    if base_kind not in {"local", "param", "call-return", "copy/coalesce-source"}:
-        return None, metadata, "field-load-base-source-unresolved"
-    base_var = _attr_value(base_attr, "name")
-    if not isinstance(base_var, str) or _SIMPLE_IDENTIFIER_RE.fullmatch(base_var) is None:
-        return None, metadata, "field-load-base-source-unresolved"
-
-    attr_type = _attr_value(base_attr, "type")
-    function_type = _base_type_in_function(
-        source_text,
-        function=function,
-        base_var=base_var,
-        search_span=search_span,
+    base_expression, base_type, base_resolution = (
+        _source_attr_base_expression_and_type(
+            source_text,
+            function=function,
+            base_attr=base_attr,
+            search_span=search_span,
+        )
     )
-    if base_kind in {"local", "param"}:
-        base_type = attr_type if isinstance(attr_type, str) else function_type
-    else:
-        base_type = function_type
-    metadata["base_var"] = base_var
+    if not isinstance(base_expression, str) or not base_expression:
+        return None, metadata, "field-load-base-source-unresolved"
+    metadata.update(base_resolution)
+    metadata["base_var"] = base_expression
+    metadata["base_expression"] = base_expression
     metadata["base_type"] = base_type
     if not isinstance(base_type, str) or "*" not in base_type:
         return None, metadata, "field-load-base-type-unresolved"
 
-    field_name, blocker = _field_name_from_attribution(
-        source_attr,
-        base_var=base_var,
-        field_offset=field_offset,
-        base_type=base_type,
-        field_context=_build_field_context_for_attrs(
+    resolved_expression: str | None = None
+    resolved_type: str | None = None
+    field_name: str | None = None
+    context = None
+    try:
+        context = _build_field_context_for_attrs(
             source_text,
             function=function,
             attrs=(source_attr, base_attr),
-        ),
-    )
+        )
+        if context is None:
+            resolved_source = None
+        else:
+            resolved_source = source_for_field_offset(
+                context,
+                base_expression=base_expression,
+                base_type=base_type,
+                offset=field_offset,
+            )
+            if (
+                resolved_source is None
+                and _SIMPLE_IDENTIFIER_RE.fullmatch(base_expression) is None
+            ):
+                field_only = source_for_field_offset(
+                    context,
+                    base_expression="window_order_base",
+                    base_type=base_type,
+                    offset=field_offset,
+                )
+                if field_only is not None and field_only.field_name:
+                    op = "->" if "*" in base_type else "."
+                    resolved_source = type(field_only)(
+                        expression=f"{base_expression}{op}{field_only.field_name}",
+                        type=field_only.type,
+                        field_name=field_only.field_name,
+                        source_line=None,
+                        source_col=None,
+                        base_var=None,
+                        confidence="field-offset",
+                    )
+    except Exception:
+        resolved_source = None
+    if resolved_source is not None and resolved_source.field_name:
+        field_name = resolved_source.field_name
+        resolved_expression = resolved_source.expression
+        resolved_type = resolved_source.type
+        metadata["resolved_field_load_source"] = {
+            "expression": resolved_source.expression,
+            "type": resolved_source.type,
+            "field_name": resolved_source.field_name,
+            "source_line": resolved_source.source_line,
+            "source_col": resolved_source.source_col,
+            "confidence": resolved_source.confidence,
+        }
+        blocker = None
+    else:
+        field_name, blocker = _field_name_from_attribution(
+            source_attr,
+            base_var=base_expression,
+            field_offset=field_offset,
+            base_type=base_type,
+            field_context=context,
+        )
+        if field_name is not None:
+            resolved_expression = f"{base_expression}->{field_name}"
     metadata["field_name"] = field_name
     if field_name is None:
         return None, metadata, blocker or "field-load-field-name-unresolved"
+    chain = _field_load_chain_metadata(
+        base_attr=base_attr,
+        base_expression=base_expression,
+        base_type=base_type,
+        resolved_expression=resolved_expression,
+        field_name=field_name,
+        field_offset=field_offset,
+    )
+    metadata["field_load_chain"] = chain
 
     resolved = {
         **_source_attr_dict(source_attr),
         "kind": "field-load",
         "confidence": _attr_value(source_attr, "confidence") or "pcode-first-def",
         "base_virtual": base_virtual,
-        "base_var": base_var,
+        "base_var": base_expression,
+        "base_expression": base_expression,
         "base_type": base_type,
         "field_offset": field_offset,
         "field_name": field_name,
-        "expression": f"{base_var}->{field_name}",
+        "expression": resolved_expression or f"{base_expression}->{field_name}",
+        "type": resolved_type or _attr_value(source_attr, "type"),
+        "field_load_chain": chain,
         "pcode_first_def": metadata["pcode_first_def"],
         "base_source_attribution": metadata["base_source_attribution"],
     }
@@ -1946,6 +2531,8 @@ def _owner_for_field_load_line(
 def _field_load_candidate_dict(candidate: _FieldLoadSourceCandidate) -> dict[str, Any]:
     payload = {
         "base_var": candidate.base_var,
+        "base_expression": candidate.base_expression or candidate.base_var,
+        "base_type": candidate.base_type,
         "field_offset": candidate.field_offset,
         "field_name": candidate.field_name,
         "expression": candidate.expression,
@@ -1961,6 +2548,10 @@ def _field_load_candidate_dict(candidate: _FieldLoadSourceCandidate) -> dict[str
         payload["accessor_name"] = candidate.accessor_name
     if candidate.accessor_return_type is not None:
         payload["accessor_return_type"] = candidate.accessor_return_type
+    if candidate.field_load_chain:
+        payload["field_load_chain"] = [
+            dict(item) for item in candidate.field_load_chain
+        ]
     return payload
 
 
@@ -2028,9 +2619,15 @@ def _field_load_source_candidates(
     search_span: tuple[int, int] | None,
 ) -> tuple[list[_FieldLoadSourceCandidate], dict[str, Any], str | None]:
     base_var, field_offset = _field_load_base_and_offset(source_attr)
+    base_expression = (
+        _normalize_member_access_expression(_attr_value(source_attr, "base_expression"))
+        or _normalize_member_access_expression(base_var)
+        or base_var
+    )
     metadata: dict[str, Any] = {
         "handler": "field-load-source-order",
         "base_var": base_var,
+        "base_expression": base_expression,
         "field_offset": field_offset,
     }
     field_context = _build_field_context_for_attrs(
@@ -2069,58 +2666,133 @@ def _field_load_source_candidates(
     candidates: list[_FieldLoadSourceCandidate] = []
     seen: set[tuple[int, int]] = set()
 
+    def append_candidate_from_match(
+        match: re.Match[str],
+        *,
+        candidate_base_var: str,
+        candidate_field_name: str,
+        candidate_base_type: str | None,
+        kind: str,
+        field_load_chain: tuple[Mapping[str, Any], ...],
+        owner_type_fallback: str | None = None,
+    ) -> None:
+        source_start, source_end = match.span()
+        line_start = source_text.rfind("\n", 0, source_start) + 1
+        line_end = source_text.find("\n", source_end)
+        if line_end < 0:
+            line_end = len(source_text)
+        line = source_text[line_start:line_end]
+        rel_start = source_start - line_start
+        owner_local, owner_type = _owner_for_field_load_line(
+            line,
+            expression_start=rel_start,
+        )
+        if owner_local is not None and owner_type is None:
+            owner_type = _function_declared_type(
+                source_text,
+                function=function,
+                name=owner_local,
+                search_span=search_span,
+            )
+        if owner_type is None:
+            owner_type = owner_type_fallback
+        key = (source_start, source_end)
+        if key in seen:
+            return
+        seen.add(key)
+        op = match.group("op")
+        candidates.append(
+            _FieldLoadSourceCandidate(
+                base_var=candidate_base_var,
+                base_expression=candidate_base_var,
+                base_type=candidate_base_type,
+                field_offset=field_offset,
+                field_name=candidate_field_name,
+                expression=f"{candidate_base_var}{op}{candidate_field_name}",
+                source_span=(source_start, source_end),
+                source_line=source_text.count("\n", 0, line_start) + 1,
+                owner_local=owner_local,
+                owner_type=owner_type,
+                kind=kind,
+                line_source_span=(line_start, line_end),
+                line_text=line,
+                field_load_chain=field_load_chain,
+            )
+        )
+
     def append_source_matches(
         *,
         candidate_base_var: str,
         candidate_field_name: str,
+        candidate_base_type: str | None,
         kind: str,
         owner_type_fallback: str | None = None,
     ) -> None:
-        expression_re = re.compile(
-            rf"(?<![A-Za-z0-9_]){re.escape(candidate_base_var)}"
-            rf"\s*(?P<op>->|\.)\s*"
-            rf"{_field_member_pattern(candidate_field_name)}(?![A-Za-z0-9_])"
+        expression_re = _member_access_expression_re(
+            candidate_base_var,
+            candidate_field_name,
+        )
+        if expression_re is None:
+            return
+        field_load_chain = tuple(
+            dict(item)
+            for item in (_attr_value(source_attr, "field_load_chain") or [])
+            if isinstance(item, Mapping)
         )
         for match in expression_re.finditer(source_text, search_start, search_end):
-            source_start, source_end = match.span()
-            line_start = source_text.rfind("\n", 0, source_start) + 1
-            line_end = source_text.find("\n", source_end)
-            if line_end < 0:
-                line_end = len(source_text)
-            line = source_text[line_start:line_end]
-            rel_start = source_start - line_start
-            owner_local, owner_type = _owner_for_field_load_line(
-                line,
-                expression_start=rel_start,
+            append_candidate_from_match(
+                match,
+                candidate_base_var=candidate_base_var,
+                candidate_field_name=candidate_field_name,
+                candidate_base_type=candidate_base_type,
+                kind=kind,
+                field_load_chain=field_load_chain,
+                owner_type_fallback=owner_type_fallback,
             )
-            if owner_local is not None and owner_type is None:
-                owner_type = _function_declared_type(
-                    source_text,
-                    function=function,
-                    name=owner_local,
-                    search_span=search_span,
-                )
-            if owner_type is None:
-                owner_type = owner_type_fallback
-            key = (source_start, source_end)
-            if key in seen:
-                continue
-            seen.add(key)
-            op = match.group("op")
-            candidates.append(
-                _FieldLoadSourceCandidate(
-                    base_var=candidate_base_var,
-                    field_offset=field_offset,
-                    field_name=candidate_field_name,
-                    expression=f"{candidate_base_var}{op}{candidate_field_name}",
-                    source_span=(source_start, source_end),
-                    source_line=source_text.count("\n", 0, line_start) + 1,
-                    owner_local=owner_local,
-                    owner_type=owner_type,
-                    kind=kind,
-                    line_source_span=(line_start, line_end),
-                    line_text=line,
-                )
+
+    def append_same_chained_field_matches(
+        *,
+        candidate_base_var: str,
+        candidate_field_name: str,
+        candidate_base_type: str | None,
+    ) -> None:
+        tokens = _member_access_tokens(candidate_base_var)
+        if tokens is None or len(tokens) < 3:
+            return
+        base_field_name = tokens[-1]
+        if _SIMPLE_IDENTIFIER_RE.fullmatch(base_field_name) is None:
+            return
+        expression_re = re.compile(
+            rf"(?<![A-Za-z0-9_])(?P<owner>[A-Za-z_]\w*)"
+            rf"\s*(?P<base_op>->|\.)\s*{re.escape(base_field_name)}"
+            rf"\s*(?P<op>->|\.)\s*{re.escape(candidate_field_name)}"
+            rf"(?![A-Za-z0-9_])"
+        )
+        original_chain = [
+            dict(item)
+            for item in (_attr_value(source_attr, "field_load_chain") or [])
+            if isinstance(item, Mapping)
+        ]
+        for match in expression_re.finditer(source_text, search_start, search_end):
+            owner = match.group("owner")
+            base_op = match.group("base_op")
+            source_base = f"{owner}{base_op}{base_field_name}"
+            chain = tuple([
+                *original_chain,
+                {
+                    "kind": "same-offset-chained-source-field",
+                    "requested_base_expression": candidate_base_var,
+                    "source_base_expression": source_base,
+                    "field_name": candidate_field_name,
+                },
+            ])
+            append_candidate_from_match(
+                match,
+                candidate_base_var=source_base,
+                candidate_field_name=candidate_field_name,
+                candidate_base_type=candidate_base_type,
+                kind="same-offset-chained-source-field",
+                field_load_chain=chain,
             )
 
     def append_accessor_matches(
@@ -2177,6 +2849,8 @@ def _field_load_source_candidates(
                 candidates.append(
                     _FieldLoadSourceCandidate(
                         base_var=candidate_base_var,
+                        base_expression=candidate_base_var,
+                        base_type=candidate_base_type,
                         field_offset=field_offset,
                         field_name=candidate_field_name,
                         expression=source_text[source_start:source_end].strip(),
@@ -2189,6 +2863,13 @@ def _field_load_source_candidates(
                         line_text=line,
                         accessor_name=accessor.name,
                         accessor_return_type=accessor.return_type,
+                        field_load_chain=tuple(
+                            dict(item)
+                            for item in (
+                                _attr_value(source_attr, "field_load_chain") or []
+                            )
+                            if isinstance(item, Mapping)
+                        ),
                     )
                 )
 
@@ -2196,8 +2877,9 @@ def _field_load_source_candidates(
     owner_type_fallback = attr_value_type if isinstance(attr_value_type, str) else None
     if base_var is not None and field_name is not None:
         append_source_matches(
-            candidate_base_var=base_var,
+            candidate_base_var=base_expression or base_var,
             candidate_field_name=field_name,
+            candidate_base_type=base_type,
             kind="inline-temp",
             owner_type_fallback=owner_type_fallback,
         )
@@ -2207,6 +2889,12 @@ def _field_load_source_candidates(
             candidate_field_name=field_name,
             owner_type_fallback=owner_type_fallback,
         )
+        if not candidates:
+            append_same_chained_field_matches(
+                candidate_base_var=base_expression or base_var,
+                candidate_field_name=field_name,
+                candidate_base_type=base_type,
+            )
 
     if not candidates and field_offset is not None:
         recovered: list[dict[str, Any]] = []
@@ -2238,6 +2926,7 @@ def _field_load_source_candidates(
                     append_source_matches(
                         candidate_base_var=scan_base_var,
                         candidate_field_name=resolved.field_name,
+                        candidate_base_type=candidate_base_type,
                         kind="same-offset-source-field",
                         owner_type_fallback=resolved.type,
                     )
@@ -2356,7 +3045,12 @@ def _materialize_field_load_candidate(
             "handler": handler,
         }
 
-    temp_stem = f"{candidate.base_var}_{candidate.field_name or 'field_load'}"
+    stem_base = re.sub(
+        r"[^A-Za-z0-9_]+",
+        "_",
+        (candidate.base_expression or candidate.base_var).replace("->", "_"),
+    ).strip("_")
+    temp_stem = f"{stem_base}_{candidate.field_name or 'field_load'}"
     temp_name = _window_order_probe_local_name(source_text, temp_stem)
     indent = re.match(r"[ \t]*", statement).group(0)
     rewritten_statement = (
@@ -5413,8 +6107,11 @@ def plan_window_order_source_probes(
                     "field_offset",
                     "base_source_attribution",
                     "base_var",
+                    "base_expression",
                     "base_type",
                     "field_name",
+                    "field_load_chain",
+                    "resolved_field_load_source",
                 }
             })
             if resolved_attr is None:
@@ -5562,8 +6259,14 @@ def plan_window_order_source_probes(
                             "pcode_first_def": pcode_metadata.get("pcode_first_def"),
                             "base_virtual": pcode_metadata.get("base_virtual"),
                             "field_offset": pcode_metadata.get("field_offset"),
+                            "base_expression": pcode_metadata.get(
+                                "base_expression"
+                            ),
                             "base_source_attribution": pcode_metadata.get(
                                 "base_source_attribution"
+                            ),
+                            "field_load_chain": pcode_metadata.get(
+                                "field_load_chain"
                             ),
                         } if pcode_metadata else {}),
                         **metadata,
@@ -5704,6 +6407,182 @@ def plan_window_order_source_probes(
         diag["source_hunks"] = source_hunks
         diag["source_diff"] = source_diff
         diag.pop("terminal_blocker", None)
+
+    def materialize_param_alias_source_candidates(
+        *,
+        diag: dict[str, Any],
+        lead: Mapping[str, Any],
+        target_ig: int,
+        direction: str,
+        source_attr: Any,
+    ) -> None:
+        param_name = _attr_value(source_attr, "name")
+        diag["source_attribution_kind"] = _attr_value(source_attr, "kind")
+        if not isinstance(param_name, str) or not param_name:
+            diag["terminal_blocker"] = "param-source-name-missing"
+            diag["param_alias_materialization_summary"] = {
+                "param_alias_source_candidates": 0,
+                "materialized_param_alias_source_candidates": 0,
+                "param_alias_candidates": 0,
+                "materialized_param_alias_candidates": 0,
+                "param_name": None,
+                "reasons": {"param-source-name-missing": 1},
+            }
+            return
+        candidates, resolver_metadata, resolver_blocker = (
+            _param_alias_source_candidates(
+                source_text,
+                function=function,
+                param_name=param_name,
+                search_span=function_body_span,
+            )
+        )
+        diag["param_name"] = param_name
+        diag["param_alias_source_probe"] = resolver_metadata
+        diag["param_alias_source_candidates"] = [
+            _param_alias_candidate_dict(candidate) for candidate in candidates
+        ]
+        diagnostics: list[dict[str, Any]] = []
+        materialized_labels: list[str] = []
+        materialized_meta: list[dict[str, Any]] = []
+        first_source_diff: str | None = None
+        first_source_hunks: list[dict[str, Any]] | None = None
+
+        if not candidates:
+            summary = {
+                "param_alias_source_candidates": 0,
+                "materialized_param_alias_source_candidates": 0,
+                "param_alias_candidates": 0,
+                "materialized_param_alias_candidates": 0,
+                "param_name": param_name,
+                "reasons": {
+                    resolver_blocker or "param-alias-source-candidates-not-found": 1
+                },
+            }
+            diag["param_alias_candidate_diagnostics"] = diagnostics
+            diag["param_alias_materialization_summary"] = summary
+            diag["terminal_blocker"] = (
+                resolver_blocker or "param-alias-source-candidates-not-found"
+            )
+            return
+
+        for candidate in candidates:
+            candidate_payload = _param_alias_candidate_dict(candidate)
+            if len(probes) >= limit:
+                diagnostics.append({
+                    **candidate_payload,
+                    "status": "rejected",
+                    "reason": "probe-limit-reached",
+                    "handler": "param-alias-source-candidates",
+                })
+                continue
+            lifetime_candidate, candidate_diag = _materialize_param_alias_candidate(
+                source_text,
+                function=function,
+                candidate=candidate,
+            )
+            if lifetime_candidate is None:
+                diagnostics.append(candidate_diag)
+                continue
+            if lifetime_candidate.source_text in seen_source:
+                diagnostics.append({
+                    **candidate_payload,
+                    "status": "rejected",
+                    "reason": "duplicate-source-move",
+                    "handler": candidate.kind,
+                })
+                continue
+
+            label = (
+                "window-order-param-alias-"
+                f"ig{target_ig}-"
+                f"{direction}-"
+                f"{candidate.kind}-"
+                f"{len(probes)}"
+            )
+            source_diff = _source_diff(source_text, lifetime_candidate.source_text)
+            source_hunks = [
+                hunk.to_dict()
+                for hunk in diff_line_hunks(
+                    source_text,
+                    lifetime_candidate.source_text,
+                    hunk_prefix="param-alias",
+                )
+            ]
+            metadata = dict(lifetime_candidate.metadata)
+            param_candidate = dict(metadata["param_alias_source_candidate"])
+            param_candidate.update({
+                "probe_label": label,
+                "materialization_kind": _param_alias_materialization_kind(
+                    candidate.kind
+                ),
+                "source_hunks": source_hunks,
+                "source_diff": source_diff,
+            })
+            metadata["param_alias_source_candidate"] = param_candidate
+            metadata["probe_label"] = label
+            metadata["source_hunks"] = source_hunks
+            metadata["source_diff"] = source_diff
+            candidate_diag["probe_label"] = label
+            seen_source.add(lifetime_candidate.source_text)
+            probes.append(
+                LifetimeLayoutProbe(
+                    label=label,
+                    operator="window-order-source-steering",
+                    description=(
+                        "Materialize a parameter alias source-order probe for "
+                        "a window-order fallback attribution."
+                    ),
+                    source_text=lifetime_candidate.source_text,
+                    provenance={
+                        "kind": lifetime_candidate.provenance_kind,
+                        "lead": dict(lead),
+                        "source_attribution": _source_attr_dict(source_attr),
+                        "param_alias_source_candidate": param_candidate,
+                        "source_hunks": source_hunks,
+                        "source_diff": source_diff,
+                        **metadata,
+                    },
+                )
+            )
+            materialized_labels.append(label)
+            materialized_meta.append(param_candidate)
+            diagnostics.append(candidate_diag)
+            if first_source_diff is None:
+                first_source_diff = source_diff
+            if first_source_hunks is None:
+                first_source_hunks = source_hunks
+
+        summary = {
+            "param_alias_source_candidates": len(candidates),
+            "materialized_param_alias_source_candidates": len(materialized_meta),
+            "param_alias_candidates": len(candidates),
+            "materialized_param_alias_candidates": len(materialized_meta),
+            "param_name": param_name,
+            "candidate_limit": limit,
+            "reasons": _candidate_reason_counts(diagnostics),
+        }
+        diag["param_alias_candidate_diagnostics"] = diagnostics
+        diag["param_alias_materialization_summary"] = summary
+        if materialized_labels:
+            diag["status"] = "materialized"
+            diag["materialized_probe_labels"] = materialized_labels
+            diag["param_alias_source_candidate"] = materialized_meta[0]
+            diag["materialized_param_alias_source_candidates"] = materialized_meta
+            if first_source_diff is not None:
+                diag["source_diff"] = first_source_diff
+            if first_source_hunks is not None:
+                diag["source_hunks"] = first_source_hunks
+            diag.pop("terminal_blocker", None)
+            return
+
+        reasons = summary["reasons"]
+        if reasons.get("probe-limit-reached"):
+            diag["terminal_blocker"] = "probe-limit-reached"
+        elif reasons.get("param-alias-use-before-delayed-init"):
+            diag["terminal_blocker"] = "param-alias-no-legal-source-movement"
+        else:
+            diag["terminal_blocker"] = "param-alias-candidates-not-materializable"
 
     def materialize_synthetic_result(
         *,
@@ -6013,6 +6892,16 @@ def plan_window_order_source_probes(
             continue
         if source_kind == "call-return":
             materialize_call_return_source_candidate(
+                diag=diag,
+                lead=lead,
+                target_ig=target_ig,
+                direction=direction,
+                source_attr=source_attr,
+            )
+            lead_diagnostics.append(diag)
+            continue
+        if source_kind == "param":
+            materialize_param_alias_source_candidates(
                 diag=diag,
                 lead=lead,
                 target_ig=target_ig,

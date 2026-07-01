@@ -8,7 +8,9 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +20,73 @@ from . import cache as pcdump_cache
 from . import local_safety
 from .source_patch import transfer_candidate
 from .temp_scratch import temporary_directory
+
+
+@contextmanager
+def _acquire_repo_source_mutation_lock(
+    melee_root: Path,
+    *,
+    label: str = "mwcc source compile",
+    timeout: float | None = None,
+) -> Iterator[None]:
+    """Serialize source staging with checkdiff/source-scoring users."""
+    if os.environ.get("CHECKDIFF_NO_LOCK"):
+        yield
+        return
+
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+
+    lock_dir = Path(tempfile.gettempdir()) / "melee-checkdiff-locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(melee_root.resolve()).encode()).hexdigest()[:12]
+    lock_path = lock_dir / f"repo.{digest}.lock"
+    lock_file = lock_path.open("w")
+    try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"waiting for repo-wide {label} lock", file=sys.stderr)
+            start = time.monotonic()
+            while True:
+                elapsed = time.monotonic() - start
+                if timeout is not None and elapsed >= timeout:
+                    raise TimeoutError(
+                        f"timed out waiting for repo-wide {label} lock "
+                        f"after {timeout:g}s: {lock_path}"
+                    )
+                sleep_for = 0.1
+                if timeout is not None:
+                    sleep_for = max(0.01, min(sleep_for, timeout - elapsed))
+                time.sleep(sleep_for)
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    continue
+            print(
+                f"acquired {label} lock after {time.monotonic() - start:.1f}s",
+                file=sys.stderr,
+            )
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+
+def _restore_source_bytes_snapshot(source_path: Path, original: bytes) -> None:
+    try:
+        source_path.write_bytes(original)
+        restored = source_path.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(f"failed to restore source {source_path}: {exc}") from exc
+    if restored != original:
+        raise RuntimeError(f"source restore verification failed for {source_path}")
 
 
 @dataclass(frozen=True)
@@ -199,6 +268,7 @@ def compile_source_variant(
                 diff_input,
                 function=function,
                 melee_root=melee_root,
+                timeout=timeout,
             )
             unit_source_path = None
         else:
@@ -493,51 +563,60 @@ def _source_path_for_compile(
     *,
     function: str,
     melee_root: Path,
+    timeout: float | None = None,
 ) -> Iterator[Path]:
     try:
         rel = diff_input.path.resolve().relative_to(melee_root.resolve())
     except ValueError:
         rel = None
     if rel is not None and str(rel).startswith("src/"):
-        unit = str(rel).removeprefix("src/").removesuffix(".c")
-        original = diff_input.path.read_bytes()
+        with _acquire_repo_source_mutation_lock(
+            melee_root,
+            timeout=timeout,
+        ):
+            unit = str(rel).removeprefix("src/").removesuffix(".c")
+            original = diff_input.path.read_bytes()
+            fresh_cache_path = _fresh_pcdump_cache_path_for_restore(
+                melee_root=melee_root,
+                unit=unit,
+            )
+            try:
+                yield diff_input.path
+            finally:
+                _restore_source_bytes_snapshot(diff_input.path, original)
+                _preserve_pcdump_cache_freshness_after_restore(
+                    cache_path=fresh_cache_path,
+                    source_path=diff_input.path,
+                    original=original,
+                )
+        return
+
+    unit = _find_unit_for_function(function, melee_root)
+    target = melee_root / "src" / f"{unit}.c"
+    candidate_text = diff_input.path.read_text(encoding="utf-8", errors="replace")
+    with _acquire_repo_source_mutation_lock(
+        melee_root,
+        timeout=timeout,
+    ):
+        original = target.read_bytes()
         fresh_cache_path = _fresh_pcdump_cache_path_for_restore(
             melee_root=melee_root,
             unit=unit,
         )
         try:
-            yield diff_input.path
+            if transfer_candidate(candidate_text, target, function) is None:
+                raise ValueError(
+                    f"{diff_input.label}: target function {function} not found in "
+                    f"candidate source {diff_input.path} or target source {target}"
+                )
+            yield target
         finally:
-            diff_input.path.write_bytes(original)
+            _restore_source_bytes_snapshot(target, original)
             _preserve_pcdump_cache_freshness_after_restore(
                 cache_path=fresh_cache_path,
-                source_path=diff_input.path,
+                source_path=target,
                 original=original,
             )
-        return
-
-    unit = _find_unit_for_function(function, melee_root)
-    target = melee_root / "src" / f"{unit}.c"
-    original = target.read_bytes()
-    fresh_cache_path = _fresh_pcdump_cache_path_for_restore(
-        melee_root=melee_root,
-        unit=unit,
-    )
-    candidate_text = diff_input.path.read_text(encoding="utf-8", errors="replace")
-    try:
-        if transfer_candidate(candidate_text, target, function) is None:
-            raise ValueError(
-                f"{diff_input.label}: target function {function} not found in "
-                f"candidate source {diff_input.path} or target source {target}"
-            )
-        yield target
-    finally:
-        target.write_bytes(original)
-        _preserve_pcdump_cache_freshness_after_restore(
-            cache_path=fresh_cache_path,
-            source_path=target,
-            original=original,
-        )
 
 
 def read_inspect_input_if_available(

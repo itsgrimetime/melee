@@ -1301,6 +1301,7 @@ def suggest_control_flow_shape(
         DEFAULT_MELEE_ROOT,
         _read_control_flow_shape_checkdiff_payload,
         _checkdiff_asm_lines,
+        _control_flow_prototype_context,
         _resolve_existing_cli_file,
         _find_unit_for_function,
     )
@@ -1361,10 +1362,16 @@ def suggest_control_flow_shape(
                 resolved_source = candidate_source
     if resolved_source is not None:
         source_text = resolved_source.read_text(encoding="utf-8", errors="replace")
+        prototype_context = _control_flow_prototype_context(
+            resolved_source,
+            DEFAULT_MELEE_ROOT,
+            source_text=source_text,
+        )
         annotate_source_materialization(
             report,
             function=function,
             source_text=source_text,
+            prototype_context=prototype_context,
         )
         source_preflight = {
             "status": "ran",

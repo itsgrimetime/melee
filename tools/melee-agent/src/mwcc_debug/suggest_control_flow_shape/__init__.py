@@ -619,6 +619,7 @@ def annotate_source_materialization(
     *,
     function: str | None = None,
     source_text: str,
+    prototype_context: str | None = None,
     max_probes_per_operator: int = 1,
 ) -> dict[str, Any]:
     """Annotate generated-operator suggestions with source probe availability."""
@@ -636,6 +637,7 @@ def annotate_source_materialization(
         report_function,
         [item for item in suggestions if isinstance(item, dict)],
         max_probes_per_family=max(1, max_probes_per_operator),
+        prototype_context=prototype_context,
     )
     family_results = materialization_status.get("families")
     result_by_family: dict[str, dict[str, Any]] = {}

@@ -4,12 +4,14 @@ from __future__ import annotations
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import src.mwcc_debug.diff_capture as diff_capture
 from src.mwcc_debug.diff_capture import (
     CompileFailure,
     DiffInput,
@@ -409,11 +411,126 @@ def test_compile_source_variant_stages_outside_repo_source_and_restores(monkeypa
         fake_run,
     )
 
-    diff_input = DiffInput(label="B", token=str(candidate), kind="source", path=candidate)
+    diff_input = DiffInput(
+        label="B",
+        token=str(candidate),
+        kind="source",
+        path=candidate,
+    )
     text = compile_source_variant(diff_input, function="fn_test", melee_root=tmp_path, timeout=30)
 
     assert text == "Starting function fn_test\n"
     assert real_src.read_text(encoding="utf-8") == original_text
+
+
+def test_compile_source_variant_holds_repo_source_lock_through_restore(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    real_src = tmp_path / "src" / "melee" / "mn" / "sample.c"
+    real_src.parent.mkdir(parents=True)
+    original_text = "void fn_test(void) { int original = 1; }\n"
+    real_src.write_text(original_text, encoding="utf-8")
+    report = tmp_path / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '{"units":[{"name":"main/melee/mn/sample","functions":[{"name":"fn_test"}]}]}',
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text(
+        "void fn_test(void) { int candidate = 2; }\n",
+        encoding="utf-8",
+    )
+
+    locked = False
+    events: list[str] = []
+
+    class FakeLock:
+        def __enter__(self):
+            nonlocal locked
+            locked = True
+            events.append("lock-enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            nonlocal locked
+            assert real_src.read_text(encoding="utf-8") == original_text
+            events.append("lock-exit")
+            locked = False
+
+    def fake_lock(
+        root: Path,
+        *,
+        label: str = "mwcc source compile",
+        timeout: float | None = None,
+    ):
+        assert root == tmp_path
+        assert label == "mwcc source compile"
+        assert timeout == 30
+        return FakeLock()
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        assert locked is True
+        assert "candidate = 2" in real_src.read_text(encoding="utf-8")
+        events.append("dump-local")
+        out_path = Path(cmd[cmd.index("--output") + 1])
+        out_path.write_text("Starting function fn_test\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(diff_capture, "_acquire_repo_source_mutation_lock", fake_lock)
+    monkeypatch.setattr(diff_capture, "_run_with_process_group_timeout", fake_run)
+
+    diff_input = DiffInput(label="B", token=str(candidate), kind="source", path=candidate)
+    text = compile_source_variant(
+        diff_input,
+        function="fn_test",
+        melee_root=tmp_path,
+        timeout=30,
+    )
+
+    assert text == "Starting function fn_test\n"
+    assert events == ["lock-enter", "dump-local", "lock-exit"]
+    assert real_src.read_text(encoding="utf-8") == original_text
+
+
+def test_compile_source_variant_repo_source_lock_uses_checkdiff_lock_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fcntl = pytest.importorskip("fcntl")
+    src = tmp_path / "src" / "melee" / "mn" / "sample.c"
+    src.parent.mkdir(parents=True)
+    original_text = "void fn_test(void) {}\n"
+    src.write_text(original_text, encoding="utf-8")
+
+    lock_dir = Path(tempfile.gettempdir()) / "melee-checkdiff-locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    digest = diff_capture.hashlib.sha1(
+        str(tmp_path.resolve()).encode(),
+    ).hexdigest()[:12]
+    lock_path = lock_dir / f"repo.{digest}.lock"
+    held_lock = lock_path.open("w")
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("compile must wait for the shared repo lock first")
+
+    monkeypatch.setattr(diff_capture, "_run_with_process_group_timeout", fake_run)
+
+    try:
+        fcntl.flock(held_lock.fileno(), fcntl.LOCK_EX)
+        diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
+        with pytest.raises(TimeoutError, match="repo-wide mwcc source compile lock"):
+            compile_source_variant(
+                diff_input,
+                function="fn_test",
+                melee_root=tmp_path,
+                timeout=0.01,
+            )
+    finally:
+        fcntl.flock(held_lock.fileno(), fcntl.LOCK_UN)
+        held_lock.close()
+
+    assert src.read_text(encoding="utf-8") == original_text
 
 
 def test_compile_source_variant_missing_target_function_fails_before_staging(

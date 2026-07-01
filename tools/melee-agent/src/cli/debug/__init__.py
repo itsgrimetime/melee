@@ -123,6 +123,100 @@ def _compute_melee_root() -> Path:
     return DEFAULT_MELEE_ROOT
 
 
+_CONTROL_FLOW_INCLUDE_RE = re.compile(
+    r"^\s*#\s*include\s+[<\"](?P<path>[^>\"]+)[>\"]",
+    re.MULTILINE,
+)
+
+
+def _control_flow_prototype_context(
+    source_path: Path,
+    melee_root: Path,
+    *,
+    source_text: str | None = None,
+    max_depth: int = 2,
+    max_headers: int = 64,
+    max_bytes: int = 2_000_000,
+) -> str:
+    """Return source plus bounded local include text for prototype discovery."""
+    root = melee_root.resolve()
+    source_path = source_path.resolve()
+    try:
+        source = (
+            source_text
+            if source_text is not None
+            else source_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except OSError:
+        return source_text or ""
+
+    chunks = [source]
+    queue: list[tuple[Path, str, int]] = [(source_path, source, 0)]
+    seen = {source_path}
+    header_count = 0
+    total_bytes = len(source.encode("utf-8", errors="replace"))
+
+    while queue and header_count < max_headers and total_bytes < max_bytes:
+        current_path, text, depth = queue.pop(0)
+        if depth >= max_depth:
+            continue
+        for match in _CONTROL_FLOW_INCLUDE_RE.finditer(text):
+            include_path = _resolve_control_flow_include(
+                match.group("path"),
+                including_path=current_path,
+                melee_root=root,
+            )
+            if include_path is None or include_path in seen:
+                continue
+            try:
+                include_text = include_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except OSError:
+                continue
+            include_bytes = len(include_text.encode("utf-8", errors="replace"))
+            if total_bytes + include_bytes > max_bytes:
+                continue
+            seen.add(include_path)
+            header_count += 1
+            total_bytes += include_bytes
+            rel = _repo_relative_for_control_flow_context(include_path, root)
+            chunks.append(
+                f"\n/* control-flow prototype context: {rel} */\n{include_text}"
+            )
+            queue.append((include_path, include_text, depth + 1))
+            if header_count >= max_headers or total_bytes >= max_bytes:
+                break
+    return "\n".join(chunks)
+
+
+def _resolve_control_flow_include(
+    include: str,
+    *,
+    including_path: Path,
+    melee_root: Path,
+) -> Path | None:
+    roots = (
+        including_path.parent,
+        melee_root / "src",
+        melee_root / "src" / "sysdolphin",
+        melee_root / "include",
+    )
+    for root in roots:
+        candidate = (root / include).resolve()
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _repo_relative_for_control_flow_context(path: Path, melee_root: Path) -> str:
+    try:
+        return str(path.relative_to(melee_root))
+    except ValueError:
+        return str(path)
+
+
 
 
 
@@ -3621,6 +3715,25 @@ def _select_order_source_bridge_summary(
                     action["field_load_materialization_summary"] = dict(
                         field_load_summary
                     )
+                param_alias = probe_diag.get("param_alias_source_candidate")
+                if isinstance(param_alias, Mapping):
+                    action["param_alias_source_candidate"] = dict(param_alias)
+                param_alias_candidates = probe_diag.get(
+                    "materialized_param_alias_source_candidates"
+                )
+                if isinstance(param_alias_candidates, list):
+                    action["materialized_param_alias_source_candidates"] = [
+                        dict(item)
+                        for item in param_alias_candidates
+                        if isinstance(item, Mapping)
+                    ]
+                param_alias_summary = probe_diag.get(
+                    "param_alias_materialization_summary"
+                )
+                if isinstance(param_alias_summary, Mapping):
+                    action["param_alias_materialization_summary"] = dict(
+                        param_alias_summary
+                    )
                 source_hunks = probe_diag.get("source_hunks")
                 if isinstance(source_hunks, list):
                     action["source_hunks"] = [
@@ -3781,6 +3894,11 @@ def _select_order_terminal_exhaustion_summary(
     best_retained = _select_order_terminal_summary_best_retained_variants(
         ranked_variants
     )
+    source_family_exhaustion = _select_order_param_alias_exhaustion_proof(
+        ranked_variants=ranked_variants,
+        force_phys=targets,
+        source_bridge_summary=source_bridge_summary,
+    )
     target_score = next(
         (
             candidate.get("target_score")
@@ -3815,7 +3933,137 @@ def _select_order_terminal_exhaustion_summary(
     }
     if isinstance(target_score, Mapping):
         summary["target_score"] = dict(target_score)
+    if source_family_exhaustion is not None:
+        summary["source_candidate_family_exhaustion"] = source_family_exhaustion
+        summary["terminal_blocker"] = "param-alias-source-family-exhausted"
     return summary
+
+
+def _select_order_probe_source_hunks_from_variant(
+    variant: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    raw_hunks = variant.get("source_hunks")
+    if not isinstance(raw_hunks, list):
+        probe = variant.get("probe")
+        provenance = (
+            probe.get("provenance")
+            if isinstance(probe, Mapping) else None
+        )
+        if isinstance(provenance, Mapping):
+            raw_hunks = provenance.get("source_hunks")
+    if not isinstance(raw_hunks, list):
+        return []
+    return [
+        dict(item) if isinstance(item, Mapping) else {"value": item}
+        for item in raw_hunks
+    ]
+
+
+def _select_order_param_alias_exhaustion_proof(
+    *,
+    ranked_variants: list[Mapping[str, Any]],
+    force_phys: Mapping[int, int],
+    source_bridge_summary: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    owner_summary = source_bridge_summary.get("terminal_owner_probe_summary")
+    if not isinstance(owner_summary, Mapping):
+        return None
+    generated = _first_int(owner_summary.get("param_alias_source_candidates"), 0)
+    materialized = _first_int(
+        owner_summary.get("materialized_param_alias_source_candidates"),
+        0,
+    )
+    if generated <= 0 or materialized <= 0:
+        return None
+
+    labels: list[str] = []
+    candidate_by_label: dict[str, dict[str, Any]] = {}
+    materialization_kinds: set[str] = set()
+    param_names: set[str] = set()
+    alias_names: set[str] = set()
+    actions = source_bridge_summary.get("ranked_actions")
+    for action in actions if isinstance(actions, list) else []:
+        if not isinstance(action, Mapping):
+            continue
+        for label in action.get("probe_labels") or []:
+            if isinstance(label, str) and label not in labels:
+                labels.append(label)
+        candidates = action.get("materialized_param_alias_source_candidates")
+        if not isinstance(candidates, list):
+            candidate = action.get("param_alias_source_candidate")
+            candidates = [candidate] if isinstance(candidate, Mapping) else []
+        for raw_candidate in candidates:
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            candidate = dict(raw_candidate)
+            label = candidate.get("probe_label")
+            if isinstance(label, str):
+                candidate_by_label[label] = candidate
+                if label not in labels:
+                    labels.append(label)
+            kind = candidate.get("materialization_kind") or candidate.get("kind")
+            if isinstance(kind, str) and kind:
+                materialization_kinds.add(kind)
+            param = candidate.get("param_name")
+            if isinstance(param, str) and param:
+                param_names.add(param)
+            alias = candidate.get("alias_name")
+            if isinstance(alias, str) and alias:
+                alias_names.add(alias)
+
+    results: list[dict[str, Any]] = []
+    for variant in ranked_variants:
+        label = variant.get("label")
+        if not isinstance(label, str):
+            continue
+        is_param_probe = label in labels or label.startswith(
+            "window-order-param-alias-"
+        )
+        if not is_param_probe:
+            continue
+        target_score = _select_order_variant_target_score(variant)
+        result = {
+            "label": label,
+            "rank": variant.get("rank"),
+            "status": variant.get("status"),
+            "operator": variant.get("operator"),
+            "source_retained": variant.get("source_retained") or variant.get("path"),
+            "pcdump_path": _select_order_variant_pcdump_path(variant),
+            "source_hunks": _select_order_probe_source_hunks_from_variant(variant),
+            "param_alias_source_candidate": candidate_by_label.get(label),
+        }
+        if target_score is not None:
+            result["target_score"] = target_score
+        results.append(result)
+
+    if not results:
+        return None
+    labels_text = ", ".join(labels[:4]) if labels else "param-alias probes"
+    param_text = ", ".join(sorted(param_names)) or "the attributed parameter"
+    alias_text = ", ".join(sorted(alias_names)) or "its alias local"
+    kind_text = ", ".join(sorted(materialization_kinds)) or "param-alias"
+    handoff_targets = ", ".join(
+        f"IG{ig}->r{phys}" for ig, phys in sorted(force_phys.items())
+    )
+    return {
+        "status": "exhausted",
+        "family": "param-alias-source-bridge",
+        "generated_candidates": generated,
+        "materialized_candidates": materialized,
+        "scored_candidates": len(results),
+        "materialization_kinds": sorted(materialization_kinds),
+        "force_phys_targets": {
+            str(key): force_phys[key] for key in sorted(force_phys)
+        },
+        "source_probe_results": results,
+        "source_level_handoff": (
+            f"Exhausted {kind_text} source probes for {param_text}/{alias_text} "
+            f"({labels_text}); none satisfied {handoff_targets}. Next source-level "
+            f"handoff is broader lifetime or interference shaping around {alias_text} "
+            "uses, or finding a non-param source owner, not retrying only alias "
+            "declaration-order or delayed-init moves."
+        ),
+    }
 
 
 def _select_order_refresh_window_order_probe_diagnostics(
@@ -4033,25 +4281,44 @@ def _select_order_source_attributions_for_leads(
             return out
 
         attrs = load_attrs(virtuals)
-        operand_virtuals: list[int] = []
-        for source in attrs.values():
-            source_dict = _solve_source_attribution_dict(source) or {}
-            if source_dict.get("kind") not in {
-                "implicit-temp",
-                "fpr-temp",
-                "copy/coalesce-product",
-            }:
-                continue
-            operand_virtuals.extend(
-                _select_order_virtual_operands_from_expression(
-                    source_dict.get("expression")
-                )
-            )
-        new_operands = [
-            virtual for virtual in operand_virtuals
-            if virtual not in set(virtuals)
-        ]
-        if new_operands:
+        for _hop in range(3):
+            operand_virtuals: list[int] = []
+            for source in attrs.values():
+                source_dict = _solve_source_attribution_dict(source) or {}
+                if source_dict.get("kind") in {
+                    "implicit-temp",
+                    "fpr-temp",
+                    "copy/coalesce-product",
+                }:
+                    operand_virtuals.extend(
+                        _select_order_virtual_operands_from_expression(
+                            source_dict.get("expression")
+                        )
+                    )
+                if (
+                    source_dict.get("kind")
+                    in {
+                        "first-def",
+                        "load/store-address",
+                        "field-load",
+                        "copy/coalesce-source",
+                    }
+                    and source_dict.get("field_offset") is not None
+                ):
+                    base_virtual = source_dict.get("base_virtual")
+                    if isinstance(base_virtual, bool):
+                        continue
+                    try:
+                        operand_virtuals.append(int(base_virtual))
+                    except (TypeError, ValueError):
+                        pass
+            seen_virtuals = set(virtuals)
+            new_operands = [
+                virtual for virtual in operand_virtuals
+                if virtual not in seen_virtuals
+            ]
+            if not new_operands:
+                break
             virtuals.extend(new_operands)
             try:
                 attrs = load_attrs(virtuals)

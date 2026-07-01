@@ -13887,6 +13887,9 @@ def _select_order_terminal_owner_probe_summary(
         "field_load_source_candidates": 0,
         "materialized_field_load_source_candidates": 0,
         "field_load_terminal_blockers": [],
+        "param_alias_source_candidates": 0,
+        "materialized_param_alias_source_candidates": 0,
+        "param_alias_terminal_blockers": [],
         "reasons": {},
     }
 
@@ -13963,16 +13966,42 @@ def _select_order_terminal_owner_probe_summary(
             and terminal_blocker.startswith("field-load-")
         ):
             summary["field_load_terminal_blockers"].append(terminal_blocker)
+        raw_param_alias = diag.get("param_alias_source_candidates")
+        if isinstance(raw_param_alias, list):
+            summary["param_alias_source_candidates"] += len([
+                item for item in raw_param_alias if isinstance(item, Mapping)
+            ])
+        materialized_param_alias = diag.get(
+            "materialized_param_alias_source_candidates"
+        )
+        if isinstance(materialized_param_alias, list):
+            materialized_count = len([
+                item for item in materialized_param_alias
+                if isinstance(item, Mapping)
+            ])
+            summary[
+                "materialized_param_alias_source_candidates"
+            ] += materialized_count
+            if not isinstance(raw_param_alias, list):
+                summary["param_alias_source_candidates"] += materialized_count
+        add_reasons(diag.get("param_alias_materialization_summary"))
+        if isinstance(terminal_blocker, str) and terminal_blocker.startswith("param-"):
+            summary["param_alias_terminal_blockers"].append(terminal_blocker)
 
     if summary["field_load_terminal_blockers"]:
         summary["field_load_terminal_blockers"] = sorted(
             set(summary["field_load_terminal_blockers"])
+        )
+    if summary["param_alias_terminal_blockers"]:
+        summary["param_alias_terminal_blockers"] = sorted(
+            set(summary["param_alias_terminal_blockers"])
         )
 
     ranked_total = (
         int(summary["ranked_local_candidates"])
         + int(summary["ranked_indexed_byte_candidates"])
         + int(summary["field_load_source_candidates"])
+        + int(summary["param_alias_source_candidates"])
     )
     if ranked_total <= 0:
         return None
@@ -13980,6 +14009,7 @@ def _select_order_terminal_owner_probe_summary(
         int(summary["materialized_local_candidates"])
         + int(summary["materialized_indexed_byte_candidates"])
         + int(summary["materialized_field_load_source_candidates"])
+        + int(summary["materialized_param_alias_source_candidates"])
     )
     summary["ranked_candidates"] = ranked_total
     summary["materialized_candidates"] = materialized_total
@@ -13988,9 +14018,12 @@ def _select_order_terminal_owner_probe_summary(
     )
     if materialized_total == 0:
         field_load_blockers = summary["field_load_terminal_blockers"]
+        param_alias_blockers = summary["param_alias_terminal_blockers"]
         summary["terminal_blocker"] = (
             field_load_blockers[0]
             if field_load_blockers
+            else param_alias_blockers[0]
+            if param_alias_blockers
             else "ranked-owner-candidates-not-materializable"
         )
     return summary

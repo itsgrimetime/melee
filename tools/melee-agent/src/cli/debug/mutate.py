@@ -1059,23 +1059,91 @@ def _control_flow_stop_condition(
     return {"kind": kind, "blocker": blocker, "reason": reason}
 
 
+def _control_flow_variant_has_score(variant: Mapping[str, Any]) -> bool:
+    return variant.get("status") == "ok" and (
+        variant.get("match_percent") is not None
+        or variant.get("final_match_percent") is not None
+        or isinstance(variant.get("checkdiff_delta"), Mapping)
+        or isinstance(variant.get("checkdiff"), Mapping)
+    )
+
+
+def _control_flow_scored_variants(
+    variants: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        variant for variant in variants if _control_flow_variant_has_score(variant)
+    ]
+
+
+def _control_flow_candidate_status_counts(
+    variants: list[dict[str, Any]],
+) -> dict[str, int]:
+    scored_count = len(_control_flow_scored_variants(variants))
+    return {
+        "candidate_count": len(variants),
+        "scored_count": scored_count,
+        "unscored_count": len(variants) - scored_count,
+        "build_failed_count": sum(
+            1 for variant in variants if variant.get("status") == "build-failed"
+        ),
+        "failed_count": sum(
+            1 for variant in variants if variant.get("status") == "failed"
+        ),
+        "ok_unscored_count": sum(
+            1
+            for variant in variants
+            if variant.get("status") == "ok"
+            and not _control_flow_variant_has_score(variant)
+        ),
+    }
+
+
+def _control_flow_unscored_blocker(variants: list[dict[str, Any]]) -> str:
+    counts = _control_flow_candidate_status_counts(variants)
+    if counts["candidate_count"] and (
+        counts["build_failed_count"] + counts["failed_count"]
+        == counts["candidate_count"]
+    ):
+        return "control-flow-shape-candidates-build-failed"
+    return "control-flow-shape-candidates-unscored"
+
+
+def _control_flow_candidate_summary(variant: Mapping[str, Any]) -> dict[str, Any]:
+    variant_probe = variant.get("probe")
+    variant_provenance = (
+        dict(variant_probe["provenance"])
+        if isinstance(variant_probe, Mapping)
+        and isinstance(variant_probe.get("provenance"), Mapping)
+        else {}
+    )
+    return {
+        "label": variant.get("label"),
+        "status": variant.get("status"),
+        "family_id": variant.get("family_id"),
+        "suggestion_kind": variant.get("suggestion_kind"),
+        "source_retained": variant.get("source_retained"),
+        "pcdump_path": variant.get("pcdump_path"),
+        "source_hunk_count": len(variant.get("source_hunks") or []),
+        "checkdiff_delta": variant.get("checkdiff_delta"),
+        "error": variant.get("error"),
+        "owner_function": variant_provenance.get("owner_function"),
+        "owner_kind": variant_provenance.get("owner_kind"),
+        "variant": variant_provenance.get("variant"),
+        "anchor_kind": variant_provenance.get("anchor_kind"),
+        "base_expr": variant_provenance.get("base_expr"),
+        "index_expr": variant_provenance.get("index_expr"),
+        "byte_offset": variant_provenance.get("byte_offset"),
+    }
+
+
 def _control_flow_candidates_exhausted_proof(
     *,
     baseline: Mapping[str, Any] | None,
     variants: list[dict[str, Any]],
     family_results: list[Any],
 ) -> dict[str, Any]:
-    scored = [
-        variant
-        for variant in variants
-        if variant.get("status") == "ok"
-        and (
-            variant.get("match_percent") is not None
-            or variant.get("final_match_percent") is not None
-            or isinstance(variant.get("checkdiff_delta"), Mapping)
-            or isinstance(variant.get("checkdiff"), Mapping)
-        )
-    ]
+    scored = _control_flow_scored_variants(variants)
     best = scored[0] if scored else (variants[0] if variants else {})
     family = next(
         (
@@ -1128,34 +1196,9 @@ def _control_flow_candidates_exhausted_proof(
         "checkdiff": best.get("checkdiff"),
         "checkdiff_delta": best.get("checkdiff_delta"),
     }
-    candidate_summaries: list[dict[str, Any]] = []
-    for variant in variants:
-        variant_probe = variant.get("probe")
-        variant_provenance = (
-            dict(variant_probe["provenance"])
-            if isinstance(variant_probe, Mapping)
-            and isinstance(variant_probe.get("provenance"), Mapping)
-            else {}
-        )
-        candidate_summaries.append(
-            {
-                "label": variant.get("label"),
-                "status": variant.get("status"),
-                "family_id": variant.get("family_id"),
-                "suggestion_kind": variant.get("suggestion_kind"),
-                "source_retained": variant.get("source_retained"),
-                "pcdump_path": variant.get("pcdump_path"),
-                "source_hunk_count": len(variant.get("source_hunks") or []),
-                "checkdiff_delta": variant.get("checkdiff_delta"),
-                "owner_function": variant_provenance.get("owner_function"),
-                "owner_kind": variant_provenance.get("owner_kind"),
-                "variant": variant_provenance.get("variant"),
-                "anchor_kind": variant_provenance.get("anchor_kind"),
-                "base_expr": variant_provenance.get("base_expr"),
-                "index_expr": variant_provenance.get("index_expr"),
-                "byte_offset": variant_provenance.get("byte_offset"),
-            }
-        )
+    candidate_summaries = [
+        _control_flow_candidate_summary(variant) for variant in variants
+    ]
     next_handoff_suffix = (
         "then rerun control-flow-shape-search with the same baseline."
         if baseline is not None
@@ -1179,8 +1222,6 @@ def _control_flow_candidates_exhausted_proof(
         "suggestion_kind": suggestion_kind,
         "terminal_blocker": "control-flow-shape-candidates-exhausted",
         "terminal_reason": terminal_reason,
-        "candidate_count": len(variants),
-        "scored_count": len(scored),
         "best_candidate": best_candidate,
         "candidate_summaries": candidate_summaries,
         "retained_evidence": {
@@ -1198,6 +1239,82 @@ def _control_flow_candidates_exhausted_proof(
     }
     if baseline is not None:
         proof["baseline"] = dict(baseline)
+    proof.update(_control_flow_candidate_status_counts(variants))
+    return proof
+
+
+def _control_flow_candidates_unscored_proof(
+    *,
+    baseline: Mapping[str, Any] | None,
+    variants: list[dict[str, Any]],
+    family_results: list[Any],
+) -> dict[str, Any]:
+    best = variants[0] if variants else {}
+    family = next(
+        (
+            item
+            for item in family_results
+            if isinstance(item, Mapping)
+            and item.get("family_id") == best.get("family_id")
+        ),
+        None,
+    )
+    if family is None:
+        family = next(
+            (item for item in family_results if isinstance(item, Mapping)),
+            {},
+        )
+    family_id = str(
+        best.get("family_id") or family.get("family_id") or "control-flow-shape"
+    )
+    operator = str(best.get("operator") or family.get("operator") or "")
+    suggestion_kind = str(
+        best.get("suggestion_kind")
+        or family.get("suggestion_kind")
+        or "unspecified"
+    )
+    blocker = _control_flow_unscored_blocker(variants)
+    terminal_reason = (
+        "bounded control-flow shape candidates were generated but none produced "
+        "checkdiff or match-score evidence; inspect retained source validity and "
+        "compile errors before treating this source-shape family as exhausted"
+    )
+    proof = {
+        "family_id": family_id,
+        "operator": operator,
+        "suggestion_kind": suggestion_kind,
+        "terminal_blocker": blocker,
+        "terminal_reason": terminal_reason,
+        "best_candidate": {
+            "label": best.get("label"),
+            "operator": best.get("operator"),
+            "family_id": best.get("family_id"),
+            "suggestion_kind": best.get("suggestion_kind"),
+            "status": best.get("status"),
+            "source_hunks": best.get("source_hunks") or [],
+            "source_retained": best.get("source_retained"),
+            "pcdump_path": best.get("pcdump_path"),
+            "error": best.get("error"),
+        },
+        "candidate_summaries": [
+            _control_flow_candidate_summary(variant) for variant in variants
+        ],
+        "retained_evidence": {
+            "source_retained": best.get("source_retained"),
+            "pcdump_path": best.get("pcdump_path"),
+            "source_hunk_count": len(best.get("source_hunks") or []),
+            "error": best.get("error"),
+        },
+        "next_handoff": (
+            "Inspect the retained source_hunks, source_retained files, and "
+            "compile errors for the generated control-flow candidates; rerun "
+            "control-flow-shape-search after the candidate source compiles, "
+            "rather than moving to another source-shape family as exhausted."
+        ),
+    }
+    if baseline is not None:
+        proof["baseline"] = dict(baseline)
+    proof.update(_control_flow_candidate_status_counts(variants))
     return proof
 
 
@@ -3308,6 +3425,7 @@ def mutate_control_flow_shape_search_cmd(
     """Compile and score conservative control-flow shape source probes."""
     from src.cli.debug import (
         _control_flow_compile_source_variant,
+        _control_flow_prototype_context,
         _find_unit_for_function,
         _make_real_score_status,
         _parse_lifetime_layout_candidate,
@@ -3327,6 +3445,7 @@ def mutate_control_flow_shape_search_cmd(
     melee_root = DEFAULT_MELEE_ROOT
     resolved_source: Path | None = None
     source_text: str | None = None
+    prototype_context: str | None = None
     candidate_specs = candidates or []
     operator_filter = tuple(operators or ())
     suggestion_items: list[Mapping[str, Any]] | None = None
@@ -3395,6 +3514,11 @@ def mutate_control_flow_shape_search_cmd(
             encoding="utf-8",
             errors="replace",
         )
+        prototype_context = _control_flow_prototype_context(
+            resolved_source,
+            melee_root,
+            source_text=source_text,
+        )
     else:
         unit = _find_unit_for_function(function, melee_root)
         if unit is not None:
@@ -3404,6 +3528,11 @@ def mutate_control_flow_shape_search_cmd(
                 source_text = candidate_source.read_text(
                     encoding="utf-8",
                     errors="replace",
+                )
+                prototype_context = _control_flow_prototype_context(
+                    resolved_source,
+                    melee_root,
+                    source_text=source_text,
                 )
 
     if source_text is None and not candidate_specs:
@@ -3435,6 +3564,7 @@ def mutate_control_flow_shape_search_cmd(
                 suggestion_items,
                 operator_filter=operator_filter or None,
                 max_probes_per_family=max(1, max_probes),
+                prototype_context=prototype_context,
             )
         else:
             probes, scan_status = scan_control_flow_shape_probes(
@@ -3442,6 +3572,7 @@ def mutate_control_flow_shape_search_cmd(
                 function,
                 operator_filter=operator_filter or None,
                 max_probes=max_probes,
+                prototype_context=prototype_context,
             )
         probes = probes[:max_probes]
 
@@ -3610,6 +3741,7 @@ def mutate_control_flow_shape_search_cmd(
         if isinstance(scan_status.get("families"), list)
         else []
     )
+    scored_variants = _control_flow_scored_variants(variants)
     terminal_proofs = list(
         scan_status.get("terminal_proofs")
         if isinstance(scan_status.get("terminal_proofs"), list)
@@ -3622,14 +3754,31 @@ def mutate_control_flow_shape_search_cmd(
             blocker=None,
             reason="validated candidate found",
         )
-    elif variants and baseline is not None and any(
-        _control_flow_variant_improved_baseline(variant) for variant in variants
+    elif scored_variants and baseline is not None and any(
+        _control_flow_variant_improved_baseline(variant) for variant in scored_variants
     ):
         blocker = None
         stop_condition = _control_flow_stop_condition(
             "improved",
             blocker=None,
             reason="at least one candidate improved the supplied baseline checkdiff",
+        )
+    elif variants and not scored_variants:
+        blocker = _control_flow_unscored_blocker(variants)
+        stop_condition = _control_flow_stop_condition(
+            "blocked",
+            blocker=blocker,
+            reason=(
+                "generated probes did not produce checkdiff or match-score "
+                "evidence"
+            ),
+        )
+        terminal_proofs.append(
+            _control_flow_candidates_unscored_proof(
+                baseline=baseline,
+                variants=variants,
+                family_results=family_results,
+            )
         )
     elif variants and baseline is not None:
         blocker = "no-control-flow-shape-candidate-improved-checkdiff"
