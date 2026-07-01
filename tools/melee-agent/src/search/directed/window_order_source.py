@@ -10,6 +10,7 @@ from typing import Any
 
 from src.mwcc_debug.pressure_explorer import LifetimeLayoutProbe
 from src.mwcc_debug.source_field_attribution import (
+    accessors_for_field_path,
     build_source_field_context,
     source_for_field_offset,
 )
@@ -176,6 +177,8 @@ class _FieldLoadSourceCandidate:
     kind: str
     line_source_span: tuple[int, int]
     line_text: str
+    accessor_name: str | None = None
+    accessor_return_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1585,6 +1588,30 @@ def _base_type_in_function(
     )
 
 
+def _source_file_from_attrs(*attrs: Any) -> str | None:
+    for attr in attrs:
+        source_file = _attr_value(attr, "source_file")
+        if isinstance(source_file, str) and source_file:
+            return source_file
+    return None
+
+
+def _build_field_context_for_attrs(
+    source_text: str,
+    *,
+    function: str,
+    attrs: tuple[Any, ...] = (),
+) -> Any | None:
+    try:
+        return build_source_field_context(
+            source_text,
+            function=function,
+            source_file=_source_file_from_attrs(*attrs),
+        )
+    except Exception:
+        return None
+
+
 def _field_load_base_and_offset(source_attr: Any) -> tuple[str | None, int | None]:
     base_var = _attr_value(source_attr, "base_var")
     if not isinstance(base_var, str) or not base_var:
@@ -1622,7 +1649,7 @@ def _pcode_field_address_like(source_attr: Any) -> bool:
     confidence = _attr_value(source_attr, "confidence")
     if source_kind == "load/store-address":
         return True
-    return source_kind == "first-def" and confidence == "pcode-first-def"
+    return source_kind in {"first-def", "fpr-temp"} and confidence == "pcode-first-def"
 
 
 def _pcode_field_opcode(source_attr: Any) -> str | None:
@@ -1649,6 +1676,13 @@ def _pcode_field_load_like(source_attr: Any) -> bool:
     if opcode.startswith("st"):
         return False
     return opcode.startswith(_LOAD_OPCODE_PREFIXES)
+
+
+def _pcode_fpr_load_like(source_attr: Any) -> bool:
+    if not _pcode_field_load_like(source_attr):
+        return False
+    opcode = _pcode_field_opcode(source_attr)
+    return bool(opcode and opcode.startswith("lf"))
 
 
 def _pcode_field_address_blocker(source_attr: Any) -> str | None:
@@ -1731,7 +1765,7 @@ def _resolved_pcode_field_load_source_attr(
         return None, metadata, "field-load-base-source-unresolved"
 
     base_kind = _attr_value(base_attr, "kind")
-    if base_kind not in {"local", "call-return", "copy/coalesce-source"}:
+    if base_kind not in {"local", "param", "call-return", "copy/coalesce-source"}:
         return None, metadata, "field-load-base-source-unresolved"
     base_var = _attr_value(base_attr, "name")
     if not isinstance(base_var, str) or _SIMPLE_IDENTIFIER_RE.fullmatch(base_var) is None:
@@ -1744,7 +1778,7 @@ def _resolved_pcode_field_load_source_attr(
         base_var=base_var,
         search_span=search_span,
     )
-    if base_kind == "local":
+    if base_kind in {"local", "param"}:
         base_type = attr_type if isinstance(attr_type, str) else function_type
     else:
         base_type = function_type
@@ -1758,6 +1792,11 @@ def _resolved_pcode_field_load_source_attr(
         base_var=base_var,
         field_offset=field_offset,
         base_type=base_type,
+        field_context=_build_field_context_for_attrs(
+            source_text,
+            function=function,
+            attrs=(source_attr, base_attr),
+        ),
     )
     metadata["field_name"] = field_name
     if field_name is None:
@@ -1832,6 +1871,7 @@ def _field_name_from_attribution(
     base_var: str,
     field_offset: int | None,
     base_type: str | None,
+    field_context: Any | None = None,
 ) -> tuple[str | None, str | None]:
     field_name = _attr_value(source_attr, "field_name")
     expression = _attr_value(source_attr, "expression")
@@ -1861,6 +1901,15 @@ def _field_name_from_attribution(
         if _looks_like_gobj_pointer_type(base_type):
             return "user_data", None
         return None, "field-load-base-type-unresolved"
+    if field_context is not None and field_offset is not None:
+        resolved = source_for_field_offset(
+            field_context,
+            base_expression=base_var,
+            base_type=base_type,
+            offset=field_offset,
+        )
+        if resolved is not None and resolved.field_name:
+            return resolved.field_name, None
     return None, "field-load-field-name-unresolved"
 
 
@@ -1895,7 +1944,7 @@ def _owner_for_field_load_line(
 
 
 def _field_load_candidate_dict(candidate: _FieldLoadSourceCandidate) -> dict[str, Any]:
-    return {
+    payload = {
         "base_var": candidate.base_var,
         "field_offset": candidate.field_offset,
         "field_name": candidate.field_name,
@@ -1908,12 +1957,17 @@ def _field_load_candidate_dict(candidate: _FieldLoadSourceCandidate) -> dict[str
         "line_source_span": list(candidate.line_source_span),
         "line_text": candidate.line_text.strip(),
     }
+    if candidate.accessor_name is not None:
+        payload["accessor_name"] = candidate.accessor_name
+    if candidate.accessor_return_type is not None:
+        payload["accessor_return_type"] = candidate.accessor_return_type
+    return payload
 
 
 def _field_load_temp_type(candidate: _FieldLoadSourceCandidate) -> str | None:
     if candidate.field_name == "user_data":
         return "void*"
-    return _safe_decl_type_text(candidate.owner_type)
+    return _safe_decl_type_text(candidate.owner_type or candidate.accessor_return_type)
 
 
 def _field_load_line_can_host_temp(
@@ -1931,6 +1985,41 @@ def _field_load_line_can_host_temp(
     )
 
 
+def _statement_bounds_for_expression(
+    source_text: str,
+    *,
+    expr_start: int,
+    expr_end: int,
+) -> tuple[int, int] | None:
+    if not (0 <= expr_start < expr_end <= len(source_text)):
+        return None
+    previous_boundary = max(
+        source_text.rfind(";", 0, expr_start),
+        source_text.rfind("{", 0, expr_start),
+        source_text.rfind("}", 0, expr_start),
+    )
+    statement_start = previous_boundary + 1
+    while (
+        statement_start < expr_start
+        and source_text[statement_start] in " \t\r\n"
+    ):
+        statement_start += 1
+    if statement_start >= expr_start:
+        return None
+    statement_line_start = source_text.rfind("\n", 0, statement_start) + 1
+    statement_end = source_text.find(";", expr_end)
+    if statement_end < 0:
+        return None
+    return statement_line_start, statement_end + 1
+
+
+def _field_member_pattern(field_name: str) -> str:
+    parts = [part for part in field_name.split(".") if part]
+    if not parts:
+        return re.escape(field_name)
+    return r"\s*\.\s*".join(re.escape(part) for part in parts)
+
+
 def _field_load_source_candidates(
     source_text: str,
     *,
@@ -1944,26 +2033,33 @@ def _field_load_source_candidates(
         "base_var": base_var,
         "field_offset": field_offset,
     }
-    if base_var is None:
-        return [], metadata, "field-load-base-type-unresolved"
-
+    field_context = _build_field_context_for_attrs(
+        source_text,
+        function=function,
+        attrs=(source_attr,),
+    )
     attr_base_type = _attr_value(source_attr, "base_type")
-    base_type = (
-        attr_base_type if isinstance(attr_base_type, str)
-        else _base_type_in_function(
-            source_text,
-            function=function,
-            base_var=base_var,
-            search_span=search_span,
+    base_type = None
+    field_name = None
+    blocker = "field-load-base-type-unresolved"
+    if base_var is not None:
+        base_type = (
+            attr_base_type if isinstance(attr_base_type, str)
+            else _base_type_in_function(
+                source_text,
+                function=function,
+                base_var=base_var,
+                search_span=search_span,
+            )
         )
-    )
+        field_name, blocker = _field_name_from_attribution(
+            source_attr,
+            base_var=base_var,
+            field_offset=field_offset,
+            base_type=base_type,
+            field_context=field_context,
+        )
     metadata["base_type"] = base_type
-    field_name, blocker = _field_name_from_attribution(
-        source_attr,
-        base_var=base_var,
-        field_offset=field_offset,
-        base_type=base_type,
-    )
     metadata["field_name"] = field_name
 
     if search_span is None:
@@ -1978,11 +2074,12 @@ def _field_load_source_candidates(
         candidate_base_var: str,
         candidate_field_name: str,
         kind: str,
+        owner_type_fallback: str | None = None,
     ) -> None:
         expression_re = re.compile(
             rf"(?<![A-Za-z0-9_]){re.escape(candidate_base_var)}"
             rf"\s*(?P<op>->|\.)\s*"
-            rf"{re.escape(candidate_field_name)}(?![A-Za-z0-9_])"
+            rf"{_field_member_pattern(candidate_field_name)}(?![A-Za-z0-9_])"
         )
         for match in expression_re.finditer(source_text, search_start, search_end):
             source_start, source_end = match.span()
@@ -2003,6 +2100,8 @@ def _field_load_source_candidates(
                     name=owner_local,
                     search_span=search_span,
                 )
+            if owner_type is None:
+                owner_type = owner_type_fallback
             key = (source_start, source_end)
             if key in seen:
                 continue
@@ -2024,19 +2123,94 @@ def _field_load_source_candidates(
                 )
             )
 
-    if field_name is not None:
+    def append_accessor_matches(
+        *,
+        candidate_base_var: str,
+        candidate_base_type: str | None,
+        candidate_field_name: str,
+        owner_type_fallback: str | None = None,
+    ) -> None:
+        if field_context is None:
+            return
+        accessors = accessors_for_field_path(
+            field_context,
+            base_type=candidate_base_type,
+            field_name=candidate_field_name,
+        )
+        if not accessors:
+            return
+        for accessor in accessors:
+            call_re = re.compile(
+                rf"(?<![A-Za-z0-9_]){re.escape(accessor.name)}"
+                rf"\s*\(\s*{re.escape(candidate_base_var)}\s*\)"
+            )
+            for match in call_re.finditer(source_text, search_start, search_end):
+                source_start, source_end = match.span()
+                line_start = source_text.rfind("\n", 0, source_start) + 1
+                line_end = source_text.find("\n", source_end)
+                if line_end < 0:
+                    line_end = len(source_text)
+                line = source_text[line_start:line_end]
+                rel_start = source_start - line_start
+                owner_local, owner_type = _owner_for_field_load_line(
+                    line,
+                    expression_start=rel_start,
+                )
+                if owner_local is not None and owner_type is None:
+                    owner_type = _function_declared_type(
+                        source_text,
+                        function=function,
+                        name=owner_local,
+                        search_span=search_span,
+                    )
+                if owner_type is None:
+                    attr_type = _attr_value(source_attr, "type")
+                    owner_type = (
+                        accessor.return_type
+                        or owner_type_fallback
+                        or (attr_type if isinstance(attr_type, str) else None)
+                    )
+                key = (source_start, source_end)
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(
+                    _FieldLoadSourceCandidate(
+                        base_var=candidate_base_var,
+                        field_offset=field_offset,
+                        field_name=candidate_field_name,
+                        expression=source_text[source_start:source_end].strip(),
+                        source_span=(source_start, source_end),
+                        source_line=source_text.count("\n", 0, line_start) + 1,
+                        owner_local=owner_local,
+                        owner_type=owner_type,
+                        kind="inline-accessor",
+                        line_source_span=(line_start, line_end),
+                        line_text=line,
+                        accessor_name=accessor.name,
+                        accessor_return_type=accessor.return_type,
+                    )
+                )
+
+    attr_value_type = _attr_value(source_attr, "type")
+    owner_type_fallback = attr_value_type if isinstance(attr_value_type, str) else None
+    if base_var is not None and field_name is not None:
         append_source_matches(
             candidate_base_var=base_var,
             candidate_field_name=field_name,
             kind="inline-temp",
+            owner_type_fallback=owner_type_fallback,
+        )
+        append_accessor_matches(
+            candidate_base_var=base_var,
+            candidate_base_type=base_type if isinstance(base_type, str) else None,
+            candidate_field_name=field_name,
+            owner_type_fallback=owner_type_fallback,
         )
 
     if not candidates and field_offset is not None:
         recovered: list[dict[str, Any]] = []
-        try:
-            context = build_source_field_context(source_text, function=function)
-        except Exception:
-            context = None
+        context = field_context
         if context is not None:
             for candidate_base_var, candidate_base_type in context.local_types.items():
                 if (
@@ -2065,6 +2239,13 @@ def _field_load_source_candidates(
                         candidate_base_var=scan_base_var,
                         candidate_field_name=resolved.field_name,
                         kind="same-offset-source-field",
+                        owner_type_fallback=resolved.type,
+                    )
+                    append_accessor_matches(
+                        candidate_base_var=scan_base_var,
+                        candidate_base_type=candidate_base_type,
+                        candidate_field_name=resolved.field_name,
+                        owner_type_fallback=resolved.type,
                     )
                 if len(candidates) > before_count:
                     recovered.append({
@@ -2106,8 +2287,17 @@ def _materialize_field_load_candidate(
     candidate_payload = _field_load_candidate_dict(candidate)
     line_start, line_end = candidate.line_source_span
     expr_start, expr_end = candidate.source_span
-    line = source_text[line_start:line_end]
-    stripped = line.strip()
+    statement_bounds = _statement_bounds_for_expression(
+        source_text,
+        expr_start=expr_start,
+        expr_end=expr_end,
+    )
+    if statement_bounds is None:
+        statement_start, statement_end = line_start, line_end
+    else:
+        statement_start, statement_end = statement_bounds
+    statement = source_text[statement_start:statement_end]
+    stripped = statement.strip()
     if not stripped or _line_has_unsafe_label_or_preprocessor(stripped):
         return None, {
             **candidate_payload,
@@ -2115,7 +2305,7 @@ def _materialize_field_load_candidate(
             "reason": "field-load-no-safe-insertion-point",
             "handler": handler,
         }
-    if not (line_start <= expr_start < expr_end <= line_end):
+    if not (statement_start <= expr_start < expr_end <= statement_end):
         return None, {
             **candidate_payload,
             "status": "rejected",
@@ -2158,7 +2348,7 @@ def _materialize_field_load_candidate(
             "handler": handler,
         }
     decl_index, decl_indent = insertion
-    if decl_index > line_start:
+    if decl_index > statement_start:
         return None, {
             **candidate_payload,
             "status": "rejected",
@@ -2168,15 +2358,17 @@ def _materialize_field_load_candidate(
 
     temp_stem = f"{candidate.base_var}_{candidate.field_name or 'field_load'}"
     temp_name = _window_order_probe_local_name(source_text, temp_stem)
-    indent = re.match(r"[ \t]*", line).group(0)
-    rewritten_line = (
-        source_text[line_start:expr_start]
+    indent = re.match(r"[ \t]*", statement).group(0)
+    rewritten_statement = (
+        source_text[statement_start:expr_start]
         + temp_name
-        + source_text[expr_end:line_end]
+        + source_text[expr_end:statement_end]
     )
-    replacement = f"{indent}{temp_name} = {candidate.expression};\n{rewritten_line}"
+    replacement = (
+        f"{indent}{temp_name} = {candidate.expression};\n{rewritten_statement}"
+    )
     edits = [
-        (line_start, line_end, replacement),
+        (statement_start, statement_end, replacement),
         (decl_index, decl_index, f"{decl_indent}{temp_type} {temp_name};\n"),
     ]
     candidate_text = source_text
@@ -5226,17 +5418,11 @@ def plan_window_order_source_probes(
                 }
             })
             if resolved_attr is None:
-                diag["field_load_source_probe"] = pcode_metadata
-                diag["field_load_materialization_summary"] = {
-                    "field_load_source_candidates": 0,
-                    "materialized_field_load_source_candidates": 0,
-                    "reasons": {pcode_blocker or "field-load-source-span-not-found": 1},
-                }
-                diag["terminal_blocker"] = (
+                pcode_metadata["pcode_resolution_blocker"] = (
                     pcode_blocker or "field-load-source-span-not-found"
                 )
-                return
-            source_attr = resolved_attr
+            else:
+                source_attr = resolved_attr
         candidates, resolver_metadata, resolver_blocker = (
             _field_load_source_candidates(
                 source_text,
@@ -5265,15 +5451,24 @@ def plan_window_order_source_probes(
         first_source_hunks: list[dict[str, Any]] | None = None
 
         if not candidates:
+            terminal_blocker = resolver_blocker or "field-load-source-span-not-found"
+            pcode_resolution_blocker = pcode_metadata.get("pcode_resolution_blocker")
+            if (
+                isinstance(pcode_resolution_blocker, str)
+                and resolver_blocker in {
+                    None,
+                    "field-load-base-type-unresolved",
+                    "field-load-field-name-unresolved",
+                }
+            ):
+                terminal_blocker = pcode_resolution_blocker
             diag["field_load_candidate_diagnostics"] = diagnostics
             diag["field_load_materialization_summary"] = {
                 "field_load_source_candidates": 0,
                 "materialized_field_load_source_candidates": 0,
-                "reasons": {resolver_blocker or "field-load-source-span-not-found": 1},
+                "reasons": {terminal_blocker: 1},
             }
-            diag["terminal_blocker"] = (
-                resolver_blocker or "field-load-source-span-not-found"
-            )
+            diag["terminal_blocker"] = terminal_blocker
             return
 
         for candidate in candidates:
@@ -5707,6 +5902,49 @@ def plan_window_order_source_probes(
             )
             lead_diagnostics.append(diag)
             continue
+        if _pcode_field_load_like(source_attr):
+            materialize_field_load_source_candidates(
+                diag=diag,
+                lead=lead,
+                target_ig=target_ig,
+                direction=direction,
+                source_attr=source_attr,
+            )
+            fpr_field_fallback_blockers = {
+                "field-load-base-source-unresolved",
+                "field-load-base-type-unresolved",
+                "field-load-field-name-unresolved",
+                "field-load-source-span-not-found",
+            }
+            if (
+                diag.get("status") != "materialized"
+                and _pcode_fpr_load_like(source_attr)
+                and diag.get("terminal_blocker") in fpr_field_fallback_blockers
+            ):
+                diag["field_load_terminal_blocker"] = diag.get("terminal_blocker")
+                diag.pop("terminal_blocker", None)
+                synthetic = _fpr_temp_owner(
+                    groups,
+                    source_attributions,
+                    owner_target_ig,
+                    source_attr,
+                )
+                if copy_product_metadata is not None:
+                    synthetic = _with_copy_product_metadata(
+                        synthetic,
+                        copy_product_metadata,
+                    )
+                materialize_synthetic_result(
+                    diag=diag,
+                    lead=lead,
+                    target_ig=target_ig,
+                    direction=direction,
+                    source_attr=provenance_source_attr,
+                    synthetic=synthetic,
+                    default_blocker="fpr-first-def-source-owner-missing",
+                )
+            lead_diagnostics.append(diag)
+            continue
         if source_kind == "fpr-temp":
             synthetic = _fpr_temp_owner(
                 groups,
@@ -5727,16 +5965,6 @@ def plan_window_order_source_probes(
                 source_attr=provenance_source_attr,
                 synthetic=synthetic,
                 default_blocker="unsupported-source-attribution-kind",
-            )
-            lead_diagnostics.append(diag)
-            continue
-        if _pcode_field_load_like(source_attr):
-            materialize_field_load_source_candidates(
-                diag=diag,
-                lead=lead,
-                target_ig=target_ig,
-                direction=direction,
-                source_attr=source_attr,
             )
             lead_diagnostics.append(diag)
             continue

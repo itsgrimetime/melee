@@ -254,6 +254,37 @@ def test_explain_virtuals_classifies_ir_first_def_provenance_without_source() ->
     assert by_virtual[44].source.field_offset == 12
 
 
+def test_explain_virtuals_classifies_fpr_load_first_def_as_field_address() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000004
+        BEFORE REGISTER COLORING
+        fn_80000004
+        B0: Succ={} Pred={} Labels={}
+            lfs f41,60(r44)
+        AFTER REGISTER COLORING
+        fn_80000004
+        B0: Succ={} Pred={} Labels={}
+            lfs f30,60(r31)
+    """)
+
+    report = explain_virtuals(
+        pcdump,
+        "fn_80000004",
+        virtuals=[41],
+        reg_class="fpr",
+    )
+
+    source_info = report.virtuals[0].source
+    assert source_info is not None
+    assert source_info.kind == "load/store-address"
+    assert source_info.confidence == "pcode-first-def"
+    assert source_info.expression == "lfs f41,60(r44)"
+    assert source_info.base_virtual == 44
+    assert source_info.field_offset == 60
+    assert source_info.first_def is not None
+    assert source_info.first_def.opcode == "lfs"
+
+
 def test_explain_virtuals_resolves_chained_pcode_loads_to_typed_source() -> None:
     pcdump = textwrap.dedent("""\
         Starting function fn_80000010
@@ -421,6 +452,97 @@ def test_source_field_attribution_refines_void_field_base_from_alias_type() -> N
     assert resolved.expression == "data2->is_name_mode"
     assert resolved.type == "u8"
     assert resolved.source_line == 21
+
+
+def test_source_field_attribution_resolves_nested_struct_offsets() -> None:
+    source = textwrap.dedent("""\
+        typedef float f32;
+        typedef struct {
+            f32 x, y, z;
+        } Vec3, *Vec3Ptr;
+        typedef struct HSD_JObj {
+            /* 0x2C */ Vec3 scale;
+            /* 0x38 */ Vec3 translate;
+        } HSD_JObj;
+
+        void fn_80000013(HSD_JObj* row0) {
+            sink(row0);
+        }
+    """)
+
+    context = build_source_field_context(source, function="fn_80000013")
+
+    y = source_for_field_offset(
+        context,
+        base_expression="row0",
+        base_type="HSD_JObj*",
+        offset=0x3C,
+    )
+    z = source_for_field_offset(
+        context,
+        base_expression="row0",
+        base_type="HSD_JObj*",
+        offset=0x40,
+    )
+
+    assert y is not None
+    assert y.expression == "row0->translate.y"
+    assert y.field_name == "translate.y"
+    assert y.type == "f32"
+    assert z is not None
+    assert z.expression == "row0->translate.z"
+    assert z.field_name == "translate.z"
+    assert z.type == "f32"
+
+
+def test_source_field_attribution_resolves_nested_offsets_through_extern_include(
+    tmp_path: pathlib.Path,
+) -> None:
+    root = tmp_path / "melee"
+    source_path = root / "src" / "melee" / "mn" / "sample.c"
+    jobj_path = root / "src" / "sysdolphin" / "baselib" / "jobj.h"
+    mtx_path = root / "extern" / "dolphin" / "include" / "dolphin" / "mtx.h"
+    source_path.parent.mkdir(parents=True)
+    jobj_path.parent.mkdir(parents=True)
+    mtx_path.parent.mkdir(parents=True)
+    mtx_path.write_text(textwrap.dedent("""\
+        typedef float f32;
+        typedef struct {
+            f32 x, y, z;
+        } Vec, Vec3, *VecPtr, Point3d, *Point3dPtr;
+    """))
+    jobj_path.write_text(textwrap.dedent("""\
+        #include <dolphin/mtx.h>
+        typedef struct HSD_JObj {
+            /* +2C */ Vec3 scale;
+            /* +38 */ Vec3 translate;
+        } HSD_JObj;
+    """))
+    source = textwrap.dedent("""\
+        #include <baselib/jobj.h>
+        void sample(HSD_JObj* row0) {
+            sink(row0);
+        }
+    """)
+    source_path.write_text(source)
+
+    context = build_source_field_context(
+        source,
+        function="sample",
+        source_file=source_path,
+        melee_root=root,
+    )
+    resolved = source_for_field_offset(
+        context,
+        base_expression="row0",
+        base_type="HSD_JObj*",
+        offset=0x3C,
+    )
+
+    assert resolved is not None
+    assert resolved.expression == "row0->translate.y"
+    assert resolved.field_name == "translate.y"
+    assert resolved.type == "f32"
 
 
 def test_explain_virtuals_prefers_pcode_over_low_confidence_binding() -> None:

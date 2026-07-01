@@ -363,6 +363,125 @@ def test_window_order_plan_recovers_pcode_field_load_user_data_from_base_virtual
     )
 
 
+def test_window_order_plan_materializes_fpr_pcode_nested_field_accessor_probe(
+) -> None:
+    source = textwrap.dedent("""\
+        typedef float f32;
+        typedef struct {
+            f32 x, y, z;
+        } Vec3, *Vec3Ptr;
+        typedef struct HSD_JObj {
+            /* 0x38 */ Vec3 translate;
+        } HSD_JObj;
+        static inline f32 HSD_JObjGetTranslationY(HSD_JObj* jobj)
+        {
+            return jobj->translate.y;
+        }
+        static inline f32 HSD_JObjGetTranslationZ(HSD_JObj* jobj)
+        {
+            return jobj->translate.z;
+        }
+        void sink(f32 value);
+
+        void fn(HSD_JObj* row0)
+        {
+            f32 y;
+            f32 z;
+            y = HSD_JObjGetTranslationY(row0);
+            z = HSD_JObjGetTranslationZ(row0);
+            sink(y + z);
+        }
+    """)
+
+    first_def_y = {
+        "block": "B0",
+        "index": 12,
+        "opcode": "lfs",
+        "operands": "f41,60(r44)",
+        "text": "lfs f41,60(r44)",
+    }
+    first_def_z = {
+        "block": "B0",
+        "index": 13,
+        "opcode": "lfs",
+        "operands": "f39,64(r44)",
+        "text": "lfs f39,64(r44)",
+    }
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[
+            {"target_ig": 41, "order_move": ["before", 50]},
+            {"target_ig": 39, "order_move": ["before", 50]},
+        ],
+        source_attributions={
+            44: {
+                "kind": "fpr-temp",
+                "confidence": "pcode-first-def",
+                "expression": "lfs f44,60(r52)",
+                "base_virtual": 52,
+                "field_offset": 60,
+            },
+            41: {
+                "kind": "fpr-temp",
+                "confidence": "pcode-first-def",
+                "expression": "lfs f41,60(r44)",
+                "base_virtual": 44,
+                "field_offset": 60,
+                "first_def": first_def_y,
+            },
+            39: {
+                "kind": "fpr-temp",
+                "confidence": "pcode-first-def",
+                "expression": "lfs f39,64(r44)",
+                "base_virtual": 44,
+                "field_offset": 64,
+                "first_def": first_def_z,
+            },
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert len(plan.probes) == 2
+    by_target = {
+        probe.provenance["lead"]["target_ig"]: probe for probe in plan.probes
+    }
+    for diag in plan.lead_diagnostics:
+        assert diag["status"] == "materialized"
+        assert diag.get("terminal_blocker") not in {
+            "unsupported-source-attribution-kind",
+            "fpr-first-def-source-owner-missing",
+        }
+        assert diag["source_hunks"]
+        assert diag["field_load_source_candidate"]["kind"] == "inline-accessor"
+        assert diag["field_load_source_probe"]["handler"] == (
+            "pcode-first-def-field-load-source-order"
+        )
+
+    y_candidate = by_target[41].provenance["field_load_source_candidate"]
+    assert by_target[41].provenance["kind"] == (
+        "pcode-first-def-field-load-source-order"
+    )
+    assert by_target[41].provenance["source_attribution"]["kind"] == (
+        "fpr-temp"
+    )
+    assert y_candidate["field_name"] == "translate.y"
+    assert y_candidate["expression"] == "HSD_JObjGetTranslationY(row0)"
+    assert y_candidate["accessor_name"] == "HSD_JObjGetTranslationY"
+    assert "f32 window_order_row0_translate_y_probe;" in by_target[41].source_text
+    assert (
+        "window_order_row0_translate_y_probe = HSD_JObjGetTranslationY(row0);"
+        in by_target[41].source_text
+    )
+
+    z_candidate = by_target[39].provenance["field_load_source_candidate"]
+    assert z_candidate["field_name"] == "translate.z"
+    assert z_candidate["expression"] == "HSD_JObjGetTranslationZ(row0)"
+    assert z_candidate["accessor_name"] == "HSD_JObjGetTranslationZ"
+
+
 def test_window_order_plan_terminal_proof_for_unresolved_pcode_field_load_base(
 ) -> None:
     source = textwrap.dedent("""\
@@ -1167,7 +1286,8 @@ def test_window_order_field_load_probe_limit_is_bounded() -> None:
     assert summary["reasons"]["field-load-candidate-limit-exhausted"] >= 1
 
 
-def test_window_order_field_load_rejects_continuation_expression_line() -> None:
+def test_window_order_field_load_materializes_continuation_expression_statement(
+) -> None:
     source = textwrap.dedent("""\
         typedef struct HSD_GObj HSD_GObj;
         typedef struct MnVibrationData MnVibrationData;
@@ -1198,12 +1318,19 @@ def test_window_order_field_load_rejects_continuation_expression_line() -> None:
     if not plan.lead_diagnostics:
         pytest.skip("tree-sitter unavailable")
 
-    assert plan.probes == []
+    assert len(plan.probes) == 1
     diag = plan.lead_diagnostics[0]
-    assert diag["terminal_blocker"] == "field-load-no-safe-insertion-point"
-    assert diag["field_load_materialization_summary"]["reasons"] == {
-        "field-load-no-safe-insertion-point": 1
-    }
+    assert diag["status"] == "materialized"
+    assert "terminal_blocker" not in diag
+    probe = plan.probes[0]
+    assert "void* window_order_gobj_user_data_probe;" in probe.source_text
+    assert "window_order_gobj_user_data_probe = gobj->user_data;" in (
+        probe.source_text
+    )
+    assert (
+        "((MnVibrationData*) window_order_gobj_user_data_probe)->jobjs[23]"
+        in probe.source_text
+    )
 
 
 def test_window_order_field_load_recovers_same_offset_when_base_is_wrong(

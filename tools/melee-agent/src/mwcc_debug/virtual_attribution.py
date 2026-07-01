@@ -34,7 +34,7 @@ _LOAD_RE = re.compile(
 )
 _COPY_RE = re.compile(r"^r(?P<dest>\d+)\s*,\s*r(?P<src>\d+)\b")
 _LOAD_ADDRESS_RE = re.compile(
-    r"^r(?P<dest>\d+)\s*,\s*(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))"
+    r"^[rf](?P<dest>\d+)\s*,\s*(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))"
     r"\s*\(\s*r(?P<base>\d+)\s*\)"
 )
 
@@ -529,7 +529,7 @@ def _source_from_first_def(site: InstructionSite, *, source_file: str | None) ->
         kind = "copy/coalesce-product"
     elif opcode in _COMPARE_TEMP_OPS:
         kind = "compare-temp"
-    elif opcode.startswith(("lw", "lb", "lha", "lhz")):
+    elif opcode.startswith(("lw", "lb", "lha", "lhz", "lf")):
         match = _LOAD_ADDRESS_RE.match(site.operands)
         if match:
             base_virtual = int(match.group("base"))
