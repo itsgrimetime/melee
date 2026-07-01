@@ -2347,11 +2347,11 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
     s32 digit_count;
     s32 digit;
     s32 i;
+    f32 x_spacing;
+    f32 y_spacing;
     f32 base;
     f32 row_offset;
     f32 col_offset;
-    f32 x_spacing;
-    f32 y_spacing;
     u8 col = arg1;
     u8 row = arg2;
     f32 y_offset;
@@ -2386,7 +2386,8 @@ void mnDiagram_80241E78(void* arg0, u8 arg1, u8 arg2, int arg3)
         digit = mn_GetDigitAt(arg3, i);
         jobj = HSD_JObjLoadJoint(joint_data[0]);
         HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2], joint_data[3]);
-        HSD_JObjReqAnimAll(jobj, (base = (f32) digit));
+        base = (f32) digit;
+        HSD_JObjReqAnimAll(jobj, base);
         HSD_JObjAnimAll(jobj);
         if (col < 7) {
             HSD_JObjSetTranslateX(jobj, (x_spacing * (f32) i) + col_offset);
