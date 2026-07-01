@@ -6,10 +6,12 @@ import json
 import pathlib
 import subprocess
 import textwrap
+import types
 
 from typer.testing import CliRunner
 
 from src.cli import app
+from src.mwcc_debug import virtual_attribution
 from src.mwcc_debug.source_field_attribution import (
     build_source_field_context,
     source_for_field_offset,
@@ -362,6 +364,55 @@ def test_explain_virtuals_resolves_chained_pcode_loads_to_typed_source() -> None
     assert copied_global.expression == "gGlobalObj"
     assert copied_global.type == "HSD_GObj*"
     assert copied_global.copy_chain == (88, 106)
+
+
+def test_source_from_load_rejects_low_confidence_scalar_field_base() -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+        struct HSD_GObj {
+            /* +00 */ int pad0;
+            /* +2C */ void* user_data;
+        };
+        typedef struct HSD_GObj HSD_GObj;
+        extern HSD_GObj* gGlobalObj;
+
+        void fn_80000014(void) {
+            int result;
+            void* data2;
+            result = input();
+            data2 = gGlobalObj->user_data;
+            sink(result, data2);
+        }
+    """)
+    context = build_source_field_context(source, function="fn_80000014")
+    site = virtual_attribution.InstructionSite(
+        "BEFORE REGISTER COLORING",
+        0,
+        1,
+        "lwz",
+        "r38,44(r34)",
+    )
+    low_confidence_scalar = types.SimpleNamespace(
+        var_name="result",
+        confidence="low-confidence",
+        type_str="int",
+        decl_line=10,
+    )
+
+    source_info = virtual_attribution._source_from_load(
+        site,
+        bindings_by_virtual={34: low_confidence_scalar},
+        source_text=source,
+        source_file="sample.c",
+        field_context=context,
+    )
+
+    assert source_info is not None
+    assert source_info.kind == "field-load"
+    assert source_info.expression == "gGlobalObj->user_data"
+    assert source_info.base_var == "gGlobalObj"
+    assert source_info.base_confidence == "global-source-expression"
+    assert source_info.field_name == "user_data"
 
 
 def test_source_field_attribution_ignores_locals_and_prefers_near_alias() -> None:
