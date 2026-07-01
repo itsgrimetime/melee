@@ -32,6 +32,12 @@ def _conflict_inputs():
     return inp
 
 
+def _structural_inputs():
+    inp = _directed_inputs()
+    inp.checkdiff_primary = "normalized-structural-near-match"
+    return inp
+
+
 def test_order_target_directed_writes_yaml_exit_0(tmp_path, monkeypatch):
     out = tmp_path / "OnFrame.yaml"
     monkeypatch.setattr(debugcli, "_collect_order_target_inputs",
@@ -73,6 +79,32 @@ def test_order_target_json_emits_full_artifact(tmp_path, monkeypatch):
     payload = json.loads(result.output)
     assert payload["routing"] == "directed"
     assert payload["order_target"] == {"28": 2, "29": 3}
+
+
+def test_order_target_json_emits_not_order_class_for_structural_primary(
+    tmp_path,
+    monkeypatch,
+):
+    out = tmp_path / "OnFrame.yaml"
+    monkeypatch.setattr(
+        debugcli,
+        "_collect_order_target_inputs",
+        lambda **kw: _structural_inputs(),
+    )
+    result = runner.invoke(debugcli.debug_app, [
+        "target", "order-target", "-f", "mnDiagram_OnFrame",
+        "-u", "melee/mn/mndiagram", "--json",
+        "--out", str(out),
+    ])
+
+    assert result.exit_code == 4, result.output
+    payload = json.loads(result.output)
+    assert payload["routing"] == "not_order_class"
+    assert payload["class_evidence"]
+    assert "normalized-structural-near-match" in payload["class_evidence"]
+    assert "not register-only" in payload["class_evidence"]
+    assert payload["order_target"] == {}
+    assert not out.exists()
 
 
 def test_order_target_passes_force_vector_timeout(monkeypatch):
