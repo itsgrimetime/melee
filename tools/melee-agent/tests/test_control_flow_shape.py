@@ -277,6 +277,65 @@ def test_call_hoist_materializes_return_value_temp_and_terminal_true_hoist() -> 
     assert proof["source_model_proof"]["branch_returns_after_call"] is True
 
 
+def test_call_hoist_result_probes_wrap_after_prior_statement_for_c89() -> None:
+    source = textwrap.dedent(
+        """\
+        typedef int s32;
+        typedef struct HSD_JObj HSD_JObj;
+        int HSD_PadRumbleAdd(int, int, int, int, void*);
+        void HSD_JObjAnimAll(HSD_JObj*);
+        void fn_80000000(HSD_JObj* panel_jobj2)
+        {
+            s32 i;
+            for (i = 0; i < 4; i++) {
+                if (i == 2) {
+                    return;
+                } else {
+                    HSD_JObjAnimAll(panel_jobj2);
+                    HSD_PadRumbleAdd(i, 0, 14, 0, 0);
+                    return;
+                }
+            }
+        }
+        """
+    )
+
+    probes, _status = materialize_control_flow_suggestions(
+        source,
+        "fn_80000000",
+        [_control_flow_suggestions()[0]],
+        max_probes_per_family=4,
+    )
+
+    result_probes = [
+        probe for probe in probes if probe.label.startswith("call-hoist-result-")
+    ]
+    assert [probe.label for probe in result_probes] == [
+        "call-hoist-result-temp-0",
+        "call-hoist-result-decl-0",
+    ]
+    for probe in result_probes:
+        assert (
+            "HSD_JObjAnimAll(panel_jobj2);\n"
+            "            s32 ll_probe_call_result_"
+            not in probe.source_text
+        )
+        assert (
+            "HSD_JObjAnimAll(panel_jobj2);\n"
+            "            {\n"
+            "                s32 ll_probe_call_result_"
+            in probe.source_text
+        )
+        assert (
+            "            }\n"
+            "            return;"
+            in probe.source_text
+        )
+        assert probe.provenance["c89_declaration_strategy"] == (
+            "local-compound-block"
+        )
+
+
 def test_pointer_walk_member_array_for_loop_materializes_bounded_probes() -> None:
     probes, status = materialize_control_flow_suggestions(
         _pointer_walk_source(),

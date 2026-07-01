@@ -656,6 +656,7 @@ def _call_hoist_return_value_probes(
     newline = "\n" if line_end > line_start and source[line_end - 1] == "\n" else ""
     result_name = f"ll_probe_call_result_{index}"
     decl_name = f"ll_probe_call_result_{index + 1}"
+    inner_indent = f"{indent}    "
     first = LifetimeLayoutProbe(
         label=f"call-hoist-result-temp-{index}",
         operator="pointer-base-call-loop",
@@ -665,8 +666,10 @@ def _call_hoist_return_value_probes(
             line_start,
             line_end,
             (
-                f"{indent}s32 {result_name} = {call_expr};\n"
-                f"{indent}(void) {result_name};{newline}"
+                f"{indent}{{\n"
+                f"{inner_indent}s32 {result_name} = {call_expr};\n"
+                f"{inner_indent}(void) {result_name};\n"
+                f"{indent}}}{newline}"
             ),
         ),
         provenance={
@@ -677,6 +680,7 @@ def _call_hoist_return_value_probes(
             "variant": "return-value-temp",
             "symbol": call["symbol"],
             "source_lines": lines,
+            "c89_declaration_strategy": "local-compound-block",
         },
     )
     second = LifetimeLayoutProbe(
@@ -688,9 +692,11 @@ def _call_hoist_return_value_probes(
             line_start,
             line_end,
             (
-                f"{indent}s32 {decl_name};\n"
-                f"{indent}{decl_name} = {call_expr};\n"
-                f"{indent}(void) {decl_name};{newline}"
+                f"{indent}{{\n"
+                f"{inner_indent}s32 {decl_name};\n"
+                f"{inner_indent}{decl_name} = {call_expr};\n"
+                f"{inner_indent}(void) {decl_name};\n"
+                f"{indent}}}{newline}"
             ),
         ),
         provenance={
@@ -701,6 +707,7 @@ def _call_hoist_return_value_probes(
             "variant": "declaration-before-use",
             "symbol": call["symbol"],
             "source_lines": lines,
+            "c89_declaration_strategy": "local-compound-block",
         },
     )
     return [first, second]

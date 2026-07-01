@@ -1551,6 +1551,142 @@ def test_control_flow_shape_search_json_compares_baseline_checkdiff(
     )
 
 
+def test_control_flow_shape_search_json_reports_build_failed_candidates_not_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from src.mwcc_debug.diff_capture import CompileFailure
+
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "mn" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef int s32;
+            typedef struct HSD_JObj HSD_JObj;
+            int HSD_PadRumbleAdd(int, int, int, int, void*);
+            void HSD_JObjAnimAll(HSD_JObj*);
+            void fn_80000000(HSD_JObj* panel_jobj2)
+            {
+                s32 i;
+                for (i = 0; i < 4; i++) {
+                    if (i == 2) {
+                        return;
+                    } else {
+                        HSD_JObjAnimAll(panel_jobj2);
+                        HSD_PadRumbleAdd(i, 0, 14, 0, 0);
+                        return;
+                    }
+                }
+            }
+            """
+        )
+    )
+    suggestions = tmp_path / "suggestions.json"
+    suggestions.write_text(
+        json.dumps(
+            {
+                "function": "fn_80000000",
+                "suggestions": [
+                    {
+                        "kind": "call-hoist",
+                        "operator": "pointer-base-call-loop",
+                        "evidence": {"symbol": "HSD_PadRumbleAdd"},
+                    }
+                ],
+            }
+        )
+    )
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "function": "fn_80000000",
+                "fuzzy_match_percent": 92.36562,
+                "classification": {
+                    "structural_truth_gate": {"normalized_diff_lines": 49}
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/demo",
+    )
+
+    def fake_compile(diff_input, *, function, melee_root, timeout):
+        raise CompileFailure(
+            "candidate",
+            ["compile"],
+            "",
+            "compiler diagnostic",
+            1,
+        )
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_control_flow_compile_source_variant",
+        fake_compile,
+        raising=False,
+    )
+
+    result = runner.invoke(
+        debug_cli.debug_app,
+        [
+            "mutate",
+            "control-flow-shape-search",
+            "-f",
+            "fn_80000000",
+            "--suggestions-json",
+            str(suggestions),
+            "--baseline-checkdiff-json",
+            str(baseline),
+            "--operator",
+            "pointer-base-call-loop",
+            "--max-probes",
+            "2",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["blocker"] == "control-flow-shape-candidates-build-failed"
+    assert payload["stop_condition"]["kind"] == "blocked"
+    assert payload["probe_count"] == 2
+    assert {variant["status"] for variant in payload["variants"]} == {
+        "build-failed"
+    }
+    assert all(
+        item["terminal_blocker"] != "control-flow-shape-candidates-exhausted"
+        for item in payload["terminal_proofs"]
+    )
+    proof = next(
+        item
+        for item in payload["terminal_proofs"]
+        if item["terminal_blocker"] == "control-flow-shape-candidates-build-failed"
+    )
+    assert proof["candidate_count"] == 2
+    assert proof["scored_count"] == 0
+    assert proof["build_failed_count"] == 2
+    assert proof["failed_count"] == 0
+    assert proof["ok_unscored_count"] == 0
+    assert proof["baseline"] == {
+        "match_percent": 92.36562,
+        "normalized_diff_lines": 49,
+    }
+    assert all(
+        item["source_retained"] and item["error"]
+        for item in proof["candidate_summaries"]
+    )
+    assert (
+        "rather than moving to another source-shape family" in proof["next_handoff"]
+    )
+
+
 def _control_flow_shape_checkdiff_payload(function: str = "fn_80000000") -> dict:
     return {
         "function": function,
