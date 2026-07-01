@@ -1062,11 +1062,11 @@ static inline u8 mnDiagram_GetVisibleNameCursorFrom(u8* sorted, int start,
 static inline u8 mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
                                                        int rank)
 {
-    u8* p;
-    u8* p2;
-    int remaining;
-    int idx;
     u8 result;
+    int remaining;
+    u8* p2;
+    u8* p;
+    int idx;
 
     remaining = rank;
     idx = start;
@@ -2050,68 +2050,30 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
     Diagram* data = gobj->user_data;
     mnDiagram_AnimTable* tbl = GET_DIAGRAM_ANIM_TABLE();
     HSD_JObj* jobj;
-    u8* sorted = mnDiagram_804A0750.sorted_fighters;
-    int count;
-    int i;
+    s32 count;
+    s32 i;
     u8* ptr;
+    u8* sorted = mnDiagram_804A0750.sorted_fighters;
     s32 result;
     u8* ptr2;
     HSD_JObj* jobj2;
-    u8 sp[8];
+    HSD_JObj* jobj3;
+    PAD_STACK(8);
 
     // Right arrow (jobjs[3])
     jobj = data->jobjs[3];
     mn_8022ED6C(jobj, &tbl->arrow_anim);
     if (data->is_name_mode != 0) {
-        // Name mode - check if 10 more names exist
-        count = 10;
-        i = data->name_cursor_pos;
-        i = (u8) i;
-        ptr = sorted + i;
-        ptr = ptr + 0x1C;
-        while (count > 0) {
-            ptr2 = ptr;
-            do {
-                i++;
-                ptr2++;
-                ptr++;
-                if (i >= 0x78) {
-                    result = 0x78;
-                    goto right_done;
-                }
-            } while (GetNameText(*ptr2) == NULL);
-            count--;
-        }
-        result = sorted[i + 0x1C];
-    right_done:;
+        result = mnDiagram_GetVisibleNameFrom(sorted,
+                                              (u8) data->name_cursor_pos, 10);
         if ((u8) result != 0x78) {
             HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
         } else {
             HSD_JObjSetFlagsAll(jobj, JOBJ_HIDDEN);
         }
     } else {
-        // Fighter mode - check if 10 more fighters exist
-        count = 10;
-        i = (u8) data->fighter_cursor_pos;
-        ptr = sorted + i;
-        do {
-            if (count == 0) {
-                result = sorted[i];
-                break;
-            }
-            ptr2 = ptr;
-            do {
-                i++;
-                ptr2++;
-                ptr++;
-                if (i >= 0x19) {
-                    result = 0x19;
-                    goto fc_right_done;
-                }
-            } while (mn_IsFighterUnlocked(*ptr2) == 0);
-            count--;
-        } while (count >= 0);
-    fc_right_done:
+        result = mnDiagram_GetVisibleFighterCursorFrom(
+            sorted, (u8) data->fighter_cursor_pos, 10);
         if ((u8) result != 0x19) {
             HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
         } else {
@@ -2148,33 +2110,15 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
     }
 
     // Down arrow (jobjs[6])
-    jobj = data->jobjs[6];
-    mn_8022ED6C(jobj, &tbl->arrow_anim);
+    jobj3 = data->jobjs[6];
+    mn_8022ED6C(jobj3, &tbl->arrow_anim);
     if (data->is_name_mode != 0) {
-        // Name mode - check if 7 more rows exist
-        count = 7;
-        i = data->name_cursor_pos >> 8;
-        ptr = sorted + i;
-        ptr = ptr + 0x1C;
-        while (count > 0) {
-            ptr2 = ptr;
-            do {
-                i++;
-                ptr2++;
-                ptr++;
-                if (i >= 0x78) {
-                    result2 = 0x78;
-                    goto dn_name_done;
-                }
-            } while (GetNameText(*ptr2) == NULL);
-            count--;
-        }
-        result2 = sorted[i + 0x1C];
-    dn_name_done:
+        result2 = mnDiagram_GetVisibleNameFrom(sorted,
+                                               data->name_cursor_pos >> 8, 7);
         if (result2 != 0x78) {
-            HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
+            HSD_JObjClearFlagsAll(jobj3, JOBJ_HIDDEN);
         } else {
-            HSD_JObjSetFlagsAll(jobj, JOBJ_HIDDEN);
+            HSD_JObjSetFlagsAll(jobj3, JOBJ_HIDDEN);
         }
     } else {
         // Fighter mode - check if 7 more rows exist
@@ -2200,9 +2144,9 @@ void mnDiagram_802417D0(HSD_GObj* gobj)
         } while (count >= 0);
     dn_fc_done:
         if (result2 != 0x19) {
-            HSD_JObjClearFlagsAll(jobj, JOBJ_HIDDEN);
+            HSD_JObjClearFlagsAll(jobj3, JOBJ_HIDDEN);
         } else {
-            HSD_JObjSetFlagsAll(jobj, JOBJ_HIDDEN);
+            HSD_JObjSetFlagsAll(jobj3, JOBJ_HIDDEN);
         }
     }
 }
