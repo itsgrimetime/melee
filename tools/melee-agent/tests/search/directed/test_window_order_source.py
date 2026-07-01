@@ -258,6 +258,166 @@ def test_window_order_plan_reports_call_return_owner_copy_not_found() -> None:
     assert diag["call_return_source_probe"]["handler"] == "call-return-owner-split"
 
 
+def test_window_order_plan_materializes_param_alias_declaration_order_probe() -> None:
+    source = textwrap.dedent("""\
+        typedef int s32;
+        void sink(s32 lhs, s32 rhs);
+
+        void fn(s32 arg1, s32 arg2)
+        {
+            s32 arg1_r = arg1;
+            s32 arg2_r = arg2;
+            sink(arg1_r, arg2_r);
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 56, "order_move": ["before", 40]}],
+        source_attributions={
+            56: {"kind": "param", "name": "arg2", "type": "s32"},
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert plan.probes
+    probe = next(
+        (
+            probe for probe in plan.probes
+            if probe.provenance.get("param_alias_source_candidate", {}).get(
+                "materialization_kind"
+            )
+            == "declaration-order"
+        ),
+        None,
+    )
+    assert probe is not None
+    diag = plan.lead_diagnostics[0]
+    assert diag["status"] == "materialized"
+    assert diag.get("terminal_blocker") != "unsupported-source-attribution-kind"
+    assert probe.label.startswith("window-order-param-alias-ig56-before-")
+    assert probe.operator == "window-order-source-steering"
+    assert probe.provenance["kind"] == "window-order-param-alias-source-order"
+    assert probe.provenance["source_attribution"]["kind"] == "param"
+    assert probe.provenance["source_attribution"]["name"] == "arg2"
+    assert probe.provenance["source_hunks"]
+    assert diag["source_hunks"]
+
+    assert diag["param_alias_source_candidates"]
+    assert diag["materialized_param_alias_source_candidates"]
+    summary = diag["param_alias_materialization_summary"]
+    assert summary["param_name"] == "arg2"
+    assert summary["param_alias_candidates"] >= 1
+    assert summary["materialized_param_alias_candidates"] >= 1
+
+    materialized = diag["materialized_param_alias_source_candidates"][0]
+    assert materialized["param_name"] == "arg2"
+    assert materialized["alias_name"] == "arg2_r"
+    assert materialized["materialization_kind"] == "declaration-order"
+    assert probe.provenance["param_alias_source_candidate"] == materialized
+    assert probe.source_text.index("s32 arg2_r = arg2;") < probe.source_text.index(
+        "s32 arg1_r = arg1;"
+    )
+
+
+def test_window_order_plan_materializes_param_alias_delayed_init_probe() -> None:
+    source = textwrap.dedent("""\
+        typedef int s32;
+        void sink(s32 value);
+
+        void fn(s32 arg1, s32 arg2)
+        {
+            s32 arg2_r = arg2;
+            s32 total;
+            total = arg2_r + arg1;
+            sink(total);
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 56, "order_move": ["after", 40]}],
+        source_attributions={
+            56: {"kind": "param", "name": "arg2", "type": "s32"},
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert plan.probes
+    probe = next(
+        (
+            probe for probe in plan.probes
+            if probe.provenance.get("param_alias_source_candidate", {}).get(
+                "materialization_kind"
+            )
+            == "delayed-init"
+        ),
+        None,
+    )
+    assert probe is not None
+    diag = plan.lead_diagnostics[0]
+    assert diag["status"] == "materialized"
+    assert diag.get("terminal_blocker") != "unsupported-source-attribution-kind"
+    assert probe.label.startswith("window-order-param-alias-ig56-after-")
+    assert probe.provenance["kind"] == "window-order-param-alias-source-order"
+    assert probe.provenance["source_hunks"]
+    assert diag["source_hunks"]
+    assert diag["param_alias_source_candidates"]
+    assert diag["materialized_param_alias_source_candidates"]
+
+    candidate = probe.provenance["param_alias_source_candidate"]
+    assert candidate["param_name"] == "arg2"
+    assert candidate["alias_name"] == "arg2_r"
+    assert candidate["materialization_kind"] == "delayed-init"
+    assert "s32 arg2_r = arg2;" not in probe.source_text
+    declaration_index = probe.source_text.index("s32 arg2_r;")
+    init_index = probe.source_text.index("arg2_r = arg2;")
+    use_index = probe.source_text.index("total = arg2_r + arg1;")
+    assert declaration_index < init_index < use_index
+
+
+def test_window_order_plan_param_alias_terminal_proof_when_no_alias_source() -> None:
+    source = textwrap.dedent("""\
+        typedef int s32;
+        void sink(s32 value);
+
+        void fn(s32 arg2)
+        {
+            sink(arg2);
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 56, "order_move": ["before", 40]}],
+        source_attributions={
+            56: {"kind": "param", "name": "arg2", "type": "s32"},
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    assert diag["status"] == "blocked"
+    assert diag["terminal_blocker"] != "unsupported-source-attribution-kind"
+    assert diag["terminal_blocker"].startswith("param-alias-")
+    assert diag["param_name"] == "arg2"
+    summary = diag["param_alias_materialization_summary"]
+    assert summary["param_name"] == "arg2"
+    assert summary["param_alias_candidates"] == 0
+    assert summary["materialized_param_alias_candidates"] == 0
+    assert "unsupported-source-attribution-kind" not in summary["reasons"]
+
+
 def test_window_order_plan_rejects_compound_call_return_rhs() -> None:
     source = textwrap.dedent("""\
         typedef struct HSD_GObj HSD_GObj;

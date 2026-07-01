@@ -5745,6 +5745,142 @@ def test_select_order_source_bridge_reports_field_load_terminal_blocker(
     )
 
 
+def test_select_order_source_bridge_reports_materialized_param_alias_action(
+) -> None:
+    fallback = {
+        "ran": True,
+        "leads": [{"target_ig": 34, "order_move": ["before", 74]}],
+    }
+    attrs = {34: {"kind": "param", "name": "arg2", "type": "s32"}}
+    param_candidate = {
+        "kind": "adjacent-param-alias-decl-swap",
+        "materialization_kind": "declaration-order",
+        "param_name": "arg2",
+        "alias_name": "arg2_r",
+        "peer_param_name": "arg1",
+        "peer_alias_name": "arg1_r",
+    }
+    source_hunks = [{
+        "hunk_id": "param-alias001",
+        "base_range": {"start": 2408, "end": 2409},
+        "candidate_range": {"start": 2408, "end": 2409},
+    }]
+    diagnostics = {
+        "fallback_leads": 1,
+        "source_attributed_leads": 1,
+        "listed_source_probes": 1,
+        "lead_diagnostics": [{
+            "lead": fallback["leads"][0],
+            "target_ig": 34,
+            "direction": "before",
+            "status": "materialized",
+            "materialized_probe_labels": [
+                "window-order-param-alias-ig34-before-decl-swap-0"
+            ],
+            "source_attribution": attrs[34],
+            "source_diff": "@@ param-alias diff @@\n",
+            "source_hunks": source_hunks,
+            "param_alias_source_candidate": param_candidate,
+            "materialized_param_alias_source_candidates": [param_candidate],
+            "param_alias_materialization_summary": {
+                "param_name": "arg2",
+                "param_alias_source_candidates": 1,
+                "materialized_param_alias_source_candidates": 1,
+                "param_alias_candidates": 1,
+                "materialized_param_alias_candidates": 1,
+                "reasons": {},
+            },
+        }],
+    }
+
+    summary = debug_cli._select_order_source_bridge_summary(
+        ranked_variants=[],
+        force_phys={34: 29},
+        window_order_fallback=fallback,
+        window_order_source_attributions=attrs,
+        window_order_probe_diagnostics=diagnostics,
+        diagnostic_buckets={},
+    )
+
+    action = next(
+        action for action in summary["ranked_actions"]
+        if action["kind"] == "try-window-order-source-move"
+    )
+    assert action["probe_labels"] == [
+        "window-order-param-alias-ig34-before-decl-swap-0"
+    ]
+    assert action["param_alias_source_candidate"] == param_candidate
+    assert action["materialized_param_alias_source_candidates"] == [
+        param_candidate
+    ]
+    assert action["source_hunks"] == source_hunks
+    owner_summary = summary["terminal_owner_probe_summary"]
+    assert owner_summary["param_alias_source_candidates"] == 1
+    assert owner_summary["materialized_param_alias_source_candidates"] == 1
+    assert owner_summary["materialized_candidates"] == 1
+
+
+def test_select_order_source_bridge_reports_param_alias_terminal_blocker(
+) -> None:
+    fallback = {
+        "ran": True,
+        "leads": [{"target_ig": 34, "order_move": ["before", 74]}],
+    }
+    attrs = {34: {"kind": "param", "name": "arg2", "type": "s32"}}
+    diagnostics = {
+        "fallback_leads": 1,
+        "source_attributed_leads": 1,
+        "listed_source_probes": 0,
+        "lead_diagnostics": [{
+            "lead": fallback["leads"][0],
+            "target_ig": 34,
+            "direction": "before",
+            "status": "blocked",
+            "terminal_blocker": "param-alias-no-legal-source-movement",
+            "source_attribution": attrs[34],
+            "param_name": "arg2",
+            "param_alias_source_candidates": [{
+                "kind": "delayed-param-alias-init",
+                "param_name": "arg2",
+                "alias_name": "arg2_r",
+            }],
+            "param_alias_materialization_summary": {
+                "param_name": "arg2",
+                "param_alias_source_candidates": 1,
+                "materialized_param_alias_source_candidates": 0,
+                "param_alias_candidates": 1,
+                "materialized_param_alias_candidates": 0,
+                "reasons": {"param-alias-use-before-delayed-init": 1},
+            },
+        }],
+    }
+
+    summary = debug_cli._select_order_source_bridge_summary(
+        ranked_variants=[],
+        force_phys={34: 29},
+        window_order_fallback=fallback,
+        window_order_source_attributions=attrs,
+        window_order_probe_diagnostics=diagnostics,
+        diagnostic_buckets={},
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["dominant_blocker"] == "param-alias-no-legal-source-movement"
+    owner_summary = summary["terminal_owner_probe_summary"]
+    assert owner_summary["param_alias_source_candidates"] == 1
+    assert owner_summary["materialized_param_alias_source_candidates"] == 0
+    assert owner_summary["terminal_blocker"] == (
+        "param-alias-no-legal-source-movement"
+    )
+    assert owner_summary["param_alias_terminal_blockers"] == [
+        "param-alias-no-legal-source-movement"
+    ]
+    assert not any(
+        action["kind"] == "try-window-order-source-move"
+        for action in summary["ranked_actions"]
+    )
+
+
 def test_select_order_source_bridge_does_not_double_count_indexed_terminal_reasons(
 ) -> None:
     fallback = {
@@ -5977,6 +6113,103 @@ def test_select_order_terminal_exhaustion_reports_case_c_no_hit() -> None:
     assert summary["best_retained_variants"][0]["target_score"]["virtuals"]["46"][
         "actual"
     ] == 1
+
+
+def test_select_order_terminal_exhaustion_reports_param_alias_family() -> None:
+    source_hunks = [{
+        "hunk_id": "param-alias001",
+        "base_range": {"start": 2412, "end": 2413},
+        "candidate_range": {"start": 2412, "end": 2413},
+    }]
+    param_candidate = {
+        "probe_label": "window-order-param-alias-ig34-before-0",
+        "materialization_kind": "declaration-order",
+        "param_name": "arg2",
+        "alias_name": "arg2_r",
+    }
+    ranked_variants = [{
+        "label": "window-order-param-alias-ig34-before-0",
+        "rank": 1,
+        "status": "ok",
+        "operator": "window-order-source-steering",
+        "path": "/tmp/param-alias.c",
+        "source_retained": "/tmp/param-alias.c",
+        "pcdump_path": "/tmp/param-alias.pcdump.txt",
+        "probe": {
+            "provenance": {
+                "kind": "window-order-param-alias-source-order",
+                "source_hunks": source_hunks,
+            },
+        },
+        "objective": {
+            "force_phys_targets": {"34": 29},
+            "force_phys_satisfied": False,
+            "force_phys_satisfied_count": 0,
+            "force_phys_mismatches": {"34": {"expected": 29, "actual": 30}},
+            "force_phys_missing": [],
+            "force_phys_distance": 1,
+            "frame_delta": 0,
+        },
+        "target_score": {
+            "matched": 0,
+            "total": 1,
+            "targeted": 1,
+            "virtuals": {
+                "34": {
+                    "expected": 29,
+                    "actual": 30,
+                    "hit": False,
+                    "matched": False,
+                },
+            },
+        },
+    }]
+    source_bridge_summary = {
+        "status": "blocked",
+        "dominant_blocker": "source-probes-exhausted",
+        "blocker_classes": ["wrong-register"],
+        "terminal_owner_probe_summary": {
+            "param_alias_source_candidates": 1,
+            "materialized_param_alias_source_candidates": 1,
+        },
+        "ranked_actions": [{
+            "kind": "try-window-order-source-move",
+            "probe_labels": ["window-order-param-alias-ig34-before-0"],
+            "materialized_param_alias_source_candidates": [param_candidate],
+        }],
+    }
+
+    summary = debug_cli._select_order_terminal_exhaustion_summary(
+        ranked_variants=ranked_variants,
+        force_phys={34: 29},
+        blocker_targets={34},
+        diagnostic_buckets={
+            "force-phys-hit-34": [],
+            "global-top": ranked_variants,
+        },
+        source_bridge_summary=source_bridge_summary,
+        timed_out=False,
+        class_id=0,
+    )
+
+    assert summary["terminal_blocker"] == "param-alias-source-family-exhausted"
+    proof = summary["source_candidate_family_exhaustion"]
+    assert proof["status"] == "exhausted"
+    assert proof["family"] == "param-alias-source-bridge"
+    assert proof["generated_candidates"] == 1
+    assert proof["materialized_candidates"] == 1
+    assert proof["scored_candidates"] == 1
+    result = proof["source_probe_results"][0]
+    assert result["source_retained"] == "/tmp/param-alias.c"
+    assert result["pcdump_path"] == "/tmp/param-alias.pcdump.txt"
+    assert result["source_hunks"] == source_hunks
+    assert result["target_score"]["virtuals"]["34"] == {
+        "expected": 29,
+        "actual": 30,
+        "hit": False,
+        "matched": False,
+    }
+    assert "arg2/arg2_r" in proof["source_level_handoff"]
 
 
 def test_select_order_source_bridge_reports_terminal_frame_repair_lane() -> None:

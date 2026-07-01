@@ -179,6 +179,24 @@ class _FieldLoadSourceCandidate:
 
 
 @dataclass(frozen=True)
+class _ParamAliasCandidate:
+    param_name: str
+    alias_name: str
+    type_text: str
+    kind: str
+    line_start: int
+    line_end: int
+    line_source_span: tuple[int, int]
+    line_text: str
+    rank_priority: int
+    peer_param_name: str | None = None
+    peer_alias_name: str | None = None
+    peer_line_source_span: tuple[int, int] | None = None
+    peer_line_text: str | None = None
+    use_lines: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class WindowOrderSourceProbePlan:
     probes: list[LifetimeLayoutProbe]
     lead_diagnostics: list[dict[str, Any]]
@@ -1530,6 +1548,329 @@ def _function_local_type(
         if match is not None:
             return match.group("type").strip()
     return None
+
+
+def _line_number_at(source_text: str, index: int) -> int:
+    return source_text.count("\n", 0, max(0, min(index, len(source_text)))) + 1
+
+
+def _identifier_use_lines(
+    source_text: str,
+    name: str,
+    *,
+    search_span: tuple[int, int],
+) -> tuple[int, ...]:
+    if not _SIMPLE_IDENTIFIER_RE.fullmatch(name):
+        return ()
+    start, end = search_span
+    start = max(0, min(start, len(source_text)))
+    end = max(start, min(end, len(source_text)))
+    pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
+    lines: list[int] = []
+    for match in pattern.finditer(source_text[start:end]):
+        line = _line_number_at(source_text, start + match.start())
+        if line not in lines:
+            lines.append(line)
+    return tuple(lines)
+
+
+def _param_alias_candidate_dict(candidate: _ParamAliasCandidate) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "kind": candidate.kind,
+        "rank_priority": candidate.rank_priority,
+        "line_start": candidate.line_start,
+        "line_end": candidate.line_end,
+        "line_source_start": candidate.line_source_span[0],
+        "line_source_end": candidate.line_source_span[1],
+        "line_source_span": list(candidate.line_source_span),
+        "span_text": candidate.line_text.strip(),
+        "param_name": candidate.param_name,
+        "alias_name": candidate.alias_name,
+        "type_text": candidate.type_text,
+        "use_lines": list(candidate.use_lines),
+    }
+    if candidate.peer_param_name is not None:
+        payload["peer_param_name"] = candidate.peer_param_name
+    if candidate.peer_alias_name is not None:
+        payload["peer_alias_name"] = candidate.peer_alias_name
+    if candidate.peer_line_source_span is not None:
+        payload["peer_line_source_span"] = list(candidate.peer_line_source_span)
+    if candidate.peer_line_text is not None:
+        payload["peer_span_text"] = candidate.peer_line_text.strip()
+    return payload
+
+
+def _param_alias_materialization_kind(candidate_kind: str) -> str:
+    if candidate_kind == "adjacent-param-alias-decl-swap":
+        return "declaration-order"
+    if candidate_kind == "delayed-param-alias-init":
+        return "delayed-init"
+    return candidate_kind
+
+
+_PARAM_ALIAS_DECL_RE = re.compile(
+    r"^(?P<indent>\s*)"
+    r"(?P<type>(?:struct\s+)?[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*|\s*\*)*)"
+    r"\s+(?P<alias>[A-Za-z_]\w*)\s*=\s*"
+    r"(?:(?P<cast>\(\s*(?:struct\s+)?[A-Za-z_]\w*"
+    r"(?:\s+[A-Za-z_]\w*|\s*\*)*\s*\))\s*)?"
+    r"(?P<param>[A-Za-z_]\w*)\s*;\s*(?://.*)?$"
+)
+
+
+def _param_alias_source_candidates(
+    source_text: str,
+    *,
+    function: str,
+    param_name: str,
+    search_span: tuple[int, int] | None,
+) -> tuple[list[_ParamAliasCandidate], dict[str, Any], str | None]:
+    if not _SIMPLE_IDENTIFIER_RE.fullmatch(param_name):
+        return [], {"param_name": param_name}, "param-source-name-invalid"
+    if search_span is None:
+        return [], {"param_name": param_name}, "source-ast-unavailable"
+
+    records = _line_records_in_span(source_text, search_span)
+    alias_records: list[dict[str, Any]] = []
+    for index, (line_start, line_end, line) in enumerate(records):
+        match = _PARAM_ALIAS_DECL_RE.match(line)
+        if match is None or match.group("param") != param_name:
+            continue
+        type_text = _safe_decl_type_text(match.group("type"))
+        alias_name = match.group("alias")
+        if type_text is None or alias_name == param_name:
+            continue
+        alias_records.append({
+            "index": index,
+            "line_start_index": line_start,
+            "line_end_index": line_end,
+            "line": line,
+            "line_start": _line_number_at(source_text, line_start),
+            "line_end": _line_number_at(source_text, line_end),
+            "type_text": type_text,
+            "alias_name": alias_name,
+        })
+
+    candidates: list[_ParamAliasCandidate] = []
+    seen: set[tuple[str, int, str | None]] = set()
+
+    def add(candidate: _ParamAliasCandidate) -> None:
+        key = (
+            candidate.kind,
+            candidate.line_source_span[0],
+            candidate.peer_alias_name,
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(candidate)
+
+    for alias in alias_records:
+        line_span = (int(alias["line_start_index"]), int(alias["line_end_index"]))
+        use_lines = _identifier_use_lines(
+            source_text,
+            str(alias["alias_name"]),
+            search_span=(line_span[1], search_span[1]),
+        )
+        add(_ParamAliasCandidate(
+            param_name=param_name,
+            alias_name=str(alias["alias_name"]),
+            type_text=str(alias["type_text"]),
+            kind="delayed-param-alias-init",
+            line_start=int(alias["line_start"]),
+            line_end=int(alias["line_end"]),
+            line_source_span=line_span,
+            line_text=str(alias["line"]),
+            rank_priority=10,
+            use_lines=use_lines,
+        ))
+
+        alias_index = int(alias["index"])
+        for neighbor_index in (alias_index - 1, alias_index + 1):
+            if neighbor_index < 0 or neighbor_index >= len(records):
+                continue
+            n_start, n_end, n_line = records[neighbor_index]
+            n_match = _PARAM_ALIAS_DECL_RE.match(n_line)
+            if n_match is None:
+                continue
+            n_param = n_match.group("param")
+            n_alias = n_match.group("alias")
+            if n_param == param_name or not _SIMPLE_IDENTIFIER_RE.fullmatch(n_param):
+                continue
+            if _safe_decl_type_text(n_match.group("type")) is None:
+                continue
+            add(_ParamAliasCandidate(
+                param_name=param_name,
+                alias_name=str(alias["alias_name"]),
+                type_text=str(alias["type_text"]),
+                kind="adjacent-param-alias-decl-swap",
+                line_start=int(alias["line_start"]),
+                line_end=int(alias["line_end"]),
+                line_source_span=line_span,
+                line_text=str(alias["line"]),
+                rank_priority=0,
+                peer_param_name=n_param,
+                peer_alias_name=n_alias,
+                peer_line_source_span=(n_start, n_end),
+                peer_line_text=n_line,
+                use_lines=use_lines,
+            ))
+
+    candidates.sort(key=lambda item: (
+        item.rank_priority,
+        item.line_source_span[0],
+        item.peer_line_source_span[0] if item.peer_line_source_span else 10**9,
+        item.kind,
+    ))
+    metadata = {
+        "handler": "param-alias-source-candidates",
+        "param_name": param_name,
+        "candidate_kinds": sorted({candidate.kind for candidate in candidates}),
+        "inspected_alias_declarations": len(alias_records),
+    }
+    if not candidates:
+        return [], metadata, "param-alias-source-candidates-not-found"
+    return candidates[:4], metadata, None
+
+
+def _materialize_param_alias_candidate(
+    source_text: str,
+    *,
+    function: str,
+    candidate: _ParamAliasCandidate,
+) -> tuple[_LocalLifetimeProbeCandidate | None, dict[str, Any]]:
+    payload = _param_alias_candidate_dict(candidate)
+    handler = candidate.kind
+    if candidate.kind == "adjacent-param-alias-decl-swap":
+        if (
+            candidate.peer_line_source_span is None
+            or candidate.peer_line_text is None
+        ):
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "param-alias-peer-missing",
+                "handler": handler,
+            }
+        first_start, first_end = candidate.peer_line_source_span
+        second_start, second_end = candidate.line_source_span
+        first_text = candidate.peer_line_text
+        second_text = candidate.line_text
+        if first_start > second_start:
+            first_start, first_end, second_start, second_end = (
+                second_start,
+                second_end,
+                first_start,
+                first_end,
+            )
+            first_text, second_text = second_text, first_text
+        between = source_text[first_end:second_start]
+        if between.strip():
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "param-alias-peer-not-adjacent",
+                "handler": handler,
+            }
+        candidate_text = source_text
+        for start, end, replacement in sorted(
+            [(first_start, first_end, second_text), (second_start, second_end, first_text)],
+            reverse=True,
+        ):
+            candidate_text = candidate_text[:start] + replacement + candidate_text[end:]
+        if candidate_text == source_text:
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "source-unchanged",
+                "handler": handler,
+            }
+        metadata = {
+            "handler": handler,
+            "param_alias_source_candidate": payload,
+            "param_name": candidate.param_name,
+            "alias_local": candidate.alias_name,
+            "peer_param_name": candidate.peer_param_name,
+            "peer_alias_name": candidate.peer_alias_name,
+        }
+        return (
+            _LocalLifetimeProbeCandidate(
+                source_text=candidate_text,
+                provenance_kind="window-order-param-alias-source-order",
+                metadata=metadata,
+            ),
+            {**payload, "status": "materialized", "handler": handler},
+        )
+
+    if candidate.kind == "delayed-param-alias-init":
+        insertion = _function_decl_insertion(source_text, function)
+        if insertion is None:
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "source-ast-unavailable",
+                "handler": handler,
+            }
+        decl_index, decl_indent = insertion
+        line_start, line_end = candidate.line_source_span
+        if decl_index < line_end:
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "param-alias-decl-insertion-before-alias",
+                "handler": handler,
+            }
+        alias_re = re.compile(
+            rf"(?<![A-Za-z0-9_]){re.escape(candidate.alias_name)}"
+            rf"(?![A-Za-z0-9_])"
+        )
+        if alias_re.search(source_text[line_end:decl_index]):
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "param-alias-use-before-delayed-init",
+                "handler": handler,
+            }
+        indent_match = re.match(r"[ \t]*", candidate.line_text)
+        indent = indent_match.group(0) if indent_match is not None else decl_indent
+        declaration = f"{indent}{candidate.type_text} {candidate.alias_name};"
+        assignment = f"{decl_indent}{candidate.alias_name} = {candidate.param_name};\n"
+        candidate_text = source_text
+        edits = [
+            (line_start, line_end, declaration),
+            (decl_index, decl_index, assignment),
+        ]
+        for start, end, replacement in sorted(edits, reverse=True):
+            candidate_text = candidate_text[:start] + replacement + candidate_text[end:]
+        if candidate_text == source_text:
+            return None, {
+                **payload,
+                "status": "rejected",
+                "reason": "source-unchanged",
+                "handler": handler,
+            }
+        metadata = {
+            "handler": handler,
+            "param_alias_source_candidate": payload,
+            "param_name": candidate.param_name,
+            "alias_local": candidate.alias_name,
+            "delayed_assignment_index": decl_index,
+        }
+        return (
+            _LocalLifetimeProbeCandidate(
+                source_text=candidate_text,
+                provenance_kind="window-order-param-alias-source-order",
+                metadata=metadata,
+            ),
+            {**payload, "status": "materialized", "handler": handler},
+        )
+
+    return None, {
+        **payload,
+        "status": "diagnostic_only",
+        "reason": "unsupported-param-alias-candidate-kind",
+        "handler": handler,
+    }
 
 
 def _function_declared_type(
@@ -5510,6 +5851,182 @@ def plan_window_order_source_probes(
         diag["source_diff"] = source_diff
         diag.pop("terminal_blocker", None)
 
+    def materialize_param_alias_source_candidates(
+        *,
+        diag: dict[str, Any],
+        lead: Mapping[str, Any],
+        target_ig: int,
+        direction: str,
+        source_attr: Any,
+    ) -> None:
+        param_name = _attr_value(source_attr, "name")
+        diag["source_attribution_kind"] = _attr_value(source_attr, "kind")
+        if not isinstance(param_name, str) or not param_name:
+            diag["terminal_blocker"] = "param-source-name-missing"
+            diag["param_alias_materialization_summary"] = {
+                "param_alias_source_candidates": 0,
+                "materialized_param_alias_source_candidates": 0,
+                "param_alias_candidates": 0,
+                "materialized_param_alias_candidates": 0,
+                "param_name": None,
+                "reasons": {"param-source-name-missing": 1},
+            }
+            return
+        candidates, resolver_metadata, resolver_blocker = (
+            _param_alias_source_candidates(
+                source_text,
+                function=function,
+                param_name=param_name,
+                search_span=function_body_span,
+            )
+        )
+        diag["param_name"] = param_name
+        diag["param_alias_source_probe"] = resolver_metadata
+        diag["param_alias_source_candidates"] = [
+            _param_alias_candidate_dict(candidate) for candidate in candidates
+        ]
+        diagnostics: list[dict[str, Any]] = []
+        materialized_labels: list[str] = []
+        materialized_meta: list[dict[str, Any]] = []
+        first_source_diff: str | None = None
+        first_source_hunks: list[dict[str, Any]] | None = None
+
+        if not candidates:
+            summary = {
+                "param_alias_source_candidates": 0,
+                "materialized_param_alias_source_candidates": 0,
+                "param_alias_candidates": 0,
+                "materialized_param_alias_candidates": 0,
+                "param_name": param_name,
+                "reasons": {
+                    resolver_blocker or "param-alias-source-candidates-not-found": 1
+                },
+            }
+            diag["param_alias_candidate_diagnostics"] = diagnostics
+            diag["param_alias_materialization_summary"] = summary
+            diag["terminal_blocker"] = (
+                resolver_blocker or "param-alias-source-candidates-not-found"
+            )
+            return
+
+        for candidate in candidates:
+            candidate_payload = _param_alias_candidate_dict(candidate)
+            if len(probes) >= limit:
+                diagnostics.append({
+                    **candidate_payload,
+                    "status": "rejected",
+                    "reason": "probe-limit-reached",
+                    "handler": "param-alias-source-candidates",
+                })
+                continue
+            lifetime_candidate, candidate_diag = _materialize_param_alias_candidate(
+                source_text,
+                function=function,
+                candidate=candidate,
+            )
+            if lifetime_candidate is None:
+                diagnostics.append(candidate_diag)
+                continue
+            if lifetime_candidate.source_text in seen_source:
+                diagnostics.append({
+                    **candidate_payload,
+                    "status": "rejected",
+                    "reason": "duplicate-source-move",
+                    "handler": candidate.kind,
+                })
+                continue
+
+            label = (
+                "window-order-param-alias-"
+                f"ig{target_ig}-"
+                f"{direction}-"
+                f"{candidate.kind}-"
+                f"{len(probes)}"
+            )
+            source_diff = _source_diff(source_text, lifetime_candidate.source_text)
+            source_hunks = [
+                hunk.to_dict()
+                for hunk in diff_line_hunks(
+                    source_text,
+                    lifetime_candidate.source_text,
+                    hunk_prefix="param-alias",
+                )
+            ]
+            metadata = dict(lifetime_candidate.metadata)
+            param_candidate = dict(metadata["param_alias_source_candidate"])
+            param_candidate.update({
+                "probe_label": label,
+                "materialization_kind": _param_alias_materialization_kind(
+                    candidate.kind
+                ),
+                "source_hunks": source_hunks,
+                "source_diff": source_diff,
+            })
+            metadata["param_alias_source_candidate"] = param_candidate
+            metadata["probe_label"] = label
+            metadata["source_hunks"] = source_hunks
+            metadata["source_diff"] = source_diff
+            candidate_diag["probe_label"] = label
+            seen_source.add(lifetime_candidate.source_text)
+            probes.append(
+                LifetimeLayoutProbe(
+                    label=label,
+                    operator="window-order-source-steering",
+                    description=(
+                        "Materialize a parameter alias source-order probe for "
+                        "a window-order fallback attribution."
+                    ),
+                    source_text=lifetime_candidate.source_text,
+                    provenance={
+                        "kind": lifetime_candidate.provenance_kind,
+                        "lead": dict(lead),
+                        "source_attribution": _source_attr_dict(source_attr),
+                        "param_alias_source_candidate": param_candidate,
+                        "source_hunks": source_hunks,
+                        "source_diff": source_diff,
+                        **metadata,
+                    },
+                )
+            )
+            materialized_labels.append(label)
+            materialized_meta.append(param_candidate)
+            diagnostics.append(candidate_diag)
+            if first_source_diff is None:
+                first_source_diff = source_diff
+            if first_source_hunks is None:
+                first_source_hunks = source_hunks
+
+        summary = {
+            "param_alias_source_candidates": len(candidates),
+            "materialized_param_alias_source_candidates": len(materialized_meta),
+            "param_alias_candidates": len(candidates),
+            "materialized_param_alias_candidates": len(materialized_meta),
+            "param_name": param_name,
+            "candidate_limit": limit,
+            "reasons": _candidate_reason_counts(diagnostics),
+        }
+        diag["param_alias_candidate_diagnostics"] = diagnostics
+        diag["param_alias_materialization_summary"] = summary
+        if materialized_labels:
+            diag["status"] = "materialized"
+            diag["materialized_probe_labels"] = materialized_labels
+            diag["param_alias_source_candidate"] = materialized_meta[0]
+            diag["materialized_param_alias_source_candidates"] = materialized_meta
+            if first_source_diff is not None:
+                diag["source_diff"] = first_source_diff
+            if first_source_hunks is not None:
+                diag["source_hunks"] = first_source_hunks
+            diag.pop("terminal_blocker", None)
+            return
+
+        reasons = summary["reasons"]
+        if reasons.get("probe-limit-reached"):
+            diag["terminal_blocker"] = "probe-limit-reached"
+        elif reasons.get("param-alias-use-before-delayed-init"):
+            diag["terminal_blocker"] = "param-alias-no-legal-source-movement"
+        else:
+            diag["terminal_blocker"] = "param-alias-candidates-not-materializable"
+
     def materialize_synthetic_result(
         *,
         diag: dict[str, Any],
@@ -5785,6 +6302,16 @@ def plan_window_order_source_probes(
             continue
         if source_kind == "call-return":
             materialize_call_return_source_candidate(
+                diag=diag,
+                lead=lead,
+                target_ig=target_ig,
+                direction=direction,
+                source_attr=source_attr,
+            )
+            lead_diagnostics.append(diag)
+            continue
+        if source_kind == "param":
+            materialize_param_alias_source_candidates(
                 diag=diag,
                 lead=lead,
                 target_ig=target_ig,

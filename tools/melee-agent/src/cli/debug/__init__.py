@@ -3621,6 +3621,25 @@ def _select_order_source_bridge_summary(
                     action["field_load_materialization_summary"] = dict(
                         field_load_summary
                     )
+                param_alias = probe_diag.get("param_alias_source_candidate")
+                if isinstance(param_alias, Mapping):
+                    action["param_alias_source_candidate"] = dict(param_alias)
+                param_alias_candidates = probe_diag.get(
+                    "materialized_param_alias_source_candidates"
+                )
+                if isinstance(param_alias_candidates, list):
+                    action["materialized_param_alias_source_candidates"] = [
+                        dict(item)
+                        for item in param_alias_candidates
+                        if isinstance(item, Mapping)
+                    ]
+                param_alias_summary = probe_diag.get(
+                    "param_alias_materialization_summary"
+                )
+                if isinstance(param_alias_summary, Mapping):
+                    action["param_alias_materialization_summary"] = dict(
+                        param_alias_summary
+                    )
                 source_hunks = probe_diag.get("source_hunks")
                 if isinstance(source_hunks, list):
                     action["source_hunks"] = [
@@ -3781,6 +3800,11 @@ def _select_order_terminal_exhaustion_summary(
     best_retained = _select_order_terminal_summary_best_retained_variants(
         ranked_variants
     )
+    source_family_exhaustion = _select_order_param_alias_exhaustion_proof(
+        ranked_variants=ranked_variants,
+        force_phys=targets,
+        source_bridge_summary=source_bridge_summary,
+    )
     target_score = next(
         (
             candidate.get("target_score")
@@ -3815,7 +3839,137 @@ def _select_order_terminal_exhaustion_summary(
     }
     if isinstance(target_score, Mapping):
         summary["target_score"] = dict(target_score)
+    if source_family_exhaustion is not None:
+        summary["source_candidate_family_exhaustion"] = source_family_exhaustion
+        summary["terminal_blocker"] = "param-alias-source-family-exhausted"
     return summary
+
+
+def _select_order_probe_source_hunks_from_variant(
+    variant: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    raw_hunks = variant.get("source_hunks")
+    if not isinstance(raw_hunks, list):
+        probe = variant.get("probe")
+        provenance = (
+            probe.get("provenance")
+            if isinstance(probe, Mapping) else None
+        )
+        if isinstance(provenance, Mapping):
+            raw_hunks = provenance.get("source_hunks")
+    if not isinstance(raw_hunks, list):
+        return []
+    return [
+        dict(item) if isinstance(item, Mapping) else {"value": item}
+        for item in raw_hunks
+    ]
+
+
+def _select_order_param_alias_exhaustion_proof(
+    *,
+    ranked_variants: list[Mapping[str, Any]],
+    force_phys: Mapping[int, int],
+    source_bridge_summary: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    owner_summary = source_bridge_summary.get("terminal_owner_probe_summary")
+    if not isinstance(owner_summary, Mapping):
+        return None
+    generated = _first_int(owner_summary.get("param_alias_source_candidates"), 0)
+    materialized = _first_int(
+        owner_summary.get("materialized_param_alias_source_candidates"),
+        0,
+    )
+    if generated <= 0 or materialized <= 0:
+        return None
+
+    labels: list[str] = []
+    candidate_by_label: dict[str, dict[str, Any]] = {}
+    materialization_kinds: set[str] = set()
+    param_names: set[str] = set()
+    alias_names: set[str] = set()
+    actions = source_bridge_summary.get("ranked_actions")
+    for action in actions if isinstance(actions, list) else []:
+        if not isinstance(action, Mapping):
+            continue
+        for label in action.get("probe_labels") or []:
+            if isinstance(label, str) and label not in labels:
+                labels.append(label)
+        candidates = action.get("materialized_param_alias_source_candidates")
+        if not isinstance(candidates, list):
+            candidate = action.get("param_alias_source_candidate")
+            candidates = [candidate] if isinstance(candidate, Mapping) else []
+        for raw_candidate in candidates:
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            candidate = dict(raw_candidate)
+            label = candidate.get("probe_label")
+            if isinstance(label, str):
+                candidate_by_label[label] = candidate
+                if label not in labels:
+                    labels.append(label)
+            kind = candidate.get("materialization_kind") or candidate.get("kind")
+            if isinstance(kind, str) and kind:
+                materialization_kinds.add(kind)
+            param = candidate.get("param_name")
+            if isinstance(param, str) and param:
+                param_names.add(param)
+            alias = candidate.get("alias_name")
+            if isinstance(alias, str) and alias:
+                alias_names.add(alias)
+
+    results: list[dict[str, Any]] = []
+    for variant in ranked_variants:
+        label = variant.get("label")
+        if not isinstance(label, str):
+            continue
+        is_param_probe = label in labels or label.startswith(
+            "window-order-param-alias-"
+        )
+        if not is_param_probe:
+            continue
+        target_score = _select_order_variant_target_score(variant)
+        result = {
+            "label": label,
+            "rank": variant.get("rank"),
+            "status": variant.get("status"),
+            "operator": variant.get("operator"),
+            "source_retained": variant.get("source_retained") or variant.get("path"),
+            "pcdump_path": _select_order_variant_pcdump_path(variant),
+            "source_hunks": _select_order_probe_source_hunks_from_variant(variant),
+            "param_alias_source_candidate": candidate_by_label.get(label),
+        }
+        if target_score is not None:
+            result["target_score"] = target_score
+        results.append(result)
+
+    if not results:
+        return None
+    labels_text = ", ".join(labels[:4]) if labels else "param-alias probes"
+    param_text = ", ".join(sorted(param_names)) or "the attributed parameter"
+    alias_text = ", ".join(sorted(alias_names)) or "its alias local"
+    kind_text = ", ".join(sorted(materialization_kinds)) or "param-alias"
+    handoff_targets = ", ".join(
+        f"IG{ig}->r{phys}" for ig, phys in sorted(force_phys.items())
+    )
+    return {
+        "status": "exhausted",
+        "family": "param-alias-source-bridge",
+        "generated_candidates": generated,
+        "materialized_candidates": materialized,
+        "scored_candidates": len(results),
+        "materialization_kinds": sorted(materialization_kinds),
+        "force_phys_targets": {
+            str(key): force_phys[key] for key in sorted(force_phys)
+        },
+        "source_probe_results": results,
+        "source_level_handoff": (
+            f"Exhausted {kind_text} source probes for {param_text}/{alias_text} "
+            f"({labels_text}); none satisfied {handoff_targets}. Next source-level "
+            f"handoff is broader lifetime or interference shaping around {alias_text} "
+            "uses, or finding a non-param source owner, not retrying only alias "
+            "declaration-order or delayed-init moves."
+        ),
+    }
 
 
 def _select_order_refresh_window_order_probe_diagnostics(
