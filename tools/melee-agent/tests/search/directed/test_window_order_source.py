@@ -523,6 +523,224 @@ def test_window_order_plan_recovers_pcode_field_load_user_data_from_base_virtual
     )
 
 
+def test_window_order_plan_materializes_chained_pcode_gobj_hsd_obj_field_load(
+) -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+        typedef struct HSD_GObj HSD_GObj;
+        typedef struct Diagram3 Diagram3;
+        struct HSD_GObj {
+            char pad0[0x28];
+            /* 0x28 */ HSD_JObj* hsd_obj;
+        };
+        struct Diagram3 {
+            char pad1[0x74];
+            /* 0x74 */ HSD_GObj* popup_gobj;
+        };
+        void sink(HSD_JObj* jobj);
+
+        void fn(HSD_GObj* gobj)
+        {
+            Diagram3* data;
+            HSD_JObj* popup;
+            data = gobj->user_data;
+            popup = data->popup_gobj->hsd_obj;
+            sink(popup);
+        }
+    """)
+
+    first_def = {
+        "block": "B3",
+        "index": 33,
+        "opcode": "lwz",
+        "operands": "r42,40(r263)",
+        "text": "lwz r42,40(r263)",
+    }
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 42, "order_move": ["before", 33]}],
+        source_attributions={
+            263: {
+                "kind": "field-load",
+                "expression": "data->popup_gobj",
+                "base_var": "data",
+                "base_type": "Diagram3*",
+                "field_offset": 0x74,
+            },
+            42: {
+                "kind": "load/store-address",
+                "confidence": "pcode-first-def",
+                "expression": "lwz r42,40(r263)",
+                "base_virtual": 263,
+                "field_offset": 40,
+                "first_def": first_def,
+            },
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert len(plan.probes) == 1
+    probe = plan.probes[0]
+    diag = plan.lead_diagnostics[0]
+    assert diag["status"] == "materialized"
+    assert diag["base_virtual"] == 263
+    assert diag["base_expression"] == "data->popup_gobj"
+    assert diag["field_name"] == "hsd_obj"
+    assert diag["base_source_attribution"]["kind"] == "field-load"
+    assert diag["field_load_source_candidate"]["base_expression"] == (
+        "data->popup_gobj"
+    )
+    assert diag["field_load_source_candidate"]["field_name"] == "hsd_obj"
+    assert diag["source_hunks"]
+    assert probe.provenance["kind"] == "pcode-first-def-field-load-source-order"
+    assert probe.provenance["base_expression"] == "data->popup_gobj"
+    assert probe.provenance["field_load_source_candidate"]["field_load_chain"]
+    assert (
+        "HSD_JObj* window_order_data_popup_gobj_hsd_obj_probe;"
+        in probe.source_text
+    )
+    assert (
+        "window_order_data_popup_gobj_hsd_obj_probe = "
+        "data->popup_gobj->hsd_obj;"
+    ) in probe.source_text
+    assert "popup = window_order_data_popup_gobj_hsd_obj_probe;" in (
+        probe.source_text
+    )
+
+
+def test_window_order_chained_pcode_field_load_probe_limit_is_bounded() -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+        typedef struct HSD_GObj HSD_GObj;
+        typedef struct Diagram3 Diagram3;
+        struct HSD_GObj {
+            char pad0[0x28];
+            /* 0x28 */ HSD_JObj* hsd_obj;
+        };
+        struct Diagram3 {
+            char pad1[0x74];
+            /* 0x74 */ HSD_GObj* popup_gobj;
+        };
+        void sink(HSD_JObj* jobj);
+
+        void fn(HSD_GObj* gobj)
+        {
+            Diagram3* data;
+            HSD_JObj* popup;
+            HSD_JObj* popup2;
+            data = gobj->user_data;
+            popup = data->popup_gobj->hsd_obj;
+            popup2 = data->popup_gobj->hsd_obj;
+            sink(popup);
+            sink(popup2);
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 42, "order_move": ["before", 33]}],
+        source_attributions={
+            263: {
+                "kind": "field-load",
+                "expression": "data->popup_gobj",
+                "base_var": "data",
+                "base_type": "Diagram3*",
+                "field_offset": 0x74,
+            },
+            42: {
+                "kind": "load/store-address",
+                "confidence": "pcode-first-def",
+                "expression": "lwz r42,40(r263)",
+                "base_virtual": 263,
+                "field_offset": 40,
+            },
+        },
+        max_probes=1,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert len(plan.probes) == 1
+    diag = plan.lead_diagnostics[0]
+    summary = diag["field_load_materialization_summary"]
+    assert summary["field_load_source_candidates"] == 2
+    assert summary["materialized_field_load_source_candidates"] == 1
+    assert summary["reasons"]["field-load-candidate-limit-exhausted"] == 1
+
+
+def test_window_order_plan_recovers_chained_pcode_base_from_synthetic_field_at(
+) -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+        typedef struct HSD_GObj HSD_GObj;
+        typedef struct Diagram3 Diagram3;
+        struct HSD_GObj {
+            char pad0[0x28];
+            /* 0x28 */ HSD_JObj* hsd_obj;
+        };
+        struct Diagram3 {
+            char pad1[0x74];
+            /* 0x74 */ HSD_GObj* popup_gobj;
+        };
+        void sink(HSD_JObj* jobj);
+
+        void fn(HSD_GObj* gobj)
+        {
+            Diagram3* data;
+            Diagram3* text_data;
+            HSD_JObj* popup;
+            data = gobj->user_data;
+            text_data = data;
+            popup = data->popup_gobj->hsd_obj;
+            sink(popup);
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 42, "order_move": ["before", 33]}],
+        source_attributions={
+            263: {
+                "kind": "field-load",
+                "expression": "text_data->field_at_0x74",
+                "base_var": "text_data",
+                "base_type": "Diagram3*",
+                "field_offset": 0x74,
+            },
+            42: {
+                "kind": "load/store-address",
+                "confidence": "pcode-first-def",
+                "expression": "lwz r42,40(r263)",
+                "base_virtual": 263,
+                "field_offset": 40,
+            },
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert len(plan.probes) == 1
+    diag = plan.lead_diagnostics[0]
+    assert diag["status"] == "materialized"
+    assert diag["field_load_source_probe"]["synthetic_base_expression"] == (
+        "text_data->field_at_0x74"
+    )
+    assert diag["base_expression"] == "text_data->popup_gobj"
+    candidate = diag["field_load_source_candidate"]
+    assert candidate["kind"] == "same-offset-chained-source-field"
+    assert candidate["base_expression"] == "data->popup_gobj"
+    assert candidate["expression"] == "data->popup_gobj->hsd_obj"
+    assert candidate["field_load_chain"][-1]["requested_base_expression"] == (
+        "text_data->popup_gobj"
+    )
+
+
 def test_window_order_plan_terminal_proof_for_unresolved_pcode_field_load_base(
 ) -> None:
     source = textwrap.dedent("""\

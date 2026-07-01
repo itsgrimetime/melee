@@ -4281,25 +4281,44 @@ def _select_order_source_attributions_for_leads(
             return out
 
         attrs = load_attrs(virtuals)
-        operand_virtuals: list[int] = []
-        for source in attrs.values():
-            source_dict = _solve_source_attribution_dict(source) or {}
-            if source_dict.get("kind") not in {
-                "implicit-temp",
-                "fpr-temp",
-                "copy/coalesce-product",
-            }:
-                continue
-            operand_virtuals.extend(
-                _select_order_virtual_operands_from_expression(
-                    source_dict.get("expression")
-                )
-            )
-        new_operands = [
-            virtual for virtual in operand_virtuals
-            if virtual not in set(virtuals)
-        ]
-        if new_operands:
+        for _hop in range(3):
+            operand_virtuals: list[int] = []
+            for source in attrs.values():
+                source_dict = _solve_source_attribution_dict(source) or {}
+                if source_dict.get("kind") in {
+                    "implicit-temp",
+                    "fpr-temp",
+                    "copy/coalesce-product",
+                }:
+                    operand_virtuals.extend(
+                        _select_order_virtual_operands_from_expression(
+                            source_dict.get("expression")
+                        )
+                    )
+                if (
+                    source_dict.get("kind")
+                    in {
+                        "first-def",
+                        "load/store-address",
+                        "field-load",
+                        "copy/coalesce-source",
+                    }
+                    and source_dict.get("field_offset") is not None
+                ):
+                    base_virtual = source_dict.get("base_virtual")
+                    if isinstance(base_virtual, bool):
+                        continue
+                    try:
+                        operand_virtuals.append(int(base_virtual))
+                    except (TypeError, ValueError):
+                        pass
+            seen_virtuals = set(virtuals)
+            new_operands = [
+                virtual for virtual in operand_virtuals
+                if virtual not in seen_virtuals
+            ]
+            if not new_operands:
+                break
             virtuals.extend(new_operands)
             try:
                 attrs = load_attrs(virtuals)

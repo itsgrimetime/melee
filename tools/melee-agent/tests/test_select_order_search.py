@@ -7312,6 +7312,60 @@ def test_select_order_source_attributions_for_leads_loads_synthetic_operands(
     assert attrs[34].name == "dst_iter"
 
 
+def test_select_order_source_attributions_for_leads_loads_pcode_base_virtual(
+    monkeypatch,
+) -> None:
+    class PcodeFieldLoad:
+        kind = "load/store-address"
+        confidence = "pcode-first-def"
+        expression = "lwz r42,40(r263)"
+        base_virtual = 263
+        field_offset = 40
+
+    class BaseFieldLoad:
+        kind = "field-load"
+        expression = "data->popup_gobj"
+        base_var = "data"
+        field_offset = 0x74
+        type = "HSD_GObj*"
+
+    calls: list[tuple[int, ...]] = []
+
+    def fake_explain_virtuals(*args, **kwargs):
+        virtuals = tuple(kwargs["virtuals"])
+        calls.append(virtuals)
+        return virtuals
+
+    def fake_source_attr_of(report, ig_idx: int):
+        if ig_idx == 42:
+            return PcodeFieldLoad()
+        if ig_idx == 263 and 263 in report:
+            return BaseFieldLoad()
+        return None
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.virtual_attribution.explain_virtuals",
+        fake_explain_virtuals,
+    )
+    monkeypatch.setattr(
+        "src.search.solver.probe.source_attr_of",
+        fake_source_attr_of,
+    )
+
+    attrs = debug_cli._select_order_source_attributions_for_leads(
+        pcdump_text="pcdump",
+        function="fn_80000000",
+        class_id=0,
+        source_text="void fn_80000000(void) {}\n",
+        source_file="sample.c",
+        fallback={"leads": [{"target_ig": 42}]},
+    )
+
+    assert calls == [(42,), (42, 263)]
+    assert attrs[42].base_virtual == 263
+    assert attrs[263].expression == "data->popup_gobj"
+
+
 def test_select_order_source_attributions_load_copy_product_source_operand(
     monkeypatch,
 ) -> None:

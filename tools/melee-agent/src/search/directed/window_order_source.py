@@ -53,6 +53,7 @@ _FIELD_AT_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?P<base>[A-Za-z_]\w*)\s*(?P<op>->|\.)\s*"
     r"field_at_0x(?P<offset>[0-9A-Fa-f]+)(?![A-Za-z0-9_])"
 )
+_MEMBER_ACCESS_TOKEN_RE = re.compile(r"\s*(?P<token>[A-Za-z_]\w*|->|\.)")
 _LI_EXPRESSION_RE = re.compile(
     r"\bli\b\s+r\d+\s*,\s*(?P<imm>-?(?:0x[0-9A-Fa-f]+|\d+))\s*$",
     re.IGNORECASE,
@@ -176,6 +177,9 @@ class _FieldLoadSourceCandidate:
     kind: str
     line_source_span: tuple[int, int]
     line_text: str
+    base_expression: str | None = None
+    base_type: str | None = None
+    field_load_chain: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1950,6 +1954,186 @@ def _field_load_base_and_offset(source_attr: Any) -> tuple[str | None, int | Non
     return (base_var if isinstance(base_var, str) and base_var else None), field_offset
 
 
+def _member_access_tokens(expression: object) -> tuple[str, ...] | None:
+    if not isinstance(expression, str):
+        return None
+    text = expression.strip()
+    if not text:
+        return None
+    tokens: list[str] = []
+    position = 0
+    expect_identifier = True
+    while position < len(text):
+        match = _MEMBER_ACCESS_TOKEN_RE.match(text, position)
+        if match is None:
+            return None
+        token = match.group("token")
+        if expect_identifier:
+            if _SIMPLE_IDENTIFIER_RE.fullmatch(token) is None:
+                return None
+        elif token not in {"->", "."}:
+            return None
+        tokens.append(token)
+        position = match.end()
+        expect_identifier = not expect_identifier
+    if expect_identifier:
+        return None
+    return tuple(tokens)
+
+
+def _normalize_member_access_expression(expression: object) -> str | None:
+    tokens = _member_access_tokens(expression)
+    return "".join(tokens) if tokens is not None else None
+
+
+def _member_access_expression_re(
+    base_expression: str,
+    field_name: str,
+) -> re.Pattern[str] | None:
+    tokens = _member_access_tokens(base_expression)
+    if tokens is None:
+        return None
+    parts: list[str] = [rf"(?<![A-Za-z0-9_]){re.escape(tokens[0])}"]
+    for token in tokens[1:]:
+        if token in {"->", "."}:
+            parts.append(rf"\s*{re.escape(token)}\s*")
+        else:
+            parts.append(rf"{re.escape(token)}")
+    parts.append(rf"\s*(?P<op>->|\.)\s*{re.escape(field_name)}")
+    parts.append(r"(?![A-Za-z0-9_])")
+    return re.compile("".join(parts))
+
+
+def _compact_source_expression(expression: object) -> str | None:
+    if not isinstance(expression, str):
+        return None
+    return re.sub(r"\s+", "", expression.strip())
+
+
+def _field_load_chain_metadata(
+    *,
+    base_attr: Any,
+    base_expression: str,
+    base_type: str | None,
+    resolved_expression: str | None = None,
+    field_name: str | None = None,
+    field_offset: int | None = None,
+) -> list[dict[str, Any]]:
+    chain: list[dict[str, Any]] = []
+    attr_expression = _attr_value(base_attr, "expression")
+    if isinstance(attr_expression, str) and attr_expression.strip():
+        chain.append({
+            "kind": _attr_value(base_attr, "kind"),
+            "expression": _normalize_member_access_expression(attr_expression)
+            or attr_expression.strip(),
+            "type": _attr_value(base_attr, "type") or base_type,
+            "field_offset": _parse_field_offset(_attr_value(base_attr, "field_offset")),
+            "field_name": _attr_value(base_attr, "field_name"),
+        })
+    chain.append({
+        "kind": "field-load",
+        "expression": resolved_expression
+        or (
+            f"{base_expression}->{field_name}"
+            if field_name is not None else base_expression
+        ),
+        "base_expression": base_expression,
+        "base_type": base_type,
+        "field_offset": field_offset,
+        "field_name": field_name,
+    })
+    return chain
+
+
+def _source_attr_base_expression_and_type(
+    source_text: str,
+    *,
+    function: str,
+    base_attr: Any,
+    search_span: tuple[int, int] | None,
+) -> tuple[str | None, str | None, dict[str, Any]]:
+    metadata: dict[str, Any] = {}
+    base_kind = _attr_value(base_attr, "kind")
+    base_name = _attr_value(base_attr, "name")
+    attr_type = _attr_value(base_attr, "type")
+    if (
+        base_kind in {"local", "call-return", "copy/coalesce-source"}
+        and isinstance(base_name, str)
+        and _SIMPLE_IDENTIFIER_RE.fullmatch(base_name) is not None
+    ):
+        function_type = _base_type_in_function(
+            source_text,
+            function=function,
+            base_var=base_name,
+            search_span=search_span,
+        )
+        return (
+            base_name,
+            attr_type if isinstance(attr_type, str) else function_type,
+            metadata,
+        )
+
+    expression = _normalize_member_access_expression(_attr_value(base_attr, "expression"))
+    if expression is None:
+        return None, None, metadata
+    metadata["base_expression"] = expression
+
+    if isinstance(attr_type, str) and "*" in attr_type:
+        return expression, attr_type, metadata
+
+    inner_base_var, inner_offset = _field_load_base_and_offset(base_attr)
+    if inner_base_var is None or inner_offset is None:
+        return expression, None, metadata
+    inner_base_type = _attr_value(base_attr, "base_type")
+    if not isinstance(inner_base_type, str):
+        inner_base_type = _base_type_in_function(
+            source_text,
+            function=function,
+            base_var=inner_base_var,
+            search_span=search_span,
+        )
+    metadata["inner_base_var"] = inner_base_var
+    metadata["inner_base_type"] = inner_base_type
+    metadata["inner_field_offset"] = inner_offset
+    if not isinstance(inner_base_type, str):
+        return expression, None, metadata
+
+    try:
+        context = build_source_field_context(source_text, function=function)
+        resolved = source_for_field_offset(
+            context,
+            base_expression=inner_base_var,
+            base_type=inner_base_type,
+            offset=inner_offset,
+        )
+    except Exception:
+        resolved = None
+    if resolved is None:
+        return expression, None, metadata
+    metadata["resolved_base_source"] = {
+        "expression": resolved.expression,
+        "type": resolved.type,
+        "field_name": resolved.field_name,
+        "source_line": resolved.source_line,
+        "source_col": resolved.source_col,
+        "confidence": resolved.confidence,
+    }
+    if _compact_source_expression(resolved.expression) != _compact_source_expression(
+        expression
+    ):
+        if "field_at_" in expression and resolved.type:
+            metadata["synthetic_base_expression"] = expression
+            metadata["base_expression"] = resolved.expression
+            return (
+                _normalize_member_access_expression(resolved.expression)
+                or resolved.expression,
+                resolved.type,
+                metadata,
+            )
+        return expression, None, metadata
+    return expression, resolved.type, metadata
+
+
 def _first_def_payload(source_attr: Any) -> Any:
     return _source_attr_jsonish(_attr_value(source_attr, "first_def"))
 
@@ -2071,49 +2255,105 @@ def _resolved_pcode_field_load_source_attr(
     if base_attr is None:
         return None, metadata, "field-load-base-source-unresolved"
 
-    base_kind = _attr_value(base_attr, "kind")
-    if base_kind not in {"local", "call-return", "copy/coalesce-source"}:
-        return None, metadata, "field-load-base-source-unresolved"
-    base_var = _attr_value(base_attr, "name")
-    if not isinstance(base_var, str) or _SIMPLE_IDENTIFIER_RE.fullmatch(base_var) is None:
-        return None, metadata, "field-load-base-source-unresolved"
-
-    attr_type = _attr_value(base_attr, "type")
-    function_type = _base_type_in_function(
-        source_text,
-        function=function,
-        base_var=base_var,
-        search_span=search_span,
+    base_expression, base_type, base_resolution = (
+        _source_attr_base_expression_and_type(
+            source_text,
+            function=function,
+            base_attr=base_attr,
+            search_span=search_span,
+        )
     )
-    if base_kind == "local":
-        base_type = attr_type if isinstance(attr_type, str) else function_type
-    else:
-        base_type = function_type
-    metadata["base_var"] = base_var
+    if not isinstance(base_expression, str) or not base_expression:
+        return None, metadata, "field-load-base-source-unresolved"
+    metadata.update(base_resolution)
+    metadata["base_var"] = base_expression
+    metadata["base_expression"] = base_expression
     metadata["base_type"] = base_type
     if not isinstance(base_type, str) or "*" not in base_type:
         return None, metadata, "field-load-base-type-unresolved"
 
-    field_name, blocker = _field_name_from_attribution(
-        source_attr,
-        base_var=base_var,
-        field_offset=field_offset,
-        base_type=base_type,
-    )
+    resolved_expression: str | None = None
+    resolved_type: str | None = None
+    field_name: str | None = None
+    try:
+        context = build_source_field_context(source_text, function=function)
+        resolved_source = source_for_field_offset(
+            context,
+            base_expression=base_expression,
+            base_type=base_type,
+            offset=field_offset,
+        )
+        if (
+            resolved_source is None
+            and _SIMPLE_IDENTIFIER_RE.fullmatch(base_expression) is None
+        ):
+            field_only = source_for_field_offset(
+                context,
+                base_expression="window_order_base",
+                base_type=base_type,
+                offset=field_offset,
+            )
+            if field_only is not None and field_only.field_name:
+                op = "->" if "*" in base_type else "."
+                resolved_source = type(field_only)(
+                    expression=f"{base_expression}{op}{field_only.field_name}",
+                    type=field_only.type,
+                    field_name=field_only.field_name,
+                    source_line=None,
+                    source_col=None,
+                    base_var=None,
+                    confidence="field-offset",
+                )
+    except Exception:
+        resolved_source = None
+    if resolved_source is not None and resolved_source.field_name:
+        field_name = resolved_source.field_name
+        resolved_expression = resolved_source.expression
+        resolved_type = resolved_source.type
+        metadata["resolved_field_load_source"] = {
+            "expression": resolved_source.expression,
+            "type": resolved_source.type,
+            "field_name": resolved_source.field_name,
+            "source_line": resolved_source.source_line,
+            "source_col": resolved_source.source_col,
+            "confidence": resolved_source.confidence,
+        }
+        blocker = None
+    else:
+        field_name, blocker = _field_name_from_attribution(
+            source_attr,
+            base_var=base_expression,
+            field_offset=field_offset,
+            base_type=base_type,
+        )
+        if field_name is not None:
+            resolved_expression = f"{base_expression}->{field_name}"
     metadata["field_name"] = field_name
     if field_name is None:
         return None, metadata, blocker or "field-load-field-name-unresolved"
+    chain = _field_load_chain_metadata(
+        base_attr=base_attr,
+        base_expression=base_expression,
+        base_type=base_type,
+        resolved_expression=resolved_expression,
+        field_name=field_name,
+        field_offset=field_offset,
+    )
+    metadata["field_load_chain"] = chain
 
     resolved = {
         **_source_attr_dict(source_attr),
         "kind": "field-load",
         "confidence": _attr_value(source_attr, "confidence") or "pcode-first-def",
         "base_virtual": base_virtual,
-        "base_var": base_var,
+        "base_var": base_expression,
+        "base_expression": base_expression,
         "base_type": base_type,
         "field_offset": field_offset,
         "field_name": field_name,
-        "expression": f"{base_var}->{field_name}",
+        "expression": resolved_expression or f"{base_expression}->{field_name}",
+        "type": resolved_type or _attr_value(source_attr, "type"),
+        "field_load_chain": chain,
         "pcode_first_def": metadata["pcode_first_def"],
         "base_source_attribution": metadata["base_source_attribution"],
     }
@@ -2236,8 +2476,10 @@ def _owner_for_field_load_line(
 
 
 def _field_load_candidate_dict(candidate: _FieldLoadSourceCandidate) -> dict[str, Any]:
-    return {
+    payload = {
         "base_var": candidate.base_var,
+        "base_expression": candidate.base_expression or candidate.base_var,
+        "base_type": candidate.base_type,
         "field_offset": candidate.field_offset,
         "field_name": candidate.field_name,
         "expression": candidate.expression,
@@ -2249,6 +2491,11 @@ def _field_load_candidate_dict(candidate: _FieldLoadSourceCandidate) -> dict[str
         "line_source_span": list(candidate.line_source_span),
         "line_text": candidate.line_text.strip(),
     }
+    if candidate.field_load_chain:
+        payload["field_load_chain"] = [
+            dict(item) for item in candidate.field_load_chain
+        ]
+    return payload
 
 
 def _field_load_temp_type(candidate: _FieldLoadSourceCandidate) -> str | None:
@@ -2280,9 +2527,15 @@ def _field_load_source_candidates(
     search_span: tuple[int, int] | None,
 ) -> tuple[list[_FieldLoadSourceCandidate], dict[str, Any], str | None]:
     base_var, field_offset = _field_load_base_and_offset(source_attr)
+    base_expression = (
+        _normalize_member_access_expression(_attr_value(source_attr, "base_expression"))
+        or _normalize_member_access_expression(base_var)
+        or base_var
+    )
     metadata: dict[str, Any] = {
         "handler": "field-load-source-order",
         "base_var": base_var,
+        "base_expression": base_expression,
         "field_offset": field_offset,
     }
     if base_var is None:
@@ -2314,63 +2567,143 @@ def _field_load_source_candidates(
     candidates: list[_FieldLoadSourceCandidate] = []
     seen: set[tuple[int, int]] = set()
 
+    def append_candidate_from_match(
+        match: re.Match[str],
+        *,
+        candidate_base_var: str,
+        candidate_field_name: str,
+        candidate_base_type: str | None,
+        kind: str,
+        field_load_chain: tuple[Mapping[str, Any], ...],
+    ) -> None:
+        source_start, source_end = match.span()
+        line_start = source_text.rfind("\n", 0, source_start) + 1
+        line_end = source_text.find("\n", source_end)
+        if line_end < 0:
+            line_end = len(source_text)
+        line = source_text[line_start:line_end]
+        rel_start = source_start - line_start
+        owner_local, owner_type = _owner_for_field_load_line(
+            line,
+            expression_start=rel_start,
+        )
+        if owner_local is not None and owner_type is None:
+            owner_type = _function_declared_type(
+                source_text,
+                function=function,
+                name=owner_local,
+                search_span=search_span,
+            )
+        key = (source_start, source_end)
+        if key in seen:
+            return
+        seen.add(key)
+        op = match.group("op")
+        candidates.append(
+            _FieldLoadSourceCandidate(
+                base_var=candidate_base_var,
+                base_expression=candidate_base_var,
+                base_type=candidate_base_type,
+                field_offset=field_offset,
+                field_name=candidate_field_name,
+                expression=f"{candidate_base_var}{op}{candidate_field_name}",
+                source_span=(source_start, source_end),
+                source_line=source_text.count("\n", 0, line_start) + 1,
+                owner_local=owner_local,
+                owner_type=owner_type,
+                kind=kind,
+                line_source_span=(line_start, line_end),
+                line_text=line,
+                field_load_chain=field_load_chain,
+            )
+        )
+
     def append_source_matches(
         *,
         candidate_base_var: str,
         candidate_field_name: str,
+        candidate_base_type: str | None,
         kind: str,
     ) -> None:
-        expression_re = re.compile(
-            rf"(?<![A-Za-z0-9_]){re.escape(candidate_base_var)}"
-            rf"\s*(?P<op>->|\.)\s*"
-            rf"{re.escape(candidate_field_name)}(?![A-Za-z0-9_])"
+        expression_re = _member_access_expression_re(
+            candidate_base_var,
+            candidate_field_name,
+        )
+        if expression_re is None:
+            return
+        field_load_chain = tuple(
+            dict(item)
+            for item in (_attr_value(source_attr, "field_load_chain") or [])
+            if isinstance(item, Mapping)
         )
         for match in expression_re.finditer(source_text, search_start, search_end):
-            source_start, source_end = match.span()
-            line_start = source_text.rfind("\n", 0, source_start) + 1
-            line_end = source_text.find("\n", source_end)
-            if line_end < 0:
-                line_end = len(source_text)
-            line = source_text[line_start:line_end]
-            rel_start = source_start - line_start
-            owner_local, owner_type = _owner_for_field_load_line(
-                line,
-                expression_start=rel_start,
+            append_candidate_from_match(
+                match,
+                candidate_base_var=candidate_base_var,
+                candidate_field_name=candidate_field_name,
+                candidate_base_type=candidate_base_type,
+                kind=kind,
+                field_load_chain=field_load_chain,
             )
-            if owner_local is not None and owner_type is None:
-                owner_type = _function_declared_type(
-                    source_text,
-                    function=function,
-                    name=owner_local,
-                    search_span=search_span,
-                )
-            key = (source_start, source_end)
-            if key in seen:
-                continue
-            seen.add(key)
-            op = match.group("op")
-            candidates.append(
-                _FieldLoadSourceCandidate(
-                    base_var=candidate_base_var,
-                    field_offset=field_offset,
-                    field_name=candidate_field_name,
-                    expression=f"{candidate_base_var}{op}{candidate_field_name}",
-                    source_span=(source_start, source_end),
-                    source_line=source_text.count("\n", 0, line_start) + 1,
-                    owner_local=owner_local,
-                    owner_type=owner_type,
-                    kind=kind,
-                    line_source_span=(line_start, line_end),
-                    line_text=line,
-                )
+
+    def append_same_chained_field_matches(
+        *,
+        candidate_base_var: str,
+        candidate_field_name: str,
+        candidate_base_type: str | None,
+    ) -> None:
+        tokens = _member_access_tokens(candidate_base_var)
+        if tokens is None or len(tokens) < 3:
+            return
+        base_field_name = tokens[-1]
+        if _SIMPLE_IDENTIFIER_RE.fullmatch(base_field_name) is None:
+            return
+        expression_re = re.compile(
+            rf"(?<![A-Za-z0-9_])(?P<owner>[A-Za-z_]\w*)"
+            rf"\s*(?P<base_op>->|\.)\s*{re.escape(base_field_name)}"
+            rf"\s*(?P<op>->|\.)\s*{re.escape(candidate_field_name)}"
+            rf"(?![A-Za-z0-9_])"
+        )
+        original_chain = [
+            dict(item)
+            for item in (_attr_value(source_attr, "field_load_chain") or [])
+            if isinstance(item, Mapping)
+        ]
+        for match in expression_re.finditer(source_text, search_start, search_end):
+            owner = match.group("owner")
+            base_op = match.group("base_op")
+            source_base = f"{owner}{base_op}{base_field_name}"
+            chain = tuple([
+                *original_chain,
+                {
+                    "kind": "same-offset-chained-source-field",
+                    "requested_base_expression": candidate_base_var,
+                    "source_base_expression": source_base,
+                    "field_name": candidate_field_name,
+                },
+            ])
+            append_candidate_from_match(
+                match,
+                candidate_base_var=source_base,
+                candidate_field_name=candidate_field_name,
+                candidate_base_type=candidate_base_type,
+                kind="same-offset-chained-source-field",
+                field_load_chain=chain,
             )
 
     if field_name is not None:
         append_source_matches(
-            candidate_base_var=base_var,
+            candidate_base_var=base_expression or base_var,
             candidate_field_name=field_name,
+            candidate_base_type=base_type,
             kind="inline-temp",
         )
+        if not candidates:
+            append_same_chained_field_matches(
+                candidate_base_var=base_expression or base_var,
+                candidate_field_name=field_name,
+                candidate_base_type=base_type,
+            )
 
     if not candidates and field_offset is not None:
         recovered: list[dict[str, Any]] = []
@@ -2405,6 +2738,7 @@ def _field_load_source_candidates(
                     append_source_matches(
                         candidate_base_var=scan_base_var,
                         candidate_field_name=resolved.field_name,
+                        candidate_base_type=candidate_base_type,
                         kind="same-offset-source-field",
                     )
                 if len(candidates) > before_count:
@@ -2507,7 +2841,12 @@ def _materialize_field_load_candidate(
             "handler": handler,
         }
 
-    temp_stem = f"{candidate.base_var}_{candidate.field_name or 'field_load'}"
+    stem_base = re.sub(
+        r"[^A-Za-z0-9_]+",
+        "_",
+        (candidate.base_expression or candidate.base_var).replace("->", "_"),
+    ).strip("_")
+    temp_stem = f"{stem_base}_{candidate.field_name or 'field_load'}"
     temp_name = _window_order_probe_local_name(source_text, temp_stem)
     indent = re.match(r"[ \t]*", line).group(0)
     rewritten_line = (
@@ -5562,8 +5901,11 @@ def plan_window_order_source_probes(
                     "field_offset",
                     "base_source_attribution",
                     "base_var",
+                    "base_expression",
                     "base_type",
                     "field_name",
+                    "field_load_chain",
+                    "resolved_field_load_source",
                 }
             })
             if resolved_attr is None:
@@ -5708,8 +6050,14 @@ def plan_window_order_source_probes(
                             "pcode_first_def": pcode_metadata.get("pcode_first_def"),
                             "base_virtual": pcode_metadata.get("base_virtual"),
                             "field_offset": pcode_metadata.get("field_offset"),
+                            "base_expression": pcode_metadata.get(
+                                "base_expression"
+                            ),
                             "base_source_attribution": pcode_metadata.get(
                                 "base_source_attribution"
+                            ),
+                            "field_load_chain": pcode_metadata.get(
+                                "field_load_chain"
                             ),
                         } if pcode_metadata else {}),
                         **metadata,
