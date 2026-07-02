@@ -1064,9 +1064,9 @@ static inline u8 mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
 {
     u8 result;
     int remaining;
+    int idx;
     u8* p2;
     u8* p;
-    int idx;
 
     remaining = rank;
     idx = start;
