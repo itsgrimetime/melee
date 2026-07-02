@@ -1064,9 +1064,43 @@ static inline u8 mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
 {
     u8 result;
     int remaining;
-    int idx;
     u8* p2;
     u8* p;
+    int idx;
+
+    remaining = rank;
+    idx = start;
+    p = sorted + start;
+    while (remaining >= 0) {
+        if (remaining == 0) {
+            result = sorted[idx];
+            break;
+        }
+        p2 = p;
+    loop:
+        idx++;
+        p2++;
+        p++;
+        if (idx >= 0x19) {
+            result = 0x19;
+            break;
+        }
+        if (mn_IsFighterUnlocked(*p2) == 0) {
+            goto loop;
+        }
+        remaining--;
+    }
+    return result;
+}
+
+static inline u8 mnDiagram_GetVisibleFighterCursorFrom2(u8* sorted, int start,
+                                                        int rank)
+{
+    u8 result;
+    int remaining;
+    int idx;
+    u8* p;
+    u8* p2;
 
     remaining = rank;
     idx = start;
@@ -2395,7 +2429,7 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                     var_r18_3 = mnDiagram_CountUnlockedFightersInline();
                     if (var_r18_3 > var_r22) {
                         var_r19_5 = mnDiagram_SumFighterFalls(
-                            mnDiagram_GetVisibleFighterCursorFrom(
+                            mnDiagram_GetVisibleFighterCursorFrom2(
                                 sorted, arg2_r, var_r22));
                         mnDiagram_80241E78(arg0, (u8) var_r22, (u8) var_r30,
                                            var_r19_5);
@@ -2443,14 +2477,14 @@ void mnDiagram_8024227C(void* arg0, s32 arg1, s32 arg2, u8 arg3)
                         }
                     } else {
                     block_83:
-                        var_r23 = mnDiagram_GetVisibleFighterCursorFrom(
+                        var_r23 = mnDiagram_GetVisibleFighterCursorFrom2(
                             sorted, arg1_r, var_r30);
                         if (var_r22_3 == 7) {
                             mnDiagram_80241E78(
                                 arg0, (u8) var_r22_3, (u8) var_r30,
                                 mnDiagram_SumFighterKOsClamped(var_r23));
                         } else {
-                            var_r24 = mnDiagram_GetVisibleFighterCursorFrom(
+                            var_r24 = mnDiagram_GetVisibleFighterCursorFrom2(
                                 sorted, arg2_r, var_r22_3);
                             mnDiagram_80241E78(
                                 arg0, (u8) var_r22_3, (u8) var_r30,
