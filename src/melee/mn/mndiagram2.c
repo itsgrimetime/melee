@@ -214,9 +214,9 @@ void mnDiagram2_UpdateHeader(HSD_GObj* gobj, u8 is_name_mode, u8 entity_idx)
     data->header_text = text;
 
     if (is_name_mode != 0) {
-        lb_8000B1CC(data->x24, (Vec3*) &mnDiagram2_803EEAD0, &sp18);
+        lb_8000B1CC(data->x24, &mnDiagram2_803EEAD0.header_pos, &sp18);
     } else {
-        lb_8000B1CC(data->x1C, (Vec3*) &mnDiagram2_803EEAD0, &sp18);
+        lb_8000B1CC(data->x1C, &mnDiagram2_803EEAD0.header_pos, &sp18);
     }
 
     {
@@ -623,6 +623,12 @@ void mnDiagram2_CreateStatRow(HSD_GObj* gobj, u8 is_name_mode, u8 stat_type,
     Diagram2* user_data = gobj->user_data;
 
     data = user_data;
+    /* base walks mnDiagram2_803EEAD0 (see MnDiagram2RowLayout in
+     * mndiagram2.static.h): +0xC label_pos, +0x18 value_pos, +0x24 icon_pos,
+     * +0x30 label_ids[24], +0x60 unit_glyph_ids[24]. Kept as raw char*
+     * pointer math - rewriting these accesses through the named struct
+     * fields changes MWCC's addressing-mode selection and regresses the
+     * match (tested); the dynamic table index below needs this exact shape. */
     base = (char*) &mnDiagram2_803EEAD0;
 
     jobj = data->row0_ref;

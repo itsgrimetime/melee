@@ -50,6 +50,11 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     u32 max_percentage;
 
     data = gobj->user_data;
+    /* base walks mnDiagram3_803EEC10..803EEC4C: +0x00 exit_anim, +0xC
+     * arrow_anim, +0x18 PosTable{title_pos,rank_name_pos@0xC,value_pos@0x18},
+     * +0x3C StatTable.label_ids[24]. Kept as raw char* pointer math -
+     * rewriting these accesses through the named struct fields changes
+     * MWCC's addressing-mode selection and regresses the match (tested). */
     base = (char*) &mnDiagram3_803EEC10;
 
     {
@@ -266,12 +271,12 @@ mnDiagram3_PosTable mnDiagram3_803EEC28 = {
     { 8.0F, 0.57F, 0.0F },
 };
 
-mnDiagram3_StatTable mnDiagram3_803EEC4C = { {
-    0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D,
-    0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79,
-    0x7A, 0x7A, 0x7A, 0x7C, 0x7C, 0x7C, 0x7C, 0x7C, 0x7A, 0x7A, 0x7A, 0xFFFF,
-    0x7C, 0x7B, 0x7E, 0x7E, 0x7E, 0x7E, 0x7D, 0x7D, 0x7D, 0x7B, 0x7B, 0x7B,
-} };
+mnDiagram3_StatTable mnDiagram3_803EEC4C = {
+    { 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D,
+      0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79 },
+    { 0x7A, 0x7A, 0x7A, 0x7C, 0x7C, 0x7C, 0x7C, 0x7C, 0x7A, 0x7A, 0x7A, 0xFFFF,
+      0x7C, 0x7B, 0x7E, 0x7E, 0x7E, 0x7E, 0x7D, 0x7D, 0x7D, 0x7B, 0x7B, 0x7B },
+};
 
 void mnDiagram3_80246D40(HSD_GObj* gobj)
 {
@@ -548,7 +553,7 @@ void mnDiagram3_8024714C(void* arg0)
                 }
 
                 {
-                    u16* entry = &mnDiagram3_803EEC4C.indices[(u8) val];
+                    u16* entry = &mnDiagram3_803EEC4C.label_ids[(u8) val];
                     HSD_SisLib_803A6368(text, *entry);
                 }
             }
@@ -567,6 +572,10 @@ void mnDiagram3_8024714C(void* arg0)
 
 void fn_802461BC(HSD_GObj* gobj)
 {
+    /* base walks mnDiagram3_803EEC10..803EEC4C: +0x18 PosTable.title_pos,
+     * +0x3C StatTable.label_ids[24]. Kept as raw char* pointer math -
+     * rewriting through the named struct fields changes MWCC's
+     * addressing-mode selection and regresses the match (tested). */
     char* base = (char*) &mnDiagram3_803EEC10;
     Diagram3* data = mnDiagram3_804D6C20->user_data;
     u32 input = Menu_GetAllInputs();
@@ -676,7 +685,7 @@ void fn_802461BC(HSD_GObj* gobj)
                 }
                 {
                     u8 idx = v;
-                    HSD_SisLib_803A6368(t, ((u16*) (base + 0x3C))[idx]);
+                    HSD_SisLib_803A6368(t, mnDiagram3_803EEC4C.label_ids[idx]);
                 }
             }
         }
@@ -755,7 +764,7 @@ void fn_802461BC(HSD_GObj* gobj)
                 }
                 {
                     u8 idx = v;
-                    HSD_SisLib_803A6368(t, ((u16*) (base + 0x3C))[idx]);
+                    HSD_SisLib_803A6368(t, mnDiagram3_803EEC4C.label_ids[idx]);
                 }
             }
             {
@@ -834,7 +843,7 @@ void fn_802461BC(HSD_GObj* gobj)
                 }
                 {
                     u8 idx = v;
-                    HSD_SisLib_803A6368(t, ((u16*) (base + 0x3C))[idx]);
+                    HSD_SisLib_803A6368(t, mnDiagram3_803EEC4C.label_ids[idx]);
                 }
             }
             {
