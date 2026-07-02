@@ -70,23 +70,6 @@ typedef union {
     };
 } mnDiagram2_SortEntry;
 
-/// Container struct with JObj at offset 0x10.
-/// @todo Identify the actual type - may be archive-related.
-typedef struct {
-    /* 0x00 */ char x0[0x10];
-    /* 0x10 */ HSD_JObj* jobj;
-} JObjContainer;
-
-/// User data for detail view GObj (used in mnDiagram2_ClearDetailView).
-typedef struct {
-    /* 0x00 */ char x0[0x20];
-    /* 0x20 */ JObjContainer* jobj_container; ///< Container for removable JObj
-    /* 0x24 */ char x24[0x34];
-    /* 0x58 */ HSD_Text* title_text; ///< Title text object
-    /* 0x5C */ HSD_Text* x5C;
-    /* 0x60 */ HSD_Text* detail_texts[5]; ///< Detail value text objects
-} Diagram2DetailView;
-
 /* Diagram2 struct is defined in mn/types.h */
 
 /* mnDiagram_ArchiveData, mnDiagram2_804D6C18, mnDiagram_804A0834 defined in
@@ -1331,12 +1314,13 @@ void mnDiagram2_GetAggregatedFighterRank(u8* out, u8 type, u8 idx)
     }
 }
 
-/// @brief Clears the detail view by freeing text objects and removing JObj.
-/// @param gobj The GObj containing the detail view data
+/// @brief Clears the detail view (Diagram3 popup) by freeing text objects and
+/// removing the ranking-popup JObj's children.
+/// @param gobj The GObj holding the Diagram3 user data (mnDiagram3_804D6C20)
 void mnDiagram2_ClearDetailView(HSD_GObj* gobj)
 {
-    Diagram2DetailView* data;
-    Diagram2DetailView* ptr;
+    Diagram3* data;
+    Diagram3* ptr;
     int i;
     void* tmp;
     HSD_JObj* jobj;
@@ -1349,22 +1333,22 @@ void mnDiagram2_ClearDetailView(HSD_GObj* gobj)
     }
 
     for (i = 0; i < 5; i++) {
-        if (data->detail_texts[i] != NULL) {
-            HSD_SisLib_803A5CC4(ptr->detail_texts[i]);
-            data->detail_texts[i] = NULL;
+        if (data->row_icons[i] != NULL) {
+            HSD_SisLib_803A5CC4(ptr->row_icons[i]);
+            data->row_icons[i] = NULL;
         }
     }
 
-    if (data->x5C != NULL) {
-        HSD_SisLib_803A5CC4(data->x5C);
-        data->x5C = NULL;
+    if (data->value_text != NULL) {
+        HSD_SisLib_803A5CC4(data->value_text);
+        data->value_text = NULL;
     }
 
-    tmp = data->jobj_container;
+    tmp = data->jobjs[6];
     if (tmp == NULL) {
         tmp = NULL;
     } else {
-        tmp = data->jobj_container->jobj;
+        tmp = data->jobjs[6]->child;
     }
     jobj = tmp;
     if (jobj != NULL) {
