@@ -9,12 +9,16 @@
 #include <dolphin/mtx.h>
 
 extern f32 mnVibration_804DC020;
-extern f32 mnVibration_804DC030;
-extern f32 mnVibration_804DC050;
-extern f32 mnVibration_804DC054;
-extern f32 mnVibration_804DC058;
-extern f32 mnVibration_804DC05C;
-extern f32 mnVibration_804DC060;
+extern f32 mnVibration_804DC030; ///< sdata2 pool; 0.0 (also cursor req-anim
+                                 ///< frame 0)
+/* 804DC034/038/03C/040/044/048/04C are the same sdata2 pool run (0.03, -9.5,
+ * 9.1, 17.0, 364.68332, 38.38772, 0.0521), kept as individual anchors rather
+ * than one array view - the loads use direct SDA relocs, not indexing. */
+extern f32 mnVibration_804DC050; ///< intro-reveal frame, port panel 1 (10.0)
+extern f32 mnVibration_804DC054; ///< intro-reveal frame, port panel 2 (11.0)
+extern f32 mnVibration_804DC058; ///< intro-reveal frame, port panel 3 (12.0)
+extern f32 mnVibration_804DC05C; ///< intro-reveal frame, port panel 4 (13.0)
+extern f32 mnVibration_804DC060; ///< intro-reveal frame, name list (14.0)
 extern SDATA char mnVibration_804D4FF4[];
 extern SDATA char mnVibration_804D4FFC[];
 

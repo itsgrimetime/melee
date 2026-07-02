@@ -104,16 +104,18 @@ static f32 mnDiagram_PopupExitAnimFrames[] = {
 
 /// Overlay over &mnDiagram_803EE728 to reach the trailing
 /// animation/text-layout data the popup/cursor procs read at fixed offsets.
+/// Draw does NOT read blob floats for spacing (that comes from JObj
+/// translations); this table's floats are only the anim/frame settings.
 typedef struct mnDiagram_AnimTable {
     /* 0x00 */ Point3d points[3];
-    /* 0x24 */ u8 pad_24[0x1C];
-    /* 0x40 */ AnimLoopSettings x40;
-    /* 0x4C */ u8 pad_4C[0xC];
+    /* 0x24 */ u8 default_fighter_order[0x1C]; ///< == mnDiagram_803EE74C
+    /* 0x40 */ AnimLoopSettings intro_anim;    ///< {0, 9, -0.1}
+    /* 0x4C */ AnimLoopSettings exit_anim;     ///< {10, 19, -0.1}
     /* 0x58 */ AnimLoopSettings arrow_anim;
     /* 0x64 */ AnimLoopSettings cursor_anim;
-    /* 0x70 */ char x70[0x18];
-    /* 0x88 */ char x88[0xC];
-    /* 0x94 */ char x94[0x14];
+    /* 0x70 */ char user_data_error[0x18]; ///< "Can't get user_data.\n"
+    /* 0x88 */ char file_name[0xC];        ///< "mndiagram.c"
+    /* 0x94 */ char user_data_name[0x14];  ///< "user_data"
 } mnDiagram_AnimTable;
 
 #define GET_DIAGRAM_ANIM_TABLE() ((mnDiagram_AnimTable*) &mnDiagram_803EE728)
@@ -1964,8 +1966,8 @@ void mnDiagram_80241310(s32 arg0, s32 arg1, s32 arg2)
 
     user_data = HSD_MemAlloc(sizeof(mnDiagram_PopupData));
     if (user_data == NULL) {
-        OSReport(tbl->x70);
-        __assert(tbl->x88, 0x5F8, tbl->x94);
+        OSReport(tbl->user_data_error);
+        __assert(tbl->file_name, 0x5F8, tbl->user_data_name);
     }
 
     GObj_InitUserData(gobj, 0, mnDiagram_PopupCleanup, user_data);
@@ -2835,7 +2837,7 @@ void mnDiagram_80243434(u8 arg0)
 
     if (arg0 == 0) {
         anim_jobj = user_data->jobjs[1];
-        HSD_JObjReqAnimAll(anim_jobj, tbl->x40.end_frame);
+        HSD_JObjReqAnimAll(anim_jobj, tbl->intro_anim.end_frame);
         HSD_JObjAnimAll(anim_jobj);
 
         mnDiagram_802433AC();
