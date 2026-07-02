@@ -676,6 +676,28 @@ void mnVibration_OnAnimComplete(HSD_GObj* gobj)
     }
 }
 
+static inline HSD_JObj* mnVibration_GetPortChildAt(HSD_GObj* gobj, s32 n)
+{
+    HSD_JObj* child;
+    HSD_JObj* temp_jobj;
+    s32 i;
+
+    temp_jobj = ((MnVibrationData*) gobj->user_data)->jobjs[23];
+    if (temp_jobj == NULL) {
+        child = NULL;
+    } else {
+        child = temp_jobj->child;
+    }
+    for (i = 0; i < n; i++) {
+        if (child == NULL) {
+            child = NULL;
+        } else {
+            child = child->next;
+        }
+    }
+    return child;
+}
+
 void mnVibration_Think(HSD_GObj* gobj)
 {
     HSD_JObj* sp44;
@@ -763,32 +785,14 @@ void mnVibration_Think(HSD_GObj* gobj)
                 HSD_JObjClearFlagsAll(
                     data->jobjs[mnVibration_PortPanelJointIds[port_idx]],
                     JOBJ_HIDDEN);
-                active_child = NULL;
                 data->x0[port_idx + 2] = 0;
                 toggle_jobj =
                     ((MnVibrationData*) mnVibration_804D6C28->user_data)
                         ->jobjs[mnVibration_PortPanelJointIds[(u8) port_idx]];
                 state = data->x0[port_idx + 2];
-                HSD_JObjReqAnimAll(toggle_jobj, (f32) state);
+                HSD_JObjReqAnimAll(toggle_jobj, state);
                 HSD_JObjAnimAll(toggle_jobj);
-                {
-                    HSD_JObj* temp_jobj3;
-                    temp_jobj3 =
-                        ((MnVibrationData*) gobj->user_data)->jobjs[23];
-                    if (temp_jobj3 != NULL) {
-                        active_child = temp_jobj3->child;
-                    }
-                }
-                {
-                    s32 i;
-                    for (i = 0; i < port_idx; i++) {
-                        if (active_child == NULL) {
-                            active_child = NULL;
-                        } else {
-                            active_child = active_child->next;
-                        }
-                    }
-                }
+                active_child = mnVibration_GetPortChildAt(gobj, port_idx);
                 mnVibration_UpdatePortPanel(active_child, port_idx, 1);
                 data->x6[port_idx] = 1;
             }
