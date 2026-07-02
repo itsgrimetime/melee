@@ -46,19 +46,19 @@ typedef struct MnVibrationDataLayout {
     char user_data_error[0x18];
     char file_name[0x10];
     char user_data_name[0xC];
-    char title_top_joint[0x18];
-    char title_top_animjoint[0x1C];
-    char title_top_matanim_joint[0x20];
-    char title_top_shapeanim_joint[0x24];
-    char scl_top_joint[0x18];
-    char scl_top_animjoint[0x1C];
-    char scl_top_matanim_joint[0x20];
-    char scl_top_shapeanim_joint[0x24];
-    char option_top_joint[0x1C];
-    char option_top_animjoint[0x20];
-    char option_top_matanim_joint[0x24];
-    char option_top_shapeanim_joint[0x24];
-    char panel_top_joint[0x20];
+    char convi_top_joint[0x18];
+    char convi_top_animjoint[0x1C];
+    char convi_top_matanim_joint[0x20];
+    char convi_top_shapeanim_joint[0x24];
+    char ctlvi_top_joint[0x18];
+    char ctlvi_top_animjoint[0x1C];
+    char ctlvi_top_matanim_joint[0x20];
+    char ctlvi_top_shapeanim_joint[0x24];
+    char onoffvi_top_joint[0x1C];
+    char onoffvi_top_animjoint[0x20];
+    char onoffvi_top_matanim_joint[0x24];
+    char onoffvi_top_shapeanim_joint[0x24];
+    char cursorvi_top_joint[0x20];
 } MnVibrationDataLayout;
 
 // Local inline JObj functions using the weak HSD_JObjSetMtxDirty pattern
@@ -146,23 +146,6 @@ static char mnVibration_803EEEB8[0x20] = "MenMainCursorVi_Top_joint";
 HSD_GObj* mnVibration_804D6C28;
 
 /// --- Local Helper Structs ---
-typedef struct MnVibrationAssets {
-    void* SCl_Top_joint; // 0x00
-    u8 pad4[0xC];
-    void* Title_Top_joint;            // 0x10
-    void* Title_Top_animjoint;        // 0x14
-    void* Title_Top_matanim_joint;    // 0x18
-    void* Title_Top_shapeanim_joint;  // 0x1C
-    void* Option_Top_joint;           // 0x20
-    void* Option_Top_animjoint;       // 0x24
-    void* Option_Top_matanim_joint;   // 0x28
-    void* Option_Top_shapeanim_joint; // 0x2C
-    void* Panel_Top_joint;            // 0x30
-    void* Panel_Top_animjoint;        // 0x34
-    void* Panel_Top_matanim_joint;    // 0x38
-    void* Panel_Top_shapeanim_joint;  // 0x3C
-} MnVibrationAssets;
-
 typedef struct MnVibrationJointAssets {
     void* joint;     // 0x00
     void* animjoint; // 0x04
@@ -181,7 +164,7 @@ typedef struct MnVibrationData {
     /* 0x94 */ HSD_GObj* cursor_gobj;
 } MnVibrationData;
 
-MnVibrationAssets mnVibration_804A0868;
+MnVibrationJointAssets mnVibration_804A0868;
 MnVibrationJointAssets mnVibration_804A0878;
 MnVibrationJointAssets mnVibration_804A0888;
 MnVibrationJointAssets mnVibration_804A0898;
@@ -814,7 +797,7 @@ void fn_80248A78(HSD_GObj* arg0)
 {
     MnVibrationData* data;
     f32 frame;
-    MnVibrationAssets* assets;
+    MnVibrationJointAssets* assets;
     MnVibrationData* data2;
     HSD_GObj* cursor_gobj;
     HSD_JObj* loaded_joint;
@@ -932,7 +915,7 @@ void fn_80248A78(HSD_GObj* arg0)
             data2 = arg0->user_data;
             cursor_gobj = GObj_Create(6U, 7U, 0x80U);
             data2->cursor_gobj = cursor_gobj;
-            loaded_joint = HSD_JObjLoadJoint(assets->SCl_Top_joint);
+            loaded_joint = HSD_JObjLoadJoint(assets->joint);
             HSD_GObjObject_80390A70(cursor_gobj, HSD_GObj_804D7849,
                                     loaded_joint);
             GObj_SetupGXLink(cursor_gobj, HSD_GObj_JObjCallback, 4U, 0x80U);
@@ -1049,22 +1032,22 @@ void mnVibration_80249174(int arg0)
     archive = mn_804D6BB8;
 
     lbArchive_LoadSections(
-        archive, &assets[3].joint, strings->title_top_joint,
-        &assets[3].animjoint, strings->title_top_animjoint, &assets[3].matanim,
-        strings->title_top_matanim_joint, &assets[3].shapeanim,
-        strings->title_top_shapeanim_joint,
+        archive, &assets[3].joint, strings->convi_top_joint,
+        &assets[3].animjoint, strings->convi_top_animjoint, &assets[3].matanim,
+        strings->convi_top_matanim_joint, &assets[3].shapeanim,
+        strings->convi_top_shapeanim_joint,
 
-        &assets[1].joint, strings->scl_top_joint, &assets[1].animjoint,
-        strings->scl_top_animjoint, &assets[1].matanim,
-        strings->scl_top_matanim_joint, &assets[1].shapeanim,
-        strings->scl_top_shapeanim_joint,
+        &assets[1].joint, strings->ctlvi_top_joint, &assets[1].animjoint,
+        strings->ctlvi_top_animjoint, &assets[1].matanim,
+        strings->ctlvi_top_matanim_joint, &assets[1].shapeanim,
+        strings->ctlvi_top_shapeanim_joint,
 
-        &assets[2].joint, strings->option_top_joint, &assets[2].animjoint,
-        strings->option_top_animjoint, &assets[2].matanim,
-        strings->option_top_matanim_joint, &assets[2].shapeanim,
-        strings->option_top_shapeanim_joint,
+        &assets[2].joint, strings->onoffvi_top_joint, &assets[2].animjoint,
+        strings->onoffvi_top_animjoint, &assets[2].matanim,
+        strings->onoffvi_top_matanim_joint, &assets[2].shapeanim,
+        strings->onoffvi_top_shapeanim_joint,
 
-        &assets[0].joint, strings->panel_top_joint,
+        &assets[0].joint, strings->cursorvi_top_joint,
 
         NULL);
 
