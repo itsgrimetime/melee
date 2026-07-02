@@ -89,7 +89,7 @@ static mnDiagram_PopupAnimTableHead mnDiagram_803EE728 = {
     },
 };
 
-static u8 mnDiagram_803EE74C[0x1C] = {
+static u8 mnDiagram_DefaultFighterOrder[0x1C] = {
     8,    1,    6,    0x10, 0x11, 4,   2,   0xD, 0xB, 0,
     5,    0xC,  0xE,  0x12, 7,    0xF, 0xA, 9,   3,   0x15,
     0x18, 0x13, 0x14, 0x17, 0x16, 0,   0,   0,
@@ -108,9 +108,10 @@ static f32 mnDiagram_PopupExitAnimFrames[] = {
 /// translations); this table's floats are only the anim/frame settings.
 typedef struct mnDiagram_AnimTable {
     /* 0x00 */ Point3d points[3];
-    /* 0x24 */ u8 default_fighter_order[0x1C]; ///< == mnDiagram_803EE74C
-    /* 0x40 */ AnimLoopSettings intro_anim;    ///< {0, 9, -0.1}
-    /* 0x4C */ AnimLoopSettings exit_anim;     ///< {10, 19, -0.1}
+    /* 0x24 */ u8
+        default_fighter_order[0x1C]; ///< == mnDiagram_DefaultFighterOrder
+    /* 0x40 */ AnimLoopSettings intro_anim; ///< {0, 9, -0.1}
+    /* 0x4C */ AnimLoopSettings exit_anim;  ///< {10, 19, -0.1}
     /* 0x58 */ AnimLoopSettings arrow_anim;
     /* 0x64 */ AnimLoopSettings cursor_anim;
     /* 0x70 */ char user_data_error[0x18]; ///< "Can't get user_data.\n"
@@ -120,7 +121,7 @@ typedef struct mnDiagram_AnimTable {
 
 #define GET_DIAGRAM_ANIM_TABLE() ((mnDiagram_AnimTable*) &mnDiagram_803EE728)
 
-static s32 mnDiagram_804D4FA0 = 0xFF;
+static s32 mnDiagram_PopupTextColor = 0xFF;
 
 /// @brief Gets the fighter ID at the given sorted index.
 /// @param idx Index into the sorted fighter list
@@ -750,9 +751,10 @@ void mnDiagram_SortFightersByKOs(void)
     dst_iter = dst;
     for (i = 0; i < 0x19; i++, dst_iter++) {
         u8 fighter;
-        *dst_iter = mnDiagram_803EE74C[i];
-        fighter = mnDiagram_803EE74C[i];
-        totals[mnDiagram_803EE74C[i]] = mnDiagram_SumFighterKOs(fighter);
+        *dst_iter = mnDiagram_DefaultFighterOrder[i];
+        fighter = mnDiagram_DefaultFighterOrder[i];
+        totals[mnDiagram_DefaultFighterOrder[i]] =
+            mnDiagram_SumFighterKOs(fighter);
     }
 
     for (i = 0; i < 0x19; i++) {
@@ -1810,7 +1812,7 @@ void mnDiagram_CreatePopupTexts(void* arg0, s32 arg1, s32 arg2, s32 arg3)
         text->pos_z = z;
     }
     text->default_alignment = 0;
-    *(s32*) &text->text_color = mnDiagram_804D4FA0;
+    *(s32*) &text->text_color = mnDiagram_PopupTextColor;
 
     if (arg3 != 0) {
         HSD_SisLib_803A6B98(text, 0.0f, 0.0f, GetNameText((u8) arg1));

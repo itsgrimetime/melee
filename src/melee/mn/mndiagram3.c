@@ -464,6 +464,9 @@ void mnDiagram3_Init(void* arg0)
 
     {
         MenuFlow* flow = &mn_804A04F0;
+        /* MenuFlow.x10 is a shared per-menu sub-state slot reused across
+         * screens (e.g. mnname.c uses 0/1/2 for a different input mode);
+         * within the VS Records flow, 0 = grid, 1 = details, 2 = rankings. */
         flow->x10 = 2;
         flow->hovered_selection = 0;
     }

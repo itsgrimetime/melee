@@ -117,7 +117,7 @@ static inline void mnVibration_JObjSetTranslateZ(HSD_JObj* jobj, f32 z)
 }
 
 // --- Static data ---
-static u16 mnVibration_804D4FE8[4] = { 0x16, 0x15, 0x14, 0x13 };
+static u16 mnVibration_PortPanelJointIds[4] = { 0x16, 0x15, 0x14, 0x13 };
 s32 mnVibration_804D4FF0 = 0x20010000;
 SDATA char mnVibration_804D4FF4[] = "jobj.h";
 SDATA char mnVibration_804D4FFC[] = "jobj";
@@ -154,8 +154,13 @@ typedef struct MnVibrationJointAssets {
 } MnVibrationJointAssets;
 
 typedef struct MnVibrationData {
-    /* 0x00 */ u8 x0[6];         // Controller scroll states
-    /* 0x06 */ u8 x6[4];         // Controller connected flags
+    /* 0x00 */ u8 x0[6];         ///< x0[0] intro_timer, x0[1] cursor_row,
+                                 ///< x0[2..5] port_mode[4] (per-port rumble
+                                 ///< toggle 0/1); kept as one array - the
+                                 ///< x0[i+2] indexing is load-bearing for
+                                 ///< the loop shape in several functions
+    /* 0x06 */ u8 x6[4];         ///< port_connected[4] (from
+                                 ///< HSD_PadCopyStatus[i].err)
     /* 0x0A */ u8 scroll_offset; // Scroll offset for name list
     /* 0x0B */ u8 pad_0B;
     /* 0x0C */ HSD_JObj* jobjs[25]; // JObj references (0xC to 0x70)
@@ -352,7 +357,8 @@ void mnVibration_HandleInput(HSD_GObj* gobj)
                 lbAudioAx_80024030(2);
                 data->x0[j + 2] = 0;
                 state = data->x0[j + 2];
-                panel_jobj = data->jobjs[mnVibration_804D4FE8[(u8) j]];
+                panel_jobj =
+                    data->jobjs[mnVibration_PortPanelJointIds[(u8) j]];
                 HSD_JObjReqAnimAll(panel_jobj, (f32) state);
                 HSD_JObjAnimAll(panel_jobj);
             } else {
@@ -362,7 +368,8 @@ void mnVibration_HandleInput(HSD_GObj* gobj)
                     lbAudioAx_80024030(2);
                     data->x0[j + 2] = 1;
                     state = data->x0[j + 2];
-                    panel_jobj = data->jobjs[mnVibration_804D4FE8[(u8) j]];
+                    panel_jobj =
+                        data->jobjs[mnVibration_PortPanelJointIds[(u8) j]];
                     HSD_JObjReqAnimAll(panel_jobj, (f32) state);
                     HSD_JObjAnimAll(panel_jobj);
                 }
@@ -728,7 +735,8 @@ void mnVibration_Think(HSD_GObj* gobj)
         {
             if ((s8) pad_err != 0) {
                 HSD_JObjSetFlagsAll(
-                    data->jobjs[mnVibration_804D4FE8[port_idx]], JOBJ_HIDDEN);
+                    data->jobjs[mnVibration_PortPanelJointIds[port_idx]],
+                    JOBJ_HIDDEN);
                 {
                     void* temp_jobj2;
                     temp_jobj2 =
@@ -753,12 +761,13 @@ void mnVibration_Think(HSD_GObj* gobj)
                 data->x6[port_idx] = 0;
             } else {
                 HSD_JObjClearFlagsAll(
-                    data->jobjs[mnVibration_804D4FE8[port_idx]], JOBJ_HIDDEN);
+                    data->jobjs[mnVibration_PortPanelJointIds[port_idx]],
+                    JOBJ_HIDDEN);
                 active_child = NULL;
                 data->x0[port_idx + 2] = 0;
                 toggle_jobj =
                     ((MnVibrationData*) mnVibration_804D6C28->user_data)
-                        ->jobjs[mnVibration_804D4FE8[(u8) port_idx]];
+                        ->jobjs[mnVibration_PortPanelJointIds[(u8) port_idx]];
                 state = data->x0[port_idx + 2];
                 HSD_JObjReqAnimAll(toggle_jobj, (f32) state);
                 HSD_JObjAnimAll(toggle_jobj);
