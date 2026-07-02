@@ -2663,7 +2663,7 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
             jobj = HSD_JObjLoadJoint(joint_data[0]);
             HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2],
                                joint_data[3]);
-            HSD_JObjReqAnimAll(jobj, 0.0f);
+            HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);
             HSD_JObjAnimAll(jobj);
             lb_80011E24(jobj, &sp_jobj, 2, -1);
             HSD_JObjReqAnimAll(sp_jobj, (f32) (fighter_id & 0xFF));
@@ -2712,7 +2712,7 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
             jobj = HSD_JObjLoadJoint(joint_data[0]);
             HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2],
                                joint_data[3]);
-            HSD_JObjReqAnimAll(jobj, 0.0f);
+            HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);
             HSD_JObjAnimAll(jobj);
             lb_80011E24(jobj, &sp_jobj2, 2, -1);
             HSD_JObjReqAnimAll(sp_jobj2, (f32) (fighter_idr & 0xFF));
