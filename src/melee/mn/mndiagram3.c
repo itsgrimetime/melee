@@ -53,7 +53,7 @@ void mnDiagram3_80245BA4(HSD_GObj* gobj)
     base = (char*) &mnDiagram3_803EEC10;
 
     {
-        u8 scroll = data->saved_selection;
+        u8 scroll = data->cursor_row;
         u8 offset = data->scroll_offset;
         u8 limit;
 
@@ -363,7 +363,7 @@ void mnDiagram3_80246F2C(Diagram3* data, int arg1)
 
     src = (u8*) &mn_804A04F0;
     data->saved_menu = src[0];
-    data->saved_selection = (u8) * (u16*) (src + 2);
+    data->cursor_row = (u8) * (u16*) (src + 2);
     data->anim_state = 1;
     data->scroll_offset = 0;
     data->is_name_mode = gmMainLib_8015CC34()->xD;
@@ -688,16 +688,16 @@ void fn_802461BC(HSD_GObj* gobj)
         return;
     }
     if (input & 1) {
-        if (data->saved_selection != 0) {
+        if (data->cursor_row != 0) {
             HSD_JObj* popup;
             Diagram3* cur;
             u8 n;
             f32 spacing;
             lbAudioAx_80024030(2);
-            data->saved_selection = data->saved_selection - 1;
+            data->cursor_row = data->cursor_row - 1;
             cur = mnDiagram3_804D6C20->user_data;
             popup = data->popup_gobj->hsd_obj;
-            n = data->saved_selection;
+            n = data->cursor_row;
             spacing = HSD_JObjGetTranslationY(cur->jobjs[9]) -
                       HSD_JObjGetTranslationY(cur->jobjs[8]);
             HSD_JObjSetTranslateX(popup,
@@ -766,16 +766,16 @@ void fn_802461BC(HSD_GObj* gobj)
         }
     } else if (input & 2) {
         u32 down_limit;
-        if (data->saved_selection < 9) {
+        if (data->cursor_row < 9) {
             HSD_JObj* popup;
             Diagram3* cur;
             u8 n;
             f32 spacing;
             lbAudioAx_80024030(2);
-            data->saved_selection = data->saved_selection + 1;
+            data->cursor_row = data->cursor_row + 1;
             cur = mnDiagram3_804D6C20->user_data;
             popup = data->popup_gobj->hsd_obj;
-            n = data->saved_selection;
+            n = data->cursor_row;
             spacing = HSD_JObjGetTranslationY(cur->jobjs[9]) -
                       HSD_JObjGetTranslationY(cur->jobjs[8]);
             HSD_JObjSetTranslateX(popup,
