@@ -25,5 +25,9 @@ extern HSD_GObj* mnDiagram_804D6C10;
 extern f64 mnDiagram_804DBF78;
 extern f32 mnDiagram_804DBF84;
 extern const f32 mnDiagram_804DBF94;
+extern const f32 mnDiagram_804DBFA4;
+extern const f32 mnDiagram_804DBFA8;
+extern const f32 mnDiagram_804DBFAC;
+extern const f32 mnDiagram_804DBFB0;
 
 #endif

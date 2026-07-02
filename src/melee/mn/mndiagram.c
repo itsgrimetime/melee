@@ -2520,13 +2520,13 @@ void mnDiagram_DrawNameHeaders(void* arg0, s32 arg1, s32 arg2)
     // Column headers
     text = HSD_SisLib_803A6754(0, 1);
     data->col_header_text = text;
-    text->font_size.x = 0.02f;
-    text->font_size.y = 0.03f;
+    text->font_size.x = mnDiagram_804DBFA4;
+    text->font_size.y = mnDiagram_804DBFA8;
     {
         HSD_JObj* j = data->jobjs[7];
         pos.z = HSD_JObjGetTranslationZ(j);
-        pos.y = -0.5f - HSD_JObjGetTranslationY(j);
-        pos.x = -1.3f + HSD_JObjGetTranslationX(j);
+        pos.y = mnDiagram_804DBFAC - HSD_JObjGetTranslationY(j);
+        pos.x = mnDiagram_804DBFB0 + HSD_JObjGetTranslationX(j);
         text->pos_x = pos.x;
         text->pos_y = pos.y;
         text->pos_z = pos.z;
@@ -2540,21 +2540,21 @@ void mnDiagram_DrawNameHeaders(void* arg0, s32 arg1, s32 arg2)
             name_id = name_byte;
             x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
                         HSD_JObjGetTranslationX(data->jobjs[7]);
-            HSD_SisLib_803A6B98(text, (x_spacing * i) / 0.02f, 0.0f,
-                                GetNameText(name_id));
+            HSD_SisLib_803A6B98(text, (x_spacing * i) / 0.02f,
+                                mnDiagram_804DBF84, GetNameText(name_id));
         }
     }
 
     // Row headers
     row_text = HSD_SisLib_803A6754(0, 1);
     data->row_header_text = row_text;
-    row_text->font_size.x = 0.02f;
-    row_text->font_size.y = 0.03f;
+    row_text->font_size.x = mnDiagram_804DBFA4;
+    row_text->font_size.y = mnDiagram_804DBFA8;
     {
         HSD_JObj* j = data->jobjs[9];
         pos.z = HSD_JObjGetTranslationZ(j);
-        pos.y = -0.5f - HSD_JObjGetTranslationY(j);
-        pos.x = -1.3f + HSD_JObjGetTranslationX(j);
+        pos.y = mnDiagram_804DBFAC - HSD_JObjGetTranslationY(j);
+        pos.x = mnDiagram_804DBFB0 + HSD_JObjGetTranslationX(j);
         row_text->pos_x = pos.x;
         row_text->pos_y = pos.y;
         row_text->pos_z = pos.z;
@@ -2568,7 +2568,8 @@ void mnDiagram_DrawNameHeaders(void* arg0, s32 arg1, s32 arg2)
             name_id = name_byte;
             y_spacing = HSD_JObjGetTranslationY(data->jobjs[10]) -
                         HSD_JObjGetTranslationY(data->jobjs[9]);
-            HSD_SisLib_803A6B98(row_text, 0.0f, -((y_spacing * i) / 0.03f),
+            HSD_SisLib_803A6B98(row_text, mnDiagram_804DBF84,
+                                -((y_spacing * i) / 0.03f),
                                 GetNameText(name_id));
         }
     }
