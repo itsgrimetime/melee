@@ -3128,3 +3128,115 @@ def test_build_lifetime_pressure_report_bounded_validates_source_candidates(
     assert calls["bounded"]["source_path"] == source
     assert report.outputs["bounded_source_validation"][0]["status"] == "full_target_match"
     assert report.outputs["bounded_validation"][0]["candidate"] == "lifetime-layout"
+
+
+def test_lifetime_pressure_cli_json_smoke(tmp_path: pathlib.Path) -> None:
+    from typer.testing import CliRunner
+
+    from src.cli.debug import debug_app
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    source = tmp_path / "source.c"
+    pcdump.write_text(PCDUMP)
+    source.write_text(SOURCE)
+
+    result = CliRunner().invoke(
+        debug_app,
+        [
+            "inspect",
+            "lifetime-pressure",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(pcdump),
+            "--source-file",
+            str(source),
+            "--force-phys",
+            "40:25",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == "lifetime-pressure-report.v1"
+    assert payload["function"] == "fn_80000000"
+    assert payload["targets"][0]["status"] == "blocked"
+
+
+def test_lifetime_pressure_cli_rejects_source_candidate_read_only(
+    tmp_path: pathlib.Path,
+) -> None:
+    from typer.testing import CliRunner
+
+    from src.cli.debug import debug_app
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    source = tmp_path / "source.c"
+    candidate = tmp_path / "candidate.c"
+    pcdump.write_text(PCDUMP)
+    source.write_text(SOURCE)
+    candidate.write_text(SOURCE)
+
+    result = CliRunner().invoke(
+        debug_app,
+        [
+            "inspect",
+            "lifetime-pressure",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(pcdump),
+            "--source-file",
+            str(source),
+            "--force-phys",
+            "40:25",
+            "--candidate",
+            f"candidate={candidate}",
+            "--validate",
+            "none",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "source candidate requires compile-capable validation mode" in result.output
+
+
+def test_lifetime_pressure_cli_writes_dot_and_blocker_table(
+    tmp_path: pathlib.Path,
+) -> None:
+    from typer.testing import CliRunner
+
+    from src.cli.debug import debug_app
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    source = tmp_path / "source.c"
+    dot = tmp_path / "pressure.dot"
+    table = tmp_path / "blockers.csv"
+    pcdump.write_text(PCDUMP)
+    source.write_text(SOURCE)
+
+    result = CliRunner().invoke(
+        debug_app,
+        [
+            "inspect",
+            "lifetime-pressure",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(pcdump),
+            "--source-file",
+            str(source),
+            "--force-phys",
+            "40:25",
+            "--dot",
+            str(dot),
+            "--blocker-table",
+            str(table),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "LIFETIME PRESSURE - FN_80000000" in result.output
+    assert "digraph lifetime_pressure" in dot.read_text()
+    assert "40,37,0,0,expected_phys_holder" in table.read_text()
