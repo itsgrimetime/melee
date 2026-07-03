@@ -427,6 +427,160 @@ def test_candidate_comparison_rejects_untrusted_identity(tmp_path: pathlib.Path)
     assert "role reanchor unavailable" in " ".join(comparison.warnings)
 
 
+def test_candidate_comparison_reanchors_identity_when_source_available(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug import role_descriptor, role_reanchor
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    calls: list[tuple[str, object]] = []
+
+    class StubCompile:
+        def __init__(self, text: str, function: str, source: str) -> None:
+            self.text = text
+            self.function = function
+            self.source = source
+
+        @classmethod
+        def from_text(cls, text: str, function: str, source: str) -> "StubCompile":
+            calls.append(("compile", function))
+            return cls(text, function, source)
+
+    def build_target_spec(
+        compile_obj: StubCompile,
+        force_phys: dict[int, int],
+        class_id: int,
+        target_kind: str,
+        provenance: dict[str, object],
+        causal_closure: bool = False,
+    ) -> SimpleNamespace:
+        calls.append(("target_spec", dict(force_phys)))
+        return SimpleNamespace(
+            function=compile_obj.function,
+            roles=[
+                SimpleNamespace(
+                    original_ig=ig,
+                    desired_phys=phys,
+                    class_id=class_id,
+                )
+                for ig, phys in force_phys.items()
+            ],
+        )
+
+    def reanchor(
+        target_spec: SimpleNamespace,
+        new_compile: StubCompile,
+        class_id: int = 0,
+    ) -> SimpleNamespace:
+        calls.append(("reanchor", class_id))
+        return SimpleNamespace(
+            class_id=class_id,
+            force_phys={40: 25},
+            diagnostics={},
+            matched={40: 40},
+        )
+
+    monkeypatch.setattr(role_descriptor, "Compile", StubCompile)
+    monkeypatch.setattr(role_descriptor, "build_target_spec", build_target_spec)
+    monkeypatch.setattr(role_reanchor, "reanchor", reanchor)
+
+    base_path = tmp_path / "base.pcdump.txt"
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    base_path.write_text(PCDUMP)
+    cand_path.write_text(CANDIDATE_PCDUMP)
+    baseline = facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        pcdump_path=base_path,
+        source_text=SOURCE,
+        class_filter=(0,),
+    )
+    target = parse_force_phys_spec("40:25", default_class_id=0)
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("hit", cand_path)],
+        source_text=SOURCE,
+        require_reanchor=True,
+    )[0]
+
+    assert comparison.status == "full_target_match"
+    assert comparison.identity_status == "reanchored"
+    assert comparison.target_results[40]["satisfied"] is True
+    assert ("reanchor", 0) in calls
+
+
+def test_candidate_comparison_rejects_reanchor_excluded_protected_target(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug import role_descriptor, role_reanchor
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    class StubCompile:
+        @classmethod
+        def from_text(cls, text: str, function: str, source: str) -> SimpleNamespace:
+            return SimpleNamespace(text=text, function=function, source=source)
+
+    def build_target_spec(
+        compile_obj: SimpleNamespace,
+        force_phys: dict[int, int],
+        class_id: int,
+        target_kind: str,
+        provenance: dict[str, object],
+        causal_closure: bool = False,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(function=compile_obj.function, roles=())
+
+    def reanchor(
+        target_spec: SimpleNamespace,
+        new_compile: SimpleNamespace,
+        class_id: int = 0,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            class_id=class_id,
+            force_phys={},
+            diagnostics={40: "ambiguous"},
+            matched={},
+        )
+
+    monkeypatch.setattr(role_descriptor, "Compile", StubCompile)
+    monkeypatch.setattr(role_descriptor, "build_target_spec", build_target_spec)
+    monkeypatch.setattr(role_reanchor, "reanchor", reanchor)
+
+    base_path = tmp_path / "base.pcdump.txt"
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    base_path.write_text(PCDUMP)
+    cand_path.write_text(CANDIDATE_PCDUMP)
+    baseline = facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        pcdump_path=base_path,
+        source_text=SOURCE,
+        class_filter=(0,),
+    )
+    target = parse_force_phys_spec("40:25", default_class_id=0)
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("hit", cand_path)],
+        source_text=SOURCE,
+        require_reanchor=True,
+    )[0]
+
+    assert comparison.status == "rejected"
+    assert comparison.identity_status == "unsafe"
+    assert comparison.target_results[40]["unsafe"] is True
+    assert "reanchor excluded protected target 40: ambiguous" in comparison.warnings
+
+
 def test_candidate_comparison_rejects_missing_function(tmp_path: pathlib.Path) -> None:
     from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
     from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
