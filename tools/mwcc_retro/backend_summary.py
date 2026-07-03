@@ -21,7 +21,9 @@ def _blocked_summary(decision: dict[str, Any] | None) -> str:
     if not decision:
         return "blocked=-"
     pairs: list[str] = []
-    for item in decision.get("blocked_by", []):
+    for item in decision.get("blocked_by") or []:
+        if not isinstance(item, dict):
+            continue
         ig = item.get("ig_id")
         phys = item.get("phys")
         if ig is not None and phys is not None:
