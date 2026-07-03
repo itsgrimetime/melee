@@ -13,7 +13,8 @@ def test_hash_file_records_size_and_sha256(tmp_path):
     h = object_parity.hash_file(p)
     assert h.path == p
     assert h.size == 3
-    assert h.sha256.startswith("ba7816bf")
+    assert len(h.sha256) == 64
+    assert h.sha256 == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 
 
 def test_compare_objects_reports_match(tmp_path):
