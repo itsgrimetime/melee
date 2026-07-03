@@ -664,6 +664,82 @@ def test_no_target_mode_is_inventory_only() -> None:
     assert report.hypotheses == ()
 
 
+def test_hypotheses_rank_lifetime_shortening_for_direct_blocker() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.hypotheses import attach_hypotheses
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        pcdump_path="baseline.pcdump.txt",
+        source_text=SOURCE,
+        source_path="src/example.c",
+        class_filter=(0,),
+    )
+    report = analyze_lifetime_pressure(facts, parse_force_phys_spec("40:25"))
+    enriched = attach_hypotheses(
+        report,
+        pcdump_path="baseline.pcdump.txt",
+        source_path="src/example.c",
+        allow_stale_pcdump=False,
+    )
+
+    assert enriched.hypotheses
+    assert enriched.hypotheses[0].action in {
+        "shorten_lifetime",
+        "split_or_scope_temp",
+        "materialize_expression",
+    }
+    commands = {cmd.id: cmd.command for cmd in enriched.validation_commands}
+    assert any("debug mutate lifetime-layout" in cmd for cmd in commands.values())
+    assert any("debug mutate simplify-order" in cmd for cmd in commands.values())
+    assert any("debug target score-source" in cmd for cmd in commands.values())
+
+
+def test_stale_pcdump_marks_line_specific_hints() -> None:
+    from dataclasses import replace
+
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.hypotheses import attach_hypotheses
+    from src.mwcc_debug.pressure_explorer.models import FunctionFreshness
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        source_text=SOURCE,
+        source_path="src/example.c",
+        class_filter=(0,),
+    )
+    stale = replace(
+        facts,
+        function=replace(
+            facts.function,
+            freshness=FunctionFreshness(
+                status="stale",
+                pcdump_mtime=1.0,
+                source_mtime=2.0,
+            ),
+        ),
+    )
+    report = analyze_lifetime_pressure(stale, parse_force_phys_spec("40:25"))
+    enriched = attach_hypotheses(
+        report,
+        pcdump_path="baseline.pcdump.txt",
+        source_path="src/example.c",
+        allow_stale_pcdump=True,
+    )
+
+    assert enriched.hypotheses
+    assert all(
+        h.line_mapping_status in {"stale_line_mapping", "not_line_specific"}
+        for h in enriched.hypotheses
+    )
+
+
 def test_coalesced_alias_node_reports_coalesced_away() -> None:
     from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
     from src.mwcc_debug.pressure_explorer.facts import facts_from_backend_trace
