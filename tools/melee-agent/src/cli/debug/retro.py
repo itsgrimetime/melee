@@ -409,7 +409,6 @@ def backend_cmd(
 ):
     """Emit an exact retail GC/1.2.5n backend/regalloc trace."""
     active_root = _resolve_melee_root(melee_root)
-    _ensure_setup(active_root)
     out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
     try:
         outcome = _run_backend_trace(

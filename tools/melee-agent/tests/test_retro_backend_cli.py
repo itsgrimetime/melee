@@ -55,3 +55,28 @@ def test_backend_command_writes_trace_outputs(monkeypatch, tmp_path):
     assert (tmp_path / "backend-trace.v1.json").exists()
     assert (tmp_path / "regalloc-summary.txt").exists()
     assert (tmp_path / "backend-summary.txt").exists()
+
+
+def test_backend_stub_returns_not_wired_without_setup(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+
+    def fail_if_setup_called(*_args, **_kwargs):
+        raise AssertionError("backend skeleton should not run setup before stub")
+
+    monkeypatch.setattr(retro, "_ensure_setup", fail_if_setup_called)
+
+    r = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "backend",
+            "src/melee/test/unit.c",
+            "-f",
+            "test_fn",
+            "-O",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 2
+    assert "retail GC/1.2.5n backend trace runtime is not wired yet" in r.output
