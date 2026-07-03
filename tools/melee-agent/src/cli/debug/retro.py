@@ -117,6 +117,18 @@ def _tail_text(value, *, limit: int = 2000) -> str:
     return text[-limit:]
 
 
+def _tail(text: str, *, lines: int = 20) -> str:
+    return "\n".join(str(text).splitlines()[-lines:])
+
+
+def _process_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return str(value)
+
+
 def _format_parity_mismatch(parity: dict) -> str:
     def object_line(label: str, data: dict | None) -> str:
         data = data or {}
@@ -224,7 +236,119 @@ def _run_object_parity_for_backend(*, src: str, melee_root: Path) -> dict:
 
 def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path) -> Path:
     """Launch retrowin32+gdb backend event tracing and return JSONL path."""
-    raise RuntimeError("backend event launcher requires validated 1.2.5n struct map")
+    import os
+    import shlex
+    import subprocess
+
+    from tools.mwcc_retro import setup as _setup
+
+    setup_result = _setup.ensure_for_root(melee_root, force=False)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    events_path = out_dir / "backend-events.v1.jsonl"
+    table = _retro_tables_dir(melee_root) / "gc_125n.json"
+    launcher = melee_root / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+    if not launcher.exists():
+        launcher = _PACKAGE_REPO / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+
+    ninja_cmd = _ninja_cmd_for_unit(src, melee_root=melee_root)
+    parts = shlex.split(ninja_cmd)
+    if not parts:
+        raise RuntimeError("backend event launcher failed: empty compiler command")
+    mwcc_exe = melee_root / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
+    mwcc_args = shlex.join([str(mwcc_exe), *parts[1:]])
+    cmd = [
+        "python3",
+        str(launcher),
+        "-e",
+        str(setup_result.retrowin32_bin),
+        "-a",
+        mwcc_args,
+        "--table",
+        str(table),
+        "--out",
+        str(out_dir),
+        "--phases",
+        "backend",
+        "--compiler",
+        "1.2.5n",
+        fn,
+    ]
+    env = dict(os.environ, RETRO_SOURCE=src, RETRO_FUNCTION=fn)
+    command_text = shlex.join([str(part) for part in cmd])
+    launch_log = out_dir / "launch.log"
+
+    def write_launch_log(*, exit_text: str, stdout="", stderr="") -> None:
+        launch_log.write_text(
+            "\n".join(
+                [
+                    f"COMMAND: {command_text}",
+                    f"RETRO_SOURCE: {src}",
+                    f"RETRO_FUNCTION: {fn}",
+                    f"EXIT: {exit_text}",
+                    "STDOUT:",
+                    _process_text(stdout),
+                    "STDERR:",
+                    _process_text(stderr),
+                ]
+            )
+            + "\n"
+        )
+
+    def remove_partial_events() -> None:
+        events_path.unlink(missing_ok=True)
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(melee_root),
+            capture_output=True,
+            text=True,
+            timeout=600,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = getattr(exc, "stdout", None) or getattr(exc, "output", None)
+        stderr = getattr(exc, "stderr", None)
+        write_launch_log(
+            exit_text=f"timeout after {exc.timeout:g}s",
+            stdout=stdout,
+            stderr=stderr,
+        )
+        remove_partial_events()
+        raise RuntimeError(
+            "backend event launcher timed out"
+            + ("\n" + _tail(_process_text(stdout) + "\n" + _process_text(stderr))
+               if stdout or stderr else "")
+        ) from exc
+    except OSError as exc:
+        write_launch_log(exit_text=f"{exc.__class__.__name__}: {exc}")
+        remove_partial_events()
+        raise RuntimeError(
+            f"backend event launcher failed: {exc.__class__.__name__}: {exc}"
+        ) from exc
+
+    combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    write_launch_log(exit_text=str(proc.returncode), stdout=proc.stdout, stderr=proc.stderr)
+
+    if "[retro] ABORT:" in combined:
+        remove_partial_events()
+        raise RuntimeError(
+            "backend event launcher aborted"
+            + ("\n" + _tail(combined) if combined.strip() else "")
+        )
+    if proc.returncode != 0:
+        remove_partial_events()
+        raise RuntimeError(
+            f"backend event launcher failed (exit {proc.returncode})"
+            + ("\n" + _tail(combined) if combined.strip() else "")
+        )
+    if not events_path.exists() or events_path.stat().st_size == 0:
+        remove_partial_events()
+        raise RuntimeError(
+            "backend event launcher produced no backend-events.v1.jsonl"
+            + ("\n" + _tail(combined) if combined.strip() else "")
+        )
+    return events_path
 
 
 def _run_backend_trace(

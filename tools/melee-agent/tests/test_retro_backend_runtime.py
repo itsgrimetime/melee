@@ -122,3 +122,185 @@ def test_run_object_parity_wraps_reference_compile_failure(monkeypatch, tmp_path
     assert "mwcceppc.exe" in message
     assert "reference stdout tail" in message
     assert "reference stderr tail" in message
+
+
+def test_launch_backend_events_writes_launch_log_on_nonzero(monkeypatch, tmp_path):
+    import subprocess
+
+    import pytest
+    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+
+    class SetupResult:
+        retrowin32_bin = tmp_path / "retrowin32"
+
+    monkeypatch.setattr(retro_setup, "ensure_for_root", lambda root, force=False: SetupResult())
+    monkeypatch.setattr(retro, "_retro_tables_dir", lambda root: tmp_path)
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda src, melee_root: "build/compilers/GC/1.2.5n/mwcceppc.exe -c source.c -o source.o",
+    )
+
+    def fake_run(cmd, **kwargs):
+        assert kwargs["env"]["RETRO_SOURCE"] == "src/melee/test/unit.c"
+        assert kwargs["env"]["RETRO_FUNCTION"] == "test_fn"
+        (tmp_path / "backend-events.v1.jsonl").write_text('{"event":"backend_marker"}\n')
+        return subprocess.CompletedProcess(cmd, 7, stdout="launcher stdout\n", stderr="launcher stderr\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="backend event launcher failed"):
+        retro._launch_backend_events(
+            src="src/melee/test/unit.c",
+            fn="test_fn",
+            out_dir=tmp_path,
+            melee_root=Path.cwd(),
+        )
+
+    launch_log = tmp_path / "launch.log"
+    log_text = launch_log.read_text()
+    log_lines = log_text.splitlines()
+    assert log_lines[0].startswith("COMMAND: ")
+    assert "mwcc_retro_debugger.py" in log_lines[0]
+    assert "--phases backend" in log_lines[0]
+    assert "--compiler 1.2.5n" in log_lines[0]
+    assert log_lines[1] == "RETRO_SOURCE: src/melee/test/unit.c"
+    assert log_lines[2] == "RETRO_FUNCTION: test_fn"
+    assert log_lines[3] == "EXIT: 7"
+    assert "STDOUT:" in log_text
+    assert "launcher stdout" in log_text
+    assert "STDERR:" in log_text
+    assert "launcher stderr" in log_text
+    assert not (tmp_path / "backend-events.v1.jsonl").exists()
+
+
+def test_launch_backend_events_deletes_partial_events_on_abort(monkeypatch, tmp_path):
+    import subprocess
+
+    import pytest
+    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+
+    class SetupResult:
+        retrowin32_bin = tmp_path / "retrowin32"
+
+    monkeypatch.setattr(retro_setup, "ensure_for_root", lambda root, force=False: SetupResult())
+    monkeypatch.setattr(retro, "_retro_tables_dir", lambda root: tmp_path)
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda src, melee_root: "build/compilers/GC/1.2.5n/mwcceppc.exe -c source.c -o source.o",
+    )
+
+    def fake_run(cmd, **kwargs):
+        (tmp_path / "backend-events.v1.jsonl").write_text('{"event":"backend_marker"}\n')
+        return subprocess.CompletedProcess(cmd, 0, stdout="[retro] ABORT: missing colorgraph\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="backend event launcher aborted"):
+        retro._launch_backend_events(
+            src="src/melee/test/unit.c",
+            fn="test_fn",
+            out_dir=tmp_path,
+            melee_root=Path.cwd(),
+        )
+
+    assert not (tmp_path / "backend-events.v1.jsonl").exists()
+    log_text = (tmp_path / "launch.log").read_text()
+    log_lines = log_text.splitlines()
+    assert log_lines[0].startswith("COMMAND: ")
+    assert log_lines[1] == "RETRO_SOURCE: src/melee/test/unit.c"
+    assert log_lines[2] == "RETRO_FUNCTION: test_fn"
+    assert log_lines[3] == "EXIT: 0"
+    assert "[retro] ABORT: missing colorgraph" in log_text
+
+
+def test_launch_backend_events_writes_launch_log_on_timeout(monkeypatch, tmp_path):
+    import subprocess
+
+    import pytest
+    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+
+    class SetupResult:
+        retrowin32_bin = tmp_path / "retrowin32"
+
+    monkeypatch.setattr(retro_setup, "ensure_for_root", lambda root, force=False: SetupResult())
+    monkeypatch.setattr(retro, "_retro_tables_dir", lambda root: tmp_path)
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda src, melee_root: "build/compilers/GC/1.2.5n/mwcceppc.exe -c source.c -o source.o",
+    )
+
+    def fake_run(cmd, **kwargs):
+        (tmp_path / "backend-events.v1.jsonl").write_text('{"event":"backend_marker"}\n')
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout=600,
+            output="timeout stdout\n",
+            stderr="timeout stderr\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="backend event launcher timed out"):
+        retro._launch_backend_events(
+            src="src/melee/test/unit.c",
+            fn="test_fn",
+            out_dir=tmp_path,
+            melee_root=Path.cwd(),
+        )
+
+    log_text = (tmp_path / "launch.log").read_text()
+    log_lines = log_text.splitlines()
+    assert log_lines[0].startswith("COMMAND: ")
+    assert log_lines[1] == "RETRO_SOURCE: src/melee/test/unit.c"
+    assert log_lines[2] == "RETRO_FUNCTION: test_fn"
+    assert log_lines[3] == "EXIT: timeout after 600s"
+    assert "timeout stdout" in log_text
+    assert "timeout stderr" in log_text
+    assert not (tmp_path / "backend-events.v1.jsonl").exists()
+
+
+def test_launch_backend_events_writes_launch_log_on_oserror(monkeypatch, tmp_path):
+    import subprocess
+
+    import pytest
+    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+
+    class SetupResult:
+        retrowin32_bin = tmp_path / "retrowin32"
+
+    monkeypatch.setattr(retro_setup, "ensure_for_root", lambda root, force=False: SetupResult())
+    monkeypatch.setattr(retro, "_retro_tables_dir", lambda root: tmp_path)
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda src, melee_root: "build/compilers/GC/1.2.5n/mwcceppc.exe -c source.c -o source.o",
+    )
+
+    def fake_run(cmd, **kwargs):
+        (tmp_path / "backend-events.v1.jsonl").write_text('{"event":"backend_marker"}\n')
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="backend event launcher failed"):
+        retro._launch_backend_events(
+            src="src/melee/test/unit.c",
+            fn="test_fn",
+            out_dir=tmp_path,
+            melee_root=Path.cwd(),
+        )
+
+    log_text = (tmp_path / "launch.log").read_text()
+    log_lines = log_text.splitlines()
+    assert log_lines[0].startswith("COMMAND: ")
+    assert log_lines[1] == "RETRO_SOURCE: src/melee/test/unit.c"
+    assert log_lines[2] == "RETRO_FUNCTION: test_fn"
+    assert log_lines[3] == "EXIT: OSError: spawn failed"
+    assert not (tmp_path / "backend-events.v1.jsonl").exists()

@@ -95,6 +95,8 @@ class _Normalizer:
             self._apply_pcode_instruction(event)
         elif kind == "regclass":
             self._apply_regclass(event)
+        elif kind == "backend_marker":
+            return
         elif kind in ALLOCATOR_EVENTS:
             cls = self._require_class(event, str(kind))
             if kind == "node":
