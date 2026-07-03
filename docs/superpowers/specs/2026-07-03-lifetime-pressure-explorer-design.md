@@ -1,0 +1,433 @@
+# Lifetime Pressure Explorer Design
+
+Date: 2026-07-03
+Status: Approved design, awaiting implementation plan
+
+## Summary
+
+Add `melee-agent debug inspect lifetime-pressure`, a read-only-by-default
+diagnostic that explains MWCC register-allocation pressure in source-actionable
+terms. Given a function, allocator facts, and a target allocation spec, the tool
+reports why the current allocation happened, what blocks the expected physical
+register, and which concrete source experiments should be validated next.
+
+The command extends the current `mwcc-debug` inspection workflow. It does not
+replace `first-divergence`, `virtual-to-var`, `lifetime-layout`,
+`select-order-search`, `simplify-order`, or `score-source`; it composes those
+tools into one higher-level pressure report.
+
+## Goals
+
+- Work for any function with suitable allocator facts, not one hardcoded
+  mismatch.
+- Accept a current pcdump/source/function and a target allocation such as
+  `--force-phys "53:25,50:22"`.
+- Explain target virtuals/IGs, current versus expected physical registers,
+  first definitions, source-variable attribution, compiler temps, live spans,
+  interferers, blockers, simplify/select order, coalescing, spills, and why the
+  current color was chosen.
+- Produce ranked, concrete, source-level hypotheses and exact validation/search
+  commands.
+- Separate hard allocator facts from heuristic source guesses.
+- Support human, JSON, optional DOT, and optional blocker-table outputs.
+- Keep validation campaigns explicit, not default behavior.
+
+## Non-Goals
+
+- Do not parse retrowin32/gdb raw events or retail compiler structs. The retail
+  tracer workstream owns that producer-side implementation.
+- Do not claim source transforms are correct without compile/checkdiff or
+  provided candidate evidence.
+- Do not mutate repo source in default mode.
+- Do not rely on raw IG ids across different compiles unless role descriptors
+  or an explicit reanchor prove identity.
+
+## Coordination With Retail Tracer
+
+The retail MWCC backend/regalloc tracer thread owns exact GC/1.2.5n fact
+collection and the producer schema. This explorer owns interpretation and
+source-actionable synthesis.
+
+The explorer will use an internal `AllocatorFacts` adapter with two inputs:
+
+- MVP adapter: current `mwcc-debug` pcdumps, using existing colorgraph parsers,
+  `first_divergence`, `virtual_attribution`, `tiebreak`, and pressure helpers.
+- Future adapter: retail `backend-trace.v1.json` using the consumer-facing
+  `functions[].regalloc.classes[]` subset.
+
+The future retail adapter targets this normalized subset only. It will not
+depend on `backend-events.v1.jsonl`, gdb breakpoint names, runtime addresses, or
+raw retail struct layouts.
+
+Shared schema constraints:
+
+- Numeric `ig_id` and virtual ids are scoped to one compile.
+- Cross-candidate comparison must use role descriptors such as normalized
+  first-def signature, source attribution, block/instruction context, and
+  symbol-bridge output.
+- Required allocator facts for classes the function uses must be complete.
+  Producer-side retail tracing should fail at confidence gates rather than emit
+  degraded required facts.
+- Source attribution may be `unattributed` or `ambiguous`; this explorer may
+  enrich it and rank experiments, but the tracer does not own experiment
+  ranking.
+
+## Command Surface
+
+Primary command:
+
+```bash
+melee-agent debug inspect lifetime-pressure -f FUNCTION
+```
+
+Core options:
+
+```bash
+--pcdump PATH                 baseline pcdump, auto-resolved when omitted
+--source-file PATH            source file, auto-resolved when omitted
+--force-phys SPEC             target allocation, e.g. 53:25,50:22
+--target PATH                 target JSON/YAML, including force_phys and class ids
+--candidate LABEL=PATH        repeatable pcdump/source candidate for comparison
+--backend-trace PATH          future retail backend-trace.v1.json input
+--class CLASS                 gpr/r/0, fpr/f/1, or auto
+--json                        emit machine-readable report
+--dot PATH                    write target-centered interference subgraph
+--blocker-table PATH          write compact blocker table
+--validate MODE               none, quick, bounded, or remote
+--timeout SECONDS             validation budget for explicit modes
+--max-candidates N            candidate cap for explicit bounded validation
+```
+
+Default behavior is equivalent to `--validate none`.
+
+## Input Model
+
+The analysis engine consumes normalized allocator facts, not parser-specific
+objects. The internal model contains:
+
+- Function metadata: function name, source path, pcdump or trace provenance,
+  compiler identity, schema/source freshness warnings.
+- Blocks: ids, order, successors, predecessors, labels.
+- Per register class: class id/name, allocatable registers, initial volatile
+  pool, nonvolatile dispense order, reserved/model-boundary registers.
+- Nodes: IG id, virtual register kind/number, first-def site, live blocks,
+  intervals when available, degree, flags, coalesce root/aliases, simplify
+  order, select/color order, assigned physical, spill state, source attribution.
+- Edges: interference pairs with confidence.
+- Color decisions: iteration, assigned phys, candidate phys before choice,
+  blockers, decision rule, confidence.
+
+The `mwcc-debug` MVP adapter builds this from:
+
+- `colorgraph_parser.parse_hook_events`
+- `first_divergence` replay/classification helpers
+- `virtual_attribution.explain_virtuals`
+- `tiebreak.build_ig` and SELECT what-if helpers
+- existing pressure signatures where candidate comparison is requested
+
+## Target Resolution
+
+The v1 target forms are:
+
+- `--force-phys "IG:PHYS,IG:PHYS"` using the active class unless an entry
+  includes a class prefix.
+- Target JSON/YAML with function, class id, force-phys map, and optional
+  baseline provenance.
+
+Targets are compile-scoped by default. If the user compares candidates whose
+raw IG ids drift, the report must mark those rows as compile-scoped and either
+abstain or use a role descriptor if one is available. No cross-compile raw id
+match should be presented as fact.
+
+## Analysis Pipeline
+
+For each target node:
+
+1. Resolve current node state: assigned physical, expected physical, spill
+   state, coalesce root, aliases, simplify/select order, live span, first def,
+   and source attribution.
+2. Reconstruct allocator pressure:
+   - registers available at the decision point;
+   - registers blocked by direct interferers;
+   - direct holder of the expected physical register;
+   - lower-priority holders that must become unavailable for the target choice;
+   - sticky nonvolatile pool state;
+   - whether the target was coalesced away or spilled before coloring.
+3. Classify the blocker:
+   - interference blocks expected phys;
+   - order/simplify/select position gives another node first choice;
+   - sticky nonvolatile dispense state differs;
+   - coalesce removes the target as an independent node;
+   - spill or incomplete rows prevent reliable explanation;
+   - no pressure issue when current equals target.
+4. Rank blockers by impact:
+   - direct expected-phys holder first;
+   - lower-priority blockers next;
+   - upstream order/dispense blockers;
+   - coalesce roots and aliases;
+   - spill/incomplete facts as hard blockers.
+5. Generate source-action hypotheses and validation commands.
+
+The report must preserve the distinction between:
+
+- `allocator_fact`: mechanically derived from pcdump or backend trace.
+- `source_guess`: heuristic mapping from node to source variable/expression.
+- `validation_evidence`: compile/checkdiff/candidate evidence.
+
+## Source Attribution
+
+Reuse `virtual_attribution` as the primary source bridge. It already explains:
+
+- declared locals and scope/confidence;
+- field loads;
+- global loads;
+- call returns and copy chains;
+- FPR expression order;
+- compiler-introduced temps from first-def opcode.
+
+When no source variable maps cleanly, the explorer reports the compiler-temp
+kind and first-def operation instead of inventing a local name. Examples:
+
+- `li` literal temp;
+- `mr` copy/coalesce product;
+- load/store-address temp;
+- compare temp;
+- implicit arithmetic/index temp;
+- FPR expression temp;
+- call-return copy chain.
+
+Every source attribution includes confidence. Source lines are used for
+actionable hints only when available.
+
+## Hypothesis Generation
+
+Hypotheses are ranked source experiments, not success claims. Each item
+includes:
+
+- target IG/virtual;
+- source owner or compiler-temp description;
+- allocator requirement, such as "remove edge X/Y" or "move X later";
+- source action, such as shortening lifetime, extending lifetime, scoped temp,
+  declaration movement, expression materialization, expression dematerialization,
+  coalesce avoidance, or coalesce introduction;
+- confidence;
+- exact validation/search commands.
+
+Example command routes:
+
+```bash
+melee-agent debug target score-source CANDIDATE.c -f FUNCTION --target TARGET --checkdiff-guard --json
+melee-agent debug mutate lifetime-layout -f FUNCTION --pcdump BASE.pcdump.txt --source-file SRC.c --pairs rX/rY --json
+melee-agent debug select-order-search -f FUNCTION --target rX<rY --force-phys IG:PHYS --pcdump BASE.pcdump.txt --source-file SRC.c --json
+melee-agent debug mutate simplify-order -f FUNCTION --force-phys IG:PHYS --source-file SRC.c --pcdump BASE.pcdump.txt --json
+melee-agent debug inspect diff BASE.pcdump.txt CANDIDATE.pcdump.txt -f FUNCTION
+```
+
+The command generator should choose existing tools rather than create a second
+mutation workflow.
+
+## Validation Modes
+
+Default mode is read-only and emits commands only.
+
+Explicit modes:
+
+- `--validate quick`: run cheap scoring on supplied candidates or a small
+  generated probe set. It may compile temporary candidates but must restore
+  source and report guard/frame/register regressions.
+- `--validate bounded --timeout 120 --max-candidates 500`: run bounded local
+  candidate generation/scoring through existing workflows.
+- `--validate remote --timeout 3600`: run or emit the existing remote-safe long
+  campaign workflow. If remote support is not available for a selected route,
+  the report emits the command and a clear blocker.
+
+Validation output never overwrites the default fact/guess split. A hypothesis
+becomes `validated` only when compile/checkdiff or supplied candidate evidence
+proves it. It becomes `rejected` when scoring shows no target movement, guard
+failure, frame-size regression, or worsening protected allocator state.
+
+## Candidate Comparison
+
+`--candidate LABEL=PATH` supports already-captured pcdumps in read-only mode.
+Source candidates require validation mode before compilation.
+
+Comparison reports:
+
+- target hit/miss and distance change;
+- first changed allocator fact;
+- live-range/interference/coalesce/simplify/select deltas;
+- whether one target improves while another worsens;
+- guard/frame/match-percent evidence when available;
+- commands to score missing evidence.
+
+Raw IG id comparisons across candidates are marked unsafe unless role
+descriptors align them.
+
+## Human Report
+
+Default text output is organized as:
+
+1. Header and input provenance.
+2. Target summary.
+3. "No pressure issue" summary when all targets already match.
+4. Per-target allocator facts.
+5. Blocker table sorted by impact.
+6. Source attribution and compiler-temp explanation.
+7. Ranked hypotheses.
+8. Exact validation/search commands.
+9. Candidate comparison deltas.
+10. Warnings and abstentions.
+
+Warnings must be concrete: stale pcdump, missing source, target absent, target
+coalesced away, incomplete interferer row, model-boundary register, source
+attribution ambiguous, or cross-compile identity unsafe.
+
+## JSON Report
+
+`--json` emits a stable object:
+
+```json
+{
+  "schema_version": "lifetime-pressure-report.v1",
+  "function": "FUNCTION",
+  "inputs": {},
+  "targets": [],
+  "allocator_facts": {},
+  "blockers": [],
+  "source_attribution": {},
+  "hypotheses": [],
+  "validation_commands": [],
+  "candidate_comparisons": [],
+  "outputs": {},
+  "warnings": []
+}
+```
+
+Per-target entries include validation status. Optional fields are `null` only
+when genuinely unavailable; unsupported required allocator facts produce a
+warning or an abstained target entry rather than silent omission.
+
+## DOT And Blocker Table
+
+`--dot PATH` writes a target-centered interference graph:
+
+- target nodes highlighted;
+- expected-phys blockers highlighted;
+- lower-priority blockers grouped;
+- coalesce aliases drawn to roots;
+- spills marked distinctly.
+
+`--blocker-table PATH` writes CSV or JSON based on extension. Rows include:
+
+- target IG/virtual;
+- blocker IG/virtual;
+- blocker assigned phys;
+- blocker type;
+- source attribution summary;
+- impact score;
+- suggested lever;
+- validation command id.
+
+## Error Handling
+
+Hard errors:
+
+- function missing from pcdump/trace;
+- malformed target spec;
+- target function mismatch in saved target;
+- requested class missing when the function uses that class;
+- source candidate supplied in read-only mode where compilation would be needed.
+
+Abstentions:
+
+- incomplete interferer row;
+- model-boundary register such as r0 when existing replay refuses it;
+- coalesced-away target without enough alias/root evidence;
+- spill state that cannot be tied to simplify/color facts;
+- cross-candidate identity mismatch without role descriptor.
+
+The command should prefer a partial report with explicit abstentions over a
+misleading complete-looking explanation.
+
+## Validation Cases
+
+Required test or smoke coverage:
+
+- Matched/no-pressure case: use a function where target equals current and
+  expect "no pressure issue".
+- Known register-allocation-only mismatch: use an existing fixture such as
+  `lbDvd_80018A2C` or another current high-percent regalloc residual.
+- Stress case: `mnDiagram_UpdateScrollArrows` if present, otherwise resolve the
+  current symbol/source name and document the mapping. This case must emphasize
+  that attractive source advice is unvalidated until real-tree guards and
+  allocator-state preservation pass.
+
+Unit tests:
+
+- force-phys and target file parsing;
+- `mwcc-debug` `AllocatorFacts` adapter;
+- target node report;
+- blocker ranking;
+- source-attribution classification;
+- compiler-temp explanation;
+- command generation;
+- JSON schema stability;
+- DOT output shape;
+- candidate comparison with target improvement and protected-target regression.
+
+CLI tests:
+
+- `debug inspect lifetime-pressure --help` golden.
+- fixture pcdump JSON smoke.
+- read-only default does not compile or edit source.
+- explicit validation mode restores source after temporary scoring.
+
+## Documentation
+
+Add examples to the `mwcc-debug` docs near existing inspect commands:
+
+```bash
+melee-agent debug inspect lifetime-pressure \
+  -f mnDiagram_UpdateScrollArrows \
+  --force-phys "53:25,50:22"
+
+melee-agent debug inspect lifetime-pressure \
+  -f lbDvd_80018A2C \
+  --pcdump tools/melee-agent/tests/fixtures/mwcc_debug/lbDvd_80018A2C_pcdump.txt \
+  --force-phys "44:10,46:12" \
+  --json
+
+melee-agent debug inspect lifetime-pressure \
+  -f FUNCTION \
+  --force-phys "53:25" \
+  --validate bounded --timeout 120 --max-candidates 500
+```
+
+The docs must repeat the main safety rule: default source advice is heuristic
+until validated by compile/checkdiff or supplied candidate evidence.
+
+## Implementation Boundaries
+
+Prefer small modules:
+
+- `src.mwcc_debug.lifetime_pressure.facts`
+- `src.mwcc_debug.lifetime_pressure.analysis`
+- `src.mwcc_debug.lifetime_pressure.hypotheses`
+- `src.mwcc_debug.lifetime_pressure.render`
+- `src.cli.debug.inspect` command wiring
+
+The exact module split may follow existing local patterns, but the boundaries
+should remain: fact loading, allocator analysis, source hypothesis generation,
+rendering, and CLI orchestration.
+
+## Success Criteria
+
+- A user can run one command for a function and target allocation and receive a
+  source-actionable pressure report.
+- The first meaningful blocker is identified in live-range/interference/order
+  terms, not merely as "register allocation differs".
+- The report emits concrete validation/search commands.
+- Candidate comparisons explain why a candidate moved closer or farther from
+  the target.
+- Default mode is read-only and does not edit source or launch long campaigns.
+- JSON/DOT/blocker-table outputs are stable enough for other tools to consume.
