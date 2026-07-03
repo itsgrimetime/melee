@@ -1,7 +1,7 @@
 # Lifetime Pressure Explorer Design
 
 Date: 2026-07-03
-Status: Approved design, awaiting implementation plan
+Status: Revised after review, awaiting user review before implementation plan
 
 ## Summary
 
@@ -15,6 +15,14 @@ The command extends the current `mwcc-debug` inspection workflow. It does not
 replace `first-divergence`, `virtual-to-var`, `lifetime-layout`,
 `select-order-search`, `simplify-order`, or `score-source`; it composes those
 tools into one higher-level pressure report.
+
+The implementation must start by auditing and reusing the existing
+`src.mwcc_debug.pressure_explorer` package. That package already owns
+`PressureSignature`, `PressureDelta`, `pressure_signature_from_pcdump`,
+`compare_pressure_signatures`, `generate_lifetime_layout_probes`, and
+`generate_source_lifetime_probes`. The new command may refactor or extend that
+package, but it must not create a parallel lifetime-pressure implementation
+without first proving that the existing package cannot host the shared logic.
 
 ## Goals
 
@@ -31,6 +39,8 @@ tools into one higher-level pressure report.
 - Separate hard allocator facts from heuristic source guesses.
 - Support human, JSON, optional DOT, and optional blocker-table outputs.
 - Keep validation campaigns explicit, not default behavior.
+- Protect all supplied target allocations by default during candidate
+  validation.
 
 ## Non-Goals
 
@@ -41,6 +51,10 @@ tools into one higher-level pressure report.
 - Do not mutate repo source in default mode.
 - Do not rely on raw IG ids across different compiles unless role descriptors
   or an explicit reanchor prove identity.
+- Do not add a new candidate generator for validation. Validation must call or
+  emit existing `debug target`, `debug mutate`, `debug select-order-search`,
+  `debug permute`, and `debug inspect diff` workflows, with only thin
+  orchestration in this command.
 
 ## Coordination With Retail Tracer
 
@@ -62,9 +76,11 @@ raw retail struct layouts.
 Shared schema constraints:
 
 - Numeric `ig_id` and virtual ids are scoped to one compile.
-- Cross-candidate comparison must use role descriptors such as normalized
-  first-def signature, source attribution, block/instruction context, and
-  symbol-bridge output.
+- Cross-candidate comparison must use the existing role tooling:
+  `role_descriptor.py`, `role_matcher.py`, and `role_reanchor.py`. Role
+  descriptors use normalized first-def signatures, source attribution,
+  block/instruction context, and symbol-bridge output; this command must not
+  invent a second reanchor system.
 - Required allocator facts for classes the function uses must be complete.
   Producer-side retail tracing should fail at confidence gates rather than emit
   degraded required facts.
@@ -90,6 +106,7 @@ Core options:
 --candidate LABEL=PATH        repeatable pcdump/source candidate for comparison
 --backend-trace PATH          future retail backend-trace.v1.json input
 --class CLASS                 gpr/r/0, fpr/f/1, or auto
+--allow-stale-pcdump          allow source-action guesses from stale pcdumps
 --json                        emit machine-readable report
 --dot PATH                    write target-centered interference subgraph
 --blocker-table PATH          write compact blocker table
@@ -99,6 +116,18 @@ Core options:
 ```
 
 Default behavior is equivalent to `--validate none`.
+
+Target behavior is deliberately not implicit:
+
+- With `--force-phys` or `--target`, the command performs blocker analysis,
+  source-action hypothesis ranking, and validation-command generation.
+- Without a target, the command emits an inventory-only allocator pressure
+  report: nodes, assignments, live ranges, interferers, coalesce/spill/order
+  facts, and suggested commands for deriving a target. It must not claim a
+  first blocker or emit source-transform hypotheses because there is no expected
+  physical register to explain.
+- A future explicit option may derive a target from register-only checkdiff
+  using existing target helpers, but v1 should not silently infer one.
 
 ## Input Model
 
@@ -117,6 +146,97 @@ objects. The internal model contains:
 - Color decisions: iteration, assigned phys, candidate phys before choice,
   blockers, decision rule, confidence.
 
+Minimal normalized shape:
+
+```json
+{
+  "schema_version": "allocator-facts.v1",
+  "producer": {"kind": "mwcc-debug-pcdump", "path": "BASE.pcdump.txt"},
+  "function": {
+    "name": "FUNCTION",
+    "source_path": "src/...",
+    "freshness": {
+      "status": "fresh|stale|unknown",
+      "pcdump_mtime": null,
+      "source_mtime": null
+    }
+  },
+  "classes": [
+    {
+      "class_id": 0,
+      "class_name": "gpr",
+      "registers": {
+        "physical_count": 32,
+        "allocatable": [3, 4, 5],
+        "initial_volatile": [3, 4, 5],
+        "nonvolatile_dispense_order": [31, 30, 29],
+        "reserved": [1, 2]
+      },
+      "nodes": [
+        {
+          "ig_id": 32,
+          "virtual": {"kind": "r", "number": 32},
+          "first_def": {
+            "pass_id": "before_register_coloring",
+            "block_id": "B1",
+            "instruction_id": "B1:0",
+            "opcode": "lwz",
+            "operands": "r32,0(r3)",
+            "normalized": "lwz r#,0(r#)"
+          },
+          "source_attribution": {
+            "status": "unattributed|attributed|ambiguous",
+            "symbol": null,
+            "line": null,
+            "confidence": "unavailable"
+          },
+          "live": {"blocks": ["B1"], "intervals": [], "confidence": "observed"},
+          "degree": 0,
+          "flags": [],
+          "coalesce": {"root_ig_id": 32, "aliases": []},
+          "simplify_order": 0,
+          "select_order": 0,
+          "assigned_phys": 31,
+          "spill": {"spilled": false, "reason": null}
+        }
+      ],
+      "edges": [{"a": 32, "b": 35, "kind": "interference", "confidence": "observed"}],
+      "coalesce": {"mappings": []},
+      "simplify_order": [32, 35],
+      "select_order": [35, 32],
+      "color_decisions": [
+        {
+          "ig_id": 32,
+          "iter": 1,
+          "assigned_phys": 31,
+          "candidate_phys_before_choice": [31, 30],
+          "blocked_by": [{"ig_id": 35, "phys": 30}],
+          "decision_rule": "lowest_available_or_nonvolatile_dispense",
+          "confidence": "observed"
+        }
+      ]
+    }
+  ],
+  "adapter_specific": {}
+}
+```
+
+Required fields for v1: `schema_version`, `producer`, `function.name`,
+`function.freshness.status`, `classes[].class_id`, `classes[].class_name`,
+`classes[].registers`, `classes[].nodes`, `classes[].edges`,
+`classes[].coalesce`, `classes[].simplify_order`, `classes[].select_order`, and
+`classes[].color_decisions`.
+
+Required per node: `ig_id`, `virtual`, `first_def`, `source_attribution`,
+`live`, `degree`, `flags`, `coalesce`, `simplify_order`, `select_order`,
+`assigned_phys`, and `spill`. Values may be `null` only when the adapter can
+prove the fact is optional for the current class or node; otherwise the target
+entry must abstain with a reason.
+
+Optional or adapter-specific fields belong under `adapter_specific` or clearly
+named optional subkeys. Retail-tracer RE confidence details stay in the retail
+trace; the explorer consumes only the normalized confidence summaries.
+
 The `mwcc-debug` MVP adapter builds this from:
 
 - `colorgraph_parser.parse_hook_events`
@@ -124,6 +244,8 @@ The `mwcc-debug` MVP adapter builds this from:
 - `virtual_attribution.explain_virtuals`
 - `tiebreak.build_ig` and SELECT what-if helpers
 - existing pressure signatures where candidate comparison is requested
+- `pressure_explorer` data structures and comparison helpers for frame, saved
+  register, spill, interference, coalesce, and target-pair deltas
 
 ## Target Resolution
 
@@ -136,8 +258,14 @@ The v1 target forms are:
 
 Targets are compile-scoped by default. If the user compares candidates whose
 raw IG ids drift, the report must mark those rows as compile-scoped and either
-abstain or use a role descriptor if one is available. No cross-compile raw id
-match should be presented as fact.
+abstain or use `role_descriptor`/`role_matcher`/`role_reanchor` if descriptors
+are available. No cross-compile raw id match should be presented as fact.
+
+Every supplied target is protected by default. A candidate can be labeled
+`validated` only when all protected targets are preserved or improved according
+to the target spec. A candidate that fixes one IG while worsening another
+protected target remains `partial` or `rejected`, never validated. V1 should not
+provide an override that silently allows target regression.
 
 ## Analysis Pipeline
 
@@ -167,6 +295,12 @@ For each target node:
    - coalesce roots and aliases;
    - spill/incomplete facts as hard blockers.
 5. Generate source-action hypotheses and validation commands.
+
+If the allocator facts are stale relative to the source file, source-action
+hypotheses must either abstain or carry a prominent stale-facts warning unless
+the user passes `--allow-stale-pcdump`. The allocator facts may still be shown
+as historical facts, but source advice tied to current line numbers is unsafe
+when the pcdump predates the source.
 
 The report must preserve the distinction between:
 
@@ -226,6 +360,11 @@ melee-agent debug inspect diff BASE.pcdump.txt CANDIDATE.pcdump.txt -f FUNCTION
 The command generator should choose existing tools rather than create a second
 mutation workflow.
 
+Generated command strings must be covered by tests against current CLI surfaces.
+At minimum, golden command tests must cover `debug target score-source`,
+`debug mutate lifetime-layout`, `debug select-order-search`,
+`debug mutate simplify-order`, and `debug inspect diff`.
+
 ## Validation Modes
 
 Default mode is read-only and emits commands only.
@@ -237,19 +376,31 @@ Explicit modes:
   source and report guard/frame/register regressions.
 - `--validate bounded --timeout 120 --max-candidates 500`: run bounded local
   candidate generation/scoring through existing workflows.
-- `--validate remote --timeout 3600`: run or emit the existing remote-safe long
-  campaign workflow. If remote support is not available for a selected route,
-  the report emits the command and a clear blocker.
+- `--validate remote --timeout 3600`: v1 is dry-run/emit-only by default. It
+  emits the remote-safe long campaign command set, required campaign/output dir,
+  timeout, expected state/log files, and triage commands. It does not launch
+  expensive remote campaigns unless a future explicit launch flag is added.
+  If remote support is not available for a selected route, the report emits the
+  blocker and local alternatives.
 
 Validation output never overwrites the default fact/guess split. A hypothesis
 becomes `validated` only when compile/checkdiff or supplied candidate evidence
-proves it. It becomes `rejected` when scoring shows no target movement, guard
+proves every protected target is preserved or improved. It becomes `partial`
+when one target improves but another protected target is unchanged or unsafe to
+compare. It becomes `rejected` when scoring shows no target movement, guard
 failure, frame-size regression, or worsening protected allocator state.
 
 ## Candidate Comparison
 
-`--candidate LABEL=PATH` supports already-captured pcdumps in read-only mode.
-Source candidates require validation mode before compilation.
+`--candidate LABEL=PATH` accepts these v1 forms:
+
+- `LABEL=path/to/candidate.pcdump.txt` or `LABEL=path/to/candidate.txt`:
+  read-only comparison against an already-captured pcdump.
+- `LABEL=path/to/candidate.c`: rejected in read-only mode because comparing it
+  requires compilation. Accepted only with explicit validation mode.
+- Paired source+pcdump evidence is not implicit in v1. If added later, it must
+  use an explicit syntax so the default path cannot accidentally compile or
+  associate the wrong source with a pcdump.
 
 Comparison reports:
 
@@ -260,8 +411,8 @@ Comparison reports:
 - guard/frame/match-percent evidence when available;
 - commands to score missing evidence.
 
-Raw IG id comparisons across candidates are marked unsafe unless role
-descriptors align them.
+Raw IG id comparisons across candidates are marked unsafe unless existing role
+reanchor tooling aligns them.
 
 ## Human Report
 
@@ -345,6 +496,9 @@ Abstentions:
 - coalesced-away target without enough alias/root evidence;
 - spill state that cannot be tied to simplify/color facts;
 - cross-candidate identity mismatch without role descriptor.
+- stale pcdump for source-action hypotheses unless the report can clearly
+  separate historical allocator facts from current source advice or the user
+  passes `--allow-stale-pcdump`.
 
 The command should prefer a partial report with explicit abstentions over a
 misleading complete-looking explanation.
@@ -374,6 +528,12 @@ Unit tests:
 - JSON schema stability;
 - DOT output shape;
 - candidate comparison with target improvement and protected-target regression.
+- round-trip role reanchoring through `role_descriptor`, `role_matcher`, and
+  `role_reanchor`, including a case where raw IG ids drift and a case where
+  identity is not stable enough to compare.
+- stale pcdump/source freshness handling that suppresses or prominently warns on
+  source-action hypotheses.
+- generated validation command golden tests for every supported route.
 
 CLI tests:
 
@@ -408,17 +568,26 @@ until validated by compile/checkdiff or supplied candidate evidence.
 
 ## Implementation Boundaries
 
-Prefer small modules:
+Start from the existing `src.mwcc_debug.pressure_explorer` package. Before
+creating any new lifetime-pressure package, audit whether the new fact adapter,
+analysis, hypothesis, and render code belongs as refactored modules under
+`pressure_explorer`. A separate package is allowed only if the implementation
+plan documents why sharing the package would create worse boundaries.
 
-- `src.mwcc_debug.lifetime_pressure.facts`
-- `src.mwcc_debug.lifetime_pressure.analysis`
-- `src.mwcc_debug.lifetime_pressure.hypotheses`
-- `src.mwcc_debug.lifetime_pressure.render`
+Likely boundaries, preferably under `src.mwcc_debug.pressure_explorer`:
+
+- fact loading / normalized `AllocatorFacts` adapter;
+- allocator analysis;
+- source hypothesis generation;
+- rendering / JSON / DOT / blocker table;
 - `src.cli.debug.inspect` command wiring
 
 The exact module split may follow existing local patterns, but the boundaries
-should remain: fact loading, allocator analysis, source hypothesis generation,
-rendering, and CLI orchestration.
+should remain fact loading, allocator analysis, source hypothesis generation,
+rendering, and CLI orchestration. Validation integration must remain a thin
+caller or command emitter over existing workflows; it must not grow independent
+probe families that duplicate `pressure_explorer`, transform-corpus,
+select-order, simplify-order, or permuter routes.
 
 ## Success Criteria
 
