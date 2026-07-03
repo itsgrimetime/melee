@@ -54,6 +54,54 @@ Run Python tests from `tools/melee-agent/`. Run build/checkdiff commands from th
 
 ---
 
+### Task 0: Audit Existing Capabilities And Lock Reuse Boundary
+
+**Files:**
+- Modify: `docs/superpowers/plans/2026-07-03-retail-mwcc-backend-regalloc-tracer.md` only if the capability surface changes before execution.
+
+- [ ] **Step 1: Run the audit-first capability search**
+
+Run from repo root:
+
+```bash
+melee-agent capabilities search "retail mwcc backend register allocation tracer"
+```
+
+Expected output includes these existing capabilities:
+
+```text
+mwcc-debug
+mwcc-inspect
+mwcc-retro
+debug suggest register-tiebreak
+```
+
+- [ ] **Step 2: Record what is reused**
+
+Use these existing pieces:
+
+- `mwcc-retro`: retrowin32 setup, gdb launcher shape, retail compiler table loading, frontend IRO tracing, existing GC/1.1 backend/regalloc trace shape, and current `debug retro dump` command plumbing.
+- `mwcc-debug`: patched debug-DLL pcdump/colorgraph facts and existing parsers for the fidelity adapter.
+- `mwcc-inspect`: context only for frontend IR/source attribution questions; do not duplicate its Windows inspector workflow.
+- `debug suggest register-tiebreak`: downstream source-lever suggestion logic; do not duplicate tiebreak/source experiment ranking in this producer.
+
+- [ ] **Step 3: Record what is new**
+
+Build only the missing producer pieces:
+
+- exact retail GC/1.2.5n backend/regalloc event collection;
+- `backend-trace.v1.json` consumer schema and validator;
+- `functions[].regalloc.classes[]` allocator-facts subset;
+- `regalloc-summary.txt` and `backend-summary.txt`;
+- raw object-byte parity gate for trusting retrowin32 output;
+- retail-vs-debug fidelity reports that compare facts without treating legitimate divergence as command failure.
+
+- [ ] **Step 4: Stop if a newer command already covers the target**
+
+If the capability search lists an existing command that already emits exact retail GC/1.2.5n backend/regalloc facts with color decisions, blocked candidates, coalescing, simplify/select order, and a stable JSON schema, update this plan to extend that command instead of adding `debug retro backend`.
+
+---
+
 ### Task 1: Consumer Schema And Minimal Fixture
 
 **Files:**
@@ -485,6 +533,63 @@ def test_register_metadata_requires_initial_pool_and_boundaries():
     errors = backend_schema.validate_backend_trace(data)
     assert any("registers missing initial_volatile" in e for e in errors)
     assert any("registers missing model_boundary" in e for e in errors)
+
+
+@pytest.mark.parametrize("field", ["edges", "coalesce", "non_allocatable_state", "simplify_order", "select_order"])
+def test_class_level_consumer_fields_are_required(field):
+    data = json.loads(FIXTURE.read_text())
+    cls = data["functions"][0]["regalloc"]["classes"][0]
+    cls.pop(field)
+    errors = backend_schema.validate_backend_trace(data)
+    assert any(f"gpr missing {field}" in e for e in errors)
+
+
+def test_duplicate_color_decision_ids_are_invalid():
+    data = json.loads(FIXTURE.read_text())
+    cls = data["functions"][0]["regalloc"]["classes"][0]
+    cls["color_decisions"].append(dict(cls["color_decisions"][0]))
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("duplicate color decision id gpr-c0" in e for e in errors)
+
+
+def test_color_decision_requires_id_and_provenance():
+    data = json.loads(FIXTURE.read_text())
+    decision = data["functions"][0]["regalloc"]["classes"][0]["color_decisions"][0]
+    decision.pop("id")
+    decision.pop("provenance")
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("color decision missing id" in e for e in errors)
+    assert any("color decision <missing-id> missing provenance" in e for e in errors)
+
+
+def test_color_decision_ig_must_match_colored_node_ref():
+    data = json.loads(FIXTURE.read_text())
+    decision = data["functions"][0]["regalloc"]["classes"][0]["color_decisions"][0]
+    decision["ig_id"] = 99
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("colored node 32 decision gpr-c0 has ig_id 99" in e for e in errors)
+
+
+def test_edge_and_coalesce_references_must_exist():
+    data = json.loads(FIXTURE.read_text())
+    cls = data["functions"][0]["regalloc"]["classes"][0]
+    cls["edges"][0]["b"] = 99
+    cls["coalesce"]["mappings"][0]["root"] = 98
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("edge references missing node 99" in e for e in errors)
+    assert any("coalesce mapping references missing root 98" in e for e in errors)
+
+
+def test_empty_register_metadata_is_invalid():
+    data = json.loads(FIXTURE.read_text())
+    regs = data["functions"][0]["regalloc"]["classes"][0]["registers"]
+    regs["allocatable"] = []
+    regs["initial_volatile"] = []
+    regs["nonvolatile_dispense_order"] = []
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("registers allocatable must be non-empty" in e for e in errors)
+    assert any("registers initial_volatile must be non-empty" in e for e in errors)
+    assert any("registers nonvolatile_dispense_order must be non-empty" in e for e in errors)
 ```
 
 - [ ] **Step 3: Run the schema tests and verify they fail**
@@ -524,6 +629,18 @@ REQUIRED_REGISTER_FIELDS = (
     "nonvolatile_dispense_order",
     "model_boundary",
 )
+REQUIRED_CLASS_FIELDS = (
+    "class_id",
+    "class_name",
+    "registers",
+    "nodes",
+    "edges",
+    "coalesce",
+    "non_allocatable_state",
+    "simplify_order",
+    "select_order",
+    "color_decisions",
+)
 REQUIRED_NODE_FIELDS = (
     "ig_id",
     "virtual",
@@ -542,6 +659,7 @@ REQUIRED_NODE_FIELDS = (
     "color_decision_ref",
 )
 REQUIRED_COLORED_DECISION_FIELDS = (
+    "id",
     "ig_id",
     "iter",
     "assigned_phys",
@@ -554,6 +672,7 @@ REQUIRED_COLORED_DECISION_FIELDS = (
     "tie_rule",
     "decision_rule",
     "confidence",
+    "provenance",
 )
 VALID_COLOR_STATUS = {
     "colored",
@@ -608,32 +727,97 @@ def validate_backend_trace(payload: dict[str, Any]) -> list[str]:
 def _validate_class(fn_name: str, cls: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     class_name = cls.get("class_name", cls.get("class_id", "<unknown>"))
+    for key in _missing(cls, REQUIRED_CLASS_FIELDS):
+        errors.append(f"{fn_name}:{class_name} missing {key}")
     regs = cls.get("registers")
     if not isinstance(regs, dict):
         errors.append(f"{fn_name}:{class_name} missing registers")
     else:
         for key in _missing(regs, REQUIRED_REGISTER_FIELDS):
             errors.append(f"{fn_name}:{class_name} registers missing {key}")
+        for key in ("allocatable", "initial_volatile", "nonvolatile_dispense_order"):
+            if isinstance(regs.get(key), list) and not regs[key]:
+                errors.append(f"{fn_name}:{class_name} registers {key} must be non-empty")
     nodes = cls.get("nodes")
     decisions = cls.get("color_decisions")
+    edges = cls.get("edges")
+    simplify_order = cls.get("simplify_order")
+    select_order = cls.get("select_order")
     if not isinstance(nodes, list):
         errors.append(f"{fn_name}:{class_name} nodes must be a list")
         nodes = []
+    if not isinstance(edges, list):
+        errors.append(f"{fn_name}:{class_name} edges must be a list")
+        edges = []
+    if not isinstance(simplify_order, list):
+        errors.append(f"{fn_name}:{class_name} simplify_order must be a list")
+    if not isinstance(select_order, list):
+        errors.append(f"{fn_name}:{class_name} select_order must be a list")
     if not isinstance(decisions, list):
         errors.append(f"{fn_name}:{class_name} color_decisions must be a list")
         decisions = []
-    decision_by_id = {
-        str(dec.get("id")): dec
-        for dec in decisions
-        if isinstance(dec, dict) and dec.get("id") is not None
-    }
+    node_by_id: dict[int, dict[str, Any]] = {}
+    for node in nodes:
+        if isinstance(node, dict) and isinstance(node.get("ig_id"), int):
+            ig_id = int(node["ig_id"])
+            if ig_id in node_by_id:
+                errors.append(f"{fn_name}:{class_name} duplicate node ig_id {ig_id}")
+            node_by_id[ig_id] = node
+
+    decision_by_id: dict[str, dict[str, Any]] = {}
+    seen_decisions: set[str] = set()
     for decision in decisions:
         if not isinstance(decision, dict):
             errors.append(f"{fn_name}:{class_name} color decision must be object")
             continue
-        decision_id = str(decision.get("id", "<missing-id>"))
+        raw_id = decision.get("id")
+        if raw_id is None:
+            errors.append(f"{fn_name}:{class_name} color decision missing id")
+            decision_id = "<missing-id>"
+        else:
+            decision_id = str(raw_id)
+            if decision_id in seen_decisions:
+                errors.append(f"{fn_name}:{class_name} duplicate color decision id {decision_id}")
+            seen_decisions.add(decision_id)
+            decision_by_id[decision_id] = decision
         for key in _missing(decision, REQUIRED_COLORED_DECISION_FIELDS):
             errors.append(f"{fn_name}:{class_name} color decision {decision_id} missing {key}")
+        ig_id = decision.get("ig_id")
+        if isinstance(ig_id, int) and ig_id not in node_by_id:
+            errors.append(f"{fn_name}:{class_name} color decision {decision_id} references missing node {ig_id}")
+        if not isinstance(decision.get("blocked_candidates", []), list):
+            errors.append(f"{fn_name}:{class_name} color decision {decision_id} blocked_candidates must be a list")
+        for blocked in decision.get("blocked_candidates", []):
+            holder = blocked.get("holder_ig_id") if isinstance(blocked, dict) else None
+            if isinstance(holder, int) and holder not in node_by_id:
+                errors.append(f"{fn_name}:{class_name} color decision {decision_id} blocked candidate holder {holder} missing")
+
+    for edge in edges:
+        if not isinstance(edge, dict):
+            errors.append(f"{fn_name}:{class_name} edge must be object")
+            continue
+        for endpoint in ("a", "b"):
+            ig_id = edge.get(endpoint)
+            if ig_id not in node_by_id:
+                errors.append(f"{fn_name}:{class_name} edge references missing node {ig_id}")
+
+    coalesce = cls.get("coalesce")
+    if not isinstance(coalesce, dict) or not isinstance(coalesce.get("mappings"), list):
+        errors.append(f"{fn_name}:{class_name} coalesce.mappings must be a list")
+        mappings = []
+    else:
+        mappings = coalesce["mappings"]
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            errors.append(f"{fn_name}:{class_name} coalesce mapping must be object")
+            continue
+        alias = mapping.get("alias")
+        root = mapping.get("root")
+        if alias not in node_by_id:
+            errors.append(f"{fn_name}:{class_name} coalesce mapping references missing alias {alias}")
+        if root not in node_by_id:
+            errors.append(f"{fn_name}:{class_name} coalesce mapping references missing root {root}")
+
     for node in nodes:
         if not isinstance(node, dict):
             errors.append(f"{fn_name}:{class_name} node must be object")
@@ -650,11 +834,18 @@ def _validate_class(fn_name: str, cls: dict[str, Any]) -> list[str]:
                 errors.append(f"{fn_name}:{class_name} colored node {node_id} missing color_decision_ref")
             elif str(ref) not in decision_by_id:
                 errors.append(f"{fn_name}:{class_name} colored node {node_id} references missing color decision {ref}")
+            elif decision_by_id[str(ref)].get("ig_id") != node_id:
+                errors.append(
+                    f"{fn_name}:{class_name} colored node {node_id} decision {ref} "
+                    f"has ig_id {decision_by_id[str(ref)].get('ig_id')}"
+                )
             if node.get("select_order") is None:
                 errors.append(f"{fn_name}:{class_name} colored node {node_id} missing select_order")
         if status == "coalesced_alias":
             if node.get("coalesced_into") is None:
                 errors.append(f"{fn_name}:{class_name} coalesced alias {node_id} missing coalesced_into")
+            elif node.get("coalesced_into") not in node_by_id:
+                errors.append(f"{fn_name}:{class_name} coalesced alias {node_id} references missing root {node.get('coalesced_into')}")
             if node.get("assigned_phys") is None:
                 errors.append(f"{fn_name}:{class_name} coalesced alias {node_id} missing inherited assigned_phys")
     return errors
@@ -855,8 +1046,15 @@ Create `tools/melee-agent/tests/fixtures/retro/backend_events_v1_minimal.jsonl`:
 {"event":"block","function":"test_fn","id":"B1","order":1,"succ":[],"pred":["B0"],"labels":["L1"]}
 {"event":"pcode_instruction","function":"test_fn","pass_id":"before_register_coloring","pass_name":"BEFORE REGISTER COLORING","id":"p0","block_id":"B0","order":0,"opcode":"mr","operands":"r32,r3","normalized":"mr v,arg0"}
 {"event":"regclass","function":"test_fn","class_id":0,"class_name":"gpr","registers":{"physical_count":32,"allocatable":[3,4,5,31,30],"initial_volatile":[3,4,5],"reserved":[0,1,2],"fixed":[],"precolored":[],"nonvolatile_dispense_order":[31,30,29],"model_boundary":[]}}
-{"event":"node","function":"test_fn","class_id":0,"node":{"ig_id":32,"virtual":{"kind":"r","number":32},"first_def":{"pass_id":"before_register_coloring","block_id":"B0","instruction_id":"p0","opcode":"mr","operands":"r32,r3","normalized":"mr v,arg0"},"source_attribution":{"status":"unattributed","symbol":null,"line":null,"confidence":"unavailable"},"live":{"blocks":["B0"],"intervals":[],"confidence":"observed"},"degree":0,"flags":[],"coalesce":{"root_ig_id":32,"aliases":[]},"simplify_order":0,"select_order":0,"assigned_phys":31,"spill":{"spilled":false,"reason":null},"color_status":"colored","coalesced_into":null,"color_decision_ref":"gpr-c0"}}
-{"event":"color_decision","function":"test_fn","class_id":0,"decision":{"id":"gpr-c0","ig_id":32,"iter":0,"assigned_phys":31,"node_state_before_select":{"precolored":false,"coalesced":false,"spill_marked":false,"rematerialized":false},"reserved_or_precolored_filtered":[0,1,2],"available_phys_ordered":[3,4,5,31],"blocked_candidates":[],"candidate_phys_ordered":[31],"chosen_source":"nonvolatile_dispense","volatile_pool_before":[3,4,5],"volatile_pool_after":[3,4,5,31],"nonvolatile_dispense_before":{"next":31,"remaining":[31,30]},"nonvolatile_dispense_after":{"consumed":31,"remaining":[30]},"tie_rule":"top_down_nonvolatile_dispense","blocked_by":[],"decision_rule":"lowest_available_or_nonvolatile_dispense","confidence":"observed","provenance":"colorgraph"}}
+{"event":"node","function":"test_fn","class_id":0,"node":{"ig_id":32,"virtual":{"kind":"r","number":32},"first_def":{"pass_id":"before_register_coloring","block_id":"B0","instruction_id":"p0","opcode":"mr","operands":"r32,r3","normalized":"mr v,arg0"},"source_attribution":{"status":"unattributed","symbol":null,"line":null,"confidence":"unavailable"},"live":{"blocks":["B0","B1"],"intervals":[],"confidence":"observed"},"degree":1,"flags":[],"coalesce":{"root_ig_id":32,"aliases":[40]},"simplify_order":1,"select_order":1,"assigned_phys":31,"spill":{"spilled":false,"reason":null},"color_status":"colored","coalesced_into":null,"color_decision_ref":"gpr-c0"}}
+{"event":"node","function":"test_fn","class_id":0,"node":{"ig_id":33,"virtual":{"kind":"r","number":33},"first_def":{"pass_id":"before_register_coloring","block_id":"B0","instruction_id":"p0","opcode":"mr","operands":"r33,r3","normalized":"mr tmp,arg0"},"source_attribution":{"status":"unattributed","symbol":null,"line":null,"confidence":"unavailable"},"live":{"blocks":["B0"],"intervals":[],"confidence":"observed"},"degree":1,"flags":[],"coalesce":{"root_ig_id":33,"aliases":[]},"simplify_order":0,"select_order":0,"assigned_phys":30,"spill":{"spilled":false,"reason":null},"color_status":"colored","coalesced_into":null,"color_decision_ref":"gpr-c1"}}
+{"event":"node","function":"test_fn","class_id":0,"node":{"ig_id":40,"virtual":{"kind":"r","number":40},"first_def":{"pass_id":"before_register_coloring","block_id":"B0","instruction_id":"p0","opcode":"mr","operands":"r40,r32","normalized":"mr alias,root"},"source_attribution":{"status":"unattributed","symbol":null,"line":null,"confidence":"unavailable"},"live":{"blocks":["B0"],"intervals":[],"confidence":"observed"},"degree":0,"flags":["coalesced_away"],"coalesce":{"root_ig_id":32,"aliases":[]},"simplify_order":null,"select_order":null,"assigned_phys":31,"spill":{"spilled":false,"reason":null},"color_status":"coalesced_alias","coalesced_into":32,"color_decision_ref":null}}
+{"event":"edge","function":"test_fn","class_id":0,"edge":{"a":32,"b":33,"kind":"interference","confidence":"observed","provenance":"interferencegraph"}}
+{"event":"coalesce_mapping","function":"test_fn","class_id":0,"mapping":{"alias":40,"root":32,"root_phys":31,"confidence":"observed","provenance":"coalesce_alias"}}
+{"event":"simplify_order","function":"test_fn","class_id":0,"order":[33,32]}
+{"event":"select_order","function":"test_fn","class_id":0,"order":[33,32]}
+{"event":"color_decision","function":"test_fn","class_id":0,"decision":{"id":"gpr-c0","ig_id":32,"iter":1,"assigned_phys":31,"node_state_before_select":{"precolored":false,"coalesced":false,"spill_marked":false,"rematerialized":false},"reserved_or_precolored_filtered":[0,1,2],"available_phys_ordered":[3,4,5,31],"blocked_candidates":[{"phys":3,"reason":"interferer-assigned-phys","holder_ig_id":33,"holder_assigned_phys":3,"provenance":"interference_edge"}],"candidate_phys_ordered":[31],"chosen_source":"nonvolatile_dispense","volatile_pool_before":[3,4,5],"volatile_pool_after":[3,4,5,31],"nonvolatile_dispense_before":{"next":31,"remaining":[31,30]},"nonvolatile_dispense_after":{"consumed":31,"remaining":[30]},"tie_rule":"top_down_nonvolatile_dispense","blocked_by":[{"ig_id":33,"phys":3}],"decision_rule":"lowest_available_or_nonvolatile_dispense","confidence":"observed","provenance":"colorgraph"}}
+{"event":"color_decision","function":"test_fn","class_id":0,"decision":{"id":"gpr-c1","ig_id":33,"iter":0,"assigned_phys":30,"node_state_before_select":{"precolored":false,"coalesced":false,"spill_marked":false,"rematerialized":false},"reserved_or_precolored_filtered":[0,1,2],"available_phys_ordered":[3,4,5,30],"blocked_candidates":[],"candidate_phys_ordered":[30],"chosen_source":"nonvolatile_dispense","volatile_pool_before":[3,4,5],"volatile_pool_after":[3,4,5,30],"nonvolatile_dispense_before":{"next":30,"remaining":[30]},"nonvolatile_dispense_after":{"consumed":30,"remaining":[]},"tie_rule":"top_down_nonvolatile_dispense","blocked_by":[],"decision_rule":"lowest_available_or_nonvolatile_dispense","confidence":"observed","provenance":"colorgraph"}}
 ```
 
 - [ ] **Step 2: Write failing event-normalizer tests**
@@ -866,6 +1064,8 @@ Create `tools/melee-agent/tests/test_retro_backend_events.py`:
 ```python
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
@@ -889,8 +1089,35 @@ def test_jsonl_events_normalize_to_backend_trace():
     )
     assert trace["schema_version"] == backend_schema.SCHEMA_VERSION
     assert trace["functions"][0]["name"] == "test_fn"
-    assert trace["functions"][0]["regalloc"]["classes"][0]["nodes"][0]["ig_id"] == 32
+    cls = trace["functions"][0]["regalloc"]["classes"][0]
+    assert [n["ig_id"] for n in cls["nodes"]] == [32, 33, 40]
+    assert cls["edges"] == [
+        {"a": 32, "b": 33, "kind": "interference", "confidence": "observed", "provenance": "interferencegraph"}
+    ]
+    assert cls["coalesce"]["mappings"][0]["alias"] == 40
+    assert cls["simplify_order"] == [33, 32]
+    assert cls["select_order"] == [33, 32]
+    assert cls["nodes"][2]["color_status"] == "coalesced_alias"
+    assert cls["color_decisions"][0]["blocked_candidates"][0]["holder_ig_id"] == 33
     assert backend_schema.validate_backend_trace(trace) == []
+
+
+def test_allocator_event_before_regclass_is_rejected():
+    events = backend_events.load_events(FIXTURE)
+    regclass_idx = next(i for i, event in enumerate(events) if event["event"] == "regclass")
+    node_idx = next(i for i, event in enumerate(events) if event["event"] == "node")
+    events[regclass_idx], events[node_idx] = events[node_idx], events[regclass_idx]
+    with pytest.raises(ValueError, match="regclass must precede node"):
+        backend_events.normalize_events(
+            events,
+            compiler={"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
+            source={
+                "tu": "src/melee/test/unit.c",
+                "function": "test_fn",
+                "mwcc_command_hash": "sha256:events",
+            },
+            tool_version="test",
+        )
 ```
 
 - [ ] **Step 3: Run tests and verify they fail**
@@ -967,10 +1194,10 @@ def normalize_events(
         fn["pcode"]["passes"].append(created)
         return created
 
-    def ensure_class(fn_name: str, class_id: int, class_name: str, registers: dict[str, Any]) -> dict[str, Any]:
+    def register_class(fn_name: str, class_id: int, class_name: str, registers: dict[str, Any]) -> dict[str, Any]:
         key = (fn_name, class_id)
         if key in class_index:
-            return class_index[key]
+            raise ValueError(f"duplicate regclass for {fn_name} class {class_id}")
         cls = {
             "class_id": class_id,
             "class_name": class_name,
@@ -989,6 +1216,12 @@ def normalize_events(
         ensure_fn(fn_name)["regalloc"]["classes"].append(cls)
         class_index[key] = cls
         return cls
+
+    def class_for_event(kind: str, fn_name: str, class_id: int) -> dict[str, Any]:
+        key = (fn_name, class_id)
+        if key not in class_index:
+            raise ValueError(f"regclass must precede {kind} for {fn_name} class {class_id}")
+        return class_index[key]
 
     for event in events:
         fn_name = event["function"]
@@ -1015,24 +1248,24 @@ def normalize_events(
                 "normalized": event.get("normalized", ""),
             })
         elif kind == "regclass":
-            ensure_class(fn_name, int(event["class_id"]), event["class_name"], event["registers"])
+            register_class(fn_name, int(event["class_id"]), event["class_name"], event["registers"])
         elif kind == "node":
-            cls = ensure_class(fn_name, int(event["class_id"]), "gpr", _default_registers())
+            cls = class_for_event(kind, fn_name, int(event["class_id"]))
             cls["nodes"].append(event["node"])
         elif kind == "edge":
-            cls = ensure_class(fn_name, int(event["class_id"]), "gpr", _default_registers())
+            cls = class_for_event(kind, fn_name, int(event["class_id"]))
             cls["edges"].append(event["edge"])
         elif kind == "coalesce_mapping":
-            cls = ensure_class(fn_name, int(event["class_id"]), "gpr", _default_registers())
+            cls = class_for_event(kind, fn_name, int(event["class_id"]))
             cls["coalesce"]["mappings"].append(event["mapping"])
         elif kind == "simplify_order":
-            cls = ensure_class(fn_name, int(event["class_id"]), "gpr", _default_registers())
+            cls = class_for_event(kind, fn_name, int(event["class_id"]))
             cls["simplify_order"] = event["order"]
         elif kind == "select_order":
-            cls = ensure_class(fn_name, int(event["class_id"]), "gpr", _default_registers())
+            cls = class_for_event(kind, fn_name, int(event["class_id"]))
             cls["select_order"] = event["order"]
         elif kind == "color_decision":
-            cls = ensure_class(fn_name, int(event["class_id"]), "gpr", _default_registers())
+            cls = class_for_event(kind, fn_name, int(event["class_id"]))
             cls["color_decisions"].append(event["decision"])
 
     trace = {
@@ -1046,20 +1279,12 @@ def normalize_events(
             "entries": [],
         },
     }
+    errors = backend_schema.validate_backend_trace(trace)
+    if errors:
+        if any("missing regalloc classes" in err for err in errors):
+            raise ValueError("backend trace has no allocator classes")
+        raise ValueError("backend trace failed validation: " + "; ".join(errors))
     return trace
-
-
-def _default_registers() -> dict[str, Any]:
-    return {
-        "physical_count": 32,
-        "allocatable": [],
-        "initial_volatile": [],
-        "reserved": [],
-        "fixed": [],
-        "precolored": [],
-        "nonvolatile_dispense_order": [],
-        "model_boundary": [],
-    }
 ```
 
 - [ ] **Step 5: Run event tests**
@@ -1560,7 +1785,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
-from tools.mwcc_retro import backend_fidelity  # noqa: E402
+from tools.mwcc_retro import backend_fidelity, backend_schema  # noqa: E402
 
 FIXTURE = REPO / "tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json"
 
@@ -2174,11 +2399,8 @@ Add to `tools/melee-agent/src/cli/debug/retro.py`:
 
 ```python
 def _run_object_parity_for_backend(*, src: str, melee_root: Path) -> dict:
-    """Run the raw .o byte-parity gate for backend tracing.
-
-    The live compile wiring is completed after this helper is covered by tests.
-    """
-    return {"matched": True, "mode": "unit-test-parity-pass"}
+    """Run the raw .o byte-parity gate for backend tracing."""
+    raise RuntimeError("backend object parity gate is not wired")
 
 
 def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path) -> Path:
@@ -2186,7 +2408,7 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
     raise RuntimeError("backend event launcher requires validated 1.2.5n struct map")
 ```
 
-The parity helper returns a pass only until live compile wiring lands in Step 7. The launcher remains hard-failing until Task 11 validates the struct map.
+The runtime tests monkeypatch `_run_object_parity_for_backend`; the committed helper must not return a synthetic pass. Step 7 replaces the hard failure with the real raw object-byte parity gate before this task is committed. The launcher remains hard-failing until Task 11 validates the struct map.
 
 - [ ] **Step 5: Replace `_run_backend_trace` stub**
 
@@ -2315,12 +2537,101 @@ git commit -m "feat(retro): wire backend runtime parity gate"
 **Files:**
 - Modify: `tools/mwcc_retro/mwcc_retro_debugger.py`
 - Modify: `tools/melee-agent/src/cli/debug/retro.py`
+- Modify: `tools/melee-agent/tests/test_retro_backend_runtime.py`
 - Modify: `tools/mwcc_retro/tables/gc_125n.json`
 - Modify: `tools/mwcc_retro/port_table.py`
 - Test: `tools/melee-agent/tests/test_retro_struct_map.py`
 - Live commands from repo root.
 
-- [ ] **Step 1: Add backend mode environment variables to launcher**
+- [ ] **Step 1: Add launcher diagnostics tests**
+
+Append to `tools/melee-agent/tests/test_retro_backend_runtime.py`:
+
+```python
+def test_launch_backend_events_writes_launch_log_on_nonzero(monkeypatch, tmp_path):
+    import subprocess
+
+    import pytest
+    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+
+    class SetupResult:
+        retrowin32_bin = tmp_path / "retrowin32"
+
+    monkeypatch.setattr(retro_setup, "ensure_for_root", lambda root, force=False: SetupResult())
+    monkeypatch.setattr(retro, "_retro_tables_dir", lambda root: tmp_path)
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda src, melee_root: "build/compilers/GC/1.2.5n/mwcceppc.exe -c source.c -o source.o",
+    )
+
+    def fake_run(cmd, **kwargs):
+        assert kwargs["env"]["RETRO_SOURCE"] == "src/melee/test/unit.c"
+        assert kwargs["env"]["RETRO_FUNCTION"] == "test_fn"
+        return subprocess.CompletedProcess(cmd, 7, stdout="launcher stdout\n", stderr="launcher stderr\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="backend event launcher failed"):
+        retro._launch_backend_events(
+            src="src/melee/test/unit.c",
+            fn="test_fn",
+            out_dir=tmp_path,
+            melee_root=Path.cwd(),
+        )
+
+    launch_log = tmp_path / "launch.log"
+    assert "launcher stdout" in launch_log.read_text()
+    assert "launcher stderr" in launch_log.read_text()
+
+
+def test_launch_backend_events_deletes_partial_events_on_abort(monkeypatch, tmp_path):
+    import subprocess
+
+    import pytest
+    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+
+    class SetupResult:
+        retrowin32_bin = tmp_path / "retrowin32"
+
+    monkeypatch.setattr(retro_setup, "ensure_for_root", lambda root, force=False: SetupResult())
+    monkeypatch.setattr(retro, "_retro_tables_dir", lambda root: tmp_path)
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda src, melee_root: "build/compilers/GC/1.2.5n/mwcceppc.exe -c source.c -o source.o",
+    )
+
+    def fake_run(cmd, **kwargs):
+        (tmp_path / "backend-events.v1.jsonl").write_text('{"event":"backend_marker"}\n')
+        return subprocess.CompletedProcess(cmd, 0, stdout="[retro] ABORT: missing colorgraph\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="backend event launcher aborted"):
+        retro._launch_backend_events(
+            src="src/melee/test/unit.c",
+            fn="test_fn",
+            out_dir=tmp_path,
+            melee_root=Path.cwd(),
+        )
+
+    assert not (tmp_path / "backend-events.v1.jsonl").exists()
+```
+
+Run:
+
+```bash
+cd tools/melee-agent
+python -m pytest tests/test_retro_backend_runtime.py::test_launch_backend_events_writes_launch_log_on_nonzero \
+  tests/test_retro_backend_runtime.py::test_launch_backend_events_deletes_partial_events_on_abort -v
+```
+
+Expected: fail because `_launch_backend_events` still hard-raises before launching.
+
+- [ ] **Step 2: Add backend mode environment variables and diagnostics to launcher**
 
 Modify `_launch_backend_events` in `tools/melee-agent/src/cli/debug/retro.py` so it calls `mwcc_retro_debugger.py` with `--phases backend --compiler 1.2.5n` and returns `out_dir / "backend-events.v1.jsonl"`.
 
@@ -2328,6 +2639,7 @@ Use this implementation:
 
 ```python
 def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path) -> Path:
+    import os
     import subprocess
 
     from tools.mwcc_retro import setup as _setup
@@ -2357,14 +2669,60 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
         "1.2.5n",
         fn,
     ]
-    subprocess.run(cmd, cwd=melee_root, check=True, capture_output=True, text=True, timeout=900)
+    env = os.environ.copy()
+    env["RETRO_SOURCE"] = src
+    env["RETRO_FUNCTION"] = fn
+    proc = subprocess.run(
+        cmd,
+        cwd=melee_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=900,
+        env=env,
+    )
+    launch_log = out_dir / "launch.log"
+    launch_log.write_text(
+        "COMMAND: " + " ".join(cmd) + "\n"
+        f"RETRO_SOURCE: {src}\n"
+        f"RETRO_FUNCTION: {fn}\n"
+        f"EXIT: {proc.returncode}\n"
+        "\nSTDOUT:\n" + proc.stdout +
+        "\nSTDERR:\n" + proc.stderr,
+        encoding="utf-8",
+    )
     events = out_dir / "backend-events.v1.jsonl"
+    combined = proc.stdout + "\n" + proc.stderr
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"backend event launcher failed with exit {proc.returncode}; "
+            f"see {launch_log}\n{_tail(combined)}"
+        )
+    if "[retro] ABORT:" in combined:
+        events.unlink(missing_ok=True)
+        raise RuntimeError(f"backend event launcher aborted; see {launch_log}\n{_tail(combined)}")
     if not events.exists():
-        raise RuntimeError(f"backend event launcher produced no events: {events}")
+        raise RuntimeError(f"backend event launcher produced no events: {events}; see {launch_log}\n{_tail(combined)}")
     return events
+
+
+def _tail(text: str, *, lines: int = 20) -> str:
+    return "\n".join(text.splitlines()[-lines:])
 ```
 
-- [ ] **Step 2: Add event writer helpers to gdb script**
+- [ ] **Step 3: Run launcher diagnostics tests**
+
+Run:
+
+```bash
+cd tools/melee-agent
+python -m pytest tests/test_retro_backend_runtime.py::test_launch_backend_events_writes_launch_log_on_nonzero \
+  tests/test_retro_backend_runtime.py::test_launch_backend_events_deletes_partial_events_on_abort -v
+```
+
+Expected: pass.
+
+- [ ] **Step 4: Add event writer helpers to gdb script**
 
 In `tools/mwcc_retro/mwcc_retro_debugger.py`, add below `RetroContext`:
 
@@ -2379,7 +2737,7 @@ def _backend_events_path(out_dir):
     return os.path.join(out_dir, "backend-events.v1.jsonl")
 ```
 
-- [ ] **Step 3: Add required backend table validation inside gdb mode**
+- [ ] **Step 5: Add required backend table validation inside gdb mode**
 
 In `run_in_gdb`, before backend tracing starts for compiler `1.2.5n`, validate required keys using the host-side `struct_map` module:
 
@@ -2400,7 +2758,7 @@ In `run_in_gdb`, before backend tracing starts for compiler `1.2.5n`, validate r
 
 Remove or bypass the previous message that said 1.2.5n backend is not populated once this function exists.
 
-- [ ] **Step 4: Add `_enable_backend_tracing` skeleton**
+- [ ] **Step 6: Add `_enable_backend_tracing` skeleton**
 
 Add this function to `tools/mwcc_retro/mwcc_retro_debugger.py`:
 
@@ -2447,17 +2805,19 @@ def _enable_backend_tracing(gdb, cad, table, out_dir, fn):
 
 This produces only a marker until the next steps add PCode, graph, simplify, and colorgraph readers. It must remain behind the struct-map gate so live users do not get complete-looking allocator facts.
 
-- [ ] **Step 5: Complete event readers incrementally**
+- [ ] **Step 7: Complete event readers with fixture-backed gates**
 
-Add readers in this order, running a live smoke after each reader:
+Add readers in the order below. After each reader, update `tools/melee-agent/tests/fixtures/retro/backend_events_v1_minimal.jsonl` only with the new event family and add one assertion to `tools/melee-agent/tests/test_retro_backend_events.py` that proves the normalized `functions[].regalloc.classes[]` field is populated.
 
-1. Function/backend markers: `function_start`, `backend_marker`.
-2. Block/PCode pass events: `block`, `pcode_instruction`.
-3. Register class metadata: `regclass`.
-4. IG nodes and edges: `node`, `edge`.
-5. Coalesce mappings: `coalesce_mapping`.
-6. Simplify/select order: `simplify_order`, `select_order`.
-7. Color decisions with structured pressure fields: `color_decision`.
+Reader acceptance checks:
+
+- Function/backend markers: `function_start`, `backend_marker`; test that marker-only JSONL raises `ValueError("backend trace has no allocator classes")` in `normalize_events`.
+- Block/PCode pass events: `block`, `pcode_instruction`; test that `pcode.passes[0].instructions[0].id == "p0"`.
+- Register class metadata: `regclass`; test that `registers.allocatable`, `registers.initial_volatile`, `registers.fixed`, `registers.precolored`, and `registers.model_boundary` are preserved exactly.
+- IG nodes and edges: `node`, `edge`; test that an edge references two existing nodes and `backend_schema.validate_backend_trace` rejects an edge to a missing node.
+- Coalesce mappings: `coalesce_mapping`; test that node `40` has `color_status == "coalesced_alias"` and `coalesced_into == 32`.
+- Simplify/select order: `simplify_order`, `select_order`; test that both class-level order arrays are non-empty and match node-level `simplify_order`/`select_order` values for colored nodes.
+- Color decisions with structured pressure fields: `color_decision`; test that `blocked_candidates[0].holder_ig_id == 33`, `candidate_phys_ordered == [31]`, and `provenance == "colorgraph"`.
 
 For each reader, use read-before-dereference checks:
 
@@ -2466,9 +2826,18 @@ def _ptr_in_expected_range(ptr):
     return 0x400000 <= int(ptr) < 0x700000
 ```
 
-If a reader sees an invalid pointer, impossible class id, negative count, or list cycle, emit `[retro] ABORT: ...` to stdout and do not write normalized allocator facts.
+If a reader sees an invalid pointer, impossible class id, negative count, or list cycle, emit `[retro] ABORT: ...` to stdout, remove `backend-events.v1.jsonl` if it exists, and return through `_continue_to_exit(gdb)`. `_launch_backend_events` treats the abort marker as a controlled failure, deletes partial events again on the host side, and prevents marker-only or partially aborted runs from being normalized into `backend-trace.v1.json`.
 
-- [ ] **Step 6: Promote validated table entries**
+Run after each reader:
+
+```bash
+cd tools/melee-agent
+python -m pytest tests/test_retro_backend_events.py tests/test_retro_backend_schema.py -v
+```
+
+Expected: pass before moving to the next reader family.
+
+- [ ] **Step 8: Promote validated table entries**
 
 After live discovery, update `tools/mwcc_retro/tables/gc_125n.json` so `entries` contains every key from `struct_map.REQUIRED_GC125N_BACKEND_KEYS`, each with accepted confidence. Add `structs.IGNode` and `structs.PCode` with accepted confidence and fields.
 
@@ -2481,7 +2850,7 @@ python -m pytest tests/test_retro_struct_map.py -v
 
 Expected: pass.
 
-- [ ] **Step 7: Live matched-function trace**
+- [ ] **Step 9: Live matched-function trace**
 
 From repo root:
 
@@ -2508,7 +2877,7 @@ melee-agent extract list --max-match 1.00 --module lb | head -20
 
 Record the chosen function in the implementation commit message.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add tools/mwcc_retro/mwcc_retro_debugger.py \
@@ -2554,7 +2923,16 @@ def test_debug_pcdump_adapter_produces_trace_shape():
     assert trace["compiler"]["retail"] is False
     fn = trace["functions"][0]
     assert fn["name"] == "fn_80247510"
-    assert fn["regalloc"]["classes"]
+    cls = fn["regalloc"]["classes"][0]
+    assert cls["nodes"]
+    colored = next(node for node in cls["nodes"] if node["color_status"] == "colored")
+    assert colored["color_decision_ref"] is not None
+    decisions = {decision["id"]: decision for decision in cls["color_decisions"]}
+    decision = decisions[colored["color_decision_ref"]]
+    assert decision["provenance"] == "mwcc-debug-pcdump"
+    assert "blocked_by" in decision
+    assert decision["confidence"] == "debug-adapter"
+    assert backend_schema.validate_backend_trace(trace) != []
 ```
 
 - [ ] **Step 2: Run adapter tests and verify they fail**
@@ -2720,7 +3098,11 @@ git commit -m "feat(retro): compare backend trace with mwcc-debug"
 - Modify: `tools/mwcc_retro/README.md`
 - Modify: `.claude/skills/mwcc-retro/SKILL.md`
 
-- [ ] **Step 1: Update `docs/mwcc-retro.md` command section**
+- [ ] **Step 1: Check live-validation evidence before removing limitations**
+
+Before replacing existing text that says exact retail GC/1.2.5n backend tracing is unavailable, verify that Task 11 Step 9 has passed and that Task 14 Steps 2, 3, and 4 have either passed or are documented as blocked with a `melee-agent issue report` command. If those commands have not run yet, add new docs sections that describe the command as experimental and keep existing limitation language intact.
+
+- [ ] **Step 2: Update `docs/mwcc-retro.md` command section**
 
 Add this block under Quick workflow:
 
@@ -2741,7 +3123,7 @@ Add an output table row for:
 | `backend-fidelity.json` / `.txt` | Retail-vs-debug-DLL comparison | `--verify-debug` |
 ```
 
-- [ ] **Step 2: Update `docs/mwcc-retro-usage.md` interpretation section**
+- [ ] **Step 3: Update `docs/mwcc-retro-usage.md` interpretation section**
 
 Add:
 
@@ -2759,13 +3141,13 @@ nonvolatile dispense state, and the tie rule. Coalesced-away nodes appear as
 explicit node rows with `color_status: "coalesced_alias"` and `coalesced_into`.
 ```
 
-- [ ] **Step 3: Update `tools/mwcc_retro/README.md`**
+- [ ] **Step 4: Update `tools/mwcc_retro/README.md`**
 
 Add the `backend` and `verify-backend` commands to the Commands section and mention the hard raw object-byte parity gate.
 
-- [ ] **Step 4: Update `.claude/skills/mwcc-retro/SKILL.md`**
+- [ ] **Step 5: Update `.claude/skills/mwcc-retro/SKILL.md` after validation evidence exists**
 
-In Quick Workflow, replace the current "Backend (GC/1.1 only today)" limitation with:
+If Task 14 Steps 2, 3, and 4 passed, replace the current "Backend (GC/1.1 only today)" limitation in Quick Workflow with:
 
 ```markdown
 # Exact retail 1.2.5n backend/regalloc trace
@@ -2777,7 +3159,9 @@ melee-agent debug retro backend src/melee/mn/mndiagram.c -f mnDiagram_UpdateScro
 
 Keep the GC/1.1 command as a donor/regression note, not as the target backend path.
 
-- [ ] **Step 5: Run docs grep checks**
+If one of the live validations is blocked, keep the current limitation text and add a short blocked note with the exact issue id reported in Task 14 Step 5.
+
+- [ ] **Step 6: Run docs grep checks**
 
 Run:
 
@@ -2785,9 +3169,9 @@ Run:
 rg -n "Backend \\(GC/1\\.1 only today\\)|1\\.2\\.5n backend is follow-on|use the DLL pcdump path for backend on 1\\.2\\.5n" docs tools/mwcc_retro .claude/skills/mwcc-retro/SKILL.md
 ```
 
-Expected: no stale statements that claim 1.2.5n backend is unavailable after this implementation. If a historical spec or findings doc appears, leave it unless it is a current workflow doc.
+Expected after successful live validation: no stale statements in current workflow docs claim 1.2.5n backend is unavailable. If a historical spec or findings doc appears, leave it unless it is a current workflow doc. Expected after a documented blocker: current workflow docs retain a limitation note and include the reported issue id.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add docs/mwcc-retro.md docs/mwcc-retro-usage.md \
