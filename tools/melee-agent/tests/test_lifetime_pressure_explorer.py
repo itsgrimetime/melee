@@ -64,6 +64,30 @@ PCDUMP = textwrap.dedent("""\
           interferers:
 """)
 
+CANDIDATE_PCDUMP = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        lwz r37,12(r32)
+        add r40,r37,r33
+    AFTER REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        lwz r26,12(r3)
+        add r25,r26,r4
+    SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=45)
+      iter ig_idx degree arraySize flags notes
+        0 37 1 1 0x00
+        1 40 1 1 0x00
+    COLORGRAPH DECISIONS (class=0, result=1, n_nodes=2)
+      iter ig_idx phys degree nIntfr flags
+        0 37 r26 1 1 0x00
+          interferers: 40=r25
+        1 40 r25 1 1 0x00
+          interferers: 37=r26
+""")
+
 SOURCE = textwrap.dedent("""\
     typedef struct Obj { int xC; } Obj;
     void fn_80000000(Obj* obj, int extra) {
@@ -257,6 +281,134 @@ def test_target_set_to_dict_converts_path_values() -> None:
     payload = TargetSet(provenance={"path": pathlib.Path("x")}).to_dict()
 
     assert json.loads(json.dumps(payload))["provenance"]["path"] == "x"
+
+
+def test_candidate_comparison_rejects_protected_target_regression(tmp_path: pathlib.Path) -> None:
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    base_path = tmp_path / "base.pcdump.txt"
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    base_path.write_text(PCDUMP)
+    cand_path.write_text(CANDIDATE_PCDUMP)
+    baseline = facts_from_pcdump(PCDUMP, "fn_80000000", pcdump_path=base_path, source_text=SOURCE, class_filter=(0,))
+    target = parse_force_phys_spec("40:25,37:25")
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("swap", cand_path)],
+        source_text=SOURCE,
+    )[0]
+
+    assert comparison.label == "swap"
+    assert comparison.status == "rejected"
+    assert comparison.target_results[40]["satisfied"] is True
+    assert comparison.target_results[37]["regressed"] is True
+
+
+def test_candidate_comparison_reports_full_target_match(tmp_path: pathlib.Path) -> None:
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    cand_path.write_text(CANDIDATE_PCDUMP)
+    baseline = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    target = parse_force_phys_spec("40:25", default_class_id=0)
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("hit", cand_path)],
+        source_text=SOURCE,
+    )[0]
+
+    assert comparison.status == "full_target_match"
+    assert comparison.target_results[40]["satisfied"] is True
+    assert comparison.target_results[40]["improved"] is True
+
+
+def test_candidate_comparison_reports_partial_progress(tmp_path: pathlib.Path) -> None:
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    cand_path.write_text(CANDIDATE_PCDUMP)
+    baseline = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    target = parse_force_phys_spec("40:25,37:27", default_class_id=0)
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("partial", cand_path)],
+        source_text=SOURCE,
+    )[0]
+
+    assert comparison.status == "partial_progress"
+    assert comparison.target_results[40]["improved"] is True
+    assert comparison.target_results[37]["satisfied"] is False
+    assert comparison.target_results[37]["regressed"] is False
+
+
+def test_candidate_comparison_rejects_untrusted_identity(tmp_path: pathlib.Path) -> None:
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    cand_path.write_text(CANDIDATE_PCDUMP)
+    baseline = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    target = parse_force_phys_spec("40:25", default_class_id=0)
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("unsafe", cand_path)],
+        source_text=None,
+        require_reanchor=True,
+    )[0]
+
+    assert comparison.status == "rejected"
+    assert comparison.identity_status == "unsafe"
+    assert "role reanchor unavailable" in " ".join(comparison.warnings)
+
+
+def test_candidate_comparison_rejects_missing_function(tmp_path: pathlib.Path) -> None:
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    cand_path = tmp_path / "wrong_function.pcdump.txt"
+    cand_path.write_text(CANDIDATE_PCDUMP.replace("fn_80000000", "fn_80000001"))
+    baseline = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    target = parse_force_phys_spec("40:25", default_class_id=0)
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("missing", cand_path)],
+        source_text=SOURCE,
+    )[0]
+
+    assert comparison.status == "rejected"
+    assert comparison.identity_status == "function_missing"
+    assert comparison.target_results[40]["unsafe"] is True
+
+
+def test_source_candidate_rejected_without_compile_capable_mode(tmp_path: pathlib.Path) -> None:
+    from src.mwcc_debug.pressure_explorer.candidates import parse_candidate_specs
+
+    source = tmp_path / "candidate.c"
+    source.write_text("void fn_80000000(void) {}\n")
+
+    with pytest.raises(ValueError, match="source candidate requires compile-capable validation mode"):
+        parse_candidate_specs([f"src={source}"], validate_mode="none")
+
+    remote = parse_candidate_specs([f"src={source}"], validate_mode="remote")
+    assert remote[0].kind == "source-dry-run"
 
 
 def test_parse_force_phys_rejects_bad_entry() -> None:

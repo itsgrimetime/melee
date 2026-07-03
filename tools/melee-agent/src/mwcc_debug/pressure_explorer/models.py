@@ -51,6 +51,24 @@ class TargetSet:
 
 
 @dataclass(frozen=True)
+class CandidateSpec:
+    label: str
+    path: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class CandidateComparison:
+    label: str
+    path: str
+    status: str
+    target_results: dict[int, dict[str, Any]]
+    pressure_delta: dict[str, Any]
+    identity_status: str
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class FunctionFreshness:
     status: str
     pcdump_mtime: float | None = None
