@@ -1,0 +1,358 @@
+{
+  "schema_version": "mwcc-retro-backend-trace.v1",
+  "tool_version": "test",
+  "compiler": {
+    "family": "MWCC",
+    "version": "GC/1.2.5n",
+    "retail": true
+  },
+  "source": {
+    "tu": "src/melee/test/unit.c",
+    "function": "test_fn",
+    "mwcc_command_hash": "sha256:fixture"
+  },
+  "functions": [
+    {
+      "name": "test_fn",
+      "identity": {
+        "requested": "test_fn",
+        "canonical_name": "test_fn",
+        "symbol_name": "test_fn",
+        "source_name": "test_fn",
+        "aliases": [],
+        "source_file": "src/melee/test/unit.c"
+      },
+      "blocks": [
+        {
+          "id": "B0",
+          "order": 0,
+          "succ": ["B1"],
+          "pred": [],
+          "labels": ["L0"]
+        },
+        {
+          "id": "B1",
+          "order": 1,
+          "succ": [],
+          "pred": ["B0"],
+          "labels": ["L1"]
+        }
+      ],
+      "pcode": {
+        "passes": [
+          {
+            "id": "before_register_coloring",
+            "name": "BEFORE REGISTER COLORING",
+            "instructions": [
+              {
+                "id": "p0",
+                "block_id": "B0",
+                "order": 0,
+                "opcode": "mr",
+                "operands": "r32,r3",
+                "normalized": "mr v,arg0"
+              },
+              {
+                "id": "p1",
+                "block_id": "B0",
+                "order": 1,
+                "opcode": "addi",
+                "operands": "r33,r32,4",
+                "normalized": "addi v,v,imm"
+              }
+            ]
+          }
+        ],
+        "instruction_identity_note": "instruction ids are stable only within this trace"
+      },
+      "regalloc": {
+        "classes": [
+          {
+            "class_id": 0,
+            "class_name": "gpr",
+            "registers": {
+              "physical_count": 32,
+              "allocatable": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 31, 30, 29, 28, 27],
+              "initial_volatile": [3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+              "reserved": [0, 1, 2],
+              "fixed": [
+                {
+                  "phys": 1,
+                  "reason": "stack_pointer"
+                },
+                {
+                  "phys": 2,
+                  "reason": "toc"
+                }
+              ],
+              "precolored": [
+                {
+                  "ig_id": 3,
+                  "phys": 3,
+                  "reason": "incoming_arg"
+                }
+              ],
+              "nonvolatile_dispense_order": [31, 30, 29, 28, 27],
+              "model_boundary": [
+                {
+                  "name": "LR",
+                  "reason": "outside-v1-allocator-facts"
+                }
+              ]
+            },
+            "nodes": [
+              {
+                "ig_id": 32,
+                "virtual": {
+                  "kind": "r",
+                  "number": 32
+                },
+                "first_def": {
+                  "pass_id": "before_register_coloring",
+                  "block_id": "B0",
+                  "instruction_id": "p0",
+                  "opcode": "mr",
+                  "operands": "r32,r3",
+                  "normalized": "mr v,arg0"
+                },
+                "source_attribution": {
+                  "status": "attributed",
+                  "symbol": "arg0",
+                  "line": 10,
+                  "confidence": "high"
+                },
+                "live": {
+                  "blocks": ["B0", "B1"],
+                  "intervals": [
+                    {
+                      "block_id": "B0",
+                      "start": 0,
+                      "end": 1
+                    }
+                  ],
+                  "confidence": "observed"
+                },
+                "degree": 1,
+                "flags": [],
+                "coalesce": {
+                  "root_ig_id": 32,
+                  "aliases": [40]
+                },
+                "simplify_order": 1,
+                "select_order": 1,
+                "assigned_phys": 31,
+                "spill": {
+                  "spilled": false,
+                  "reason": null
+                },
+                "color_status": "colored",
+                "coalesced_into": null,
+                "color_decision_ref": "gpr-c0"
+              },
+              {
+                "ig_id": 33,
+                "virtual": {
+                  "kind": "r",
+                  "number": 33
+                },
+                "first_def": {
+                  "pass_id": "before_register_coloring",
+                  "block_id": "B0",
+                  "instruction_id": "p1",
+                  "opcode": "addi",
+                  "operands": "r33,r32,4",
+                  "normalized": "addi v,v,imm"
+                },
+                "source_attribution": {
+                  "status": "ambiguous",
+                  "symbol": null,
+                  "line": null,
+                  "confidence": "low",
+                  "candidates": ["tmp_a", "tmp_b"]
+                },
+                "live": {
+                  "blocks": ["B0"],
+                  "intervals": [
+                    {
+                      "block_id": "B0",
+                      "start": 1,
+                      "end": 1
+                    }
+                  ],
+                  "confidence": "observed"
+                },
+                "degree": 1,
+                "flags": [],
+                "coalesce": {
+                  "root_ig_id": 33,
+                  "aliases": []
+                },
+                "simplify_order": 0,
+                "select_order": 0,
+                "assigned_phys": 30,
+                "spill": {
+                  "spilled": false,
+                  "reason": null
+                },
+                "color_status": "colored",
+                "coalesced_into": null,
+                "color_decision_ref": "gpr-c1"
+              },
+              {
+                "ig_id": 40,
+                "virtual": {
+                  "kind": "r",
+                  "number": 40
+                },
+                "first_def": {
+                  "pass_id": "before_register_coloring",
+                  "block_id": "B0",
+                  "instruction_id": "p0",
+                  "opcode": "mr",
+                  "operands": "r40,r32",
+                  "normalized": "mr alias,root"
+                },
+                "source_attribution": {
+                  "status": "unattributed",
+                  "symbol": null,
+                  "line": null,
+                  "confidence": "unavailable"
+                },
+                "live": {
+                  "blocks": ["B0"],
+                  "intervals": [],
+                  "confidence": "observed"
+                },
+                "degree": 0,
+                "flags": ["coalesced_away"],
+                "coalesce": {
+                  "root_ig_id": 32,
+                  "aliases": []
+                },
+                "simplify_order": null,
+                "select_order": null,
+                "assigned_phys": 31,
+                "spill": {
+                  "spilled": false,
+                  "reason": null
+                },
+                "color_status": "coalesced_alias",
+                "coalesced_into": 32,
+                "color_decision_ref": null
+              }
+            ],
+            "edges": [
+              {
+                "a": 32,
+                "b": 33,
+                "kind": "interference",
+                "confidence": "observed",
+                "provenance": "interferencegraph"
+              }
+            ],
+            "coalesce": {
+              "mappings": [
+                {
+                  "alias": 40,
+                  "root": 32,
+                  "root_phys": 31,
+                  "confidence": "observed",
+                  "provenance": "coalesce_alias"
+                }
+              ]
+            },
+            "non_allocatable_state": {
+              "status": "model-boundary",
+              "notes": ["CR/LR/CTR not modeled in v1 allocator facts"]
+            },
+            "simplify_order": [33, 32],
+            "select_order": [33, 32],
+            "color_decisions": [
+              {
+                "id": "gpr-c0",
+                "ig_id": 32,
+                "iter": 1,
+                "assigned_phys": 31,
+                "node_state_before_select": {
+                  "precolored": false,
+                  "coalesced": false,
+                  "spill_marked": false,
+                  "rematerialized": false
+                },
+                "reserved_or_precolored_filtered": [0, 1, 2],
+                "available_phys_ordered": [3, 4, 5, 31, 30],
+                "blocked_candidates": [
+                  {
+                    "phys": 3,
+                    "reason": "interferer-assigned-phys",
+                    "holder_ig_id": 33,
+                    "holder_assigned_phys": 3,
+                    "provenance": "interference_edge"
+                  }
+                ],
+                "candidate_phys_ordered": [31, 30],
+                "chosen_source": "nonvolatile_dispense",
+                "volatile_pool_before": [3, 4, 5],
+                "volatile_pool_after": [3, 4, 5, 31],
+                "nonvolatile_dispense_before": {
+                  "next": 31,
+                  "remaining": [31, 30, 29]
+                },
+                "nonvolatile_dispense_after": {
+                  "consumed": 31,
+                  "remaining": [30, 29]
+                },
+                "tie_rule": "top_down_nonvolatile_dispense",
+                "blocked_by": [
+                  {
+                    "ig_id": 33,
+                    "phys": 3
+                  }
+                ],
+                "decision_rule": "lowest_available_or_nonvolatile_dispense",
+                "confidence": "observed",
+                "provenance": "colorgraph"
+              },
+              {
+                "id": "gpr-c1",
+                "ig_id": 33,
+                "iter": 0,
+                "assigned_phys": 30,
+                "node_state_before_select": {
+                  "precolored": false,
+                  "coalesced": false,
+                  "spill_marked": false,
+                  "rematerialized": false
+                },
+                "reserved_or_precolored_filtered": [0, 1, 2],
+                "available_phys_ordered": [3, 4, 5, 31, 30],
+                "blocked_candidates": [],
+                "candidate_phys_ordered": [30],
+                "chosen_source": "nonvolatile_dispense",
+                "volatile_pool_before": [3, 4, 5],
+                "volatile_pool_after": [3, 4, 5, 30],
+                "nonvolatile_dispense_before": {
+                  "next": 30,
+                  "remaining": [30, 29]
+                },
+                "nonvolatile_dispense_after": {
+                  "consumed": 30,
+                  "remaining": [29]
+                },
+                "tie_rule": "top_down_nonvolatile_dispense",
+                "blocked_by": [],
+                "decision_rule": "lowest_available_or_nonvolatile_dispense",
+                "confidence": "observed",
+                "provenance": "colorgraph"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "struct_map": {
+    "schema_version": "mwcc-retro-struct-map.v1",
+    "entries": []
+  }
+}
