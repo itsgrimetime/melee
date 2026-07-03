@@ -92,8 +92,12 @@ def validate_backend_trace(payload: dict[str, Any]) -> list[str]:
         )
 
     compiler = payload.get("compiler") or {}
-    if compiler.get("version") != "GC/1.2.5n" or compiler.get("retail") is not True:
-        errors.append("compiler must describe retail GC/1.2.5n")
+    if (
+        compiler.get("family") != "MWCC"
+        or compiler.get("version") != "GC/1.2.5n"
+        or compiler.get("retail") is not True
+    ):
+        errors.append("compiler must describe retail MWCC GC/1.2.5n")
 
     functions = payload.get("functions")
     if not isinstance(functions, list) or not functions:
@@ -361,6 +365,12 @@ def _validate_coalesced_alias(
         errors.append(f"{fn_name}:{class_name} coalesced alias {node_id} missing coalesced_into")
     elif root not in node_by_id:
         errors.append(f"{fn_name}:{class_name} coalesced alias {node_id} references missing root {root}")
+    elif node.get("assigned_phys") != node_by_id[root].get("assigned_phys"):
+        errors.append(
+            f"{fn_name}:{class_name} coalesced alias {node_id} assigned_phys "
+            f"{node.get('assigned_phys')} does not match root {root} assigned_phys "
+            f"{node_by_id[root].get('assigned_phys')}"
+        )
 
     if node.get("assigned_phys") is None:
         errors.append(f"{fn_name}:{class_name} coalesced alias {node_id} missing inherited assigned_phys")

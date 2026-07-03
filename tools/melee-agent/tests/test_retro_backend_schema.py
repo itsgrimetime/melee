@@ -18,6 +18,13 @@ def test_minimal_backend_trace_fixture_validates():
     assert errors == []
 
 
+def test_compiler_family_must_be_mwcc():
+    data = json.loads(FIXTURE.read_text())
+    data["compiler"]["family"] = "Not MWCC"
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("compiler must describe retail MWCC GC/1.2.5n" in e for e in errors)
+
+
 def test_colored_node_without_decision_is_invalid():
     data = json.loads(FIXTURE.read_text())
     cls = data["functions"][0]["regalloc"]["classes"][0]
@@ -34,6 +41,18 @@ def test_coalesced_alias_may_have_null_select_and_decision():
     assert alias["color_decision_ref"] is None
     errors = backend_schema.validate_backend_trace(data)
     assert errors == []
+
+
+def test_coalesced_alias_must_inherit_root_assigned_phys():
+    data = json.loads(FIXTURE.read_text())
+    cls = data["functions"][0]["regalloc"]["classes"][0]
+    alias = next(n for n in cls["nodes"] if n["ig_id"] == 40)
+    alias["assigned_phys"] = 30
+    errors = backend_schema.validate_backend_trace(data)
+    assert any(
+        "coalesced alias 40 assigned_phys 30 does not match root 32 assigned_phys 31" in e
+        for e in errors
+    )
 
 
 def test_color_decision_requires_pressure_fields():
