@@ -41,6 +41,7 @@ def attach_hypotheses(
     hypotheses: list[SourceHypothesis] = []
     commands: list[ValidationCommand] = list(report.validation_commands)
     command_ids_by_target: dict[tuple[int, int], tuple[str, ...]] = {}
+    force_phys = _force_phys_for_report_targets(report.targets)
 
     for target in report.targets:
         blocker_ig = _primary_blocker_ig(target)
@@ -48,7 +49,7 @@ def attach_hypotheses(
             function=report.function,
             pcdump_path=pcdump_path,
             source_path=source_path,
-            force_phys=_force_phys_for_target(target),
+            force_phys=force_phys,
             target_ig=target.ig_id,
             blocker_ig=blocker_ig,
             class_id=target.class_id,
@@ -237,8 +238,12 @@ def _primary_blocker_ig(target: TargetPressureReport) -> int | None:
     return None
 
 
-def _force_phys_for_target(target: TargetPressureReport) -> str:
-    return f"{target.class_id}:{target.ig_id}:{target.expected_phys}"
+def _force_phys_for_report_targets(targets: tuple[TargetPressureReport, ...]) -> str:
+    return ",".join(
+        f"{target.class_id}:{target.ig_id}:{target.expected_phys}"
+        for target in targets
+        if target.expected_phys is not None
+    )
 
 
 def _blocker_discriminator(blocker: Blocker) -> str:

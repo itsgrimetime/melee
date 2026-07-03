@@ -1257,6 +1257,45 @@ def test_hypotheses_rank_lifetime_shortening_for_direct_blocker() -> None:
     assert any("debug target score-source" in cmd for cmd in commands.values())
 
 
+def test_multi_target_hypothesis_commands_protect_full_force_phys_map() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.hypotheses import attach_hypotheses
+
+    facts = facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        pcdump_path="baseline.pcdump.txt",
+        source_text=SOURCE,
+        source_path="src/example.c",
+        class_filter=(0,),
+    )
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("37:25,40:25", default_class_id=0),
+    )
+
+    enriched = attach_hypotheses(
+        report,
+        pcdump_path="baseline.pcdump.txt",
+        source_path="src/example.c",
+        allow_stale_pcdump=False,
+    )
+
+    force_phys_commands = [
+        command.command
+        for command in enriched.validation_commands
+        if "--force-phys" in command.command
+    ]
+
+    assert force_phys_commands
+    assert all(
+        "--force-phys 0:37:25,0:40:25" in command
+        for command in force_phys_commands
+    )
+    assert any("--target 'r40<r37'" in command for command in force_phys_commands)
+
+
 def test_stale_pcdump_marks_line_specific_hints() -> None:
     from dataclasses import replace
 
