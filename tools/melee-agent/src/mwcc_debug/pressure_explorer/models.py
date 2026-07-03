@@ -316,6 +316,8 @@ __all__ = [
     "_json_value",
     "TargetAllocation",
     "TargetSet",
+    "CandidateSpec",
+    "CandidateComparison",
     "FunctionFreshness",
     "FirstDefSite",
     "SourceAttributionFact",

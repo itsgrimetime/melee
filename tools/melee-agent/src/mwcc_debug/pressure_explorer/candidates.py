@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +63,7 @@ def compare_candidate_pcdumps(
     candidates: list[tuple[str, Path]],
     source_text: str | None = None,
     require_reanchor: bool = False,
+    validation_evidence: dict[str, dict[str, object]] | None = None,
 ) -> tuple[CandidateComparison, ...]:
     return tuple(
         _compare_candidate_pcdump(
@@ -71,6 +73,9 @@ def compare_candidate_pcdumps(
             path=path,
             source_text=source_text,
             require_reanchor=require_reanchor,
+            validation_evidence=(
+                None if validation_evidence is None else validation_evidence.get(label)
+            ),
         )
         for label, path in candidates
     )
@@ -84,12 +89,17 @@ def _compare_candidate_pcdump(
     path: Path,
     source_text: str | None,
     require_reanchor: bool,
+    validation_evidence: dict[str, object] | None,
 ) -> CandidateComparison:
     candidate_text = path.read_text()
     function = baseline.function.name
+    guard_warnings = _guard_failure_warnings(validation_evidence)
 
     if require_reanchor:
-        warnings = ("role reanchor unavailable for candidate identity check",)
+        warnings = (
+            "role reanchor unavailable for candidate identity check",
+            *guard_warnings,
+        )
         return _unsafe_comparison(
             baseline,
             target_set,
@@ -117,7 +127,7 @@ def _compare_candidate_pcdump(
                 path=path,
                 candidate_text=candidate_text,
                 identity_status="function_missing",
-                warnings=(str(exc),),
+                warnings=(str(exc), *guard_warnings),
             )
         raise
 
@@ -135,7 +145,11 @@ def _compare_candidate_pcdump(
             candidate_by_ig.get(target.ig_id),
         )
 
-    status = _candidate_status(target_results)
+    status = (
+        "rejected"
+        if guard_warnings
+        else _candidate_status(target_results)
+    )
     return CandidateComparison(
         label=label,
         path=str(path),
@@ -148,6 +162,7 @@ def _compare_candidate_pcdump(
             function=function,
         ),
         identity_status="trusted",
+        warnings=guard_warnings,
     )
 
 
@@ -207,6 +222,24 @@ def _candidate_status(target_results: dict[int, dict[str, Any]]) -> str:
     if any(result["improved"] for result in results):
         return "partial_progress"
     return "rejected"
+
+
+def _guard_failure_warnings(
+    validation_evidence: dict[str, object] | None,
+) -> tuple[str, ...]:
+    if validation_evidence is None:
+        return ()
+
+    warnings: list[str] = []
+    guard_labels = {
+        "checkdiff_guard": "checkdiff guard rejected candidate",
+        "structural_guard": "structural guard rejected candidate",
+    }
+    for key, warning in guard_labels.items():
+        guard = validation_evidence.get(key)
+        if isinstance(guard, Mapping) and guard.get("accepted") is False:
+            warnings.append(warning)
+    return tuple(warnings)
 
 
 def _unsafe_comparison(

@@ -283,6 +283,23 @@ def test_target_set_to_dict_converts_path_values() -> None:
     assert json.loads(json.dumps(payload))["provenance"]["path"] == "x"
 
 
+def test_candidate_models_reexport_from_pressure_explorer_package() -> None:
+    from src.mwcc_debug.pressure_explorer import CandidateComparison, CandidateSpec
+
+    spec = CandidateSpec(label="candidate", path="candidate.pcdump.txt", kind="pcdump")
+    comparison = CandidateComparison(
+        label="candidate",
+        path="candidate.pcdump.txt",
+        status="rejected",
+        target_results={},
+        pressure_delta={},
+        identity_status="trusted",
+    )
+
+    assert spec.kind == "pcdump"
+    assert comparison.identity_status == "trusted"
+
+
 def test_candidate_comparison_rejects_protected_target_regression(tmp_path: pathlib.Path) -> None:
     from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
     from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
@@ -328,6 +345,40 @@ def test_candidate_comparison_reports_full_target_match(tmp_path: pathlib.Path) 
     assert comparison.status == "full_target_match"
     assert comparison.target_results[40]["satisfied"] is True
     assert comparison.target_results[40]["improved"] is True
+
+
+@pytest.mark.parametrize(
+    ("guard_name", "expected_warning"),
+    [
+        ("checkdiff_guard", "checkdiff guard rejected candidate"),
+        ("structural_guard", "structural guard rejected candidate"),
+    ],
+)
+def test_candidate_comparison_rejects_guard_failure_evidence(
+    tmp_path: pathlib.Path,
+    guard_name: str,
+    expected_warning: str,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    cand_path.write_text(CANDIDATE_PCDUMP)
+    baseline = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    target = parse_force_phys_spec("40:25", default_class_id=0)
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("hit", cand_path)],
+        source_text=SOURCE,
+        validation_evidence={"hit": {guard_name: {"accepted": False}}},
+    )[0]
+
+    assert comparison.status == "rejected"
+    assert comparison.target_results[40]["satisfied"] is True
+    assert expected_warning in comparison.warnings
 
 
 def test_candidate_comparison_reports_partial_progress(tmp_path: pathlib.Path) -> None:
