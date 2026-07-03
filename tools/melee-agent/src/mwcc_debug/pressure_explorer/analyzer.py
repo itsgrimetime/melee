@@ -180,7 +180,7 @@ def _target_blockers(
     if decision is None:
         return ()
 
-    blockers.extend(_order_blockers(target, decision))
+    blockers.extend(_order_blockers(target, node, decision))
     return _sort_blockers(blockers)
 
 
@@ -237,10 +237,13 @@ def _expected_phys_holders(
 
 def _order_blockers(
     target: TargetAllocation,
+    node: AllocatorNode | None,
     decision: ColorDecision,
 ) -> Iterable[Blocker]:
+    emitted = False
     candidate_order = decision.candidate_phys_ordered
     if target.expected_phys not in candidate_order and candidate_order:
+        emitted = True
         yield Blocker(
             target_ig_id=target.ig_id,
             ig_id=None,
@@ -254,6 +257,7 @@ def _order_blockers(
         assigned_idx = candidate_order.index(decision.assigned_phys)
         expected_idx = candidate_order.index(target.expected_phys)
         if expected_idx > assigned_idx:
+            emitted = True
             yield Blocker(
                 target_ig_id=target.ig_id,
                 ig_id=None,
@@ -268,6 +272,7 @@ def _order_blockers(
             )
 
     if decision.chosen_source and decision.chosen_source not in {"observed", "candidate"}:
+        emitted = True
         yield Blocker(
             target_ig_id=target.ig_id,
             ig_id=None,
@@ -275,6 +280,20 @@ def _order_blockers(
             assigned_phys=decision.assigned_phys,
             impact=50,
             reason=f"chosen source {decision.chosen_source!r} selected r{decision.assigned_phys}",
+            confidence=decision.confidence,
+        )
+
+    if not emitted and node is not None and node.select_order is not None:
+        yield Blocker(
+            target_ig_id=target.ig_id,
+            ig_id=None,
+            kind="select_order",
+            assigned_phys=decision.assigned_phys,
+            impact=50,
+            reason=(
+                f"select-order position {node.select_order} selected "
+                f"r{decision.assigned_phys} before the target reached r{target.expected_phys}"
+            ),
             confidence=decision.confidence,
         )
 

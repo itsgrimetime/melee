@@ -13,6 +13,7 @@ from src.mwcc_debug.pressure_explorer.models import (
     AllocatorClassFacts,
     AllocatorFacts,
     AllocatorNode,
+    Blocker,
     BlockedCandidate,
     ColorDecision,
     CoalesceFacts,
@@ -67,6 +68,108 @@ SOURCE = textwrap.dedent("""\
         sink(temp);
     }
 """)
+
+
+def _parsed_pressure_facts() -> AllocatorFacts:
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+
+    return facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        source_text=SOURCE,
+        class_filter=(0,),
+    )
+
+
+def _source_attr(symbol: str = "local") -> SourceAttributionFact:
+    return SourceAttributionFact(status="attributed", symbol=symbol, confidence="observed")
+
+
+def _manual_node(
+    ig_id: int,
+    *,
+    assigned_phys: int | None,
+    color_status: str = "colored",
+    coalesced_into: int | None = None,
+    coalesce: CoalesceFacts | None = None,
+    select_order: int | None = 0,
+) -> AllocatorNode:
+    return AllocatorNode(
+        ig_id=ig_id,
+        virtual_kind="gpr",
+        virtual_number=ig_id,
+        color_status=color_status,
+        coalesced_into=coalesced_into,
+        color_decision_ref=f"gpr-c{ig_id}",
+        first_def=FirstDefSite(opcode="mr", operands=f"r{ig_id}, r3"),
+        source_attribution=_source_attr(f"v{ig_id}"),
+        live=LiveFacts(blocks=("B0",), intervals=((0, 1),)),
+        degree=0,
+        flags=(),
+        coalesce=coalesce or CoalesceFacts(root_ig_id=ig_id),
+        simplify_order=0,
+        select_order=select_order,
+        assigned_phys=assigned_phys,
+        spill=SpillFacts(spilled=False),
+    )
+
+
+def _manual_decision(
+    ig_id: int,
+    *,
+    assigned_phys: int | None,
+    candidate_phys_ordered: tuple[int, ...] = (25, 26, 27),
+    chosen_source: str = "observed",
+    confidence: str = "observed",
+) -> ColorDecision:
+    return ColorDecision(
+        id=f"gpr-c{ig_id}",
+        ig_id=ig_id,
+        iter=0,
+        assigned_phys=assigned_phys,
+        available_phys_ordered=(25, 26, 27),
+        blocked_candidates=(),
+        candidate_phys_ordered=candidate_phys_ordered,
+        chosen_source=chosen_source,
+        decision_rule="unit-test",
+        tie_rule="unit-test",
+        confidence=confidence,
+    )
+
+
+def _manual_facts(
+    *,
+    nodes: tuple[AllocatorNode, ...],
+    decisions: tuple[ColorDecision, ...],
+    edges: tuple[InterferenceEdge, ...] = (),
+    coalesce_mappings: tuple[tuple[int, int], ...] = (),
+) -> AllocatorFacts:
+    return AllocatorFacts(
+        schema_version="allocator-facts.v1",
+        producer={"kind": "unit-test"},
+        function=FunctionFacts(
+            name="fn_80000000",
+            source_path=None,
+            freshness=FunctionFreshness(status="fresh"),
+        ),
+        classes=(
+            AllocatorClassFacts(
+                class_id=0,
+                class_name="gpr",
+                registers=RegisterFacts(physical_count=32, allocatable=(25, 26, 27)),
+                nodes=nodes,
+                edges=edges,
+                coalesce={
+                    "mappings": [
+                        {"alias": alias, "root": root}
+                        for alias, root in coalesce_mappings
+                    ]
+                },
+                coalesce_mappings=coalesce_mappings,
+                color_decisions=decisions,
+            ),
+        ),
+    )
 
 
 def test_parse_force_phys_spec_supports_class_prefixes() -> None:
@@ -322,10 +425,9 @@ def test_allocator_facts_from_pcdump_contains_nodes_edges_and_decisions() -> Non
 
 def test_analyze_reports_no_pressure_issue_when_target_matches() -> None:
     from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
-    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
     from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
 
-    facts = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    facts = _parsed_pressure_facts()
     report = analyze_lifetime_pressure(
         facts,
         parse_force_phys_spec("37:25", default_class_id=0),
@@ -340,10 +442,9 @@ def test_analyze_reports_no_pressure_issue_when_target_matches() -> None:
 
 def test_analyze_finds_expected_phys_holder_blocker() -> None:
     from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
-    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
     from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
 
-    facts = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    facts = _parsed_pressure_facts()
     report = analyze_lifetime_pressure(
         facts,
         parse_force_phys_spec("40:25", default_class_id=0),
@@ -358,12 +459,89 @@ def test_analyze_finds_expected_phys_holder_blocker() -> None:
     assert "remove interference" in target.must_change[0]
 
 
-def test_analyze_reports_candidate_order_when_expected_phys_is_later() -> None:
+def test_analyze_rejects_target_function_mismatch() -> None:
     from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
-    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+
+    facts = _parsed_pressure_facts()
+
+    with pytest.raises(ValueError, match="target function mismatch"):
+        analyze_lifetime_pressure(
+            facts,
+            TargetSet(
+                function="fn_80000004",
+                targets=parse_force_phys_spec("37:25", default_class_id=0).targets,
+            ),
+        )
+
+
+def test_analyze_reports_missing_class_as_abstained_target() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
     from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
 
-    facts = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    facts = _parsed_pressure_facts()
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("f40:14", default_class_id=0),
+    )
+
+    assert report.targets[0].status == "abstained"
+    assert "requested class 1 missing" in report.warnings
+
+
+def test_analyze_reports_spilled_target() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = _parsed_pressure_facts()
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("41:25", default_class_id=0),
+    )
+
+    assert report.targets[0].status == "spilled"
+    assert report.targets[0].spill.spilled is True
+
+
+def test_analyze_reports_incomplete_allocator_state_blocker() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = _parsed_pressure_facts()
+    cls = facts.class_by_id()[0]
+    decision = cls.decision_by_ig()[40]
+    facts = replace(
+        facts,
+        classes=(
+            replace(
+                cls,
+                edges=(),
+                color_decisions=(
+                    cls.color_decisions[0],
+                    replace(
+                        decision,
+                        blocked_candidates=(),
+                        confidence="synthesized",
+                    ),
+                    cls.color_decisions[2],
+                ),
+            ),
+        ),
+    )
+
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("40:25", default_class_id=0),
+    )
+
+    assert report.targets[0].status == "blocked"
+    assert report.targets[0].blockers[0].kind == "incomplete_allocator_state"
+
+
+def test_analyze_reports_candidate_order_when_expected_phys_is_later() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = _parsed_pressure_facts()
     cls = facts.class_by_id()[0]
     decision = cls.decision_by_ig()[40]
     facts = replace(
@@ -396,11 +574,88 @@ def test_analyze_reports_candidate_order_when_expected_phys_is_later() -> None:
     assert any(blocker.kind == "candidate_order" for blocker in target.blockers)
 
 
+def test_analyze_reports_coalesced_alias_without_shared_fixture() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = _manual_facts(
+        nodes=(
+            _manual_node(
+                32,
+                assigned_phys=31,
+                coalesce=CoalesceFacts(root_ig_id=32, aliases=(33,)),
+            ),
+            _manual_node(
+                33,
+                assigned_phys=31,
+                color_status="coalesced_alias",
+                coalesced_into=32,
+                coalesce=CoalesceFacts(root_ig_id=32, aliases=(33,)),
+            ),
+        ),
+        decisions=(_manual_decision(32, assigned_phys=31),),
+        coalesce_mappings=((33, 32),),
+    )
+
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("33:25", default_class_id=0),
+    )
+
+    assert report.targets[0].status == "coalesced_away"
+    assert report.targets[0].current_phys == 31
+    assert report.targets[0].coalesce.root_ig_id == 32
+
+
+def test_analyze_reports_select_order_fallback_blocker() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = _manual_facts(
+        nodes=(_manual_node(40, assigned_phys=26, select_order=7),),
+        decisions=(
+            _manual_decision(
+                40,
+                assigned_phys=26,
+                candidate_phys_ordered=(25, 26, 27),
+                chosen_source="observed",
+            ),
+        ),
+    )
+
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("40:25", default_class_id=0),
+    )
+
+    target = report.targets[0]
+    assert target.status == "blocked"
+    assert target.blockers[0].kind == "select_order"
+    assert "select" in target.blockers[0].reason
+
+
+def test_blocker_sort_orders_impact_then_ig_id_with_none_last() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import _sort_blockers
+
+    blockers = _sort_blockers(
+        (
+            Blocker(40, None, "none-id", None, 50, "none"),
+            Blocker(40, 37, "lower-impact", 25, 100, "first"),
+            Blocker(40, 41, "same-impact", 26, 50, "same"),
+        )
+    )
+
+    assert [(blocker.impact, blocker.ig_id) for blocker in blockers] == [
+        (100, 37),
+        (50, 41),
+        (50, None),
+    ]
+
+
 def test_no_target_mode_is_inventory_only() -> None:
     from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
-    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
 
-    facts = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    facts = _parsed_pressure_facts()
     report = analyze_lifetime_pressure(facts, target_set=None)
 
     assert report.inventory_only is True
