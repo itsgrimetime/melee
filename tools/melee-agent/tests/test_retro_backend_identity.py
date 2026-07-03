@@ -31,3 +31,25 @@ def test_identity_matches_aliases_not_runtime_address():
     assert identity.matches("mnDiagram_UpdateScrollArrows")
     assert identity.matches("fn_80240000")
     assert not identity.matches("0x80240000")
+    assert not identity.matches("0X80240000")
+
+
+def test_identity_does_not_match_empty_optional_names():
+    identity = backend_identity.FunctionIdentity(
+        requested="fn_80240000",
+        canonical_name="mnDiagram_UpdateScrollArrows",
+        symbol_name=None,
+        source_name=None,
+        aliases=(),
+        source_file="src/melee/mn/mndiagram.c",
+    )
+    assert not identity.matches("")
+
+
+def test_path_slug_avoids_hidden_special_and_path_segments():
+    for text in (".hidden", "..", ".", "../path", "..."):
+        slug = backend_identity.path_slug(text)
+        assert not slug.startswith(".")
+        assert "/" not in slug
+        assert "\\" not in slug
+        assert slug not in {".", ".."}

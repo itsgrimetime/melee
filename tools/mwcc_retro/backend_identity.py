@@ -17,14 +17,18 @@ class FunctionIdentity:
     source_file: str
 
     def matches(self, seen_name: str) -> bool:
-        if seen_name.startswith("0x"):
+        if not seen_name or seen_name.lower().startswith("0x"):
             return False
         names = {
-            self.requested,
-            self.canonical_name,
-            self.symbol_name or "",
-            self.source_name or "",
-            *self.aliases,
+            name
+            for name in (
+                self.requested,
+                self.canonical_name,
+                self.symbol_name,
+                self.source_name,
+                *self.aliases,
+            )
+            if name
         }
         return seen_name in names
 
@@ -42,6 +46,9 @@ class FunctionIdentity:
 def path_slug(text: str, *, max_len: int = 72) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_")
     slug = re.sub(r"_+", "_", slug)
+    slug = slug.lstrip(".")
+    if slug in {"", ".", ".."}:
+        slug = "unnamed"
     return (slug or "unnamed")[:max_len]
 
 
