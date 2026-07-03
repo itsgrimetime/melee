@@ -109,6 +109,81 @@ __all__ = [
 ]
 
 
+def _signal_process_group(proc: subprocess.Popen[Any], sig: int) -> None:
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        pgid = proc.pid
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        if sig == signal.SIGKILL:
+            proc.kill()
+        else:
+            proc.terminate()
+
+
+def _terminate_local_permuter_group(proc: subprocess.Popen[Any]) -> None:
+    _signal_process_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_process_group(proc, signal.SIGKILL)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _run_local_permuter(
+    cmd: list[str],
+    *,
+    env: Mapping[str, str],
+    cwd: Path,
+) -> int:
+    proc = subprocess.Popen(
+        cmd,
+        env=dict(env),
+        cwd=cwd,
+        start_new_session=True,
+    )
+    terminated = False
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        signals.append(signal.SIGHUP)
+    previous_handlers: dict[int, Any] = {}
+
+    def terminate_once() -> None:
+        nonlocal terminated
+        if terminated:
+            return
+        terminated = True
+        _terminate_local_permuter_group(proc)
+
+    def _handler(signum: int, _frame: Any) -> NoReturn:
+        terminate_once()
+        raise SystemExit(128 + signum)
+
+    for signum in signals:
+        previous_handlers[signum] = signal.signal(signum, _handler)
+    try:
+        try:
+            return proc.wait()
+        finally:
+            if proc.poll() is None:
+                terminate_once()
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
 _PERMUTER_DEFAULT_PRESERVE_MACROS = (
     r"PAD_STACK|FORCE_PAD_STACK(?:_[0-9]+)?|PERM_.*"
 )
@@ -4423,7 +4498,5 @@ def permute(
     print(f"  {' '.join(cmd)}")
     print()
 
-    proc = subprocess.run(cmd, env=env, cwd=permuter_code_root)
-    raise typer.Exit(proc.returncode)
-
-
+    returncode = _run_local_permuter(cmd, env=env, cwd=permuter_code_root)
+    raise typer.Exit(returncode)

@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+import signal
+import subprocess
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from src.cli import app
+
+
+runner = CliRunner()
+
+
+def test_run_local_permuter_terminates_process_group_on_sigterm(monkeypatch):
+    import src.cli.debug.permute as permute_cli
+
+    handlers = {}
+    calls = {}
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if timeout is None:
+                handlers[signal.SIGTERM](signal.SIGTERM, None)
+            self.returncode = -signal.SIGTERM
+            return self.returncode
+
+        def kill(self):
+            calls["kill"] = True
+
+    def fake_popen(cmd, **kwargs):
+        calls["cmd"] = cmd
+        calls["popen_kwargs"] = kwargs
+        return FakeProc()
+
+    def fake_signal(signum, handler):
+        previous = handlers.get(signum)
+        handlers[signum] = handler
+        return previous
+
+    killed = []
+    monkeypatch.setattr(permute_cli.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(permute_cli.signal, "signal", fake_signal)
+    monkeypatch.setattr(permute_cli.os, "getpgid", lambda pid: 9876)
+    monkeypatch.setattr(permute_cli.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+
+    with pytest.raises(SystemExit) as exc:
+        permute_cli._run_local_permuter(
+            ["python", "wrapper.py"],
+            env={"KEY": "value"},
+            cwd=Path("/tmp/permuter"),
+        )
+
+    assert exc.value.code == 128 + signal.SIGTERM
+    assert calls["popen_kwargs"]["start_new_session"] is True
+    assert calls["popen_kwargs"]["env"] == {"KEY": "value"}
+    assert calls["popen_kwargs"]["cwd"] == Path("/tmp/permuter")
+    assert killed == [(9876, signal.SIGTERM)]
+
+
+def test_debug_permute_run_uses_local_permuter_helper(monkeypatch, tmp_path):
+    import src.cli.debug as debug_cli
+    import src.cli.debug.permute as permute_cli
+
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    perm_dir = perm_root / "nonmatchings" / "fn_80000000"
+    wrapper = melee_root / "tools" / "melee-agent" / "scripts" / "permute_with_mwcc.py"
+    target = tmp_path / "target.json"
+    perm_dir.mkdir(parents=True)
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("# fake wrapper\n")
+    target.write_text("{}\n")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_resolve_permuter_function_dir",
+        lambda function, *, perm_root, melee_root: perm_dir,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_resolve_decomp_permuter_root",
+        lambda requested_root: perm_root,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(
+        permute_cli.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("debug permute run must use _run_local_permuter")
+        ),
+    )
+
+    seen = {}
+
+    def fake_run_local(cmd, *, env, cwd):
+        seen["cmd"] = cmd
+        seen["env"] = env
+        seen["cwd"] = cwd
+        return 7
+
+    monkeypatch.setattr(permute_cli, "_run_local_permuter", fake_run_local, raising=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "run",
+            "-f",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--perm-root",
+            str(perm_root),
+            "-j",
+            "3",
+            "--",
+            "--best-only",
+        ],
+    )
+
+    assert result.exit_code == 7
+    assert seen["cmd"] == [
+        "python",
+        str(wrapper),
+        str(perm_dir),
+        "-j",
+        "3",
+        "--best-only",
+    ]
+    assert seen["cwd"] == perm_root
+    assert seen["env"]["MELEE_PERMUTER_ROOT"] == str(perm_root)
+    assert seen["env"]["MELEE_ROOT"] == str(melee_root)
+    assert seen["env"]["MWCC_DEBUG_TARGET"] == str(target)
+    assert seen["env"]["MWCC_DEBUG_FN"] == "fn_80000000"
+    assert seen["env"]["MWCC_DEBUG_UNIT"] == "src/melee/mn/sample.c"
