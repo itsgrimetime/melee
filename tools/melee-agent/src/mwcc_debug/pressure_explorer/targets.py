@@ -73,7 +73,7 @@ def _target_from_mapping_item(
             class_id=target.class_id,
             ig_id=target.ig_id,
             expected_phys=target.expected_phys,
-            provenance=dict(value.get("provenance") or {}) or None,
+            source=str(value.get("source", "force-phys")),
         )
     return _target_from_token(
         str(key),

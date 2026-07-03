@@ -28,13 +28,13 @@ class TargetAllocation:
     class_id: int
     ig_id: int
     expected_phys: int
-    provenance: dict[str, Any] | None = None
+    source: str = "force-phys"
 
 
 @dataclass(frozen=True)
 class TargetSet:
-    targets: tuple[TargetAllocation, ...]
     function: str | None = None
+    targets: tuple[TargetAllocation, ...] = ()
     provenance: dict[str, Any] | None = None
 
     def protected_ig_ids_by_class(self) -> dict[int, set[int]]:
@@ -49,102 +49,105 @@ class TargetSet:
 
 @dataclass(frozen=True)
 class FunctionFreshness:
-    function: str
+    status: str
+    pcdump_mtime: float | int | None = None
+    source_mtime: float | int | None = None
+
+
+@dataclass(frozen=True)
+class FunctionFacts:
+    name: str
     source_path: str | None = None
-    source_mtime_ns: int | None = None
-    pcdump_path: str | None = None
-    pcdump_mtime_ns: int | None = None
-    provenance: dict[str, Any] | None = None
+    freshness: FunctionFreshness | None = None
 
 
 @dataclass(frozen=True)
 class FirstDefSite:
-    class_id: int
-    ig_id: int
-    block: str | None = None
-    instruction_index: int | None = None
+    pass_id: str | None = None
+    block_id: str | int | None = None
+    instruction_id: str | int | None = None
     opcode: str | None = None
-    source_span: dict[str, Any] | None = None
-    provenance: dict[str, Any] | None = None
+    operands: tuple[str, ...] = ()
+    normalized: str | None = None
 
 
 @dataclass(frozen=True)
 class SourceAttributionFact:
-    class_id: int
-    ig_id: int
-    source: str | None = None
-    confidence: float | None = None
-    first_def: FirstDefSite | None = None
-    provenance: dict[str, Any] | None = None
+    status: str
+    symbol: str | None = None
+    expression: str | None = None
+    kind: str | None = None
+    source_file: str | None = None
+    line: int | None = None
+    column: int | None = None
+    confidence: str | float | None = None
+    scope: str | None = None
+    compiler_temp: bool | None = None
 
 
 @dataclass(frozen=True)
 class LiveFacts:
-    class_id: int
-    ig_id: int
-    live_range: tuple[int, int] | None = None
-    use_count: int | None = None
-    first_def: FirstDefSite | None = None
-    provenance: dict[str, Any] | None = None
+    blocks: tuple[str | int, ...] = ()
+    intervals: tuple[tuple[int, int], ...] = ()
+    confidence: str | float | None = None
 
 
 @dataclass(frozen=True)
 class CoalesceFacts:
-    class_id: int
-    ig_id: int
     root_ig_id: int | None = None
     aliases: tuple[int, ...] = ()
-    provenance: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class SpillFacts:
-    class_id: int
-    ig_id: int
-    spilled: bool
-    spill_slot: int | None = None
-    provenance: dict[str, Any] | None = None
+    spilled: bool = False
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
 class AllocatorNode:
-    class_id: int
     ig_id: int
+    virtual_kind: str | None = None
+    virtual_number: int | None = None
+    color_status: str | None = None
+    coalesced_into: int | None = None
     color_decision_ref: str | None = None
-    assigned_phys: int | None = None
-    source: SourceAttributionFact | None = None
+    first_def: FirstDefSite | None = None
+    source_attribution: SourceAttributionFact | None = None
     live: LiveFacts | None = None
+    degree: int | None = None
+    flags: tuple[str, ...] = ()
     coalesce: CoalesceFacts | None = None
+    simplify_order: int | None = None
+    select_order: int | None = None
+    assigned_phys: int | None = None
     spill: SpillFacts | None = None
-    provenance: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class InterferenceEdge:
-    class_id: int
-    left_ig_id: int
-    right_ig_id: int
-    reason: str | None = None
-    provenance: dict[str, Any] | None = None
+    a: int
+    b: int
+    kind: str | None = None
+    confidence: str | float | None = None
 
 
 @dataclass(frozen=True)
 class RegisterFacts:
-    class_id: int
-    available_phys_ordered: tuple[int, ...] = ()
+    physical_count: int
+    allocatable: tuple[int, ...] = ()
+    initial_volatile: tuple[int, ...] = ()
+    nonvolatile_dispense_order: tuple[int, ...] = ()
+    reserved: tuple[int, ...] = ()
     fixed: tuple[dict[str, Any], ...] = ()
     precolored: tuple[dict[str, Any], ...] = ()
     model_boundary: tuple[dict[str, Any], ...] = ()
-    provenance: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class BlockedBy:
-    kind: str
     ig_id: int | None = None
     phys: int | None = None
-    reason: str | None = None
-    provenance: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -167,39 +170,46 @@ class ColorDecision:
     chosen_source: str | None
     decision_rule: str | None
     tie_rule: str | None
-    confidence: float | None
+    confidence: str
     provenance: dict[str, Any] | None = None
     blocked_by: tuple[BlockedBy, ...] = ()
     node_state_before_select: dict[str, Any] | None = None
     volatile_pool_before: tuple[int, ...] = ()
-    nonvolatile_pool_before: tuple[int, ...] = ()
+    nonvolatile_pool_before: dict[str, tuple[int, ...]] | None = None
     reserved_or_precolored_filtered: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
 class AllocatorClassFacts:
     class_id: int
-    register_facts: RegisterFacts | None = None
+    class_name: str
+    registers: RegisterFacts
     nodes: tuple[AllocatorNode, ...] = ()
-    interference_edges: tuple[InterferenceEdge, ...] = ()
+    edges: tuple[InterferenceEdge, ...] = ()
+    coalesce: tuple[CoalesceFacts, ...] = ()
+    coalesce_mappings: tuple[tuple[int, int], ...] = ()
+    simplify_order: tuple[int, ...] = ()
+    select_order: tuple[int, ...] = ()
     color_decisions: tuple[ColorDecision, ...] = ()
-    provenance: dict[str, Any] | None = None
+    non_allocatable_state: dict[str, Any] | None = None
 
+    def node_by_ig(self) -> dict[int, AllocatorNode]:
+        return {node.ig_id: node for node in self.nodes}
 
-@dataclass(frozen=True)
-class FunctionFacts:
-    function: str
-    freshness: FunctionFreshness | None = None
-    classes: tuple[AllocatorClassFacts, ...] = ()
-    targets: TargetSet | None = None
-    provenance: dict[str, Any] | None = None
+    def decision_by_ig(self) -> dict[int, ColorDecision]:
+        return {decision.ig_id: decision for decision in self.color_decisions}
 
 
 @dataclass(frozen=True)
 class AllocatorFacts:
-    functions: tuple[FunctionFacts, ...] = ()
-    targets: TargetSet | None = None
-    provenance: dict[str, Any] | None = None
+    schema_version: str
+    producer: str
+    function: FunctionFacts
+    classes: tuple[AllocatorClassFacts, ...] = ()
+    adapter_specific: dict[str, Any] | None = None
+
+    def class_by_id(self) -> dict[int, AllocatorClassFacts]:
+        return {allocator_class.class_id: allocator_class for allocator_class in self.classes}
 
     def to_dict(self) -> dict[str, Any]:
         return _json_value(self)
@@ -225,3 +235,4 @@ __all__ = [
     "FunctionFacts",
     "AllocatorFacts",
 ]
+
