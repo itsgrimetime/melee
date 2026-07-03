@@ -976,6 +976,24 @@ def test_analyze_reports_no_pressure_issue_when_target_matches() -> None:
     assert target.blockers == ()
 
 
+def test_matched_target_reports_no_pressure_issue() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+
+    facts = facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        source_text=SOURCE,
+        class_filter=(0,),
+    )
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("37:25", default_class_id=0),
+    )
+
+    assert report.targets[0].status == "no_pressure_issue"
+
+
 def test_analyze_finds_expected_phys_holder_blocker() -> None:
     from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
     from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
@@ -2887,6 +2905,42 @@ def test_build_lifetime_pressure_report_inventory_only_has_derive_command(
     assert report.inventory_only is True
     assert report.hypotheses == ()
     assert any("derive a target" in cmd.command for cmd in report.validation_commands)
+
+
+def test_lbDvd_fixture_lifetime_pressure_smoke() -> None:
+    from src.mwcc_debug.pressure_explorer.lifetime_pressure import (
+        build_lifetime_pressure_report,
+    )
+
+    fixture = pathlib.Path(
+        "tools/melee-agent/tests/fixtures/mwcc_debug/lbDvd_80018A2C_pcdump.txt"
+    )
+    if not fixture.exists():
+        pytest.skip(f"fixture missing: {fixture}")
+
+    report = build_lifetime_pressure_report(
+        function="lbDvd_80018A2C",
+        pcdump_text=None,
+        pcdump_path=fixture,
+        source_text=None,
+        source_path=None,
+        force_phys=None,
+        target_path=None,
+        candidates=[],
+        backend_trace_path=None,
+        class_id=0,
+        allow_stale_pcdump=False,
+        validate_mode="none",
+        timeout=120,
+        max_candidates=100,
+    )
+
+    assert report.inventory_only is True
+    assert report.allocator_facts.classes
+    assert any(
+        cls.nodes and cls.color_decisions
+        for cls in report.allocator_facts.classes
+    )
 
 
 def test_build_lifetime_pressure_report_attaches_pcdump_candidate_comparisons(
