@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import pathlib
+import re
 import textwrap
 from dataclasses import replace
 from types import SimpleNamespace
@@ -692,6 +693,11 @@ def test_hypotheses_rank_lifetime_shortening_for_direct_blocker() -> None:
         "split_or_scope_temp",
         "materialize_expression",
     }
+    assert any(
+        h.line_mapping_status == "fresh"
+        and re.search(r":\d+$", h.source_owner) is not None
+        for h in enriched.hypotheses
+    )
     commands = {cmd.id: cmd.command for cmd in enriched.validation_commands}
     assert any("debug mutate lifetime-layout" in cmd for cmd in commands.values())
     assert any("debug mutate simplify-order" in cmd for cmd in commands.values())
@@ -737,6 +743,11 @@ def test_stale_pcdump_marks_line_specific_hints() -> None:
     assert all(
         h.line_mapping_status in {"stale_line_mapping", "not_line_specific"}
         for h in enriched.hypotheses
+    )
+    assert all(
+        re.search(r":\d+$", h.source_owner) is None
+        for h in enriched.hypotheses
+        if h.line_mapping_status == "stale_line_mapping"
     )
 
 

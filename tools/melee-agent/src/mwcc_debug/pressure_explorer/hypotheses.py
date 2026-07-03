@@ -110,7 +110,10 @@ def _hypotheses_for_target(
                 target,
                 action="avoid_or_reintroduce_coalescing",
                 allocator_requirement=target.why_current_color,
-                source_owner=_target_owner(target),
+                source_owner=_target_owner(
+                    target,
+                    stale_line_mapping=stale_line_mapping,
+                ),
                 confidence="medium" if aliases_known else "low",
                 stale_line_mapping=stale_line_mapping,
                 source=target.source_attribution,
@@ -124,7 +127,10 @@ def _hypotheses_for_target(
                 target,
                 action="reduce_pressure_before_select",
                 allocator_requirement=target.why_current_color,
-                source_owner=_target_owner(target),
+                source_owner=_target_owner(
+                    target,
+                    stale_line_mapping=stale_line_mapping,
+                ),
                 confidence="low",
                 stale_line_mapping=stale_line_mapping,
                 source=target.source_attribution,
@@ -160,7 +166,11 @@ def _hypothesis_for_blocker(
             target,
             action=action,
             allocator_requirement=blocker.reason,
-            source_owner=_blocker_owner(blocker, holder),
+            source_owner=_blocker_owner(
+                blocker,
+                holder,
+                stale_line_mapping=stale_line_mapping,
+            ),
             confidence=confidence,
             stale_line_mapping=stale_line_mapping,
             source=source,
@@ -173,7 +183,10 @@ def _hypothesis_for_blocker(
             target,
             action="move_declaration_or_simplify_order",
             allocator_requirement=blocker.reason,
-            source_owner=_target_owner(target),
+            source_owner=_target_owner(
+                target,
+                stale_line_mapping=stale_line_mapping,
+            ),
             confidence="low",
             stale_line_mapping=stale_line_mapping,
             source=target.source_attribution,
@@ -224,9 +237,17 @@ def _force_phys_for_target(target: TargetPressureReport) -> str:
     return f"{prefix}{target.ig_id}:{target.expected_phys}"
 
 
-def _blocker_owner(blocker: Blocker, holder: AllocatorNode | None) -> str:
+def _blocker_owner(
+    blocker: Blocker,
+    holder: AllocatorNode | None,
+    *,
+    stale_line_mapping: bool,
+) -> str:
     if holder is not None:
-        owner = _source_owner(holder.source_attribution)
+        owner = _source_owner(
+            holder.source_attribution,
+            include_line=not stale_line_mapping,
+        )
         if owner != "source unavailable":
             return owner
     if blocker.source_summary:
@@ -236,17 +257,28 @@ def _blocker_owner(blocker: Blocker, holder: AllocatorNode | None) -> str:
     return "source unavailable"
 
 
-def _target_owner(target: TargetPressureReport) -> str:
-    return _source_owner(target.source_attribution)
+def _target_owner(
+    target: TargetPressureReport,
+    *,
+    stale_line_mapping: bool,
+) -> str:
+    return _source_owner(
+        target.source_attribution,
+        include_line=not stale_line_mapping,
+    )
 
 
-def _source_owner(source: SourceAttributionFact | None) -> str:
+def _source_owner(
+    source: SourceAttributionFact | None,
+    *,
+    include_line: bool = True,
+) -> str:
     if source is None:
         return "source unavailable"
     owner = source.symbol or source.expression or source.kind
     if owner is None:
         return "source unavailable"
-    if source.line is not None:
+    if include_line and source.line is not None:
         return f"{owner}:{source.line}"
     return owner
 
