@@ -67,3 +67,44 @@ def test_allocator_event_before_regclass_is_rejected():
             source=SOURCE,
             tool_version="test",
         )
+
+
+def test_allocator_event_with_conflicting_class_identifiers_is_rejected():
+    events = backend_events.load_events(FIXTURE)
+    regclass_index = next(i for i, event in enumerate(events) if event["event"] == "regclass")
+    events.insert(
+        regclass_index + 1,
+        {
+            "event": "regclass",
+            "class_id": 999,
+            "class_name": "fpr",
+            "registers": {
+                "physical_count": 32,
+                "allocatable": [1],
+                "initial_volatile": [1],
+                "reserved": [],
+                "fixed": [],
+                "precolored": [],
+                "nonvolatile_dispense_order": [31],
+                "model_boundary": [{"name": "FPSCR", "reason": "outside-v1-allocator-facts"}],
+            },
+        },
+    )
+    edge = next(event for event in events if event["event"] == "edge")
+    edge["class_id"] = 999
+
+    with pytest.raises(ValueError, match="class_name and class_id refer to different classes"):
+        backend_events.normalize_events(
+            events,
+            compiler=COMPILER,
+            source=SOURCE,
+            tool_version="test",
+        )
+
+
+def test_load_events_reports_invalid_json_line_number(tmp_path):
+    path = tmp_path / "bad.jsonl"
+    path.write_text('{"event": "function_start"}\n{"event":\n')
+
+    with pytest.raises(ValueError, match="event line 2 invalid JSON: Expecting value"):
+        backend_events.load_events(path)

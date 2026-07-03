@@ -23,7 +23,10 @@ def load_events(path: str | Path) -> list[dict[str, Any]]:
     for line_no, line in enumerate(Path(path).read_text().splitlines(), start=1):
         if not line.strip():
             continue
-        event = json.loads(line)
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"event line {line_no} invalid JSON: {exc.msg}") from exc
         if not isinstance(event, dict):
             raise ValueError(f"event line {line_no} must be an object")
         events.append(event)
@@ -261,11 +264,20 @@ class _Normalizer:
 
     def _require_class(self, event: dict[str, Any], kind: str) -> dict[str, Any]:
         class_name = event.get("class_name")
-        if class_name is not None and class_name in self.classes_by_name:
-            return self.classes_by_name[class_name]
         class_id = event.get("class_id")
-        if class_id is not None and class_id in self.classes_by_id:
-            return self.classes_by_id[class_id]
+        cls_by_name = self.classes_by_name.get(class_name) if class_name is not None else None
+        cls_by_id = self.classes_by_id.get(class_id) if class_id is not None else None
+
+        if class_name is not None and cls_by_name is None:
+            raise ValueError(f"regclass must precede {kind}")
+        if class_id is not None and cls_by_id is None:
+            raise ValueError(f"regclass must precede {kind}")
+        if cls_by_name is not None and cls_by_id is not None and cls_by_name is not cls_by_id:
+            raise ValueError("class_name and class_id refer to different classes")
+        if cls_by_name is not None:
+            return cls_by_name
+        if cls_by_id is not None:
+            return cls_by_id
         raise ValueError(f"regclass must precede {kind}")
 
     def _finalize_coalesce(self) -> None:
