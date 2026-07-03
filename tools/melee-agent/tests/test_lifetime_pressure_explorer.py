@@ -2182,6 +2182,134 @@ def test_blocker_tables_include_class_context_for_duplicate_igs() -> None:
     ]
 
 
+def test_renderer_outputs_class_aware_analyzer_fpr_blocker_reasons() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        render_blocker_table_csv,
+        render_blocker_table_json,
+        render_dot,
+        render_text_report,
+    )
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = AllocatorFacts(
+        schema_version="allocator-facts.v1",
+        producer={"kind": "unit-test"},
+        function=FunctionFacts(
+            name="fn_80000000",
+            source_path=None,
+            freshness=FunctionFreshness(status="fresh"),
+        ),
+        classes=(
+            AllocatorClassFacts(
+                class_id=1,
+                class_name="fpr",
+                registers=RegisterFacts(physical_count=32, allocatable=(24, 25)),
+                nodes=(
+                    AllocatorNode(
+                        ig_id=40,
+                        virtual_kind="fpr",
+                        virtual_number=40,
+                        color_status="colored",
+                        coalesced_into=None,
+                        color_decision_ref="fpr-c40",
+                        first_def=FirstDefSite(opcode="fadds", operands="f40, f1, f2"),
+                        source_attribution=SourceAttributionFact(
+                            status="attributed",
+                            symbol="target",
+                        ),
+                        live=LiveFacts(blocks=("B0",), intervals=((0, 2),)),
+                        degree=1,
+                        flags=(),
+                        coalesce=CoalesceFacts(root_ig_id=40),
+                        simplify_order=0,
+                        select_order=0,
+                        assigned_phys=24,
+                        spill=SpillFacts(spilled=False),
+                    ),
+                    AllocatorNode(
+                        ig_id=41,
+                        virtual_kind="fpr",
+                        virtual_number=41,
+                        color_status="colored",
+                        coalesced_into=None,
+                        color_decision_ref="fpr-c41",
+                        first_def=FirstDefSite(opcode="fmr", operands="f41, f3"),
+                        source_attribution=SourceAttributionFact(
+                            status="attributed",
+                            symbol="holder",
+                        ),
+                        live=LiveFacts(blocks=("B0",), intervals=((0, 2),)),
+                        degree=1,
+                        flags=(),
+                        coalesce=CoalesceFacts(root_ig_id=41),
+                        simplify_order=1,
+                        select_order=1,
+                        assigned_phys=25,
+                        spill=SpillFacts(spilled=False),
+                    ),
+                ),
+                edges=(InterferenceEdge(40, 41),),
+                color_decisions=(
+                    ColorDecision(
+                        id="fpr-c40",
+                        ig_id=40,
+                        iter=0,
+                        assigned_phys=24,
+                        available_phys_ordered=(24, 25),
+                        blocked_candidates=(
+                            BlockedCandidate(
+                                phys=25,
+                                holder_ig_id=41,
+                                holder_assigned_phys=25,
+                                reason="interferes",
+                            ),
+                        ),
+                        candidate_phys_ordered=(24, 25),
+                        chosen_source="observed",
+                        decision_rule="unit-test",
+                        tie_rule="unit-test",
+                        confidence="observed",
+                    ),
+                    ColorDecision(
+                        id="fpr-c41",
+                        ig_id=41,
+                        iter=1,
+                        assigned_phys=25,
+                        available_phys_ordered=(24, 25),
+                        blocked_candidates=(),
+                        candidate_phys_ordered=(24, 25),
+                        chosen_source="observed",
+                        decision_rule="unit-test",
+                        tie_rule="unit-test",
+                        confidence="observed",
+                    ),
+                ),
+            ),
+        ),
+    )
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("40:25", default_class_id=1),
+    )
+
+    text = render_text_report(report)
+    dot = render_dot(report)
+    csv_table = render_blocker_table_csv(report)
+    json_table = render_blocker_table_json(report)
+
+    assert "current=f24 expected=f25" in text
+    assert "expected phys f25 is held by interfering IG 41" in text
+    assert "unit-test selected f24 from observed" in text
+    assert "expected phys r25" not in text
+    assert "selected r24" not in text
+    assert "expected f25" in dot
+    assert "expected r25" not in dot
+    assert "expected phys f25 is held by interfering IG 41" in csv_table
+    assert "expected phys r25" not in csv_table
+    assert json_table[0]["reason"] == "expected phys f25 is held by interfering IG 41"
+
+
 def test_render_text_no_target_mode_is_inventory_only_without_blocker_claims() -> None:
     from src.mwcc_debug.pressure_explorer import render_text_report
     from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure

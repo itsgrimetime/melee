@@ -18,7 +18,6 @@ from .models import (
     ValidationCommand,
 )
 
-
 SCHEMA_VERSION = "lifetime-pressure-report.v1"
 
 
@@ -134,7 +133,10 @@ def _analyze_target(
             current_phys=current_phys,
             status="no_pressure_issue",
             blockers=(),
-            why_current_color=f"IG {target.ig_id} already has r{target.expected_phys}",
+            why_current_color=(
+                f"IG {target.ig_id} already has "
+                f"{_phys_label(target.expected_phys, target.class_id)}"
+            ),
             must_change=(),
             confidence=_confidence(node, decision),
             coalesce=coalesce,
@@ -147,7 +149,7 @@ def _analyze_target(
         current_phys=current_phys,
         status="blocked" if blockers else "unexplained",
         blockers=blockers,
-        why_current_color=_why_current_color(current_phys, decision),
+        why_current_color=_why_current_color(current_phys, decision, target.class_id),
         must_change=_must_change(target, blockers),
         confidence=_confidence(node, decision),
         coalesce=coalesce,
@@ -204,7 +206,7 @@ def _expected_phys_holders(
                 assigned_phys=candidate.holder_assigned_phys,
                 impact=100,
                 reason=(
-                    f"expected phys r{target.expected_phys} is held by "
+                    f"expected phys {_phys_label(target.expected_phys, target.class_id)} is held by "
                     f"interfering IG {candidate.holder_ig_id}"
                 ),
                 source_summary=_source_summary(nodes.get(candidate.holder_ig_id)),
@@ -228,7 +230,7 @@ def _expected_phys_holders(
             assigned_phys=holder.assigned_phys,
             impact=100,
             reason=(
-                f"expected phys r{target.expected_phys} is held by "
+                f"expected phys {_phys_label(target.expected_phys, target.class_id)} is held by "
                 f"interfering IG {holder_ig}"
             ),
             source_summary=_source_summary(holder),
@@ -250,7 +252,10 @@ def _order_blockers(
             kind="candidate_order",
             assigned_phys=decision.assigned_phys,
             impact=60,
-            reason=f"expected phys r{target.expected_phys} is absent from candidate order",
+            reason=(
+                f"expected phys {_phys_label(target.expected_phys, target.class_id)} "
+                "is absent from candidate order"
+            ),
             confidence=decision.confidence,
         )
     elif decision.assigned_phys in candidate_order and target.expected_phys in candidate_order:
@@ -265,8 +270,9 @@ def _order_blockers(
                 assigned_phys=decision.assigned_phys,
                 impact=60,
                 reason=(
-                    f"expected phys r{target.expected_phys} is available later in "
-                    f"candidate order than assigned phys r{decision.assigned_phys}"
+                    f"expected phys {_phys_label(target.expected_phys, target.class_id)} "
+                    "is available later in candidate order than assigned phys "
+                    f"{_phys_label(decision.assigned_phys, target.class_id)}"
                 ),
                 confidence=decision.confidence,
             )
@@ -279,7 +285,10 @@ def _order_blockers(
             kind="sticky_pool",
             assigned_phys=decision.assigned_phys,
             impact=50,
-            reason=f"chosen source {decision.chosen_source!r} selected r{decision.assigned_phys}",
+            reason=(
+                f"chosen source {decision.chosen_source!r} selected "
+                f"{_phys_label(decision.assigned_phys, target.class_id)}"
+            ),
             confidence=decision.confidence,
         )
 
@@ -292,7 +301,9 @@ def _order_blockers(
             impact=50,
             reason=(
                 f"select-order position {node.select_order} selected "
-                f"r{decision.assigned_phys} before the target reached r{target.expected_phys}"
+                f"{_phys_label(decision.assigned_phys, target.class_id)} before "
+                "the target reached "
+                f"{_phys_label(target.expected_phys, target.class_id)}"
             ),
             confidence=decision.confidence,
         )
@@ -415,7 +426,8 @@ def _must_change(
     if first.kind == "expected_phys_holder" and first.ig_id is not None:
         return (
             "remove interference or move "
-            f"IG {first.ig_id} off r{target.expected_phys} before coloring IG {target.ig_id}",
+            f"IG {first.ig_id} off {_phys_label(target.expected_phys, target.class_id)} "
+            f"before coloring IG {target.ig_id}",
         )
     if first.kind == "incomplete_allocator_state":
         return ("collect complete allocator state before ranking pressure blockers",)
@@ -464,12 +476,23 @@ def _confidence(node: AllocatorNode | None, decision: ColorDecision | None) -> s
 def _why_current_color(
     current_phys: int | None,
     decision: ColorDecision | None,
+    class_id: int,
 ) -> str:
     if decision is None:
         return "no color decision was available"
     if current_phys is None:
         return "color decision did not assign a physical register"
-    return f"{decision.decision_rule} selected r{current_phys} from {decision.chosen_source}"
+    return (
+        f"{decision.decision_rule} selected {_phys_label(current_phys, class_id)} "
+        f"from {decision.chosen_source}"
+    )
+
+
+def _phys_label(phys: int | None, class_id: int) -> str:
+    if phys is None:
+        return "none"
+    prefix = "f" if class_id == 1 else "r"
+    return f"{prefix}{phys}"
 
 
 def _coalesced_reason(ig_id: int, coalesce: CoalesceFacts | None) -> str:
