@@ -2747,3 +2747,243 @@ def test_bounded_validation_uses_fpr_direct_blocker_target(
     assert "r40<r37" not in select_order
     assert "--class" in select_order
     assert select_order[select_order.index("--class") + 1] == "1"
+
+
+def test_build_lifetime_pressure_report_combines_analysis_and_hypotheses(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.lifetime_pressure import (
+        build_lifetime_pressure_report,
+    )
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    source = tmp_path / "source.c"
+    pcdump.write_text(PCDUMP)
+    source.write_text(SOURCE)
+    pcdump.touch()
+
+    report = build_lifetime_pressure_report(
+        function="fn_80000000",
+        pcdump_text=PCDUMP,
+        pcdump_path=pcdump,
+        source_text=SOURCE,
+        source_path=source,
+        force_phys="40:25",
+        target_path=None,
+        candidates=[],
+        backend_trace_path=None,
+        class_id=0,
+        allow_stale_pcdump=False,
+        validate_mode="none",
+        timeout=120,
+        max_candidates=100,
+    )
+
+    assert report.function == "fn_80000000"
+    assert report.targets[0].status == "blocked"
+    assert report.hypotheses
+    assert report.validation_commands
+
+
+def test_build_lifetime_pressure_report_inventory_only_has_derive_command(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.lifetime_pressure import (
+        build_lifetime_pressure_report,
+    )
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    pcdump.write_text(PCDUMP)
+
+    report = build_lifetime_pressure_report(
+        function="fn_80000000",
+        pcdump_text=None,
+        pcdump_path=pcdump,
+        source_text=None,
+        source_path=None,
+        force_phys=None,
+        target_path=None,
+        candidates=[],
+        backend_trace_path=None,
+        class_id=0,
+        allow_stale_pcdump=False,
+        validate_mode="none",
+        timeout=120,
+        max_candidates=100,
+    )
+
+    assert report.inventory_only is True
+    assert report.hypotheses == ()
+    assert any("derive a target" in cmd.command for cmd in report.validation_commands)
+
+
+def test_build_lifetime_pressure_report_attaches_pcdump_candidate_comparisons(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.lifetime_pressure import (
+        build_lifetime_pressure_report,
+    )
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    candidate = tmp_path / "candidate.pcdump.txt"
+    pcdump.write_text(PCDUMP)
+    candidate.write_text(CANDIDATE_PCDUMP)
+
+    report = build_lifetime_pressure_report(
+        function="fn_80000000",
+        pcdump_text=PCDUMP,
+        pcdump_path=pcdump,
+        source_text=SOURCE,
+        source_path=None,
+        force_phys="40:25",
+        target_path=None,
+        candidates=[f"try1={candidate}"],
+        backend_trace_path=None,
+        class_id=0,
+        allow_stale_pcdump=False,
+        validate_mode="none",
+        timeout=120,
+        max_candidates=100,
+    )
+
+    assert [comparison.label for comparison in report.candidate_comparisons] == ["try1"]
+    assert report.candidate_comparisons[0].path == str(candidate)
+
+
+def test_build_lifetime_pressure_report_remote_source_candidate_is_dry_run_only(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.lifetime_pressure import (
+        build_lifetime_pressure_report,
+    )
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    source = tmp_path / "candidate.c"
+    pcdump.write_text(PCDUMP)
+    source.write_text(SOURCE)
+
+    report = build_lifetime_pressure_report(
+        function="fn_80000000",
+        pcdump_text=PCDUMP,
+        pcdump_path=pcdump,
+        source_text=SOURCE,
+        source_path=source,
+        force_phys="40:25",
+        target_path=None,
+        candidates=[f"source_try={source}"],
+        backend_trace_path=None,
+        class_id=0,
+        allow_stale_pcdump=False,
+        validate_mode="remote",
+        timeout=45,
+        max_candidates=100,
+    )
+
+    assert report.candidate_comparisons == ()
+    assert any(
+        command.id.startswith("remote-score-source")
+        and str(source) in command.command
+        and "--remote-fallback" in command.command
+        for command in report.validation_commands
+    )
+
+
+def test_build_lifetime_pressure_report_quick_materializes_force_phys_target(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug.pressure_explorer import lifetime_pressure
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    source = tmp_path / "candidate.c"
+    target_file = tmp_path / "materialized.target.yaml"
+    pcdump.write_text(PCDUMP)
+    source.write_text(SOURCE)
+    calls: dict[str, object] = {}
+
+    def fake_materialize_force_phys_target_spec(**kwargs: object) -> pathlib.Path:
+        calls["materialize"] = kwargs
+        target_file.write_text("target: true\n")
+        return target_file
+
+    def fake_run_quick_validation(**kwargs: object) -> list[dict[str, object]]:
+        calls["quick"] = kwargs
+        return [{"candidate": str(source), "status": "partial_progress"}]
+
+    monkeypatch.setattr(
+        lifetime_pressure,
+        "materialize_force_phys_target_spec",
+        fake_materialize_force_phys_target_spec,
+    )
+    monkeypatch.setattr(
+        lifetime_pressure,
+        "run_quick_validation",
+        fake_run_quick_validation,
+    )
+
+    report = lifetime_pressure.build_lifetime_pressure_report(
+        function="fn_80000000",
+        pcdump_text=PCDUMP,
+        pcdump_path=pcdump,
+        source_text=SOURCE,
+        source_path=source,
+        force_phys="40:25",
+        target_path=None,
+        candidates=[f"source_try={source}"],
+        backend_trace_path=None,
+        class_id=0,
+        allow_stale_pcdump=False,
+        validate_mode="quick",
+        timeout=30,
+        max_candidates=100,
+    )
+
+    assert calls["materialize"]["baseline_dump"] == pcdump
+    assert calls["materialize"]["output_dir"] == tmp_path
+    assert calls["quick"]["target_file"] == target_file
+    assert calls["quick"]["source_candidates"] == [source]
+    assert report.outputs["quick_validation"][0]["status"] == "partial_progress"
+
+
+def test_build_lifetime_pressure_report_bounded_passes_direct_blockers(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug.pressure_explorer import lifetime_pressure
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    source = tmp_path / "source.c"
+    pcdump.write_text(PCDUMP)
+    source.write_text(SOURCE)
+    calls: dict[str, object] = {}
+
+    def fake_run_bounded_validation(**kwargs: object) -> list[dict[str, object]]:
+        calls["bounded"] = kwargs
+        return [{"candidate": "select-order-0-40-37", "status": "partial_progress"}]
+
+    monkeypatch.setattr(
+        lifetime_pressure,
+        "run_bounded_validation",
+        fake_run_bounded_validation,
+    )
+
+    report = lifetime_pressure.build_lifetime_pressure_report(
+        function="fn_80000000",
+        pcdump_text=PCDUMP,
+        pcdump_path=pcdump,
+        source_text=SOURCE,
+        source_path=source,
+        force_phys="40:25",
+        target_path=None,
+        candidates=[],
+        backend_trace_path=None,
+        class_id=0,
+        allow_stale_pcdump=False,
+        validate_mode="bounded",
+        timeout=30,
+        max_candidates=8,
+    )
+
+    assert calls["bounded"]["direct_blockers"] == [(0, 40, 37)]
+    assert calls["bounded"]["force_phys"] == "40:25"
+    assert report.outputs["bounded_validation"][0]["candidate"] == "select-order-0-40-37"

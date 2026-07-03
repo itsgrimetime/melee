@@ -9655,3 +9655,4 @@ from .models import *  # noqa: F403,E402
 from .targets import *  # noqa: F403,E402
 from .analyzer import *  # noqa: F403,E402
 from .candidates import *  # noqa: F403,E402
+from .lifetime_pressure import *  # noqa: F403,E402
