@@ -358,6 +358,253 @@ def test_backend_trace_fixture_maps_to_allocator_facts() -> None:
     )
 
 
+def test_backend_trace_array_contract_maps_to_allocator_facts(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_backend_trace
+
+    path = tmp_path / "backend_trace_v1_minimal.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "backend-trace.v1",
+                "functions": [
+                    {
+                        "name": "other_fn",
+                        "regalloc": {"classes": []},
+                    },
+                    {
+                        "name": "test_fn",
+                        "source_path": "src/test.c",
+                        "regalloc": {
+                            "classes": [
+                                {
+                                    "class_id": 0,
+                                    "class_name": "gpr",
+                                    "registers": {
+                                        "physical_count": 32,
+                                        "allocatable": [3, 4, 31],
+                                        "initial_volatile": [3, 4],
+                                        "nonvolatile_dispense_order": [31],
+                                        "reserved": [1, 2],
+                                        "fixed": [{"phys": 1, "name": "sp"}],
+                                        "precolored": [{"ig_id": 3, "phys": 3}],
+                                        "model_boundary": [{"phys": 0, "name": "r0"}],
+                                    },
+                                    "nodes": [
+                                        {
+                                            "ig_id": 32,
+                                            "virtual": {"kind": "r", "number": 32},
+                                            "color_status": "colored",
+                                            "coalesced_into": None,
+                                            "color_decision_ref": "gpr-c0",
+                                            "first_def": {
+                                                "pass_id": "select",
+                                                "block_id": "bb0",
+                                                "instruction_id": "i0",
+                                                "opcode": "lwz",
+                                                "operands": "r32,0(r3)",
+                                                "normalized": "load",
+                                            },
+                                            "source_attribution": {
+                                                "status": "attributed",
+                                                "symbol": "root",
+                                                "confidence": "observed",
+                                            },
+                                            "live": {
+                                                "blocks": ["bb0"],
+                                                "intervals": [[0, 2]],
+                                                "confidence": "observed",
+                                            },
+                                            "degree": 1,
+                                            "flags": ["live"],
+                                            "coalesce": {
+                                                "root_ig_id": 32,
+                                                "aliases": [33],
+                                            },
+                                            "simplify_order": 0,
+                                            "select_order": 0,
+                                            "assigned_phys": 31,
+                                            "spill": {"spilled": False},
+                                        },
+                                        {
+                                            "ig_id": 33,
+                                            "virtual": {"kind": "r", "number": 33},
+                                            "color_status": "coalesced_alias",
+                                            "coalesced_into": 32,
+                                            "color_decision_ref": "gpr-c0",
+                                            "first_def": {
+                                                "pass_id": "coalesce",
+                                                "block_id": "bb0",
+                                                "instruction_id": "i1",
+                                                "opcode": "mr",
+                                                "operands": "r33,r32",
+                                                "normalized": "copy",
+                                            },
+                                            "source_attribution": {
+                                                "status": "unattributed",
+                                                "confidence": "unavailable",
+                                            },
+                                            "live": {
+                                                "blocks": ["bb0"],
+                                                "intervals": [[1, 2]],
+                                                "confidence": "observed",
+                                            },
+                                            "degree": 0,
+                                            "flags": [],
+                                            "coalesce": {
+                                                "root_ig_id": 32,
+                                                "aliases": [],
+                                            },
+                                            "simplify_order": 1,
+                                            "select_order": None,
+                                            "assigned_phys": None,
+                                            "spill": {"spilled": False},
+                                        },
+                                        {
+                                            "ig_id": 40,
+                                            "virtual": {"kind": "r", "number": 40},
+                                            "color_status": "colored",
+                                            "coalesced_into": None,
+                                            "color_decision_ref": "gpr-c1",
+                                            "first_def": {
+                                                "pass_id": "select",
+                                                "block_id": "bb0",
+                                                "instruction_id": "i2",
+                                                "opcode": "add",
+                                                "operands": "r40,r32,r4",
+                                            },
+                                            "source_attribution": {
+                                                "status": "attributed",
+                                                "symbol": "sum",
+                                                "confidence": "observed",
+                                            },
+                                            "live": {
+                                                "blocks": ["bb0"],
+                                                "intervals": [[2, 3]],
+                                                "confidence": "observed",
+                                            },
+                                            "degree": 1,
+                                            "flags": [],
+                                            "coalesce": {
+                                                "root_ig_id": 40,
+                                                "aliases": [],
+                                            },
+                                            "simplify_order": 2,
+                                            "select_order": 1,
+                                            "assigned_phys": 4,
+                                            "spill": {"spilled": False},
+                                        },
+                                    ],
+                                    "edges": [
+                                        {
+                                            "a": 32,
+                                            "b": 40,
+                                            "kind": "interference",
+                                            "confidence": "observed",
+                                        }
+                                    ],
+                                    "coalesce": {
+                                        "mappings": [
+                                            {
+                                                "alias": 33,
+                                                "root": 32,
+                                                "root_phys": 31,
+                                            }
+                                        ]
+                                    },
+                                    "coalesce_mappings": [[33, 32]],
+                                    "non_allocatable_state": {"reserved": [1, 2]},
+                                    "simplify_order": [32, 33, 40],
+                                    "select_order": [32, 40],
+                                    "color_decisions": [
+                                        {
+                                            "id": "gpr-c0",
+                                            "ig_id": 32,
+                                            "iter": 0,
+                                            "assigned_phys": 31,
+                                            "available_phys_ordered": [3, 4, 31],
+                                            "blocked_candidates": [
+                                                {
+                                                    "phys": 4,
+                                                    "holder_ig_id": 40,
+                                                    "holder_assigned_phys": 4,
+                                                    "reason": "interference",
+                                                }
+                                            ],
+                                            "candidate_phys_ordered": [31],
+                                            "chosen_source": "nonvolatile",
+                                            "decision_rule": "retail",
+                                            "tie_rule": "fixture",
+                                            "confidence": "observed",
+                                            "provenance": "retail-trace-fixture",
+                                            "blocked_by": [
+                                                {"ig_id": 40, "phys": 4}
+                                            ],
+                                            "node_state_before_select": {"degree": 1},
+                                            "volatile_pool_before": [3, 4],
+                                            "nonvolatile_pool_before": {
+                                                "available": [31]
+                                            },
+                                            "reserved_or_precolored_filtered": [1, 2],
+                                        },
+                                        {
+                                            "id": "gpr-c1",
+                                            "ig_id": 40,
+                                            "iter": 1,
+                                            "assigned_phys": 4,
+                                            "available_phys_ordered": [3, 4, 31],
+                                            "blocked_candidates": [],
+                                            "candidate_phys_ordered": [4, 31],
+                                            "chosen_source": "volatile",
+                                            "decision_rule": "retail",
+                                            "tie_rule": "fixture",
+                                            "confidence": "observed",
+                                            "provenance": "retail-trace-fixture",
+                                        },
+                                    ],
+                                }
+                            ]
+                        },
+                    },
+                ],
+            }
+        )
+    )
+
+    facts = facts_from_backend_trace(path, function="test_fn")
+    cls = facts.class_by_id()[0]
+    nodes = cls.node_by_ig()
+    decisions = {decision.id: decision for decision in cls.color_decisions}
+    mappings = cls.coalesce["mappings"]
+
+    assert facts.function.name == "test_fn"
+    assert 0 in facts.class_by_id()
+    assert {32, 33, 40}.issubset(nodes)
+    assert nodes[32].color_status == "colored"
+    assert nodes[33].color_status == "coalesced_alias"
+    assert nodes[33].coalesced_into == 32
+    assert nodes[33].color_decision_ref == "gpr-c0"
+    assert nodes[33].assigned_phys == nodes[32].assigned_phys
+    assert nodes[40].color_decision_ref == "gpr-c1"
+    assert mappings[0]["alias"] == 33
+    assert mappings[0]["root"] == 32
+    assert "root_phys" in mappings[0]
+    assert "gpr-c0" in decisions
+    assert any(
+        candidate.holder_ig_id is not None
+        and candidate.holder_assigned_phys is not None
+        for decision in decisions.values()
+        for candidate in decision.blocked_candidates
+    )
+    assert cls.registers.fixed and isinstance(cls.registers.fixed[0], dict)
+    assert cls.registers.precolored and isinstance(cls.registers.precolored[0], dict)
+    assert cls.registers.model_boundary and isinstance(
+        cls.registers.model_boundary[0],
+        dict,
+    )
+
+
 def test_allocator_facts_from_real_pcdump_has_allocator_shape() -> None:
     from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
 
