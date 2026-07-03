@@ -28,6 +28,43 @@ from src.mwcc_debug.pressure_explorer.targets import (
     parse_target_file,
 )
 
+PCDUMP = textwrap.dedent("""\
+    Starting function fn_80000000
+    BEFORE REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        lwz r37,12(r32)
+        add r40,r37,r33
+        mr r41,r40
+    AFTER REGISTER COLORING
+    fn_80000000
+    B0: Succ={} Pred={} Labels={}
+        lwz r25,12(r3)
+        add r26,r25,r4
+        mr r27,r26
+    SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=45)
+      iter ig_idx degree arraySize flags notes
+        0 37 1 1 0x00
+        1 40 1 1 0x00
+        2 41 0 0 0x08 SPILLED
+    COLORGRAPH DECISIONS (class=0, result=1, n_nodes=3)
+      iter ig_idx phys degree nIntfr flags
+        0 37 r25 1 1 0x00
+          interferers: 40=r26
+        1 40 r26 1 1 0x00
+          interferers: 37=r25
+        2 41 r27 0 0 0x00
+          interferers:
+""")
+
+SOURCE = textwrap.dedent("""\
+    typedef struct Obj { int xC; } Obj;
+    void fn_80000000(Obj* obj, int extra) {
+        int temp = obj->xC + extra;
+        sink(temp);
+    }
+""")
+
 
 def test_parse_force_phys_spec_supports_class_prefixes() -> None:
     target = parse_force_phys_spec("53:25,0:50:22,f40:14", default_class_id=0)
@@ -246,3 +283,102 @@ def test_allocator_facts_schema_preserves_normalized_shape() -> None:
         "reserved": [31],
     }
     assert data["classes"][0]["color_decisions"][1]["nonvolatile_pool_before"] == {}
+
+
+def test_allocator_facts_from_pcdump_contains_nodes_edges_and_decisions() -> None:
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+
+    facts = facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        pcdump_path="baseline.pcdump.txt",
+        source_text=SOURCE,
+        source_path="src/example.c",
+        class_filter=(0,),
+    )
+
+    cls = facts.class_by_id()[0]
+    nodes = cls.node_by_ig()
+    decisions = cls.decision_by_ig()
+
+    assert facts.schema_version == "allocator-facts.v1"
+    assert facts.producer["kind"] == "mwcc-debug-pcdump"
+    assert cls.class_name == "gpr"
+    assert sorted((edge.a, edge.b) for edge in cls.edges) == [(37, 40)]
+    assert nodes[37].first_def.opcode == "lwz"
+    assert nodes[37].source_attribution.status in {
+        "attributed",
+        "ambiguous",
+        "unattributed",
+    }
+    assert nodes[41].spill.spilled is True
+    assert decisions[40].assigned_phys == 26
+    assert decisions[40].blocked_candidates
+    assert decisions[40].confidence in {"observed", "synthesized"}
+
+
+def test_backend_trace_fixture_maps_to_allocator_facts() -> None:
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_backend_trace
+
+    path = pathlib.Path("tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json")
+    if not path.exists():
+        pytest.skip("shared retail backend trace fixture has not landed")
+
+    facts = facts_from_backend_trace(path, function="test_fn")
+    cls = facts.class_by_id()[0]
+    nodes = cls.node_by_ig()
+    decisions = {decision.id: decision for decision in cls.color_decisions}
+    mappings = cls.coalesce["mappings"]
+
+    assert facts.producer["kind"] == "mwcc-retro-backend-trace"
+    assert facts.function.name == "test_fn"
+    assert {32, 33, 40}.issubset(nodes)
+    assert nodes[32].color_status == "colored"
+    assert nodes[33].color_status == "coalesced_alias"
+    assert nodes[33].coalesced_into == 32
+    assert nodes[33].color_decision_ref == "gpr-c0"
+    assert nodes[33].assigned_phys == nodes[32].assigned_phys
+    assert nodes[40].color_decision_ref == "gpr-c1"
+    assert mappings[0]["alias"] == 33
+    assert mappings[0]["root"] == 32
+    assert "root_phys" in mappings[0]
+    assert decisions["gpr-c0"].id == "gpr-c0"
+    assert decisions["gpr-c0"].provenance == "retail-trace-fixture"
+    assert any(
+        candidate.holder_ig_id is not None
+        and candidate.holder_assigned_phys is not None
+        for decision in decisions.values()
+        for candidate in decision.blocked_candidates
+    )
+    assert cls.registers.fixed and isinstance(cls.registers.fixed[0], dict)
+    assert cls.registers.precolored and isinstance(cls.registers.precolored[0], dict)
+    assert cls.registers.model_boundary and isinstance(
+        cls.registers.model_boundary[0],
+        dict,
+    )
+
+
+def test_allocator_facts_from_real_pcdump_has_allocator_shape() -> None:
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+
+    fixture = pathlib.Path(
+        "tools/melee-agent/tests/fixtures/mwcc_debug/lbDvd_80018A2C_pcdump.txt"
+    )
+    if not fixture.exists():
+        pytest.skip("lbDvd pcdump fixture missing")
+
+    facts = facts_from_pcdump(
+        fixture.read_text(),
+        "lbDvd_80018A2C",
+        pcdump_path=fixture,
+        class_filter=(0,),
+    )
+    cls = facts.class_by_id()[0]
+
+    assert cls.nodes
+    assert cls.color_decisions
+    assert cls.simplify_order
+    assert cls.select_order
+    assert cls.edges or cls.coalesce_mappings or any(
+        node.spill.spilled for node in cls.nodes
+    )

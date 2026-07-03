@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._helpers import *  # noqa: F403
+from .facts import *  # noqa: F403,E402
 
 @dataclass(frozen=True)
 class TargetPairState:
