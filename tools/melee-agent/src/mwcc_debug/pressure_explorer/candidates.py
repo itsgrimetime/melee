@@ -463,6 +463,12 @@ def _pressure_delta_dict(
     *,
     function: str,
 ) -> dict[str, Any]:
+    if len(_target_class_ids(target_set)) > 1:
+        return {
+            "status": "unavailable",
+            "reason": "pressure delta unavailable for mixed register classes",
+        }
+
     try:
         pairs = _target_pairs(target_set)
         baseline_path = baseline.producer.get("path")

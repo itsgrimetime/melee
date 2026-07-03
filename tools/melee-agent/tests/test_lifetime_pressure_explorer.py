@@ -355,6 +355,11 @@ def test_candidate_comparison_preserves_mixed_class_targets_with_same_ig(
     from src.mwcc_debug.pressure_explorer import candidates as candidate_module
     from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
 
+    base_path = tmp_path / "base.pcdump.txt"
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    base_path.write_text(PCDUMP)
+    cand_path.write_text(CANDIDATE_PCDUMP)
+
     def two_class_facts(
         *,
         gpr_phys: int,
@@ -362,7 +367,7 @@ def test_candidate_comparison_preserves_mixed_class_targets_with_same_ig(
     ) -> AllocatorFacts:
         return AllocatorFacts(
             schema_version="allocator-facts.v1",
-            producer={"kind": "unit-test"},
+            producer={"kind": "unit-test", "path": str(base_path)},
             function=FunctionFacts(
                 name="fn_80000000",
                 source_path=None,
@@ -388,8 +393,6 @@ def test_candidate_comparison_preserves_mixed_class_targets_with_same_ig(
 
     baseline = two_class_facts(gpr_phys=26, fpr_phys=15)
     candidate = two_class_facts(gpr_phys=25, fpr_phys=14)
-    cand_path = tmp_path / "candidate.pcdump.txt"
-    cand_path.write_text("candidate text is supplied by monkeypatch\n")
     monkeypatch.setattr(
         candidate_module,
         "facts_from_pcdump",
@@ -412,6 +415,8 @@ def test_candidate_comparison_preserves_mixed_class_targets_with_same_ig(
     assert comparison.target_results["0:40"]["candidate_phys"] == 25
     assert comparison.target_results["1:40"]["class_id"] == 1
     assert comparison.target_results["1:40"]["candidate_phys"] == 14
+    assert comparison.pressure_delta["status"] == "unavailable"
+    assert "mixed register classes" in comparison.pressure_delta["reason"]
 
 
 def test_candidate_comparison_rejects_missing_baseline_target(
