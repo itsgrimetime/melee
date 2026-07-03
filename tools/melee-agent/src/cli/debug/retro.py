@@ -16,7 +16,7 @@ retro_app = typer.Typer(
 # Package checkout discovery (this file is tools/melee-agent/src/cli/debug/retro.py).
 _PACKAGE_REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_PACKAGE_REPO))
-from tools.mwcc_retro import TABLES_DIR, setup as retro_setup  # noqa: E402
+from tools.mwcc_retro import backend_events, TABLES_DIR, setup as retro_setup  # noqa: E402
 
 
 @dataclass
@@ -107,6 +107,59 @@ def _write_backend_outputs(
         )
 
 
+def _run_object_parity_for_backend(*, src: str, melee_root: Path) -> dict:
+    """Run the raw .o byte-parity gate for backend tracing."""
+    import shlex
+    import subprocess
+    import tempfile
+
+    from tools.mwcc_retro import object_parity, setup as _setup
+
+    setup_result = _setup.ensure_for_root(melee_root, force=False)
+    cmd = _ninja_cmd_for_unit(src, melee_root=melee_root)
+    parts = shlex.split(cmd)
+    compiler = str(melee_root / parts[0])
+    args = [p for p in parts[1:] if p != "-MMD"]
+    with tempfile.TemporaryDirectory() as td:
+        ref = Path(td) / "reference.o"
+        retro_obj = Path(td) / "retro.o"
+
+        def with_output(path: Path) -> list[str]:
+            local = list(args)
+            if "-o" in local:
+                local[local.index("-o") + 1] = str(path)
+            else:
+                local += ["-o", str(path)]
+            return local
+
+        wibo = melee_root / "build/tools/wibo"
+        sjis = melee_root / "build/tools/sjiswrap.exe"
+        if sjis.exists():
+            normal_cmd = [str(wibo), str(sjis), compiler] + with_output(ref)
+        else:
+            normal_cmd = [str(wibo), compiler] + with_output(ref)
+        subprocess.run(
+            normal_cmd,
+            cwd=melee_root,
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+        subprocess.run(
+            [str(setup_result.retrowin32_bin), compiler] + with_output(retro_obj),
+            cwd=melee_root,
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+        return object_parity.compare_objects(ref, retro_obj).to_dict()
+
+
+def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path) -> Path:
+    """Launch retrowin32+gdb backend event tracing and return JSONL path."""
+    raise RuntimeError("backend event launcher requires validated 1.2.5n struct map")
+
+
 def _run_backend_trace(
     *,
     src: str,
@@ -115,10 +168,34 @@ def _run_backend_trace(
     verify_debug: bool,
     melee_root: Path,
 ) -> BackendOutcome:
-    raise RuntimeError(
-        "retail GC/1.2.5n backend trace runtime is not wired yet; "
-        "schema and CLI plumbing are installed"
+    parity = _run_object_parity_for_backend(src=src, melee_root=melee_root)
+    if not parity.get("matched"):
+        return BackendOutcome(exit_code=2, trace=None, fidelity=None)
+    try:
+        events_path = _launch_backend_events(
+            src=src,
+            fn=fn,
+            out_dir=out_dir,
+            melee_root=melee_root,
+        )
+    except RuntimeError:
+        raise
+    events = backend_events.load_events(events_path)
+    trace = backend_events.normalize_events(
+        events,
+        compiler={"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
+        source={
+            "tu": src,
+            "function": fn,
+            "mwcc_command_hash": "sha256:"
+            + __import__("hashlib").sha256(src.encode()).hexdigest(),
+        },
+        tool_version="mwcc-retro-dev",
     )
+    fidelity = None
+    if verify_debug:
+        fidelity = {"schema_version": "mwcc-retro-backend-fidelity.v1", "summary": {}}
+    return BackendOutcome(exit_code=0, trace=trace, fidelity=fidelity)
 
 
 def _ninja_cmd_for_unit(src_rel: str, *, melee_root: Path) -> str:

@@ -57,13 +57,12 @@ def test_backend_command_writes_trace_outputs(monkeypatch, tmp_path):
     assert (tmp_path / "backend-summary.txt").exists()
 
 
-def test_backend_stub_returns_not_wired_without_setup(monkeypatch, tmp_path):
+def test_backend_launcher_returns_not_wired_after_parity(monkeypatch, tmp_path):
     import src.cli.debug.retro as retro
 
-    def fail_if_setup_called(*_args, **_kwargs):
-        raise AssertionError("backend skeleton should not run setup before stub")
-
-    monkeypatch.setattr(retro, "_ensure_setup", fail_if_setup_called)
+    monkeypatch.setattr(
+        retro, "_run_object_parity_for_backend", lambda **_kwargs: {"matched": True}
+    )
 
     r = runner.invoke(
         app,
@@ -79,4 +78,4 @@ def test_backend_stub_returns_not_wired_without_setup(monkeypatch, tmp_path):
         ],
     )
     assert r.exit_code == 2
-    assert "retail GC/1.2.5n backend trace runtime is not wired yet" in r.output
+    assert "backend event launcher requires validated 1.2.5n struct map" in r.output
