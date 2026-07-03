@@ -99,8 +99,14 @@ def _direct_statement_nodes(body_node) -> list:
     return sorted(out, key=lambda n: n.start_byte)
 
 
-def _scope_for_node(source: str, fn_name: str, node) -> tuple[tuple[str, ...], tuple[int, int]]:
-    decls = ast_walker.walk_function(source, fn_name, path=None)
+def _scope_for_node(
+    source: str,
+    fn_name: str,
+    node,
+    decls: Optional[list] = None,
+) -> tuple[tuple[str, ...], tuple[int, int]]:
+    if decls is None:
+        decls = ast_walker.walk_function(source, fn_name, path=None)
     best_path = (fn_name,)
     best_range = (0, len(source.encode("utf-8")))
     for decl in decls:
@@ -145,11 +151,12 @@ def list_statement_spans(source: str, fn_name: str) -> list[StatementSpan]:
     if body is None:
         return []
     source_bytes = source.encode("utf-8")
+    decls = ast_walker.walk_function(source, fn_name, path=None)
     spans: list[StatementSpan] = []
     for node in _direct_statement_nodes(body):
         line_start, _ = _line_col(source_bytes, node.start_byte)
         line_end, _ = _line_col(source_bytes, node.end_byte)
-        scope_path, scope_range = _scope_for_node(source, fn_name, node)
+        scope_path, scope_range = _scope_for_node(source, fn_name, node, decls)
         reads, writes = _read_write_sets(node, source_bytes)
         spans.append(StatementSpan(
             text=_node_text(source_bytes, node).strip(),

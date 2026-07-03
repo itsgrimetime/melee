@@ -13,6 +13,7 @@ from src.mwcc_debug.suggest_inlines import (
     run,
 )
 from src.mwcc_debug.source_shape import CandidatePatch, CandidateScore, SourceShapeReport
+from src.mwcc_debug.source_spans import SpanGroup, StatementSpan
 
 
 def test_generate_candidates_from_repeated_call_groups() -> None:
@@ -96,6 +97,53 @@ def test_repeated_scalar_assignment_local_writes_generate_patches() -> None:
     assert payload["candidates"][0]["metadata"]["transform_family"] == (
         "local-write-helper"
     )
+
+
+def test_generate_candidates_reuses_visible_type_map_for_repeated_groups(
+    monkeypatch,
+) -> None:
+    import src.mwcc_debug.suggest_inlines as suggest_mod
+
+    def span(text: str, start: int, reads: tuple[str, ...], writes: tuple[str, ...]):
+        return StatementSpan(
+            text=text,
+            byte_range=(start, start + len(text)),
+            line_range=(1, 1),
+            scope_path=("f",),
+            scope_byte_range=(0, 100),
+            kind="expression_statement",
+            reads=reads,
+            writes=writes,
+        )
+
+    groups = (
+        SpanGroup((span("x = a;", 10, ("a",), ("x",)),), reason="test"),
+        SpanGroup((span("y = b;", 20, ("b",), ("y",)),), reason="test"),
+    )
+    calls = 0
+
+    def fake_visible_type_map(source: str, function: str) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        assert function == "f"
+        return {"a": "int", "b": "int", "x": "int", "y": "int"}
+
+    monkeypatch.setattr(
+        suggest_mod,
+        "find_repeated_call_groups",
+        lambda *args, **kwargs: groups,
+    )
+    monkeypatch.setattr(suggest_mod, "_visible_type_map", fake_visible_type_map)
+
+    candidates = generate_candidates(
+        source="void f(void) { x = a; y = b; }\n",
+        function="f",
+        seed_source="repeated",
+        budget=8,
+    )
+
+    assert candidates
+    assert calls == 1
 
 
 def test_unsupported_repeated_local_write_spans_are_terminal_blocker() -> None:

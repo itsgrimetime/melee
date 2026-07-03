@@ -6,7 +6,7 @@ import json
 import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from .ast_walker import walk_function
 from .source_patch import find_function as find_source_function
@@ -603,8 +603,11 @@ def _local_write_candidates_from_group(
     idx: int,
     group: SpanGroup,
     plan: SpanLocalWritePlan,
+    *,
+    visible_types: Optional[dict[str, str]] = None,
 ) -> list[InlineCandidate]:
-    visible_types = _visible_type_map(source, function)
+    if visible_types is None:
+        visible_types = _visible_type_map(source, function)
     blockers = _variant_blockers(plan, visible_types)
     out: list[InlineCandidate] = []
 
@@ -728,6 +731,8 @@ def _candidates_from_group(
     function: str,
     idx: int,
     group: SpanGroup,
+    *,
+    visible_type_map: Optional[Callable[[], dict[str, str]]] = None,
 ) -> list[InlineCandidate]:
     rejection = reject_reason_for_span_group(list(group.spans))
     call_names = _call_names_for_spans(group.spans)
@@ -745,7 +750,15 @@ def _candidates_from_group(
         return [_candidate_from_group(function, idx, group)]
 
     plan = _local_write_plan(group, call_names)
-    return _local_write_candidates_from_group(source, function, idx, group, plan)
+    visible_types = visible_type_map() if visible_type_map is not None else None
+    return _local_write_candidates_from_group(
+        source,
+        function,
+        idx,
+        group,
+        plan,
+        visible_types=visible_types,
+    )
 
 
 def _direct_call_names(source: str, function: str) -> tuple[str, ...]:
@@ -904,11 +917,25 @@ def generate_candidates(
 ) -> list[InlineCandidate]:
     candidates: list[InlineCandidate] = []
     idx = 1
+    repeated_visible_types: Optional[dict[str, str]] = None
+
+    def get_repeated_visible_types() -> dict[str, str]:
+        nonlocal repeated_visible_types
+        if repeated_visible_types is None:
+            repeated_visible_types = _visible_type_map(source, function)
+        return repeated_visible_types
+
     if seed_source in {"all", "repeated"}:
         for group in find_repeated_call_groups(
             source, function, max_span_statements=max_span_statements,
         ):
-            candidates.extend(_candidates_from_group(source, function, idx, group))
+            candidates.extend(_candidates_from_group(
+                source,
+                function,
+                idx,
+                group,
+                visible_type_map=get_repeated_visible_types,
+            ))
             idx += 1
     if seed_source in {"all", "patterns", "coalesce", "guide"}:
         for arg in find_call_argument_spans(source, function, "HSD_JObjSetMtxDirtySub"):
