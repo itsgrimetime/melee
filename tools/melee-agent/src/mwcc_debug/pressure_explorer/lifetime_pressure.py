@@ -207,8 +207,11 @@ def _attach_validation(
             report,
             function=function,
             force_phys=force_phys,
+            target_path=target_path,
             pcdump_path=pcdump_path,
             source_path=source_path,
+            source_candidates=source_candidates,
+            class_id=class_id,
             timeout=timeout,
             max_candidates=max_candidates,
         )
@@ -308,11 +311,49 @@ def _attach_bounded_validation(
     *,
     function: str,
     force_phys: str | None,
+    target_path: Path | None,
     pcdump_path: Path | None,
     source_path: Path | None,
+    source_candidates: list[Path],
+    class_id: int,
     timeout: int,
     max_candidates: int,
 ) -> LifetimePressureReport:
+    if source_candidates:
+        bounded_source_target_path = target_path
+        if (
+            bounded_source_target_path is None
+            and force_phys is not None
+            and pcdump_path is not None
+        ):
+            bounded_source_target_path = materialize_force_phys_target_spec(
+                function=function,
+                class_id=class_id,
+                force_phys=force_phys,
+                baseline_dump=pcdump_path,
+                output_dir=pcdump_path.parent,
+            )
+        if bounded_source_target_path is None:
+            report = replace(
+                report,
+                warnings=(
+                    *report.warnings,
+                    "bounded source validation requires a target file or force-phys pcdump",
+                ),
+            )
+        else:
+            source_results = run_quick_validation(
+                function=function,
+                target_file=bounded_source_target_path,
+                source_candidates=source_candidates,
+                timeout=timeout,
+            )
+            report = _append_output(
+                report,
+                "bounded_source_validation",
+                source_results,
+            )
+
     if force_phys is None or pcdump_path is None or source_path is None:
         return replace(
             report,

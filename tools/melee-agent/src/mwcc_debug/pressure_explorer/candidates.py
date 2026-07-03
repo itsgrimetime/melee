@@ -132,8 +132,8 @@ def _compare_candidate_pcdump(
         )
 
     reanchor_identity_status = "trusted"
-    reanchored_targets: dict[int, TargetAllocation] = {}
-    reanchor_unsafe: dict[int, str] = {}
+    reanchored_targets: dict[str, TargetAllocation] = {}
+    reanchor_unsafe: dict[str, str] = {}
     reanchor_warnings: tuple[str, ...] = ()
     if require_reanchor:
         (
@@ -150,31 +150,32 @@ def _compare_candidate_pcdump(
 
     baseline_classes = baseline.class_by_id()
     candidate_classes = candidate.class_by_id()
-    target_results: dict[int, dict[str, Any]] = {}
+    target_results: dict[str, dict[str, Any]] = {}
     reanchored_candidate_ids = False
     for target in target_set.targets:
+        target_key = _target_key(target)
         baseline_node = baseline_classes.get(target.class_id, None)
         candidate_node = candidate_classes.get(target.class_id, None)
         baseline_by_ig = {} if baseline_node is None else baseline_node.node_by_ig()
         candidate_by_ig = {} if candidate_node is None else candidate_node.node_by_ig()
         if target.ig_id not in baseline_by_ig:
-            target_results[target.ig_id] = _unsafe_target_result(
+            target_results[target_key] = _unsafe_target_result(
                 baseline,
                 target,
                 warning="baseline target not found",
             )
             continue
-        if target.ig_id in reanchor_unsafe:
-            target_results[target.ig_id] = _unsafe_target_result(
+        if target_key in reanchor_unsafe:
+            target_results[target_key] = _unsafe_target_result(
                 baseline,
                 target,
-                warning=reanchor_unsafe[target.ig_id],
+                warning=reanchor_unsafe[target_key],
             )
             continue
-        effective_target = reanchored_targets.get(target.ig_id, target)
+        effective_target = reanchored_targets.get(target_key, target)
         if effective_target.ig_id != target.ig_id:
             reanchored_candidate_ids = True
-        target_results[target.ig_id] = _target_result(
+        target_results[target_key] = _target_result(
             target,
             baseline_by_ig.get(target.ig_id),
             candidate_by_ig.get(effective_target.ig_id),
@@ -281,7 +282,7 @@ def _unsafe_target_result(
     }
 
 
-def _candidate_status(target_results: dict[int, dict[str, Any]]) -> str:
+def _candidate_status(target_results: dict[str, dict[str, Any]]) -> str:
     results = tuple(target_results.values())
     if any(result["regressed"] or result["unsafe"] for result in results):
         return "rejected"
@@ -316,12 +317,15 @@ def _reanchor_candidate_targets(
     candidate_text: str,
     *,
     source_text: str | None,
-) -> tuple[str, dict[int, TargetAllocation], dict[int, str], tuple[str, ...]]:
+) -> tuple[str, dict[str, TargetAllocation], dict[str, str], tuple[str, ...]]:
     if source_text is None:
         return (
             "unsafe",
             {},
-            {target.ig_id: "role reanchor unavailable" for target in target_set.targets},
+            {
+                _target_key(target): "role reanchor unavailable"
+                for target in target_set.targets
+            },
             ("role reanchor unavailable for candidate identity check",),
         )
 
@@ -330,7 +334,10 @@ def _reanchor_candidate_targets(
         return (
             "unsafe",
             {},
-            {target.ig_id: "baseline pcdump path unavailable" for target in target_set.targets},
+            {
+                _target_key(target): "baseline pcdump path unavailable"
+                for target in target_set.targets
+            },
             ("role reanchor unavailable: baseline pcdump path unavailable",),
         )
 
@@ -349,8 +356,8 @@ def _reanchor_candidate_targets(
         source_text,
     )
 
-    reanchored: dict[int, TargetAllocation] = {}
-    unsafe: dict[int, str] = {}
+    reanchored: dict[str, TargetAllocation] = {}
+    unsafe: dict[str, str] = {}
     warnings: list[str] = []
     by_class: dict[int, list[TargetAllocation]] = {}
     for target in target_set.targets:
@@ -387,10 +394,10 @@ def _reanchor_candidate_targets(
                 warning = (
                     f"reanchor excluded protected target {target.ig_id}: {reason}"
                 )
-                unsafe[target.ig_id] = warning
+                unsafe[_target_key(target)] = warning
                 warnings.append(warning)
                 continue
-            reanchored[target.ig_id] = TargetAllocation(
+            reanchored[_target_key(target)] = TargetAllocation(
                 class_id=target.class_id,
                 ig_id=new_ig,
                 expected_phys=int(force_phys_result[new_ig]),
@@ -420,7 +427,7 @@ def _unsafe_comparison(
     warnings: tuple[str, ...],
 ) -> CandidateComparison:
     target_results = {
-        target.ig_id: {
+        _target_key(target): {
             "class_id": target.class_id,
             "ig_id": target.ig_id,
             "expected_phys": target.expected_phys,
@@ -513,6 +520,10 @@ def _phys_distance(actual: int | None, expected: int) -> int | None:
     if actual is None:
         return None
     return abs(actual - expected)
+
+
+def _target_key(target: TargetAllocation) -> str:
+    return f"{target.class_id}:{target.ig_id}"
 
 
 __all__ = [

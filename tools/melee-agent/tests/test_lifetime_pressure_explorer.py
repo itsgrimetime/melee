@@ -27,6 +27,7 @@ from src.mwcc_debug.pressure_explorer.models import (
     RegisterFacts,
     SourceAttributionFact,
     SpillFacts,
+    TargetAllocation,
     TargetPressureReport,
     TargetSet,
 )
@@ -321,8 +322,8 @@ def test_candidate_comparison_rejects_protected_target_regression(tmp_path: path
 
     assert comparison.label == "swap"
     assert comparison.status == "rejected"
-    assert comparison.target_results[40]["satisfied"] is True
-    assert comparison.target_results[37]["regressed"] is True
+    assert comparison.target_results["0:40"]["satisfied"] is True
+    assert comparison.target_results["0:37"]["regressed"] is True
 
 
 def test_candidate_comparison_reports_full_target_match(tmp_path: pathlib.Path) -> None:
@@ -343,8 +344,74 @@ def test_candidate_comparison_reports_full_target_match(tmp_path: pathlib.Path) 
     )[0]
 
     assert comparison.status == "full_target_match"
-    assert comparison.target_results[40]["satisfied"] is True
-    assert comparison.target_results[40]["improved"] is True
+    assert comparison.target_results["0:40"]["satisfied"] is True
+    assert comparison.target_results["0:40"]["improved"] is True
+
+
+def test_candidate_comparison_preserves_mixed_class_targets_with_same_ig(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug.pressure_explorer import candidates as candidate_module
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+
+    def two_class_facts(
+        *,
+        gpr_phys: int,
+        fpr_phys: int,
+    ) -> AllocatorFacts:
+        return AllocatorFacts(
+            schema_version="allocator-facts.v1",
+            producer={"kind": "unit-test"},
+            function=FunctionFacts(
+                name="fn_80000000",
+                source_path=None,
+                freshness=FunctionFreshness(status="fresh"),
+            ),
+            classes=(
+                AllocatorClassFacts(
+                    class_id=0,
+                    class_name="gpr",
+                    registers=RegisterFacts(physical_count=32, allocatable=(25, 26)),
+                    nodes=(_manual_node(40, assigned_phys=gpr_phys),),
+                    color_decisions=(_manual_decision(40, assigned_phys=gpr_phys),),
+                ),
+                AllocatorClassFacts(
+                    class_id=1,
+                    class_name="fpr",
+                    registers=RegisterFacts(physical_count=32, allocatable=(14, 15)),
+                    nodes=(_manual_node(40, assigned_phys=fpr_phys),),
+                    color_decisions=(_manual_decision(40, assigned_phys=fpr_phys),),
+                ),
+            ),
+        )
+
+    baseline = two_class_facts(gpr_phys=26, fpr_phys=15)
+    candidate = two_class_facts(gpr_phys=25, fpr_phys=14)
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    cand_path.write_text("candidate text is supplied by monkeypatch\n")
+    monkeypatch.setattr(
+        candidate_module,
+        "facts_from_pcdump",
+        lambda *args, **kwargs: candidate,
+    )
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        TargetSet(
+            targets=(
+                TargetAllocation(class_id=0, ig_id=40, expected_phys=25),
+                TargetAllocation(class_id=1, ig_id=40, expected_phys=14),
+            )
+        ),
+        candidates=[("mixed", cand_path)],
+    )[0]
+
+    assert set(comparison.target_results) == {"0:40", "1:40"}
+    assert comparison.target_results["0:40"]["class_id"] == 0
+    assert comparison.target_results["0:40"]["candidate_phys"] == 25
+    assert comparison.target_results["1:40"]["class_id"] == 1
+    assert comparison.target_results["1:40"]["candidate_phys"] == 14
 
 
 def test_candidate_comparison_rejects_missing_baseline_target(
@@ -381,8 +448,8 @@ def test_candidate_comparison_rejects_missing_baseline_target(
     )[0]
 
     assert comparison.status == "rejected"
-    assert comparison.target_results[40]["unsafe"] is True
-    assert "baseline target not found" in comparison.target_results[40]["warning"]
+    assert comparison.target_results["0:40"]["unsafe"] is True
+    assert "baseline target not found" in comparison.target_results["0:40"]["warning"]
 
 
 @pytest.mark.parametrize(
@@ -415,7 +482,7 @@ def test_candidate_comparison_rejects_guard_failure_evidence(
     )[0]
 
     assert comparison.status == "rejected"
-    assert comparison.target_results[40]["satisfied"] is True
+    assert comparison.target_results["0:40"]["satisfied"] is True
     assert expected_warning in comparison.warnings
 
 
@@ -437,9 +504,9 @@ def test_candidate_comparison_reports_partial_progress(tmp_path: pathlib.Path) -
     )[0]
 
     assert comparison.status == "partial_progress"
-    assert comparison.target_results[40]["improved"] is True
-    assert comparison.target_results[37]["satisfied"] is False
-    assert comparison.target_results[37]["regressed"] is False
+    assert comparison.target_results["0:40"]["improved"] is True
+    assert comparison.target_results["0:37"]["satisfied"] is False
+    assert comparison.target_results["0:37"]["regressed"] is False
 
 
 def test_candidate_comparison_rejects_untrusted_identity(tmp_path: pathlib.Path) -> None:
@@ -548,7 +615,7 @@ def test_candidate_comparison_reanchors_identity_when_source_available(
 
     assert comparison.status == "full_target_match"
     assert comparison.identity_status == "reanchored"
-    assert comparison.target_results[40]["satisfied"] is True
+    assert comparison.target_results["0:40"]["satisfied"] is True
     assert ("reanchor", 0) in calls
 
 
@@ -613,7 +680,7 @@ def test_candidate_comparison_suppresses_pressure_delta_for_reanchored_ids(
         require_reanchor=True,
     )[0]
 
-    assert comparison.target_results[40]["candidate_ig_id"] == 41
+    assert comparison.target_results["0:40"]["candidate_ig_id"] == 41
     assert comparison.pressure_delta["status"] == "unavailable"
     assert "reanchored candidate ids" in comparison.pressure_delta["reason"]
 
@@ -681,7 +748,7 @@ def test_candidate_comparison_rejects_reanchor_excluded_protected_target(
 
     assert comparison.status == "rejected"
     assert comparison.identity_status == "unsafe"
-    assert comparison.target_results[40]["unsafe"] is True
+    assert comparison.target_results["0:40"]["unsafe"] is True
     assert "reanchor excluded protected target 40: ambiguous" in comparison.warnings
 
 
@@ -704,7 +771,7 @@ def test_candidate_comparison_rejects_missing_function(tmp_path: pathlib.Path) -
 
     assert comparison.status == "rejected"
     assert comparison.identity_status == "function_missing"
-    assert comparison.target_results[40]["unsafe"] is True
+    assert comparison.target_results["0:40"]["unsafe"] is True
 
 
 def test_source_candidate_rejected_without_compile_capable_mode(tmp_path: pathlib.Path) -> None:
@@ -2987,3 +3054,72 @@ def test_build_lifetime_pressure_report_bounded_passes_direct_blockers(
     assert calls["bounded"]["direct_blockers"] == [(0, 40, 37)]
     assert calls["bounded"]["force_phys"] == "40:25"
     assert report.outputs["bounded_validation"][0]["candidate"] == "select-order-0-40-37"
+
+
+def test_build_lifetime_pressure_report_bounded_validates_source_candidates(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug.pressure_explorer import lifetime_pressure
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    source = tmp_path / "source.c"
+    candidate = tmp_path / "candidate.c"
+    target_file = tmp_path / "materialized.target.yaml"
+    pcdump.write_text(PCDUMP)
+    source.write_text(SOURCE)
+    candidate.write_text(SOURCE)
+    calls: dict[str, object] = {}
+
+    def fake_materialize_force_phys_target_spec(**kwargs: object) -> pathlib.Path:
+        calls["materialize"] = kwargs
+        target_file.write_text("target: true\n")
+        return target_file
+
+    def fake_run_quick_validation(**kwargs: object) -> list[dict[str, object]]:
+        calls["quick"] = kwargs
+        return [{"candidate": str(candidate), "status": "full_target_match"}]
+
+    def fake_run_bounded_validation(**kwargs: object) -> list[dict[str, object]]:
+        calls["bounded"] = kwargs
+        return [{"candidate": "lifetime-layout", "status": "partial_progress"}]
+
+    monkeypatch.setattr(
+        lifetime_pressure,
+        "materialize_force_phys_target_spec",
+        fake_materialize_force_phys_target_spec,
+    )
+    monkeypatch.setattr(
+        lifetime_pressure,
+        "run_quick_validation",
+        fake_run_quick_validation,
+    )
+    monkeypatch.setattr(
+        lifetime_pressure,
+        "run_bounded_validation",
+        fake_run_bounded_validation,
+    )
+
+    report = lifetime_pressure.build_lifetime_pressure_report(
+        function="fn_80000000",
+        pcdump_text=PCDUMP,
+        pcdump_path=pcdump,
+        source_text=SOURCE,
+        source_path=source,
+        force_phys="40:25",
+        target_path=None,
+        candidates=[f"candidate={candidate}"],
+        backend_trace_path=None,
+        class_id=0,
+        allow_stale_pcdump=False,
+        validate_mode="bounded",
+        timeout=30,
+        max_candidates=8,
+    )
+
+    assert calls["materialize"]["baseline_dump"] == pcdump
+    assert calls["quick"]["target_file"] == target_file
+    assert calls["quick"]["source_candidates"] == [candidate]
+    assert calls["bounded"]["source_path"] == source
+    assert report.outputs["bounded_source_validation"][0]["status"] == "full_target_match"
+    assert report.outputs["bounded_validation"][0]["candidate"] == "lifetime-layout"
