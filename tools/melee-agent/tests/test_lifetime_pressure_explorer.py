@@ -319,6 +319,77 @@ def test_allocator_facts_from_pcdump_contains_nodes_edges_and_decisions() -> Non
     assert decisions[40].confidence in {"observed", "synthesized"}
 
 
+def test_analyze_reports_no_pressure_issue_when_target_matches() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("37:25", default_class_id=0),
+    )
+
+    target = report.targets[0]
+    assert target.status == "no_pressure_issue"
+    assert target.current_phys == 25
+    assert target.expected_phys == 25
+    assert target.blockers == ()
+
+
+def test_analyze_finds_expected_phys_holder_blocker() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("40:25", default_class_id=0),
+    )
+
+    target = report.targets[0]
+    assert target.status == "blocked"
+    assert target.current_phys == 26
+    assert target.expected_phys == 25
+    assert target.blockers[0].kind == "expected_phys_holder"
+    assert target.blockers[0].ig_id == 37
+    assert "remove interference" in target.must_change[0]
+
+
+def test_no_target_mode_is_inventory_only() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+
+    facts = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    report = analyze_lifetime_pressure(facts, target_set=None)
+
+    assert report.inventory_only is True
+    assert report.targets == ()
+    assert any("derive a target" in command.command for command in report.validation_commands)
+    assert report.hypotheses == ()
+
+
+def test_coalesced_alias_node_reports_coalesced_away() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_backend_trace
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    fixture = pathlib.Path("tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json")
+    if not fixture.exists():
+        pytest.skip("shared retail backend trace fixture has not landed")
+
+    facts = facts_from_backend_trace(fixture, function="test_fn")
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("33:31", default_class_id=0),
+    )
+
+    assert report.targets[0].status == "coalesced_away"
+    assert report.targets[0].current_phys == 31
+    assert report.targets[0].coalesce.root_ig_id == 32
+
+
 def test_backend_trace_fixture_maps_to_allocator_facts() -> None:
     from src.mwcc_debug.pressure_explorer.facts import facts_from_backend_trace
 

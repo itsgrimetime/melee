@@ -9648,3 +9648,4 @@ def _find_matching_paren(source: str, open_idx: int) -> int | None:
 
 from .models import *  # noqa: F403,E402
 from .targets import *  # noqa: F403,E402
+from .analyzer import *  # noqa: F403,E402

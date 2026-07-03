@@ -218,6 +218,82 @@ class AllocatorFacts:
         return _json_value(self)
 
 
+@dataclass(frozen=True)
+class Blocker:
+    target_ig_id: int
+    ig_id: int | None
+    kind: str
+    assigned_phys: int | None
+    impact: int
+    reason: str
+    source_summary: str | None = None
+    confidence: str = "observed"
+
+
+@dataclass(frozen=True)
+class TargetPressureReport:
+    class_id: int
+    ig_id: int
+    virtual: dict[str, Any]
+    current_phys: int | None
+    expected_phys: int | None
+    status: str
+    first_def: FirstDefSite | None
+    source_attribution: SourceAttributionFact | None
+    live: LiveFacts | None
+    simplify_order: int | None
+    select_order: int | None
+    coalesce: CoalesceFacts | None
+    spill: SpillFacts | None
+    blockers: tuple[Blocker, ...]
+    why_current_color: str
+    must_change: tuple[str, ...]
+    confidence: str
+
+
+@dataclass(frozen=True)
+class ValidationCommand:
+    id: str
+    purpose: str
+    command: str
+    mode: str = "emit"
+    confidence: str = "exact"
+
+
+@dataclass(frozen=True)
+class SourceHypothesis:
+    id: str
+    target_ig_id: int
+    rank: int
+    action: str
+    allocator_requirement: str
+    source_owner: str
+    confidence: str
+    status: str = "unvalidated"
+    validation_command_ids: tuple[str, ...] = ()
+    line_mapping_status: str = "fresh"
+
+
+@dataclass(frozen=True)
+class LifetimePressureReport:
+    schema_version: str
+    function: str
+    inventory_only: bool
+    inputs: dict[str, Any]
+    targets: tuple[TargetPressureReport, ...]
+    allocator_facts: AllocatorFacts
+    blockers: tuple[Blocker, ...]
+    source_attribution: dict[str, Any]
+    hypotheses: tuple[SourceHypothesis, ...]
+    validation_commands: tuple[ValidationCommand, ...]
+    candidate_comparisons: tuple[Any, ...] = ()
+    outputs: dict[str, Any] = field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return _json_value(self)
+
+
 __all__ = [
     "_json_value",
     "TargetAllocation",
@@ -237,4 +313,9 @@ __all__ = [
     "AllocatorClassFacts",
     "FunctionFacts",
     "AllocatorFacts",
+    "Blocker",
+    "TargetPressureReport",
+    "ValidationCommand",
+    "SourceHypothesis",
+    "LifetimePressureReport",
 ]
