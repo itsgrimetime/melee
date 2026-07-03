@@ -25,12 +25,45 @@ def test_compiler_family_must_be_mwcc():
     assert any("compiler must describe retail MWCC GC/1.2.5n" in e for e in errors)
 
 
+def test_compiler_must_be_object():
+    data = json.loads(FIXTURE.read_text())
+    data["compiler"] = "MWCC GC/1.2.5n"
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("compiler must be object" in e for e in errors)
+
+
+def test_regalloc_must_be_object():
+    data = json.loads(FIXTURE.read_text())
+    data["functions"][0]["regalloc"] = "regalloc"
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("function test_fn regalloc must be object" in e for e in errors)
+
+
 def test_colored_node_without_decision_is_invalid():
     data = json.loads(FIXTURE.read_text())
     cls = data["functions"][0]["regalloc"]["classes"][0]
     cls["nodes"][0]["color_decision_ref"] = None
     errors = backend_schema.validate_backend_trace(data)
     assert any("colored node 32 missing color_decision_ref" in e for e in errors)
+
+
+def test_colored_node_decision_assigned_phys_must_match():
+    data = json.loads(FIXTURE.read_text())
+    decision = data["functions"][0]["regalloc"]["classes"][0]["color_decisions"][0]
+    decision["assigned_phys"] = 29
+    errors = backend_schema.validate_backend_trace(data)
+    assert any(
+        "colored node 32 assigned_phys 31 does not match decision gpr-c0 assigned_phys 29" in e
+        for e in errors
+    )
+
+
+def test_colored_node_requires_assigned_phys():
+    data = json.loads(FIXTURE.read_text())
+    node = data["functions"][0]["regalloc"]["classes"][0]["nodes"][0]
+    node["assigned_phys"] = None
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("colored node 32 missing assigned_phys" in e for e in errors)
 
 
 def test_coalesced_alias_may_have_null_select_and_decision():

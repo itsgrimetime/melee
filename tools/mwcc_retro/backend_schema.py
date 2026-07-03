@@ -92,12 +92,16 @@ def validate_backend_trace(payload: dict[str, Any]) -> list[str]:
         )
 
     compiler = payload.get("compiler") or {}
-    if (
-        compiler.get("family") != "MWCC"
-        or compiler.get("version") != "GC/1.2.5n"
-        or compiler.get("retail") is not True
-    ):
-        errors.append("compiler must describe retail MWCC GC/1.2.5n")
+    if not isinstance(compiler, dict):
+        errors.append("compiler must be object")
+        compiler = {}
+    else:
+        if (
+            compiler.get("family") != "MWCC"
+            or compiler.get("version") != "GC/1.2.5n"
+            or compiler.get("retail") is not True
+        ):
+            errors.append("compiler must describe retail MWCC GC/1.2.5n")
 
     functions = payload.get("functions")
     if not isinstance(functions, list) or not functions:
@@ -109,9 +113,12 @@ def validate_backend_trace(payload: dict[str, Any]) -> list[str]:
             errors.append(f"function[{fn_index}] must be an object")
             continue
 
-        regalloc = fn.get("regalloc") or {}
-        classes = regalloc.get("classes")
         fn_name = str(fn.get("name", fn_index))
+        regalloc = fn.get("regalloc") or {}
+        if not isinstance(regalloc, dict):
+            errors.append(f"function {fn_name} regalloc must be object")
+            continue
+        classes = regalloc.get("classes")
         if not isinstance(classes, list) or not classes:
             errors.append(f"function {fn_name} missing regalloc classes")
             continue
@@ -336,16 +343,28 @@ def _validate_colored_node(
 ) -> None:
     node_id = node.get("ig_id", "<missing-ig>")
     ref = node.get("color_decision_ref")
+    decision = None
     if ref is None:
         errors.append(f"{fn_name}:{class_name} colored node {node_id} missing color_decision_ref")
     elif str(ref) not in decision_by_id:
         errors.append(
             f"{fn_name}:{class_name} colored node {node_id} references missing color decision {ref}"
         )
-    elif decision_by_id[str(ref)].get("ig_id") != node_id:
+    else:
+        decision = decision_by_id[str(ref)]
+        if decision.get("ig_id") != node_id:
+            errors.append(
+                f"{fn_name}:{class_name} colored node {node_id} decision {ref} "
+                f"has ig_id {decision.get('ig_id')}"
+            )
+
+    if node.get("assigned_phys") is None:
+        errors.append(f"{fn_name}:{class_name} colored node {node_id} missing assigned_phys")
+    elif decision is not None and node.get("assigned_phys") != decision.get("assigned_phys"):
         errors.append(
-            f"{fn_name}:{class_name} colored node {node_id} decision {ref} "
-            f"has ig_id {decision_by_id[str(ref)].get('ig_id')}"
+            f"{fn_name}:{class_name} colored node {node_id} assigned_phys "
+            f"{node.get('assigned_phys')} does not match decision {ref} assigned_phys "
+            f"{decision.get('assigned_phys')}"
         )
 
     if node.get("select_order") is None:
