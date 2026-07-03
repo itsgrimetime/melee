@@ -23,7 +23,11 @@ def build_remote_validation_plan(
     source_candidates: list[Path],
     target_file: Path | None = None,
 ) -> tuple[ValidationCommand, ...]:
-    target_path = target_file if target_file is not None else campaign_dir / "force_phys_target.yaml"
+    target_path = (
+        target_file
+        if target_file is not None
+        else campaign_dir / f"{_safe_filename(function)}.force-phys.target.yaml"
+    )
     commands: list[ValidationCommand] = []
     candidates = source_candidates or [Path("CANDIDATE.c")]
     for index, candidate in enumerate(candidates, start=1):

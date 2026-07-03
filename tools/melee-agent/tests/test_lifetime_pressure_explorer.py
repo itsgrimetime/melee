@@ -2375,6 +2375,8 @@ def test_remote_validation_is_emit_only(tmp_path: pathlib.Path) -> None:
     assert all("--remote-fallback" in command.command for command in commands)
     assert all("--timeout 45" in command.command for command in commands)
     assert str(tmp_path / "campaign") in commands[0].command
+    assert "fn_80000000.force-phys.target.yaml" in commands[0].command
+    assert "force_phys_target.yaml" not in commands[0].command
     assert str(candidates[0]) in commands[0].command
     assert str(candidates[1]) in commands[1].command
 
