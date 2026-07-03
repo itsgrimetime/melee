@@ -14,10 +14,10 @@ from src.mwcc_debug.pressure_explorer.models import (
     AllocatorClassFacts,
     AllocatorFacts,
     AllocatorNode,
-    Blocker,
     BlockedCandidate,
-    ColorDecision,
+    Blocker,
     CoalesceFacts,
+    ColorDecision,
     FirstDefSite,
     FunctionFacts,
     FunctionFreshness,
@@ -27,8 +27,8 @@ from src.mwcc_debug.pressure_explorer.models import (
     RegisterFacts,
     SourceAttributionFact,
     SpillFacts,
-    TargetSet,
     TargetPressureReport,
+    TargetSet,
 )
 from src.mwcc_debug.pressure_explorer.targets import (
     parse_force_phys_spec,
@@ -1919,3 +1919,107 @@ def test_allocator_facts_from_real_pcdump_has_allocator_shape() -> None:
     assert cls.edges or cls.coalesce_mappings or any(
         node.spill.spilled for node in cls.nodes
     )
+
+
+def test_render_text_and_json_include_fact_guess_split() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        render_json_report,
+        render_text_report,
+    )
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.hypotheses import attach_hypotheses
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        pcdump_path="baseline.pcdump.txt",
+        source_text=SOURCE,
+        source_path="src/example.c",
+        class_filter=(0,),
+    )
+    report = attach_hypotheses(
+        analyze_lifetime_pressure(facts, parse_force_phys_spec("40:25")),
+        pcdump_path="baseline.pcdump.txt",
+        source_path="src/example.c",
+        allow_stale_pcdump=False,
+    )
+
+    text = render_text_report(report)
+    expected_sections = [
+        "LIFETIME PRESSURE - FN_80000000",
+        "INPUTS",
+        "TARGET SUMMARY",
+        "ALLOCATOR FACTS",
+        "BLOCKERS",
+        "SOURCE GUESSES",
+        "HYPOTHESES",
+        "VALIDATION COMMANDS",
+        "CANDIDATE COMPARISONS",
+        "WARNINGS",
+    ]
+
+    assert [text.index(section) for section in expected_sections] == sorted(
+        text.index(section) for section in expected_sections
+    )
+    assert "expected_phys_holder" in text
+    assert "debug mutate lifetime-layout" in text
+    assert "schema_version" not in text
+    json_report = render_json_report(report)
+    assert json_report["schema_version"] == "lifetime-pressure-report.v1"
+    assert json_report["targets"][0]["status"] == "blocked"
+    assert json_report["source_attribution"]["status"] == "ranked"
+
+
+def test_dot_and_blocker_table_outputs() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        render_blocker_table_csv,
+        render_blocker_table_json,
+        render_dot,
+    )
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    report = analyze_lifetime_pressure(
+        _parsed_pressure_facts(),
+        parse_force_phys_spec("40:25", default_class_id=0),
+    )
+
+    dot = render_dot(report)
+    csv_table = render_blocker_table_csv(report)
+    json_table = render_blocker_table_json(report)
+
+    assert "digraph lifetime_pressure" in dot
+    assert "ig40" in dot
+    assert "ig37" in dot
+    assert "ig37 -> ig40" in dot
+    assert "expected_phys_holder" in dot
+    assert csv_table.startswith("target_ig,blocker_ig")
+    assert "40,37,expected_phys_holder" in csv_table
+    assert "expected phys r25" in csv_table
+    assert json_table == [
+        {
+            "target_ig": 40,
+            "blocker_ig": 37,
+            "kind": "expected_phys_holder",
+            "assigned_phys": 25,
+            "impact": 100,
+            "reason": "expected phys r25 is held by interfering IG 37",
+            "source_summary": "obj->xC / field-load",
+            "confidence": "observed",
+        }
+    ]
+
+
+def test_render_text_no_target_mode_is_inventory_only_without_blocker_claims() -> None:
+    from src.mwcc_debug.pressure_explorer import render_text_report
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+
+    report = analyze_lifetime_pressure(_parsed_pressure_facts(), target_set=None)
+
+    text = render_text_report(report)
+
+    assert "inventory-only: no target allocation supplied" in text
+    assert "expected_phys_holder" not in text
+    assert "blocked by" not in text.lower()

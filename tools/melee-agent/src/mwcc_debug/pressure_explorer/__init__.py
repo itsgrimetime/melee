@@ -4,6 +4,7 @@ from ._helpers import *  # noqa: F403
 from .commands import *  # noqa: F403,E402
 from .facts import *  # noqa: F403,E402
 from .hypotheses import *  # noqa: F403,E402
+from .render import *  # noqa: F403,E402
 
 
 @dataclass(frozen=True)
