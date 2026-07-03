@@ -22,11 +22,19 @@ compiler.
 debug DLL path. It is fast and useful, but it is not the unmodified retail
 compiler.
 
-`mwcc-retro` already runs the retail GC/1.2.5n compiler under retrowin32 with a
-gdb stub. Its current production capability is frontend IRO pass tracing. The
-existing docs and code explicitly leave exact 1.2.5n backend/regalloc tracing as
-unfinished because an earlier address-port attempt had incomplete data globals
-and false byte-correlation matches.
+`mwcc-retro` already runs retail MWCC under retrowin32 with a gdb stub. Its
+current production capabilities are:
+
+- Frontend IRO pass tracing for retail GC/1.2.5n.
+- Backend PCode/regalloc/stack dumps for GC/1.1 through the existing
+  cadmic-style backend reader (`debug retro dump --phases backend --compiler
+  1.1`).
+
+The unfinished gap is exact retail GC/1.2.5n backend/regalloc tracing. The GC/1.1
+backend path is useful as a donor, regression fixture, and shape reference, but
+not as a substitute target. Implementation should reuse the existing GC/1.1
+backend reader and normalizer shapes where they apply instead of treating all
+backend tracing as greenfield.
 
 This project closes that gap by extending `mwcc-retro` instead of creating a
 parallel tool.
@@ -128,6 +136,54 @@ escape hatch. The frontend IRO dump machinery may continue using its existing
 in-memory toggles, but the backend tracer must not depend on write patches for
 normal fact collection.
 
+## Function Identity And Selection
+
+`-f <fn>` names the desired source/compiler function, not a runtime address or
+encounter-order slot. The command resolves it before and during tracing using a
+canonical identity record:
+
+- `requested`: the exact user argument.
+- `canonical_name`: the compiler/source function name used for matching trace
+  records.
+- `symbol_name`: symbol-table name when available.
+- `source_name`: C source spelling when available.
+- `aliases`: accepted alternates, including `fn_` symbols, static/source-local
+  spellings, and known map/report aliases.
+- `source_file`: repo-relative TU path.
+
+Resolution may consult build report metadata, symbols, source parsing, and the
+compiler's current-function object/link name. Runtime addresses may be recorded
+as observations, but they must not be used as the stable identity.
+
+The tracer may observe many functions in a TU. It must emit the requested
+function's normalized record only when a seen compiler function matches the
+canonical identity or one of its aliases. If the requested function is not found,
+the command exits with the not-found code and writes a diagnostic listing the
+requested name, attempted aliases, and nearby or same-TU function names seen
+during the compile. That diagnostic must not rely on encounter order alone.
+
+## Object Parity Gate
+
+The v1 trust gate is raw object-byte parity. The tool compiles the same TU with
+the same MWCC arguments through:
+
+- the normal repo retail path, with output redirected to a temporary reference
+  object; and
+- retrowin32 retail GC/1.2.5n, with output redirected to a temporary retro
+  object.
+
+The comparator drops dependency-file side effects such as `-MMD` when necessary
+and keeps the compile working directory and command flags otherwise equivalent.
+The two produced `.o` files are expected to be deterministic byte-for-byte, based
+on the existing `mwcc-retro` P0 evidence. The diagnostic records both object
+paths, sizes, and cryptographic hashes.
+
+If raw object bytes differ, `debug retro backend` fails before trusting backend
+state. The tool must not silently fall back to a weaker comparator. If future
+evidence proves benign non-code metadata drift, a normalized parity gate over
+section bytes, relocations, and symbol-critical metadata must be designed and
+documented before this hard gate is relaxed.
+
 ## Failure Policy
 
 `debug retro backend` fails instead of degrading when any of these occur:
@@ -138,18 +194,30 @@ normal fact collection.
 - A required breakpoint resolves ambiguously or fails its first-hit invariant.
 - A required struct field has invalid bounds, impossible pointer section,
   impossible register class, corrupt list shape, or inconsistent count.
-- The command cannot emit complete regalloc decisions for every GPR or FPR class
-  the function actually uses.
+- The command cannot emit complete regalloc decisions for every v1 allocator
+  class the function actually uses.
 - Required allocator facts are missing from the normalized consumer schema.
 
 Best-effort source attribution is not a hard failure. It may be `unattributed`
 or `ambiguous` because downstream tools can enrich it.
+
+V1 allocator classes are GPR and FPR. CR, LR, CTR, condition-code, and other
+special backend machinery may be represented in PCode or a
+`non_allocatable_state` model-boundary section, but they are outside the v1
+`AllocatorFacts` completeness gate.
 
 ## Output Files
 
 All files are written under:
 
 `build/mwcc_retro/<unit>/<function>/`
+
+`<unit>` is a path-safe encoding of the repo-relative source path plus a short
+hash of that repo-relative path or MWCC command. `<function>` is a path-safe
+canonical compiler function name plus a short hash when needed to avoid
+collisions. The display source path and display function name are recorded in
+`provenance.json` and `backend-trace.v1.json`. Duplicate filenames, static
+functions, unusual characters, and aliases must not collide on disk.
 
 New or extended files:
 
@@ -229,6 +297,10 @@ Required shape:
             "coalesce": {
               "mappings": []
             },
+            "non_allocatable_state": {
+              "status": "model-boundary",
+              "notes": []
+            },
             "simplify_order": [],
             "select_order": [],
             "color_decisions": []
@@ -269,8 +341,28 @@ Per-color-decision fields:
 - `ig_id`.
 - `iter`.
 - `assigned_phys`.
-- `candidate_phys_before_choice` when observed.
-- `blocked_by`: interferers and physical registers that removed candidates.
+- `node_state_before_select`: whether the node was precolored, coalesced,
+  spill-marked, rematerialized, or otherwise special before selection.
+- `reserved_or_precolored_filtered`: physical registers removed before normal
+  candidate selection because they are reserved, fixed, precolored, or
+  unavailable for the class.
+- `available_phys_ordered`: ordered candidate physical registers after reserved
+  and precolored filtering, before interference blocking.
+- `blocked_candidates`: one entry per candidate removed by pressure, including
+  candidate physical register, blocker reason, holder `ig_id` when available,
+  holder assigned physical, and provenance such as interference edge,
+  call-clobber, reserved register, or class constraint.
+- `candidate_phys_ordered`: ordered candidate physicals at the final choice
+  point after filtering/blocking.
+- `chosen_source`: `volatile_pool`, `nonvolatile_dispense`, `precolored`,
+  `coalesced`, or `spill`.
+- `volatile_pool_before` and `volatile_pool_after` when observed.
+- `nonvolatile_dispense_before` and `nonvolatile_dispense_after` when observed,
+  including next register, consumed register, and sticky-pool additions.
+- `tie_rule`: the rule used to pick among available candidates, such as
+  lowest-numbered volatile candidate or top-down nonvolatile dispense.
+- `blocked_by`: compatibility summary of blockers for quick display. The
+  structured source of truth is `blocked_candidates`.
 - `decision_rule`: e.g. `lowest_available_or_nonvolatile_dispense`.
 - `confidence`.
 
@@ -286,9 +378,10 @@ Identity caveats:
 
 Completeness gate:
 
-- For every register class a function uses, the consumer subset must include
-  nodes, edges, coalesce roots/aliases, simplify/select order, color decisions,
-  assigned physicals, and spill flags.
+- For every v1 allocator class a function uses, the consumer subset must
+  include nodes, edges, coalesce roots/aliases, simplify/select order, color
+  decisions, assigned physicals, spill flags, and the structured color-decision
+  pressure fields needed to explain why one physical was chosen over another.
 - Missing required allocator facts fail the command.
 - Source attribution may be incomplete without failing the command.
 
@@ -355,6 +448,18 @@ Fields compared where both tools expose them:
 Retail is authoritative. The verifier reports DLL differences and does not
 massage retail data to match the debug DLL.
 
+Default exit semantics:
+
+- `--verify-debug` exits successfully when the retail trace is valid, schema
+  validation passes, and the retail-vs-debug comparison completes.
+- Retail/debug differences are reported as data in `backend-fidelity.json` and
+  `backend-fidelity.txt`; they are not command failures by default.
+- The command exits nonzero for trace defects, schema defects, runtime failures,
+  missing required retail facts, missing requested inputs, or verifier crashes.
+- A future `--strict` or equivalent mode may make selected unexpected
+  retail/debug differences fail CI, but that is not the default because real
+  retail/debug divergence is one reason this tool exists.
+
 ## CLI
 
 New or extended commands:
@@ -379,6 +484,31 @@ route exists for consistency with current `mwcc-retro` command shape.
 CLI help must state that GC/1.2.5n backend tracing is exact retail tracing and
 that the command fails on missing required allocator facts.
 
+## Implementation Milestones
+
+Implementation should land behind visible gates rather than trying to jump from
+schema design directly to the hardest live case.
+
+Milestone ladder:
+
+1. Schema and synthetic normalizer fixtures. Artifact: schema docs plus a
+   checked-in minimal `backend-trace.v1.json` fixture with allocator facts.
+2. Existing GC/1.1 backend reuse/regression. Artifact: a GC/1.1 backend trace or
+   fixture normalized through the new schema shape where applicable.
+3. GC/1.2.5n address and struct confidence map. Artifact:
+   `struct-map.v1.json`/table updates with invariants and evidence for required
+   backend/regalloc fields.
+4. One matched-function live GC/1.2.5n backend trace. Artifact: complete trace,
+   summary, and verifier output.
+5. One register-allocation-only mismatch live trace. Artifact: complete trace
+   and enough color-decision facts to explain a wrong physical choice.
+6. `mnDiagram_UpdateScrollArrows` live trace or documented current-name mapping
+   plus blocker evidence if the function cannot be resolved.
+
+Each milestone should produce an artifact that remains useful even if a later
+stage blocks. A serious confidence blocker in milestone 3 or later should be
+reported before pivoting.
+
 ## Documentation
 
 Update:
@@ -400,6 +530,17 @@ Add schema documentation for:
 
 Docs must include reproducible commands and explain how to interpret hard
 failures versus fidelity differences.
+
+The implementation must also add a checked-in consumer-contract fixture, for
+example:
+
+`tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json`
+
+The fixture must contain at least two GPR nodes, one interference edge, one
+coalesce mapping, simplify/select order, and one color decision with structured
+blockers. It exists so downstream tools such as the lifetime-pressure explorer
+can develop adapters without parsing raw gdb events or waiting for live retail
+traces.
 
 ## Validation
 
