@@ -2423,6 +2423,29 @@ def test_materialize_force_phys_target_spec_writes_score_source_contract(
     assert all(isinstance(key, int) for key in data["force_phys"])
 
 
+def test_validation_public_functions_are_keyword_only(tmp_path: pathlib.Path) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import (
+        build_remote_validation_plan,
+        run_quick_validation,
+    )
+
+    with pytest.raises(TypeError):
+        build_remote_validation_plan(
+            "fn_80000000",
+            "37:25",
+            45,
+            tmp_path / "campaign",
+            [tmp_path / "candidate.c"],
+        )
+    with pytest.raises(TypeError):
+        run_quick_validation(
+            "fn_80000000",
+            tmp_path / "target.yaml",
+            [tmp_path / "candidate.c"],
+            30,
+        )
+
+
 def test_quick_validation_runs_supplied_source_candidates_with_runner(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -2441,9 +2464,9 @@ def test_quick_validation_runs_supplied_source_candidates_with_runner(
         }
 
     results = run_quick_validation(
-        "fn_80000000",
-        target,
-        candidates,
+        function="fn_80000000",
+        target_file=target,
+        source_candidates=candidates,
         timeout=30,
         runner=runner,
     )
@@ -2493,9 +2516,9 @@ def test_quick_validation_classifies_partial_progress_and_rejections(
         }
 
     results = run_quick_validation(
-        "fn_80000000",
-        tmp_path / "target.yaml",
-        [
+        function="fn_80000000",
+        target_file=tmp_path / "target.yaml",
+        source_candidates=[
             tmp_path / "partial.c",
             tmp_path / "structural_reject.c",
             tmp_path / "guard_reject.c",
@@ -2577,3 +2600,77 @@ def test_bounded_validation_runs_existing_mutation_workflows(
             "--json",
         ],
     ]
+
+
+def test_bounded_validation_runs_select_order_for_direct_blockers(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_bounded_validation
+
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], _timeout: int) -> dict[str, object]:
+        calls.append(argv)
+        return {"returncode": 0, "stdout": '{"ok": true}', "stderr": ""}
+
+    results = run_bounded_validation(
+        function="fn_80000000",
+        force_phys="40:25",
+        pcdump_path=tmp_path / "base.pcdump.txt",
+        source_path=tmp_path / "source.c",
+        timeout=60,
+        max_candidates=7,
+        direct_blockers=[(0, 40, 37)],
+        runner=runner,
+    )
+
+    assert len(results) == 3
+    select_order = calls[2]
+    assert select_order[:4] == [
+        "melee-agent",
+        "debug",
+        "select-order-search",
+        "-f",
+    ]
+    assert "debug" in select_order
+    assert "select-order-search" in select_order
+    assert select_order[select_order.index("--target") + 1] == "r40<r37"
+    assert select_order[select_order.index("--force-phys") + 1] == "40:25"
+    assert select_order[select_order.index("--pcdump") + 1] == str(
+        tmp_path / "base.pcdump.txt"
+    )
+    assert select_order[select_order.index("--source-file") + 1] == str(
+        tmp_path / "source.c"
+    )
+    assert select_order[select_order.index("--max-probes") + 1] == "7"
+    assert select_order[select_order.index("--timeout") + 1] == "60"
+    assert "--json" in select_order
+
+
+def test_bounded_validation_uses_fpr_direct_blocker_target(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_bounded_validation
+
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], _timeout: int) -> dict[str, object]:
+        calls.append(argv)
+        return {"returncode": 0, "stdout": '{"ok": true}', "stderr": ""}
+
+    run_bounded_validation(
+        function="fn_80000000",
+        force_phys="1:40:25",
+        pcdump_path=tmp_path / "base.pcdump.txt",
+        source_path=tmp_path / "source.c",
+        timeout=60,
+        max_candidates=7,
+        direct_blockers=[(1, 40, 37)],
+        runner=runner,
+    )
+
+    select_order = calls[2]
+    assert select_order[select_order.index("--target") + 1] == "f40<f37"
+    assert "r40<r37" not in select_order
+    assert "--class" in select_order
+    assert select_order[select_order.index("--class") + 1] == "1"

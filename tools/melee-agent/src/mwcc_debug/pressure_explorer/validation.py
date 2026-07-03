@@ -15,6 +15,7 @@ ValidationRunner = Callable[[list[str], int], dict[str, object]]
 
 
 def build_remote_validation_plan(
+    *,
     function: str,
     force_phys: str,
     timeout: int,
@@ -50,6 +51,7 @@ def build_remote_validation_plan(
 
 
 def materialize_force_phys_target_spec(
+    *,
     function: str,
     class_id: int,
     force_phys: str,
@@ -89,6 +91,7 @@ def materialize_force_phys_target_spec(
 
 
 def run_quick_validation(
+    *,
     function: str,
     target_file: Path,
     source_candidates: list[Path],
@@ -136,12 +139,14 @@ def run_quick_validation(
 
 
 def run_bounded_validation(
+    *,
     function: str,
     force_phys: str,
     pcdump_path: Path | None,
     source_path: Path | None,
     timeout: int,
     max_candidates: int,
+    direct_blockers: list[tuple[int, int, int]] | None = None,
     runner: ValidationRunner | None = None,
 ) -> list[dict[str, object]]:
     if pcdump_path is None or source_path is None:
@@ -193,6 +198,31 @@ def run_bounded_validation(
             ],
         ),
     ]
+    for class_id, target_ig, blocker_ig in direct_blockers or []:
+        reg_prefix = "f" if class_id == 1 else "r"
+        argv = [
+            "melee-agent",
+            "debug",
+            "select-order-search",
+            "-f",
+            function,
+            "--target",
+            f"{reg_prefix}{target_ig}<{reg_prefix}{blocker_ig}",
+            "--force-phys",
+            force_phys,
+            "--pcdump",
+            str(pcdump_path),
+            "--source-file",
+            str(source_path),
+            "--max-probes",
+            str(max_candidates),
+            "--timeout",
+            str(timeout),
+            "--json",
+        ]
+        if class_id == 1:
+            argv[5:5] = ["--class", "1"]
+        commands.append((f"select-order-{class_id}-{target_ig}-{blocker_ig}", argv))
 
     results: list[dict[str, object]] = []
     for workflow, argv in commands:
