@@ -1151,7 +1151,7 @@ def _source_generation_candidates_with_text(
             candidate_id="product-local-materialize",
             family="product_sink_ownership",
             strategy="product-local-materialize",
-            priority=83,
+            priority=88,
             rationale=(
                 "Restore an explicit col_offset_product_fpr materialization "
                 "when retained source only has a direct col_offset product."

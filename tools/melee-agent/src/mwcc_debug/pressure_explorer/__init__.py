@@ -597,7 +597,7 @@ def generate_frame_directed_probes(
         _append_probe(probes, probe)
         if len(probes) >= max_probes:
             return probes
-    for probe in _probe_frame_split_fp_const_lifetimes(
+    for probe in _probe_frame_magic_scratch_relocations(
         source_text,
         body,
         body_start,
@@ -606,7 +606,7 @@ def generate_frame_directed_probes(
         _append_probe(probes, probe)
         if len(probes) >= max_probes:
             return probes
-    for probe in _probe_frame_magic_scratch_relocations(
+    for probe in _probe_frame_split_fp_const_lifetimes(
         source_text,
         body,
         body_start,
@@ -3529,10 +3529,10 @@ def _fp_source_value_candidates(body: str) -> list[_FpConstCandidate]:
             assign_start=assign_start,
             assign_end=assign_end,
             assign_text=assign_text,
-            call_start=call.start(),
-            call_end=call.end(),
+            call_start=call.call_start,
+            call_end=call.call_end,
             call_replacement=call_replacement,
-            call_name=call.group("callee"),
+            call_name=call.callee,
         ))
     return candidates
 
