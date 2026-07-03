@@ -17,6 +17,10 @@ retro_app = typer.Typer(
 _PACKAGE_REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_PACKAGE_REPO))
 from tools.mwcc_retro import TABLES_DIR, setup as retro_setup  # noqa: E402
+from src.mwcc_debug.diff_capture import _run_with_process_group_timeout  # noqa: E402
+
+
+RETRO_DUMP_TIMEOUT_SECONDS = 600
 
 
 @dataclass
@@ -82,9 +86,18 @@ def _ninja_cmd_for_unit(src_rel: str, *, melee_root: Path) -> str:
     return f"{compiler} {cflags} -c {unit} -o {obj}"
 
 
+def _stream_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
                  out_dir: Path, table: Path, melee_root: Path,
-                 gdb_py: str = "") -> DumpOutcome:
+                 gdb_py: str = "",
+                 timeout: int = RETRO_DUMP_TIMEOUT_SECONDS) -> DumpOutcome:
     """Invoke the gdb-side launcher, then post-process the IRO trace.
 
     Runs `mwcc_retro_debugger.py main()` (host launcher), which drives
@@ -125,9 +138,23 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
     cmd.append(fn)
     # Run from the active repo root so the emulated mwcceppc resolves the relative
     # source path (the ninja command uses repo-relative paths, like wibo does).
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
-                          cwd=str(melee_root))
+    out_dir.mkdir(parents=True, exist_ok=True)
     log = (out_dir / "launch.log")
+    try:
+        proc = _run_with_process_group_timeout(
+            cmd,
+            cwd=melee_root,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        log.write_text(
+            _stream_text(exc.output)
+            + "\n--- stderr ---\n"
+            + _stream_text(exc.stderr)
+            + f"\n[retro] launcher timed out after {timeout}s; "
+              "killed process group\n"
+        )
+        return DumpOutcome(exit_code=2, produced=[], missing=["timeout"])
     log.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
 
     if gdb_py:
@@ -308,6 +335,13 @@ def dump_cmd(
         None, "--gdb-py",
         help="Intervention hook (a .py with intervene(ctx)) handed the connected "
              "gdb session to mutate compiler state and replay forward."),
+    timeout: int = typer.Option(
+        RETRO_DUMP_TIMEOUT_SECONDS,
+        "--timeout",
+        min=1,
+        help="Seconds to wait for the retrowin32+gdb launcher before killing "
+             "the whole subprocess tree.",
+    ),
 ):
     """Dump retail compiler internals for FN in SRC."""
     if phases not in ("all", "frontend", "backend"):
@@ -325,7 +359,8 @@ def dump_cmd(
     )
     outcome = _launch_dump(src=src, fn=fn, phases=phases, compiler=compiler,
                            out_dir=out_dir, table=table, melee_root=active_root,
-                           gdb_py=str(gdb_py) if gdb_py else "")
+                           gdb_py=str(gdb_py) if gdb_py else "",
+                           timeout=timeout)
     attribution_path = _write_backend_source_attribution(
         out_dir=out_dir,
         src=src,

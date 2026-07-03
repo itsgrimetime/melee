@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 from typer.testing import CliRunner
 
@@ -40,6 +41,94 @@ def test_retro_dump_default_phases_all(monkeypatch, tmp_path):
     assert seen["phases"] == "all"
     assert seen["compiler"] == "1.2.5n"
     assert seen["melee_root"] == retro._resolve_melee_root()
+    assert seen["timeout"] == 600
+
+
+def test_retro_dump_passes_explicit_timeout(monkeypatch):
+    import src.cli.debug.retro as retro
+    seen = {}
+
+    def fake_launch(**kw):
+        seen.update(kw)
+        return retro.DumpOutcome(exit_code=0, produced=["frontend"], missing=[])
+
+    monkeypatch.setattr(retro, "_launch_dump", fake_launch)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
+
+    result = runner.invoke(app, [
+        "debug", "retro", "dump",
+        "src/melee/mn/mnvibration.c",
+        "-f", "mnVibration_80248644",
+        "--timeout", "1234",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert seen["timeout"] == 1234
+
+
+def test_launch_dump_uses_process_group_timeout_runner(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+    import tools.mwcc_retro.setup as retro_setup
+
+    melee_root = tmp_path / "melee"
+    out_dir = tmp_path / "out"
+    table = tmp_path / "table.json"
+    launcher = tmp_path / "vendor" / "mwcc_retro_debugger.py"
+    cadmic_script = tmp_path / "vendor" / "cadmic" / "pkg" / "mwcc_debugger.py"
+    retrowin32_bin = tmp_path / "retrowin32"
+    for path in (launcher, cadmic_script, table, retrowin32_bin):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fake\n")
+
+    class SetupResult:
+        pass
+
+    setup_result = SetupResult()
+    setup_result.retrowin32_bin = retrowin32_bin
+    setup_result.cadmic_script = cadmic_script
+    monkeypatch.setattr(retro_setup, "ensure_for_root", lambda *_args, **_kwargs: setup_result)
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda *_args, **_kwargs: "mwcceppc.exe -c src/melee/mn/mnvibration.c -o out.o",
+    )
+
+    seen = {}
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        seen["cmd"] = cmd
+        seen["cwd"] = cwd
+        seen["timeout"] = timeout
+        seen["env"] = env
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            "[retro] running intervention hook\n",
+            "",
+        )
+
+    monkeypatch.setattr(retro, "_run_with_process_group_timeout", fake_run)
+
+    outcome = retro._launch_dump(
+        src="src/melee/mn/mnvibration.c",
+        fn="mnVibration_80248644",
+        phases="all",
+        compiler="1.2.5n",
+        out_dir=out_dir,
+        table=table,
+        melee_root=melee_root,
+        gdb_py=str(tmp_path / "hook.py"),
+        timeout=17,
+    )
+
+    assert outcome.exit_code == 0
+    assert seen["timeout"] == 17
+    assert seen["cwd"] == melee_root
+    assert str(launcher) in seen["cmd"]
+    assert str(retrowin32_bin) in seen["cmd"]
+    assert (out_dir / "launch.log").read_text().startswith(
+        "[retro] running intervention hook"
+    )
 
 
 def test_retro_dump_uses_explicit_melee_root_for_paths(monkeypatch, tmp_path):
