@@ -822,6 +822,7 @@ def search(
     preserve_precolor_enabled: bool = True,
     melee_root: Path | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    skip_callback: Callable[[int, str, str], None] | None = None,
     skip_first_candidates: int = 0,
     skip_provenances: Iterable[str] = (),
     skip_families: Iterable[str] = (),
@@ -858,6 +859,8 @@ def search(
         `ctx.melee_root`.
       progress_callback: Optional callback invoked immediately before each
         compile with `(compiled_count, max_candidates, provenance)`.
+      skip_callback: Optional callback invoked when an explicit skip control
+        skips a unique candidate with `(skipped_count, reason, provenance)`.
       skip_first_candidates: Skip the first N unique candidate texts after
         cross-source deduplication and before compile counting.
       skip_provenances: Exact provenance strings to skip after deduplication.
@@ -949,6 +952,8 @@ def search(
                 "provenance": provenance,
                 "reason": reason,
             })
+        if skip_callback is not None:
+            skip_callback(skipped, reason, provenance)
 
     for source in sources:
         if exact_match is not None or compiled >= max_candidates:

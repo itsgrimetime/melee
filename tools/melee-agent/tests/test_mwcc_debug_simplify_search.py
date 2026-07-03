@@ -503,6 +503,7 @@ def test_search_skip_first_candidates_after_dedupe_before_compile_count(
         yield SourceVariant(text="D", provenance="compile-d",
                             parent_baseline=ctx.source_path)
 
+    skip_progress: list[tuple[int, str, str]] = []
     result = search(
         sources=[src],
         ctx=ctx,
@@ -511,6 +512,11 @@ def test_search_skip_first_candidates_after_dedupe_before_compile_count(
         max_candidates=1,
         timeout=10,
         skip_first_candidates=2,
+        skip_callback=lambda count, reason, provenance: skip_progress.append((
+            count,
+            reason,
+            provenance,
+        )),
     )
 
     assert calls == ["C"]
@@ -520,6 +526,10 @@ def test_search_skip_first_candidates_after_dedupe_before_compile_count(
     assert result.skip_reasons == [
         {"provenance": "skip-a", "reason": "skip-first-candidates"},
         {"provenance": "skip-b", "reason": "skip-first-candidates"},
+    ]
+    assert skip_progress == [
+        (1, "skip-first-candidates", "skip-a"),
+        (2, "skip-first-candidates", "skip-b"),
     ]
 
 

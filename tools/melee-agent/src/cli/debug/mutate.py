@@ -6544,6 +6544,7 @@ def _simplify_retained_probe_records(
     retain_count: int,
     checkdiff_guard: bool,
     timeout: float | None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> list[dict[str, object]]:
     from src.cli.debug import (
         _compact_source_hunk_for_function,
@@ -6557,12 +6558,12 @@ def _simplify_retained_probe_records(
 
     records: list[dict[str, object]] = []
     active_provenance: str | None = None
+    ranked_scored = _simplify_ranked_scored_candidates(result)[: max(0, retain_count)]
     try:
-        for rank, scored in enumerate(
-            _simplify_ranked_scored_candidates(result)[: max(0, retain_count)],
-            1,
-        ):
+        for rank, scored in enumerate(ranked_scored, 1):
             active_provenance = scored.variant.provenance
+            if progress_callback is not None:
+                progress_callback(rank, len(ranked_scored), scored.variant.provenance)
             source_retained: str | None = None
             structural_guard = None
             structural_guard_error = None
@@ -7286,6 +7287,18 @@ def mutate_simplify_order_cmd(
             err=True,
         )
 
+    def _simplify_skip_progress(count: int, reason: str, provenance: str) -> None:
+        typer.echo(
+            f"[simplify-order] skipped {count}: {reason}: {provenance}",
+            err=True,
+        )
+
+    def _simplify_retain_progress(rank: int, total: int, provenance: str) -> None:
+        typer.echo(
+            f"[simplify-order] retaining/scoring {rank}/{total}: {provenance}",
+            err=True,
+        )
+
     result = search(
         sources=sources,
         ctx=ctx,
@@ -7299,6 +7312,7 @@ def mutate_simplify_order_cmd(
         timeout=timeout,
         preserve_precolor_enabled=preserve_precolor,
         progress_callback=_simplify_progress,
+        skip_callback=_simplify_skip_progress,
         skip_first_candidates=skip_first_candidates,
         skip_provenances=skip_provenance_values,
         skip_families=skip_family_values,
@@ -7316,6 +7330,7 @@ def mutate_simplify_order_cmd(
                 retain_count=retain_count,
                 checkdiff_guard=checkdiff_guard,
                 timeout=timeout,
+                progress_callback=_simplify_retain_progress,
             )
         except _SimplifyRetainInterrupted as exc:
             retain_interrupt = exc
