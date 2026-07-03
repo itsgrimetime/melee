@@ -12,9 +12,15 @@ from src.mwcc_debug.pressure_explorer.models import (
     AllocatorNode,
     BlockedCandidate,
     ColorDecision,
+    CoalesceFacts,
+    FirstDefSite,
     FunctionFacts,
     FunctionFreshness,
+    InterferenceEdge,
+    LiveFacts,
     RegisterFacts,
+    SourceAttributionFact,
+    SpillFacts,
     TargetSet,
 )
 from src.mwcc_debug.pressure_explorer.targets import (
@@ -85,17 +91,47 @@ def test_allocator_facts_schema_preserves_normalized_shape() -> None:
         confidence="observed",
         nonvolatile_pool_before={"available": (25, 26), "reserved": (31,)},
     )
+    default_decision = ColorDecision(
+        id="gpr-c1",
+        ig_id=54,
+        iter=8,
+        assigned_phys=26,
+        available_phys_ordered=(25, 26, 27),
+        blocked_candidates=(),
+        candidate_phys_ordered=(26, 27),
+        chosen_source="nonvolatile",
+        decision_rule="first-available",
+        tie_rule="pool-order",
+        confidence="observed",
+    )
     node = AllocatorNode(
         ig_id=53,
         virtual_kind="gpr",
         virtual_number=53,
         color_status="colored",
+        coalesced_into=None,
         color_decision_ref="gpr-c0",
+        first_def=FirstDefSite(
+            pass_id="color",
+            block_id="bb0",
+            instruction_id="i0",
+            opcode="lwz",
+            operands="r3, 0(r4)",
+            normalized="load",
+        ),
+        source_attribution=SourceAttributionFact(
+            status="available",
+            symbol="local_a",
+            confidence="observed",
+        ),
+        live=LiveFacts(blocks=("bb0",), intervals=((0, 3),)),
         degree=3,
         flags=("live",),
+        coalesce=CoalesceFacts(root_ig_id=53, aliases=(33,)),
         simplify_order=2,
         select_order=1,
         assigned_phys=25,
+        spill=SpillFacts(spilled=False),
     )
     cls = AllocatorClassFacts(
         class_id=0,
@@ -109,11 +145,12 @@ def test_allocator_facts_schema_preserves_normalized_shape() -> None:
             fixed=({"kind": "arg", "phys": 3, "ig_id": 10},),
         ),
         nodes=(node,),
-        color_decisions=(decision,),
+        coalesce={"mappings": [{"alias": 33, "root": 32}]},
+        color_decisions=(decision, default_decision),
     )
     facts = AllocatorFacts(
         schema_version="lifetime-pressure-v1",
-        producer="unit-test",
+        producer={"kind": "unit-test"},
         function=FunctionFacts(
             name="fn_80000000",
             source_path="src/melee/test.c",
@@ -132,9 +169,23 @@ def test_allocator_facts_schema_preserves_normalized_shape() -> None:
     assert cls.decision_by_ig()[53] is decision
     assert cls.nodes[0].color_decision_ref == "gpr-c0"
     assert isinstance(cls.registers.fixed[0], dict)
+    assert cls.non_allocatable_state == {}
+    assert default_decision.nonvolatile_pool_before == {}
+    assert InterferenceEdge(a=53, b=40).kind == "interference"
+    assert InterferenceEdge(a=53, b=40).confidence == "observed"
+    assert LiveFacts().confidence == "observed"
+    source_attribution = SourceAttributionFact(status="unavailable")
+    assert source_attribution.confidence == "unavailable"
+    assert source_attribution.compiler_temp is False
 
     data = facts.to_dict()
 
+    assert data["producer"]["kind"] == "unit-test"
+    assert data["classes"][0]["coalesce"]["mappings"][0] == {
+        "alias": 33,
+        "root": 32,
+    }
+    assert data["classes"][0]["non_allocatable_state"] == {}
     assert data["classes"][0]["nodes"][0]["flags"] == ["live"]
     assert data["classes"][0]["registers"]["fixed"][0] == {
         "ig_id": 10,
@@ -145,3 +196,4 @@ def test_allocator_facts_schema_preserves_normalized_shape() -> None:
         "available": [25, 26],
         "reserved": [31],
     }
+    assert data["classes"][0]["color_decisions"][1]["nonvolatile_pool_before"] == {}

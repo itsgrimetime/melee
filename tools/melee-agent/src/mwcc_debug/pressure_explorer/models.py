@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any
 
 
@@ -50,15 +50,15 @@ class TargetSet:
 @dataclass(frozen=True)
 class FunctionFreshness:
     status: str
-    pcdump_mtime: float | int | None = None
-    source_mtime: float | int | None = None
+    pcdump_mtime: float | None = None
+    source_mtime: float | None = None
 
 
 @dataclass(frozen=True)
 class FunctionFacts:
     name: str
-    source_path: str | None = None
-    freshness: FunctionFreshness | None = None
+    source_path: str | None
+    freshness: FunctionFreshness
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ class FirstDefSite:
     block_id: str | int | None = None
     instruction_id: str | int | None = None
     opcode: str | None = None
-    operands: tuple[str, ...] = ()
+    operands: str | None = None
     normalized: str | None = None
 
 
@@ -80,16 +80,16 @@ class SourceAttributionFact:
     source_file: str | None = None
     line: int | None = None
     column: int | None = None
-    confidence: str | float | None = None
+    confidence: str = "unavailable"
     scope: str | None = None
-    compiler_temp: bool | None = None
+    compiler_temp: bool = False
 
 
 @dataclass(frozen=True)
 class LiveFacts:
     blocks: tuple[str | int, ...] = ()
     intervals: tuple[tuple[int, int], ...] = ()
-    confidence: str | float | None = None
+    confidence: str = "observed"
 
 
 @dataclass(frozen=True)
@@ -107,29 +107,29 @@ class SpillFacts:
 @dataclass(frozen=True)
 class AllocatorNode:
     ig_id: int
-    virtual_kind: str | None = None
-    virtual_number: int | None = None
-    color_status: str | None = None
-    coalesced_into: int | None = None
-    color_decision_ref: str | None = None
-    first_def: FirstDefSite | None = None
-    source_attribution: SourceAttributionFact | None = None
-    live: LiveFacts | None = None
-    degree: int | None = None
-    flags: tuple[str, ...] = ()
-    coalesce: CoalesceFacts | None = None
-    simplify_order: int | None = None
-    select_order: int | None = None
-    assigned_phys: int | None = None
-    spill: SpillFacts | None = None
+    virtual_kind: str
+    virtual_number: int
+    color_status: str
+    coalesced_into: int | None
+    color_decision_ref: str | None
+    first_def: FirstDefSite | None
+    source_attribution: SourceAttributionFact
+    live: LiveFacts
+    degree: int
+    flags: tuple[str, ...]
+    coalesce: CoalesceFacts
+    simplify_order: int
+    select_order: int
+    assigned_phys: int | None
+    spill: SpillFacts
 
 
 @dataclass(frozen=True)
 class InterferenceEdge:
     a: int
     b: int
-    kind: str | None = None
-    confidence: str | float | None = None
+    kind: str = "interference"
+    confidence: str = "observed"
 
 
 @dataclass(frozen=True)
@@ -167,15 +167,15 @@ class ColorDecision:
     available_phys_ordered: tuple[int, ...]
     blocked_candidates: tuple[BlockedCandidate, ...]
     candidate_phys_ordered: tuple[int, ...]
-    chosen_source: str | None
-    decision_rule: str | None
-    tie_rule: str | None
+    chosen_source: str
+    decision_rule: str
+    tie_rule: str
     confidence: str
-    provenance: dict[str, Any] | None = None
+    provenance: str | None = None
     blocked_by: tuple[BlockedBy, ...] = ()
-    node_state_before_select: dict[str, Any] | None = None
+    node_state_before_select: dict[str, Any] = field(default_factory=dict)
     volatile_pool_before: tuple[int, ...] = ()
-    nonvolatile_pool_before: dict[str, tuple[int, ...]] | None = None
+    nonvolatile_pool_before: dict[str, tuple[int, ...]] = field(default_factory=dict)
     reserved_or_precolored_filtered: tuple[int, ...] = ()
 
 
@@ -186,12 +186,12 @@ class AllocatorClassFacts:
     registers: RegisterFacts
     nodes: tuple[AllocatorNode, ...] = ()
     edges: tuple[InterferenceEdge, ...] = ()
-    coalesce: tuple[CoalesceFacts, ...] = ()
+    coalesce: dict[str, Any] = field(default_factory=dict)
     coalesce_mappings: tuple[tuple[int, int], ...] = ()
     simplify_order: tuple[int, ...] = ()
     select_order: tuple[int, ...] = ()
     color_decisions: tuple[ColorDecision, ...] = ()
-    non_allocatable_state: dict[str, Any] | None = None
+    non_allocatable_state: dict[str, Any] = field(default_factory=dict)
 
     def node_by_ig(self) -> dict[int, AllocatorNode]:
         return {node.ig_id: node for node in self.nodes}
@@ -203,10 +203,10 @@ class AllocatorClassFacts:
 @dataclass(frozen=True)
 class AllocatorFacts:
     schema_version: str
-    producer: str
+    producer: dict[str, Any]
     function: FunctionFacts
     classes: tuple[AllocatorClassFacts, ...] = ()
-    adapter_specific: dict[str, Any] | None = None
+    adapter_specific: dict[str, Any] = field(default_factory=dict)
 
     def class_by_id(self) -> dict[int, AllocatorClassFacts]:
         return {allocator_class.class_id: allocator_class for allocator_class in self.classes}
@@ -235,4 +235,3 @@ __all__ = [
     "FunctionFacts",
     "AllocatorFacts",
 ]
-
