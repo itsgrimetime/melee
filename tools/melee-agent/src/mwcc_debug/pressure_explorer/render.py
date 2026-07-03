@@ -41,6 +41,10 @@ def render_text_report(report: LifetimePressureReport) -> str:
     _section(lines, "BLOCKERS")
     if report.inventory_only:
         lines.append("inventory-only: no target allocation supplied")
+    elif any(target.blockers for target in report.targets):
+        for target in report.targets:
+            for blocker in target.blockers:
+                lines.extend(_blocker_lines(target, blocker))
     elif report.blockers:
         for blocker in report.blockers:
             lines.append(
@@ -114,25 +118,28 @@ def render_dot(report: LifetimePressureReport) -> str:
         f"  label=\"{_dot_escape(report.function)}\";",
     ]
     for target in report.targets:
-        target_id = _dot_node_id(target.ig_id)
+        target_id = _dot_node_id(target.class_id, target.ig_id)
         target_label = (
-            f"target IG {target.ig_id}\n"
+            f"target c{target.class_id} IG {target.ig_id}\n"
             f"status {target.status}\n"
-            f"expected {_phys_label(target.expected_phys)}"
+            f"expected {_phys_label(target.expected_phys, target.class_id)}"
         )
         lines.append(
             f"  {target_id} [shape=box,label=\"{_dot_escape(target_label)}\"];"
         )
         for blocker in target.blockers:
             if blocker.ig_id is None:
-                blocker_id = f"blocker_{target.ig_id}_{_dot_safe_name(blocker.kind)}"
+                blocker_id = (
+                    f"c{target.class_id}_blocker_{target.ig_id}_"
+                    f"{_dot_safe_name(blocker.kind)}"
+                )
                 blocker_label = f"{blocker.kind}\nimpact {blocker.impact}"
             else:
-                blocker_id = _dot_node_id(blocker.ig_id)
+                blocker_id = _dot_node_id(target.class_id, blocker.ig_id)
                 blocker_label = (
-                    f"blocker IG {blocker.ig_id}\n"
+                    f"blocker c{target.class_id} IG {blocker.ig_id}\n"
                     f"{blocker.kind}\n"
-                    f"{_phys_label(blocker.assigned_phys)}"
+                    f"{_phys_label(blocker.assigned_phys, target.class_id)}"
                 )
             lines.append(
                 f"  {blocker_id} [label=\"{_dot_escape(blocker_label)}\"];"
@@ -157,12 +164,19 @@ def render_blocker_table_csv(report: LifetimePressureReport) -> str:
 def render_blocker_table_json(
     report: LifetimePressureReport,
 ) -> list[dict[str, object]]:
-    return [_blocker_row(blocker) for blocker in report.blockers]
+    rows: list[dict[str, object]] = []
+    for target in report.targets:
+        rows.extend(_blocker_row(target, blocker) for blocker in target.blockers)
+    if rows:
+        return rows
+    return [_blocker_row(None, blocker) for blocker in report.blockers]
 
 
 _BLOCKER_TABLE_FIELDS = (
     "target_ig",
     "blocker_ig",
+    "target_class",
+    "blocker_class",
     "kind",
     "assigned_phys",
     "impact",
@@ -181,8 +195,8 @@ def _target_summary_lines(target: TargetPressureReport) -> list[str]:
         "  "
         f"IG {target.ig_id} class={target.class_id} "
         f"status={target.status} "
-        f"current={_phys_label(target.current_phys)} "
-        f"expected={_phys_label(target.expected_phys)}",
+        f"current={_phys_label(target.current_phys, target.class_id)} "
+        f"expected={_phys_label(target.expected_phys, target.class_id)}",
         f"    why: {target.why_current_color}",
         f"    must_change: {_tuple_text(target.must_change)}",
     ]
@@ -216,10 +230,29 @@ def _candidate_comparison_lines(comparison: Any) -> list[str]:
     ]
 
 
-def _blocker_row(blocker: Blocker) -> dict[str, object]:
+def _blocker_lines(target: TargetPressureReport, blocker: Blocker) -> list[str]:
+    lines = [
+        "  "
+        f"target c{target.class_id} IG {blocker.target_ig_id}: "
+        f"{blocker.kind} via {_ig_label(blocker.ig_id)} "
+        f"impact={blocker.impact} confidence={blocker.confidence}",
+        f"    {blocker.reason}",
+    ]
+    if blocker.source_summary:
+        lines.append(f"    source: {blocker.source_summary}")
+    return lines
+
+
+def _blocker_row(
+    target: TargetPressureReport | None,
+    blocker: Blocker,
+) -> dict[str, object]:
+    target_class = None if target is None else target.class_id
     return {
         "target_ig": blocker.target_ig_id,
         "blocker_ig": blocker.ig_id,
+        "target_class": target_class,
+        "blocker_class": None if blocker.ig_id is None else target_class,
         "kind": blocker.kind,
         "assigned_phys": blocker.assigned_phys,
         "impact": blocker.impact,
@@ -243,8 +276,11 @@ def _tuple_text(values: tuple[str, ...]) -> str:
     return "; ".join(values) if values else "none"
 
 
-def _phys_label(phys: int | None) -> str:
-    return "none" if phys is None else f"r{phys}"
+def _phys_label(phys: int | None, class_id: int) -> str:
+    if phys is None:
+        return "none"
+    prefix = "f" if class_id == 1 else "r"
+    return f"{prefix}{phys}"
 
 
 def _ig_label(ig_id: int | None) -> str:
@@ -257,8 +293,8 @@ def _field(value: Any, name: str, default: object) -> object:
     return getattr(value, name, default)
 
 
-def _dot_node_id(ig_id: int) -> str:
-    return f"ig{ig_id}"
+def _dot_node_id(class_id: int, ig_id: int) -> str:
+    return f"c{class_id}_ig{ig_id}"
 
 
 def _dot_escape(value: str) -> str:

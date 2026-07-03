@@ -1993,20 +1993,190 @@ def test_dot_and_blocker_table_outputs() -> None:
     assert "digraph lifetime_pressure" in dot
     assert "ig40" in dot
     assert "ig37" in dot
-    assert "ig37 -> ig40" in dot
+    assert "c0_ig37 -> c0_ig40" in dot
     assert "expected_phys_holder" in dot
-    assert csv_table.startswith("target_ig,blocker_ig")
-    assert "40,37,expected_phys_holder" in csv_table
+    assert csv_table.startswith("target_ig,blocker_ig,target_class,blocker_class")
+    assert "40,37,0,0,expected_phys_holder" in csv_table
     assert "expected phys r25" in csv_table
     assert json_table == [
         {
             "target_ig": 40,
             "blocker_ig": 37,
+            "target_class": 0,
+            "blocker_class": 0,
             "kind": "expected_phys_holder",
             "assigned_phys": 25,
             "impact": 100,
             "reason": "expected phys r25 is held by interfering IG 37",
             "source_summary": "obj->xC / field-load",
+            "confidence": "observed",
+        }
+    ]
+
+
+def test_render_class_aware_phys_labels_and_dot_ids_do_not_collide() -> None:
+    from src.mwcc_debug.pressure_explorer import render_dot, render_text_report
+
+    gpr_blocker = Blocker(
+        target_ig_id=40,
+        ig_id=41,
+        kind="expected_phys_holder",
+        assigned_phys=25,
+        impact=100,
+        reason="expected phys r25 is held by interfering IG 41",
+    )
+    fpr_blocker = Blocker(
+        target_ig_id=40,
+        ig_id=41,
+        kind="expected_phys_holder",
+        assigned_phys=25,
+        impact=100,
+        reason="expected phys f25 is held by interfering IG 41",
+    )
+    gpr_target = TargetPressureReport(
+        class_id=0,
+        ig_id=40,
+        virtual={"kind": "gpr", "number": 40},
+        current_phys=24,
+        expected_phys=25,
+        status="blocked",
+        first_def=None,
+        source_attribution=SourceAttributionFact(status="attributed", symbol="gpr"),
+        live=LiveFacts(),
+        simplify_order=1,
+        select_order=1,
+        coalesce=CoalesceFacts(root_ig_id=40),
+        spill=SpillFacts(spilled=False),
+        blockers=(gpr_blocker,),
+        why_current_color="mwcc-colorgraph selected r24",
+        must_change=("remove gpr interference",),
+        confidence="observed",
+    )
+    fpr_target = TargetPressureReport(
+        class_id=1,
+        ig_id=40,
+        virtual={"kind": "fpr", "number": 40},
+        current_phys=24,
+        expected_phys=25,
+        status="blocked",
+        first_def=None,
+        source_attribution=SourceAttributionFact(status="attributed", symbol="fpr"),
+        live=LiveFacts(),
+        simplify_order=1,
+        select_order=1,
+        coalesce=CoalesceFacts(root_ig_id=40),
+        spill=SpillFacts(spilled=False),
+        blockers=(fpr_blocker,),
+        why_current_color="mwcc-colorgraph selected f24",
+        must_change=("remove fpr interference",),
+        confidence="observed",
+    )
+    report = LifetimePressureReport(
+        schema_version="lifetime-pressure-report.v1",
+        function="fn_80000000",
+        inventory_only=False,
+        inputs={},
+        targets=(gpr_target, fpr_target),
+        allocator_facts=AllocatorFacts(
+            schema_version="allocator-facts.v1",
+            producer={"kind": "unit-test"},
+            function=FunctionFacts(
+                name="fn_80000000",
+                source_path=None,
+                freshness=FunctionFreshness(status="fresh"),
+            ),
+            classes=(),
+        ),
+        blockers=(gpr_blocker, fpr_blocker),
+        source_attribution={"status": "not_ranked"},
+        hypotheses=(),
+        validation_commands=(),
+    )
+
+    text = render_text_report(report)
+    dot = render_dot(report)
+
+    assert "class=1 status=blocked current=f24 expected=f25" in text
+    assert "class=1 status=blocked current=r24 expected=r25" not in text
+    assert "c0_ig40" in dot
+    assert "c1_ig40" in dot
+    assert "c0_ig41 -> c0_ig40" in dot
+    assert "c1_ig41 -> c1_ig40" in dot
+    assert "expected f25" in dot
+    assert "expected r25" in dot
+
+
+def test_blocker_tables_include_class_context_for_duplicate_igs() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        render_blocker_table_csv,
+        render_blocker_table_json,
+    )
+
+    blocker = Blocker(
+        target_ig_id=40,
+        ig_id=41,
+        kind="expected_phys_holder",
+        assigned_phys=25,
+        impact=100,
+        reason="expected phys f25 is held by interfering IG 41",
+    )
+    target = TargetPressureReport(
+        class_id=1,
+        ig_id=40,
+        virtual={"kind": "fpr", "number": 40},
+        current_phys=24,
+        expected_phys=25,
+        status="blocked",
+        first_def=None,
+        source_attribution=SourceAttributionFact(status="attributed", symbol="fpr"),
+        live=LiveFacts(),
+        simplify_order=1,
+        select_order=1,
+        coalesce=CoalesceFacts(root_ig_id=40),
+        spill=SpillFacts(spilled=False),
+        blockers=(blocker,),
+        why_current_color="mwcc-colorgraph selected f24",
+        must_change=("remove fpr interference",),
+        confidence="observed",
+    )
+    report = LifetimePressureReport(
+        schema_version="lifetime-pressure-report.v1",
+        function="fn_80000000",
+        inventory_only=False,
+        inputs={},
+        targets=(target,),
+        allocator_facts=AllocatorFacts(
+            schema_version="allocator-facts.v1",
+            producer={"kind": "unit-test"},
+            function=FunctionFacts(
+                name="fn_80000000",
+                source_path=None,
+                freshness=FunctionFreshness(status="fresh"),
+            ),
+            classes=(),
+        ),
+        blockers=(blocker,),
+        source_attribution={"status": "not_ranked"},
+        hypotheses=(),
+        validation_commands=(),
+    )
+
+    csv_table = render_blocker_table_csv(report)
+    json_table = render_blocker_table_json(report)
+
+    assert csv_table.startswith("target_ig,blocker_ig,target_class,blocker_class")
+    assert "40,41,1,1,expected_phys_holder" in csv_table
+    assert json_table == [
+        {
+            "target_ig": 40,
+            "blocker_ig": 41,
+            "target_class": 1,
+            "blocker_class": 1,
+            "kind": "expected_phys_holder",
+            "assigned_phys": 25,
+            "impact": 100,
+            "reason": "expected phys f25 is held by interfering IG 41",
+            "source_summary": None,
             "confidence": "observed",
         }
     ]
