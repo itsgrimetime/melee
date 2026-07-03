@@ -209,9 +209,26 @@ Minimal normalized shape:
           "ig_id": 32,
           "iter": 1,
           "assigned_phys": 31,
-          "candidate_phys_before_choice": [31, 30],
-          "blocked_by": [{"ig_id": 35, "phys": 30}],
+          "node_state_before_select": {
+            "degree": 1,
+            "spill_flag": false,
+            "coalesce_root_ig_id": 32,
+            "assigned_before": null
+          },
+          "volatile_pool_before": [3, 4, 5],
+          "nonvolatile_pool_before": {
+            "dispensed": [31],
+            "fresh_remaining": [30, 29]
+          },
+          "reserved_or_precolored_filtered": [1, 2],
+          "available_phys_ordered": [31, 30],
+          "blocked_candidates": [
+            {"phys": 30, "blocked_by": [{"ig_id": 35, "phys": 30}]}
+          ],
+          "candidate_phys_ordered": [31, 30],
+          "chosen_source": "available_pool|nonvolatile_dispense|spill",
           "decision_rule": "lowest_available_or_nonvolatile_dispense",
+          "tie_rule": "lowest_available_then_nonvolatile_order",
           "confidence": "observed"
         }
       ]
@@ -232,6 +249,16 @@ Required per node: `ig_id`, `virtual`, `first_def`, `source_attribution`,
 `assigned_phys`, and `spill`. Values may be `null` only when the adapter can
 prove the fact is optional for the current class or node; otherwise the target
 entry must abstain with a reason.
+
+Required per color decision: `ig_id`, `iter`, `assigned_phys`,
+`available_phys_ordered`, `blocked_candidates`, `candidate_phys_ordered`,
+`chosen_source`, `decision_rule`, `tie_rule`, and `confidence`. Retail traces
+should fill the richer decision-state fields (`node_state_before_select`,
+`volatile_pool_before`, `nonvolatile_pool_before`, and
+`reserved_or_precolored_filtered`) from observed compiler state. The
+`mwcc-debug` pcdump adapter may synthesize or omit those richer state fields
+only if it marks their confidence and abstains from conclusions that require
+missing state.
 
 Optional or adapter-specific fields belong under `adapter_specific` or clearly
 named optional subkeys. Retail-tracer RE confidence details stay in the retail
@@ -261,11 +288,20 @@ raw IG ids drift, the report must mark those rows as compile-scoped and either
 abstain or use `role_descriptor`/`role_matcher`/`role_reanchor` if descriptors
 are available. No cross-compile raw id match should be presented as fact.
 
-Every supplied target is protected by default. A candidate can be labeled
-`validated` only when all protected targets are preserved or improved according
-to the target spec. A candidate that fixes one IG while worsening another
-protected target remains `partial` or `rejected`, never validated. V1 should not
-provide an override that silently allows target regression.
+Every supplied target is protected by default. Candidate-level status is separate
+from per-hypothesis evidence:
+
+- `full_target_match`: all protected assignments satisfy the target spec and
+  guard/frame checks pass.
+- `partial_progress`: at least one protected target moves in the intended
+  direction, no protected target regresses, and remaining misses are still
+  wrong, unchanged, or not safely comparable.
+- `rejected`: any protected target regresses, guard/frame checks fail, or the
+  identity for a claimed win cannot be trusted.
+
+Per-hypothesis status may be `supported` when its local target moved in the
+intended direction without protected regressions, but that is not a validated
+fix unless the candidate-level status is `full_target_match`.
 
 ## Analysis Pipeline
 
@@ -300,7 +336,10 @@ If the allocator facts are stale relative to the source file, source-action
 hypotheses must either abstain or carry a prominent stale-facts warning unless
 the user passes `--allow-stale-pcdump`. The allocator facts may still be shown
 as historical facts, but source advice tied to current line numbers is unsafe
-when the pcdump predates the source.
+when the pcdump predates the source. Even with `--allow-stale-pcdump`, exact
+line-numbered source actions must be suppressed or marked
+`stale_line_mapping`; the override may enable generic source-family hypotheses
+but not authoritative line-specific edits.
 
 The report must preserve the distinction between:
 
@@ -384,11 +423,10 @@ Explicit modes:
   blocker and local alternatives.
 
 Validation output never overwrites the default fact/guess split. A hypothesis
-becomes `validated` only when compile/checkdiff or supplied candidate evidence
-proves every protected target is preserved or improved. It becomes `partial`
-when one target improves but another protected target is unchanged or unsafe to
-compare. It becomes `rejected` when scoring shows no target movement, guard
-failure, frame-size regression, or worsening protected allocator state.
+becomes `supported` only when compile/checkdiff or supplied candidate evidence
+shows its local target moved in the intended direction and no protected target
+regressed. Candidate-level validation uses the status taxonomy from Target
+Resolution: `full_target_match`, `partial_progress`, or `rejected`.
 
 ## Candidate Comparison
 
@@ -397,7 +435,10 @@ failure, frame-size regression, or worsening protected allocator state.
 - `LABEL=path/to/candidate.pcdump.txt` or `LABEL=path/to/candidate.txt`:
   read-only comparison against an already-captured pcdump.
 - `LABEL=path/to/candidate.c`: rejected in read-only mode because comparing it
-  requires compilation. Accepted only with explicit validation mode.
+  requires compilation. Accepted only in compile-capable validation modes
+  (`quick` or `bounded`, or a future explicit remote launch flag). With
+  `--validate remote` in v1, source candidates are not compared evidence; the
+  report emits remote dry-run commands for that source instead.
 - Paired source+pcdump evidence is not implicit in v1. If added later, it must
   use an explicit syntax so the default path cannot accidentally compile or
   associate the wrong source with a pcdump.
@@ -541,6 +582,10 @@ CLI tests:
 - fixture pcdump JSON smoke.
 - read-only default does not compile or edit source.
 - explicit validation mode restores source after temporary scoring.
+- future retail adapter fixture smoke: consume a checked-in minimal
+  `backend-trace.v1.json` consumer-contract fixture from the retail tracer
+  workstream, or prove that the explorer's `allocator-facts.v1` example maps
+  cleanly from that fixture.
 
 ## Documentation
 
