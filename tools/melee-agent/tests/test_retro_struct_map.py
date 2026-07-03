@@ -50,3 +50,32 @@ def test_low_confidence_required_key_reports_error():
     }
     errors = struct_map.validate_required_backend_map(table)
     assert any("codegen_start confidence byte-correlate below required gate" in e for e in errors)
+
+
+def test_malformed_top_level_collections_report_errors_without_crashing():
+    table = {"compiler": "1.2.5n", "entries": ["bad"], "structs": "bad"}
+    errors = struct_map.validate_required_backend_map(table)
+    assert "entries must be object" in errors
+    assert "structs must be object" in errors
+    assert any("missing required backend entry codegen_start" in e for e in errors)
+    assert any("missing required struct IGNode" in e for e in errors)
+
+
+def test_malformed_nested_values_report_errors_without_crashing():
+    table = {
+        "compiler": "1.2.5n",
+        "entries": {
+            "codegen_start": "bad",
+        },
+        "structs": {
+            "IGNode": "bad",
+            "PCode": {
+                "confidence": "manual-disassembly-confirmed",
+                "fields": "bad",
+            },
+        },
+    }
+    errors = struct_map.validate_required_backend_map(table)
+    assert "backend entry codegen_start must be object" in errors
+    assert "struct IGNode must be object" in errors
+    assert "struct PCode fields must be object" in errors

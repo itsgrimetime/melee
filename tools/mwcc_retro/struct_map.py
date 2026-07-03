@@ -1,6 +1,7 @@
 """Confidence gates for retail GC/1.2.5n backend/regalloc maps."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 ACCEPTED_REQUIRED_CONFIDENCE = {
@@ -50,11 +51,20 @@ REQUIRED_STRUCT_FIELDS: dict[str, dict[str, int]] = {
 def validate_required_backend_map(table: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     entries = table.get("entries") or {}
+    if not isinstance(entries, Mapping):
+        errors.append("entries must be object")
+        entries = {}
     structs = table.get("structs") or {}
+    if not isinstance(structs, Mapping):
+        errors.append("structs must be object")
+        structs = {}
     for key in REQUIRED_GC125N_BACKEND_KEYS:
         entry = entries.get(key)
-        if not entry:
+        if entry is None:
             errors.append(f"missing required backend entry {key}")
+            continue
+        if not isinstance(entry, Mapping):
+            errors.append(f"backend entry {key} must be object")
             continue
         conf = entry.get("confidence")
         if conf not in ACCEPTED_REQUIRED_CONFIDENCE:
@@ -63,13 +73,19 @@ def validate_required_backend_map(table: dict[str, Any]) -> list[str]:
             errors.append(f"{key} missing positive va")
     for name, fields in REQUIRED_STRUCT_FIELDS.items():
         struct = structs.get(name)
-        if not struct:
+        if struct is None:
             errors.append(f"missing required struct {name}")
+            continue
+        if not isinstance(struct, Mapping):
+            errors.append(f"struct {name} must be object")
             continue
         conf = struct.get("confidence")
         if conf not in ACCEPTED_REQUIRED_CONFIDENCE:
             errors.append(f"struct {name} confidence {conf} below required gate")
-        actual = struct.get("fields") or {}
+        actual = struct.get("fields")
+        if not isinstance(actual, Mapping):
+            errors.append(f"struct {name} fields must be object")
+            continue
         for field, offset in fields.items():
             if actual.get(field) != offset:
                 errors.append(
