@@ -347,6 +347,44 @@ def test_candidate_comparison_reports_full_target_match(tmp_path: pathlib.Path) 
     assert comparison.target_results[40]["improved"] is True
 
 
+def test_candidate_comparison_rejects_missing_baseline_target(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    base_text = (
+        CANDIDATE_PCDUMP.replace("add r40", "add r42")
+        .replace("1 40 1", "1 42 1")
+        .replace("1 40 r25", "1 42 r25")
+        .replace("40=r25", "42=r25")
+    )
+    base_path = tmp_path / "base.pcdump.txt"
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    base_path.write_text(base_text)
+    cand_path.write_text(CANDIDATE_PCDUMP)
+    baseline = facts_from_pcdump(
+        base_text,
+        "fn_80000000",
+        pcdump_path=base_path,
+        source_text=SOURCE,
+        class_filter=(0,),
+    )
+    target = parse_force_phys_spec("40:25", default_class_id=0)
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("stale", cand_path)],
+        source_text=SOURCE,
+    )[0]
+
+    assert comparison.status == "rejected"
+    assert comparison.target_results[40]["unsafe"] is True
+    assert "baseline target not found" in comparison.target_results[40]["warning"]
+
+
 @pytest.mark.parametrize(
     ("guard_name", "expected_warning"),
     [
@@ -512,6 +550,72 @@ def test_candidate_comparison_reanchors_identity_when_source_available(
     assert comparison.identity_status == "reanchored"
     assert comparison.target_results[40]["satisfied"] is True
     assert ("reanchor", 0) in calls
+
+
+def test_candidate_comparison_suppresses_pressure_delta_for_reanchored_ids(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug import role_descriptor, role_reanchor
+    from src.mwcc_debug.pressure_explorer.candidates import compare_candidate_pcdumps
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    class StubCompile:
+        @classmethod
+        def from_text(cls, text: str, function: str, source: str) -> SimpleNamespace:
+            return SimpleNamespace(text=text, function=function, source=source)
+
+    def build_target_spec(
+        compile_obj: SimpleNamespace,
+        force_phys: dict[int, int],
+        class_id: int,
+        target_kind: str,
+        provenance: dict[str, object],
+        causal_closure: bool = False,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(function=compile_obj.function, roles=())
+
+    def reanchor(
+        target_spec: SimpleNamespace,
+        new_compile: SimpleNamespace,
+        class_id: int = 0,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            class_id=class_id,
+            force_phys={41: 27},
+            diagnostics={},
+            matched={41: 40},
+        )
+
+    monkeypatch.setattr(role_descriptor, "Compile", StubCompile)
+    monkeypatch.setattr(role_descriptor, "build_target_spec", build_target_spec)
+    monkeypatch.setattr(role_reanchor, "reanchor", reanchor)
+
+    base_path = tmp_path / "base.pcdump.txt"
+    cand_path = tmp_path / "candidate.pcdump.txt"
+    base_path.write_text(PCDUMP)
+    cand_path.write_text(PCDUMP)
+    baseline = facts_from_pcdump(
+        PCDUMP,
+        "fn_80000000",
+        pcdump_path=base_path,
+        source_text=SOURCE,
+        class_filter=(0,),
+    )
+    target = parse_force_phys_spec("40:27", default_class_id=0)
+
+    comparison = compare_candidate_pcdumps(
+        baseline,
+        target,
+        candidates=[("renumbered", cand_path)],
+        source_text=SOURCE,
+        require_reanchor=True,
+    )[0]
+
+    assert comparison.target_results[40]["candidate_ig_id"] == 41
+    assert comparison.pressure_delta["status"] == "unavailable"
+    assert "reanchored candidate ids" in comparison.pressure_delta["reason"]
 
 
 def test_candidate_comparison_rejects_reanchor_excluded_protected_target(

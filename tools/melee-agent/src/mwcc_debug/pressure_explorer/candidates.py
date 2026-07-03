@@ -151,11 +151,19 @@ def _compare_candidate_pcdump(
     baseline_classes = baseline.class_by_id()
     candidate_classes = candidate.class_by_id()
     target_results: dict[int, dict[str, Any]] = {}
+    reanchored_candidate_ids = False
     for target in target_set.targets:
         baseline_node = baseline_classes.get(target.class_id, None)
         candidate_node = candidate_classes.get(target.class_id, None)
         baseline_by_ig = {} if baseline_node is None else baseline_node.node_by_ig()
         candidate_by_ig = {} if candidate_node is None else candidate_node.node_by_ig()
+        if target.ig_id not in baseline_by_ig:
+            target_results[target.ig_id] = _unsafe_target_result(
+                baseline,
+                target,
+                warning="baseline target not found",
+            )
+            continue
         if target.ig_id in reanchor_unsafe:
             target_results[target.ig_id] = _unsafe_target_result(
                 baseline,
@@ -164,6 +172,8 @@ def _compare_candidate_pcdump(
             )
             continue
         effective_target = reanchored_targets.get(target.ig_id, target)
+        if effective_target.ig_id != target.ig_id:
+            reanchored_candidate_ids = True
         target_results[target.ig_id] = _target_result(
             target,
             baseline_by_ig.get(target.ig_id),
@@ -176,17 +186,25 @@ def _compare_candidate_pcdump(
         if guard_warnings or reanchor_unsafe
         else _candidate_status(target_results)
     )
+    pressure_delta = (
+        {
+            "status": "unavailable",
+            "reason": "pressure delta unavailable for reanchored candidate ids",
+        }
+        if reanchored_candidate_ids
+        else _pressure_delta_dict(
+            baseline,
+            candidate_text,
+            target_set,
+            function=function,
+        )
+    )
     return CandidateComparison(
         label=label,
         path=str(path),
         status=status,
         target_results=target_results,
-        pressure_delta=_pressure_delta_dict(
-            baseline,
-            candidate_text,
-            target_set,
-            function=function,
-        ),
+        pressure_delta=pressure_delta,
         identity_status=reanchor_identity_status,
         warnings=(*guard_warnings, *reanchor_warnings),
     )
