@@ -97,6 +97,9 @@ NINJA_RANGES_125N: list[tuple[int, int]] = [
 # 1.2.5n backend stays on the faithful DLL pcdump path (proven byte-identical to
 # retail for front-end IRO in #543). These are recorded so the partial work is
 # not lost, but are NOT wired into _descriptor_125n.
+# Backend entries move from `backend_partial` into active `entries` only after
+# backend_discovery evidence plus struct_map.validate_required_backend_map() pass.
+# A byte-correlated address by itself is not enough for the 1.2.5n backend tracer.
 BACKEND_PARTIAL_125N: dict[str, dict] = {
     "codegen_start": {"va": 0x4351C0, "provenance": "byte-correlate",
                       "confidence": "unique", "src_va_gc11": 0x4351B0,
