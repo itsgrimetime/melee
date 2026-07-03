@@ -2385,6 +2385,17 @@ def inspect_lifetime_pressure(
             f"--validate must be one of {', '.join(sorted(validate_modes))}"
         )
 
+    if backend_trace is not None:
+        try:
+            with backend_trace.open("r", encoding="utf-8"):
+                pass
+        except OSError:
+            typer.echo(
+                f"backend trace not found or unreadable: {backend_trace}",
+                err=True,
+            )
+            raise typer.Exit(2)
+
     pcdump_path = pcdump
     pcdump_text: str | None = None
     if backend_trace is None:
@@ -2433,23 +2444,28 @@ def inspect_lifetime_pressure(
         report = dataclasses.replace(report, warnings=(*report.warnings, *warnings))
 
     if dot is not None:
-        dot.write_text(render_dot(report), encoding="utf-8")
+        _write_text_creating_parent(dot, render_dot(report))
     if blocker_table is not None:
         if blocker_table.suffix.lower() == ".json":
-            blocker_table.write_text(
+            _write_text_creating_parent(
+                blocker_table,
                 json.dumps(render_blocker_table_json(report), indent=2) + "\n",
-                encoding="utf-8",
             )
         else:
-            blocker_table.write_text(
+            _write_text_creating_parent(
+                blocker_table,
                 render_blocker_table_csv(report),
-                encoding="utf-8",
             )
 
     if json_out:
         print(json.dumps(render_json_report(report), indent=2))
     else:
         print(render_text_report(report), end="")
+
+
+def _write_text_creating_parent(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def _first_divergence_frame_case(report: dict) -> str:

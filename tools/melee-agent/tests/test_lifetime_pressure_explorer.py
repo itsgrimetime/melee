@@ -3211,8 +3211,8 @@ def test_lifetime_pressure_cli_writes_dot_and_blocker_table(
 
     pcdump = tmp_path / "base.pcdump.txt"
     source = tmp_path / "source.c"
-    dot = tmp_path / "pressure.dot"
-    table = tmp_path / "blockers.csv"
+    dot = tmp_path / "out" / "graphs" / "pressure.dot"
+    table = tmp_path / "out" / "tables" / "blockers.json"
     pcdump.write_text(PCDUMP)
     source.write_text(SOURCE)
 
@@ -3239,4 +3239,34 @@ def test_lifetime_pressure_cli_writes_dot_and_blocker_table(
     assert result.exit_code == 0, result.output
     assert "LIFETIME PRESSURE - FN_80000000" in result.output
     assert "digraph lifetime_pressure" in dot.read_text()
-    assert "40,37,0,0,expected_phys_holder" in table.read_text()
+    table_payload = json.loads(table.read_text())
+    assert table_payload[0]["target_ig"] == 40
+    assert table_payload[0]["blocker_ig"] == 37
+    assert table_payload[0]["kind"] == "expected_phys_holder"
+
+
+def test_lifetime_pressure_cli_reports_missing_backend_trace(
+    tmp_path: pathlib.Path,
+) -> None:
+    from typer.testing import CliRunner
+
+    from src.cli.debug import debug_app
+
+    missing_trace = tmp_path / "missing" / "trace.json"
+
+    result = CliRunner().invoke(
+        debug_app,
+        [
+            "inspect",
+            "lifetime-pressure",
+            "-f",
+            "fn_80000000",
+            "--backend-trace",
+            str(missing_trace),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "backend trace" in result.output
+    assert "not found" in result.output or "unreadable" in result.output
