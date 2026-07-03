@@ -261,7 +261,7 @@ class AllocatorNode:
     virtual_number: int
     color_status: str
     coalesced_into: int | None
-    color_decision_ref: int | None
+    color_decision_ref: str | None
     first_def: FirstDefSite
     source_attribution: SourceAttributionFact
     live: LiveFacts
@@ -289,9 +289,9 @@ class RegisterFacts:
     initial_volatile: tuple[int, ...]
     nonvolatile_dispense_order: tuple[int, ...]
     reserved: tuple[int, ...]
-    fixed: tuple[int, ...] = ()
-    precolored: dict[int, int] = field(default_factory=dict)
-    model_boundary: tuple[int, ...] = ()
+    fixed: tuple[dict[str, Any], ...] = ()
+    precolored: tuple[dict[str, Any], ...] = ()
+    model_boundary: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -303,7 +303,9 @@ class BlockedBy:
 @dataclass(frozen=True)
 class BlockedCandidate:
     phys: int
-    blocked_by: tuple[BlockedBy, ...]
+    holder_ig_id: int | None = None
+    holder_assigned_phys: int | None = None
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -320,6 +322,7 @@ class ColorDecision:
     tie_rule: str
     confidence: str
     provenance: str | None = None
+    blocked_by: tuple[BlockedBy, ...] = ()
     node_state_before_select: dict[str, Any] = field(default_factory=dict)
     volatile_pool_before: tuple[int, ...] = ()
     nonvolatile_pool_before: dict[str, tuple[int, ...]] = field(default_factory=dict)
@@ -368,6 +371,13 @@ class AllocatorFacts:
     def to_dict(self) -> dict[str, Any]:
         return _json_value(self)
 ```
+
+`RegisterFacts.fixed`, `precolored`, and `model_boundary` preserve the structured
+retail object-list records from `backend_trace_v1_minimal.json` instead of
+collapsing them to integer tuples. Adapter helpers may derive convenience views
+such as `fixed_phys`, `precolored_by_ig`, or `model_boundary_names`, but the
+normalized facts object must retain the producer fields needed to explain
+fixed/precolored/model-boundary register pressure.
 
 - [ ] **Step 4: Add target parsing**
 
@@ -482,7 +492,7 @@ git commit -m "feat: add lifetime pressure model schema"
 
 **Files:**
 - Create: `tools/melee-agent/src/mwcc_debug/pressure_explorer/facts.py`
-- Create or consume: `tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json`
+- Consume: `tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json`
 - Modify: `tools/melee-agent/src/mwcc_debug/pressure_explorer/__init__.py`
 - Test: `tools/melee-agent/tests/test_lifetime_pressure_explorer.py`
 
@@ -562,20 +572,37 @@ def test_backend_trace_fixture_maps_to_allocator_facts() -> None:
 
     path = pathlib.Path("tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json")
     if not path.exists():
-        pytest.fail("shared retro backend_trace_v1_minimal.json fixture is missing")
+        pytest.skip("shared retail backend trace fixture has not landed")
 
-    facts = facts_from_backend_trace(path, function="fn_80000000")
+    facts = facts_from_backend_trace(path, function="test_fn")
+    cls = facts.class_by_id()[0]
+    nodes = cls.node_by_ig()
+    decisions = {decision.id: decision for decision in cls.color_decisions}
+    mappings = cls.coalesce["mappings"]
 
     assert facts.producer["kind"] == "mwcc-retro-backend-trace"
-    assert facts.function.name == "fn_80000000"
-    assert facts.class_by_id()[0].node_by_ig()[37].assigned_phys == 31
-    assert facts.class_by_id()[0].registers.fixed == (1, 2)
-    assert facts.class_by_id()[0].non_allocatable_state["model_boundary"] == [0]
-    assert facts.class_by_id()[0].coalesce["mappings"] == [[38, 37]]
-    assert facts.class_by_id()[0].node_by_ig()[38].color_status == "coalesced_alias"
-    assert facts.class_by_id()[0].node_by_ig()[38].coalesced_into == 37
-    assert facts.class_by_id()[0].color_decisions[0].id == "c0-select-0"
-    assert facts.class_by_id()[0].color_decisions[0].provenance == "retail-trace-fixture"
+    assert facts.function.name == "test_fn"
+    assert {32, 33, 40}.issubset(nodes)
+    assert nodes[32].color_status == "colored"
+    assert nodes[33].color_status == "coalesced_alias"
+    assert nodes[33].coalesced_into == 32
+    assert nodes[33].color_decision_ref == "gpr-c0"
+    assert nodes[33].assigned_phys == nodes[32].assigned_phys
+    assert nodes[40].color_decision_ref == "gpr-c1"
+    assert mappings[0]["alias"] == 33
+    assert mappings[0]["root"] == 32
+    assert "root_phys" in mappings[0]
+    assert decisions["gpr-c0"].id == "gpr-c0"
+    assert decisions["gpr-c0"].provenance == "retail-trace-fixture"
+    assert any(
+        candidate.holder_ig_id is not None
+        and candidate.holder_assigned_phys is not None
+        for decision in decisions.values()
+        for candidate in decision.blocked_candidates
+    )
+    assert cls.registers.fixed and isinstance(cls.registers.fixed[0], dict)
+    assert cls.registers.precolored and isinstance(cls.registers.precolored[0], dict)
+    assert cls.registers.model_boundary and isinstance(cls.registers.model_boundary[0], dict)
 
 
 def test_allocator_facts_from_real_pcdump_has_allocator_shape() -> None:
@@ -600,102 +627,16 @@ def test_allocator_facts_from_real_pcdump_has_allocator_shape() -> None:
     assert cls.edges or cls.coalesce_mappings or any(node.spill.spilled for node in cls.nodes)
 ```
 
-- [ ] **Step 2: Create the shared backend-trace fixture if the tracer workstream has not already committed it**
+- [ ] **Step 2: Verify the shared backend-trace fixture contract**
 
-Create `tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json` with this exact consumer-contract payload if the file does not already exist:
-
-```json
-{
-  "schema_version": "mwcc-retro-backend-trace.v1",
-  "compiler": {"family": "MWCC", "version": "GC/1.2.5n", "retail": true},
-  "source": {"tu": "src/example.c", "function": "fn_80000000", "mwcc_command_hash": "fixture"},
-  "functions": [
-    {
-      "name": "fn_80000000",
-      "blocks": [{"id": "B0", "order": 0, "succ": [], "pred": [], "labels": []}],
-      "regalloc": {
-        "classes": [
-          {
-            "class_id": 0,
-            "class_name": "gpr",
-            "registers": {
-              "physical_count": 32,
-              "allocatable": [3, 4, 5, 31, 30],
-              "initial_volatile": [3, 4, 5],
-              "nonvolatile_dispense_order": [31, 30],
-              "reserved": [1, 2],
-              "fixed": [1, 2],
-              "precolored": {"1": 1, "2": 2},
-              "model_boundary": [0]
-            },
-            "nodes": [
-              {
-                "ig_id": 37,
-                "virtual": {"kind": "r", "number": 37},
-                "color_status": "colored",
-                "coalesced_into": null,
-                "color_decision_ref": 0,
-                "first_def": {"pass_id": "before_register_coloring", "block_id": "B0", "instruction_id": "B0:0", "opcode": "li", "operands": "r37,0", "normalized": "li r#,0"},
-                "source_attribution": {"status": "unattributed", "symbol": null, "line": null, "confidence": "unavailable"},
-                "live": {"blocks": ["B0"], "intervals": [], "confidence": "observed"},
-                "degree": 0,
-                "flags": [],
-                "coalesce": {"root_ig_id": 37, "aliases": [38]},
-                "simplify_order": 0,
-                "select_order": 0,
-                "assigned_phys": 31,
-                "spill": {"spilled": false, "reason": null}
-              },
-              {
-                "ig_id": 38,
-                "virtual": {"kind": "r", "number": 38},
-                "color_status": "coalesced_alias",
-                "coalesced_into": 37,
-                "color_decision_ref": 0,
-                "first_def": {"pass_id": "before_register_coloring", "block_id": "B0", "instruction_id": "B0:1", "opcode": "mr", "operands": "r38,r37", "normalized": "mr r#,r#"},
-                "source_attribution": {"status": "unattributed", "symbol": null, "line": null, "confidence": "unavailable"},
-                "live": {"blocks": ["B0"], "intervals": [], "confidence": "observed"},
-                "degree": 0,
-                "flags": ["coalesced_alias"],
-                "coalesce": {"root_ig_id": 37, "aliases": []},
-                "simplify_order": null,
-                "select_order": null,
-                "assigned_phys": 31,
-                "spill": {"spilled": false, "reason": "coalesced into ig37"}
-              }
-            ],
-            "edges": [],
-            "coalesce": {"mappings": [[38, 37]]},
-            "non_allocatable_state": {"fixed": [1, 2], "model_boundary": [0]},
-            "simplify_order": [37],
-            "select_order": [37],
-            "color_decisions": [
-              {
-                "id": "c0-select-0",
-                "ig_id": 37,
-                "iter": 0,
-                "assigned_phys": 31,
-                "node_state_before_select": {"degree": 0, "spill_flag": false, "coalesce_root_ig_id": 37, "assigned_before": null},
-                "volatile_pool_before": [3, 4, 5],
-                "nonvolatile_pool_before": {"dispensed": [], "fresh_remaining": [31, 30]},
-                "reserved_or_precolored_filtered": [1, 2],
-                "available_phys_ordered": [31, 30, 3, 4, 5],
-                "blocked_candidates": [],
-                "candidate_phys_ordered": [31, 30, 3, 4, 5],
-                "chosen_source": "nonvolatile_dispense",
-                "decision_rule": "lowest_available_or_nonvolatile_dispense",
-                "tie_rule": "lowest_available_then_nonvolatile_order",
-                "confidence": "observed",
-                "provenance": "retail-trace-fixture"
-              }
-            ]
-          }
-        ]
-      }
-    }
-  ]
-}
-```
+Do not create a lifetime-specific fallback fixture. The canonical consumer
+contract is owned by the retail tracer workstream at
+`tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json`. If it
+has not landed when this task is implemented, leave the backend-trace adapter
+test as a skip with the message `shared retail backend trace fixture has not
+landed` and coordinate with the tracer thread rather than committing a second
+shape. The explorer plan consumes only this `backend_trace_v1_minimal.json`
+consumer contract, not `backend_events_v1_minimal.jsonl`.
 
 - [ ] **Step 3: Run tests and verify adapter functions are missing**
 
@@ -720,6 +661,8 @@ Create `tools/melee-agent/src/mwcc_debug/pressure_explorer/facts.py`. It must:
   and coalesce mappings;
 - set pcdump-derived `coalesced_into`, `color_decision_ref`, and inherited
   `assigned_phys` for coalesced aliases when the root decision is known;
+  `color_decision_ref` must be the synthesized string decision id, not a
+  numeric array index;
 - synthesize pcdump color-decision `id` values as
   `class{class_id}-iter{iter_idx}` and set `provenance="mwcc-debug-pcdump"`;
 - synthesize color-decision blocked candidates with confidence `synthesized` when pcdump hooks lack richer retail state;
@@ -756,7 +699,7 @@ def _register_facts(class_id: int) -> RegisterFacts:
             nonvolatile_dispense_order=tuple(range(31, 13, -1)),
             reserved=(),
             fixed=(),
-            precolored={},
+            precolored=(),
             model_boundary=(),
         )
     return RegisterFacts(
@@ -765,9 +708,9 @@ def _register_facts(class_id: int) -> RegisterFacts:
         initial_volatile=tuple(range(3, 13)),
         nonvolatile_dispense_order=tuple(range(31, 12, -1)),
         reserved=(1, 2),
-        fixed=(1, 2),
-        precolored={},
-        model_boundary=(0,),
+        fixed=({"phys": 1, "name": "sp"}, {"phys": 2, "name": "toc"}),
+        precolored=(),
+        model_boundary=({"phys": 0, "name": "r0"},),
     )
 ```
 
@@ -801,11 +744,14 @@ class-level `edges`, `coalesce`, `non_allocatable_state`, `simplify_order`,
 `candidate_phys_ordered`, `chosen_source`, `tie_rule`, `decision_rule`,
 `confidence`, and `provenance`. Missing these fields is an adapter error for
 backend traces, not a warning, because the producer contract uses them to
-preserve coalesced/precolored/fixed-state allocator facts. Convert JSON object
-keys in `registers.precolored` to integer keys in `RegisterFacts.precolored`.
-Preserve `color_decisions[].blocked_candidates[].blocked_by[]` holder identity
-as `(ig_id, phys)` pairs; do not collapse it into a set of blocked physical
-registers.
+preserve coalesced/precolored/fixed-state allocator facts. Preserve structured
+records from `registers.fixed`, `registers.precolored`, and
+`registers.model_boundary`; expose derived convenience maps only as helpers or
+adapter-specific metadata. Retail `blocked_candidates[]` entries carry
+candidate-level `holder_ig_id` and `holder_assigned_phys`; color decisions may
+also carry decision-level `blocked_by`. Preserve both forms and do not collapse
+them into a set of blocked physical registers. There is no producer field named
+`blocked_candidates[].blocked_by[]`.
 
 Keep the function intentionally narrow:
 
@@ -841,8 +787,7 @@ Expected: all tests in this file PASS.
 ```bash
 git add tools/melee-agent/src/mwcc_debug/pressure_explorer/facts.py \
         tools/melee-agent/src/mwcc_debug/pressure_explorer/__init__.py \
-        tools/melee-agent/tests/test_lifetime_pressure_explorer.py \
-        tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json
+        tools/melee-agent/tests/test_lifetime_pressure_explorer.py
 git commit -m "feat: normalize lifetime pressure allocator facts"
 ```
 
@@ -916,15 +861,18 @@ def test_coalesced_alias_node_reports_coalesced_away() -> None:
     from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
 
     fixture = pathlib.Path("tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json")
-    facts = facts_from_backend_trace(fixture, function="fn_80000000")
+    if not fixture.exists():
+        pytest.skip("shared retail backend trace fixture has not landed")
+
+    facts = facts_from_backend_trace(fixture, function="test_fn")
     report = analyze_lifetime_pressure(
         facts,
-        parse_force_phys_spec("38:31", default_class_id=0),
+        parse_force_phys_spec("33:31", default_class_id=0),
     )
 
     assert report.targets[0].status == "coalesced_away"
     assert report.targets[0].current_phys == 31
-    assert report.targets[0].coalesce.root_ig_id == 37
+    assert report.targets[0].coalesce.root_ig_id == 32
 ```
 
 - [ ] **Step 2: Run analysis tests and verify missing analyzer**
@@ -1485,7 +1433,9 @@ Status taxonomy:
 
 - `full_target_match`: every protected target is satisfied.
 - `partial_progress`: at least one protected target newly improves, none regress, and at least one remains unsatisfied or unsafe. An unsatisfied target counts as improved when its absolute distance from expected physical register decreases or when role reanchor reports intended-direction movement.
-- `rejected`: any protected target regresses, guard/frame fails when evidence exists, or identity cannot be trusted for a claimed win.
+- `rejected`: any protected target regresses, `checkdiff_guard.accepted` or
+  `structural_guard.accepted` is false when validation evidence exists, or
+  identity cannot be trusted for a claimed win.
 
 For same-function pcdump comparison in v1, raw IG ids are safe only when the
 candidate uses the same `function.name`, class/node exists, and
@@ -1747,7 +1697,18 @@ def test_quick_validation_runs_supplied_source_candidates_with_runner(tmp_path: 
                     "structural_rejection": False,
                     "coalesced_targets": [],
                 },
-                "checkdiff_guard": {"ok": True, "frame_size_changed": False},
+                "checkdiff_guard": {
+                    "accepted": True,
+                    "match_percent": 100.0,
+                    "classification_primary": "matched",
+                    "normalized_diff_lines": [],
+                    "hunk_count": 0,
+                },
+                "structural_guard": {
+                    "accepted": True,
+                    "classification_primary": "matched",
+                    "reason": None,
+                },
                 "score_mode": "force-phys",
             }),
             "stderr": "",
