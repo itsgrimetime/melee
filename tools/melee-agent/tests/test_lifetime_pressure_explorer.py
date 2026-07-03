@@ -483,7 +483,7 @@ def test_candidate_comparison_reanchors_identity_when_source_available(
             self.source = source
 
         @classmethod
-        def from_text(cls, text: str, function: str, source: str) -> "StubCompile":
+        def from_text(cls, text: str, function: str, source: str) -> StubCompile:
             calls.append(("compile", function))
             return cls(text, function, source)
 
@@ -2321,3 +2321,259 @@ def test_render_text_no_target_mode_is_inventory_only_without_blocker_claims() -
     assert "inventory-only: no target allocation supplied" in text
     assert "expected_phys_holder" not in text
     assert "blocked by" not in text.lower()
+
+
+def _score_source_payload(
+    *,
+    matched: int,
+    targeted: int = 2,
+    structural_rejection: bool = False,
+    checkdiff_accepted: bool = True,
+    structural_accepted: bool = True,
+) -> dict[str, object]:
+    return {
+        "target_score": {
+            "matched": matched,
+            "targeted": targeted,
+            "virtuals": {
+                "37": {
+                    "matched": matched >= 1,
+                    "baseline_matched": False,
+                },
+                "40": {
+                    "matched": matched >= 2,
+                    "baseline_matched": False,
+                },
+            },
+        },
+        "force_phys_score": {
+            "force_phys_hits": matched,
+            "structural_rejection": structural_rejection,
+        },
+        "checkdiff_guard": {"accepted": checkdiff_accepted},
+        "structural_guard": {"accepted": structural_accepted},
+    }
+
+
+def test_remote_validation_is_emit_only(tmp_path: pathlib.Path) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import (
+        build_remote_validation_plan,
+    )
+
+    candidates = [tmp_path / "candidate_a.c", tmp_path / "candidate_b.c"]
+
+    commands = build_remote_validation_plan(
+        function="fn_80000000",
+        force_phys="37:25,40:26",
+        timeout=45,
+        campaign_dir=tmp_path / "campaign",
+        source_candidates=candidates,
+    )
+
+    assert commands
+    assert {command.mode for command in commands} == {"emit"}
+    assert all("--remote-fallback" in command.command for command in commands)
+    assert all("--timeout 45" in command.command for command in commands)
+    assert str(tmp_path / "campaign") in commands[0].command
+    assert str(candidates[0]) in commands[0].command
+    assert str(candidates[1]) in commands[1].command
+
+
+def test_validation_api_reexports_from_pressure_explorer_package() -> None:
+    from src.mwcc_debug.pressure_explorer import (
+        build_remote_validation_plan,
+        materialize_force_phys_target_spec,
+        run_bounded_validation,
+        run_quick_validation,
+    )
+
+    assert callable(build_remote_validation_plan)
+    assert callable(materialize_force_phys_target_spec)
+    assert callable(run_bounded_validation)
+    assert callable(run_quick_validation)
+
+
+def test_materialize_force_phys_target_spec_writes_score_source_contract(
+    tmp_path: pathlib.Path,
+) -> None:
+    import yaml
+
+    from src.mwcc_debug.pressure_explorer.validation import (
+        materialize_force_phys_target_spec,
+    )
+
+    baseline = tmp_path / "baseline.pcdump.txt"
+
+    target = materialize_force_phys_target_spec(
+        function="fn_80000000",
+        class_id=0,
+        force_phys="37:25,40:26",
+        baseline_dump=baseline,
+        output_dir=tmp_path / "out",
+    )
+
+    data = yaml.safe_load(target.read_text(encoding="utf-8"))
+    assert data == {
+        "function": "fn_80000000",
+        "class_id": 0,
+        "baseline_dump": str(baseline),
+        "force_phys": {37: 25, 40: 26},
+        "coalesce_preservation": True,
+    }
+    assert all(isinstance(key, int) for key in data["force_phys"])
+
+
+def test_quick_validation_runs_supplied_source_candidates_with_runner(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_quick_validation
+
+    target = tmp_path / "target.yaml"
+    candidates = [tmp_path / "candidate.c"]
+    calls: list[tuple[list[str], int]] = []
+
+    def runner(argv: list[str], timeout: int) -> dict[str, object]:
+        calls.append((argv, timeout))
+        return {
+            "returncode": 0,
+            "stdout": json.dumps(_score_source_payload(matched=2)),
+            "stderr": "",
+        }
+
+    results = run_quick_validation(
+        "fn_80000000",
+        target,
+        candidates,
+        timeout=30,
+        runner=runner,
+    )
+
+    assert results[0]["status"] == "full_target_match"
+    assert results[0]["target_score"]["matched"] == 2
+    assert calls == [
+        (
+            [
+                "melee-agent",
+                "debug",
+                "target",
+                "score-source",
+                str(candidates[0]),
+                "-f",
+                "fn_80000000",
+                "--target",
+                str(target),
+                "--json",
+                "--retain-pcdump",
+                "--checkdiff-guard",
+                "--timeout",
+                "30",
+            ],
+            30,
+        )
+    ]
+
+
+def test_quick_validation_classifies_partial_progress_and_rejections(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_quick_validation
+
+    payloads = [
+        _score_source_payload(matched=1),
+        _score_source_payload(matched=2, structural_rejection=True),
+        _score_source_payload(matched=2, checkdiff_accepted=False),
+        _score_source_payload(matched=0),
+    ]
+
+    def runner(_argv: list[str], _timeout: int) -> dict[str, object]:
+        return {
+            "returncode": 0,
+            "stdout": json.dumps(payloads.pop(0)),
+            "stderr": "",
+        }
+
+    results = run_quick_validation(
+        "fn_80000000",
+        tmp_path / "target.yaml",
+        [
+            tmp_path / "partial.c",
+            tmp_path / "structural_reject.c",
+            tmp_path / "guard_reject.c",
+            tmp_path / "miss.c",
+        ],
+        timeout=30,
+        runner=runner,
+    )
+
+    assert [result["status"] for result in results] == [
+        "partial_progress",
+        "rejected",
+        "rejected",
+        "rejected",
+    ]
+
+
+def test_bounded_validation_runs_existing_mutation_workflows(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_bounded_validation
+
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], _timeout: int) -> dict[str, object]:
+        calls.append(argv)
+        return {"returncode": 0, "stdout": '{"ok": true}', "stderr": ""}
+
+    results = run_bounded_validation(
+        function="fn_80000000",
+        force_phys="37:25",
+        pcdump_path=tmp_path / "base.pcdump.txt",
+        source_path=tmp_path / "source.c",
+        timeout=60,
+        max_candidates=7,
+        runner=runner,
+    )
+
+    assert [result["status"] for result in results] == [
+        "partial_progress",
+        "partial_progress",
+    ]
+    assert calls == [
+        [
+            "melee-agent",
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(tmp_path / "base.pcdump.txt"),
+            "--source-file",
+            str(tmp_path / "source.c"),
+            "--compile-probes",
+            "--max-probes",
+            "7",
+            "--timeout",
+            "60",
+            "--json",
+        ],
+        [
+            "melee-agent",
+            "debug",
+            "mutate",
+            "simplify-order",
+            "-f",
+            "fn_80000000",
+            "--force-phys",
+            "37:25",
+            "--source-file",
+            str(tmp_path / "source.c"),
+            "--pcdump",
+            str(tmp_path / "base.pcdump.txt"),
+            "--max-candidates",
+            "7",
+            "--timeout",
+            "60",
+            "--json",
+        ],
+    ]

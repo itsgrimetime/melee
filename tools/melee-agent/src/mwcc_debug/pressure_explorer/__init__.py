@@ -5,6 +5,7 @@ from .commands import *  # noqa: F403,E402
 from .facts import *  # noqa: F403,E402
 from .hypotheses import *  # noqa: F403,E402
 from .render import *  # noqa: F403,E402
+from .validation import *  # noqa: F403,E402
 
 
 @dataclass(frozen=True)
