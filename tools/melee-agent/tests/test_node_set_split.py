@@ -4970,6 +4970,77 @@ def test_summarize_all_wrong_register_emits_case_c_order_repair_handoff(
     assert any("Case-C order repair" in step for step in summary["next_steps"])
 
 
+def test_summarize_node_set_split_reports_global_renumbering_cascade() -> None:
+    req = NodeSetSplitRequest(
+        "fn_test",
+        0,
+        34,
+        target_reg="r27",
+        var_name="state",
+    )
+    patches = [CandidatePatch("c0", "src0", "c0", ((0, 0),), hunk="@@ c0")]
+    score = CandidateScore(
+        "c0",
+        compile_ok=True,
+        checkdiff_pct=None,
+        checkdiff_delta=None,
+        pcdump_score_delta=None,
+        diagnostics_path=None,
+        status="objective-failed",
+    )
+
+    summary = summarize_node_set_split_scores(
+        "fn_test",
+        req,
+        patches,
+        [{
+            "score": score,
+            "objective": {
+                "status": "wrong-register",
+                "target_score": {
+                    "matched": 0,
+                    "targeted": 3,
+                    "renumbered": 3,
+                    "virtuals": {
+                        "23": {
+                            "expected": 27,
+                            "candidate_virtual": 22,
+                            "actual": 25,
+                            "renumbered": True,
+                        },
+                        "30": {
+                            "expected": 25,
+                            "candidate_virtual": 29,
+                            "actual": 26,
+                            "renumbered": True,
+                        },
+                        "31": {
+                            "expected": 26,
+                            "candidate_virtual": 30,
+                            "actual": 27,
+                            "renumbered": True,
+                        },
+                    },
+                },
+            },
+        }],
+        threshold=1.0,
+    )
+
+    cascade = summary["global_renumbering_cascade"]
+    assert cascade["kind"] == "node-deletion-global-renumbering-cascade"
+    assert cascade["renumbered_count"] == 3
+    assert cascade["source_model_layer_dimension_id"] == (
+        "node-deletion-virtual-renumbering-cascade"
+    )
+    assert cascade["sample"][0]["baseline_virtual"] == 23
+    assert summary["terminal_proof"]["kind"] == (
+        "node-deletion-global-renumbering-cascade"
+    )
+    assert "global virtual renumbering cascade" in " ".join(summary["next_steps"])
+    assert "source-level" in cascade["next_handoff"]
+
+
 def test_summarize_wrong_register_compile_failed_mix_marks_terminal() -> None:
     req = NodeSetSplitRequest("fn_test", 0, 34, target_reg="r27", var_name="holder")
     patches = [
