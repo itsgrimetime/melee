@@ -52,6 +52,17 @@ Modify:
 
 Run Python tests from `tools/melee-agent/`. Run build/checkdiff commands from the repo root `/Users/mike/.codex/worktrees/71b5/melee`.
 
+## Shared Fixture Contract
+
+`tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json` is the canonical shared consumer fixture for the retail tracer and the lifetime-pressure explorer. Keep these fixture facts stable unless both plans and both adapters are updated in the same implementation window:
+
+- function identity: `test_fn`;
+- GPR IG ids: `32`, `33`, and coalesced alias `40`;
+- string `color_decision_ref` ids such as `gpr-c0` and `gpr-c1`;
+- object `coalesce.mappings[]` rows with `alias`, `root`, `root_phys`, `confidence`, and `provenance`;
+- structured `registers.fixed`, `registers.precolored`, and `registers.model_boundary` arrays;
+- node final-state fields `color_status`, `coalesced_into`, and `color_decision_ref`.
+
 ---
 
 ### Task 0: Audit Existing Capabilities And Lock Reuse Boundary
@@ -2807,7 +2818,7 @@ This produces only a marker until the next steps add PCode, graph, simplify, and
 
 - [ ] **Step 7: Complete event readers with fixture-backed gates**
 
-Add readers in the order below. After each reader, update `tools/melee-agent/tests/fixtures/retro/backend_events_v1_minimal.jsonl` only with the new event family and add one assertion to `tools/melee-agent/tests/test_retro_backend_events.py` that proves the normalized `functions[].regalloc.classes[]` field is populated.
+Add readers in the order below. Task 3 already creates the complete all-event fixture `tools/melee-agent/tests/fixtures/retro/backend_events_v1_minimal.jsonl`; keep that fixture as the full normalizer contract. For each reader family, either add an assertion against that existing full fixture or create a focused incremental fixture named `tools/melee-agent/tests/fixtures/retro/backend_events_v1_<family>.jsonl` when the reader needs a partial-stream failure test. Add one assertion to `tools/melee-agent/tests/test_retro_backend_events.py` per reader family that proves the normalized `functions[].regalloc.classes[]` field is populated or that the partial stream fails with the documented error.
 
 Reader acceptance checks:
 
