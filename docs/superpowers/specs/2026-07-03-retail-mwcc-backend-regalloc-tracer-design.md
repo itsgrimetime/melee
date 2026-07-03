@@ -290,7 +290,12 @@ Required shape:
             "registers": {
               "physical_count": 32,
               "allocatable": [],
-              "nonvolatile_dispense_order": [31, 30, 29, 28, 27]
+              "initial_volatile": [],
+              "reserved": [],
+              "fixed": [],
+              "precolored": [],
+              "nonvolatile_dispense_order": [31, 30, 29, 28, 27],
+              "model_boundary": []
             },
             "nodes": [],
             "edges": [],
@@ -328,6 +333,18 @@ Per-node fields:
 - `select_order`: position or null.
 - `assigned_phys`: assigned physical register or null before coloring.
 - `spill`: spilled state and reason if known.
+- `color_status`: `colored`, `coalesced_alias`, `spilled`, `precolored`, or
+  `uncolored`.
+- `coalesced_into`: root `ig_id` when `color_status` is `coalesced_alias`.
+- `color_decision_ref`: id of the class color-decision entry when this node has
+  an independent color decision.
+
+Coalesced-away nodes are explicit final-state rows, not omitted nodes. A
+coalesced alias may have `select_order`, `color_decision_ref`, and independent
+decision fields set to null only because it was intentionally coalesced away.
+Its `assigned_phys` is inherited from the root when the root is colored, and
+`coalesced_into` points at that root. A null select/color field on a node with
+`color_status: "colored"` is missing required data and fails the trace.
 
 Per-edge fields:
 
@@ -335,6 +352,23 @@ Per-edge fields:
 - `kind`: normally `interference`.
 - `confidence`: observed, inferred, or unavailable.
 - `provenance`: which retail structure or pass produced the edge.
+
+Per-register-class metadata:
+
+- `physical_count`: number of physical registers in the class.
+- `allocatable`: physical registers available to the allocator after class-level
+  exclusions.
+- `initial_volatile`: allocator's initial volatile/caller-save pool in choice
+  order.
+- `reserved`: registers excluded because of ABI, hardware, stack pointer, TOC,
+  scratch-only, or other hard constraints.
+- `fixed`: registers fixed by ABI roles or backend machinery for this function.
+- `precolored`: physical or pseudo-physical nodes that enter the graph with a
+  fixed color.
+- `nonvolatile_dispense_order`: ordered callee-save/nonvolatile register
+  dispense list.
+- `model_boundary`: registers or backend state that are intentionally outside
+  the v1 AllocatorFacts model, such as CR/LR/CTR state.
 
 Per-color-decision fields:
 
@@ -366,6 +400,25 @@ Per-color-decision fields:
 - `decision_rule`: e.g. `lowest_available_or_nonvolatile_dispense`.
 - `confidence`.
 
+Color-decision field contract:
+
+- Required for every normal `color_status: "colored"` GPR/FPR decision:
+  `ig_id`, `iter`, `assigned_phys`, `node_state_before_select`,
+  `reserved_or_precolored_filtered`, `available_phys_ordered`,
+  `blocked_candidates`, `candidate_phys_ordered`, `chosen_source`, `tie_rule`,
+  `decision_rule`, and `confidence`.
+- Required-if-applicable:
+  `volatile_pool_before` and `volatile_pool_after` when the volatile pool is
+  consulted or mutated for the decision; `nonvolatile_dispense_before` and
+  `nonvolatile_dispense_after` when `chosen_source` is
+  `nonvolatile_dispense`; `blocked_by` when a text summary is emitted.
+- Optional:
+  display-only aliases or convenience summaries that duplicate structured data.
+- Required on every reverse-engineered field:
+  `confidence` and `provenance`, either on the field itself or inherited from
+  the enclosing event/section. Required fields may not be null solely because
+  the tracer failed to recover the hard part of the decision.
+
 Identity caveats:
 
 - Raw `ig_id`, virtual ids, PCode instruction ids, and runtime addresses are
@@ -393,6 +446,26 @@ Coordination result:
   and ranked source experiments over this subset.
 - The explorer's MVP may consume `mwcc-debug` pcdumps through an adapter, then
   later consume this retail subset through a separate adapter.
+
+Compatibility note:
+
+`backend-trace.v1.json` is the producer-owned retail trace schema. The
+lifetime-pressure explorer may use its own adapter-normalized
+`allocator-facts.v1` shape. They do not need to be byte-identical, but the
+following field meanings are intentionally aligned:
+
+| Retail trace field | Explorer adapter meaning |
+|---|---|
+| `functions[].regalloc.classes[].nodes[]` | allocator nodes / virtual identities |
+| `nodes[].first_def` | role descriptor anchor input |
+| `nodes[].live` | live span / pressure input |
+| `classes[].edges[]` | interference graph edges |
+| `nodes[].coalesce`, `classes[].coalesce` | coalesce roots and aliases |
+| `classes[].simplify_order` | simplify/select-order reasoning input |
+| `classes[].select_order` | color walk order input |
+| `classes[].color_decisions[]` | physical-choice explanation input |
+| `classes[].registers` | register pool and model-boundary metadata |
+| `nodes[].source_attribution` | best-effort source bridge input |
 
 ## Regalloc Summary
 
@@ -536,11 +609,23 @@ example:
 
 `tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json`
 
-The fixture must contain at least two GPR nodes, one interference edge, one
-coalesce mapping, simplify/select order, and one color decision with structured
-blockers. It exists so downstream tools such as the lifetime-pressure explorer
-can develop adapters without parsing raw gdb events or waiting for live retail
-traces.
+The fixture must contain at least:
+
+- one GPR class with `allocatable`, `initial_volatile`, `reserved`, fixed or
+  precolored metadata, nonvolatile dispense order, and model-boundary metadata;
+- two independently colored GPR nodes;
+- one coalesced-alias node final-state row with `coalesced_into` and inherited
+  physical assignment;
+- one interference edge;
+- one coalesce mapping;
+- simplify and select order;
+- one color decision with at least one blocked candidate whose holder identity
+  is explicit; and
+- one source attribution entry that is either attributed or intentionally
+  ambiguous.
+
+It exists so downstream tools such as the lifetime-pressure explorer can develop
+adapters without parsing raw gdb events or waiting for live retail traces.
 
 ## Validation
 
