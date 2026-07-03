@@ -143,9 +143,7 @@ def parse_target_file(path: str | pathlib.Path) -> TargetSet:
     return TargetSet(
         function=data.get("function"),
         targets=_load_target_mapping(data),
-        provenance=(
-            data["provenance"] if "provenance" in data else {"path": str(target_path)}
-        ),
+        provenance=data.get("provenance") or {"path": str(target_path)},
     )
 
 

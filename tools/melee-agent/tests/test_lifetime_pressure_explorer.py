@@ -73,6 +73,17 @@ def test_parse_target_file_defaults_provenance_to_path(tmp_path: pathlib.Path) -
     assert target.provenance == {"path": str(path)}
 
 
+def test_parse_target_file_null_provenance_defaults_to_path(
+    tmp_path: pathlib.Path,
+) -> None:
+    path = tmp_path / "target.json"
+    path.write_text(json.dumps({"force_phys": {"37": 25}, "provenance": None}))
+
+    target = parse_target_file(path)
+
+    assert target.provenance == {"path": str(path)}
+
+
 @pytest.mark.parametrize("key", ["force_phys", "virtuals"])
 def test_parse_target_file_rejects_empty_target_mapping(
     tmp_path: pathlib.Path,
