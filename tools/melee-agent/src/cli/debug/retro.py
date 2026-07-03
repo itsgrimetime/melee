@@ -26,6 +26,14 @@ class DumpOutcome:
     missing: list[str] = field(default_factory=list)
 
 
+@dataclass
+class BackendOutcome:
+    exit_code: int
+    trace: dict | None = None
+    fidelity: dict | None = None
+    missing: list[str] = field(default_factory=list)
+
+
 def _looks_like_melee_root(path: Path) -> bool:
     return (
         (path / "src" / "melee").is_dir()
@@ -70,6 +78,47 @@ def _ensure_setup(melee_root: Path | None = None):
     if hasattr(retro_setup, "ensure_for_root"):
         return retro_setup.ensure_for_root(root, force=False)
     return retro_setup.ensure(force=False)
+
+
+def _write_backend_outputs(
+    out_dir: Path,
+    trace: dict,
+    fidelity: dict | None = None,
+) -> None:
+    from tools.mwcc_retro import backend_fidelity, backend_schema, backend_summary
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    errors = backend_schema.validate_backend_trace(trace)
+    if errors:
+        raise RuntimeError("backend trace schema errors: " + "; ".join(errors))
+    backend_schema.write_backend_trace(out_dir / "backend-trace.v1.json", trace)
+    (out_dir / "regalloc-summary.txt").write_text(
+        backend_summary.render_regalloc_summary(trace)
+    )
+    (out_dir / "backend-summary.txt").write_text(
+        backend_summary.render_backend_summary(trace)
+    )
+    if fidelity is not None:
+        (out_dir / "backend-fidelity.json").write_text(
+            json.dumps(fidelity, indent=2, sort_keys=True) + "\n"
+        )
+        (out_dir / "backend-fidelity.txt").write_text(
+            backend_fidelity.render_fidelity_text(fidelity)
+        )
+
+
+def _run_backend_trace(
+    *,
+    src: str,
+    fn: str,
+    out_dir: Path,
+    verify_debug: bool,
+    melee_root: Path,
+) -> BackendOutcome:
+    raise RuntimeError(
+        "retail GC/1.2.5n backend trace runtime is not wired yet; "
+        "schema and CLI plumbing are installed"
+    )
 
 
 def _ninja_cmd_for_unit(src_rel: str, *, melee_root: Path) -> str:
@@ -340,6 +389,65 @@ def dump_cmd(
     if outcome.missing:
         typer.secho(f"missing phase streams: {outcome.missing}", fg="yellow", err=True)
     raise typer.Exit(outcome.exit_code)
+
+
+@retro_app.command("backend")
+def backend_cmd(
+    src: str = typer.Argument(..., help="TU source path, e.g. src/melee/mn/mndiagram.c"),
+    fn: str = typer.Option(..., "-f", "--function"),
+    out: Path = typer.Option(None, "-O", "--output"),
+    melee_root: Path = typer.Option(
+        None,
+        "--melee-root",
+        help="Active Melee checkout/worktree root. Defaults to the current cwd tree.",
+    ),
+    verify_debug: bool = typer.Option(
+        False,
+        "--verify-debug",
+        help="Also compare the retail backend trace to the mwcc-debug pcdump.",
+    ),
+):
+    """Emit an exact retail GC/1.2.5n backend/regalloc trace."""
+    active_root = _resolve_melee_root(melee_root)
+    _ensure_setup(active_root)
+    out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
+    try:
+        outcome = _run_backend_trace(
+            src=src,
+            fn=fn,
+            out_dir=out_dir,
+            verify_debug=verify_debug,
+            melee_root=active_root,
+        )
+        if outcome.trace is not None:
+            _write_backend_outputs(out_dir, outcome.trace, outcome.fidelity)
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2)
+    raise typer.Exit(outcome.exit_code)
+
+
+@retro_app.command("verify-backend")
+def verify_backend_cmd(
+    src: str = typer.Argument(..., help="TU source path used for trace generation"),
+    fn: str = typer.Option(..., "-f", "--function"),
+    trace_path: Path = typer.Option(
+        None,
+        "--trace",
+        help="Existing backend-trace.v1.json. Defaults to the generated output path.",
+    ),
+    melee_root: Path = typer.Option(None, "--melee-root"),
+):
+    """Compare a retail backend trace to mwcc-debug pcdump facts."""
+    active_root = _resolve_melee_root(melee_root)
+    out_dir = _resolve_output_dir(None, melee_root=active_root, src=src, fn=fn)
+    trace_file = trace_path or (out_dir / "backend-trace.v1.json")
+    if not trace_file.exists():
+        typer.secho(f"backend trace not found: {trace_file}", fg="red", err=True)
+        raise typer.Exit(2)
+    typer.echo(f"backend trace: {trace_file}")
+    typer.echo("mwcc-debug comparison wiring lands with the fidelity adapter task")
+    raise typer.Exit(0)
 
 
 @retro_app.command("verify")

@@ -1,0 +1,16 @@
+                                                                                
+ Usage: melee-agent debug retro verify-backend [OPTIONS] SRC                    
+                                                                                
+ Compare a retail backend trace to mwcc-debug pcdump facts.                     
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    src      TEXT  TU source path used for trace generation [required]      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function    -f      TEXT  [required]                                    │
+│    --trace               PATH  Existing backend-trace.v1.json. Defaults to   │
+│                                the generated output path.                    │
+│    --melee-root          PATH                                                │
+│    --help                      Show this message and exit.                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
