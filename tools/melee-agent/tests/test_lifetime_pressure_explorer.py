@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import copy
 import json
 import pathlib
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 
@@ -603,6 +605,220 @@ def test_backend_trace_array_contract_maps_to_allocator_facts(
         cls.registers.model_boundary[0],
         dict,
     )
+
+
+def _minimal_backend_trace_payload() -> dict:
+    return {
+        "schema_version": "backend-trace.v1",
+        "functions": [
+            {
+                "name": "test_fn",
+                "source_path": "src/test.c",
+                "regalloc": {
+                    "classes": [
+                        {
+                            "class_id": 0,
+                            "class_name": "gpr",
+                            "registers": {
+                                "physical_count": 32,
+                                "allocatable": [3, 4, 31],
+                                "initial_volatile": [3, 4],
+                                "reserved": [1, 2],
+                                "nonvolatile_dispense_order": [31],
+                                "fixed": [{"phys": 1, "name": "sp"}],
+                                "precolored": [{"ig_id": 3, "phys": 3}],
+                                "model_boundary": [{"phys": 0, "name": "r0"}],
+                            },
+                            "nodes": [
+                                {
+                                    "ig_id": 32,
+                                    "virtual": {"kind": "r", "number": 32},
+                                    "color_status": "colored",
+                                    "coalesced_into": None,
+                                    "color_decision_ref": "gpr-c0",
+                                    "assigned_phys": 31,
+                                    "simplify_order": 0,
+                                    "select_order": 0,
+                                    "first_def": {"opcode": "lwz"},
+                                    "source_attribution": {
+                                        "status": "attributed",
+                                        "confidence": "observed",
+                                    },
+                                    "live": {"blocks": [], "intervals": []},
+                                    "coalesce": {
+                                        "root_ig_id": 32,
+                                        "aliases": [],
+                                    },
+                                    "spill": {"spilled": False},
+                                }
+                            ],
+                            "edges": [],
+                            "coalesce": {"mappings": []},
+                            "non_allocatable_state": {},
+                            "simplify_order": [32],
+                            "select_order": [32],
+                            "color_decisions": [
+                                {
+                                    "id": "gpr-c0",
+                                    "ig_id": 32,
+                                    "assigned_phys": 31,
+                                    "available_phys_ordered": [3, 4, 31],
+                                    "blocked_candidates": [],
+                                    "candidate_phys_ordered": [31],
+                                    "chosen_source": "nonvolatile",
+                                    "tie_rule": "fixture",
+                                    "decision_rule": "retail",
+                                    "confidence": "observed",
+                                    "provenance": "retail-trace-fixture",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+
+
+def _write_backend_trace(tmp_path: pathlib.Path, payload: dict) -> pathlib.Path:
+    path = tmp_path / "backend_trace.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def _remove_backend_key(payload: dict, path: tuple[str | int, ...]) -> dict:
+    out = copy.deepcopy(payload)
+    current = out
+    for key in path[:-1]:
+        current = current[key]
+    del current[path[-1]]
+    return out
+
+
+def test_backend_trace_rejects_object_shaped_functions(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_backend_trace
+
+    payload = _minimal_backend_trace_payload()
+    payload["functions"] = {
+        "test_fn": {
+            "name": "test_fn",
+            "classes": payload["functions"][0]["regalloc"]["classes"],
+        }
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="backend trace missing required allocator facts: functions",
+    ):
+        facts_from_backend_trace(_write_backend_trace(tmp_path, payload), function="test_fn")
+
+
+def test_backend_trace_rejects_function_missing_regalloc(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_backend_trace
+
+    payload = _minimal_backend_trace_payload()
+    function_payload = payload["functions"][0]
+    function_payload["classes"] = function_payload["regalloc"]["classes"]
+    del function_payload["regalloc"]
+
+    with pytest.raises(
+        ValueError,
+        match="backend trace missing required allocator facts: regalloc",
+    ):
+        facts_from_backend_trace(_write_backend_trace(tmp_path, payload), function="test_fn")
+
+
+@pytest.mark.parametrize(
+    ("path", "field"),
+    [
+        (("functions", 0, "regalloc", "classes", 0, "edges"), "edges"),
+        (
+            (
+                "functions",
+                0,
+                "regalloc",
+                "classes",
+                0,
+                "registers",
+                "allocatable",
+            ),
+            "allocatable",
+        ),
+        (
+            (
+                "functions",
+                0,
+                "regalloc",
+                "classes",
+                0,
+                "nodes",
+                0,
+                "first_def",
+            ),
+            "first_def",
+        ),
+        (
+            (
+                "functions",
+                0,
+                "regalloc",
+                "classes",
+                0,
+                "color_decisions",
+                0,
+                "available_phys_ordered",
+            ),
+            "available_phys_ordered",
+        ),
+    ],
+)
+def test_backend_trace_rejects_missing_required_allocator_fields(
+    tmp_path: pathlib.Path,
+    path: tuple[str | int, ...],
+    field: str,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_backend_trace
+
+    payload = _remove_backend_key(_minimal_backend_trace_payload(), path)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"backend trace missing required allocator facts: .*{field}",
+    ):
+        facts_from_backend_trace(_write_backend_trace(tmp_path, payload), function="test_fn")
+
+
+def test_source_attribution_status_uses_confidence_and_temp_kind() -> None:
+    from src.mwcc_debug.pressure_explorer.facts import _source_attribution_fact
+
+    def attribution(kind: str, confidence: str) -> SimpleNamespace:
+        source = SimpleNamespace(
+            name="temp",
+            expression=None,
+            kind=kind,
+            source_file=None,
+            source_line=None,
+            source_col=None,
+            confidence=confidence,
+        )
+        return SimpleNamespace(source=source)
+
+    assert _source_attribution_fact(attribution("local", "low")).status == "ambiguous"
+    assert (
+        _source_attribution_fact(attribution("implicit-temp", "unknown")).status
+        == "unattributed"
+    )
+    assert (
+        _source_attribution_fact(
+            attribution("copy/coalesce-product", "unknown")
+        ).status
+        == "unattributed"
+    )
+    assert _source_attribution_fact(attribution("local", "exact")).status == "attributed"
 
 
 def test_allocator_facts_from_real_pcdump_has_allocator_shape() -> None:

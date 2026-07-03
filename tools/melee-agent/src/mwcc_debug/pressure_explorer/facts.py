@@ -72,6 +72,8 @@ def facts_from_pcdump(
 
 def facts_from_backend_trace(path: Path, *, function: str) -> AllocatorFacts:
     data = json.loads(Path(path).read_text())
+    if not isinstance(data, Mapping):
+        raise ValueError("backend trace missing required allocator facts: root")
     fn_data = _select_backend_function(data, function)
     class_payloads = _backend_class_payloads(fn_data)
     if not isinstance(class_payloads, Sequence) or isinstance(class_payloads, str):
@@ -207,15 +209,21 @@ def _class_facts_from_pcdump(
 def _class_facts_from_backend_trace(payload: Any) -> AllocatorClassFacts:
     if not isinstance(payload, Mapping):
         raise ValueError("backend trace missing required allocator facts: classes[]")
-    missing = [
-        key
-        for key in ("class_id", "registers", "nodes", "color_decisions")
-        if key not in payload
-    ]
-    if missing:
-        raise ValueError(
-            "backend trace missing required allocator facts: " + ", ".join(missing)
-        )
+    _require_fields(
+        payload,
+        (
+            "class_id",
+            "class_name",
+            "registers",
+            "nodes",
+            "edges",
+            "coalesce",
+            "non_allocatable_state",
+            "simplify_order",
+            "select_order",
+            "color_decisions",
+        ),
+    )
     class_id = int(payload["class_id"])
     nodes = tuple(_node_from_mapping(node) for node in payload["nodes"])
     nodes = _inherit_backend_alias_assignments(nodes, payload)
@@ -224,7 +232,7 @@ def _class_facts_from_backend_trace(payload: Any) -> AllocatorClassFacts:
         class_name=str(payload.get("class_name", _class_name(class_id))),
         registers=_registers_from_mapping(payload["registers"]),
         nodes=nodes,
-        edges=tuple(_edge_from_mapping(edge) for edge in payload.get("edges", ())),
+        edges=tuple(_edge_from_mapping(edge) for edge in payload["edges"]),
         coalesce=dict(payload.get("coalesce", {})),
         coalesce_mappings=tuple(
             _coalesce_mapping_pair(item)
@@ -241,15 +249,15 @@ def _class_facts_from_backend_trace(payload: Any) -> AllocatorClassFacts:
 
 
 def _select_backend_function(data: Mapping[str, Any], function: str) -> Mapping[str, Any]:
-    functions = data.get("functions", [])
-    if isinstance(functions, Mapping):
-        selected = functions.get(function)
-    elif isinstance(functions, Sequence) and not isinstance(functions, str):
+    functions = _required(data, "functions")
+    if isinstance(functions, Sequence) and not isinstance(functions, str):
+        if any(not isinstance(fn, Mapping) for fn in functions):
+            raise ValueError("backend trace missing required allocator facts: functions")
         selected = next(
             (
                 fn
                 for fn in functions
-                if isinstance(fn, Mapping) and fn.get("name") == function
+                if fn.get("name") == function
             ),
             None,
         )
@@ -263,12 +271,10 @@ def _select_backend_function(data: Mapping[str, Any], function: str) -> Mapping[
 
 
 def _backend_class_payloads(fn_data: Mapping[str, Any]) -> Any:
-    if "regalloc" in fn_data:
-        regalloc = fn_data["regalloc"]
-        if not isinstance(regalloc, Mapping):
-            raise ValueError("backend trace missing required allocator facts: regalloc")
-        return _required(regalloc, "classes")
-    return _required(fn_data, "classes")
+    regalloc = _required(fn_data, "regalloc")
+    if not isinstance(regalloc, Mapping):
+        raise ValueError("backend trace missing required allocator facts: regalloc")
+    return _required(regalloc, "classes")
 
 
 def _inherit_backend_alias_assignments(
@@ -398,16 +404,17 @@ def _color_decision_from_pcdump(
         for interferer, assigned in decision.interferers
         if _blocked_phys(interferer, assigned) is not None
     )
+    register_policy = _register_policy(class_id)
     return ColorDecision(
         id=_decision_id(class_id, decision.iter_idx),
         ig_id=decision.ig_idx,
         iter=decision.iter_idx,
         assigned_phys=decision.assigned_reg if decision.assigned_reg >= 0 else None,
-        available_phys_ordered=_register_policy(class_id).allocatable,
+        available_phys_ordered=register_policy.allocatable,
         blocked_candidates=blocked,
         candidate_phys_ordered=tuple(
             phys
-            for phys in _register_policy(class_id).allocatable
+            for phys in register_policy.allocatable
             if phys not in {candidate.phys for candidate in blocked}
         ),
         chosen_source="observed",
@@ -445,7 +452,7 @@ def _virtual_attribution(
             source_file=_path_str(source_path),
             reg_class=_class_name(class_id),
         )
-    except Exception:
+    except ValueError:
         return {}
     out: dict[int, Any] = {}
     for entry in report.virtuals:
@@ -512,7 +519,7 @@ def _source_attribution_fact(attribution: Any) -> SourceAttributionFact:
     if attribution is None or attribution.source is None:
         return SourceAttributionFact(status="unattributed", confidence="unavailable")
     source = attribution.source
-    status = "ambiguous" if source.confidence == "ambiguous" else "attributed"
+    status = _source_status(source)
     return SourceAttributionFact(
         status=status,
         symbol=source.name,
@@ -523,6 +530,20 @@ def _source_attribution_fact(attribution: Any) -> SourceAttributionFact:
         column=source.source_col,
         confidence=source.confidence,
         compiler_temp=source.kind in {"compiler-temp", "temporary"},
+    )
+
+
+def _source_status(source: Any) -> str:
+    if source is None:
+        return "unattributed"
+    if source.confidence in {"exact", "decl-order", "symbol-bridge", "copy-chain"}:
+        return "attributed"
+    if source.confidence in {"low", "ambiguous"}:
+        return "ambiguous"
+    return (
+        "unattributed"
+        if source.kind in {"implicit-temp", "copy/coalesce-product"}
+        else "attributed"
     )
 
 
@@ -579,65 +600,83 @@ def _node_flags(decision: Any, simplify: Any, ig_node: Any) -> tuple[str, ...]:
 def _node_from_mapping(payload: Any) -> AllocatorNode:
     if not isinstance(payload, Mapping):
         raise ValueError("backend trace missing required allocator facts: nodes[]")
-    missing = [key for key in ("ig_id", "color_status") if key not in payload]
-    if missing:
-        raise ValueError(
-            "backend trace missing required allocator facts: " + ", ".join(missing)
-        )
-    virtual = payload.get("virtual", {})
-    if virtual is None:
-        virtual = {}
+    _require_fields(
+        payload,
+        (
+            "ig_id",
+            "virtual",
+            "color_status",
+            "coalesced_into",
+            "color_decision_ref",
+            "assigned_phys",
+            "simplify_order",
+            "select_order",
+            "first_def",
+            "source_attribution",
+            "live",
+            "coalesce",
+            "spill",
+        ),
+    )
+    virtual = payload["virtual"]
     if not isinstance(virtual, Mapping):
         raise ValueError("backend trace missing required allocator facts: virtual")
     return AllocatorNode(
         ig_id=int(payload["ig_id"]),
-        virtual_kind=str(payload.get("virtual_kind", virtual.get("kind", "gpr"))),
-        virtual_number=int(
-            payload.get("virtual_number", virtual.get("number", payload["ig_id"]))
-        ),
+        virtual_kind=str(_required(virtual, "kind")),
+        virtual_number=int(_required(virtual, "number")),
         color_status=str(payload["color_status"]),
         coalesced_into=_maybe_int(payload.get("coalesced_into")),
         color_decision_ref=_maybe_str(payload.get("color_decision_ref")),
-        first_def=_first_def_from_mapping(payload.get("first_def")),
-        source_attribution=_source_attr_from_mapping(payload.get("source_attribution")),
-        live=_live_from_mapping(payload.get("live")),
+        first_def=_first_def_from_mapping(payload["first_def"]),
+        source_attribution=_source_attr_from_mapping(payload["source_attribution"]),
+        live=_live_from_mapping(payload["live"]),
         degree=int(payload.get("degree", 0)),
         flags=tuple(str(item) for item in payload.get("flags", ())),
-        coalesce=_coalesce_facts_from_mapping(payload.get("coalesce")),
+        coalesce=_coalesce_facts_from_mapping(payload["coalesce"]),
         simplify_order=_maybe_int(payload.get("simplify_order")),
         select_order=_maybe_int(payload.get("select_order")),
         assigned_phys=_maybe_int(payload.get("assigned_phys")),
-        spill=_spill_from_mapping(payload.get("spill")),
+        spill=_spill_from_mapping(payload["spill"]),
     )
 
 
 def _decision_from_mapping(payload: Any, *, index: int) -> ColorDecision:
     if not isinstance(payload, Mapping):
         raise ValueError("backend trace missing required allocator facts: color_decisions[]")
-    missing = [key for key in ("id", "ig_id") if key not in payload]
-    if missing:
-        raise ValueError(
-            "backend trace missing required allocator facts: " + ", ".join(missing)
-        )
+    _require_fields(
+        payload,
+        (
+            "id",
+            "ig_id",
+            "assigned_phys",
+            "available_phys_ordered",
+            "blocked_candidates",
+            "candidate_phys_ordered",
+            "chosen_source",
+            "tie_rule",
+            "decision_rule",
+            "confidence",
+            "provenance",
+        ),
+    )
     return ColorDecision(
         id=str(payload["id"]),
         ig_id=int(payload["ig_id"]),
         iter=int(payload.get("iter", index)),
         assigned_phys=_maybe_int(payload.get("assigned_phys")),
-        available_phys_ordered=tuple(
-            int(item) for item in payload.get("available_phys_ordered", ())
-        ),
+        available_phys_ordered=tuple(int(item) for item in payload["available_phys_ordered"]),
         blocked_candidates=tuple(
             _blocked_candidate_from_mapping(candidate)
-            for candidate in payload.get("blocked_candidates", ())
+            for candidate in payload["blocked_candidates"]
         ),
         candidate_phys_ordered=tuple(
-            int(item) for item in payload.get("candidate_phys_ordered", ())
+            int(item) for item in payload["candidate_phys_ordered"]
         ),
-        chosen_source=str(payload.get("chosen_source", "")),
-        decision_rule=str(payload.get("decision_rule", "")),
-        tie_rule=str(payload.get("tie_rule", "")),
-        confidence=str(payload.get("confidence", "observed")),
+        chosen_source=str(payload["chosen_source"]),
+        decision_rule=str(payload["decision_rule"]),
+        tie_rule=str(payload["tie_rule"]),
+        confidence=str(payload["confidence"]),
         provenance=_maybe_str(payload.get("provenance")),
         blocked_by=tuple(
             _blocked_by_from_mapping(item) for item in payload.get("blocked_by", ())
@@ -657,19 +696,30 @@ def _decision_from_mapping(payload: Any, *, index: int) -> ColorDecision:
 def _registers_from_mapping(payload: Any) -> RegisterFacts:
     if not isinstance(payload, Mapping):
         raise ValueError("backend trace missing required allocator facts: registers")
-    if "physical_count" not in payload:
-        raise ValueError("backend trace missing required allocator facts: physical_count")
+    _require_fields(
+        payload,
+        (
+            "physical_count",
+            "allocatable",
+            "initial_volatile",
+            "reserved",
+            "nonvolatile_dispense_order",
+            "fixed",
+            "precolored",
+            "model_boundary",
+        ),
+    )
     return RegisterFacts(
         physical_count=int(payload["physical_count"]),
-        allocatable=tuple(int(item) for item in payload.get("allocatable", ())),
-        initial_volatile=tuple(int(item) for item in payload.get("initial_volatile", ())),
+        allocatable=tuple(int(item) for item in payload["allocatable"]),
+        initial_volatile=tuple(int(item) for item in payload["initial_volatile"]),
         nonvolatile_dispense_order=tuple(
-            int(item) for item in payload.get("nonvolatile_dispense_order", ())
+            int(item) for item in payload["nonvolatile_dispense_order"]
         ),
-        reserved=tuple(int(item) for item in payload.get("reserved", ())),
-        fixed=tuple(dict(item) for item in payload.get("fixed", ())),
-        precolored=tuple(dict(item) for item in payload.get("precolored", ())),
-        model_boundary=tuple(dict(item) for item in payload.get("model_boundary", ())),
+        reserved=tuple(int(item) for item in payload["reserved"]),
+        fixed=tuple(dict(item) for item in payload["fixed"]),
+        precolored=tuple(dict(item) for item in payload["precolored"]),
+        model_boundary=tuple(dict(item) for item in payload["model_boundary"]),
     )
 
 
@@ -685,8 +735,8 @@ def _edge_from_mapping(payload: Any) -> InterferenceEdge:
 
 
 def _first_def_from_mapping(payload: Any) -> FirstDefSite | None:
-    if payload is None:
-        return None
+    if not isinstance(payload, Mapping):
+        raise ValueError("backend trace missing required allocator facts: first_def")
     return FirstDefSite(
         pass_id=payload.get("pass_id"),
         block_id=payload.get("block_id"),
@@ -699,7 +749,8 @@ def _first_def_from_mapping(payload: Any) -> FirstDefSite | None:
 
 def _source_attr_from_mapping(payload: Any) -> SourceAttributionFact:
     if not isinstance(payload, Mapping):
-        return SourceAttributionFact(status="unattributed", confidence="unavailable")
+        raise ValueError("backend trace missing required allocator facts: source_attribution")
+    _require_fields(payload, ("status", "confidence"))
     return SourceAttributionFact(
         status=str(payload.get("status", "unattributed")),
         symbol=_maybe_str(payload.get("symbol")),
@@ -716,7 +767,8 @@ def _source_attr_from_mapping(payload: Any) -> SourceAttributionFact:
 
 def _live_from_mapping(payload: Any) -> LiveFacts:
     if not isinstance(payload, Mapping):
-        return LiveFacts(confidence="unavailable")
+        raise ValueError("backend trace missing required allocator facts: live")
+    _require_fields(payload, ("blocks", "intervals"))
     return LiveFacts(
         blocks=tuple(payload.get("blocks", ())),
         intervals=tuple(tuple(item) for item in payload.get("intervals", ())),
@@ -726,7 +778,7 @@ def _live_from_mapping(payload: Any) -> LiveFacts:
 
 def _coalesce_facts_from_mapping(payload: Any) -> CoalesceFacts:
     if not isinstance(payload, Mapping):
-        return CoalesceFacts()
+        raise ValueError("backend trace missing required allocator facts: coalesce")
     return CoalesceFacts(
         root_ig_id=_maybe_int(payload.get("root_ig_id")),
         aliases=tuple(int(item) for item in payload.get("aliases", ())),
@@ -735,7 +787,8 @@ def _coalesce_facts_from_mapping(payload: Any) -> CoalesceFacts:
 
 def _spill_from_mapping(payload: Any) -> SpillFacts:
     if not isinstance(payload, Mapping):
-        return SpillFacts()
+        raise ValueError("backend trace missing required allocator facts: spill")
+    _require_fields(payload, ("spilled",))
     return SpillFacts(
         spilled=bool(payload.get("spilled", False)),
         reason=_maybe_str(payload.get("reason")),
@@ -856,6 +909,14 @@ def _required(payload: Mapping[str, Any], key: str) -> Any:
     if key not in payload:
         raise ValueError(f"backend trace missing required allocator facts: {key}")
     return payload[key]
+
+
+def _require_fields(payload: Mapping[str, Any], fields: tuple[str, ...]) -> None:
+    missing = [field for field in fields if field not in payload]
+    if missing:
+        raise ValueError(
+            "backend trace missing required allocator facts: " + ", ".join(missing)
+        )
 
 
 __all__ = [
