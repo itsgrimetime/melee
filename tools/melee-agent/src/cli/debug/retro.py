@@ -107,10 +107,81 @@ def _write_backend_outputs(
         )
 
 
+def _tail_text(value, *, limit: int = 2000) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        text = value.decode(errors="replace")
+    else:
+        text = str(value)
+    return text[-limit:]
+
+
+def _format_parity_mismatch(parity: dict) -> str:
+    def object_line(label: str, data: dict | None) -> str:
+        data = data or {}
+        return (
+            f"{label}: path={data.get('path', '<unknown>')} "
+            f"size={data.get('size', '<unknown>')} "
+            f"sha256={data.get('sha256', '<unknown>')}"
+        )
+
+    return "\n".join(
+        [
+            "backend object parity mismatch",
+            object_line("reference", parity.get("reference")),
+            object_line("retro", parity.get("retro")),
+        ]
+    )
+
+
+def _format_parity_compile_error(*, phase: str, cmd: list[str], exc) -> str:
+    import shlex
+    import subprocess
+
+    lines = [
+        f"backend object parity {phase} compile failed",
+        "command: " + shlex.join([str(part) for part in cmd]),
+    ]
+    if isinstance(exc, subprocess.CalledProcessError):
+        lines.append(f"exit code: {exc.returncode}")
+        stdout = _tail_text(getattr(exc, "stdout", None) or getattr(exc, "output", None))
+        stderr = _tail_text(getattr(exc, "stderr", None))
+    elif isinstance(exc, subprocess.TimeoutExpired):
+        lines.append(f"timeout: {exc.timeout}s")
+        stdout = _tail_text(getattr(exc, "stdout", None) or getattr(exc, "output", None))
+        stderr = _tail_text(getattr(exc, "stderr", None))
+    else:
+        lines.append(f"error: {exc}")
+        stdout = ""
+        stderr = ""
+    if stdout:
+        lines.append("stdout tail:\n" + stdout)
+    if stderr:
+        lines.append("stderr tail:\n" + stderr)
+    return "\n".join(lines)
+
+
+def _run_parity_compile_command(*, phase: str, cmd: list[str], melee_root: Path) -> None:
+    import subprocess
+
+    try:
+        subprocess.run(
+            cmd,
+            cwd=melee_root,
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        raise RuntimeError(
+            _format_parity_compile_error(phase=phase, cmd=cmd, exc=exc)
+        ) from exc
+
+
 def _run_object_parity_for_backend(*, src: str, melee_root: Path) -> dict:
     """Run the raw .o byte-parity gate for backend tracing."""
     import shlex
-    import subprocess
     import tempfile
 
     from tools.mwcc_retro import object_parity, setup as _setup
@@ -138,19 +209,15 @@ def _run_object_parity_for_backend(*, src: str, melee_root: Path) -> dict:
             normal_cmd = [str(wibo), str(sjis), compiler] + with_output(ref)
         else:
             normal_cmd = [str(wibo), compiler] + with_output(ref)
-        subprocess.run(
-            normal_cmd,
-            cwd=melee_root,
-            check=True,
-            capture_output=True,
-            timeout=300,
+        _run_parity_compile_command(
+            phase="reference",
+            cmd=normal_cmd,
+            melee_root=melee_root,
         )
-        subprocess.run(
-            [str(setup_result.retrowin32_bin), compiler] + with_output(retro_obj),
-            cwd=melee_root,
-            check=True,
-            capture_output=True,
-            timeout=300,
+        _run_parity_compile_command(
+            phase="retro",
+            cmd=[str(setup_result.retrowin32_bin), compiler] + with_output(retro_obj),
+            melee_root=melee_root,
         )
         return object_parity.compare_objects(ref, retro_obj).to_dict()
 
@@ -170,7 +237,7 @@ def _run_backend_trace(
 ) -> BackendOutcome:
     parity = _run_object_parity_for_backend(src=src, melee_root=melee_root)
     if not parity.get("matched"):
-        return BackendOutcome(exit_code=2, trace=None, fidelity=None)
+        raise RuntimeError(_format_parity_mismatch(parity))
     try:
         events_path = _launch_backend_events(
             src=src,
