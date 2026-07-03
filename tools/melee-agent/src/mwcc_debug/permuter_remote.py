@@ -799,6 +799,7 @@ def repair_target(
     local_perm_root = local_perm_root.expanduser()
     _require_dir(local_melee_root / "tools" / "melee-agent", "local melee-agent tools")
     _require_dir(local_melee_root / "tools" / "mwcc_debug", "local mwcc_debug tools")
+    _require_dir(local_melee_root / "tools" / "mwcc_retro", "local mwcc_retro tools")
     _require_file(_remote_compiler_file(local_melee_root, "mwcceppc_debug.exe"), "local debug compiler")
     _require_file(_remote_compiler_file(local_melee_root, "MWDBG326.dll"), "local debug compiler DLL")
     _require_dir(local_perm_root, "local decomp-permuter root")
@@ -838,6 +839,15 @@ def repair_target(
         f"{target.ssh}:{target.remote_melee_root}/tools/mwcc_debug/",
     ])
     actions.append("synced tools/mwcc_debug")
+
+    runner([
+        "rsync",
+        "-az",
+        "--delete",
+        f"{local_melee_root / 'tools' / 'mwcc_retro'}/",
+        f"{target.ssh}:{target.remote_melee_root}/tools/mwcc_retro/",
+    ])
+    actions.append("synced tools/mwcc_retro")
 
     runner([
         "rsync",

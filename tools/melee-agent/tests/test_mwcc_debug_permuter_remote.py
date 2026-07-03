@@ -1595,6 +1595,8 @@ def test_repair_target_syncs_tooling_permuter_deps_and_function_dir(tmp_path: Pa
     (local_melee / "tools" / "melee-agent").mkdir(parents=True)
     (local_melee / "tools" / "melee-agent" / "pyproject.toml").write_text("[project]\n")
     (local_melee / "tools" / "mwcc_debug").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_retro").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_retro" / "__init__.py").write_text("")
     compiler_dir = local_melee / "build" / "compilers" / "GC" / "1.2.5n"
     compiler_dir.mkdir(parents=True)
     (compiler_dir / "mwcceppc_debug.exe").write_text("mwcc\n")
@@ -1647,6 +1649,7 @@ command = "/home/coder/.local/bin/melee-agent debug target score-simplify-order 
     assert report.target == "coder64"
     assert "synced tools/melee-agent" in report.actions
     assert "refreshed remote Linux dtk" in report.actions
+    assert "synced tools/mwcc_retro" in report.actions
     assert "installed remote python dependencies" in report.actions
     assert ["ssh", "coder.coder64"] == calls[0][:2]
     assert "mkdir -p /home/coder/melee /home/coder/decomp-permuter" in calls[0][2]
@@ -1654,6 +1657,8 @@ command = "/home/coder/.local/bin/melee-agent debug target score-simplify-order 
     assert f"{local_melee}/tools/melee-agent/" in joined_calls
     assert "coder.coder64:/home/coder/melee/tools/melee-agent/" in joined_calls
     assert f"{local_melee}/tools/mwcc_debug/" in joined_calls
+    assert f"{local_melee}/tools/mwcc_retro/" in joined_calls
+    assert "coder.coder64:/home/coder/melee/tools/mwcc_retro/" in joined_calls
     assert "mwcceppc_debug.exe" in joined_calls
     assert f"{local_melee}/build/tools/dtk" not in joined_calls
     assert "dtk-linux-" in calls[-1][2]
@@ -1943,6 +1948,8 @@ def test_submit_job_repairs_missing_remote_toml_before_start(
     local_perm = local_perm_root / "nonmatchings" / "fn_80000000"
     (local_melee / "tools" / "melee-agent").mkdir(parents=True)
     (local_melee / "tools" / "mwcc_debug").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_retro").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_retro" / "__init__.py").write_text("")
     compiler_dir = local_melee / "build" / "compilers" / "GC" / "1.2.5n"
     compiler_dir.mkdir(parents=True)
     (compiler_dir / "mwcceppc_debug.exe").write_text("mwcc\n")
