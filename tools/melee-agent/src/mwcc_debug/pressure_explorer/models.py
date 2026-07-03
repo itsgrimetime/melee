@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import pathlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any
 
 
 def _json_value(value: Any) -> Any:
+    if isinstance(value, pathlib.Path):
+        return str(value)
     if is_dataclass(value):
         return {
             field.name: _json_value(getattr(value, field.name))
@@ -35,7 +38,7 @@ class TargetAllocation:
 class TargetSet:
     function: str | None = None
     targets: tuple[TargetAllocation, ...] = ()
-    provenance: dict[str, Any] | None = None
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def protected_ig_ids_by_class(self) -> dict[int, set[int]]:
         protected: dict[int, set[int]] = {}
@@ -118,8 +121,8 @@ class AllocatorNode:
     degree: int
     flags: tuple[str, ...]
     coalesce: CoalesceFacts
-    simplify_order: int
-    select_order: int
+    simplify_order: int | None
+    select_order: int | None
     assigned_phys: int | None
     spill: SpillFacts
 

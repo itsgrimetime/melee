@@ -64,6 +64,44 @@ def test_parse_target_file_json(tmp_path: pathlib.Path) -> None:
     assert target.provenance == {"kind": "unit-test"}
 
 
+def test_parse_target_file_defaults_provenance_to_path(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / "target.json"
+    path.write_text(json.dumps({"force_phys": {"37": 25}}))
+
+    target = parse_target_file(path)
+
+    assert target.provenance == {"path": str(path)}
+
+
+@pytest.mark.parametrize("key", ["force_phys", "virtuals"])
+def test_parse_target_file_rejects_empty_target_mapping(
+    tmp_path: pathlib.Path,
+    key: str,
+) -> None:
+    path = tmp_path / "target.json"
+    path.write_text(json.dumps({key: {}}))
+
+    with pytest.raises(ValueError, match="empty target mapping"):
+        parse_target_file(path)
+
+
+def test_parse_target_file_uses_class_fallback(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / "target.json"
+    path.write_text(json.dumps({"class": 1, "force_phys": {"37": 25}}))
+
+    target = parse_target_file(path)
+
+    assert [(t.class_id, t.ig_id, t.expected_phys) for t in target.targets] == [
+        (1, 37, 25),
+    ]
+
+
+def test_target_set_to_dict_converts_path_values() -> None:
+    payload = TargetSet(provenance={"path": pathlib.Path("x")}).to_dict()
+
+    assert json.loads(json.dumps(payload))["provenance"]["path"] == "x"
+
+
 def test_parse_force_phys_rejects_bad_entry() -> None:
     with pytest.raises(ValueError, match="bad force-phys entry"):
         parse_force_phys_spec("37", default_class_id=0)

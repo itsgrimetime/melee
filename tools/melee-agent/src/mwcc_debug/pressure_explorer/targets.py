@@ -120,8 +120,10 @@ def _load_target_mapping(data: Mapping[str, Any]) -> tuple[TargetAllocation, ...
     raw_targets = data.get("force_phys", data.get("virtuals"))
     if not isinstance(raw_targets, Mapping):
         raise ValueError("target file must contain force_phys or virtuals mapping")
+    if not raw_targets:
+        raise ValueError("empty target mapping")
 
-    default_class_id = int(data.get("class_id", 0))
+    default_class_id = int(data.get("class_id", data.get("class", 0)))
     targets = [
         _target_from_mapping_item(
             key,
@@ -141,7 +143,9 @@ def parse_target_file(path: str | pathlib.Path) -> TargetSet:
     return TargetSet(
         function=data.get("function"),
         targets=_load_target_mapping(data),
-        provenance=data.get("provenance"),
+        provenance=(
+            data["provenance"] if "provenance" in data else {"path": str(target_path)}
+        ),
     )
 
 
