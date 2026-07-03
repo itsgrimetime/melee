@@ -2423,6 +2423,34 @@ def test_materialize_force_phys_target_spec_writes_score_source_contract(
     assert all(isinstance(key, int) for key in data["force_phys"])
 
 
+def test_remote_validation_uses_materialized_target_file(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import (
+        build_remote_validation_plan,
+        materialize_force_phys_target_spec,
+    )
+
+    target_file = materialize_force_phys_target_spec(
+        function="fn_80000000",
+        class_id=0,
+        force_phys="37:25",
+        baseline_dump=tmp_path / "baseline.pcdump.txt",
+        output_dir=tmp_path / "campaign",
+    )
+
+    commands = build_remote_validation_plan(
+        function="fn_80000000",
+        force_phys="37:25",
+        timeout=45,
+        campaign_dir=tmp_path / "campaign",
+        source_candidates=[tmp_path / "candidate.c"],
+        target_file=target_file,
+    )
+
+    assert f"--target {target_file}" in commands[0].command
+
+
 def test_validation_public_functions_are_keyword_only(tmp_path: pathlib.Path) -> None:
     from src.mwcc_debug.pressure_explorer.validation import (
         build_remote_validation_plan,
@@ -2444,6 +2472,49 @@ def test_validation_public_functions_are_keyword_only(tmp_path: pathlib.Path) ->
             [tmp_path / "candidate.c"],
             30,
         )
+
+
+def test_zero_validation_timeout_disables_subprocess_timeout_but_keeps_cli_arg(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer import validation
+
+    subprocess_timeouts: list[float | None] = []
+
+    def fake_run(
+        argv: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        timeout: float | None,
+        check: bool,
+    ) -> SimpleNamespace:
+        subprocess_timeouts.append(timeout)
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(validation.subprocess, "run", fake_run)
+
+    validation._subprocess_runner(["melee-agent"], timeout=0)
+
+    quick_calls: list[tuple[list[str], int]] = []
+
+    def runner(argv: list[str], timeout: int) -> dict[str, object]:
+        quick_calls.append((argv, timeout))
+        return {"returncode": 0, "stdout": "{}", "stderr": ""}
+
+    validation.run_quick_validation(
+        function="fn_80000000",
+        target_file=tmp_path / "target.yaml",
+        source_candidates=[tmp_path / "candidate.c"],
+        timeout=0,
+        runner=runner,
+    )
+
+    assert subprocess_timeouts == [None]
+    argv, runner_timeout = quick_calls[0]
+    assert argv[argv.index("--timeout") + 1] == "0"
+    assert runner_timeout == 0
 
 
 def test_quick_validation_runs_supplied_source_candidates_with_runner(

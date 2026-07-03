@@ -21,8 +21,9 @@ def build_remote_validation_plan(
     timeout: int,
     campaign_dir: Path,
     source_candidates: list[Path],
+    target_file: Path | None = None,
 ) -> tuple[ValidationCommand, ...]:
-    target_file = campaign_dir / "force_phys_target.yaml"
+    target_path = target_file if target_file is not None else campaign_dir / "force_phys_target.yaml"
     commands: list[ValidationCommand] = []
     candidates = source_candidates or [Path("CANDIDATE.c")]
     for index, candidate in enumerate(candidates, start=1):
@@ -38,7 +39,7 @@ def build_remote_validation_plan(
                     "melee-agent debug target score-source "
                     f"{command_quote(candidate)} "
                     f"-f {command_quote(function)} "
-                    f"--target {command_quote(target_file)} "
+                    f"--target {command_quote(target_path)} "
                     "--json --retain-pcdump --checkdiff-guard "
                     "--remote-fallback "
                     f"--pcdump-output {command_quote(output_path)} "
@@ -247,12 +248,13 @@ def run_bounded_validation(
 
 
 def _subprocess_runner(argv: list[str], timeout: int) -> dict[str, object]:
+    subprocess_timeout = timeout if timeout > 0 else None
     try:
         proc = subprocess.run(
             argv,
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=subprocess_timeout,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
