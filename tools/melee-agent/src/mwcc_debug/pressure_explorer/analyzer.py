@@ -239,10 +239,8 @@ def _order_blockers(
     target: TargetAllocation,
     decision: ColorDecision,
 ) -> Iterable[Blocker]:
-    if (
-        target.expected_phys not in decision.candidate_phys_ordered
-        and decision.candidate_phys_ordered
-    ):
+    candidate_order = decision.candidate_phys_ordered
+    if target.expected_phys not in candidate_order and candidate_order:
         yield Blocker(
             target_ig_id=target.ig_id,
             ig_id=None,
@@ -252,6 +250,22 @@ def _order_blockers(
             reason=f"expected phys r{target.expected_phys} is absent from candidate order",
             confidence=decision.confidence,
         )
+    elif decision.assigned_phys in candidate_order and target.expected_phys in candidate_order:
+        assigned_idx = candidate_order.index(decision.assigned_phys)
+        expected_idx = candidate_order.index(target.expected_phys)
+        if expected_idx > assigned_idx:
+            yield Blocker(
+                target_ig_id=target.ig_id,
+                ig_id=None,
+                kind="candidate_order",
+                assigned_phys=decision.assigned_phys,
+                impact=60,
+                reason=(
+                    f"expected phys r{target.expected_phys} is available later in "
+                    f"candidate order than assigned phys r{decision.assigned_phys}"
+                ),
+                confidence=decision.confidence,
+            )
 
     if decision.chosen_source and decision.chosen_source not in {"observed", "candidate"}:
         yield Blocker(

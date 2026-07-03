@@ -4,6 +4,7 @@ import copy
 import json
 import pathlib
 import textwrap
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -355,6 +356,44 @@ def test_analyze_finds_expected_phys_holder_blocker() -> None:
     assert target.blockers[0].kind == "expected_phys_holder"
     assert target.blockers[0].ig_id == 37
     assert "remove interference" in target.must_change[0]
+
+
+def test_analyze_reports_candidate_order_when_expected_phys_is_later() -> None:
+    from src.mwcc_debug.pressure_explorer.analyzer import analyze_lifetime_pressure
+    from src.mwcc_debug.pressure_explorer.facts import facts_from_pcdump
+    from src.mwcc_debug.pressure_explorer.targets import parse_force_phys_spec
+
+    facts = facts_from_pcdump(PCDUMP, "fn_80000000", source_text=SOURCE, class_filter=(0,))
+    cls = facts.class_by_id()[0]
+    decision = cls.decision_by_ig()[40]
+    facts = replace(
+        facts,
+        classes=(
+            replace(
+                cls,
+                edges=(),
+                color_decisions=(
+                    cls.color_decisions[0],
+                    replace(
+                        decision,
+                        blocked_candidates=(),
+                        candidate_phys_ordered=(26, 25, 27),
+                    ),
+                    cls.color_decisions[2],
+                ),
+            ),
+        ),
+    )
+
+    report = analyze_lifetime_pressure(
+        facts,
+        parse_force_phys_spec("40:25", default_class_id=0),
+    )
+
+    target = report.targets[0]
+    assert target.status == "blocked"
+    assert target.current_phys == 26
+    assert any(blocker.kind == "candidate_order" for blocker in target.blockers)
 
 
 def test_no_target_mode_is_inventory_only() -> None:
