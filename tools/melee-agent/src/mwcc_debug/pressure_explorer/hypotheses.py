@@ -119,6 +119,7 @@ def _hypotheses_for_target(
                 source=target.source_attribution,
                 validation_command_ids=validation_command_ids,
                 priority=30,
+                discriminator="coalesced",
             )
         )
     elif target.status == "spilled":
@@ -136,6 +137,7 @@ def _hypotheses_for_target(
                 source=target.source_attribution,
                 validation_command_ids=validation_command_ids,
                 priority=40,
+                discriminator="spilled",
             )
         )
 
@@ -176,6 +178,7 @@ def _hypothesis_for_blocker(
             source=source,
             validation_command_ids=validation_command_ids,
             priority=0,
+            discriminator=_blocker_discriminator(blocker),
         )
 
     if blocker.kind in {"candidate_order", "sticky_pool", "select_order"}:
@@ -192,6 +195,7 @@ def _hypothesis_for_blocker(
             source=target.source_attribution,
             validation_command_ids=validation_command_ids,
             priority=20,
+            discriminator=_blocker_discriminator(blocker),
         )
 
     return None
@@ -208,9 +212,10 @@ def _source_hypothesis(
     source: SourceAttributionFact | None,
     validation_command_ids: tuple[str, ...],
     priority: int,
+    discriminator: str,
 ) -> SourceHypothesis:
     return SourceHypothesis(
-        id=f"{target.class_id}-{target.ig_id}-{priority}-{action}",
+        id=f"{target.class_id}-{target.ig_id}-{priority}-{discriminator}-{action}",
         target_ig_id=target.ig_id,
         rank=0,
         action=action,
@@ -233,8 +238,12 @@ def _primary_blocker_ig(target: TargetPressureReport) -> int | None:
 
 
 def _force_phys_for_target(target: TargetPressureReport) -> str:
-    prefix = "f" if target.class_id == 1 else ""
-    return f"{prefix}{target.ig_id}:{target.expected_phys}"
+    return f"{target.class_id}:{target.ig_id}:{target.expected_phys}"
+
+
+def _blocker_discriminator(blocker: Blocker) -> str:
+    blocker_ig = "none" if blocker.ig_id is None else str(blocker.ig_id)
+    return f"{blocker.kind}-{blocker_ig}"
 
 
 def _blocker_owner(

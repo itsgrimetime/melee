@@ -22,6 +22,7 @@ def validation_commands_for_target(
 ) -> tuple[ValidationCommand, ...]:
     reg_prefix = "f" if class_id == 1 else "r"
     target_reg = f"{reg_prefix}{target_ig}"
+    class_arg = f"--class {class_id} " if class_id != 0 else ""
     commands = [
         ValidationCommand(
             id=f"score-source-{class_id}-{target_ig}",
@@ -61,6 +62,7 @@ def validation_commands_for_target(
                     command=(
                         "melee-agent debug select-order-search "
                         f"-f {command_quote(function)} "
+                        f"{class_arg}"
                         f"--target {command_quote(order_target)} "
                         f"--force-phys {command_quote(force_phys)} "
                         f"--pcdump {command_quote(pcdump_path)} "
@@ -75,6 +77,7 @@ def validation_commands_for_target(
                 command=(
                     "melee-agent debug mutate simplify-order "
                     f"-f {command_quote(function)} "
+                    f"{class_arg}"
                     f"--force-phys {command_quote(force_phys)} "
                     f"--source-file {command_quote(source_path)} "
                     f"--pcdump {command_quote(pcdump_path)} --json"

@@ -22,11 +22,13 @@ from src.mwcc_debug.pressure_explorer.models import (
     FunctionFacts,
     FunctionFreshness,
     InterferenceEdge,
+    LifetimePressureReport,
     LiveFacts,
     RegisterFacts,
     SourceAttributionFact,
     SpillFacts,
     TargetSet,
+    TargetPressureReport,
 )
 from src.mwcc_debug.pressure_explorer.targets import (
     parse_force_phys_spec,
@@ -749,6 +751,165 @@ def test_stale_pcdump_marks_line_specific_hints() -> None:
         for h in enriched.hypotheses
         if h.line_mapping_status == "stale_line_mapping"
     )
+
+
+def test_fpr_hypotheses_emit_class_scoped_validation_commands() -> None:
+    from src.mwcc_debug.pressure_explorer.hypotheses import attach_hypotheses
+
+    blocker = Blocker(
+        target_ig_id=40,
+        ig_id=41,
+        kind="expected_phys_holder",
+        assigned_phys=25,
+        impact=100,
+        reason="expected phys f25 is held by interfering IG 41",
+    )
+    target = TargetPressureReport(
+        class_id=1,
+        ig_id=40,
+        virtual={"kind": "fpr", "number": 40},
+        current_phys=24,
+        expected_phys=25,
+        status="blocked",
+        first_def=None,
+        source_attribution=SourceAttributionFact(
+            status="attributed",
+            symbol="target",
+            line=10,
+            confidence="observed",
+        ),
+        live=LiveFacts(),
+        simplify_order=1,
+        select_order=1,
+        coalesce=CoalesceFacts(root_ig_id=40),
+        spill=SpillFacts(spilled=False),
+        blockers=(blocker,),
+        why_current_color="mwcc-colorgraph selected f24",
+        must_change=("remove interference",),
+        confidence="observed",
+    )
+    facts = AllocatorFacts(
+        schema_version="allocator-facts.v1",
+        producer={"kind": "unit-test"},
+        function=FunctionFacts(
+            name="fn_80000000",
+            source_path="src/example.c",
+            freshness=FunctionFreshness(status="fresh"),
+        ),
+        classes=(
+            AllocatorClassFacts(
+                class_id=1,
+                class_name="fpr",
+                registers=RegisterFacts(physical_count=32, allocatable=(24, 25)),
+                nodes=(
+                    _manual_node(41, assigned_phys=25),
+                ),
+            ),
+        ),
+    )
+    report = LifetimePressureReport(
+        schema_version="lifetime-pressure-report.v1",
+        function="fn_80000000",
+        inventory_only=False,
+        inputs={},
+        targets=(target,),
+        allocator_facts=facts,
+        blockers=(blocker,),
+        source_attribution={"status": "not_ranked"},
+        hypotheses=(),
+        validation_commands=(),
+    )
+
+    enriched = attach_hypotheses(
+        report,
+        pcdump_path="baseline.pcdump.txt",
+        source_path="src/example.c",
+        allow_stale_pcdump=False,
+    )
+    commands = {command.id: command.command for command in enriched.validation_commands}
+    select_order = commands["select-order-1-40-41"]
+    simplify_order = commands["simplify-order-1-40"]
+    lifetime_layout = commands["lifetime-layout-1-40-41"]
+
+    assert "--force-phys 1:40:25" in select_order
+    assert "--force-phys f40:25" not in select_order
+    assert "--force-phys 1:40:25" in simplify_order
+    assert "--class 1" in select_order
+    assert "--class 1" in simplify_order
+    assert "--pairs f40/f41" in lifetime_layout
+    assert "--target 'f40<f41'" in select_order
+
+
+def test_blocker_hypothesis_ids_include_blocker_discriminator() -> None:
+    from src.mwcc_debug.pressure_explorer.hypotheses import attach_hypotheses
+
+    blockers = (
+        Blocker(40, 41, "expected_phys_holder", 25, 100, "holder 41"),
+        Blocker(40, 42, "expected_phys_holder", 25, 100, "holder 42"),
+    )
+    target = TargetPressureReport(
+        class_id=0,
+        ig_id=40,
+        virtual={"kind": "gpr", "number": 40},
+        current_phys=26,
+        expected_phys=25,
+        status="blocked",
+        first_def=None,
+        source_attribution=SourceAttributionFact(status="attributed", symbol="target"),
+        live=LiveFacts(),
+        simplify_order=1,
+        select_order=1,
+        coalesce=CoalesceFacts(root_ig_id=40),
+        spill=SpillFacts(spilled=False),
+        blockers=blockers,
+        why_current_color="mwcc-colorgraph selected r26",
+        must_change=("remove interference",),
+        confidence="observed",
+    )
+    facts = AllocatorFacts(
+        schema_version="allocator-facts.v1",
+        producer={"kind": "unit-test"},
+        function=FunctionFacts(
+            name="fn_80000000",
+            source_path="src/example.c",
+            freshness=FunctionFreshness(status="fresh"),
+        ),
+        classes=(
+            AllocatorClassFacts(
+                class_id=0,
+                class_name="gpr",
+                registers=RegisterFacts(physical_count=32, allocatable=(25, 26)),
+                nodes=(
+                    _manual_node(41, assigned_phys=25),
+                    _manual_node(42, assigned_phys=25),
+                ),
+            ),
+        ),
+    )
+    report = LifetimePressureReport(
+        schema_version="lifetime-pressure-report.v1",
+        function="fn_80000000",
+        inventory_only=False,
+        inputs={},
+        targets=(target,),
+        allocator_facts=facts,
+        blockers=blockers,
+        source_attribution={"status": "not_ranked"},
+        hypotheses=(),
+        validation_commands=(),
+    )
+
+    enriched = attach_hypotheses(
+        report,
+        pcdump_path="baseline.pcdump.txt",
+        source_path="src/example.c",
+        allow_stale_pcdump=False,
+    )
+    hypothesis_ids = [hypothesis.id for hypothesis in enriched.hypotheses]
+
+    assert len(hypothesis_ids) == len(set(hypothesis_ids))
+    assert any("-41-" in hypothesis_id for hypothesis_id in hypothesis_ids)
+    assert any("-42-" in hypothesis_id for hypothesis_id in hypothesis_ids)
 
 
 def test_coalesced_alias_node_reports_coalesced_away() -> None:
