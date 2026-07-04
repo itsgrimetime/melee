@@ -2624,6 +2624,35 @@ def test_materialize_force_phys_target_spec_writes_score_source_contract(
     assert all(isinstance(key, int) for key in data["force_phys"])
 
 
+def test_materialize_force_phys_target_spec_absolutizes_relative_baseline(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import yaml
+
+    from src.mwcc_debug.pressure_explorer.validation import (
+        materialize_force_phys_target_spec,
+    )
+
+    baseline = pathlib.Path("fixtures") / "baseline.pcdump.txt"
+    (tmp_path / baseline).parent.mkdir(parents=True)
+    (tmp_path / baseline).write_text("pcdump\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    target = materialize_force_phys_target_spec(
+        function="fn_80000000",
+        class_id=0,
+        force_phys="37:25",
+        baseline_dump=baseline,
+        output_dir=tmp_path / "fixtures",
+    )
+
+    data = yaml.safe_load(target.read_text(encoding="utf-8"))
+    baseline_path = pathlib.Path(data["baseline_dump"])
+    assert baseline_path.is_absolute()
+    assert baseline_path == (tmp_path / baseline).resolve()
+
+
 def test_remote_validation_uses_materialized_target_file(
     tmp_path: pathlib.Path,
 ) -> None:

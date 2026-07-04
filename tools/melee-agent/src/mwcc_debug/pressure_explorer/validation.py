@@ -77,6 +77,10 @@ def materialize_force_phys_target_spec(
     if not force_phys_map:
         raise ValueError("force-phys spec must contain at least one target")
 
+    baseline_dump_path = baseline_dump.expanduser()
+    if not baseline_dump_path.is_absolute():
+        baseline_dump_path = baseline_dump_path.resolve()
+
     output_dir.mkdir(parents=True, exist_ok=True)
     target_path = output_dir / f"{_safe_filename(function)}.force-phys.target.yaml"
     target_path.write_text(
@@ -84,7 +88,7 @@ def materialize_force_phys_target_spec(
             {
                 "function": function,
                 "class_id": class_id,
-                "baseline_dump": str(baseline_dump),
+                "baseline_dump": str(baseline_dump_path),
                 "force_phys": force_phys_map,
                 "coalesce_preservation": True,
             },

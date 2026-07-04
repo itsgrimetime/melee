@@ -2108,6 +2108,57 @@ def _apply_score_source_scope(
     return payload
 
 
+def _apply_score_source_checkdiff_guard(
+    payload: dict[str, Any],
+    *,
+    c_file: str,
+    source_rel: str,
+    melee_root: Path,
+    function: str,
+    timeout: float | None,
+    deadline: float | None,
+    full_unit_source: bool,
+    score_real_tree: Any,
+    update_score_from_normalized: bool = False,
+) -> None:
+    candidate_path = Path(c_file)
+    if not candidate_path.is_absolute():
+        candidate_path = melee_root / source_rel
+    real_score = score_real_tree(
+        candidate_path,
+        function=function,
+        melee_root=melee_root,
+        timeout=timeout,
+        deadline=deadline,
+        include_structural_guard=True,
+        full_unit_source=full_unit_source,
+    )
+    match_percent = getattr(real_score, "match_percent", None)
+    match_percent_error = getattr(real_score, "match_percent_error", None)
+    structural_guard = getattr(real_score, "structural_guard", None)
+    structural_guard_error = getattr(real_score, "structural_guard_error", None)
+
+    payload["match_percent"] = match_percent
+    payload["checkdiff_match_percent"] = match_percent
+    payload["structural_guard"] = structural_guard
+    payload["structural_guard_error"] = structural_guard_error or match_percent_error
+    guard = structural_guard if isinstance(structural_guard, dict) else {}
+    normalized = guard.get("normalized_diff_lines")
+    if (
+        update_score_from_normalized
+        and isinstance(normalized, int)
+        and not isinstance(normalized, bool)
+    ):
+        payload["score"] = normalized
+    payload["checkdiff_guard"] = {
+        "match_percent": match_percent,
+        "classification_primary": guard.get("classification_primary"),
+        "normalized_diff_lines": guard.get("normalized_diff_lines"),
+        "hunk_count": guard.get("hunk_count"),
+        "accepted": guard.get("accepted"),
+    }
+
+
 def _score_source_unsafe_lane_payload(
     *,
     source_rel: str,
@@ -2953,6 +3004,18 @@ def score_source(
             force_phys_payload["remote_fallback"] = remote_fallback_meta
         if unsafe_lane is not None and remote_fallback_meta is not None:
             force_phys_payload["unsafe_local_pcdump_lane"] = dict(unsafe_lane)
+        if checkdiff_guard:
+            _apply_score_source_checkdiff_guard(
+                force_phys_payload,
+                c_file=c_file,
+                source_rel=src_rel,
+                melee_root=melee_root,
+                function=function,
+                timeout=active_timeout,
+                deadline=command_deadline,
+                full_unit_source=full_unit_source,
+                score_real_tree=_score_source_candidate_real_tree,
+            )
         if json_out:
             print(json.dumps(force_phys_payload))
         else:
@@ -3025,40 +3088,18 @@ def score_source(
         if unsafe_lane is not None and remote_fallback_meta is not None:
             payload["unsafe_local_pcdump_lane"] = dict(unsafe_lane)
         if checkdiff_guard:
-            candidate_path = Path(c_file)
-            if not candidate_path.is_absolute():
-                candidate_path = melee_root / src_rel
-            real_score = _score_source_candidate_real_tree(
-                candidate_path,
-                function=function,
+            _apply_score_source_checkdiff_guard(
+                payload,
+                c_file=c_file,
+                source_rel=src_rel,
                 melee_root=melee_root,
+                function=function,
                 timeout=active_timeout,
                 deadline=command_deadline,
-                include_structural_guard=True,
                 full_unit_source=full_unit_source,
+                score_real_tree=_score_source_candidate_real_tree,
+                update_score_from_normalized=True,
             )
-            payload["match_percent"] = real_score.match_percent
-            payload["checkdiff_match_percent"] = real_score.match_percent
-            payload["structural_guard"] = real_score.structural_guard
-            payload["structural_guard_error"] = (
-                real_score.structural_guard_error
-                or real_score.match_percent_error
-            )
-            guard = (
-                real_score.structural_guard
-                if isinstance(real_score.structural_guard, dict)
-                else {}
-            )
-            normalized = guard.get("normalized_diff_lines")
-            if isinstance(normalized, int) and not isinstance(normalized, bool):
-                payload["score"] = normalized
-            payload["checkdiff_guard"] = {
-                "match_percent": real_score.match_percent,
-                "classification_primary": guard.get("classification_primary"),
-                "normalized_diff_lines": guard.get("normalized_diff_lines"),
-                "hunk_count": guard.get("hunk_count"),
-                "accepted": guard.get("accepted"),
-            }
         print(json.dumps(payload, indent=2))
         return
 

@@ -293,6 +293,116 @@ def test_score_source_cli_forwards_full_unit_source_to_checkdiff_guard(
     assert payload["full_unit_source"] is False
 
 
+def test_score_source_force_phys_mode_applies_checkdiff_guard(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void fn_80000000(void) {}\n", encoding="utf-8")
+    target = tmp_path / "target.yaml"
+    target.write_text("force_phys: {37: 25}\n", encoding="utf-8")
+    wibo = tmp_path / "wibo"
+    wibo.write_text("", encoding="utf-8")
+    compiler_dir = tmp_path / "compiler"
+    compiler_dir.mkdir()
+    (compiler_dir / "mwcceppc_debug.exe").write_text("", encoding="utf-8")
+    captured_full_unit_flags = []
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_unsafe_lane_payload",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda unit: ("", "mwcc"))
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_expression_source",
+        lambda path, *, melee_root: ("void fn_80000000(void) {}\n", str(path)),
+    )
+    monkeypatch.setattr(
+        target_cli,
+        "_score_source_compile_source_rel",
+        lambda **kwargs: nullcontext(kwargs["source_rel"]),
+    )
+
+    def fake_run_command(args, *, cwd, env, timeout=None):
+        (cwd / env["MWCC_DEBUG_PCDUMP_PATH"]).write_text(
+            "pcdump\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def fake_real_tree(candidate_path, **kwargs):
+        captured_full_unit_flags.append(kwargs.get("full_unit_source", False))
+        return SimpleNamespace(
+            match_percent=87.5,
+            structural_guard={
+                "accepted": False,
+                "classification_primary": "asm-diff",
+                "normalized_diff_lines": 4,
+                "hunk_count": 2,
+            },
+            structural_guard_error=None,
+            match_percent_error=None,
+        )
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_command_with_optional_timeout",
+        fake_run_command,
+    )
+    monkeypatch.setattr(debug_cli, "_score_source_candidate_real_tree", fake_real_tree)
+    monkeypatch.setattr(
+        target_cli,
+        "_score_source_force_phys_payload",
+        lambda *args, **kwargs: {
+            "score": 11,
+            "target_score": {"matched": 1, "targeted": 2},
+            "force_phys_score": {"matched": 1, "targeted": 2},
+            "score_mode": "force-phys",
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(source),
+            "--function",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--cflags-from",
+            str(source),
+            "--checkdiff-guard",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert captured_full_unit_flags == [False]
+    assert payload["score_mode"] == "force-phys"
+    assert payload["match_percent"] == 87.5
+    assert payload["checkdiff_match_percent"] == 87.5
+    assert payload["structural_guard"]["classification_primary"] == "asm-diff"
+    assert payload["checkdiff_guard"] == {
+        "match_percent": 87.5,
+        "classification_primary": "asm-diff",
+        "normalized_diff_lines": 4,
+        "hunk_count": 2,
+        "accepted": False,
+    }
+
+
 def test_score_source_cli_scopes_json_failure_payload(
     tmp_path,
     monkeypatch,
