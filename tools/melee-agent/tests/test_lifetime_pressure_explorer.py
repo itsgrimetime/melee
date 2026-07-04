@@ -2998,6 +2998,60 @@ def test_bounded_lifetime_layout_rejects_zero_force_phys_hits(
     assert results[0]["status"] == "rejected"
 
 
+def test_bounded_simplify_order_rejects_zero_progress_terminal_proof(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_bounded_validation
+
+    def runner(argv: list[str], _timeout: int) -> dict[str, object]:
+        if "lifetime-layout" in argv:
+            payload = {
+                "variants": [
+                    {
+                        "status": "ok",
+                        "target_score": {"hits": 0, "matched": 0, "targeted": 2},
+                    }
+                ],
+                "terminal_summary": {
+                    "force_phys_terminal_proof": {"best_hits": 0}
+                },
+            }
+            return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+        payload = {
+            "summary": {
+                "compiled": 12,
+                "compile_failures": 0,
+                "progress_hits": 0,
+            },
+            "ranked_probes": [
+                {
+                    "target_score": {
+                        "hits": 0,
+                        "targeted": 2,
+                        "distance_total": 44,
+                    }
+                }
+            ],
+            "terminal_blocker": (
+                "no-retained-candidate-improved-residual-force-phys"
+            ),
+        }
+        return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    results = run_bounded_validation(
+        function="fn_80000000",
+        force_phys="53:25,50:22",
+        pcdump_path=tmp_path / "base.pcdump.txt",
+        source_path=tmp_path / "source.c",
+        timeout=60,
+        max_candidates=7,
+        runner=runner,
+    )
+
+    assert results[1]["candidate"] == "simplify-order"
+    assert results[1]["status"] == "rejected"
+
+
 def test_bounded_validation_skips_mixed_class_lifetime_layout(
     tmp_path: pathlib.Path,
 ) -> None:

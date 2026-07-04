@@ -305,6 +305,8 @@ def _bounded_workflow_status(
         return "rejected"
     if workflow == "lifetime-layout":
         return _lifetime_layout_status(payload)
+    if workflow == "simplify-order":
+        return _simplify_order_status(payload)
     return "partial_progress"
 
 
@@ -328,6 +330,17 @@ def _lifetime_layout_status(payload: dict[str, Any]) -> str:
         proof = terminal
     best_hits = max(best_hits, _int_value(proof.get("best_hits")))
     return "partial_progress" if best_hits > 0 else "rejected"
+
+
+def _simplify_order_status(payload: dict[str, Any]) -> str:
+    summary = _mapping(payload.get("summary"))
+    if "progress_hits" in summary:
+        return (
+            "partial_progress"
+            if _int_value(summary.get("progress_hits")) > 0
+            else "rejected"
+        )
+    return "partial_progress"
 
 
 def _subprocess_runner(argv: list[str], timeout: int) -> dict[str, object]:
