@@ -246,6 +246,7 @@ class Blocker:
     reason: str
     source_summary: str | None = None
     confidence: str = "observed"
+    target_class: int | None = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +291,7 @@ class SourceHypothesis:
     status: str = "unvalidated"
     validation_command_ids: tuple[str, ...] = ()
     line_mapping_status: str = "fresh"
+    target_class: int | None = None
 
 
 @dataclass(frozen=True)

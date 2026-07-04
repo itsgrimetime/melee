@@ -158,28 +158,20 @@ def run_bounded_validation(
         return []
 
     active_runner = runner or _subprocess_runner
-    commands = [
-        (
-            "lifetime-layout",
-            [
-                "melee-agent",
-                "debug",
-                "mutate",
-                "lifetime-layout",
-                "-f",
-                function,
-                "--pcdump",
-                str(pcdump_path),
-                "--source-file",
-                str(source_path),
-                "--compile-probes",
-                "--max-probes",
-                str(max_candidates),
-                "--timeout",
-                str(timeout),
-                "--json",
-            ],
-        ),
+    direct_blockers = direct_blockers or []
+    commands: list[tuple[str, list[str]]] = []
+    lifetime_layout_argv = _lifetime_layout_argv(
+        function=function,
+        force_phys=force_phys,
+        pcdump_path=pcdump_path,
+        source_path=source_path,
+        timeout=timeout,
+        max_candidates=max_candidates,
+        direct_blockers=direct_blockers,
+    )
+    if lifetime_layout_argv is not None:
+        commands.append(("lifetime-layout", lifetime_layout_argv))
+    commands.append(
         (
             "simplify-order",
             [
@@ -202,8 +194,8 @@ def run_bounded_validation(
                 "--json",
             ],
         ),
-    ]
-    for class_id, target_ig, blocker_ig in direct_blockers or []:
+    )
+    for class_id, target_ig, blocker_ig in direct_blockers:
         reg_prefix = "f" if class_id == 1 else "r"
         argv = [
             "melee-agent",
@@ -236,11 +228,7 @@ def run_bounded_validation(
         results.append(
             {
                 "candidate": workflow,
-                "status": (
-                    "partial_progress"
-                    if int(proc.get("returncode") or 0) == 0
-                    else "rejected"
-                ),
+                "status": _bounded_workflow_status(workflow, payload, proc),
                 "argv": argv,
                 "returncode": proc.get("returncode"),
                 "stdout": proc.get("stdout", ""),
@@ -249,6 +237,93 @@ def run_bounded_validation(
             }
         )
     return results
+
+
+def _lifetime_layout_argv(
+    *,
+    function: str,
+    force_phys: str,
+    pcdump_path: Path,
+    source_path: Path,
+    timeout: int,
+    max_candidates: int,
+    direct_blockers: list[tuple[int, int, int]],
+) -> list[str] | None:
+    target_classes = {
+        target.class_id
+        for target in parse_force_phys_spec(force_phys, default_class_id=0).targets
+    }
+    pair_arg: str | None = None
+    if direct_blockers:
+        blocker_classes = {class_id for class_id, _target, _blocker in direct_blockers}
+        if len(target_classes) != 1 or blocker_classes != target_classes:
+            return None
+        class_id = next(iter(blocker_classes))
+        prefix = "f" if class_id == 1 else "r"
+        pair_arg = ",".join(
+            f"{prefix}{target_ig}/{prefix}{blocker_ig}"
+            for _class_id, target_ig, blocker_ig in direct_blockers
+        )
+    elif target_classes != {0}:
+        return None
+
+    argv = [
+        "melee-agent",
+        "debug",
+        "mutate",
+        "lifetime-layout",
+        "-f",
+        function,
+        "--pcdump",
+        str(pcdump_path),
+        "--source-file",
+        str(source_path),
+        "--compile-probes",
+        "--max-probes",
+        str(max_candidates),
+        "--timeout",
+        str(timeout),
+        "--transform-force-phys",
+        force_phys,
+        "--json",
+    ]
+    if pair_arg is not None:
+        argv[10:10] = ["--pairs", pair_arg]
+    return argv
+
+
+def _bounded_workflow_status(
+    workflow: str,
+    payload: dict[str, Any],
+    proc: dict[str, object],
+) -> str:
+    if int(proc.get("returncode") or 0) != 0:
+        return "rejected"
+    if workflow == "lifetime-layout":
+        return _lifetime_layout_status(payload)
+    return "partial_progress"
+
+
+def _lifetime_layout_status(payload: dict[str, Any]) -> str:
+    best_hits = 0
+    for variant in _list_of_mappings(payload.get("variants")):
+        score = _mapping(variant.get("target_score"))
+        if not score:
+            continue
+        hits = _int_value(score.get("hits"))
+        if hits == 0:
+            hits = _int_value(score.get("matched"))
+        targeted = _int_value(score.get("targeted"))
+        best_hits = max(best_hits, hits)
+        if targeted > 0 and hits >= targeted:
+            return "full_target_match"
+
+    terminal = _mapping(payload.get("terminal_summary"))
+    proof = _mapping(terminal.get("force_phys_terminal_proof"))
+    if not proof and terminal.get("kind") == "lifetime-layout-force-phys-terminal-proof":
+        proof = terminal
+    best_hits = max(best_hits, _int_value(proof.get("best_hits")))
+    return "partial_progress" if best_hits > 0 else "rejected"
 
 
 def _subprocess_runner(argv: list[str], timeout: int) -> dict[str, object]:
@@ -297,6 +372,13 @@ def _score_source_status(
     virtual_values = [
         virtual for virtual in virtuals.values() if isinstance(virtual, dict)
     ]
+    if any(
+        virtual.get("baseline_matched") is True
+        and virtual.get("matched") is not True
+        for virtual in virtual_values
+    ):
+        return "rejected"
+
     all_virtuals_matched = bool(virtual_values) and all(
         virtual.get("matched") is True for virtual in virtual_values
     )
@@ -336,6 +418,12 @@ def _json_payload(stdout: object) -> dict[str, Any]:
 
 def _mapping(value: object) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _list_of_mappings(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 def _int_value(value: object) -> int:

@@ -46,7 +46,9 @@ def validation_commands_for_target(
                     f"-f {command_quote(function)} "
                     f"--pcdump {command_quote(pcdump_path)} "
                     f"--source-file {command_quote(source_path)} "
-                    f"--pairs {target_reg}/{blocker_reg} --json"
+                    f"--pairs {target_reg}/{blocker_reg} "
+                    f"--transform-force-phys {command_quote(force_phys)} "
+                    "--json"
                 ),
             )
         )

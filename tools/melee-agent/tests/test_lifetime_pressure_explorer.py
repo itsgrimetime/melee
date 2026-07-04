@@ -30,6 +30,7 @@ from src.mwcc_debug.pressure_explorer.models import (
     TargetAllocation,
     TargetPressureReport,
     TargetSet,
+    SourceHypothesis,
 )
 from src.mwcc_debug.pressure_explorer.targets import (
     parse_force_phys_spec,
@@ -2235,6 +2236,75 @@ def test_render_class_aware_phys_labels_and_dot_ids_do_not_collide() -> None:
     assert "expected r25" in dot
 
 
+def test_json_top_level_blockers_and_hypotheses_include_target_class() -> None:
+    from src.mwcc_debug.pressure_explorer import render_json_report
+
+    blocker = Blocker(
+        target_ig_id=40,
+        target_class=1,
+        ig_id=41,
+        kind="expected_phys_holder",
+        assigned_phys=25,
+        impact=100,
+        reason="expected phys f25 is held by interfering IG 41",
+    )
+    hypothesis = SourceHypothesis(
+        id="1-40-0-expected_phys_holder-41-shorten_lifetime",
+        target_ig_id=40,
+        target_class=1,
+        rank=1,
+        action="shorten_lifetime",
+        allocator_requirement=blocker.reason,
+        source_owner="row_val line 12",
+        confidence="medium",
+    )
+    target = TargetPressureReport(
+        class_id=1,
+        ig_id=40,
+        virtual={"kind": "fpr", "number": 40},
+        current_phys=24,
+        expected_phys=25,
+        status="blocked",
+        first_def=None,
+        source_attribution=SourceAttributionFact(status="attributed", symbol="fpr"),
+        live=LiveFacts(),
+        simplify_order=1,
+        select_order=1,
+        coalesce=CoalesceFacts(root_ig_id=40),
+        spill=SpillFacts(spilled=False),
+        blockers=(blocker,),
+        why_current_color="mwcc-colorgraph selected f24",
+        must_change=("remove fpr interference",),
+        confidence="observed",
+    )
+    report = LifetimePressureReport(
+        schema_version="lifetime-pressure-report.v1",
+        function="fn_80000000",
+        inventory_only=False,
+        inputs={},
+        targets=(target,),
+        allocator_facts=AllocatorFacts(
+            schema_version="allocator-facts.v1",
+            producer={"kind": "unit-test"},
+            function=FunctionFacts(
+                name="fn_80000000",
+                source_path=None,
+                freshness=FunctionFreshness(status="fresh"),
+            ),
+            classes=(),
+        ),
+        blockers=(blocker,),
+        source_attribution={"status": "ranked"},
+        hypotheses=(hypothesis,),
+        validation_commands=(),
+    )
+
+    rendered = render_json_report(report)
+
+    assert rendered["blockers"][0]["target_class"] == 1
+    assert rendered["hypotheses"][0]["target_class"] == 1
+
+
 def test_blocker_tables_include_class_context_for_duplicate_igs() -> None:
     from src.mwcc_debug.pressure_explorer import (
         render_blocker_table_csv,
@@ -2738,6 +2808,33 @@ def test_quick_validation_classifies_partial_progress_and_rejections(
     ]
 
 
+def test_quick_validation_rejects_protected_target_regression(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_quick_validation
+
+    payload = _score_source_payload(matched=1)
+    payload["target_score"]["virtuals"]["40"]["baseline_matched"] = True
+    payload["target_score"]["virtuals"]["40"]["matched"] = False
+
+    def runner(_argv: list[str], _timeout: int) -> dict[str, object]:
+        return {
+            "returncode": 0,
+            "stdout": json.dumps(payload),
+            "stderr": "",
+        }
+
+    results = run_quick_validation(
+        function="fn_80000000",
+        target_file=tmp_path / "target.yaml",
+        source_candidates=[tmp_path / "loses_protected.c"],
+        timeout=30,
+        runner=runner,
+    )
+
+    assert results[0]["status"] == "rejected"
+
+
 def test_bounded_validation_runs_existing_mutation_workflows(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -2747,6 +2844,16 @@ def test_bounded_validation_runs_existing_mutation_workflows(
 
     def runner(argv: list[str], _timeout: int) -> dict[str, object]:
         calls.append(argv)
+        if "lifetime-layout" in argv:
+            payload = {
+                "variants": [
+                    {
+                        "status": "ok",
+                        "target_score": {"hits": 1, "matched": 1, "targeted": 1},
+                    }
+                ]
+            }
+            return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
         return {"returncode": 0, "stdout": '{"ok": true}', "stderr": ""}
 
     results = run_bounded_validation(
@@ -2760,7 +2867,7 @@ def test_bounded_validation_runs_existing_mutation_workflows(
     )
 
     assert [result["status"] for result in results] == [
-        "partial_progress",
+        "full_target_match",
         "partial_progress",
     ]
     assert calls == [
@@ -2780,6 +2887,8 @@ def test_bounded_validation_runs_existing_mutation_workflows(
             "7",
             "--timeout",
             "60",
+            "--transform-force-phys",
+            "37:25",
             "--json",
         ],
         [
@@ -2802,6 +2911,88 @@ def test_bounded_validation_runs_existing_mutation_workflows(
             "--json",
         ],
     ]
+
+
+def test_lifetime_layout_advisory_command_protects_force_phys() -> None:
+    from src.mwcc_debug.pressure_explorer.commands import (
+        validation_commands_for_target,
+    )
+
+    commands = validation_commands_for_target(
+        function="fn_80000000",
+        pcdump_path="base.pcdump.txt",
+        source_path="source.c",
+        force_phys="37:25,40:26",
+        target_ig=40,
+        blocker_ig=37,
+        class_id=0,
+    )
+
+    lifetime = next(
+        command for command in commands if command.id == "lifetime-layout-0-40-37"
+    )
+    assert "--transform-force-phys 37:25,40:26" in lifetime.command
+
+
+def test_bounded_lifetime_layout_rejects_zero_force_phys_hits(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_bounded_validation
+
+    def runner(argv: list[str], _timeout: int) -> dict[str, object]:
+        if "lifetime-layout" in argv:
+            payload = {
+                "variants": [
+                    {
+                        "status": "ok",
+                        "target_score": {"hits": 0, "matched": 0, "targeted": 1},
+                    }
+                ],
+                "terminal_summary": {
+                    "force_phys_terminal_proof": {"best_hits": 0}
+                },
+            }
+            return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+        return {"returncode": 0, "stdout": '{"ok": true}', "stderr": ""}
+
+    results = run_bounded_validation(
+        function="fn_80000000",
+        force_phys="37:25",
+        pcdump_path=tmp_path / "base.pcdump.txt",
+        source_path=tmp_path / "source.c",
+        timeout=60,
+        max_candidates=7,
+        runner=runner,
+    )
+
+    assert results[0]["candidate"] == "lifetime-layout"
+    assert results[0]["status"] == "rejected"
+
+
+def test_bounded_validation_skips_mixed_class_lifetime_layout(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_bounded_validation
+
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], _timeout: int) -> dict[str, object]:
+        calls.append(argv)
+        return {"returncode": 0, "stdout": '{"ok": true}', "stderr": ""}
+
+    results = run_bounded_validation(
+        function="fn_80000000",
+        force_phys="0:40:25,1:40:25",
+        pcdump_path=tmp_path / "base.pcdump.txt",
+        source_path=tmp_path / "source.c",
+        timeout=60,
+        max_candidates=7,
+        direct_blockers=[(0, 40, 37), (1, 40, 37)],
+        runner=runner,
+    )
+
+    assert all("lifetime-layout" not in call for call in calls)
+    assert all(result["candidate"] != "lifetime-layout" for result in results)
 
 
 def test_bounded_validation_runs_select_order_for_direct_blockers(
@@ -2876,6 +3067,97 @@ def test_bounded_validation_uses_fpr_direct_blocker_target(
     assert "r40<r37" not in select_order
     assert "--class" in select_order
     assert select_order[select_order.index("--class") + 1] == "1"
+
+
+def test_bounded_validation_uses_class_normalized_force_phys_from_orchestrator(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer import lifetime_pressure
+
+    pcdump = tmp_path / "base.pcdump.txt"
+    source = tmp_path / "source.c"
+    pcdump.write_text(PCDUMP)
+    source.write_text(SOURCE)
+    facts = AllocatorFacts(
+        schema_version="allocator-facts.v1",
+        producer={"kind": "unit-test"},
+        function=FunctionFacts(
+            name="fn_80000000",
+            source_path=str(source),
+            freshness=FunctionFreshness(status="fresh"),
+        ),
+        classes=(
+            AllocatorClassFacts(
+                class_id=1,
+                class_name="fpr",
+                registers=RegisterFacts(physical_count=32, allocatable=(24, 25)),
+                nodes=(
+                    _manual_node(40, assigned_phys=24),
+                    _manual_node(41, assigned_phys=25),
+                ),
+                edges=(InterferenceEdge(40, 41),),
+                color_decisions=(
+                    ColorDecision(
+                        id="fpr-c40",
+                        ig_id=40,
+                        iter=0,
+                        assigned_phys=24,
+                        available_phys_ordered=(24, 25),
+                        blocked_candidates=(
+                            BlockedCandidate(
+                                phys=25,
+                                holder_ig_id=41,
+                                holder_assigned_phys=25,
+                            ),
+                        ),
+                        candidate_phys_ordered=(24, 25),
+                        chosen_source="observed",
+                        decision_rule="unit-test",
+                        tie_rule="unit-test",
+                        confidence="observed",
+                    ),
+                ),
+            ),
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        lifetime_pressure,
+        "facts_from_pcdump",
+        lambda *args, **kwargs: facts,
+    )
+
+    def fake_run_bounded_validation(**kwargs: object) -> list[dict[str, object]]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        lifetime_pressure,
+        "run_bounded_validation",
+        fake_run_bounded_validation,
+    )
+
+    lifetime_pressure.build_lifetime_pressure_report(
+        function="fn_80000000",
+        pcdump_text=None,
+        pcdump_path=pcdump,
+        source_text=SOURCE,
+        source_path=source,
+        force_phys="40:25",
+        target_path=None,
+        candidates=[],
+        backend_trace_path=None,
+        class_id=1,
+        allow_stale_pcdump=False,
+        validate_mode="bounded",
+        timeout=60,
+        max_candidates=7,
+    )
+
+    assert captured["force_phys"] == "1:40:25"
+    assert captured["direct_blockers"] == [(1, 40, 41)]
 
 
 def test_build_lifetime_pressure_report_combines_analysis_and_hypotheses(

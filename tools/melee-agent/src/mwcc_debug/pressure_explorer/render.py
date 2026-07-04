@@ -47,9 +47,14 @@ def render_text_report(report: LifetimePressureReport) -> str:
                 lines.extend(_blocker_lines(target, blocker))
     elif report.blockers:
         for blocker in report.blockers:
+            class_text = (
+                ""
+                if blocker.target_class is None
+                else f" c{blocker.target_class}"
+            )
             lines.append(
                 "  "
-                f"target IG {blocker.target_ig_id}: "
+                f"target{class_text} IG {blocker.target_ig_id}: "
                 f"{blocker.kind} via {_ig_label(blocker.ig_id)} "
                 f"impact={blocker.impact} confidence={blocker.confidence}"
             )
@@ -247,7 +252,7 @@ def _blocker_row(
     target: TargetPressureReport | None,
     blocker: Blocker,
 ) -> dict[str, object]:
-    target_class = None if target is None else target.class_id
+    target_class = blocker.target_class if target is None else target.class_id
     return {
         "target_ig": blocker.target_ig_id,
         "blocker_ig": blocker.ig_id,

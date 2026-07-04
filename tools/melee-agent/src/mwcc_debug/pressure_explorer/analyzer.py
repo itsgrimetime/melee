@@ -176,6 +176,7 @@ def _target_blockers(
                 impact=80,
                 reason="allocator state is incomplete, so expected-phys interference is not fully known",
                 confidence="synthesized",
+                target_class=target.class_id,
             ),
         )
 
@@ -210,6 +211,7 @@ def _expected_phys_holders(
                     f"interfering IG {candidate.holder_ig_id}"
                 ),
                 source_summary=_source_summary(nodes.get(candidate.holder_ig_id)),
+                target_class=target.class_id,
             )
 
     for edge in allocator_class.edges:
@@ -234,6 +236,7 @@ def _expected_phys_holders(
                 f"interfering IG {holder_ig}"
             ),
             source_summary=_source_summary(holder),
+            target_class=target.class_id,
         )
 
 
@@ -257,6 +260,7 @@ def _order_blockers(
                 "is absent from candidate order"
             ),
             confidence=decision.confidence,
+            target_class=target.class_id,
         )
     elif decision.assigned_phys in candidate_order and target.expected_phys in candidate_order:
         assigned_idx = candidate_order.index(decision.assigned_phys)
@@ -275,6 +279,7 @@ def _order_blockers(
                     f"{_phys_label(decision.assigned_phys, target.class_id)}"
                 ),
                 confidence=decision.confidence,
+                target_class=target.class_id,
             )
 
     if decision.chosen_source and decision.chosen_source not in {"observed", "candidate"}:
@@ -290,6 +295,7 @@ def _order_blockers(
                 f"{_phys_label(decision.assigned_phys, target.class_id)}"
             ),
             confidence=decision.confidence,
+            target_class=target.class_id,
         )
 
     if not emitted and node is not None and node.select_order is not None:
@@ -306,6 +312,7 @@ def _order_blockers(
                 f"{_phys_label(target.expected_phys, target.class_id)}"
             ),
             confidence=decision.confidence,
+            target_class=target.class_id,
         )
 
 

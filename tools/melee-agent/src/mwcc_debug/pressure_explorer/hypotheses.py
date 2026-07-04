@@ -228,6 +228,7 @@ def _source_hypothesis(
             source,
             stale_line_mapping=stale_line_mapping,
         ),
+        target_class=target.class_id,
     )
 
 

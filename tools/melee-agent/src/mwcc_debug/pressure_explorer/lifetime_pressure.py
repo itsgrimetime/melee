@@ -179,11 +179,12 @@ def _attach_validation(
     max_candidates: int,
 ) -> LifetimePressureReport:
     source_candidates = _source_candidate_paths(candidate_specs)
+    effective_force_phys = _force_phys_from_target_set(target_set) or force_phys
     if validate_mode == "remote":
         return _attach_remote_validation_plan(
             report,
             function=function,
-            force_phys=force_phys,
+            force_phys=effective_force_phys,
             target_path=target_path,
             target_set=target_set,
             pcdump_path=pcdump_path,
@@ -195,7 +196,7 @@ def _attach_validation(
         return _attach_quick_validation(
             report,
             function=function,
-            force_phys=force_phys,
+            force_phys=effective_force_phys,
             target_path=target_path,
             pcdump_path=pcdump_path,
             source_candidates=source_candidates,
@@ -206,7 +207,7 @@ def _attach_validation(
         return _attach_bounded_validation(
             report,
             function=function,
-            force_phys=force_phys,
+            force_phys=effective_force_phys,
             target_path=target_path,
             pcdump_path=pcdump_path,
             source_path=source_path,
