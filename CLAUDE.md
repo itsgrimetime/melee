@@ -38,6 +38,15 @@ melee/
 
 All operations via `python -m src.cli` or `melee-agent`:
 
+`/opt/homebrew/bin/melee-agent` is an editable install of the shared
+`/Users/mike/code/melee/tools/melee-agent` checkout. It is intentionally kept on
+the shared `master` tooling baseline so matcher worktrees do not shadow the
+installed command. When validating branch-local CLI changes in an isolated
+worktree before they are merged to `master`, run them from that worktree with
+`cd tools/melee-agent && python -m src.cli ...` (or set `PYTHONPATH` to that
+worktree's `tools/melee-agent`) instead of expecting the installed entrypoint to
+pick up unmerged worktree code.
+
 ```bash
 # Scratch operations (primary workflow)
 melee-agent scratch compile <slug> --stdin --diff  # Compile from stdin (use with heredoc)
