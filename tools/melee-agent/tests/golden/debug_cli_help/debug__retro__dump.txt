@@ -8,15 +8,25 @@
 │                     [required]                                               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ *  --function    -f      TEXT  [required]                                    │
-│    --phases              TEXT  all|frontend|backend [default: all]           │
-│    --compiler            TEXT  1.2.5n|1.1 [default: 1.2.5n]                  │
+│ *  --function    -f      TEXT                  [required]                    │
+│    --phases              TEXT                  all|frontend|backend          │
+│                                                [default: all]                │
+│    --compiler            TEXT                  1.2.5n|1.1 [default: 1.2.5n]  │
 │    --output      -O      PATH                                                │
-│    --melee-root          PATH  Active Melee checkout/worktree root. Defaults │
-│                                to the current cwd tree.                      │
-│    --gdb-py              PATH  Intervention hook (a .py with intervene(ctx)) │
-│                                handed the connected gdb session to mutate    │
-│                                compiler state and replay forward.            │
-│    --help                      Show this message and exit.                   │
+│    --melee-root          PATH                  Active Melee                  │
+│                                                checkout/worktree root.       │
+│                                                Defaults to the current cwd   │
+│                                                tree.                         │
+│    --gdb-py              PATH                  Intervention hook (a .py with │
+│                                                intervene(ctx)) handed the    │
+│                                                connected gdb session to      │
+│                                                mutate compiler state and     │
+│                                                replay forward.               │
+│    --timeout             INTEGER RANGE [x>=1]  Seconds to wait for the       │
+│                                                retrowin32+gdb launcher       │
+│                                                before killing the whole      │
+│                                                subprocess tree.              │
+│                                                [default: 600]                │
+│    --help                                      Show this message and exit.   │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
