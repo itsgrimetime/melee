@@ -162,6 +162,31 @@ melee-agent debug inspect diagnose fn_80247510
 `inspect diff` compares two source variants (or two pcdump files) pass
 by pass through MWCC's pipeline and reports the earliest divergence.
 
+### Lifetime Pressure Explorer
+
+Use `inspect lifetime-pressure` to inventory allocator facts, explain
+register-pressure blockers for target assignments, and emit follow-up
+validation commands.
+
+Default output is read-only. Source actions are hypotheses until validated by compile/checkdiff or supplied candidate evidence. When multiple target assignments are supplied, every target is protected by default.
+
+```bash
+melee-agent debug inspect lifetime-pressure \
+  -f mnDiagram_UpdateScrollArrows \
+  --force-phys "53:25,50:22"
+
+melee-agent debug inspect lifetime-pressure \
+  -f lbDvd_80018A2C \
+  --pcdump tools/melee-agent/tests/fixtures/mwcc_debug/lbDvd_80018A2C_pcdump.txt \
+  --force-phys "44:10,46:12" \
+  --json
+
+melee-agent debug inspect lifetime-pressure \
+  -f FUNCTION \
+  --force-phys "53:25" \
+  --validate bounded --timeout 120 --max-candidates 500
+```
+
 ### Reading `inspect diff` output
 
 `inspect diff` accepts either two `.c` source files (forward-compiled

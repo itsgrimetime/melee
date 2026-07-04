@@ -506,6 +506,7 @@ __all__ = [
     'inspect_explain_diff',
     'inspect_explain_schedule',
     'inspect_explain_virtual',
+    'inspect_lifetime_pressure',
     'inspect_stack_homes',
     'inspect_tiebreak',
     'rank_callees',
@@ -2265,6 +2266,208 @@ def first_divergence_cmd(
         print(json.dumps(fd.report_to_dict(report), indent=2))
     else:
         typer.echo(fd.format_report(report))
+
+
+@inspect_app.command("lifetime-pressure")
+def inspect_lifetime_pressure(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to inspect."),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--pcdump",
+            help=(
+                "Baseline pcdump. Auto-resolves from cache when omitted "
+                "unless --backend-trace is used."
+            ),
+        ),
+    ] = None,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help="Source file for source attribution and validation commands.",
+        ),
+    ] = None,
+    force_phys: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys",
+            help="Target coloring as ig:phys[,ig:phys] or class:ig:phys entries.",
+        ),
+    ] = None,
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target",
+            help="JSON target file consumed by the pressure explorer.",
+        ),
+    ] = None,
+    candidates: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--candidate",
+            help="Candidate to compare or validate, repeatable. Format LABEL=PATH.",
+        ),
+    ] = None,
+    backend_trace: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--backend-trace",
+            help="Allocator backend trace JSON. Skips pcdump auto-resolution.",
+        ),
+    ] = None,
+    class_id: Annotated[
+        int,
+        typer.Option("--class", help="Default register class for --force-phys."),
+    ] = 0,
+    allow_stale_pcdump: Annotated[
+        bool,
+        typer.Option(
+            "--allow-stale-pcdump",
+            help="Allow stale pcdump/source freshness when ranking hypotheses.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit structured JSON instead of text."),
+    ] = False,
+    dot: Annotated[
+        Optional[Path],
+        typer.Option("--dot", help="Write Graphviz DOT blocker graph to PATH."),
+    ] = None,
+    blocker_table: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--blocker-table",
+            help="Write blocker table to PATH. Uses JSON for .json, CSV otherwise.",
+        ),
+    ] = None,
+    validate: Annotated[
+        str,
+        typer.Option(
+            "--validate",
+            help="Validation mode: none, quick, bounded, or remote.",
+        ),
+    ] = "none",
+    timeout: Annotated[
+        int,
+        typer.Option("--timeout", help="Validation subprocess timeout in seconds."),
+    ] = 120,
+    max_candidates: Annotated[
+        int,
+        typer.Option(
+            "--max-candidates",
+            help="Maximum bounded-validation candidates to try.",
+        ),
+    ] = 100,
+):
+    """Explain allocator lifetime pressure blockers and follow-up validation."""
+    from src.cli.debug import (  # noqa: PLC0415
+        DEFAULT_MELEE_ROOT,
+        _resolve_pcdump_path,
+        _source_path_for_function,
+    )
+    from src.mwcc_debug.pressure_explorer import (  # noqa: PLC0415
+        build_lifetime_pressure_report,
+        render_blocker_table_csv,
+        render_blocker_table_json,
+        render_dot,
+        render_json_report,
+        render_text_report,
+    )
+
+    validate_modes = {"none", "quick", "bounded", "remote"}
+    if validate not in validate_modes:
+        raise typer.BadParameter(
+            f"--validate must be one of {', '.join(sorted(validate_modes))}"
+        )
+
+    if backend_trace is not None:
+        try:
+            with backend_trace.open("r", encoding="utf-8"):
+                pass
+        except OSError:
+            typer.echo(
+                f"backend trace not found or unreadable: {backend_trace}",
+                err=True,
+            )
+            raise typer.Exit(2)
+
+    pcdump_path = pcdump
+    pcdump_text: str | None = None
+    if backend_trace is None:
+        pcdump_path = _resolve_pcdump_path(pcdump, function, DEFAULT_MELEE_ROOT)
+        pcdump_text = pcdump_path.read_text(encoding="utf-8", errors="replace")
+
+    warnings: list[str] = []
+    resolved_source = source_file
+    if resolved_source is None:
+        try:
+            resolved_source = _source_path_for_function(function, DEFAULT_MELEE_ROOT)
+        except Exception as exc:
+            warnings.append(f"source file auto-resolution failed: {exc}")
+            resolved_source = None
+
+    source_text: str | None = None
+    if resolved_source is None:
+        warnings.append("source file could not be resolved")
+    elif resolved_source.exists():
+        source_text = resolved_source.read_text(encoding="utf-8", errors="replace")
+    else:
+        warnings.append(f"source file not found: {resolved_source}")
+
+    try:
+        report = build_lifetime_pressure_report(
+            function=function,
+            pcdump_text=pcdump_text,
+            pcdump_path=pcdump_path,
+            source_text=source_text,
+            source_path=resolved_source,
+            force_phys=force_phys,
+            target_path=target,
+            candidates=list(candidates or []),
+            backend_trace_path=backend_trace,
+            class_id=class_id,
+            allow_stale_pcdump=allow_stale_pcdump,
+            validate_mode=validate,
+            timeout=timeout,
+            max_candidates=max_candidates,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+
+    if warnings:
+        report = dataclasses.replace(report, warnings=(*report.warnings, *warnings))
+
+    if dot is not None:
+        _write_text_creating_parent(dot, render_dot(report))
+    if blocker_table is not None:
+        if blocker_table.suffix.lower() == ".json":
+            _write_text_creating_parent(
+                blocker_table,
+                json.dumps(render_blocker_table_json(report), indent=2) + "\n",
+            )
+        else:
+            _write_text_creating_parent(
+                blocker_table,
+                render_blocker_table_csv(report),
+            )
+
+    if json_out:
+        print(json.dumps(render_json_report(report), indent=2))
+    else:
+        print(render_text_report(report), end="")
+
+
+def _write_text_creating_parent(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
 def _first_divergence_frame_case(report: dict) -> str:
     if report.get("expected") is None:
         return "frame-current-only"
