@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -74,10 +75,9 @@ def test_launch_dump_uses_process_group_timeout_runner(monkeypatch, tmp_path):
     melee_root = tmp_path / "melee"
     out_dir = tmp_path / "out"
     table = tmp_path / "table.json"
-    launcher = tmp_path / "vendor" / "mwcc_retro_debugger.py"
     cadmic_script = tmp_path / "vendor" / "cadmic" / "pkg" / "mwcc_debugger.py"
     retrowin32_bin = tmp_path / "retrowin32"
-    for path in (launcher, cadmic_script, table, retrowin32_bin):
+    for path in (cadmic_script, table, retrowin32_bin):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# fake\n")
 
@@ -125,14 +125,17 @@ def test_launch_dump_uses_process_group_timeout_runner(monkeypatch, tmp_path):
     assert outcome.exit_code == 0
     assert seen["timeout"] == 17
     assert seen["cwd"] == melee_root
-    assert str(launcher) in seen["cmd"]
+    assert seen["cmd"][1] == str(
+        retro._PACKAGE_REPO / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+    )
     assert str(retrowin32_bin) in seen["cmd"]
+    assert seen["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(retro._PACKAGE_REPO)
     assert (out_dir / "launch.log").read_text().startswith(
         "[retro] running intervention hook"
     )
 
 
-def test_retro_dump_uses_explicit_melee_root_for_paths(monkeypatch, tmp_path):
+def test_retro_dump_uses_package_table_with_explicit_melee_root(monkeypatch, tmp_path):
     import src.cli.debug.retro as retro
 
     repo = tmp_path / "worktree"
@@ -160,7 +163,7 @@ def test_retro_dump_uses_explicit_melee_root_for_paths(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert seen["melee_root"] == repo.resolve()
     assert seen["out_dir"] == repo.resolve() / "build" / "mwcc_retro" / "draw"
-    assert seen["table"] == repo.resolve() / "tools" / "mwcc_retro" / "tables" / "gc_125n.json"
+    assert seen["table"] == retro.TABLES_DIR / "gc_125n.json"
     provenance = json.loads((seen["out_dir"] / "provenance.json").read_text())
     assert provenance["melee_root"] == str(repo.resolve())
 

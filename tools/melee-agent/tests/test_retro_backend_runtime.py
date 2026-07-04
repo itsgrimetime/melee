@@ -2808,6 +2808,82 @@ def test_launch_backend_events_uses_onepass_hook_and_validates_summary(monkeypat
     assert not any("candidate" in note.lower() for note in summary["notes"])
 
 
+def test_launch_backend_events_uses_package_scripts_with_explicit_melee_root(
+    monkeypatch, tmp_path
+):
+    import os
+    import subprocess
+
+    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+
+    class SetupResult:
+        retrowin32_bin = tmp_path / "retrowin32"
+
+    stale_root = tmp_path / "stale-worktree"
+    (stale_root / "tools" / "mwcc_retro" / "tables").mkdir(parents=True)
+    (stale_root / "tools" / "mwcc_retro" / "tables" / "gc_125n.json").write_text("{}\n")
+    (stale_root / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py").write_text(
+        "# stale launcher\n"
+    )
+    out_dir = tmp_path / "out"
+    _write_valid_backend_map(tmp_path)
+    monkeypatch.setattr(retro_setup, "ensure_for_root", lambda root, force=False: SetupResult())
+    monkeypatch.setattr(retro, "_retro_tables_dir", lambda root: tmp_path)
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda src, melee_root: "build/compilers/GC/1.2.5n/mwcceppc.exe -c source.c -o source.o",
+    )
+
+    def fake_run(cmd, **kwargs):
+        launcher = Path(cmd[1])
+        assert launcher == retro._PACKAGE_REPO / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+        table = Path(cmd[cmd.index("--table") + 1])
+        assert table == tmp_path / "gc_125n.json"
+        hook = Path(cmd[cmd.index("--gdb-py") + 1])
+        assert hook == retro._PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_onepass_trace_hook.py"
+        pythonpath = kwargs["env"].get("PYTHONPATH", "").split(os.pathsep)
+        assert pythonpath[0] == str(retro._PACKAGE_REPO)
+        assert kwargs["cwd"] == str(stale_root)
+        (out_dir / "backend-events.v1.jsonl").write_text(
+            '{"event":"function_start","name":"test_fn"}\n'
+        )
+        (out_dir / "backend-onepass-candidate.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "mwcc-retro-backend-onepass-candidate.v1",
+                    "requested_function": "test_fn",
+                    "requested_function_matched": True,
+                    "classes_seen": [
+                        {
+                            "class_id": 0,
+                            "class_name": "gpr",
+                            "nodes": 1,
+                            "order_nodes": 0,
+                            "exact_color_decisions": 0,
+                        }
+                    ],
+                    "errors": [],
+                    "warnings": [],
+                }
+            )
+            + "\n"
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    events = retro._launch_backend_events(
+        src="src/melee/test/unit.c",
+        fn="test_fn",
+        out_dir=out_dir,
+        melee_root=stale_root,
+    )
+
+    assert events == out_dir / "backend-events.v1.jsonl"
+
+
 def test_launch_backend_events_requires_complete_reader_gate(monkeypatch, tmp_path):
     import subprocess
 

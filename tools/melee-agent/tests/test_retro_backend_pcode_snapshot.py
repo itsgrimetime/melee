@@ -6,7 +6,11 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
-from tools.mwcc_retro import backend_events, backend_pcode_snapshot  # noqa: E402
+from tools.mwcc_retro import (  # noqa: E402
+    backend_events,
+    backend_onepass_trace_hook,
+    backend_pcode_snapshot,
+)
 
 COMPILER = {"family": "MWCC", "version": "GC/1.2.5n", "retail": True}
 SOURCE = {
@@ -183,3 +187,49 @@ def test_pcode_snapshot_rejects_null_block_list_pointer() -> None:
             opcode_names={1: "mr"},
             source_stage="pcode_pass_boundary",
         )
+
+
+def test_onepass_pcode_stage_failure_allows_later_stage_retry() -> None:
+    state = {"pcode_captured": False, "warnings": []}
+    attempts = []
+
+    def fail(stage: str) -> None:
+        attempts.append(stage)
+        raise ValueError("invalid arg_count 31016")
+
+    assert (
+        backend_onepass_trace_hook._try_capture_pcode_stage(
+            state,
+            "pcode_pass_boundary",
+            fail,
+            fallback_stage="final_scheduler",
+        )
+        is False
+    )
+    assert state["pcode_captured"] is False
+    assert attempts == ["pcode_pass_boundary"]
+    assert state["warnings"] == [
+        {
+            "stage": "pcode_pass_boundary",
+            "warning": (
+                "PCode pcode_pass_boundary snapshot skipped; "
+                "final_scheduler fallback will be tried: invalid arg_count 31016"
+            ),
+        }
+    ]
+
+    def succeed(stage: str) -> None:
+        attempts.append(stage)
+        state["pcode_captured"] = True
+
+    assert (
+        backend_onepass_trace_hook._try_capture_pcode_stage(
+            state,
+            "final_scheduler",
+            succeed,
+            fallback_stage="codegen_end",
+        )
+        is True
+    )
+    assert attempts == ["pcode_pass_boundary", "final_scheduler"]
+    assert state["pcode_captured"] is True

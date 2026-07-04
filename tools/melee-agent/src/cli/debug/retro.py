@@ -93,9 +93,25 @@ def _resolve_melee_root(explicit: Path | None = None) -> Path:
     return (_find_melee_root(Path.cwd()) or _PACKAGE_REPO).resolve()
 
 
-def _retro_tables_dir(melee_root: Path) -> Path:
-    worktree_tables = melee_root / "tools" / "mwcc_retro" / "tables"
-    return worktree_tables if worktree_tables.is_dir() else TABLES_DIR
+def _retro_tables_dir(_melee_root: Path) -> Path:
+    return TABLES_DIR
+
+
+def _retro_script(name: str) -> Path:
+    return _PACKAGE_REPO / "tools" / "mwcc_retro" / name
+
+
+def _retro_subprocess_env(**overrides: str) -> dict[str, str]:
+    import os
+
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    paths = [str(_PACKAGE_REPO)]
+    if existing:
+        paths.append(existing)
+    env["PYTHONPATH"] = os.pathsep.join(paths)
+    env.update(overrides)
+    return env
 
 
 def _resolve_output_dir(out: Path | None, *, melee_root: Path, src: str, fn: str) -> Path:
@@ -286,7 +302,6 @@ def _run_object_parity_for_backend(*, src: str, melee_root: Path) -> dict:
 
 def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path) -> Path:
     """Launch retrowin32+gdb backend event tracing and return JSONL path."""
-    import os
     import shlex
     import subprocess
 
@@ -297,9 +312,7 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
     out_dir.mkdir(parents=True, exist_ok=True)
     events_path = out_dir / "backend-events.v1.jsonl"
     table = _retro_tables_dir(melee_root) / "gc_125n.json"
-    launcher = melee_root / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
-    if not launcher.exists():
-        launcher = _PACKAGE_REPO / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+    launcher = _retro_script("mwcc_retro_debugger.py")
 
     table_data = json.loads(table.read_text())
     map_errors = struct_map.validate_required_backend_map(table_data)
@@ -338,11 +351,9 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
         "1.2.5n",
         fn,
     ]
-    hook = melee_root / "tools" / "mwcc_retro" / "backend_onepass_trace_hook.py"
-    if not hook.exists():
-        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_onepass_trace_hook.py"
+    hook = _retro_script("backend_onepass_trace_hook.py")
     cmd[-1:-1] = ["--gdb-py", str(hook)]
-    env = dict(os.environ, RETRO_SOURCE=src, RETRO_FUNCTION=fn)
+    env = _retro_subprocess_env(RETRO_SOURCE=src, RETRO_FUNCTION=fn)
     command_text = shlex.join([str(part) for part in cmd])
     launch_log = out_dir / "launch.log"
 
@@ -1210,9 +1221,7 @@ def _run_backend_map_probe(
         raise RuntimeError(_format_parity_mismatch(parity))
 
     table = _retro_tables_dir(melee_root) / "gc_125n.json"
-    hook = melee_root / "tools" / "mwcc_retro" / "backend_map_probe_hook.py"
-    if not hook.exists():
-        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_map_probe_hook.py"
+    hook = _retro_script("backend_map_probe_hook.py")
     outcome = _launch_dump(
         src=src,
         fn=fn,
@@ -1273,9 +1282,7 @@ def _launch_backend_ig_snapshot(
             + "; ".join(partial_errors)
         )
 
-    hook = melee_root / "tools" / "mwcc_retro" / "backend_ig_snapshot_hook.py"
-    if not hook.exists():
-        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_ig_snapshot_hook.py"
+    hook = _retro_script("backend_ig_snapshot_hook.py")
     outcome = _launch_dump(
         src=src,
         fn=fn,
@@ -1366,9 +1373,7 @@ def _launch_backend_pcode_snapshot(
             + "; ".join(partial_errors)
         )
 
-    hook = melee_root / "tools" / "mwcc_retro" / "backend_pcode_snapshot_hook.py"
-    if not hook.exists():
-        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_pcode_snapshot_hook.py"
+    hook = _retro_script("backend_pcode_snapshot_hook.py")
     outcome = _launch_dump(
         src=src,
         fn=fn,
@@ -1535,9 +1540,7 @@ def _run_backend_onepass_candidate_trace(
             + "; ".join([*pcode_errors, *ig_errors])
         )
 
-    hook = melee_root / "tools" / "mwcc_retro" / "backend_onepass_trace_hook.py"
-    if not hook.exists():
-        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_onepass_trace_hook.py"
+    hook = _retro_script("backend_onepass_trace_hook.py")
     outcome = _launch_dump(
         src=src,
         fn=fn,
@@ -1837,11 +1840,7 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
     # strip the leading compiler path; the launcher prepends the emulator.
     mwcc_args = mwcc_args.split(" ", 1)[1] if " " in mwcc_args else mwcc_args
     mwcc_exe = str(mwcc_dir / "mwcceppc.exe")
-    launcher = res.cadmic_script.parent.parent.parent / "mwcc_retro_debugger.py"
-    if not launcher.exists():
-        launcher = melee_root / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
-    if not launcher.exists():
-        launcher = _PACKAGE_REPO / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+    launcher = _retro_script("mwcc_retro_debugger.py")
     cmd = [
         "python3", str(launcher),
         "-e", str(res.retrowin32_bin),
@@ -1859,7 +1858,7 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
     out_dir.mkdir(parents=True, exist_ok=True)
     if phases in ("backend", "all"):
         _remove_backend_dump_text_artifacts(out_dir)
-    env = dict(__import__("os").environ, RETRO_SOURCE=src, RETRO_FUNCTION=fn)
+    env = _retro_subprocess_env(RETRO_SOURCE=src, RETRO_FUNCTION=fn)
     log = (out_dir / "launch.log")
     try:
         proc = _run_with_process_group_timeout(

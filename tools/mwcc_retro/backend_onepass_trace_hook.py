@@ -7,6 +7,25 @@ candidate-only diagnostics.
 """
 
 
+def _try_capture_pcode_stage(state, stage, capture_pcode, *, fallback_stage):
+    if state["pcode_captured"]:
+        return True
+    try:
+        capture_pcode(stage)
+        return True
+    except Exception as exc:  # noqa: BLE001 - later backend stages can still retry
+        state["warnings"].append(
+            {
+                "stage": stage,
+                "warning": (
+                    f"PCode {stage} snapshot skipped; "
+                    f"{fallback_stage} fallback will be tried: {exc}"
+                ),
+            }
+        )
+        return False
+
+
 def intervene(ctx):
     import json
     import os
@@ -261,17 +280,13 @@ def intervene(ctx):
                 or state["pcode_boundary_failed"]
             ):
                 return False
-            try:
-                capture_pcode("pcode_pass_boundary")
-            except Exception as exc:  # noqa: BLE001 - codegen_end can still fallback
+            if not _try_capture_pcode_stage(
+                state,
+                "pcode_pass_boundary",
+                capture_pcode,
+                fallback_stage="final_scheduler",
+            ):
                 state["pcode_boundary_failed"] = True
-                state["warnings"].append(
-                    {
-                        "stage": "pcode_pass_boundary",
-                        "warning": f"PCode boundary snapshot skipped; "
-                        f"codegen_end fallback will be used: {exc}",
-                    }
-                )
             return False
 
     class Colorgraph(gdb.Breakpoint):
@@ -624,6 +639,13 @@ def intervene(ctx):
     class FinalScheduler(gdb.Breakpoint):
         def stop(self):
             if state["active"]:
+                if not state["pcode_captured"]:
+                    _try_capture_pcode_stage(
+                        state,
+                        "final_scheduler",
+                        capture_pcode,
+                        fallback_stage="codegen_end",
+                    )
                 try:
                     capture_frame("final_scheduler")
                 except Exception as exc:  # noqa: BLE001 - codegen_end can still fallback
