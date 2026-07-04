@@ -1,0 +1,15 @@
+
+ Usage: melee-agent debug retro probe-backend-ig [OPTIONS] SRC
+
+ Probe retail GC/1.2.5n partial IG/order/coalesce/observed-color snapshots.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    src      TEXT  TU source path to compile under retail MWCC [required]   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function    -f      TEXT  [required]                                    │
+│    --output      -O      PATH                                                │
+│    --melee-root          PATH  Active Melee checkout/worktree root. Defaults │
+│                                to the current cwd tree.                      │
+│    --help                      Show this message and exit.                   │
+╰──────────────────────────────────────────────────────────────────────────────╯

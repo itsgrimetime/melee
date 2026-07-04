@@ -13,9 +13,9 @@ provides this: `mwcc-debug` (the pcdump/DLL path) covers only back-end PCode;
 `mwcc-inspect` gives one front-end IR snapshot on demand. In addition to the
 front-end trace, on the **GC/1.1** compiler (`--compiler 1.1`) `mwcc-retro`
 produces retail-faithful back-end PCode passes, register-allocator
-priority/cost/adjacency dumps, and stack-allocation maps. Backend introspection
-on GC/1.2.5n is a follow-on (#542); for backend on 1.2.5n use the `mwcc-debug`
-DLL pcdump path.
+priority/cost/adjacency dumps, and stack-allocation maps. On **GC/1.2.5n** it
+emits exact retail backend/regalloc traces through `debug retro backend`, plus
+lower-level map, interference-graph, PCode, and candidate probes for diagnostics.
 
 ## Commands
 
@@ -45,14 +45,38 @@ Compiles `<src.c>` under the emulated retail compiler and writes dumps for
 the requested phase group. Examples:
 
 ```bash
-# Front-end IRO trace for one function (1.2.5n; backend on 1.2.5n is follow-on #542)
+# Front-end IRO trace for one function (1.2.5n)
 melee-agent debug retro dump src/melee/mn/mndraw.c -f mnDraw_8024A3B0
 
 # Front-end only (fast; skips backend regalloc)
 melee-agent debug retro dump src/melee/gm/gm_1BA8.c -f gm_801BCC9C --phases frontend
 
-# Backend (GC/1.1 only today)
+# Backend through the GC/1.1 donor/reference route
 melee-agent debug retro dump src/melee/lb/lbarq.c -f lbArq_80014ABC --phases backend --compiler 1.1
+
+# Exact retail GC/1.2.5n backend/regalloc trace
+melee-agent debug retro backend src/melee/lb/lb_00B0.c -f lb_8000CE30
+
+# Exact retail trace plus retail-vs-debug-DLL fidelity report
+melee-agent debug retro backend src/melee/lb/lb_00B0.c -f lb_8000CE30 --verify-debug
+
+# GC/1.2.5n backend map evidence probe (no trace output)
+melee-agent debug retro probe-backend-map src/melee/lb/lbarq.c -f lbArq_80014ABC
+
+# GC/1.2.5n partial retail IG/order/coalesce/color snapshot
+melee-agent debug retro probe-backend-ig src/melee/lb/lbarq.c -f lbArq_80014ABC
+
+# GC/1.2.5n partial retail PCode/block snapshot (block/pcode only)
+melee-agent debug retro probe-backend-pcode src/melee/lb/lbarq.c -f lbArq_80014ABC
+
+# GC/1.2.5n candidate backend trace assembled from validated partial probes
+melee-agent debug retro backend-candidate src/melee/lb/lb_00B0.c -f lb_8000CE30
+
+# One-pass candidate diagnostic hook; still writes only candidate outputs
+melee-agent debug retro backend-candidate src/melee/lb/lb_00B0.c -f lb_8000CE30 --one-pass
+
+# Compare a full or candidate backend trace with an existing mwcc-debug pcdump
+melee-agent debug retro verify-backend src/melee/lb/lb_00B0.c -f lb_8000CE30 --debug-pcdump pcdump.txt
 
 # Use the GC/1.1 compiler descriptor instead
 melee-agent debug retro dump src/melee/ft/ftco.c -f ftCo_8009C744 --compiler 1.1
@@ -70,6 +94,12 @@ Output goes to `build/mwcc_retro/<unit>/<fn>/`:
 | `iro-trace.txt` | All IRO optimizer passes concatenated | Frontend (both compilers) |
 | `iro-NN-<phase>.txt` | One file per optimizer pass (split from trace) | Frontend (both compilers) |
 | `iro-summary.txt` | Pass-iteration-aware node ledger | Frontend (both compilers) |
+| `backend-events.v1.jsonl` | Raw retail backend/regalloc events | GC/1.2.5n backend (`debug retro backend`) |
+| `backend-onepass-summary.json` | Hook completeness summary and warnings | GC/1.2.5n backend (`debug retro backend`) |
+| `backend-trace.v1.json` | Stable PCode, frame, and allocator facts | GC/1.2.5n backend (`debug retro backend`) |
+| `regalloc-summary.txt` | Compact allocator summary for diffs | GC/1.2.5n backend (`debug retro backend`) |
+| `backend-summary.txt` | Human-readable backend/PCode/frame summary | GC/1.2.5n backend (`debug retro backend`) |
+| `backend-fidelity.json` / `backend-fidelity.txt` | Retail-vs-mwcc-debug comparison | `verify-backend`, `backend --verify-debug` |
 | `frontend-NN-ast-<pass>.txt` | AST per front-end pass | GC/1.1 backend (`--compiler 1.1`) |
 | `backend-NN-<pass>.txt` | Back-end PCode per pass | GC/1.1 backend (`--compiler 1.1`) |
 | `regalloc-<cls>-pass-N-all.txt` | Register-allocator priority/cost/adjacency | GC/1.1 backend (`--compiler 1.1`) |
@@ -77,6 +107,72 @@ Output goes to `build/mwcc_retro/<unit>/<fn>/`:
 | `variables.txt` | Stack allocation map (variable home assignments) | GC/1.1 backend (`--compiler 1.1`) |
 | `launch.log` | Emulator stdout/stderr for this run | Both |
 | `provenance.json` | Compiler identity, pinned SHAs, fidelity-gate result | Both |
+
+### Backend Map Probe
+
+```bash
+melee-agent debug retro probe-backend-map <src.c> -f <FUNCTION> [-O OUT]
+```
+
+This command is a GC/1.2.5n reverse-engineering aid for the backend tracer
+confidence gate. It writes `backend-map-candidates.json` with every required
+backend map key, static PE evidence, and whether that entry still needs a live
+invariant. Without `--static-only`, it first runs the normal raw object
+byte-parity gate, then attaches the retail compiler under retrowin32+gdb and
+writes `backend-map-probe.json` with the backend stage hits observed while the
+requested function compiles. It also writes `backend-map-evidence.json`, a
+normalized classifier output that separates live-invariant promotable facts from
+blocked facts with reasons.
+
+`probe-backend-map` intentionally does **not** emit `backend-events.v1.jsonl`,
+`backend-trace.v1.json`, or summaries. It is for validating the retail
+GC/1.2.5n address/struct map before the full backend/regalloc trace path is
+allowed to consume it.
+
+### Backend IG Snapshot Probe
+
+```bash
+melee-agent debug retro probe-backend-ig <src.c> -f <FUNCTION> [-O OUT]
+```
+
+Captures the retail GC/1.2.5n interference graph, coalesced-alias mappings,
+post-`colorgraph` order, and observed assignment/blocker rows as partial
+backend facts:
+
+- `backend-ig-snapshot.json`: requested-function match status, functions seen,
+  captured register classes, and hook errors.
+- `backend-ig-snapshot-events.v1.jsonl`: `function_start`, `backend_marker`,
+  `regclass`, `node`, `edge`, `coalesce_mapping`, `coalesce_mapping_empty`,
+  `simplify_order`, `select_order`, and optional `color_decision` events.
+- `backend-colorgraph-trace.json`: sidecar status for exact internal
+  `colorgraph` decision breakpoints.
+- `backend-colorgraph-decisions.v1.jsonl`: sidecar `function_start` plus
+  exact internal `color_decision` rows when the requested function exercises
+  retail `colorgraph` selection.
+
+This command intentionally does not write `backend-trace.v1.json`,
+`regalloc-summary.txt`, or `backend-summary.txt`, and it does not claim full
+allocator replay. The `backend-colorgraph-*` sidecar is validated and useful
+for allocator-choice evidence; use `debug retro backend` when you need those
+facts normalized with PCode and frame state into the full trace schema.
+
+### Backend PCode Snapshot Probe
+
+```bash
+melee-agent debug retro probe-backend-pcode <src.c> -f <FUNCTION> [-O OUT]
+```
+
+Captures a retail GC/1.2.5n PCode/block snapshot at a proven backend PCode
+stage and writes partial backend facts:
+
+- `backend-pcode-snapshot.json`: requested-function match status, functions
+  seen, captured pass counts, and hook errors.
+- `backend-pcode-snapshot-events.v1.jsonl`: `function_start`,
+  `backend_marker`, `block`, and `pcode_instruction` events.
+
+This command intentionally does not write `backend-trace.v1.json`,
+`regalloc-summary.txt`, or `backend-summary.txt`. It avoids the ambiguous
+PCodeBlock line/loop-weight region and does not claim allocator decisions.
 
 ### Verify
 
@@ -87,8 +183,8 @@ melee-agent debug retro verify
 Cross-checks the emulated retail compile against the normal wibo build by
 **byte-comparing the produced `.o`** for a control TU. If they are
 byte-identical, the emulator is a faithful oracle and its dumps can be trusted.
-(The vreg-map / regalloc-count / LOOPWEIGHT cross-checks from the design depend
-on the GC/1.2.5n backend port and are a #542 follow-on.)
+Use `debug retro verify-backend` or `debug retro backend --verify-debug` for
+retail backend/regalloc comparison against mwcc-debug pcdump facts.
 
 Use `verify` when you suspect the emulated path has drifted from retail, or
 after a vendor SHA update.
