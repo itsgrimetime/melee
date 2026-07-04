@@ -14,7 +14,8 @@ COMPILER = {"family": "MWCC", "version": "GC/1.2.5n", "retail": True}
 SOURCE = {
     "tu": "src/melee/test/unit.c",
     "function": "test_fn",
-    "mwcc_command_hash": "sha256:events",
+    "mwcc_command": "test mwcc command events test_fn",
+    "mwcc_command_hash": "sha256:f74695e683c6f9bfe6eb33a4065ed1780d8cd018328a414a7c38c219d2c74861",
 }
 
 
@@ -36,6 +37,7 @@ def test_jsonl_events_normalize_to_backend_trace():
     first_instruction = first_pass["instructions"][0]
     first_edge = cls["edges"][0]
     first_decision = cls["color_decisions"][0]
+    frame = fn["frame"]
 
     assert trace["schema_version"] == backend_schema.SCHEMA_VERSION
     assert trace["struct_map"]["schema_version"] == backend_schema.STRUCT_MAP_SCHEMA_VERSION
@@ -85,6 +87,29 @@ def test_jsonl_events_normalize_to_backend_trace():
     assert first_decision["blocked_candidates"][0]["holder_ig_id"] == 33
     assert first_decision["candidate_phys_ordered"] == [31, 30]
     assert first_decision["provenance"] == "colorgraph"
+    assert frame["base_size_bytes"] == 32
+    assert frame["call_args_size_bytes"] == 16
+    assert frame["objects"] == [
+        {
+            "area": "locals",
+            "name": "tmp_a",
+            "stack_offset": -8,
+            "size": 4,
+            "type": "s32",
+            "confidence": "observed",
+            "provenance": "frame_locals",
+        },
+        {
+            "area": "arguments",
+            "name": "arg_slot",
+            "stack_offset": 8,
+            "size": 4,
+            "type": "s32",
+            "confidence": "observed",
+            "provenance": "frame_arguments",
+        },
+    ]
+    assert frame["source_stage"] == "final_scheduler"
     assert backend_schema.validate_backend_trace(trace) == []
 
 
@@ -147,6 +172,57 @@ def test_allocator_event_with_conflicting_class_identifiers_is_rejected():
             source=SOURCE,
             tool_version="test",
         )
+
+
+def test_coalesced_alias_inherits_later_root_assignment_when_root_phys_is_null():
+    events = backend_events.load_events(FIXTURE)
+    mapping = next(event for event in events if event["event"] == "coalesce_mapping")
+    mapping["root_phys"] = None
+
+    trace = backend_events.normalize_events(
+        events,
+        compiler=COMPILER,
+        source=SOURCE,
+        tool_version="test",
+    )
+
+    cls = trace["functions"][0]["regalloc"]["classes"][0]
+    nodes = {node["ig_id"]: node for node in cls["nodes"]}
+    assert nodes[40]["color_status"] == "coalesced_alias"
+    assert nodes[40]["assigned_phys"] == 31
+    assert nodes[40]["coalesced_into"] == 32
+    assert backend_schema.validate_backend_trace(trace) == []
+
+
+def test_spill_color_decision_marks_node_spilled():
+    events = backend_events.load_events(FIXTURE)
+    first_decision = next(
+        event for event in events
+        if event.get("event") == "color_decision" and event.get("id") == "gpr-c1"
+    )
+    first_decision["assigned_phys"] = None
+    first_decision["available_phys_ordered"] = []
+    first_decision["candidate_phys_ordered"] = []
+    first_decision["chosen_source"] = "spill"
+    first_decision["tie_rule"] = "none_spill"
+    first_decision["decision_rule"] = "spill_no_available_color"
+    first_decision["spill"] = {"spilled": True, "reason": "no_available_color"}
+
+    trace = backend_events.normalize_events(
+        events,
+        compiler=COMPILER,
+        source=SOURCE,
+        tool_version="test",
+    )
+
+    cls = trace["functions"][0]["regalloc"]["classes"][0]
+    nodes = {node["ig_id"]: node for node in cls["nodes"]}
+    node = nodes[33]
+    assert node["color_status"] == "spilled"
+    assert node["assigned_phys"] is None
+    assert node["spill"] == {"spilled": True, "reason": "no_available_color"}
+    assert node["color_decision_ref"] == "gpr-c1"
+    assert backend_schema.validate_backend_trace(trace) == []
 
 
 def test_load_events_reports_invalid_json_line_number(tmp_path):

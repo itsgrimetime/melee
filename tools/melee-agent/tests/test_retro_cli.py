@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -75,45 +76,48 @@ def test_retro_dump_uses_explicit_melee_root_for_paths(monkeypatch, tmp_path):
     assert provenance["melee_root"] == str(repo.resolve())
 
 
-def test_retro_dump_125n_backend_gap_writes_source_attribution(
+def test_retro_dump_125n_backend_routes_to_full_trace(
     monkeypatch,
     tmp_path,
 ):
     import src.cli.debug.retro as retro
+    trace = json.loads(
+        (
+            Path(__file__).resolve().parents[3]
+            / "tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json"
+        ).read_text()
+    )
     seen = {}
 
-    def fake_launch(**kw):
-        seen["launch"] = kw
-        return retro.DumpOutcome(
-            exit_code=4,
-            produced=["frontend"],
-            missing=["backend"],
-        )
+    def fake_backend_trace(**kw):
+        seen["backend"] = kw
+        kw["out_dir"].mkdir(parents=True, exist_ok=True)
+        return retro.BackendOutcome(exit_code=0, trace=trace, fidelity=None)
 
-    def fake_attribution(**kw):
-        seen["attribution"] = kw
-        path = kw["out_dir"] / "backend-source-attribution.json"
-        path.write_text('{"status": "backend-trace-unavailable"}\n')
-        return path
+    def fail_launch(**_kw):
+        raise AssertionError("1.2.5n backend-only dump should use full tracer")
 
-    monkeypatch.setattr(retro, "_launch_dump", fake_launch)
+    monkeypatch.setattr(retro, "_launch_dump", fail_launch)
+    monkeypatch.setattr(retro, "_run_backend_trace", fake_backend_trace)
     monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(retro, "_write_backend_source_attribution", fake_attribution)
 
     result = runner.invoke(app, [
         "debug", "retro", "dump",
         "src/melee/mn/mnvibration.c",
         "-f", "mnVibration_80248644",
         "--compiler", "1.2.5n",
-        "--phases", "all",
+        "--phases", "backend",
         "-O", str(tmp_path),
     ])
 
-    assert result.exit_code == 4
-    assert seen["attribution"]["compiler"] == "1.2.5n"
-    assert seen["attribution"]["missing"] == ["backend"]
-    assert "backend source attribution" in result.output
-    assert "backend-source-attribution.json" in result.output
+    assert result.exit_code == 0, result.output
+    assert seen["backend"]["src"] == "src/melee/mn/mnvibration.c"
+    assert seen["backend"]["fn"] == "mnVibration_80248644"
+    assert seen["backend"]["verify_debug"] is False
+    assert (tmp_path / "backend-trace.v1.json").exists()
+    assert (tmp_path / "regalloc-summary.txt").exists()
+    assert (tmp_path / "backend-summary.txt").exists()
+    assert not (tmp_path / "backend-source-attribution.json").exists()
 
 
 def test_retro_backend_source_attribution_records_missing_pcdump(

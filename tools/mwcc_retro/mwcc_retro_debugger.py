@@ -180,6 +180,13 @@ def run_in_gdb():
                 print(f"[retro] ABORT: {error}")
             _continue_to_exit(gdb)
             return
+        reader_errors = struct_map.validate_backend_reader_capability(table)
+        if reader_errors:
+            print("[retro] ABORT: backend reader capability gate failed")
+            for error in reader_errors:
+                print(f"[retro] ABORT: {error}")
+            _continue_to_exit(gdb)
+            return
         _enable_backend_tracing(gdb, cad, table, out_dir, fn)
     else:  # "frontend" or "all"
         _enable_frontend_tracing(gdb, cad, table, out_dir, fn)

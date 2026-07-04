@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ SCHEMA_VERSION = "mwcc-retro-backend-trace.v1"
 STRUCT_MAP_SCHEMA_VERSION = "mwcc-retro-struct-map.v1"
 
 REQUIRED_TOP = ("schema_version", "compiler", "source", "functions")
+REQUIRED_SOURCE_FIELDS = ("tu", "function", "mwcc_command", "mwcc_command_hash")
 REQUIRED_REGISTER_FIELDS = (
     "physical_count",
     "allocatable",
@@ -63,6 +65,7 @@ REQUIRED_COLOR_DECISION_FIELDS = (
     "decision_rule",
     "confidence",
     "provenance",
+    "blocked_by",
 )
 VALID_COLOR_STATUS = {
     "colored",
@@ -71,6 +74,7 @@ VALID_COLOR_STATUS = {
     "precolored",
     "uncolored",
 }
+VALID_FRAME_AREAS = {"arguments", "locals", "temps"}
 
 
 def load_backend_trace(path: str | Path) -> dict[str, Any]:
@@ -103,6 +107,8 @@ def validate_backend_trace(payload: dict[str, Any]) -> list[str]:
         ):
             errors.append("compiler must describe retail MWCC GC/1.2.5n")
 
+    _validate_source(payload.get("source"), errors)
+
     functions = payload.get("functions")
     if not isinstance(functions, list) or not functions:
         errors.append("functions must be a non-empty list")
@@ -114,6 +120,8 @@ def validate_backend_trace(payload: dict[str, Any]) -> list[str]:
             continue
 
         fn_name = str(fn.get("name", fn_index))
+        _validate_frame(fn_name, fn.get("frame"), errors)
+
         regalloc = fn.get("regalloc") or {}
         if not isinstance(regalloc, dict):
             errors.append(f"function {fn_name} regalloc must be object")
@@ -130,6 +138,61 @@ def validate_backend_trace(payload: dict[str, Any]) -> list[str]:
             errors.extend(_validate_class(fn_name, cls))
 
     return errors
+
+
+def _validate_source(source: Any, errors: list[str]) -> None:
+    if not isinstance(source, dict):
+        errors.append("source must be object")
+        return
+
+    for key in _missing(source, REQUIRED_SOURCE_FIELDS):
+        errors.append(f"source missing {key}")
+
+    command = source.get("mwcc_command")
+    command_hash = source.get("mwcc_command_hash")
+    if not isinstance(command, str) or not command:
+        errors.append("source mwcc_command must be non-empty string")
+    if not isinstance(command_hash, str) or not command_hash:
+        errors.append("source mwcc_command_hash must be non-empty string")
+    elif isinstance(command, str) and command:
+        expected = "sha256:" + hashlib.sha256(command.encode()).hexdigest()
+        if command_hash != expected:
+            errors.append("source mwcc_command_hash does not match mwcc_command")
+
+
+def _validate_frame(fn_name: str, frame: Any, errors: list[str]) -> None:
+    if not isinstance(frame, dict):
+        errors.append(f"function {fn_name} missing frame")
+        return
+
+    for key in ("base_size_bytes", "call_args_size_bytes"):
+        value = frame.get(key)
+        if not isinstance(value, int) or value < 0:
+            errors.append(f"function {fn_name} frame {key} must be non-negative int")
+
+    objects = frame.get("objects")
+    if not isinstance(objects, list):
+        errors.append(f"function {fn_name} frame objects must be a list")
+        objects = []
+    for index, obj in enumerate(objects):
+        if not isinstance(obj, dict):
+            errors.append(f"function {fn_name} frame object[{index}] must be object")
+            continue
+        area = obj.get("area")
+        if area not in VALID_FRAME_AREAS:
+            errors.append(f"function {fn_name} frame object[{index}] invalid area {area!r}")
+        for key in ("name", "confidence", "provenance"):
+            if not isinstance(obj.get(key), str) or not obj.get(key):
+                errors.append(f"function {fn_name} frame object[{index}] missing {key}")
+        for key in ("stack_offset", "size"):
+            if not isinstance(obj.get(key), int):
+                errors.append(f"function {fn_name} frame object[{index}] missing {key}")
+        if isinstance(obj.get("size"), int) and obj["size"] < 0:
+            errors.append(f"function {fn_name} frame object[{index}] size must be non-negative")
+
+    for key in ("source_stage", "provenance"):
+        if not isinstance(frame.get(key), str) or not frame.get(key):
+            errors.append(f"function {fn_name} frame missing {key}")
 
 
 def _missing(mapping: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
@@ -258,7 +321,111 @@ def _index_decisions(
                     f"blocked candidate holder {holder} missing"
                 )
 
+        _validate_color_decision_completeness(
+            fn_name,
+            class_name,
+            decision_id,
+            decision,
+            node_by_id,
+            errors,
+        )
+
     return decision_by_id
+
+
+def _validate_color_decision_completeness(
+    fn_name: str,
+    class_name: Any,
+    decision_id: str,
+    decision: dict[str, Any],
+    node_by_id: dict[int, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    if (
+        decision.get("confidence") == "observed-partial"
+        or decision.get("provenance") == "retail-colorgraph-return"
+        or decision.get("tie_rule") == "unavailable-retail-post-colorgraph"
+        or decision.get("decision_rule") == "retail-post-colorgraph-observed-assignment"
+    ):
+        errors.append(
+            f"{fn_name}:{class_name} color decision {decision_id} "
+            "is partial post-colorgraph observation"
+        )
+
+    state = decision.get("node_state_before_select")
+    if not isinstance(state, dict):
+        errors.append(
+            f"{fn_name}:{class_name} color decision {decision_id} "
+            "node_state_before_select must be object"
+        )
+    else:
+        for key in ("precolored", "coalesced", "spill_marked", "rematerialized"):
+            if key not in state:
+                errors.append(
+                    f"{fn_name}:{class_name} color decision {decision_id} "
+                    f"node_state_before_select missing {key}"
+                )
+            elif not isinstance(state.get(key), bool):
+                errors.append(
+                    f"{fn_name}:{class_name} color decision {decision_id} "
+                    f"node_state_before_select {key} must be bool"
+                )
+
+    available = decision.get("available_phys_ordered")
+    if not isinstance(available, list):
+        errors.append(
+            f"{fn_name}:{class_name} color decision {decision_id} "
+            "available_phys_ordered must be a list"
+        )
+    elif decision.get("assigned_phys") is not None and not available:
+        errors.append(
+            f"{fn_name}:{class_name} color decision {decision_id} "
+            "available_phys_ordered must be non-empty"
+        )
+
+    candidates = decision.get("candidate_phys_ordered")
+    if not isinstance(candidates, list):
+        errors.append(
+            f"{fn_name}:{class_name} color decision {decision_id} "
+            "candidate_phys_ordered must be a list"
+        )
+    else:
+        assigned_phys = decision.get("assigned_phys")
+        if assigned_phys is not None and assigned_phys not in candidates:
+            errors.append(
+                f"{fn_name}:{class_name} color decision {decision_id} "
+                f"candidate_phys_ordered must include assigned_phys {assigned_phys}"
+            )
+
+    blocked_by = decision.get("blocked_by")
+    if not isinstance(blocked_by, list):
+        errors.append(
+            f"{fn_name}:{class_name} color decision {decision_id} blocked_by must be a list"
+        )
+    else:
+        for blocked in blocked_by:
+            if not isinstance(blocked, dict):
+                errors.append(
+                    f"{fn_name}:{class_name} color decision {decision_id} "
+                    "blocked_by entry must be object"
+                )
+                continue
+            holder = blocked.get("ig_id")
+            if not isinstance(holder, int):
+                errors.append(
+                    f"{fn_name}:{class_name} color decision {decision_id} "
+                    "blocked_by entry missing ig_id"
+                )
+            elif holder not in node_by_id:
+                errors.append(
+                    f"{fn_name}:{class_name} color decision {decision_id} "
+                    f"blocked_by references missing node {holder}"
+                )
+            if not isinstance(blocked.get("phys"), int):
+                errors.append(
+                    f"{fn_name}:{class_name} color decision {decision_id} "
+                    "blocked_by entry missing phys"
+                )
 
 
 def _validate_edges(
@@ -332,6 +499,12 @@ def _validate_nodes(
             _validate_colored_node(fn_name, class_name, node, decision_by_id, errors)
         elif status == "coalesced_alias":
             _validate_coalesced_alias(fn_name, class_name, node, node_by_id, errors)
+        elif status == "spilled":
+            _validate_spilled_node(fn_name, class_name, node, decision_by_id, errors)
+        elif status == "precolored":
+            _validate_precolored_node(fn_name, class_name, node, errors)
+        elif status == "uncolored" and node.get("select_order") is not None:
+            errors.append(f"{fn_name}:{class_name} selected node {node_id} remains uncolored")
 
 
 def _validate_colored_node(
@@ -369,6 +542,63 @@ def _validate_colored_node(
 
     if node.get("select_order") is None:
         errors.append(f"{fn_name}:{class_name} colored node {node_id} missing select_order")
+
+
+def _validate_precolored_node(
+    fn_name: str,
+    class_name: Any,
+    node: dict[str, Any],
+    errors: list[str],
+) -> None:
+    node_id = node.get("ig_id", "<missing-ig>")
+    if node.get("assigned_phys") is None:
+        errors.append(f"{fn_name}:{class_name} precolored node {node_id} missing assigned_phys")
+
+
+def _validate_spilled_node(
+    fn_name: str,
+    class_name: Any,
+    node: dict[str, Any],
+    decision_by_id: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    node_id = node.get("ig_id", "<missing-ig>")
+    ref = node.get("color_decision_ref")
+    decision = None
+    if ref is None:
+        errors.append(f"{fn_name}:{class_name} spilled node {node_id} missing color_decision_ref")
+    elif str(ref) not in decision_by_id:
+        errors.append(
+            f"{fn_name}:{class_name} spilled node {node_id} references missing color decision {ref}"
+        )
+    else:
+        decision = decision_by_id[str(ref)]
+        if decision.get("ig_id") != node_id:
+            errors.append(
+                f"{fn_name}:{class_name} spilled node {node_id} decision {ref} "
+                f"has ig_id {decision.get('ig_id')}"
+            )
+        if decision.get("assigned_phys") is not None:
+            errors.append(
+                f"{fn_name}:{class_name} spilled node {node_id} decision {ref} "
+                "has assigned_phys"
+            )
+        decision_spill = decision.get("spill")
+        if not isinstance(decision_spill, dict) or decision_spill.get("spilled") is not True:
+            errors.append(
+                f"{fn_name}:{class_name} spilled node {node_id} decision {ref} "
+                "missing spill.spilled true"
+            )
+
+    if node.get("assigned_phys") is not None:
+        errors.append(f"{fn_name}:{class_name} spilled node {node_id} must not have assigned_phys")
+
+    spill = node.get("spill")
+    if not isinstance(spill, dict) or spill.get("spilled") is not True:
+        errors.append(f"{fn_name}:{class_name} spilled node {node_id} missing spill.spilled true")
+
+    if node.get("select_order") is None:
+        errors.append(f"{fn_name}:{class_name} spilled node {node_id} missing select_order")
 
 
 def _validate_coalesced_alias(

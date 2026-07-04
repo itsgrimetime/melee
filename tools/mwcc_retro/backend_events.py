@@ -12,6 +12,7 @@ ALLOCATOR_EVENTS = {
     "node",
     "edge",
     "coalesce_mapping",
+    "coalesce_mapping_empty",
     "simplify_order",
     "select_order",
     "color_decision",
@@ -95,6 +96,8 @@ class _Normalizer:
             self._apply_pcode_instruction(event)
         elif kind == "regclass":
             self._apply_regclass(event)
+        elif kind == "frame_state":
+            self._apply_frame_state(event)
         elif kind == "backend_marker":
             return
         elif kind in ALLOCATOR_EVENTS:
@@ -105,6 +108,8 @@ class _Normalizer:
                 self._apply_edge(cls, event)
             elif kind == "coalesce_mapping":
                 self._apply_coalesce_mapping(cls, event)
+            elif kind == "coalesce_mapping_empty":
+                return
             elif kind == "simplify_order":
                 self._apply_order(cls, event, "simplify_order")
             elif kind == "select_order":
@@ -260,9 +265,22 @@ class _Normalizer:
         node = self.nodes_by_class[id(cls)].get(decision.get("ig_id"))
         if node is not None:
             node["assigned_phys"] = decision.get("assigned_phys")
-            node["color_status"] = "colored"
+            if decision.get("assigned_phys") is None and decision.get("spill", {}).get("spilled"):
+                node["color_status"] = "spilled"
+                node["spill"] = copy.deepcopy(decision["spill"])
+            else:
+                node["color_status"] = "colored"
             node["coalesced_into"] = None
             node["color_decision_ref"] = decision.get("id")
+
+    def _apply_frame_state(self, event: dict[str, Any]) -> None:
+        self.function["frame"] = {
+            "base_size_bytes": event["base_size_bytes"],
+            "call_args_size_bytes": event["call_args_size_bytes"],
+            "objects": copy.deepcopy(event.get("objects", [])),
+            "source_stage": event.get("source_stage", ""),
+            "provenance": event.get("provenance", "frame_state"),
+        }
 
     def _require_class(self, event: dict[str, Any], kind: str) -> dict[str, Any]:
         class_name = event.get("class_name")
@@ -290,13 +308,17 @@ class _Normalizer:
                 root = nodes.get(mapping["root"])
                 if alias is None or root is None:
                     continue
-                alias["color_status"] = "coalesced_alias"
                 alias["coalesced_into"] = root["ig_id"]
-                alias["assigned_phys"] = mapping.get("root_phys", root.get("assigned_phys"))
+                inherited_phys = mapping.get("root_phys")
+                if inherited_phys is None:
+                    inherited_phys = root.get("assigned_phys")
+                alias["assigned_phys"] = inherited_phys
                 alias["color_decision_ref"] = None
                 alias["simplify_order"] = None
                 alias["select_order"] = None
                 alias["coalesce"]["root_ig_id"] = root["ig_id"]
+                if inherited_phys is not None:
+                    alias["color_status"] = "coalesced_alias"
 
                 root["coalesce"].setdefault("aliases", [])
                 if alias["ig_id"] not in root["coalesce"]["aliases"]:

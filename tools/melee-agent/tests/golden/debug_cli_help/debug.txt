@@ -30,7 +30,7 @@
 │                      functions.                                              │
 │ search               Fast+directed match-search substrate (Spec 1).          │
 │ retro                Retail-binary MWCC introspection via retrowin32 + gdb   │
-│                      (front-end IRO tracing, backend PCode, regalloc, stack  │
-│                      maps).                                                  │
+│                      (GC/1.2.5n front-end IRO and backend/regalloc traces,   │
+│                      plus GC/1.1 backend dumps).                             │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 

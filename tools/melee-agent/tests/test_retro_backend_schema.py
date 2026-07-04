@@ -1,5 +1,6 @@
 import json
 import sys
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -32,11 +33,50 @@ def test_compiler_must_be_object():
     assert any("compiler must be object" in e for e in errors)
 
 
+def test_source_requires_mwcc_command_and_matching_hash():
+    data = json.loads(FIXTURE.read_text())
+    source = data["source"]
+    command = source["mwcc_command"]
+    assert source["mwcc_command_hash"] == (
+        "sha256:" + hashlib.sha256(command.encode()).hexdigest()
+    )
+
+    source.pop("mwcc_command")
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("source missing mwcc_command" in e for e in errors)
+
+    source["mwcc_command"] = command
+    source["mwcc_command_hash"] = "sha256:bad"
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("source mwcc_command_hash does not match mwcc_command" in e for e in errors)
+
+
 def test_regalloc_must_be_object():
     data = json.loads(FIXTURE.read_text())
     data["functions"][0]["regalloc"] = "regalloc"
     errors = backend_schema.validate_backend_trace(data)
     assert any("function test_fn regalloc must be object" in e for e in errors)
+
+
+def test_frame_map_is_required_and_validated():
+    data = json.loads(FIXTURE.read_text())
+    frame = data["functions"][0].pop("frame")
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("function test_fn missing frame" in e for e in errors)
+
+    data = json.loads(FIXTURE.read_text())
+    frame = data["functions"][0]["frame"]
+    frame["base_size_bytes"] = -1
+    frame["objects"][0]["area"] = "unknown"
+    frame["objects"][0].pop("stack_offset")
+    frame["objects"].append("bad")
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("frame base_size_bytes must be non-negative int" in e for e in errors)
+    assert any("frame object[0] invalid area 'unknown'" in e for e in errors)
+    assert any("frame object[0] missing stack_offset" in e for e in errors)
+    assert any("frame object[2] must be object" in e for e in errors)
+
+    assert frame
 
 
 def test_colored_node_without_decision_is_invalid():
@@ -66,6 +106,59 @@ def test_colored_node_requires_assigned_phys():
     assert any("colored node 32 missing assigned_phys" in e for e in errors)
 
 
+def test_precolored_node_requires_assigned_phys():
+    data = json.loads(FIXTURE.read_text())
+    node = data["functions"][0]["regalloc"]["classes"][0]["nodes"][0]
+    node["color_status"] = "precolored"
+    node["assigned_phys"] = None
+    node["color_decision_ref"] = None
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("precolored node 32 missing assigned_phys" in e for e in errors)
+
+
+def test_selected_uncolored_node_is_invalid():
+    data = json.loads(FIXTURE.read_text())
+    node = data["functions"][0]["regalloc"]["classes"][0]["nodes"][0]
+    node["color_status"] = "uncolored"
+    node["assigned_phys"] = None
+    node["color_decision_ref"] = None
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("selected node 32 remains uncolored" in e for e in errors)
+
+
+def test_spilled_node_requires_spill_decision_and_no_assigned_phys():
+    data = json.loads(FIXTURE.read_text())
+    cls = data["functions"][0]["regalloc"]["classes"][0]
+    node = cls["nodes"][1]
+    decision = cls["color_decisions"][1]
+    node["color_status"] = "spilled"
+    node["assigned_phys"] = None
+    node["spill"] = {"spilled": True, "reason": "no_available_color"}
+    decision["assigned_phys"] = None
+    decision["available_phys_ordered"] = []
+    decision["candidate_phys_ordered"] = []
+    decision["chosen_source"] = "spill"
+    decision["tie_rule"] = "none_spill"
+    decision["decision_rule"] = "spill_no_available_color"
+    decision["spill"] = {"spilled": True, "reason": "no_available_color"}
+
+    assert backend_schema.validate_backend_trace(data) == []
+
+    node["color_decision_ref"] = None
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("spilled node 33 missing color_decision_ref" in e for e in errors)
+
+    node["color_decision_ref"] = "gpr-c1"
+    node["assigned_phys"] = 30
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("spilled node 33 must not have assigned_phys" in e for e in errors)
+
+    node["assigned_phys"] = None
+    node["spill"] = {"spilled": False, "reason": None}
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("spilled node 33 missing spill.spilled true" in e for e in errors)
+
+
 def test_coalesced_alias_may_have_null_select_and_decision():
     data = json.loads(FIXTURE.read_text())
     cls = data["functions"][0]["regalloc"]["classes"][0]
@@ -92,8 +185,60 @@ def test_color_decision_requires_pressure_fields():
     data = json.loads(FIXTURE.read_text())
     decision = data["functions"][0]["regalloc"]["classes"][0]["color_decisions"][0]
     decision.pop("blocked_candidates")
+    decision.pop("blocked_by")
     errors = backend_schema.validate_backend_trace(data)
     assert any("color decision gpr-c0 missing blocked_candidates" in e for e in errors)
+    assert any("color decision gpr-c0 missing blocked_by" in e for e in errors)
+
+
+def test_full_schema_rejects_partial_post_colorgraph_decision():
+    data = json.loads(FIXTURE.read_text())
+    decision = data["functions"][0]["regalloc"]["classes"][0]["color_decisions"][0]
+    decision.update(
+        {
+            "node_state_before_select": {
+                "status": "unavailable",
+                "reason": "retail-post-colorgraph-only",
+            },
+            "available_phys_ordered": [],
+            "candidate_phys_ordered": [31],
+            "chosen_source": "observed-retail-assignment",
+            "tie_rule": "unavailable-retail-post-colorgraph",
+            "decision_rule": "retail-post-colorgraph-observed-assignment",
+            "confidence": "observed-partial",
+            "provenance": "retail-colorgraph-return",
+            "source_stage": "colorgraph_return",
+        }
+    )
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("color decision gpr-c0 is partial post-colorgraph observation" in e for e in errors)
+    assert any("color decision gpr-c0 node_state_before_select missing precolored" in e for e in errors)
+    assert any("color decision gpr-c0 available_phys_ordered must be non-empty" in e for e in errors)
+
+
+def test_color_decision_candidates_must_explain_assigned_phys():
+    data = json.loads(FIXTURE.read_text())
+    decision = data["functions"][0]["regalloc"]["classes"][0]["color_decisions"][0]
+    decision["candidate_phys_ordered"] = [30]
+    errors = backend_schema.validate_backend_trace(data)
+    assert any(
+        "color decision gpr-c0 candidate_phys_ordered must include assigned_phys 31" in e
+        for e in errors
+    )
+
+
+def test_color_decision_blocked_by_requires_holder_and_phys():
+    data = json.loads(FIXTURE.read_text())
+    decision = data["functions"][0]["regalloc"]["classes"][0]["color_decisions"][0]
+    decision["blocked_by"] = [
+        {"ig_id": 99, "phys": 3},
+        {"ig_id": 33},
+        "bad",
+    ]
+    errors = backend_schema.validate_backend_trace(data)
+    assert any("color decision gpr-c0 blocked_by references missing node 99" in e for e in errors)
+    assert any("color decision gpr-c0 blocked_by entry missing phys" in e for e in errors)
+    assert any("color decision gpr-c0 blocked_by entry must be object" in e for e in errors)
 
 
 def test_register_metadata_requires_initial_pool_and_boundaries():

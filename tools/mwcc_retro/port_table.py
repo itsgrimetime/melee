@@ -84,7 +84,7 @@ NINJA_RANGES_125N: list[tuple[int, int]] = [
     (0x506510, 0x50653E),
 ]
 
-# Backend port progress (#542): byte-correlated GC/1.1 -> 1.2.5n .text addresses
+# Backend port progress (#1158): byte-correlated GC/1.1 -> 1.2.5n .text addresses
 # that landed CONFIDENTLY (unique, plausibility-checked). Kept SEPARATE from the
 # active descriptor entries on purpose — the full backend run (cad.run_compiler)
 # needs the complete set incl. cmangler + the .bss data globals (interference
@@ -194,7 +194,7 @@ def build_table(src_exe, dst_exe) -> dict:
     for name, e in entries.items():
         if e["va"] and overlaps_ninja(e["va"], NINJA_RANGES_125N):
             raise AssertionError(f"table entry {name} overlaps Ninji patch range")
-    # backend_partial is recorded porting progress (#542), deliberately NOT in
+    # backend_partial is recorded porting progress (#1158), deliberately NOT in
     # active `entries` so an incomplete backend set never half-runs.
     return {"compiler": "1.2.5n", "entries": entries,
             "backend_partial": dict(BACKEND_PARTIAL_125N)}

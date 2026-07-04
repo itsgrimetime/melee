@@ -9,7 +9,8 @@
   "source": {
     "tu": "src/melee/test/unit.c",
     "function": "test_fn",
-    "mwcc_command_hash": "sha256:fixture"
+    "mwcc_command": "build/compilers/GC/1.2.5n/mwcceppc.exe -O4,p -proc gekko -c src/melee/test/unit.c -o build/GALE01/src/melee/test/unit.o",
+    "mwcc_command_hash": "sha256:63a4e3bb7348d3aa2be64a0665e45439743fa16389144b7da93b38b22a8b97fd"
   },
   "functions": [
     {
@@ -64,6 +65,32 @@
           }
         ],
         "instruction_identity_note": "instruction ids are stable only within this trace"
+      },
+      "frame": {
+        "base_size_bytes": 32,
+        "call_args_size_bytes": 16,
+        "objects": [
+          {
+            "area": "locals",
+            "name": "tmp_a",
+            "stack_offset": -8,
+            "size": 4,
+            "type": "s32",
+            "confidence": "observed",
+            "provenance": "frame_locals"
+          },
+          {
+            "area": "arguments",
+            "name": "arg_slot",
+            "stack_offset": 8,
+            "size": 4,
+            "type": "s32",
+            "confidence": "observed",
+            "provenance": "frame_arguments"
+          }
+        ],
+        "source_stage": "final_scheduler",
+        "provenance": "frame_locals"
       },
       "regalloc": {
         "classes": [

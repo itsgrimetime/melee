@@ -31,6 +31,14 @@ def _blocked_summary(decision: dict[str, Any] | None) -> str:
     return "blocked=" + (",".join(pairs) if pairs else "-")
 
 
+def _frame_area_label(area: Any) -> str:
+    return {
+        "arguments": "argument",
+        "locals": "local",
+        "temps": "temp",
+    }.get(area, str(area))
+
+
 def render_regalloc_summary(trace: dict[str, Any]) -> str:
     out: list[str] = [f"schema {trace.get('schema_version')}", ""]
     for fn in trace.get("functions", []):
@@ -67,6 +75,21 @@ def render_backend_summary(trace: dict[str, Any]) -> str:
                 out.append(
                     f"  {inst.get('id')} {inst.get('block_id')} "
                     f"{inst.get('opcode')} {inst.get('operands')}"
+                )
+        frame = fn.get("frame")
+        if isinstance(frame, dict):
+            out.append(
+                "frame "
+                f"base={frame.get('base_size_bytes')} "
+                f"call_args={frame.get('call_args_size_bytes')}"
+            )
+            for obj in frame.get("objects", []):
+                if not isinstance(obj, dict):
+                    continue
+                out.append(
+                    f"  {_frame_area_label(obj.get('area'))} {obj.get('name')} "
+                    f"offset={obj.get('stack_offset')} size={obj.get('size')} "
+                    f"type={obj.get('type', '')}"
                 )
         for cls in (fn.get("regalloc") or {}).get("classes", []):
             out.append(f"regalloc class {cls.get('class_name')}({cls.get('class_id')})")

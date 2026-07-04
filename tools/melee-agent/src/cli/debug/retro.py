@@ -10,13 +10,18 @@ import typer
 
 retro_app = typer.Typer(
     help="Retail-binary MWCC introspection via retrowin32 + gdb "
-         "(front-end IRO tracing, backend PCode, regalloc, stack maps)."
+    "(GC/1.2.5n front-end IRO and backend/regalloc traces, plus GC/1.1 backend dumps)."
 )
 
 # Package checkout discovery (this file is tools/melee-agent/src/cli/debug/retro.py).
 _PACKAGE_REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_PACKAGE_REPO))
-from tools.mwcc_retro import backend_events, TABLES_DIR, setup as retro_setup  # noqa: E402
+from tools.mwcc_retro import (  # noqa: E402
+    backend_events,
+    backend_trace_assembler,
+    TABLES_DIR,
+    setup as retro_setup,
+)
 
 
 @dataclass
@@ -32,6 +37,29 @@ class BackendOutcome:
     trace: dict | None = None
     fidelity: dict | None = None
     missing: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BackendIgSnapshotOutcome:
+    exit_code: int
+    summary_path: Path | None = None
+    events_path: Path | None = None
+
+
+@dataclass
+class BackendPcodeSnapshotOutcome:
+    exit_code: int
+    summary_path: Path | None = None
+    events_path: Path | None = None
+
+
+@dataclass
+class BackendCandidateOutcome:
+    exit_code: int
+    trace: dict | None = None
+    map_dir: Path | None = None
+    pcode_dir: Path | None = None
+    ig_dir: Path | None = None
 
 
 def _looks_like_melee_root(path: Path) -> bool:
@@ -105,6 +133,24 @@ def _write_backend_outputs(
         (out_dir / "backend-fidelity.txt").write_text(
             backend_fidelity.render_fidelity_text(fidelity)
         )
+
+
+def _write_backend_candidate_outputs(out_dir: Path, trace: dict) -> None:
+    from tools.mwcc_retro import backend_schema, backend_summary
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    errors = backend_schema.validate_backend_trace(trace)
+    if errors:
+        raise RuntimeError("backend candidate trace schema errors: " + "; ".join(errors))
+    (out_dir / "backend-trace.candidate.v1.json").write_text(
+        json.dumps(trace, indent=2, sort_keys=True) + "\n"
+    )
+    (out_dir / "regalloc-summary.candidate.txt").write_text(
+        backend_summary.render_regalloc_summary(trace)
+    )
+    (out_dir / "backend-summary.candidate.txt").write_text(
+        backend_summary.render_backend_summary(trace)
+    )
 
 
 def _tail_text(value, *, limit: int = 2000) -> str:
@@ -240,6 +286,7 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
     import shlex
     import subprocess
 
+    from tools.mwcc_retro import struct_map
     from tools.mwcc_retro import setup as _setup
 
     setup_result = _setup.ensure_for_root(melee_root, force=False)
@@ -249,6 +296,20 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
     launcher = melee_root / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
     if not launcher.exists():
         launcher = _PACKAGE_REPO / "tools" / "mwcc_retro" / "mwcc_retro_debugger.py"
+
+    table_data = json.loads(table.read_text())
+    map_errors = struct_map.validate_required_backend_map(table_data)
+    if map_errors:
+        raise RuntimeError(
+            "backend event launcher requires validated 1.2.5n struct map: "
+            + "; ".join(map_errors)
+        )
+    reader_errors = struct_map.validate_backend_reader_capability(table_data)
+    if reader_errors:
+        raise RuntimeError(
+            "backend event launcher requires complete backend reader: "
+            + "; ".join(reader_errors)
+        )
 
     ninja_cmd = _ninja_cmd_for_unit(src, melee_root=melee_root)
     parts = shlex.split(ninja_cmd)
@@ -273,6 +334,10 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
         "1.2.5n",
         fn,
     ]
+    hook = melee_root / "tools" / "mwcc_retro" / "backend_onepass_trace_hook.py"
+    if not hook.exists():
+        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_onepass_trace_hook.py"
+    cmd[-1:-1] = ["--gdb-py", str(hook)]
     env = dict(os.environ, RETRO_SOURCE=src, RETRO_FUNCTION=fn)
     command_text = shlex.join([str(part) for part in cmd])
     launch_log = out_dir / "launch.log"
@@ -348,7 +413,1279 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
             "backend event launcher produced no backend-events.v1.jsonl"
             + ("\n" + _tail(combined) if combined.strip() else "")
         )
+    try:
+        _validate_onepass_candidate_summary(out_dir, fn=fn)
+        _validate_onepass_event_function_start(backend_events.load_events(events_path), fn=fn)
+        _promote_onepass_summary_for_full_backend(out_dir)
+    except (RuntimeError, ValueError) as exc:
+        remove_partial_events()
+        raise RuntimeError(f"backend event launcher produced invalid trace: {exc}") from exc
     return events_path
+
+
+def _remove_backend_probe_stale_artifacts(out_dir: Path) -> None:
+    """Remove backend trace artifacts that would make probe output ambiguous."""
+    names = {
+        "backend-map-candidates.json",
+        "backend-map-probe.json",
+        "backend-map-evidence.json",
+        "backend-ig-snapshot.json",
+        "backend-ig-snapshot-events.v1.jsonl",
+        "backend-pcode-snapshot.json",
+        "backend-pcode-snapshot-events.v1.jsonl",
+        "backend-colorgraph-decisions.v1.jsonl",
+        "backend-colorgraph-trace.json",
+        "backend-events.v1.jsonl",
+        "backend-trace.v1.json",
+        "backend-summary.txt",
+        "regalloc-summary.txt",
+        "backend-fidelity.json",
+        "backend-fidelity.txt",
+        "backend-source-attribution.json",
+        "backend-trace.candidate.v1.json",
+        "backend-summary.candidate.txt",
+        "regalloc-summary.candidate.txt",
+        "launch.log",
+        "provenance.json",
+        "variables.txt",
+    }
+    for name in names:
+        (out_dir / name).unlink(missing_ok=True)
+    for pattern in ("backend-*.txt", "regalloc-*.txt"):
+        for path in out_dir.glob(pattern):
+            if path.is_file():
+                path.unlink()
+
+
+def _remove_backend_dump_text_artifacts(out_dir: Path) -> None:
+    for pattern in ("backend-*.txt", "regalloc-*.txt"):
+        for path in out_dir.glob(pattern):
+            if path.is_file():
+                path.unlink()
+
+
+def _validate_backend_map_probe_payload(path: Path, *, fn: str) -> dict:
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"backend map probe wrote invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("backend map probe payload must be a JSON object")
+
+    problems: list[str] = []
+    if payload.get("schema_version") != "mwcc-retro-backend-map-probe.v1":
+        problems.append(
+            "backend map probe wrote unexpected schema "
+            f"{payload.get('schema_version')!r}"
+        )
+    if payload.get("requested_function") != fn:
+        problems.append(
+            "backend map probe requested_function mismatch: "
+            f"{payload.get('requested_function')!r} != {fn!r}"
+        )
+    if payload.get("requested_function_matched") is not True:
+        problems.append(f"backend map probe did not observe requested function {fn}")
+    errors = payload.get("errors") or []
+    if errors:
+        problems.append(f"backend map probe recorded {len(errors)} error(s): {errors!r}")
+    if problems:
+        raise RuntimeError("; ".join(problems))
+    return payload
+
+
+def _validate_backend_ig_snapshot_payload(path: Path, *, fn: str) -> dict:
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"backend IG snapshot wrote invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("backend IG snapshot payload must be a JSON object")
+
+    problems: list[str] = []
+    if payload.get("schema_version") != "mwcc-retro-backend-ig-snapshot.v1":
+        problems.append(
+            "backend IG snapshot wrote unexpected schema "
+            f"{payload.get('schema_version')!r}"
+        )
+    if payload.get("requested_function") != fn:
+        problems.append(
+            "backend IG snapshot requested_function mismatch: "
+            f"{payload.get('requested_function')!r} != {fn!r}"
+        )
+    if payload.get("requested_function_matched") is not True:
+        problems.append(f"backend IG snapshot did not observe requested function {fn}")
+    errors = payload.get("errors") or []
+    if errors:
+        problems.append(
+            f"backend IG snapshot recorded {len(errors)} error(s): {errors!r}"
+        )
+    classes = payload.get("classes_seen")
+    if not isinstance(classes, list) or not classes:
+        problems.append("backend IG snapshot did not record any register classes")
+    if problems:
+        raise RuntimeError("; ".join(problems))
+    return payload
+
+
+def _validate_backend_ig_snapshot_events(path: Path, *, fn: str) -> None:
+    from tools.mwcc_retro import struct_map
+
+    allowed_events = set(struct_map.REQUIRED_BACKEND_IG_SNAPSHOT_FAMILIES)
+    required_events = allowed_events - {"edge", "coalesce_mapping_empty", "color_decision"}
+    problems: list[str] = []
+    event_count = 0
+    function_start_seen = False
+    seen_events: set[str] = set()
+    regclass_ids: set[int] = set()
+    regclass_names: set[str] = set()
+    regclass_names_by_id: dict[int, str] = {}
+    node_classes: dict[int, set[int]] = {}
+    order_events_by_class: dict[int, set[str]] = {}
+    coalesce_events_by_class: dict[int, set[str]] = {}
+    coalesce_aliases_by_class: dict[int, set[int]] = {}
+    color_decision_ids_by_class: dict[int, set[str]] = {}
+
+    def resolve_allocator_class(event: dict, *, kind: str, lineno: int) -> int | None:
+        class_id = event.get("class_id")
+        if not isinstance(class_id, int) or class_id not in regclass_ids:
+            problems.append(
+                f"line {lineno} {kind} references class_id {class_id!r} "
+                "before regclass"
+            )
+            return None
+
+        class_name = event.get("class_name")
+        expected_name = regclass_names_by_id.get(class_id)
+        if not isinstance(class_name, str) or not class_name:
+            problems.append(f"line {lineno} {kind} missing class_name")
+        elif expected_name is not None and class_name != expected_name:
+            problems.append(
+                f"line {lineno} class_id {class_id} registered as "
+                f"{expected_name!r} but {kind} reports class_name {class_name!r}"
+            )
+        return class_id
+
+    with path.open(encoding="utf-8") as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            event_count += 1
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "backend IG snapshot events wrote invalid JSON on "
+                    f"line {lineno}: {exc}"
+                ) from exc
+            if not isinstance(event, dict):
+                problems.append(f"line {lineno} event must be a JSON object")
+                continue
+
+            kind = event.get("event")
+            if kind not in allowed_events:
+                problems.append(f"line {lineno} unexpected event {kind!r}")
+                continue
+            seen_events.add(kind)
+            if kind == "coalesce_mapping_empty":
+                seen_events.add("coalesce_mapping")
+
+            if kind == "function_start":
+                if function_start_seen:
+                    problems.append("backend IG snapshot events duplicate function_start")
+                function_start_seen = True
+                name = event.get("name")
+                if name != fn:
+                    problems.append(
+                        "backend IG snapshot events function_start mismatch: "
+                        f"{name!r} != {fn!r}"
+                    )
+            elif kind == "regclass":
+                class_id = event.get("class_id")
+                class_name = event.get("class_name")
+                if not isinstance(class_id, int):
+                    problems.append(f"line {lineno} regclass missing integer class_id")
+                elif class_id in regclass_ids:
+                    problems.append(
+                        f"backend IG snapshot events duplicate regclass class_id {class_id}"
+                    )
+                else:
+                    regclass_ids.add(class_id)
+                    node_classes.setdefault(class_id, set())
+                    order_events_by_class.setdefault(class_id, set())
+                    coalesce_events_by_class.setdefault(class_id, set())
+                    coalesce_aliases_by_class.setdefault(class_id, set())
+                    color_decision_ids_by_class.setdefault(class_id, set())
+
+                if not isinstance(class_name, str) or not class_name:
+                    problems.append(f"line {lineno} regclass missing class_name")
+                elif class_name in regclass_names:
+                    problems.append(
+                        "backend IG snapshot events duplicate regclass class_name "
+                        f"{class_name!r}"
+                    )
+                else:
+                    regclass_names.add(class_name)
+                    if isinstance(class_id, int):
+                        regclass_names_by_id[class_id] = class_name
+
+                registers = event.get("registers")
+                if not isinstance(registers, dict) or not registers:
+                    problems.append(f"line {lineno} regclass missing register metadata")
+            elif kind == "node":
+                class_id = resolve_allocator_class(event, kind=kind, lineno=lineno)
+                if class_id is None:
+                    continue
+                ig_id = event.get("ig_id")
+                if not isinstance(ig_id, int):
+                    problems.append(f"line {lineno} node missing integer ig_id")
+                else:
+                    node_classes.setdefault(class_id, set()).add(ig_id)
+            elif kind == "edge":
+                class_id = resolve_allocator_class(event, kind=kind, lineno=lineno)
+                if class_id is None:
+                    continue
+                for key in ("a", "b"):
+                    endpoint = event.get(key)
+                    if not isinstance(endpoint, int):
+                        problems.append(f"line {lineno} edge missing integer {key}")
+                    elif endpoint not in node_classes.get(class_id, set()):
+                        problems.append(
+                            f"line {lineno} edge references missing node {endpoint} "
+                            f"in class_id {class_id}"
+                        )
+            elif kind in {"coalesce_mapping", "coalesce_mapping_empty"}:
+                class_id = resolve_allocator_class(event, kind=kind, lineno=lineno)
+                if class_id is None:
+                    continue
+
+                coalesce_events_by_class.setdefault(class_id, set()).add(kind)
+
+                for key in ("source_stage", "provenance"):
+                    if not isinstance(event.get(key), str) or not event.get(key):
+                        problems.append(f"line {lineno} {kind} missing {key}")
+
+                if kind == "coalesce_mapping_empty":
+                    continue
+
+                emitted_nodes = node_classes.get(class_id, set())
+                alias = event.get("alias")
+                root = event.get("root")
+                if not isinstance(alias, int):
+                    problems.append(f"line {lineno} coalesce_mapping missing integer alias")
+                elif alias not in emitted_nodes:
+                    problems.append(
+                        f"line {lineno} coalesce_mapping references missing alias node "
+                        f"{alias} in class_id {class_id}"
+                    )
+                else:
+                    seen_aliases = coalesce_aliases_by_class.setdefault(class_id, set())
+                    if alias in seen_aliases:
+                        problems.append(
+                            "backend IG snapshot events duplicate coalesce_mapping "
+                            f"alias {alias} for class_id {class_id}"
+                        )
+                    else:
+                        seen_aliases.add(alias)
+
+                if not isinstance(root, int):
+                    problems.append(f"line {lineno} coalesce_mapping missing integer root")
+                elif isinstance(alias, int) and alias == root:
+                    problems.append(
+                        f"line {lineno} coalesce_mapping self-map alias {alias} "
+                        f"root {root} in class_id {class_id}"
+                    )
+                elif root not in emitted_nodes:
+                    problems.append(
+                        f"line {lineno} coalesce_mapping references missing root node "
+                        f"{root} in class_id {class_id}"
+                    )
+            elif kind in {"simplify_order", "select_order"}:
+                class_id = resolve_allocator_class(event, kind=kind, lineno=lineno)
+                if class_id is None:
+                    continue
+
+                seen_orders = order_events_by_class.setdefault(class_id, set())
+                if kind in seen_orders:
+                    problems.append(
+                        f"backend IG snapshot events duplicate {kind} "
+                        f"for class_id {class_id}"
+                    )
+                else:
+                    seen_orders.add(kind)
+
+                order = event.get("order")
+                if not isinstance(order, list):
+                    problems.append(f"line {lineno} {kind} missing order list")
+                else:
+                    emitted_nodes = node_classes.get(class_id, set())
+                    seen_order_ids: set[int] = set()
+                    for ig_id in order:
+                        if not isinstance(ig_id, int):
+                            problems.append(f"line {lineno} {kind} contains non-integer ig id")
+                        elif ig_id not in emitted_nodes:
+                            problems.append(
+                                f"line {lineno} {kind} references missing node {ig_id} "
+                                f"in class_id {class_id}"
+                            )
+                        elif ig_id in seen_order_ids:
+                            problems.append(
+                                f"line {lineno} {kind} duplicates ig id {ig_id} "
+                                f"in class_id {class_id}"
+                            )
+                        else:
+                            seen_order_ids.add(ig_id)
+
+                for key in ("source_stage", "provenance"):
+                    if not isinstance(event.get(key), str) or not event.get(key):
+                        problems.append(f"line {lineno} {kind} missing {key}")
+            elif kind == "color_decision":
+                class_id = resolve_allocator_class(event, kind=kind, lineno=lineno)
+                if class_id is None:
+                    continue
+
+                if event.get("source_stage") != "colorgraph_return":
+                    problems.append(f"line {lineno} color_decision missing source_stage")
+                if event.get("provenance") != "retail-colorgraph-return":
+                    problems.append(
+                        "line "
+                        f"{lineno} color_decision provenance must be retail-colorgraph-return"
+                    )
+                if event.get("confidence") != "observed-partial":
+                    problems.append(
+                        f"line {lineno} color_decision confidence must be observed-partial"
+                    )
+                if event.get("chosen_source") != "observed-retail-assignment":
+                    problems.append(
+                        "line "
+                        f"{lineno} color_decision chosen_source must be "
+                        "observed-retail-assignment"
+                    )
+                if event.get("available_phys_ordered") != []:
+                    problems.append(
+                        "line "
+                        f"{lineno} color_decision available_phys_ordered must be "
+                        "empty for partial observed facts"
+                    )
+                if event.get("tie_rule") != "unavailable-retail-post-colorgraph":
+                    problems.append(
+                        "line "
+                        f"{lineno} color_decision tie_rule must be "
+                        "unavailable-retail-post-colorgraph"
+                    )
+                if event.get("decision_rule") != "retail-post-colorgraph-observed-assignment":
+                    problems.append(
+                        "line "
+                        f"{lineno} color_decision decision_rule must be "
+                        "retail-post-colorgraph-observed-assignment"
+                    )
+                if event.get("node_state_before_select") != {
+                    "status": "unavailable",
+                    "reason": "retail-post-colorgraph-only",
+                }:
+                    problems.append(
+                        "line "
+                        f"{lineno} color_decision node_state_before_select must mark "
+                        "retail-post-colorgraph-only"
+                    )
+
+                decision_id = event.get("id")
+                if not isinstance(decision_id, str) or not decision_id:
+                    problems.append(f"line {lineno} color_decision missing id")
+                else:
+                    seen_decisions = color_decision_ids_by_class.setdefault(class_id, set())
+                    if decision_id in seen_decisions:
+                        problems.append(
+                            "backend IG snapshot events duplicate color_decision "
+                            f"id {decision_id} for class_id {class_id}"
+                        )
+                    else:
+                        seen_decisions.add(decision_id)
+
+                emitted_nodes = node_classes.get(class_id, set())
+                ig_id = event.get("ig_id")
+                if not isinstance(ig_id, int):
+                    problems.append(f"line {lineno} color_decision missing integer ig_id")
+                elif ig_id not in emitted_nodes:
+                    problems.append(
+                        f"line {lineno} color_decision references missing node {ig_id} "
+                        f"in class_id {class_id}"
+                    )
+
+                blocked_candidates = event.get("blocked_candidates", [])
+                if not isinstance(blocked_candidates, list):
+                    problems.append(
+                        f"line {lineno} color_decision blocked_candidates must be list"
+                    )
+                else:
+                    for blocked in blocked_candidates:
+                        if not isinstance(blocked, dict):
+                            problems.append(
+                                f"line {lineno} color_decision blocked candidate must be object"
+                            )
+                            continue
+                        holder = blocked.get("holder_ig_id")
+                        if not isinstance(holder, int):
+                            problems.append(
+                                "line "
+                                f"{lineno} color_decision blocked candidate missing "
+                                "integer holder_ig_id"
+                            )
+                        elif holder not in emitted_nodes:
+                            problems.append(
+                                "line "
+                                f"{lineno} color_decision blocked candidate references "
+                                f"missing holder node {holder} in class_id {class_id}"
+                            )
+
+    if event_count == 0:
+        problems.append("backend IG snapshot events file is empty")
+    if not function_start_seen:
+        problems.append("backend IG snapshot events missing function_start")
+    if not regclass_ids:
+        problems.append("backend IG snapshot events missing regclass")
+    missing_events = sorted(required_events - seen_events)
+    if missing_events:
+        problems.append(
+            "backend IG snapshot events missing required event families: "
+            + ", ".join(missing_events)
+        )
+    for class_id, kinds in sorted(order_events_by_class.items()):
+        missing_order = sorted({"select_order", "simplify_order"} - kinds)
+        if missing_order:
+            problems.append(
+                f"backend IG snapshot events class_id {class_id} missing order "
+                "event families: " + ", ".join(missing_order)
+            )
+    for class_id, kinds in sorted(coalesce_events_by_class.items()):
+        if not kinds:
+            problems.append(
+                f"backend IG snapshot events class_id {class_id} missing "
+                "coalesce_mapping event family"
+            )
+        elif {"coalesce_mapping", "coalesce_mapping_empty"} <= kinds:
+            problems.append(
+                f"backend IG snapshot events class_id {class_id} emitted both "
+                "coalesce_mapping and coalesce_mapping_empty"
+            )
+
+    if problems:
+        raise RuntimeError("; ".join(problems))
+
+
+def _validate_backend_colorgraph_decision_events(path: Path, *, fn: str) -> None:
+    problems: list[str] = []
+    function_start_seen = False
+    event_count = 0
+    decision_ids: set[str] = set()
+
+    with path.open(encoding="utf-8") as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            event_count += 1
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "backend colorgraph decision events wrote invalid JSON on "
+                    f"line {lineno}: {exc}"
+                ) from exc
+            if not isinstance(event, dict):
+                problems.append(f"line {lineno} event must be a JSON object")
+                continue
+
+            kind = event.get("event")
+            if kind == "function_start":
+                if function_start_seen:
+                    problems.append("backend colorgraph events duplicate function_start")
+                function_start_seen = True
+                name = event.get("name")
+                if name != fn:
+                    problems.append(
+                        "backend colorgraph events function_start mismatch: "
+                        f"{name!r} != {fn!r}"
+                    )
+                continue
+            if kind != "color_decision":
+                problems.append(f"line {lineno} unexpected colorgraph event {kind!r}")
+                continue
+
+            decision_id = event.get("id")
+            if not isinstance(decision_id, str) or not decision_id:
+                problems.append(f"line {lineno} colorgraph decision missing id")
+                decision_id = f"<line-{lineno}>"
+            elif decision_id in decision_ids:
+                problems.append(
+                    f"backend colorgraph events duplicate decision id {decision_id}"
+                )
+            else:
+                decision_ids.add(decision_id)
+
+            for key in ("class_name", "chosen_source", "tie_rule", "decision_rule"):
+                if not isinstance(event.get(key), str) or not event.get(key):
+                    problems.append(
+                        f"line {lineno} colorgraph decision {decision_id} missing {key}"
+                    )
+            for key in ("class_id", "ig_id", "iter"):
+                if not isinstance(event.get(key), int):
+                    problems.append(
+                        f"line {lineno} colorgraph decision {decision_id} "
+                        f"missing integer {key}"
+                    )
+
+            if event.get("source_stage") != "colorgraph":
+                problems.append(f"line {lineno} colorgraph decision missing source_stage")
+            if event.get("provenance") != "retail-colorgraph-internal":
+                problems.append(
+                    "line "
+                    f"{lineno} colorgraph decision provenance must be "
+                    "retail-colorgraph-internal"
+                )
+            if event.get("confidence") != "observed-internal":
+                problems.append(
+                    f"line {lineno} colorgraph decision confidence must be observed-internal"
+                )
+
+            for key in (
+                "available_phys_ordered",
+                "candidate_phys_ordered",
+                "blocked_candidates",
+                "blocked_by",
+                "reserved_or_precolored_filtered",
+                "volatile_pool_before",
+                "volatile_pool_after",
+            ):
+                if not isinstance(event.get(key), list):
+                    problems.append(
+                        f"line {lineno} colorgraph decision {decision_id} {key} must be list"
+                    )
+            for key in ("nonvolatile_dispense_before", "nonvolatile_dispense_after"):
+                if not isinstance(event.get(key), dict):
+                    problems.append(
+                        f"line {lineno} colorgraph decision {decision_id} {key} must be object"
+                    )
+
+            assigned_phys = event.get("assigned_phys")
+            candidates = event.get("candidate_phys_ordered")
+            if assigned_phys is not None:
+                if not isinstance(assigned_phys, int):
+                    problems.append(
+                        f"line {lineno} colorgraph decision {decision_id} "
+                        "assigned_phys must be integer or null"
+                    )
+                elif isinstance(candidates, list) and assigned_phys not in candidates:
+                    problems.append(
+                        f"line {lineno} colorgraph decision candidate_phys_ordered "
+                        f"must include assigned_phys {assigned_phys}"
+                    )
+
+            state = event.get("node_state_before_select")
+            if not isinstance(state, dict):
+                problems.append(
+                    f"line {lineno} colorgraph decision {decision_id} "
+                    "node_state_before_select must be object"
+                )
+            else:
+                for key in (
+                    "precolored",
+                    "coalesced",
+                    "spill_marked",
+                    "rematerialized",
+                ):
+                    if key not in state:
+                        problems.append(
+                            f"line {lineno} colorgraph decision "
+                            f"node_state_before_select missing {key}"
+                        )
+                    elif not isinstance(state.get(key), bool):
+                        problems.append(
+                            f"line {lineno} colorgraph decision "
+                            f"node_state_before_select {key} must be bool"
+                        )
+
+    if event_count == 0:
+        problems.append("backend colorgraph decision events file is empty")
+    if not function_start_seen:
+        problems.append("backend colorgraph decision events missing function_start")
+    if problems:
+        raise RuntimeError("; ".join(problems))
+
+
+def _validate_backend_colorgraph_trace_payload(path: Path, *, fn: str) -> dict:
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"backend colorgraph trace wrote invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("backend colorgraph trace payload must be a JSON object")
+
+    problems: list[str] = []
+    if payload.get("schema_version") != "mwcc-retro-backend-colorgraph-trace.v1":
+        problems.append(
+            "backend colorgraph trace wrote unexpected schema "
+            f"{payload.get('schema_version')!r}"
+        )
+    if payload.get("requested_function") != fn:
+        problems.append(
+            "backend colorgraph trace requested_function mismatch: "
+            f"{payload.get('requested_function')!r} != {fn!r}"
+        )
+    if payload.get("requested_function_matched") is not True:
+        problems.append(f"backend colorgraph trace did not observe requested function {fn}")
+    errors = payload.get("errors") or []
+    if errors:
+        problems.append(
+            f"backend colorgraph trace recorded {len(errors)} error(s): {errors!r}"
+        )
+    breakpoints = payload.get("internal_breakpoints")
+    if not isinstance(breakpoints, dict) or not breakpoints:
+        problems.append("backend colorgraph trace missing internal_breakpoints")
+    if not isinstance(payload.get("decisions_seen"), list):
+        problems.append("backend colorgraph trace decisions_seen must be a list")
+    if problems:
+        raise RuntimeError("; ".join(problems))
+    return payload
+
+
+def _validate_backend_pcode_snapshot_payload(path: Path, *, fn: str) -> dict:
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"backend PCode snapshot wrote invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("backend PCode snapshot payload must be a JSON object")
+
+    problems: list[str] = []
+    if payload.get("schema_version") != "mwcc-retro-backend-pcode-snapshot.v1":
+        problems.append(
+            "backend PCode snapshot wrote unexpected schema "
+            f"{payload.get('schema_version')!r}"
+        )
+    if payload.get("requested_function") != fn:
+        problems.append(
+            "backend PCode snapshot requested_function mismatch: "
+            f"{payload.get('requested_function')!r} != {fn!r}"
+        )
+    if payload.get("requested_function_matched") is not True:
+        problems.append(f"backend PCode snapshot did not observe requested function {fn}")
+    errors = payload.get("errors") or []
+    if errors:
+        problems.append(
+            f"backend PCode snapshot recorded {len(errors)} error(s): {errors!r}"
+        )
+    passes = payload.get("passes_seen")
+    if not isinstance(passes, list) or not passes:
+        problems.append("backend PCode snapshot did not record any PCode passes")
+    if problems:
+        raise RuntimeError("; ".join(problems))
+    return payload
+
+
+def _validate_backend_pcode_snapshot_events(path: Path, *, fn: str) -> None:
+    from tools.mwcc_retro import struct_map
+
+    allowed_events = set(struct_map.REQUIRED_BACKEND_PCODE_SNAPSHOT_FAMILIES)
+    problems: list[str] = []
+    event_count = 0
+    function_start_seen = False
+    seen_events: set[str] = set()
+    block_ids: set[str] = set()
+    instruction_ids: set[str] = set()
+
+    with path.open(encoding="utf-8") as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            event_count += 1
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "backend PCode snapshot events wrote invalid JSON on "
+                    f"line {lineno}: {exc}"
+                ) from exc
+            if not isinstance(event, dict):
+                problems.append(f"line {lineno} event must be a JSON object")
+                continue
+
+            kind = event.get("event")
+            if kind not in allowed_events:
+                problems.append(f"line {lineno} unexpected event {kind!r}")
+                continue
+            seen_events.add(kind)
+
+            if kind == "function_start":
+                if function_start_seen:
+                    problems.append("backend PCode snapshot events duplicate function_start")
+                function_start_seen = True
+                name = event.get("name")
+                if name != fn:
+                    problems.append(
+                        "backend PCode snapshot events function_start mismatch: "
+                        f"{name!r} != {fn!r}"
+                    )
+            elif kind == "block":
+                block_id = event.get("id")
+                if not isinstance(block_id, str) or not block_id:
+                    problems.append(f"line {lineno} block missing id")
+                elif block_id in block_ids:
+                    problems.append(
+                        f"backend PCode snapshot events duplicate block {block_id!r}"
+                    )
+                else:
+                    block_ids.add(block_id)
+                if not isinstance(event.get("order"), int):
+                    problems.append(f"line {lineno} block missing integer order")
+            elif kind == "pcode_instruction":
+                instr_id = event.get("id")
+                if not isinstance(instr_id, str) or not instr_id:
+                    problems.append(f"line {lineno} pcode_instruction missing id")
+                elif instr_id in instruction_ids:
+                    problems.append(
+                        "backend PCode snapshot events duplicate pcode_instruction "
+                        f"{instr_id!r}"
+                    )
+                else:
+                    instruction_ids.add(instr_id)
+                block_id = event.get("block_id")
+                if block_id not in block_ids:
+                    problems.append(
+                        f"line {lineno} pcode_instruction references missing block "
+                        f"{block_id!r}"
+                    )
+                for key in ("order",):
+                    if not isinstance(event.get(key), int):
+                        problems.append(
+                            f"line {lineno} pcode_instruction missing integer {key}"
+                        )
+                for key in ("pass_id", "pass_name", "opcode"):
+                    if not isinstance(event.get(key), str) or not event.get(key):
+                        problems.append(f"line {lineno} pcode_instruction missing {key}")
+
+    if event_count == 0:
+        problems.append("backend PCode snapshot events file is empty")
+    if not function_start_seen:
+        problems.append("backend PCode snapshot events missing function_start")
+    missing_events = sorted(allowed_events - seen_events)
+    if missing_events:
+        problems.append(
+            "backend PCode snapshot events missing required event families: "
+            + ", ".join(missing_events)
+        )
+    if problems:
+        raise RuntimeError("; ".join(problems))
+
+
+def _run_backend_map_probe(
+    *,
+    src: str,
+    fn: str,
+    out_dir: Path,
+    static_only: bool,
+    melee_root: Path,
+) -> DumpOutcome:
+    """Write static candidate evidence and optionally run a live map probe."""
+    from tools.mwcc_retro import backend_discovery
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _remove_backend_probe_stale_artifacts(out_dir)
+    exe = melee_root / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
+    report = backend_discovery.build_gc125n_backend_candidate_report(exe)
+    (out_dir / "backend-map-candidates.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+    )
+
+    if static_only:
+        return DumpOutcome(exit_code=0, produced=["static"], missing=[])
+
+    parity = _run_object_parity_for_backend(src=src, melee_root=melee_root)
+    if not parity.get("matched"):
+        raise RuntimeError(_format_parity_mismatch(parity))
+
+    table = _retro_tables_dir(melee_root) / "gc_125n.json"
+    hook = melee_root / "tools" / "mwcc_retro" / "backend_map_probe_hook.py"
+    if not hook.exists():
+        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_map_probe_hook.py"
+    outcome = _launch_dump(
+        src=src,
+        fn=fn,
+        phases="backend",
+        compiler="1.2.5n",
+        out_dir=out_dir,
+        table=table,
+        melee_root=melee_root,
+        gdb_py=str(hook),
+    )
+    if outcome.exit_code != 0:
+        missing = f"\nmissing: {', '.join(outcome.missing)}" if outcome.missing else ""
+        raise RuntimeError(
+            f"backend map probe launcher failed (exit {outcome.exit_code})" + missing
+        )
+    probe_path = out_dir / "backend-map-probe.json"
+    if not probe_path.exists():
+        raise RuntimeError("backend map probe did not produce backend-map-probe.json")
+    payload = _validate_backend_map_probe_payload(probe_path, fn=fn)
+    from tools.mwcc_retro import backend_map_evidence
+
+    evidence = backend_map_evidence.classify_probe_evidence(payload)
+    (out_dir / "backend-map-evidence.json").write_text(
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+    )
+    return outcome
+
+
+def _launch_backend_ig_snapshot(
+    *,
+    src: str,
+    fn: str,
+    out_dir: Path,
+    melee_root: Path,
+) -> tuple[Path, Path]:
+    from tools.mwcc_retro import struct_map
+    from tools.mwcc_retro import setup as _setup
+
+    _setup.ensure_for_root(melee_root, force=False)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = out_dir / "backend-ig-snapshot.json"
+    events_path = out_dir / "backend-ig-snapshot-events.v1.jsonl"
+    summary_path.unlink(missing_ok=True)
+    events_path.unlink(missing_ok=True)
+
+    table = _retro_tables_dir(melee_root) / "gc_125n.json"
+    table_data = json.loads(table.read_text())
+    map_errors = struct_map.validate_required_backend_map(table_data)
+    if map_errors:
+        raise RuntimeError(
+            "backend IG snapshot requires validated 1.2.5n struct map: "
+            + "; ".join(map_errors)
+        )
+    partial_errors = struct_map.validate_backend_ig_snapshot_capability(table_data)
+    if partial_errors:
+        raise RuntimeError(
+            "backend IG snapshot requires internal colorgraph PCs and partial reader: "
+            + "; ".join(partial_errors)
+        )
+
+    hook = melee_root / "tools" / "mwcc_retro" / "backend_ig_snapshot_hook.py"
+    if not hook.exists():
+        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_ig_snapshot_hook.py"
+    outcome = _launch_dump(
+        src=src,
+        fn=fn,
+        phases="backend",
+        compiler="1.2.5n",
+        out_dir=out_dir,
+        table=table,
+        melee_root=melee_root,
+        gdb_py=str(hook),
+    )
+    if outcome.exit_code != 0:
+        missing = f"\nmissing: {', '.join(outcome.missing)}" if outcome.missing else ""
+        raise RuntimeError(
+            f"backend IG snapshot launcher failed (exit {outcome.exit_code})" + missing
+        )
+    if not summary_path.exists():
+        raise RuntimeError("backend IG snapshot did not produce backend-ig-snapshot.json")
+    _validate_backend_ig_snapshot_payload(summary_path, fn=fn)
+    if not events_path.exists() or events_path.stat().st_size == 0:
+        raise RuntimeError(
+            "backend IG snapshot did not produce backend-ig-snapshot-events.v1.jsonl"
+        )
+    _validate_backend_ig_snapshot_events(events_path, fn=fn)
+    colorgraph_summary_path = out_dir / "backend-colorgraph-trace.json"
+    if colorgraph_summary_path.exists():
+        _validate_backend_colorgraph_trace_payload(colorgraph_summary_path, fn=fn)
+    colorgraph_events_path = out_dir / "backend-colorgraph-decisions.v1.jsonl"
+    if colorgraph_events_path.exists():
+        _validate_backend_colorgraph_decision_events(colorgraph_events_path, fn=fn)
+    (out_dir / "launch.log").unlink(missing_ok=True)
+    return summary_path, events_path
+
+
+def _run_backend_ig_snapshot(
+    *,
+    src: str,
+    fn: str,
+    out_dir: Path,
+    melee_root: Path,
+) -> BackendIgSnapshotOutcome:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _remove_backend_probe_stale_artifacts(out_dir)
+    parity = _run_object_parity_for_backend(src=src, melee_root=melee_root)
+    if not parity.get("matched"):
+        raise RuntimeError(_format_parity_mismatch(parity))
+    summary_path, events_path = _launch_backend_ig_snapshot(
+        src=src,
+        fn=fn,
+        out_dir=out_dir,
+        melee_root=melee_root,
+    )
+    return BackendIgSnapshotOutcome(
+        exit_code=0,
+        summary_path=summary_path,
+        events_path=events_path,
+    )
+
+
+def _launch_backend_pcode_snapshot(
+    *,
+    src: str,
+    fn: str,
+    out_dir: Path,
+    melee_root: Path,
+) -> tuple[Path, Path]:
+    from tools.mwcc_retro import struct_map
+    from tools.mwcc_retro import setup as _setup
+
+    _setup.ensure_for_root(melee_root, force=False)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = out_dir / "backend-pcode-snapshot.json"
+    events_path = out_dir / "backend-pcode-snapshot-events.v1.jsonl"
+    summary_path.unlink(missing_ok=True)
+    events_path.unlink(missing_ok=True)
+
+    table = _retro_tables_dir(melee_root) / "gc_125n.json"
+    table_data = json.loads(table.read_text())
+    map_errors = struct_map.validate_required_backend_map(table_data)
+    if map_errors:
+        raise RuntimeError(
+            "backend PCode snapshot requires validated 1.2.5n struct map: "
+            + "; ".join(map_errors)
+        )
+    partial_errors = struct_map.validate_backend_pcode_snapshot_capability(table_data)
+    if partial_errors:
+        raise RuntimeError(
+            "backend PCode snapshot requires partial reader: "
+            + "; ".join(partial_errors)
+        )
+
+    hook = melee_root / "tools" / "mwcc_retro" / "backend_pcode_snapshot_hook.py"
+    if not hook.exists():
+        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_pcode_snapshot_hook.py"
+    outcome = _launch_dump(
+        src=src,
+        fn=fn,
+        phases="backend",
+        compiler="1.2.5n",
+        out_dir=out_dir,
+        table=table,
+        melee_root=melee_root,
+        gdb_py=str(hook),
+    )
+    if outcome.exit_code != 0:
+        missing = f"\nmissing: {', '.join(outcome.missing)}" if outcome.missing else ""
+        raise RuntimeError(
+            f"backend PCode snapshot launcher failed (exit {outcome.exit_code})"
+            + missing
+        )
+    if not summary_path.exists():
+        raise RuntimeError(
+            "backend PCode snapshot did not produce backend-pcode-snapshot.json"
+        )
+    _validate_backend_pcode_snapshot_payload(summary_path, fn=fn)
+    if not events_path.exists() or events_path.stat().st_size == 0:
+        raise RuntimeError(
+            "backend PCode snapshot did not produce "
+            "backend-pcode-snapshot-events.v1.jsonl"
+        )
+    _validate_backend_pcode_snapshot_events(events_path, fn=fn)
+    (out_dir / "launch.log").unlink(missing_ok=True)
+    return summary_path, events_path
+
+
+def _run_backend_pcode_snapshot(
+    *,
+    src: str,
+    fn: str,
+    out_dir: Path,
+    melee_root: Path,
+) -> BackendPcodeSnapshotOutcome:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _remove_backend_probe_stale_artifacts(out_dir)
+    parity = _run_object_parity_for_backend(src=src, melee_root=melee_root)
+    if not parity.get("matched"):
+        raise RuntimeError(_format_parity_mismatch(parity))
+    summary_path, events_path = _launch_backend_pcode_snapshot(
+        src=src,
+        fn=fn,
+        out_dir=out_dir,
+        melee_root=melee_root,
+    )
+    return BackendPcodeSnapshotOutcome(
+        exit_code=0,
+        summary_path=summary_path,
+        events_path=events_path,
+    )
+
+
+def _run_backend_candidate_trace(
+    *,
+    src: str,
+    fn: str,
+    out_dir: Path,
+    melee_root: Path,
+    one_pass: bool = False,
+) -> BackendCandidateOutcome:
+    if one_pass:
+        return _run_backend_onepass_candidate_trace(
+            src=src,
+            fn=fn,
+            out_dir=out_dir,
+            melee_root=melee_root,
+        )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _remove_backend_probe_stale_artifacts(out_dir)
+    map_dir = out_dir / "map"
+    pcode_dir = out_dir / "pcode"
+    ig_dir = out_dir / "ig"
+
+    _run_backend_map_probe(
+        src=src,
+        fn=fn,
+        out_dir=map_dir,
+        static_only=False,
+        melee_root=melee_root,
+    )
+    pcode = _run_backend_pcode_snapshot(
+        src=src,
+        fn=fn,
+        out_dir=pcode_dir,
+        melee_root=melee_root,
+    )
+    ig = _run_backend_ig_snapshot(
+        src=src,
+        fn=fn,
+        out_dir=ig_dir,
+        melee_root=melee_root,
+    )
+
+    map_probe_path = map_dir / "backend-map-probe.json"
+    if not map_probe_path.exists():
+        raise RuntimeError("backend candidate missing map/backend-map-probe.json")
+    if pcode.events_path is None or not pcode.events_path.exists():
+        raise RuntimeError("backend candidate missing PCode events")
+    if ig.events_path is None or not ig.events_path.exists():
+        raise RuntimeError("backend candidate missing IG events")
+    colorgraph_events_path = ig_dir / "backend-colorgraph-decisions.v1.jsonl"
+    if not colorgraph_events_path.exists():
+        raise RuntimeError("backend candidate missing colorgraph decision events")
+
+    frame_events = backend_trace_assembler.frame_events_from_map_probe_payload(
+        json.loads(map_probe_path.read_text())
+    )
+    pcode_events = backend_events.load_events(pcode.events_path)
+    ig_events = backend_events.load_events(ig.events_path)
+    colorgraph_events = backend_events.load_events(colorgraph_events_path)
+    trace = backend_trace_assembler.assemble_candidate_trace(
+        pcode_events=pcode_events,
+        ig_events=ig_events,
+        frame_events=frame_events,
+        colorgraph_events=colorgraph_events,
+        compiler={"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
+        source=_backend_source_metadata(src=src, fn=fn, melee_root=melee_root),
+        tool_version="mwcc-retro-candidate",
+    )
+    _write_backend_candidate_outputs(out_dir, trace)
+    return BackendCandidateOutcome(
+        exit_code=0,
+        trace=trace,
+        map_dir=map_dir,
+        pcode_dir=pcode_dir,
+        ig_dir=ig_dir,
+    )
+
+
+def _run_backend_onepass_candidate_trace(
+    *,
+    src: str,
+    fn: str,
+    out_dir: Path,
+    melee_root: Path,
+) -> BackendCandidateOutcome:
+    from tools.mwcc_retro import struct_map
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _remove_backend_probe_stale_artifacts(out_dir)
+
+    parity = _run_object_parity_for_backend(src=src, melee_root=melee_root)
+    if not parity.get("matched"):
+        raise RuntimeError(_format_parity_mismatch(parity))
+
+    table = _retro_tables_dir(melee_root) / "gc_125n.json"
+    table_data = json.loads(table.read_text())
+    map_errors = struct_map.validate_required_backend_map(table_data)
+    if map_errors:
+        raise RuntimeError(
+            "backend one-pass candidate requires validated 1.2.5n struct map: "
+            + "; ".join(map_errors)
+        )
+    pcode_errors = struct_map.validate_backend_pcode_snapshot_capability(table_data)
+    ig_errors = struct_map.validate_backend_ig_snapshot_capability(table_data)
+    if pcode_errors or ig_errors:
+        raise RuntimeError(
+            "backend one-pass candidate requires partial PCode and IG readers: "
+            + "; ".join([*pcode_errors, *ig_errors])
+        )
+
+    hook = melee_root / "tools" / "mwcc_retro" / "backend_onepass_trace_hook.py"
+    if not hook.exists():
+        hook = _PACKAGE_REPO / "tools" / "mwcc_retro" / "backend_onepass_trace_hook.py"
+    outcome = _launch_dump(
+        src=src,
+        fn=fn,
+        phases="backend",
+        compiler="1.2.5n",
+        out_dir=out_dir,
+        table=table,
+        melee_root=melee_root,
+        gdb_py=str(hook),
+    )
+    if outcome.exit_code != 0:
+        missing = f"\nmissing: {', '.join(outcome.missing)}" if outcome.missing else ""
+        raise RuntimeError(
+            f"backend one-pass candidate launcher failed (exit {outcome.exit_code})"
+            + missing
+        )
+
+    events_path = out_dir / "backend-events.v1.jsonl"
+    if not events_path.exists() or events_path.stat().st_size == 0:
+        raise RuntimeError(
+            "backend one-pass candidate did not produce backend-events.v1.jsonl"
+        )
+    _validate_onepass_candidate_summary(out_dir, fn=fn)
+    try:
+        events = backend_events.load_events(events_path)
+        _validate_onepass_event_function_start(events, fn=fn)
+        trace = backend_events.normalize_events(
+            events,
+            compiler={"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
+            source=_backend_source_metadata(src=src, fn=fn, melee_root=melee_root),
+            tool_version="mwcc-retro-candidate-one-pass",
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            f"backend one-pass candidate normalization failed: {exc}"
+        ) from exc
+    _write_backend_candidate_outputs(out_dir, trace)
+    return BackendCandidateOutcome(exit_code=0, trace=trace)
+
+
+def _compare_backend_trace_with_debug_pcdump(
+    *,
+    trace: dict,
+    src: str,
+    fn: str,
+    melee_root: Path,
+) -> dict:
+    import importlib
+
+    from tools.mwcc_retro import backend_fidelity
+
+    debug_cli = importlib.import_module("src.cli.debug")
+    pcdump_path = debug_cli._resolve_pcdump_path(
+        None,
+        fn,
+        melee_root,
+        require_fresh=False,
+    )
+    debug_trace = backend_fidelity.trace_from_mwcc_debug_pcdump(
+        pcdump_path.read_text(encoding="utf-8"),
+        function=fn,
+        source=src,
+    )
+    return backend_fidelity.compare_backend_traces(trace, debug_trace)
+
+
+def _validate_onepass_candidate_summary(out_dir: Path, *, fn: str) -> None:
+    summary_path = out_dir / "backend-onepass-candidate.json"
+    if not summary_path.exists():
+        raise RuntimeError("backend one-pass candidate missing backend-onepass-candidate.json")
+    try:
+        payload = json.loads(summary_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"backend one-pass candidate summary invalid JSON: {exc}"
+        ) from exc
+
+    requested_function = payload.get("requested_function")
+    if requested_function != fn:
+        raise RuntimeError(
+            "backend one-pass candidate requested_function mismatch: "
+            f"{requested_function!r} != {fn!r}"
+        )
+
+    if payload.get("requested_function_matched") is not True:
+        raise RuntimeError("backend one-pass candidate did not match requested function")
+
+    errors = payload.get("errors") or []
+    if errors:
+        detail = "; ".join(
+            error.get("error", str(error)) if isinstance(error, dict) else str(error)
+            for error in errors
+        )
+        raise RuntimeError(f"backend one-pass candidate hook errors: {detail}")
+
+    classes_seen = payload.get("classes_seen")
+    if not isinstance(classes_seen, list) or not classes_seen:
+        raise RuntimeError("backend one-pass candidate saw no allocator classes")
+
+    for cls in classes_seen:
+        if not isinstance(cls, dict):
+            raise RuntimeError("backend one-pass candidate class summary must be object")
+        class_name = cls.get("class_name", cls.get("class_id", "<unknown>"))
+        order_nodes = cls.get("order_nodes")
+        exact_decisions = cls.get("exact_color_decisions")
+        if not isinstance(order_nodes, int) or not isinstance(exact_decisions, int):
+            raise RuntimeError(
+                f"backend one-pass candidate class {class_name} missing decision counts"
+            )
+        if exact_decisions != order_nodes:
+            raise RuntimeError(
+                "one-pass candidate missing exact color decisions for "
+                f"{class_name}: {exact_decisions}/{order_nodes}"
+            )
+
+
+def _validate_onepass_event_function_start(events: list[dict], *, fn: str) -> None:
+    starts = [event for event in events if event.get("event") == "function_start"]
+    if not starts:
+        raise RuntimeError("backend one-pass candidate events missing function_start")
+    for event in starts:
+        name = event.get("name")
+        if name != fn:
+            raise RuntimeError(
+                "backend one-pass candidate event function_start mismatch: "
+                f"{name!r} != {fn!r}"
+            )
+        identity = event.get("identity")
+        if isinstance(identity, dict):
+            for key in ("requested", "canonical_name", "symbol_name", "source_name"):
+                value = identity.get(key)
+                if isinstance(value, str) and value != fn:
+                    raise RuntimeError(
+                        "backend one-pass candidate event identity mismatch: "
+                        f"{key}={value!r} != {fn!r}"
+                    )
+
+
+def _promote_onepass_summary_for_full_backend(out_dir: Path) -> None:
+    raw_path = out_dir / "backend-onepass-candidate.json"
+    public_path = out_dir / "backend-onepass-summary.json"
+    if not raw_path.exists():
+        return
+    payload = json.loads(raw_path.read_text())
+    payload["schema_version"] = "mwcc-retro-backend-onepass-summary.v1"
+    payload["source_sidecar"] = raw_path.name
+    payload["notes"] = [
+        "Retail GC/1.2.5n backend event stream.",
+        "Validated before assembling backend-trace.v1.json.",
+    ]
+    public_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    raw_path.unlink()
 
 
 def _run_backend_trace(
@@ -371,22 +1708,73 @@ def _run_backend_trace(
         )
     except RuntimeError:
         raise
-    events = backend_events.load_events(events_path)
-    trace = backend_events.normalize_events(
-        events,
-        compiler={"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
-        source={
-            "tu": src,
-            "function": fn,
-            "mwcc_command_hash": "sha256:"
-            + __import__("hashlib").sha256(src.encode()).hexdigest(),
-        },
-        tool_version="mwcc-retro-dev",
-    )
+    try:
+        events = backend_events.load_events(events_path)
+        trace = backend_events.normalize_events(
+            events,
+            compiler={"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
+            source=_backend_source_metadata(src=src, fn=fn, melee_root=melee_root),
+            tool_version="mwcc-retro-dev",
+        )
+    except ValueError as exc:
+        raise RuntimeError(f"backend event normalization failed: {exc}") from exc
     fidelity = None
     if verify_debug:
-        fidelity = {"schema_version": "mwcc-retro-backend-fidelity.v1", "summary": {}}
+        fidelity = _compare_backend_trace_with_debug_pcdump(
+            trace=trace,
+            src=src,
+            fn=fn,
+            melee_root=melee_root,
+        )
     return BackendOutcome(exit_code=0, trace=trace, fidelity=fidelity)
+
+
+def _backend_trace_function_names(trace: dict) -> set[str]:
+    names: set[str] = set()
+    source = trace.get("source")
+    if isinstance(source, dict) and isinstance(source.get("function"), str):
+        names.add(source["function"])
+    functions = trace.get("functions")
+    if isinstance(functions, list):
+        for function in functions:
+            if not isinstance(function, dict):
+                continue
+            if isinstance(function.get("name"), str):
+                names.add(function["name"])
+            identity = function.get("identity")
+            if isinstance(identity, dict):
+                for key in ("requested", "canonical_name", "symbol_name", "source_name"):
+                    if isinstance(identity.get(key), str):
+                        names.add(identity[key])
+                aliases = identity.get("aliases")
+                if isinstance(aliases, list):
+                    names.update(alias for alias in aliases if isinstance(alias, str))
+    return names
+
+
+def _validate_backend_trace_matches_function(trace: dict, fn: str) -> None:
+    names = _backend_trace_function_names(trace)
+    if fn not in names:
+        available = ", ".join(sorted(names)) or "<none>"
+        raise ValueError(
+            f"backend trace function mismatch: requested {fn}; trace contains {available}"
+        )
+
+
+def _resolve_backend_trace_for_verify(
+    trace_path: Path | None,
+    *,
+    out_dir: Path,
+) -> Path:
+    if trace_path is not None:
+        return trace_path
+    full_trace = out_dir / "backend-trace.v1.json"
+    if full_trace.exists():
+        return full_trace
+    candidate_trace = out_dir / "backend-trace.candidate.v1.json"
+    if candidate_trace.exists():
+        return candidate_trace
+    return full_trace
 
 
 def _ninja_cmd_for_unit(src_rel: str, *, melee_root: Path) -> str:
@@ -397,6 +1785,19 @@ def _ninja_cmd_for_unit(src_rel: str, *, melee_root: Path) -> str:
     obj = f"build/GALE01/{Path(src_rel).with_suffix('.o')}"
     compiler = "build/compilers/GC/1.2.5n/mwcceppc.exe"
     return f"{compiler} {cflags} -c {unit} -o {obj}"
+
+
+def _backend_source_metadata(*, src: str, fn: str, melee_root: Path) -> dict:
+    import hashlib
+
+    mwcc_command = _ninja_cmd_for_unit(src, melee_root=melee_root)
+    return {
+        "tu": src,
+        "function": fn,
+        "mwcc_command": mwcc_command,
+        "mwcc_command_hash": "sha256:"
+        + hashlib.sha256(mwcc_command.encode()).hexdigest(),
+    }
 
 
 def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
@@ -442,10 +1843,24 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
     cmd.append(fn)
     # Run from the active repo root so the emulated mwcceppc resolves the relative
     # source path (the ninja command uses repo-relative paths, like wibo does).
+    if phases in ("backend", "all"):
+        _remove_backend_dump_text_artifacts(out_dir)
+    env = dict(__import__("os").environ, RETRO_SOURCE=src, RETRO_FUNCTION=fn)
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
-                          cwd=str(melee_root))
+                          cwd=str(melee_root), env=env)
     log = (out_dir / "launch.log")
     log.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
+
+    combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    safety_aborted = "[retro] ABORT" in combined
+    if safety_aborted:
+        if gdb_py:
+            missing = ["hook"]
+        elif phases == "frontend":
+            missing = ["frontend"]
+        else:
+            missing = ["backend"]
+        return DumpOutcome(exit_code=5, produced=[], missing=missing)
 
     if gdb_py:
         # The hook owns the session; trace/backend post-processing doesn't apply.
@@ -457,7 +1872,6 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
     produced: list[str] = []
     missing: list[str] = []
     target_absent = False  # set by the host-side trace filter below
-    safety_aborted = "[retro] ABORT" in proc.stdout
     trace = out_dir / "iro-trace.txt"
     if phases in ("frontend", "all"):
         if trace.exists() and trace.stat().st_size > 0:
@@ -487,9 +1901,6 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         elif phases == "backend":
             missing.append("backend")
 
-    if safety_aborted and not produced:
-        # a read-before-write byte assert or fopen-NULL fired gdb-side
-        return DumpOutcome(exit_code=5, produced=produced, missing=missing)
     if proc.returncode != 0 and not produced and not target_absent:
         return DumpOutcome(exit_code=2, produced=produced, missing=missing)
     if target_absent and not produced:
@@ -518,13 +1929,14 @@ def _write_backend_source_attribution(
         "source": src,
         "compiler": compiler,
         "reason": (
-            "retail GC/1.2.5n backend/regalloc hooks are not populated; "
+            "the requested dump did not produce retail GC/1.2.5n backend/regalloc traces; "
             "this sidecar uses mwcc-debug pcdump source attribution as the "
             "actionable fallback instead of fabricating backend decisions"
         ),
         "source_attribution": [],
         "next_commands": [
             f"melee-agent debug dump local {src} --function {fn}",
+            f"melee-agent debug retro backend {src} --function {fn}",
             f"melee-agent debug inspect explain-virtual --function {fn} --virtual <ig>",
         ],
     }
@@ -640,6 +2052,28 @@ def dump_cmd(
     table = _retro_tables_dir(active_root) / (
         "gc_125n.json" if compiler == "1.2.5n" else "gc_11.json"
     )
+    if compiler == "1.2.5n" and phases == "backend" and gdb_py is None:
+        try:
+            backend_outcome = _run_backend_trace(
+                src=src,
+                fn=fn,
+                out_dir=out_dir,
+                verify_debug=False,
+                melee_root=active_root,
+            )
+            if backend_outcome.trace is not None:
+                _write_backend_outputs(out_dir, backend_outcome.trace, backend_outcome.fidelity)
+        except RuntimeError as exc:
+            typer.secho(str(exc), fg="red", err=True)
+            raise typer.Exit(2)
+        outcome = DumpOutcome(
+            exit_code=backend_outcome.exit_code,
+            produced=["backend"] if backend_outcome.trace is not None else [],
+            missing=backend_outcome.missing,
+        )
+        _write_provenance(out_dir, src, fn, compiler, table, outcome, active_root)
+        raise typer.Exit(outcome.exit_code)
+
     outcome = _launch_dump(src=src, fn=fn, phases=phases, compiler=compiler,
                            out_dir=out_dir, table=table, melee_root=active_root,
                            gdb_py=str(gdb_py) if gdb_py else "")
@@ -675,7 +2109,7 @@ def backend_cmd(
         help="Also compare the retail backend trace to the mwcc-debug pcdump.",
     ),
 ):
-    """Emit an exact retail GC/1.2.5n backend/regalloc trace."""
+    """Gated retail GC/1.2.5n backend/regalloc trace command."""
     active_root = _resolve_melee_root(melee_root)
     out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
     try:
@@ -694,6 +2128,192 @@ def backend_cmd(
     raise typer.Exit(outcome.exit_code)
 
 
+@retro_app.command("backend-candidate")
+def backend_candidate_cmd(
+    src: str = typer.Argument(..., help="TU source path to compile under retail MWCC"),
+    fn: str = typer.Option(..., "-f", "--function"),
+    out: Path = typer.Option(None, "-O", "--output"),
+    melee_root: Path = typer.Option(
+        None,
+        "--melee-root",
+        help="Active Melee checkout/worktree root. Defaults to the current cwd tree.",
+    ),
+    one_pass: bool = typer.Option(
+        False,
+        "--one-pass",
+        help=(
+            "Use the one-pass candidate hook instead of separate "
+            "map/PCode/IG probe compiles."
+        ),
+    ),
+):
+    """Assemble a candidate retail GC/1.2.5n backend trace.
+
+    Diagnostic candidate output. Use `debug retro backend` for full traces.
+    """
+    active_root = _resolve_melee_root(melee_root)
+    _ensure_setup(active_root)
+    out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
+    try:
+        outcome = _run_backend_candidate_trace(
+            src=src,
+            fn=fn,
+            out_dir=out_dir,
+            melee_root=active_root,
+            one_pass=one_pass,
+        )
+        if outcome.trace is not None:
+            _write_backend_candidate_outputs(out_dir, outcome.trace)
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2)
+    except Exception as exc:  # noqa: BLE001 - CLI should report probe failures cleanly.
+        typer.secho(
+            f"backend candidate trace failed: {exc.__class__.__name__}: {exc}",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    typer.echo(f"backend candidate trace: {out_dir / 'backend-trace.candidate.v1.json'}")
+    typer.echo(f"regalloc candidate summary: {out_dir / 'regalloc-summary.candidate.txt'}")
+    typer.echo(f"backend candidate summary: {out_dir / 'backend-summary.candidate.txt'}")
+    if outcome.map_dir is not None:
+        typer.echo(f"backend map probe dir: {outcome.map_dir}")
+    if outcome.pcode_dir is not None:
+        typer.echo(f"backend PCode probe dir: {outcome.pcode_dir}")
+    if outcome.ig_dir is not None:
+        typer.echo(f"backend IG probe dir: {outcome.ig_dir}")
+    raise typer.Exit(outcome.exit_code)
+
+
+@retro_app.command("probe-backend-map")
+def probe_backend_map_cmd(
+    src: str = typer.Argument(..., help="TU source path to compile under retail MWCC"),
+    fn: str = typer.Option(..., "-f", "--function"),
+    out: Path = typer.Option(None, "-O", "--output"),
+    melee_root: Path = typer.Option(
+        None,
+        "--melee-root",
+        help="Active Melee checkout/worktree root. Defaults to the current cwd tree.",
+    ),
+    static_only: bool = typer.Option(
+        False,
+        "--static-only",
+        help="Only write backend-map-candidates.json; skip parity and live gdb probe.",
+    ),
+):
+    """Probe retail GC/1.2.5n backend map candidates without emitting traces."""
+    active_root = _resolve_melee_root(melee_root)
+    out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
+    try:
+        outcome = _run_backend_map_probe(
+            src=src,
+            fn=fn,
+            out_dir=out_dir,
+            static_only=static_only,
+            melee_root=active_root,
+        )
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2)
+    except Exception as exc:  # noqa: BLE001 - CLI should report probe setup failures cleanly.
+        typer.secho(
+            f"backend map probe failed: {exc.__class__.__name__}: {exc}",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(2)
+    typer.echo(f"backend map candidates: {out_dir / 'backend-map-candidates.json'}")
+    if (out_dir / "backend-map-probe.json").exists():
+        typer.echo(f"backend map probe: {out_dir / 'backend-map-probe.json'}")
+    if (out_dir / "backend-map-evidence.json").exists():
+        typer.echo(f"backend map evidence: {out_dir / 'backend-map-evidence.json'}")
+    raise typer.Exit(outcome.exit_code)
+
+
+@retro_app.command("probe-backend-ig")
+def probe_backend_ig_cmd(
+    src: str = typer.Argument(..., help="TU source path to compile under retail MWCC"),
+    fn: str = typer.Option(..., "-f", "--function"),
+    out: Path = typer.Option(None, "-O", "--output"),
+    melee_root: Path = typer.Option(
+        None,
+        "--melee-root",
+        help="Active Melee checkout/worktree root. Defaults to the current cwd tree.",
+    ),
+):
+    """Probe retail GC/1.2.5n partial IG/order/coalesce/observed-color snapshots."""
+    active_root = _resolve_melee_root(melee_root)
+    out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
+    try:
+        outcome = _run_backend_ig_snapshot(
+            src=src,
+            fn=fn,
+            out_dir=out_dir,
+            melee_root=active_root,
+        )
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2)
+    except Exception as exc:  # noqa: BLE001 - CLI should report probe setup failures cleanly.
+        typer.secho(
+            f"backend IG snapshot failed: {exc.__class__.__name__}: {exc}",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if outcome.summary_path is not None:
+        typer.echo(f"backend IG snapshot: {outcome.summary_path}")
+    if outcome.events_path is not None:
+        typer.echo(f"backend IG events: {outcome.events_path}")
+    colorgraph_summary = out_dir / "backend-colorgraph-trace.json"
+    colorgraph_events = out_dir / "backend-colorgraph-decisions.v1.jsonl"
+    if colorgraph_summary.exists():
+        typer.echo(f"backend colorgraph trace: {colorgraph_summary}")
+    if colorgraph_events.exists():
+        typer.echo(f"backend colorgraph decisions: {colorgraph_events}")
+    raise typer.Exit(outcome.exit_code)
+
+
+@retro_app.command("probe-backend-pcode")
+def probe_backend_pcode_cmd(
+    src: str = typer.Argument(..., help="TU source path to compile under retail MWCC"),
+    fn: str = typer.Option(..., "-f", "--function"),
+    out: Path = typer.Option(None, "-O", "--output"),
+    melee_root: Path = typer.Option(
+        None,
+        "--melee-root",
+        help="Active Melee checkout/worktree root. Defaults to the current cwd tree.",
+    ),
+):
+    """Probe retail GC/1.2.5n backend PCode/block snapshots."""
+    active_root = _resolve_melee_root(melee_root)
+    out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
+    try:
+        outcome = _run_backend_pcode_snapshot(
+            src=src,
+            fn=fn,
+            out_dir=out_dir,
+            melee_root=active_root,
+        )
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2)
+    except Exception as exc:  # noqa: BLE001 - CLI should report probe setup failures cleanly.
+        typer.secho(
+            f"backend PCode snapshot failed: {exc.__class__.__name__}: {exc}",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if outcome.summary_path is not None:
+        typer.echo(f"backend PCode snapshot: {outcome.summary_path}")
+    if outcome.events_path is not None:
+        typer.echo(f"backend PCode events: {outcome.events_path}")
+    raise typer.Exit(outcome.exit_code)
+
+
 @retro_app.command("verify-backend")
 def verify_backend_cmd(
     src: str = typer.Argument(..., help="TU source path used for trace generation"),
@@ -703,17 +2323,67 @@ def verify_backend_cmd(
         "--trace",
         help="Existing backend-trace.v1.json. Defaults to the generated output path.",
     ),
+    debug_pcdump: Path = typer.Option(
+        None,
+        "--debug-pcdump",
+        help="Existing mwcc-debug pcdump.txt to compare against.",
+    ),
+    out: Path = typer.Option(None, "-O", "--output"),
     melee_root: Path = typer.Option(None, "--melee-root"),
 ):
     """Compare a retail backend trace to mwcc-debug pcdump facts."""
+    from tools.mwcc_retro import backend_fidelity, backend_schema
+
     active_root = _resolve_melee_root(melee_root)
-    out_dir = _resolve_output_dir(None, melee_root=active_root, src=src, fn=fn)
-    trace_file = trace_path or (out_dir / "backend-trace.v1.json")
+    out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
+    trace_file = _resolve_backend_trace_for_verify(trace_path, out_dir=out_dir)
     if not trace_file.exists():
         typer.secho(f"backend trace not found: {trace_file}", fg="red", err=True)
         raise typer.Exit(2)
+    if debug_pcdump is None:
+        typer.secho(
+            "--debug-pcdump is required until automatic mwcc-debug lookup lands",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if not debug_pcdump.exists():
+        typer.secho(f"mwcc-debug pcdump not found: {debug_pcdump}", fg="red", err=True)
+        raise typer.Exit(2)
+
+    retail_trace = backend_schema.load_backend_trace(trace_file)
+    errors = backend_schema.validate_backend_trace(retail_trace)
+    if errors:
+        typer.secho("backend trace failed validation:", fg="red", err=True)
+        for error in errors:
+            typer.secho(f"  {error}", fg="red", err=True)
+        raise typer.Exit(2)
+    try:
+        _validate_backend_trace_matches_function(retail_trace, fn)
+    except ValueError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2) from exc
+
+    try:
+        debug_trace = backend_fidelity.trace_from_mwcc_debug_pcdump(
+            debug_pcdump.read_text(encoding="utf-8"),
+            function=fn,
+            source=src,
+        )
+    except ValueError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2) from exc
+    report = backend_fidelity.compare_backend_traces(retail_trace, debug_trace)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fidelity_json = out_dir / "backend-fidelity.json"
+    fidelity_txt = out_dir / "backend-fidelity.txt"
+    fidelity_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    fidelity_txt.write_text(backend_fidelity.render_fidelity_text(report))
+
     typer.echo(f"backend trace: {trace_file}")
-    typer.echo("mwcc-debug comparison wiring lands with the fidelity adapter task")
+    typer.echo(f"mwcc-debug pcdump: {debug_pcdump}")
+    typer.echo(f"backend fidelity: {fidelity_json}")
+    typer.echo(f"backend fidelity text: {fidelity_txt}")
     raise typer.Exit(0)
 
 

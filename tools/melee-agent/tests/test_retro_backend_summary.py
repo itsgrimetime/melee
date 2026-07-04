@@ -33,6 +33,9 @@ def test_backend_summary_lists_passes_and_edges():
         "pass before_register_coloring: BEFORE REGISTER COLORING\n"
         "  p0 B0 mr r32,r3\n"
         "  p1 B0 addi r33,r32,4\n"
+        "frame base=32 call_args=16\n"
+        "  local tmp_a offset=-8 size=4 type=s32\n"
+        "  argument arg_slot offset=8 size=4 type=s32\n"
         "regalloc class gpr(0)\n"
         "  edge 32 -- 33 observed interferencegraph\n"
     )

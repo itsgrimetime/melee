@@ -1,16 +1,16 @@
 ---
 name: mwcc-retro
-description: Dump retail MWCC GC/1.2.5n front-end IRO per-pass traces + backend PCode, register-allocator internals, and stack maps via retrowin32+gdb. Use when you need front-end optimizer pass visibility (CSE, loop unrolling, propagation, DCE) or a retail-vs-debug-DLL fidelity check. Not first-resort — reach for mismatch-db, opseq, ghidra, discord-knowledge, and mwcc-debug first.
+description: Dump retail MWCC GC/1.2.5n front-end IRO per-pass traces via retrowin32+gdb; GC/1.1 also has backend PCode, register-allocator, and stack-map dumps. Use when you need front-end optimizer pass visibility (CSE, loop unrolling, propagation, DCE) or a retail-vs-debug-DLL fidelity check. Not first-resort — reach for mismatch-db, opseq, ghidra, discord-knowledge, and mwcc-debug first.
 ---
 
 # MWCC Retro
 
 Runs the **retail** MWCC GC/1.2.5n compiler under the retrowin32 x86 emulator
 with a gdb stub and reads compiler-internal data structures directly from the
-emulated process. Produces front-end IRO optimizer traces (one snapshot per
-optimizer pass: CSE, loop unrolling, constant propagation, DCE, and others),
-back-end PCode passes, register-allocator priority/cost/adjacency dumps, and
-stack allocation maps — all from the unmodified retail binary.
+emulated process. For GC/1.2.5n it produces front-end IRO optimizer traces (one
+snapshot per optimizer pass: CSE, loop unrolling, constant propagation, DCE, and
+others) plus exact retail backend/regalloc traces. Lower-level backend map,
+interference-graph, PCode, and candidate probes remain available for diagnostics.
 
 Use this after the lighter tools have been exhausted and you specifically
 need to see what the front-end optimizer did, or when you suspect a residual
@@ -22,14 +22,38 @@ mismatch is a debug-DLL artifact rather than genuine retail behavior.
 # One-time: clone and build retrowin32 + cadmic/mwcc-debugger at pinned SHAs; run P0 gate
 melee-agent debug retro setup
 
-# Front-end IRO trace (1.2.5n). Backend/regalloc/stack: --compiler 1.1, or mwcc-debug for 1.2.5n backend.
+# Front-end IRO trace (1.2.5n)
 melee-agent debug retro dump src/melee/mn/mndraw.c -f mnDraw_8024A3B0
 
 # Front-end only (faster; skip backend when you only need the IRO trace)
 melee-agent debug retro dump src/melee/gm/gm_1BA8.c -f gm_801BCC9C --phases frontend
 
-# Backend (GC/1.1 only today)
+# Backend through the GC/1.1 donor/reference route
 melee-agent debug retro dump src/melee/lb/lbarq.c -f lbArq_80014ABC --phases backend --compiler 1.1
+
+# Exact retail GC/1.2.5n backend/regalloc trace
+melee-agent debug retro backend src/melee/lb/lb_00B0.c -f lb_8000CE30
+
+# Exact retail trace plus retail-vs-debug-DLL fidelity report
+melee-agent debug retro backend src/melee/lb/lb_00B0.c -f lb_8000CE30 --verify-debug
+
+# GC/1.2.5n backend map evidence probe; writes backend-map-evidence.json, no trace
+melee-agent debug retro probe-backend-map src/melee/lb/lbarq.c -f lbArq_80014ABC
+
+# GC/1.2.5n partial retail IG/order/coalesce/color snapshot plus exact colorgraph sidecar
+melee-agent debug retro probe-backend-ig src/melee/lb/lbarq.c -f lbArq_80014ABC
+
+# GC/1.2.5n partial retail PCode/block snapshot; writes block/pcode JSONL only
+melee-agent debug retro probe-backend-pcode src/melee/lb/lbarq.c -f lbArq_80014ABC
+
+# GC/1.2.5n candidate backend/regalloc diagnostic; writes backend-trace.candidate.v1.json
+melee-agent debug retro backend-candidate src/melee/lb/lb_00B0.c -f lb_8000CE30
+
+# One-pass candidate diagnostic path. Still writes only candidate outputs.
+melee-agent debug retro backend-candidate src/melee/lb/lb_00B0.c -f lb_8000CE30 --one-pass
+
+# Compare a full or candidate backend trace with an mwcc-debug pcdump.
+melee-agent debug retro verify-backend src/melee/lb/lb_00B0.c -f lb_8000CE30 --debug-pcdump pcdump.txt
 
 # After a vendor SHA update, confirm retail fidelity
 melee-agent debug retro verify
@@ -49,15 +73,17 @@ ledger: which IROLinear indices appeared or disappeared between passes).
 | Need callers, callees, or string xrefs | `/ghidra` |
 | Need parsed expression trees or ObjObject IDs | `/mwcc-inspect` |
 | Back-end PCode, basic blocks, virtual regs, coloring (fast path) | `/mwcc-debug` |
+| Need retail GC/1.2.5n backend/regalloc evidence | `melee-agent debug retro backend` |
 | Front-end IRO pass-by-pass trace (CSE, unrolling, propagation, DCE…) | This skill |
-| Confirm a mismatch is retail vs. debug-DLL artifact | `melee-agent debug retro verify` |
+| Confirm a mismatch is retail vs. debug-DLL artifact | `melee-agent debug retro verify` or `verify-backend` |
 
 `mwcc-retro` is diagnosis-grade: the emulated compile is slower than the
 wibo/DLL path. Use it when `mwcc-debug` and source-shape experiments have not
 explained the residual and front-end pass visibility is specifically needed.
 
 If `iro-summary.txt` shows no node changes across all passes, the mismatch is
-purely back-end — switch to `/mwcc-debug` for register-coloring investigation.
+purely back-end. Start with `/mwcc-debug` for speed, then use
+`debug retro backend` when you need retail GC/1.2.5n allocator facts.
 
 ## Tooling Issue Gate
 
