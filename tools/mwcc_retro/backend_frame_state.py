@@ -207,39 +207,57 @@ def _snapshot_object_list(
         if not _bounded_ptr(obj):
             raise ValueError(f"invalid {area} ObjObject pointer 0x{obj:x}")
 
-        name_record = _read_u32(
-            read_u32, obj + OBJECT_NAME_RECORD, f"{area} ObjObject name record"
-        )
-        if not _bounded_ptr(name_record):
-            raise ValueError(f"invalid {area} ObjObject name record 0x{name_record:x}")
-        name = read_cstr(name_record + NAME_RECORD_TEXT, 96)
-        if not name:
-            raise ValueError(f"empty {area} ObjObject name at 0x{name_record:x}")
-
         type_ptr = _read_u32(read_u32, obj + OBJECT_TYPE, f"{area} ObjObject type")
         if not _bounded_ptr(type_ptr):
             raise ValueError(f"invalid {area} ObjObject type pointer 0x{type_ptr:x}")
         size = _read_s32(read_s32, type_ptr + TYPE_SIZE, f"{area} ObjObject type size")
         if size < 0:
             raise ValueError(f"negative {area} ObjObject size {size}")
+        stack_offset = _read_s32(
+            read_s32,
+            obj + OBJECT_STACK_OFFSET,
+            f"{area} ObjObject stack offset",
+        )
+        name_record = _read_u32(
+            read_u32, obj + OBJECT_NAME_RECORD, f"{area} ObjObject name record"
+        )
+        name, confidence = _frame_object_name(
+            read_cstr,
+            area=area,
+            stack_offset=stack_offset,
+            name_record=name_record,
+        )
 
         objects.append(
             {
                 "area": area,
                 "name": name,
-                "stack_offset": _read_s32(
-                    read_s32,
-                    obj + OBJECT_STACK_OFFSET,
-                    f"{area} ObjObject stack offset",
-                ),
+                "stack_offset": stack_offset,
                 "size": size,
                 "type": f"type@0x{type_ptr:x}",
-                "confidence": "observed",
+                "confidence": confidence,
                 "provenance": f"frame_{area}",
             }
         )
         current = next_node
     raise ValueError(f"{area} frame object list exceeded max_objects {max_objects}")
+
+
+def _frame_object_name(
+    read_cstr: ReadCString,
+    *,
+    area: str,
+    stack_offset: int,
+    name_record: int,
+) -> tuple[str, str]:
+    if _bounded_ptr(name_record):
+        try:
+            name = read_cstr(name_record + NAME_RECORD_TEXT, 96)
+        except Exception:  # noqa: BLE001 - unnamed frame slots are still useful facts
+            name = ""
+        if name:
+            return name, "observed"
+    return f"{area}_slot_{stack_offset}", "observed-unnamed"
 
 
 def _bounded_ptr(value: int) -> bool:
