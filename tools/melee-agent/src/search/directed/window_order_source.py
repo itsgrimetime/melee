@@ -3599,6 +3599,132 @@ def _literal_assignment_record(
     )
 
 
+_CALL_ARGUMENT_SKIP_CALLEES = {
+    "for",
+    "if",
+    "sizeof",
+    "switch",
+    "while",
+}
+
+
+def _matching_text_paren_index(
+    text: str,
+    open_index: int,
+    limit: int,
+) -> int | None:
+    depth = 0
+    for index in range(open_index, min(limit, len(text))):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _top_level_argument_spans(
+    text: str,
+    start: int,
+    end: int,
+) -> list[tuple[int, int, str]]:
+    spans: list[tuple[int, int, str]] = []
+    depth = 0
+    arg_start = start
+    for index in range(start, end + 1):
+        char = text[index] if index < end else ","
+        if index < end:
+            if char in "([{":
+                depth += 1
+            elif char in ")]}" and depth > 0:
+                depth -= 1
+        if char == "," and depth == 0:
+            raw_start = arg_start
+            raw_end = index
+            while raw_start < raw_end and text[raw_start].isspace():
+                raw_start += 1
+            while raw_end > raw_start and text[raw_end - 1].isspace():
+                raw_end -= 1
+            if raw_start < raw_end:
+                spans.append((raw_start, raw_end, text[raw_start:raw_end]))
+            arg_start = index + 1
+    return spans
+
+
+def _li_call_argument_records_in_span(
+    source_text: str,
+    search_span: tuple[int, int],
+) -> list[dict[str, Any]]:
+    search_start, search_end = search_span
+    search_start = max(0, min(search_start, len(source_text)))
+    search_end = max(search_start, min(search_end, len(source_text)))
+    records: list[dict[str, Any]] = []
+    call_re = re.compile(
+        r"(?<![A-Za-z0-9_])(?P<callee>[A-Za-z_]\w*)\s*\("
+    )
+    for call in call_re.finditer(source_text, search_start, search_end):
+        callee = call.group("callee")
+        if callee in _CALL_ARGUMENT_SKIP_CALLEES:
+            continue
+        open_index = source_text.find("(", call.start("callee"), search_end)
+        if open_index < 0:
+            continue
+        close_index = _matching_text_paren_index(
+            source_text,
+            open_index,
+            search_end,
+        )
+        if close_index is None:
+            continue
+        call_line_start = source_text.rfind("\n", 0, call.start("callee")) + 1
+        call_line_end = source_text.find("\n", call.start("callee"), search_end)
+        if call_line_end < 0:
+            call_line_end = min(search_end, len(source_text))
+        call_line = source_text[call_line_start:call_line_end]
+        indent_match = re.match(r"[ \t]*", call_line)
+        call_indent = indent_match.group(0) if indent_match else ""
+        for argument_index, (arg_start, arg_end, argument_text) in enumerate(
+            _top_level_argument_spans(source_text, open_index + 1, close_index)
+        ):
+            if _INT_LITERAL_RE.fullmatch(argument_text) is None:
+                continue
+            literal_value = _integer_literal_value(argument_text)
+            if literal_value is None:
+                continue
+            records.append(_line_span_payload(
+                source_text,
+                arg_start,
+                arg_end,
+                kind="li-constant-call-argument",
+                priority=-3,
+                handler="li-constant-call-argument-owner",
+                literal_text=argument_text,
+                literal_value=literal_value,
+                owner_assignment_text=source_text[
+                    call.start("callee"):close_index + 1
+                ].strip(),
+                assignment_kind="call-argument",
+                callee=callee,
+                argument_index=argument_index,
+                argument_text=argument_text,
+                call_source_start=call.start("callee"),
+                call_source_end=close_index + 1,
+                call_source_span=[call.start("callee"), close_index + 1],
+                call_line_source_start=call_line_start,
+                call_line_source_end=call_line_end,
+                call_line_source_span=[call_line_start, call_line_end],
+                call_indent=call_indent,
+                action_families=[
+                    "li-constant-call-argument-owner",
+                    "li-constant-threshold-owner",
+                    "synthetic-temp-owner",
+                ],
+            ))
+    return records
+
+
 def _local_read_score(
     source_text: str,
     *,
@@ -3673,6 +3799,7 @@ def _rank_li_constant_source_candidates(
         record = _literal_assignment_record(source_text, line_start, line_end, line)
         if record is not None:
             records.append(record)
+    records.extend(_li_call_argument_records_in_span(source_text, search_span))
 
     candidates = [
         dict(record)
@@ -3717,7 +3844,12 @@ def _materialize_li_constant_candidate(
     function: str,
     candidate: Mapping[str, Any],
 ) -> tuple[_LocalLifetimeProbeCandidate | None, dict[str, Any]]:
-    handler = "li-constant-threshold-owner"
+    raw_handler = candidate.get("handler")
+    handler = (
+        raw_handler
+        if isinstance(raw_handler, str) and raw_handler
+        else "li-constant-threshold-owner"
+    )
     rejection_reason = candidate.get("candidate_rejection_reason")
     if isinstance(rejection_reason, str) and rejection_reason:
         return None, _candidate_materialization_diagnostic(
@@ -3746,10 +3878,9 @@ def _materialize_li_constant_candidate(
     owner_local = candidate.get("owner_local")
     literal_text = candidate.get("literal_text")
     immediate = candidate.get("immediate_value")
+    assignment_kind = candidate.get("assignment_kind")
     if (
-        not isinstance(owner_local, str)
-        or not owner_local
-        or not isinstance(literal_text, str)
+        not isinstance(literal_text, str)
         or _integer_literal_value(literal_text) != immediate
     ):
         return None, _candidate_materialization_diagnostic(
@@ -3767,14 +3898,16 @@ def _materialize_li_constant_candidate(
             handler=handler,
         )
     decl_index, decl_indent = insertion
-    temp_name = _window_order_probe_local_name(
-        source_text,
-        f"{owner_local}_{abs(int(immediate))}",
-    )
-    assignment_kind = candidate.get("assignment_kind")
     indent = re.match(r"[ \t]*", line).group(0)
     candidate_text = source_text
     if assignment_kind == "declaration-init":
+        if not isinstance(owner_local, str) or not owner_local:
+            return None, _candidate_materialization_diagnostic(
+                candidate,
+                status="rejected",
+                reason="missing-li-constant-owner",
+                handler=handler,
+            )
         declaration_type = candidate.get("declaration_type")
         if not isinstance(declaration_type, str) or not declaration_type:
             return None, _candidate_materialization_diagnostic(
@@ -3783,6 +3916,10 @@ def _materialize_li_constant_candidate(
                 reason="missing-safe-local-declaration-type",
                 handler=handler,
             )
+        temp_name = _window_order_probe_local_name(
+            source_text,
+            f"{owner_local}_{abs(int(immediate))}",
+        )
         replacement = f"{indent}{declaration_type} {owner_local};\n"
         insertion_text = (
             f"{decl_indent}int {temp_name};\n"
@@ -3794,6 +3931,13 @@ def _materialize_li_constant_candidate(
             (decl_index, decl_index, insertion_text),
         ]
     elif assignment_kind == "assignment":
+        if not isinstance(owner_local, str) or not owner_local:
+            return None, _candidate_materialization_diagnostic(
+                candidate,
+                status="rejected",
+                reason="missing-li-constant-owner",
+                handler=handler,
+            )
         if decl_index > line_start:
             return None, _candidate_materialization_diagnostic(
                 candidate,
@@ -3801,12 +3945,74 @@ def _materialize_li_constant_candidate(
                 reason="declaration-anchor-after-use",
                 handler=handler,
             )
+        temp_name = _window_order_probe_local_name(
+            source_text,
+            f"{owner_local}_{abs(int(immediate))}",
+        )
         replacement = (
             f"{indent}{temp_name} = {literal_text};\n"
             f"{indent}{owner_local} = {temp_name};\n"
         )
         edits = [
             (line_start, line_end, replacement),
+            (decl_index, decl_index, f"{decl_indent}int {temp_name};\n"),
+        ]
+    elif assignment_kind == "call-argument":
+        call_line_start_raw = candidate.get("call_line_source_start")
+        try:
+            call_line_start = int(call_line_start_raw)
+        except (TypeError, ValueError):
+            call_line_start = line_start
+        call_line_start = max(0, min(call_line_start, len(source_text)))
+        if decl_index > call_line_start:
+            return None, _candidate_materialization_diagnostic(
+                candidate,
+                status="rejected",
+                reason="declaration-anchor-after-use",
+                handler=handler,
+            )
+        try:
+            expr_start = int(candidate["source_start"])
+            expr_end = int(candidate["source_end"])
+        except (KeyError, TypeError, ValueError):
+            return None, _candidate_materialization_diagnostic(
+                candidate,
+                status="rejected",
+                reason="missing-source-span",
+                handler=handler,
+            )
+        expr_start = max(line_start, min(expr_start, line_end))
+        expr_end = max(expr_start, min(expr_end, line_end))
+        if source_text[expr_start:expr_end] != literal_text:
+            return None, _candidate_materialization_diagnostic(
+                candidate,
+                status="rejected",
+                reason="stale-source-span",
+                handler=handler,
+            )
+        callee = candidate.get("callee")
+        stem = (
+            f"{callee}_{abs(int(immediate))}"
+            if isinstance(callee, str) and callee
+            else f"li_constant_{abs(int(immediate))}"
+        )
+        temp_name = _window_order_probe_local_name(source_text, stem)
+        if source_text[expr_start:expr_end] == temp_name:
+            return None, _candidate_materialization_diagnostic(
+                candidate,
+                status="rejected",
+                reason="source-unchanged",
+                handler=handler,
+            )
+        call_indent = candidate.get("call_indent")
+        if not isinstance(call_indent, str):
+            call_indent = _line_indent_at(source_text, call_line_start)
+        assignment = (
+            f"{call_indent}{temp_name} = {literal_text};\n"
+        )
+        edits = [
+            (expr_start, expr_end, temp_name),
+            (call_line_start, call_line_start, assignment),
             (decl_index, decl_index, f"{decl_indent}int {temp_name};\n"),
         ]
     else:
@@ -3837,6 +4043,9 @@ def _materialize_li_constant_candidate(
         "paired_literal": candidate.get("paired_literal"),
         "paired_assignment_text": candidate.get("paired_assignment_text"),
         "synthetic_local": temp_name,
+        "callee": candidate.get("callee"),
+        "argument_index": candidate.get("argument_index"),
+        "argument_text": candidate.get("argument_text"),
         "line_range": [
             int(candidate.get("line_start") or 0),
             int(candidate.get("line_end") or 0),

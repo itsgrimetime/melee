@@ -539,6 +539,26 @@ def _iter_comma_noop_assignment_anchors(
         )
 
 
+_DECLARATION_STATEMENT_RE = re.compile(
+    r"""
+    ^
+    (?:
+        (?:static|extern|const|volatile|register|auto|inline|signed|unsigned|
+           struct|union|enum)\s+
+    )*
+    [A-Za-z_]\w*
+    (?:\s*\*+\s*|\s+)
+    \**
+    [A-Za-z_]\w*
+    (?:\s*\[[^\]]*\])*
+    (?:\s*=\s*[^;]+)?
+    ;
+    $
+    """,
+    re.VERBOSE,
+)
+
+
 def _statement_barrier_safe(line: str) -> bool:
     stripped = line.strip()
     if not stripped or not stripped.endswith(";"):
@@ -549,7 +569,7 @@ def _statement_barrier_safe(line: str) -> bool:
         return False
     if stripped.endswith(":"):
         return False
-    if re.match(r"^(?:[A-Za-z_]\w*\s+)+[A-Za-z_]\w*(?:\s*=|;)", stripped):
+    if _DECLARATION_STATEMENT_RE.match(stripped):
         return False
     return True
 

@@ -51,6 +51,35 @@ def test_generate_transform_probes_materializes_source_edits() -> None:
     assert all(probe.target_assignments for probe in probes)
 
 
+def test_empty_do_while_barrier_skips_pointer_declaration_block() -> None:
+    source = (
+        "typedef struct Obj Obj;\n"
+        "void target(Obj* gobj) {\n"
+        "    Obj* data = gobj;\n"
+        "    Obj* next = data;\n"
+        "    int count = 0;\n"
+        "    process(next);\n"
+        "    update(count);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="target",
+        unit="melee/test/target",
+        force_phys={},
+        max_per_family=1,
+    )
+    barrier = next(
+        probe for probe in probes if probe.family_id == "empty_do_while_barrier"
+    )
+
+    assert "Obj* data = gobj;\n    do {" not in barrier.candidate_text
+    assert "Obj* next = data;\n    do {" not in barrier.candidate_text
+    assert "int count = 0;\n    do {" not in barrier.candidate_text
+    assert "process(next);\n    do {" in barrier.candidate_text
+
+
 def test_generate_transform_probes_node_set_delta_skips_recursive_combos(
     monkeypatch,
 ) -> None:

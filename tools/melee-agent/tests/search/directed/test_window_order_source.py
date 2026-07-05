@@ -1073,6 +1073,66 @@ def test_window_order_plan_materializes_li_constant_threshold_owner() -> None:
     assert "threshold = window_order_threshold_24_probe;" in probe.source_text
 
 
+def test_window_order_plan_prefers_li_constant_call_argument_over_later_assignment() -> None:
+    source = textwrap.dedent("""\
+        void helper(int item, int cursor, int count);
+        void sink(int value);
+
+        void fn(int sorted, int cursor)
+        {
+            int count;
+            helper(sorted,
+                   cursor >> 8, 7);
+            if (sorted != 0) {
+                count = 7;
+                sink(count);
+            }
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{
+            "target_ig": 50,
+            "order_move": ["before", 53],
+            "perturbed_reg": 25,
+        }],
+        source_attributions={
+            50: {
+                "kind": "first-def",
+                "expression": "li r50,7",
+                "first_def": {"opcode": "li", "operands": "r50,7"},
+            },
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert plan.probes
+    diag = plan.lead_diagnostics[0]
+    assert diag["status"] == "materialized"
+    synthetic = diag["synthetic_source_probe"]
+    candidate = synthetic["ranked_li_constant_source_candidates"][0]
+    assert candidate["kind"] == "li-constant-call-argument"
+    assert candidate["callee"] == "helper"
+    assert candidate["argument_index"] == 2
+    assert candidate["literal_text"] == "7"
+    assert "count = 7;" not in candidate["span_text"]
+
+    probe = plan.probes[0]
+    assert probe.provenance["kind"] == "window-order-li-constant-source-probe"
+    assert (
+        probe.provenance["ranked_li_constant_source_candidate"]["kind"]
+        == "li-constant-call-argument"
+    )
+    assert "int window_order_helper_7_probe;" in probe.source_text
+    assert "window_order_helper_7_probe = 7;" in probe.source_text
+    assert "cursor >> 8, window_order_helper_7_probe);" in probe.source_text
+    assert "count = 7;" in probe.source_text
+
+
 def test_window_order_plan_li_constant_terminal_blocker_is_specific() -> None:
     source = textwrap.dedent("""\
         void fn(int scroll)

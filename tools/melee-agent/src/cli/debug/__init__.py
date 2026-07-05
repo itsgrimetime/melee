@@ -5170,6 +5170,15 @@ def _probe_requires_full_unit_source(probe: Any) -> bool:
 
 
 
+def _full_unit_source_for_probe(
+    probe: Any,
+    source_path_for_probes: Path | None,
+) -> Path | None:
+    if not _probe_requires_full_unit_source(probe):
+        return None
+    return source_path_for_probes
+
+
 def _append_transform_corpus_probes(
     probes: list[Any],
     *,
