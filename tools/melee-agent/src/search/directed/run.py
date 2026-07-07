@@ -673,6 +673,7 @@ def _run_live(
     from src.search.directed.gate import evaluate_phase1_gate
     from src.search.directed.objective import (
         GRICEMT_9ACC_FORCE_PHYS,
+        allows_force_phys_assignment_fallback,
         build_directed_objective,
         preflight_objective,
         PreflightError,
@@ -772,7 +773,11 @@ def _run_live(
     except PreflightError as exc:
         preflight_ok = False
         preflight_reason = str(exc)
-        if preflight_reason == "case_abstained" and force_phys and objective is not None:
+        if allows_force_phys_assignment_fallback(
+            preflight_reason,
+            proof_force_phys=force_phys,
+            objective=objective,
+        ):
             preflight_fallback = "force_phys_assignment"
     except Exception as exc:
         preflight_ok = False

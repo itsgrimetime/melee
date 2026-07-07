@@ -8703,6 +8703,7 @@ def run_cmd(
         from src.search.directed.contracts import DirectedSchedulerConfig
         from src.search.directed.objective import (
             PreflightError,
+            allows_force_phys_assignment_fallback,
             build_directed_objective,
             preflight_objective,
         )
@@ -8733,7 +8734,11 @@ def run_cmd(
             preflight_objective(objective)
         except PreflightError as exc:
             reason = str(exc)
-            if reason != "case_abstained":
+            if not allows_force_phys_assignment_fallback(
+                reason,
+                proof_force_phys=directed_force_phys_map,
+                objective=objective,
+            ):
                 typer.echo(
                     f"error: directed objective preflight failed: {exc}",
                     err=True,

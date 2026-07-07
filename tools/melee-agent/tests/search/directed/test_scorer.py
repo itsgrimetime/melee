@@ -60,10 +60,14 @@ def test_invalid_on_enum_abstained(tmp_path):
     out = _pipe("abstained").score_directed(_art(tmp_path), DirectedScoringCall(_objective(), _parent()))
     assert out.status == "invalid" and out.directed_meta.valid is False and out.directed_meta.invalid_reason == "case_abstained"
 
-def test_force_phys_assignment_fallback_scores_abstained_case(tmp_path):
+@pytest.mark.parametrize("case_value", ["abstained", "none"])
+def test_force_phys_assignment_fallback_scores_assignment_preflight_cases(
+    tmp_path,
+    case_value,
+):
     p = DirectedScorePipeline(
         analyze=lambda t,c,class_id=0:(
-            _State(_Case("abstained")),
+            _State(_Case(case_value)),
             object(),
             _Re({1: 58, 2: 44}),
         ),

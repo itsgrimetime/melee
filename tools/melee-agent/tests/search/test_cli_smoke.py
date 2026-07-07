@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from src.search.cli import (
@@ -7905,9 +7906,11 @@ def test_search_run_directed_summary_reports_byte_best_not_directed_best(
     assert summary["best_byte_score"] == 2006
 
 
-def test_search_run_directed_force_phys_continues_after_abstained_preflight(
+@pytest.mark.parametrize("preflight_reason", ["case_abstained", "case_none"])
+def test_search_run_directed_force_phys_continues_after_assignment_preflight_fallback(
     tmp_path: Path,
     monkeypatch,
+    preflight_reason: str,
 ) -> None:
     from dataclasses import replace
 
@@ -8014,8 +8017,8 @@ def test_search_run_directed_force_phys_continues_after_abstained_preflight(
                 status="ok",
             )
 
-    def abstain_preflight(_objective):
-        raise PreflightError("case_abstained")
+    def fallback_preflight(_objective):
+        raise PreflightError(preflight_reason)
 
     monkeypatch.setattr("src.search.cli._compute_melee_root", lambda: repo)
     monkeypatch.setattr(
@@ -8024,7 +8027,7 @@ def test_search_run_directed_force_phys_continues_after_abstained_preflight(
     )
     monkeypatch.setattr(
         "src.search.directed.objective.preflight_objective",
-        abstain_preflight,
+        fallback_preflight,
     )
     monkeypatch.setattr(
         "src.search.directed.pcdump_backend.PcdumpLocalBackend",
@@ -8052,7 +8055,7 @@ def test_search_run_directed_force_phys_continues_after_abstained_preflight(
 
     assert result.exit_code == 0, result.output
     summary = json.loads(result.stdout)
-    assert summary["directed"]["preflight"] == "fallback:case_abstained"
+    assert summary["directed"]["preflight"] == f"fallback:{preflight_reason}"
     assert summary["directed"]["preflight_ok"] is False
     assert summary["directed_telemetry"][0]["case"] == "force_phys_assignment"
 

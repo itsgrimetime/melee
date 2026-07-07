@@ -94,9 +94,11 @@ def test_run_directed_dry_accounting(tmp_path):
     assert "compiled" in accounting, f"accounting missing 'compiled': {accounting}"
 
 
-def test_run_directed_live_case_abstained_scores_seed_fallback(
+@pytest.mark.parametrize("preflight_reason", ["case_abstained", "case_none"])
+def test_run_directed_live_assignment_preflight_scores_seed_fallback(
     tmp_path,
     monkeypatch,
+    preflight_reason,
 ):
     from src.search.directed.contracts import DirectedMeta, DirectedObjective
     from src.search.directed.objective import PreflightError
@@ -163,8 +165,8 @@ def test_run_directed_live_case_abstained_scores_seed_fallback(
             proof_force_phys=kwargs["proof_force_phys"],
         )
 
-    def abstain_preflight(_objective):
-        raise PreflightError("case_abstained")
+    def fallback_preflight(_objective):
+        raise PreflightError(preflight_reason)
 
     monkeypatch.setattr(
         "src.search.directed.pcdump_backend.PcdumpLocalBackend",
@@ -176,7 +178,7 @@ def test_run_directed_live_case_abstained_scores_seed_fallback(
     )
     monkeypatch.setattr(
         "src.search.directed.objective.preflight_objective",
-        abstain_preflight,
+        fallback_preflight,
     )
     monkeypatch.setattr(
         "src.search.scheduler.DefaultScheduler",
