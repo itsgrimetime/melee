@@ -10976,7 +10976,9 @@ def test_select_order_search_json_returns_when_source_score_lock_is_held(
     assert result.exit_code == 0, result.stdout + result.stderr
     assert time.monotonic() - start < 2.5
     payload = json.loads(result.stdout)
-    assert payload["status"] == "ok"
+    assert payload["status"] == "timeout"
+    assert payload["timed_out"] is True
+    assert "finishing select-order candidate held-lock" in payload["timeout_error"]
     assert payload["variants"]
 
 
@@ -11364,6 +11366,122 @@ def test_select_order_search_emits_partial_guard_repair_json_on_top_level_timeou
     assert "guard repair" in ledger["timeout_error"]
     assert len(ledger["entries"]) == 1
     assert payload["variants"]
+
+
+def test_select_order_search_skips_optional_summaries_after_budget_exhausted(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    base = tmp_path / "base.c"
+    campaign = tmp_path / "campaign"
+    baseline.write_text(BASELINE)
+    base.write_text("void fn_80000000(void) { /* base */ }\n")
+    clock = {"now": 100.0}
+    source_bridge_calls: list[bool] = []
+    terminal_calls: list[bool] = []
+
+    def fake_probes(*args, **kwargs) -> list[LifetimeLayoutProbe]:
+        return [
+            LifetimeLayoutProbe(
+                label="slow-probe",
+                operator="block-scope",
+                description="Synthetic slow probe.",
+                source_text="void fn_80000000(void) { /* slow */ }\n",
+            )
+        ]
+
+    def fake_compile(*args, **kwargs) -> str:
+        clock["now"] += 1.2
+        return ONE_FORCE_PHYS_HIT
+
+    def fake_source_score(path: pathlib.Path, **kwargs):
+        return debug_cli._SourceCandidateRealScore(70.0, None)
+
+    def fake_source_bridge_summary(*args, **kwargs):
+        source_bridge_calls.append(True)
+        return {"status": "called"}
+
+    def fake_terminal_summary(*args, **kwargs):
+        terminal_calls.append(True)
+        return {"status": "called"}
+
+    monkeypatch.setattr(debug_cli.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        debug_cli,
+        "_register_tiebreak_window_order_fallback",
+        lambda **kwargs: {"ran": True, "leads": []},
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_source_attributions_for_leads",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "src.search.directed.window_order_source.generate_window_order_source_probes",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        fake_probes,
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(debug_cli, "_select_order_source_score", fake_source_score)
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_source_bridge_summary",
+        fake_source_bridge_summary,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_terminal_exhaustion_summary",
+        fake_terminal_summary,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(base),
+            "--force-phys",
+            "32:29,33:30",
+            "--beam-depth",
+            "1",
+            "--beam-width",
+            "1",
+            "--max-probes",
+            "1",
+            "--campaign-dir",
+            str(campaign),
+            "--timeout",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "timeout"
+    assert payload["partial"] is True
+    assert "finishing select-order beam candidate" in payload["timeout_error"]
+    assert payload["source_bridge_summary"]["status"] == "skipped-timeout"
+    assert payload["terminal_exhaustion_summary"]["status"] == "skipped-timeout"
+    assert source_bridge_calls == []
+    assert terminal_calls == []
+    ledger = json.loads(pathlib.Path(payload["beam_ledger"]).read_text())
+    assert ledger["stop_condition"] == "timeout"
+    assert ledger["timed_out"] is True
 
 
 def test_select_order_search_marks_source_score_deadline_error_as_timeout(
