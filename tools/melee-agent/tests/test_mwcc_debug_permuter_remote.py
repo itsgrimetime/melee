@@ -1850,6 +1850,86 @@ def test_submit_job_builds_rsync_ssh_tmux_and_metadata(tmp_path: Path) -> None:
     assert "permuter.log" in remote_script
 
 
+def test_submit_job_rewrites_scorer_target_to_remote_run_before_preflight(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "simplify_order_target.yaml").write_text(
+        "objective: force-phys\n"
+        "force_phys:\n"
+        "  1: 27\n"
+    )
+    (local_perm / "settings.toml").write_text(
+        """
+[scorer]
+command = "melee-agent debug target score-force-phys --function fn_80000000 --target nonmatchings/fn_80000000/simplify_order_target.yaml"
+""".strip()
+        + "\n"
+    )
+    jobs_dir = tmp_path / "jobs"
+    calls: list[list[str]] = []
+    staged_settings: list[str] = []
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        del cwd, check
+        calls.append(argv)
+        if argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            assert "remote-scorer-target" not in argv[2]
+            return pr.CommandResult(
+                returncode=0,
+                stdout=(
+                    _remote_doctor_ok_stdout()
+                    + "remote-custom-scorer\tok\t/home/coder/decomp-permuter\n"
+                    + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent debug target score-force-phys --help\n"
+                    + "remote-scorer-schema\tok\tforce-phys scorer schema supported\n"
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                ),
+                stderr="",
+            )
+        if argv[0] == "rsync" and argv[-1].endswith("/nonmatchings/fn_80000000/"):
+            staged_settings.append((Path(argv[-2]) / "settings.toml").read_text())
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    job = pr.submit_job(
+        function="fn_80000000",
+        target=target,
+        local_perm_dir=local_perm,
+        jobs_dir=jobs_dir,
+        runner=fake_runner,
+        now=lambda: "2026-05-25T14:30:12",
+    )
+
+    expected_target = (
+        "/home/coder/decomp-permuter/remote-runs/"
+        "fn_80000000-coder64-20260525-143012/"
+        "nonmatchings/fn_80000000/simplify_order_target.yaml"
+    )
+    assert job.job_id == "fn_80000000-coder64-20260525-143012"
+    assert staged_settings
+    assert expected_target in staged_settings[0]
+    assert (
+        "/home/coder/decomp-permuter/nonmatchings/"
+        "fn_80000000/simplify_order_target.yaml"
+    ) not in staged_settings[0]
+
+
 def test_submit_job_cleans_remote_run_dir_when_launch_fails_after_rsync(
     tmp_path: Path,
 ) -> None:

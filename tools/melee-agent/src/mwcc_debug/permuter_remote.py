@@ -708,6 +708,7 @@ def doctor_target(
     target: RemoteTarget,
     local_perm_dir: Path | None = None,
     runner: Callable[..., CommandResult] = run_command,
+    require_remote_scorer_target: bool = True,
 ) -> DoctorReport:
     """Run read-only checks for a remote permuter target."""
     checks: list[DoctorCheck] = [
@@ -742,6 +743,7 @@ def doctor_target(
         target,
         scorer_info=scorer_info,
         objdump_info=objdump_info,
+        require_remote_scorer_target=require_remote_scorer_target,
     )
     result = runner(["ssh", target.ssh, _remote_sh(script)], check=False)
     if result.returncode != 0:
@@ -751,6 +753,11 @@ def doctor_target(
         checks.extend(_parse_remote_doctor_output(
             result.stdout,
             expect_scorer=scorer_info is not None,
+            expect_remote_scorer_target=(
+                require_remote_scorer_target
+                and scorer_info is not None
+                and scorer_info.target_path is not None
+            ),
             expect_objdump=objdump_info is not None,
         ))
 
@@ -970,9 +977,18 @@ def submit_job(
             f"{jobs_dir / f'{job.job_id}.json'}"
         )
 
-    with _staged_remote_perm_dir(local_perm_dir, target=target) as submit_perm_dir:
+    with _staged_remote_perm_dir(
+        local_perm_dir,
+        target=target,
+        remote_perm_dir=remote_perm_dir,
+    ) as submit_perm_dir:
         _validate_remote_ready_perm_dir(submit_perm_dir)
-        preflight = doctor_target(target, local_perm_dir=submit_perm_dir, runner=runner)
+        preflight = doctor_target(
+            target,
+            local_perm_dir=submit_perm_dir,
+            runner=runner,
+            require_remote_scorer_target=False,
+        )
         if (
             not preflight.ok
             and auto_repair
@@ -994,7 +1010,12 @@ def submit_job(
                     f"{_preflight_failure_detail(preflight)}; "
                     f"auto-repair failed: {exc}"
                 ) from exc
-            preflight = doctor_target(target, local_perm_dir=submit_perm_dir, runner=runner)
+            preflight = doctor_target(
+                target,
+                local_perm_dir=submit_perm_dir,
+                runner=runner,
+                require_remote_scorer_target=False,
+            )
         if not preflight.ok:
             raise RemoteJobError(
                 f"remote preflight failed for {target.name}: "
@@ -1260,6 +1281,7 @@ def _remote_doctor_script(
     target: RemoteTarget,
     scorer_info: ScorerCommandInfo | None = None,
     objdump_info: ObjdumpCommandInfo | None = None,
+    require_remote_scorer_target: bool = True,
 ) -> str:
     melee_root = shlex.quote(target.remote_melee_root)
     perm_root = shlex.quote(target.remote_perm_root)
@@ -1289,7 +1311,12 @@ def _remote_doctor_script(
     if objdump_info is not None:
         lines.extend(_remote_objdump_doctor_lines(objdump_info))
     if scorer_info is not None:
-        lines.extend(_remote_scorer_doctor_lines(scorer_info))
+        lines.extend(
+            _remote_scorer_doctor_lines(
+                scorer_info,
+                require_target=require_remote_scorer_target,
+            )
+        )
     return "\n".join(lines)
 
 
@@ -1319,7 +1346,11 @@ def _scorer_probe_schema(scorer_info: ScorerCommandInfo) -> tuple[str, str, str]
     return command, "--strict-polarity", "strict-polarity scorer schema supported"
 
 
-def _remote_scorer_doctor_lines(scorer_info: ScorerCommandInfo) -> list[str]:
+def _remote_scorer_doctor_lines(
+    scorer_info: ScorerCommandInfo,
+    *,
+    require_target: bool = True,
+) -> list[str]:
     scorer_command, schema_flag, schema_ok_detail = _scorer_probe_schema(scorer_info)
     lines = [
         'if grep -q "class CustomCommandScorer" "$perm_root/src/scorer.py" 2>/dev/null && grep -q "scorer_settings" "$perm_root/src/main.py" 2>/dev/null; then emit remote-custom-scorer ok "$perm_root"; else emit remote-custom-scorer fail "CustomCommandScorer missing in remote decomp-permuter"; fi',
@@ -1330,7 +1361,7 @@ def _remote_scorer_doctor_lines(scorer_info: ScorerCommandInfo) -> list[str]:
         'if test "${scorer_executable#/}" != "$scorer_executable"; then scorer_resolved="$scorer_executable"; elif test "$scorer_executable" = "melee-agent" && test -x "$melee_root/tools/melee-agent/.venv/bin/melee-agent"; then scorer_resolved="$melee_root/tools/melee-agent/.venv/bin/melee-agent"; elif command -v "$scorer_executable" >/dev/null 2>&1; then scorer_resolved="$(command -v "$scorer_executable")"; elif test "$scorer_executable" = "melee-agent" && test -x "$HOME/.local/bin/melee-agent"; then scorer_resolved="$HOME/.local/bin/melee-agent"; else scorer_resolved=""; fi',
         'if test -n "$scorer_resolved" && test -x "$scorer_resolved"; then scorer_tmp=/tmp/melee-remote-doctor-scorer.$$; (cd "$perm_root" && "$scorer_resolved" debug target "$scorer_command" --help) >"$scorer_tmp" 2>&1; scorer_rc=$?; scorer_out=$(head -40 "$scorer_tmp"); if test "$scorer_rc" -eq 0; then emit remote-scorer-command ok "$scorer_resolved debug target $scorer_command --help"; grep -q -- "$scorer_schema_flag" "$scorer_tmp" && emit remote-scorer-schema ok "$scorer_schema_ok_detail" || emit remote-scorer-schema fail "stale $scorer_command help; missing $scorer_schema_flag"; else emit remote-scorer-command fail "$scorer_out"; emit remote-scorer-schema fail "$scorer_command --help failed"; fi; rm -f "$scorer_tmp"; else emit remote-scorer-command fail "$scorer_executable not found or not executable"; emit remote-scorer-schema fail "$scorer_executable not found or not executable"; fi',
     ]
-    if scorer_info.target_path is not None:
+    if require_target and scorer_info.target_path is not None:
         lines.extend([
             f"scorer_target={shlex.quote(scorer_info.target_path)}",
             'test -f "$scorer_target" && emit remote-scorer-target ok "$scorer_target" || emit remote-scorer-target fail "$scorer_target missing on remote"',
@@ -1343,6 +1374,7 @@ def _staged_remote_perm_dir(
     local_perm_dir: Path,
     *,
     target: RemoteTarget | None = None,
+    remote_perm_dir: str | None = None,
 ) -> Any:
     with tempfile.TemporaryDirectory(prefix="melee_remote_perm_") as td:
         staged = Path(td) / local_perm_dir.name
@@ -1362,12 +1394,20 @@ def _staged_remote_perm_dir(
         settings_toml = staged / "settings.toml"
         if settings_toml.exists():
             text = settings_toml.read_text()
-            rewritten = _rewrite_settings_toml_for_remote(text, target=target)
+            rewritten = _rewrite_settings_toml_for_remote(
+                text,
+                target=target,
+                remote_perm_dir=remote_perm_dir,
+            )
             if rewritten != text:
                 settings_toml.write_text(rewritten)
         for yaml_path in [*staged.glob("*.yaml"), *staged.glob("*.yml")]:
             text = yaml_path.read_text()
-            rewritten = _rewrite_target_yaml_for_remote(text, target=target)
+            rewritten = _rewrite_target_yaml_for_remote(
+                text,
+                target=target,
+                remote_perm_dir=remote_perm_dir,
+            )
             if rewritten != text:
                 yaml_path.write_text(rewritten)
         yield staged
@@ -1448,11 +1488,33 @@ def _remote_objdump_command(command: str, target: RemoteTarget | None) -> str:
     return command
 
 
-def _remote_perm_path(path: str, target: RemoteTarget | None) -> str:
+def _remote_perm_path(
+    path: str,
+    target: RemoteTarget | None,
+    *,
+    remote_perm_dir: str | None = None,
+) -> str:
     if target is None:
         return path
     if not path:
         return path
+    if remote_perm_dir is not None:
+        remote_perm_dir = remote_perm_dir.rstrip("/")
+        if path == remote_perm_dir or path.startswith(remote_perm_dir + "/"):
+            return path
+        function = posixpath.basename(remote_perm_dir)
+        parts = [part for part in path.split("/") if part and part != "."]
+        if "nonmatchings" in parts:
+            index = parts.index("nonmatchings")
+            if index + 1 < len(parts) and parts[index + 1] == function:
+                suffix = parts[index + 2:]
+                return (
+                    posixpath.join(remote_perm_dir, *suffix)
+                    if suffix
+                    else remote_perm_dir
+                )
+        elif not path.startswith("/"):
+            return posixpath.normpath(posixpath.join(remote_perm_dir, path))
     if path.startswith(target.remote_perm_root + "/"):
         return path
     if path.startswith("/"):
@@ -1465,7 +1527,12 @@ def _remote_perm_path(path: str, target: RemoteTarget | None) -> str:
     return posixpath.normpath(posixpath.join(target.remote_perm_root, path))
 
 
-def _rewrite_scorer_command_for_remote(command: str, target: RemoteTarget | None) -> str:
+def _rewrite_scorer_command_for_remote(
+    command: str,
+    target: RemoteTarget | None,
+    *,
+    remote_perm_dir: str | None = None,
+) -> str:
     if target is None:
         return command
     try:
@@ -1475,14 +1542,22 @@ def _rewrite_scorer_command_for_remote(command: str, target: RemoteTarget | None
     changed = False
     for index, arg in enumerate(argv):
         if arg == "--target" and index + 1 < len(argv):
-            remote_path = _remote_perm_path(argv[index + 1], target)
+            remote_path = _remote_perm_path(
+                argv[index + 1],
+                target,
+                remote_perm_dir=remote_perm_dir,
+            )
             if remote_path != argv[index + 1]:
                 argv[index + 1] = remote_path
                 changed = True
             break
         if arg.startswith("--target="):
             value = arg.split("=", 1)[1]
-            remote_path = _remote_perm_path(value, target) if value.startswith("/") else value
+            remote_path = _remote_perm_path(
+                value,
+                target,
+                remote_perm_dir=remote_perm_dir,
+            )
             if remote_path != value:
                 argv[index] = f"--target={remote_path}"
                 changed = True
@@ -1494,6 +1569,7 @@ def _rewrite_target_yaml_for_remote(
     text: str,
     *,
     target: RemoteTarget | None = None,
+    remote_perm_dir: str | None = None,
 ) -> str:
     if target is None:
         return text
@@ -1511,7 +1587,11 @@ def _rewrite_target_yaml_for_remote(
             ):
                 quote = value[0]
                 value = value[1:-1]
-            remote_path = _remote_perm_path(value, target)
+            remote_path = _remote_perm_path(
+                value,
+                target,
+                remote_perm_dir=remote_perm_dir,
+            )
             rendered = f"{quote}{remote_path}{quote}" if quote else remote_path
             out.append(f"{indent}baseline_dump: {rendered}")
         else:
@@ -1524,6 +1604,7 @@ def _rewrite_settings_toml_for_remote(
     text: str,
     *,
     target: RemoteTarget | None = None,
+    remote_perm_dir: str | None = None,
 ) -> str:
     """Ensure remote jobs use a project-provided scorer disassembler."""
     lines = text.splitlines()
@@ -1556,6 +1637,7 @@ def _rewrite_settings_toml_for_remote(
                 rewritten = _rewrite_scorer_command_for_remote(
                     scorer_command,
                     target,
+                    remote_perm_dir=remote_perm_dir,
                 )
                 out.append(f'{prefix}{sep} "{rewritten}"')
             else:
@@ -1873,6 +1955,7 @@ def _parse_remote_doctor_output(
     stdout: str,
     *,
     expect_scorer: bool = False,
+    expect_remote_scorer_target: bool = False,
     expect_objdump: bool = False,
 ) -> list[DoctorCheck]:
     labels = {
@@ -1892,12 +1975,19 @@ def _parse_remote_doctor_output(
         "remote-custom-scorer": "remote custom scorer",
         "remote-scorer-command": "remote scorer command",
         "remote-scorer-schema": "remote scorer schema",
+    }
+    scorer_target_labels = {
         "remote-scorer-target": "remote scorer target",
     }
     objdump_labels = {
         "remote-objdump-command": "remote objdump command",
     }
-    known_labels = {**labels, **scorer_labels, **objdump_labels}
+    known_labels = {
+        **labels,
+        **scorer_labels,
+        **scorer_target_labels,
+        **objdump_labels,
+    }
     checks: list[DoctorCheck] = []
     seen: set[str] = set()
     last_check_idx: int | None = None
@@ -1924,6 +2014,8 @@ def _parse_remote_doctor_output(
     expected_labels = dict(labels)
     if expect_scorer:
         expected_labels.update(scorer_labels)
+    if expect_remote_scorer_target:
+        expected_labels.update(scorer_target_labels)
     if expect_objdump:
         expected_labels.update(objdump_labels)
     for key, label in expected_labels.items():
