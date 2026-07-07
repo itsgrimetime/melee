@@ -2437,15 +2437,25 @@ def fetch_all_jobs(
     runner: Callable[..., CommandResult] = run_command,
     function_filter: str | None = None,
     target_filter: str | None = None,
+    before_fetch: Callable[[RemoteJob, int, int], None] | None = None,
+    after_fetch: Callable[[RemoteJob, Path, int, int], None] | None = None,
 ) -> list[Path]:
     """Fetch remote outputs for all (or filtered) jobs."""
+    selected_jobs = [
+        job
+        for job in jobs
+        if (function_filter is None or job.function == function_filter)
+        and (target_filter is None or job.target == target_filter)
+    ]
     fetched: list[Path] = []
-    for job in jobs:
-        if function_filter is not None and job.function != function_filter:
-            continue
-        if target_filter is not None and job.target != target_filter:
-            continue
-        fetched.append(fetch_job(job, runner=runner))
+    total = len(selected_jobs)
+    for index, job in enumerate(selected_jobs, 1):
+        if before_fetch is not None:
+            before_fetch(job, index, total)
+        fetched_path = fetch_job(job, runner=runner)
+        fetched.append(fetched_path)
+        if after_fetch is not None:
+            after_fetch(job, fetched_path, index, total)
     return fetched
 
 

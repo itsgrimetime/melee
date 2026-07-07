@@ -2826,6 +2826,53 @@ def test_remote_fetch_cli_all_flag(
     assert "Fetched" in result.stdout
 
 
+def test_remote_fetch_all_prints_progress_and_triage_for_each_job(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    job2 = replace(
+        job,
+        job_id="fn_80000000-coder2-20260525-143013",
+        target="coder2",
+        ssh="coder2.example",
+    )
+    fetch_calls: list[str] = []
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job, job2])
+
+    def fake_fetch_job(loaded_job: pr.RemoteJob, **kwargs) -> Path:
+        fetch_calls.append(loaded_job.job_id)
+        return Path(f"/tmp/{loaded_job.job_id}")
+
+    monkeypatch.setattr(pr, "fetch_job", fake_fetch_job)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "fetch",
+            "--all",
+            "--function",
+            job.function,
+            "--triage",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fetch_calls == [job.job_id, job2.job_id]
+    assert f"Fetching 1/2: {job.job_id}" in result.stdout
+    assert f"Fetching 2/2: {job2.job_id}" in result.stdout
+    assert result.stdout.index(f"Fetching 1/2: {job.job_id}") < result.stdout.index(
+        f"Fetched: /tmp/{job.job_id}"
+    )
+    assert result.stdout.count("Triage manually with:") == 2
+    assert f"--function {job.function}" in result.stdout
+    assert "Fetched 2 job(s)." in result.stdout
+
+
 def test_remote_fetch_cli_requires_job_id_or_all(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

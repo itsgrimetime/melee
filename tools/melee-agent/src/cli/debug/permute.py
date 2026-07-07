@@ -952,13 +952,46 @@ def remote_fetch(
     try:
         if all_jobs:
             jobs = permuter_remote.list_jobs(permuter_remote.JOBS_DIR)
+            fetched_jobs: list[tuple[permuter_remote.RemoteJob, Path]] = []
+
+            def before_fetch(
+                job: permuter_remote.RemoteJob,
+                index: int,
+                total: int,
+            ) -> None:
+                print(
+                    f"Fetching {index}/{total}: {job.job_id} "
+                    f"({job.function} on {job.target})",
+                    flush=True,
+                )
+
+            def after_fetch(
+                job: permuter_remote.RemoteJob,
+                path: Path,
+                index: int,
+                total: int,
+            ) -> None:
+                del index, total
+                fetched_jobs.append((job, path))
+                print(f"Fetched: {path}", flush=True)
+
             fetched = permuter_remote.fetch_all_jobs(
                 jobs,
                 function_filter=function,
                 target_filter=target,
+                before_fetch=before_fetch,
+                after_fetch=after_fetch,
             )
-            for path in fetched:
-                print(f"Fetched: {path}")
+            if not fetched_jobs:
+                for path in fetched:
+                    print(f"Fetched: {path}")
+            if triage:
+                for job, path in fetched_jobs:
+                    print(
+                        "Triage manually with: "
+                        f"melee-agent debug permute triage {shlex.quote(str(path))} "
+                        f"--function {shlex.quote(job.function)}"
+                    )
             print(f"\nFetched {len(fetched)} job(s).")
             return
 
