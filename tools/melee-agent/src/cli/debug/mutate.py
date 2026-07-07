@@ -132,6 +132,34 @@ def _write_retained_pcdump(path: Path, pcdump_text: str | None) -> str | None:
     return str(pcdump_path)
 
 
+def _compiled_pcdump_contains_function(pcdump_text: str, function: str) -> bool:
+    try:
+        return find_function(parse_pcdump(pcdump_text), function) is not None
+    except Exception:
+        return (
+            re.search(
+                rf"^Starting function {re.escape(function)}$",
+                pcdump_text,
+                flags=re.MULTILINE,
+            )
+            is not None
+        )
+
+
+def _concise_missing_pcdump_function_detail(detail: str, function: str) -> str:
+    for raw_line in detail.splitlines():
+        line = raw_line.strip()
+        if (
+            function in line
+            and "function " in line
+            and "not found in pcdump" in line
+        ):
+            return line
+    if "not found in pcdump" in detail:
+        return f"function '{function}' not found in pcdump"
+    return "compiled source did not emit the requested pcdump function"
+
+
 def _compact_checkdiff_payload(
     payload: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -2941,15 +2969,33 @@ def mutate_lifetime_layout_cmd(
                     if unit_source is not None:
                         compile_kwargs["unit_source"] = unit_source
                     candidate_text = compile_source_variant(**compile_kwargs)
+                    if not _compiled_pcdump_contains_function(
+                        candidate_text,
+                        function,
+                    ):
+                        raise _MalformedSourceCandidate(
+                            (
+                                "compiled probe pcdump omitted the target "
+                                f"function. Source retained at {path}"
+                            ),
+                            source_hunk=_compact_source_hunk_for_function(
+                                candidate_source_text,
+                                function,
+                            ),
+                        )
                 except CompileFailure as exc:
                     detail = str(exc)
                     if (
                         exc.returncode == 3
                         and "not found in pcdump" in detail
                     ):
+                        concise_detail = _concise_missing_pcdump_function_detail(
+                            detail,
+                            function,
+                        )
                         raise _MalformedSourceCandidate(
                             (
-                                f"{detail}; compiled probe pcdump omitted the "
+                                f"{concise_detail}; compiled probe pcdump omitted the "
                                 f"target function. Source retained at {path}"
                             ),
                             source_hunk=_compact_source_hunk_for_function(

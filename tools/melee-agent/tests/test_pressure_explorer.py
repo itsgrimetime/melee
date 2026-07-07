@@ -5884,6 +5884,56 @@ def test_lifetime_layout_cli_source_failure_keeps_source_path(
     assert "fn_80000000" in variant["source_hunk"]
 
 
+def test_lifetime_layout_rejects_compiled_pcdump_missing_target_before_real_score(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "probe.c"
+    baseline.write_text(BASELINE)
+    source.write_text("void fn_80000000(void) {}\n")
+
+    def fake_compile(*args, **kwargs) -> str:
+        return BASELINE.replace("fn_80000000", "other")
+
+    def fail_if_real_scored(*args, **kwargs):
+        raise AssertionError("score-source should not run for missing target pcdump")
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_candidate_real_tree",
+        fail_if_real_scored,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "mutate",
+            "lifetime-layout",
+            "-f",
+            "fn_80000000",
+            "--pcdump",
+            str(baseline),
+            "--candidate",
+            f"block-scope={source}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    variant = json.loads(result.stdout)["variants"][0]
+    assert variant["status"] == "malformed-source"
+    assert "compiled probe pcdump omitted the target function" in variant["error"]
+    assert "score-source should not run" not in variant["error"]
+    assert variant["source_retained"] == str(source)
+    assert "source_hunk" in variant
+
+
 def test_lifetime_layout_cli_rejects_source_missing_target_before_compile(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5945,6 +5995,8 @@ def test_lifetime_layout_cli_marks_dump_missing_target_as_malformed_source(
             stderr=(
                 "function 'fn_80000000' not found in pcdump\n"
                 "suggestions: fn_80000001"
+                "\n\nTo report this tooling failure for follow-up, run:\n"
+                "  melee-agent issue report 'melee-agent command failed: debug dump local ...'"
             ),
             returncode=3,
         )
@@ -5974,7 +6026,9 @@ def test_lifetime_layout_cli_marks_dump_missing_target_as_malformed_source(
     variant = json.loads(result.stdout)["variants"][0]
     assert variant["status"] == "malformed-source"
     assert "compiled probe pcdump omitted the target function" in variant["error"]
-    assert "fn_80000001" in variant["error"]
+    assert "function 'fn_80000000' not found in pcdump" in variant["error"]
+    assert "To report this tooling failure" not in variant["error"]
+    assert "command:" not in variant["error"]
     assert variant["source_retained"] == str(source)
     assert "fn_80000000" in variant["source_hunk"]
 
