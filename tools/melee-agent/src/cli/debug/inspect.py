@@ -9073,6 +9073,8 @@ def _run_checkdiff_json(
     timeout: float | None = None,
     no_build: bool = True,
     label: str = "checkdiff",
+    locked_child: bool = False,
+    disable_fingerprint: bool = False,
 ) -> tuple[dict | None, str | None]:
     cmd = [
         sys.executable,
@@ -9083,6 +9085,14 @@ def _run_checkdiff_json(
     ]
     if no_build:
         cmd.append("--no-build")
+    env = None
+    if locked_child:
+        env = _checkdiff_env_for_locked_child(
+            disable_fingerprint=disable_fingerprint
+        )
+    elif disable_fingerprint:
+        from src.cli.debug import _checkdiff_env_without_fingerprint
+        env = _checkdiff_env_without_fingerprint()
     try:
         proc = subprocess.run(
             cmd,
@@ -9090,6 +9100,7 @@ def _run_checkdiff_json(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return None, f"{label} timed out"

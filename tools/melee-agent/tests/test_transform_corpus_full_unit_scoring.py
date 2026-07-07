@@ -170,6 +170,117 @@ def test_real_tree_scoring_full_unit_writes_whole_candidate_and_restores(
     assert target.read_text() == original
 
 
+def test_real_tree_scoring_full_unit_structural_guard_rebuilds_checkdiff(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    melee_root = tmp_path / "repo"
+    target = melee_root / "src" / "melee" / "demo.c"
+    target.parent.mkdir(parents=True)
+    original = (
+        "static int fn_80000000(int value, int unused) { return value; }\n"
+        "int caller(void) { return fn_80000000(1, 0); }\n"
+    )
+    candidate_text = (
+        "static int fn_80000000(int value) { return value; }\n"
+        "int caller(void) { return fn_80000000(1); }\n"
+    )
+    target.write_text(original)
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text(candidate_text)
+    checkdiff_calls = []
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/demo",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_acquire_source_score_repo_lock",
+        lambda root, timeout=None: nullcontext(),
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "transfer_candidate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("full-unit scoring must not transfer only the target")
+        ),
+    )
+
+    def fake_ninja(args, root, *, timeout=None):
+        assert target.read_text() == candidate_text
+        return subprocess.CompletedProcess(args, 0, "", ""), False
+
+    def fake_refresh(unit, function, root, **kwargs):
+        assert target.read_text() == candidate_text
+        return 75.0, None
+
+    def fake_checkdiff_json(
+        function,
+        *,
+        melee_root,
+        timeout=None,
+        no_build=True,
+        label,
+        locked_child=False,
+        disable_fingerprint=False,
+    ):
+        assert target.read_text() == candidate_text
+        checkdiff_calls.append(
+            {
+                "no_build": no_build,
+                "locked_child": locked_child,
+                "disable_fingerprint": disable_fingerprint,
+            }
+        )
+        return {
+            "classification": {
+                "primary": "instruction-sequence",
+                "structural_truth_gate": {"normalized_diff_lines": 6},
+                "stack_frame_sizes": {
+                    "expected_frame_size": 48,
+                    "current_frame_size": 48,
+                },
+            },
+            "structural": {
+                "normalized_diff_lines": 6,
+                "opcode_similarity": 0.5,
+                "line_delta": 2,
+                "hunk_count": 1,
+            },
+        }, None
+
+    monkeypatch.setattr(debug_cli, "_run_ninja_with_no_diag_retry", fake_ninja)
+    monkeypatch.setattr(debug_cli, "_refresh_match_pct_after_successful_build", fake_refresh)
+    monkeypatch.setattr(debug_cli, "_run_checkdiff_json", fake_checkdiff_json)
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_command_with_optional_timeout",
+        lambda args, cwd, timeout=None: subprocess.CompletedProcess(args, 0, "", ""),
+    )
+
+    score = debug_cli._score_source_candidate_real_tree(
+        candidate,
+        function="fn_80000000",
+        melee_root=melee_root,
+        timeout=1,
+        include_structural_guard=True,
+        full_unit_source=True,
+    )
+
+    assert checkdiff_calls == [
+        {
+            "no_build": False,
+            "locked_child": True,
+            "disable_fingerprint": True,
+        }
+    ]
+    assert score.structural_guard["accepted"] is False
+    assert score.structural_guard["classification_primary"] == "instruction-sequence"
+    assert target.read_text() == original
+
+
 def test_score_source_cli_forwards_full_unit_source_to_checkdiff_guard(
     tmp_path,
     monkeypatch,
@@ -291,6 +402,138 @@ def test_score_source_cli_forwards_full_unit_source_to_checkdiff_guard(
     payload = json.loads(result.stdout)
     assert captured_full_unit_flags[-1] is False
     assert payload["full_unit_source"] is False
+
+
+def test_score_source_cli_rejects_structural_guard_when_target_score_misses_all(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    melee_root = tmp_path / "repo"
+    source = melee_root / "src" / "melee" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void fn_80000000(void) {}\n", encoding="utf-8")
+    target = tmp_path / "target.json"
+    target.write_text('{"function":"fn_80000000","virtuals":{"33":28,"39":26}}\n')
+    wibo = tmp_path / "wibo"
+    wibo.write_text("", encoding="utf-8")
+    compiler_dir = tmp_path / "compiler"
+    compiler_dir.mkdir()
+    (compiler_dir / "mwcceppc_debug.exe").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_unsafe_lane_payload",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda unit: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_load_target_spec", lambda path: {})
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_target_details",
+        lambda result, target_spec: {
+            "matched": 0,
+            "targeted": 2,
+            "virtuals": {
+                "33": {"expected": 28, "actual": 26, "matched": False},
+                "39": {"expected": 26, "actual": 28, "matched": False},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_expression_source",
+        lambda path, *, melee_root: ("void fn_80000000(void) {}\n", str(path)),
+    )
+    monkeypatch.setattr(debug_cli, "_score_expression_anchors", lambda **kwargs: None)
+    monkeypatch.setattr(
+        target_cli,
+        "_score_source_compile_source_rel",
+        lambda **kwargs: nullcontext(kwargs["source_rel"]),
+    )
+
+    def fake_run_command(args, *, cwd, env, timeout=None):
+        (cwd / env["MWCC_DEBUG_PCDUMP_PATH"]).write_text(
+            "pcdump\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def fake_real_tree(candidate_path, **kwargs):
+        return SimpleNamespace(
+            structural_guard={
+                "accepted": True,
+                "shape_preserved": True,
+                "classification_primary": "normalized-structural-match",
+                "normalized_diff_lines": 0,
+                "hunk_count": 7,
+                "rejection_reason": None,
+            },
+            structural_guard_error=None,
+            match_percent_error=None,
+        )
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_command_with_optional_timeout",
+        fake_run_command,
+    )
+    monkeypatch.setattr(debug_cli, "_score_source_candidate_real_tree", fake_real_tree)
+    monkeypatch.setattr(
+        mwcc_debug_module,
+        "parse_pcdump",
+        lambda text: [SimpleNamespace(name="fn_80000000")],
+    )
+    monkeypatch.setattr(mwcc_debug_module, "parse_hook_events", lambda text: [])
+    monkeypatch.setattr(
+        mwcc_debug_module,
+        "find_function",
+        lambda events, function: None,
+    )
+    monkeypatch.setattr(
+        mwcc_debug_module,
+        "score_function",
+        lambda fn, target_spec, events=None: SimpleNamespace(total=140),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(source),
+            "--function",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--cflags-from",
+            str(source),
+            "--checkdiff-guard",
+            "--full-unit-source",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["target_score"]["matched"] == 0
+    assert payload["target_score"]["targeted"] == 2
+    assert payload["structural_guard"]["shape_preserved"] is True
+    assert payload["structural_guard"]["accepted"] is False
+    assert payload["structural_guard"]["target_score_accepted"] is False
+    assert payload["structural_guard"]["target_score_matched"] == 0
+    assert payload["structural_guard"]["target_score_targeted"] == 2
+    assert payload["candidate_verdict"] == {
+        "classification": "target-score-miss",
+        "ledger": "revert candidate",
+        "matched": 0,
+        "targeted": 2,
+        "reason": "target score missed all requested registers",
+    }
 
 
 def test_score_source_force_phys_mode_applies_checkdiff_guard(

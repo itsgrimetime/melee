@@ -2108,6 +2108,71 @@ def _apply_score_source_scope(
     return payload
 
 
+def _score_source_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _apply_score_source_target_verdict(payload: dict[str, Any]) -> None:
+    target_score = payload.get("target_score")
+    structural_guard = payload.get("structural_guard")
+    if not isinstance(target_score, dict) or not isinstance(structural_guard, dict):
+        return
+    matched = _score_source_int(target_score.get("matched"))
+    targeted = _score_source_int(target_score.get("targeted"))
+    if matched is None or targeted is None or targeted <= 0:
+        return
+
+    target_score_accepted = matched > 0
+    structural_guard["target_score_matched"] = matched
+    structural_guard["target_score_targeted"] = targeted
+    structural_guard["target_score_accepted"] = target_score_accepted
+
+    if not target_score_accepted:
+        reason = "target score missed all requested registers"
+        structural_guard["accepted"] = False
+        structural_guard["rejection_reason"] = (
+            structural_guard.get("rejection_reason") or reason
+        )
+        payload["candidate_verdict"] = {
+            "classification": "target-score-miss",
+            "ledger": "revert candidate",
+            "matched": matched,
+            "targeted": targeted,
+            "reason": reason,
+        }
+        return
+
+    if matched < targeted:
+        payload.setdefault(
+            "candidate_verdict",
+            {
+                "classification": "target-score-partial-hit",
+                "ledger": "active experiment",
+                "matched": matched,
+                "targeted": targeted,
+                "reason": "target score hit some requested registers",
+            },
+        )
+        return
+
+    payload.setdefault(
+        "candidate_verdict",
+        {
+            "classification": "target-score-hit",
+            "ledger": "active experiment",
+            "matched": matched,
+            "targeted": targeted,
+            "reason": "target score hit all requested registers",
+        },
+    )
+
+
 def _apply_score_source_checkdiff_guard(
     payload: dict[str, Any],
     *,
@@ -2150,6 +2215,7 @@ def _apply_score_source_checkdiff_guard(
         and not isinstance(normalized, bool)
     ):
         payload["score"] = normalized
+    _apply_score_source_target_verdict(payload)
     payload["checkdiff_guard"] = {
         "match_percent": match_percent,
         "classification_primary": guard.get("classification_primary"),
@@ -3184,6 +3250,19 @@ def score_source(
                 real_score.structural_guard_error
                 or real_score.match_percent_error
             )
+            guard = (
+                real_score.structural_guard
+                if isinstance(real_score.structural_guard, dict)
+                else {}
+            )
+            _apply_score_source_target_verdict(payload)
+            payload["checkdiff_guard"] = {
+                "match_percent": getattr(real_score, "match_percent", None),
+                "classification_primary": guard.get("classification_primary"),
+                "normalized_diff_lines": guard.get("normalized_diff_lines"),
+                "hunk_count": guard.get("hunk_count"),
+                "accepted": guard.get("accepted"),
+            }
         print(json.dumps(payload, indent=2))
         return
     print(score_value)

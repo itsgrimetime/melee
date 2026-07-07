@@ -2044,11 +2044,17 @@ def _score_source_candidate_real_tree(
                         structural_guard_error = deadline_error
                     stack_timeout = 0.0
                 else:
+                    # Full-unit retained probes replace the real TU source.
+                    # Re-run checkdiff's build step while the candidate is
+                    # applied so the guard cannot accept a stale pre-probe
+                    # object from a prior no-build state.
                     checkdiff_payload, checkdiff_error = _run_checkdiff_json(
                         function,
                         melee_root=melee_root,
                         timeout=stack_timeout,
-                        no_build=True,
+                        no_build=not full_unit_source,
+                        locked_child=True,
+                        disable_fingerprint=full_unit_source,
                         label=(
                             "checkdiff structural guard"
                             if include_structural_guard
