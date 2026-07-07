@@ -226,6 +226,59 @@ def test_remote_status_reports_stale_age_and_cleanup_guidance(
     assert f"melee-agent debug permute remote stop {job.job_id}" in result.stdout
 
 
+def test_remote_status_forwards_timeout_to_status_and_log_probes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    seen_status_timeout: list[float | None] = []
+    seen_log_timeout: list[float | None] = []
+
+    def fake_read_job(job_id: str, jobs_dir: Path = pr.JOBS_DIR) -> pr.RemoteJob:
+        assert job_id == job.job_id
+        return job
+
+    def fake_status_job(
+        loaded_job: pr.RemoteJob,
+        *,
+        timeout: float | None = None,
+    ) -> pr.RemoteStatus:
+        assert loaded_job == job
+        seen_status_timeout.append(timeout)
+        return pr.RemoteStatus(job_id=job.job_id, state="active")
+
+    def fake_remote_log_status(
+        loaded_job: pr.RemoteJob,
+        *,
+        timeout: float | None = None,
+    ) -> pr.RemoteLogStatus:
+        assert loaded_job == job
+        seen_log_timeout.append(timeout)
+        return pr.RemoteLogStatus(exists=False, detail="timed out")
+
+    monkeypatch.setattr(pr, "read_job", fake_read_job)
+    monkeypatch.setattr(pr, "status_job", fake_status_job)
+    monkeypatch.setattr(pr, "remote_log_status", fake_remote_log_status)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "status",
+            job.job_id,
+            "--timeout",
+            "0.25",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen_status_timeout == [0.25]
+    assert seen_log_timeout == [0.25]
+    assert "log idle: unknown - timed out" in result.stdout
+
+
 def test_parse_permuter_log_summary_uses_global_min_not_latest() -> None:
     summary = pr.parse_permuter_log_summary(
         (
@@ -2460,6 +2513,54 @@ def test_probe_jobs_active_maps_active_dead(tmp_path: Path) -> None:
     assert active_map["job2-target-20260101-000000"] is False
 
 
+def test_probe_jobs_active_batched_groups_one_tmux_query_per_ssh(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    same_host_dead = replace(
+        job,
+        job_id="fn_80000010-coder64-20260525-143013",
+        function="fn_80000010",
+        tmux_session="melee-perm-fn_80000010-coder64-20260525-143013",
+    )
+    other_host = replace(
+        job,
+        job_id="fn_80000020-coder2-20260525-143014",
+        function="fn_80000020",
+        target="coder2",
+        ssh="coder2.example",
+        tmux_session="melee-perm-fn_80000020-coder2-20260525-143014",
+    )
+    calls: list[tuple[str, float | None, str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        assert argv[0] == "ssh"
+        assert check is False
+        calls.append((argv[1], timeout, argv[2]))
+        stdout = f"{job.tmux_session}\n" if argv[1] == job.ssh else ""
+        return pr.CommandResult(returncode=0, stdout=stdout, stderr="")
+
+    active_map = pr.probe_jobs_active_batched(
+        [job, same_host_dead, other_host],
+        runner=fake_runner,
+        timeout=0.5,
+    )
+
+    assert active_map == {
+        job.job_id: True,
+        same_host_dead.job_id: False,
+        other_host.job_id: False,
+    }
+    assert sorted((ssh, timeout) for ssh, timeout, _script in calls) == [
+        ("coder.coder64", 0.5),
+        ("coder2.example", 0.5),
+    ]
+    assert all("tmux list-sessions" in script for _ssh, _timeout, script in calls)
+
+
 # ── prune_dead_jobs ──────────────────────────────────────────────────────────
 
 
@@ -2474,14 +2575,14 @@ def test_prune_dead_jobs_removes_only_dead_metadata(tmp_path: Path) -> None:
     def fake_probe(jobs, **kwargs):
         return {job1.job_id: True, job2.job_id: False}
 
-    original = pr.probe_jobs_active
-    pr.probe_jobs_active = fake_probe
+    original = pr.probe_jobs_active_batched
+    pr.probe_jobs_active_batched = fake_probe
     try:
         pruned = pr.prune_dead_jobs(
             [job1, job2], dry_run=False, jobs_dir=jobs_dir,
         )
     finally:
-        pr.probe_jobs_active = original
+        pr.probe_jobs_active_batched = original
 
     assert pruned == [job2.job_id]
     assert (jobs_dir / f"{job1.job_id}.json").exists()
@@ -2497,12 +2598,12 @@ def test_prune_dead_jobs_dry_run_does_not_delete(tmp_path: Path) -> None:
     def fake_probe(jobs, **kwargs):
         return {job.job_id: False}
 
-    original = pr.probe_jobs_active
-    pr.probe_jobs_active = fake_probe
+    original = pr.probe_jobs_active_batched
+    pr.probe_jobs_active_batched = fake_probe
     try:
         pruned = pr.prune_dead_jobs([job], dry_run=True, jobs_dir=jobs_dir)
     finally:
-        pr.probe_jobs_active = original
+        pr.probe_jobs_active_batched = original
 
     assert pruned == [job.job_id]
     assert (jobs_dir / f"{job.job_id}.json").exists()
@@ -2524,7 +2625,7 @@ def test_remote_list_cli_shows_active_dead(
         return {job.job_id: True}
 
     monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
-    monkeypatch.setattr(pr, "probe_jobs_active", fake_probe)
+    monkeypatch.setattr(pr, "probe_jobs_active_batched", fake_probe, raising=False)
 
     result = CliRunner().invoke(app, ["debug", "permute", "remote", "list"])
     assert result.exit_code == 0
@@ -2546,7 +2647,7 @@ def test_remote_list_cli_active_flag_filters(
         return {job.job_id: True, job2.job_id: False}
 
     monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
-    monkeypatch.setattr(pr, "probe_jobs_active", fake_probe)
+    monkeypatch.setattr(pr, "probe_jobs_active_batched", fake_probe, raising=False)
 
     result = CliRunner().invoke(
         app, ["debug", "permute", "remote", "list", "--active"],
@@ -2570,13 +2671,56 @@ def test_remote_list_cli_dead_flag_filters(
         return {job.job_id: True, job2.job_id: False}
 
     monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
-    monkeypatch.setattr(pr, "probe_jobs_active", fake_probe)
+    monkeypatch.setattr(pr, "probe_jobs_active_batched", fake_probe, raising=False)
 
     result = CliRunner().invoke(
         app, ["debug", "permute", "remote", "list", "--dead"],
     )
     assert result.exit_code == 0
     assert job.job_id not in result.stdout
+    assert job2.job_id in result.stdout
+
+
+def test_remote_list_cli_uses_batched_active_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    job2 = replace(
+        job,
+        job_id="fn_80000010-coder64-20260525-143013",
+        function="fn_80000010",
+    )
+    seen_probe: list[tuple[list[str], float | None]] = []
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job, job2])
+
+    def fail_sequential_probe(jobs, **kwargs):
+        raise AssertionError("remote list must not probe jobs serially")
+
+    def fake_batched_probe(
+        jobs: list[pr.RemoteJob],
+        **kwargs,
+    ) -> dict[str, bool]:
+        seen_probe.append(([loaded.job_id for loaded in jobs], kwargs.get("timeout")))
+        return {job.job_id: True, job2.job_id: False}
+
+    monkeypatch.setattr(pr, "probe_jobs_active", fail_sequential_probe)
+    monkeypatch.setattr(
+        pr,
+        "probe_jobs_active_batched",
+        fake_batched_probe,
+        raising=False,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "list", "--timeout", "0.5"],
+    )
+
+    assert result.exit_code == 0
+    assert seen_probe == [([job.job_id, job2.job_id], 0.5)]
+    assert job.job_id in result.stdout
     assert job2.job_id in result.stdout
 
 

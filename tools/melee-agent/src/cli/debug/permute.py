@@ -674,7 +674,7 @@ def remote_list(
     ] = False,
     timeout: Annotated[
         float,
-        typer.Option("--timeout", help="Per-job SSH probe timeout in seconds."),
+        typer.Option("--timeout", help="Per-host SSH probe timeout in seconds."),
     ] = 10.0,
     prune_dead: Annotated[
         bool,
@@ -711,13 +711,11 @@ def remote_list(
             print("No remote permuter jobs found.")
         return
 
-    # Probe which are active
-    active_map = permuter_remote.probe_jobs_active(jobs, timeout=timeout)
-
     if prune_dead:
         pruned = permuter_remote.prune_dead_jobs(
             jobs, dry_run=False,
             jobs_dir=permuter_remote.JOBS_DIR,
+            timeout=timeout,
         )
         if pruned:
             print(f"Pruned {len(pruned)} dead job metadata file(s):")
@@ -726,6 +724,9 @@ def remote_list(
         else:
             print("No dead job metadata to prune.")
         return
+
+    # Probe which are active with one SSH call per host instead of one per job.
+    active_map = permuter_remote.probe_jobs_active_batched(jobs, timeout=timeout)
 
     header_printed = False
     for job in jobs:
@@ -773,12 +774,16 @@ def remote_status(
             help="Recommend stopping active jobs whose log is idle this many hours.",
         ),
     ] = 12.0,
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Per remote status/log probe timeout in seconds."),
+    ] = 15.0,
 ) -> None:
     """Show remote permuter job activity and stale cleanup guidance."""
     try:
         job = _remote_read_job(job_id)
-        status = permuter_remote.status_job(job)
-        log_status = permuter_remote.remote_log_status(job)
+        status = _remote_status_job_for_triage(job, timeout=timeout)
+        log_status = _remote_log_status_for_triage(job, timeout=timeout)
     except (permuter_remote.RemoteConfigError, permuter_remote.RemoteJobError) as exc:
         _remote_error(exc)
 

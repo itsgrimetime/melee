@@ -2467,6 +2467,48 @@ def probe_jobs_active(
     return result
 
 
+def probe_jobs_active_batched(
+    jobs: list[RemoteJob],
+    runner: Callable[..., CommandResult] = run_command,
+    timeout: float = 10.0,
+) -> dict[str, bool]:
+    """Probe active remote jobs with one tmux session query per SSH host."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    jobs_by_ssh: dict[str, list[RemoteJob]] = {}
+    for job in jobs:
+        jobs_by_ssh.setdefault(job.ssh, []).append(job)
+    if not jobs_by_ssh:
+        return {}
+
+    def probe_host(ssh: str, host_jobs: list[RemoteJob]) -> dict[str, bool]:
+        script = "tmux list-sessions -F '#{session_name}' 2>/dev/null || true"
+        result = runner(
+            ["ssh", ssh, _remote_sh(script)],
+            check=False,
+            timeout=timeout,
+        )
+        active_sessions = {
+            line.strip()
+            for line in result.stdout.splitlines()
+            if line.strip()
+        }
+        return {
+            job.job_id: job.tmux_session in active_sessions
+            for job in host_jobs
+        }
+
+    active: dict[str, bool] = {}
+    with ThreadPoolExecutor(max_workers=min(len(jobs_by_ssh), 8)) as executor:
+        futures = [
+            executor.submit(probe_host, ssh, host_jobs)
+            for ssh, host_jobs in jobs_by_ssh.items()
+        ]
+        for future in as_completed(futures):
+            active.update(future.result())
+    return active
+
+
 def prune_dead_jobs(
     jobs: list[RemoteJob],
     runner: Callable[..., CommandResult] = run_command,
@@ -2478,7 +2520,7 @@ def prune_dead_jobs(
 
     Returns the list of pruned (or would-prune) job_ids.
     """
-    active_map = probe_jobs_active(jobs, runner=runner, timeout=timeout)
+    active_map = probe_jobs_active_batched(jobs, runner=runner, timeout=timeout)
     pruned: list[str] = []
     for job in jobs:
         if not active_map.get(job.job_id, False):
