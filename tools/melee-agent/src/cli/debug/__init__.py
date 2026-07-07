@@ -4287,44 +4287,42 @@ def _select_order_source_attributions_for_leads(
             return out
 
         attrs = load_attrs(virtuals)
-        for _hop in range(3):
-            operand_virtuals: list[int] = []
-            for source in attrs.values():
-                source_dict = _solve_source_attribution_dict(source) or {}
-                if source_dict.get("kind") in {
-                    "implicit-temp",
-                    "fpr-temp",
-                    "copy/coalesce-product",
-                }:
-                    operand_virtuals.extend(
-                        _select_order_virtual_operands_from_expression(
-                            source_dict.get("expression")
-                        )
+        operand_virtuals: list[int] = []
+        for source in attrs.values():
+            source_dict = _solve_source_attribution_dict(source) or {}
+            if source_dict.get("kind") in {
+                "implicit-temp",
+                "fpr-temp",
+                "copy/coalesce-product",
+            }:
+                operand_virtuals.extend(
+                    _select_order_virtual_operands_from_expression(
+                        source_dict.get("expression")
                     )
-                if (
-                    source_dict.get("kind")
-                    in {
-                        "first-def",
-                        "load/store-address",
-                        "field-load",
-                        "copy/coalesce-source",
-                    }
-                    and source_dict.get("field_offset") is not None
-                ):
-                    base_virtual = source_dict.get("base_virtual")
-                    if isinstance(base_virtual, bool):
-                        continue
-                    try:
-                        operand_virtuals.append(int(base_virtual))
-                    except (TypeError, ValueError):
-                        pass
-            seen_virtuals = set(virtuals)
-            new_operands = [
-                virtual for virtual in operand_virtuals
-                if virtual not in seen_virtuals
-            ]
-            if not new_operands:
-                break
+                )
+            if (
+                source_dict.get("kind")
+                in {
+                    "first-def",
+                    "load/store-address",
+                    "field-load",
+                    "copy/coalesce-source",
+                }
+                and source_dict.get("field_offset") is not None
+            ):
+                base_virtual = source_dict.get("base_virtual")
+                if isinstance(base_virtual, bool):
+                    continue
+                try:
+                    operand_virtuals.append(int(base_virtual))
+                except (TypeError, ValueError):
+                    pass
+        seen_virtuals = set(virtuals)
+        new_operands = [
+            virtual for virtual in operand_virtuals
+            if virtual not in seen_virtuals
+        ]
+        if new_operands:
             virtuals.extend(new_operands)
             try:
                 attrs = load_attrs(virtuals)
@@ -7514,6 +7512,56 @@ def _run_auto_verify_command_with_status(
 
 
 
+def _expression_order_first_def_mismatch(
+    anchor: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> bool:
+    signature = anchor.get("signature")
+    if not isinstance(signature, Mapping):
+        return False
+    if signature.get("kind") != "source-expression":
+        return False
+    baseline_source = anchor.get("baseline_source")
+    candidate_source = candidate.get("source")
+    if not isinstance(baseline_source, Mapping) or not isinstance(
+        candidate_source,
+        Mapping,
+    ):
+        return False
+    if (
+        baseline_source.get("confidence") != "fpr-expression-order"
+        or candidate_source.get("confidence") != "fpr-expression-order"
+    ):
+        return False
+    baseline_first_def = baseline_source.get("first_def")
+    candidate_first_def = candidate_source.get("first_def")
+    if not isinstance(baseline_first_def, Mapping) or not isinstance(
+        candidate_first_def,
+        Mapping,
+    ):
+        return False
+    baseline_opcode = _normalize_expression_text(
+        baseline_first_def.get("opcode")
+    ).lower()
+    candidate_opcode = _normalize_expression_text(
+        candidate_first_def.get("opcode")
+    ).lower()
+    baseline_operands = _normalize_first_def_operands(
+        baseline_first_def.get("operands")
+    )
+    candidate_operands = _normalize_first_def_operands(
+        candidate_first_def.get("operands")
+    )
+    if not baseline_opcode or not candidate_opcode:
+        return False
+    if not baseline_operands or not candidate_operands:
+        return False
+    return (baseline_opcode, baseline_operands) != (
+        candidate_opcode,
+        candidate_operands,
+    )
+
+
 def _score_expression_anchors(
     *,
     target_spec: Mapping[str, Any],
@@ -7603,13 +7651,17 @@ def _score_expression_anchors(
                 actual = int(candidate.get("actual"))
             except (TypeError, ValueError):
                 actual = None
-            is_match = actual == expected
+            first_def_mismatch = _expression_order_first_def_mismatch(
+                anchor,
+                candidate,
+            )
+            is_match = actual == expected and not first_def_mismatch
             if is_match:
                 matched += 1
             if candidate_virtual is not None and candidate_virtual != baseline_virtual:
                 moved += 1
             entry.update({
-                "status": "ok",
+                "status": "first-def-mismatch" if first_def_mismatch else "ok",
                 "candidate_virtual": candidate_virtual,
                 "actual": actual,
                 "matched": is_match,
@@ -7619,6 +7671,10 @@ def _score_expression_anchors(
                 ),
                 "candidate_source": candidate.get("source"),
             })
+            if first_def_mismatch:
+                entry["mismatch_reason"] = (
+                    "fpr-expression-order source attribution first-def mismatch"
+                )
         false_positive = raw_matched and not bool(entry["matched"])
         entry["virtual_id_false_positive"] = false_positive
         if false_positive:

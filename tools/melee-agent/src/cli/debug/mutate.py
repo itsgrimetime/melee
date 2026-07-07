@@ -2196,7 +2196,6 @@ _FRAME_TRANSFORM_OUTGOING_FLOOR_FAMILIES = (
 )
 
 _FPR_SELECT_ORDER_TRANSFORM_FAMILIES = (
-    "pcode_only_fpr_fsubs_cast_owner_repair",
     "pcode_only_fpr_callarg_temp_repair",
     "coupled_fpr_coalesce_product_repair",
     "coloring_register_steering",

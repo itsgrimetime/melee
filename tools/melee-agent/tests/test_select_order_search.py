@@ -7416,6 +7416,93 @@ def test_select_order_source_attributions_load_copy_product_source_operand(
     assert attrs[37].expression == "addi r37,r52,28"
 
 
+def test_expression_score_rejects_fpr_order_source_with_mismatched_first_def(
+    monkeypatch,
+) -> None:
+    signature = {
+        "kind": "source-expression",
+        "source_kind": "local",
+        "name": "row_offset",
+        "expression": "y_offset * rowf",
+    }
+    key = debug_cli._expression_signature_key(signature)
+
+    def fake_candidate_expression_entries(**kwargs):
+        return {
+            key: [
+                {
+                    "virtual": 33,
+                    "actual": 26,
+                    "signature": dict(signature),
+                    "source": {
+                        "kind": "local",
+                        "confidence": "fpr-expression-order",
+                        "name": "row_offset",
+                        "expression": "y_offset * rowf",
+                        "first_def": {
+                            "opcode": "fmuls",
+                            "operands": "f33,f36,f52",
+                        },
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_candidate_expression_entries",
+        fake_candidate_expression_entries,
+    )
+
+    score = debug_cli._score_expression_anchors(
+        target_spec={
+            "virtuals": {"33": 26},
+            "expression_register_class": "fpr",
+            "expression_anchors": {
+                "33": {
+                    "expected": 26,
+                    "signature": signature,
+                    "baseline_source": {
+                        "kind": "local",
+                        "confidence": "fpr-expression-order",
+                        "name": "row_offset",
+                        "expression": "y_offset * rowf",
+                        "first_def": {
+                            "opcode": "fmuls",
+                            "operands": "f39,f32,f48",
+                        },
+                    },
+                }
+            },
+        },
+        target_details={
+            "virtuals": {
+                "33": {
+                    "actual": 26,
+                    "matched": True,
+                }
+            }
+        },
+        pcdump_text="candidate pcdump",
+        function="fn_80000000",
+        fn=object(),
+        candidate_source_text="void fn_80000000(void) {}\n",
+        candidate_source_file="sample.c",
+        baseline_pcdump_text=None,
+        baseline_source_text=None,
+        baseline_source_file=None,
+        reg_class="fpr",
+    )
+
+    assert score is not None
+    assert score["matched"] == 0
+    assert score["false_positive_virtual_id_hit_count"] == 1
+    detail = score["virtuals"]["33"]
+    assert detail["status"] == "first-def-mismatch"
+    assert detail["matched"] is False
+    assert detail["virtual_id_false_positive"] is True
+
+
 def test_select_order_source_attributions_keep_first_pass_when_operand_retry_fails(
     monkeypatch,
 ) -> None:

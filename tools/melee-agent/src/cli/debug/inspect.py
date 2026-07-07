@@ -10852,6 +10852,20 @@ def _select_order_owner_split_candidates(
         if isinstance(raw_probe, Mapping):
             candidates.append(raw_probe)
     return candidates
+
+
+def _select_order_expression_is_cast_of(
+    expression: str,
+    owner_local: str,
+) -> bool:
+    text = expression.strip()
+    owner = owner_local.strip()
+    if not owner:
+        return False
+    match = re.fullmatch(r"\([^()]+\)\s*(?P<owner>[A-Za-z_][A-Za-z_0-9]*)", text)
+    return bool(match and match.group("owner") == owner)
+
+
 def _select_order_owner_split_safe_source(
     causal_target: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -10861,6 +10875,7 @@ def _select_order_owner_split_safe_source(
     if causal_target.get("source_actionable") is not True or not labels:
         return None
     for candidate in _select_order_owner_split_candidates(causal_target):
+        owner_local = candidate.get("owner_local")
         expression = None
         for key in (
             "safe_source_expression",
@@ -10875,6 +10890,13 @@ def _select_order_owner_split_safe_source(
                 and _select_order_expression_safe_to_bind(value)
             ):
                 expression = value.strip()
+                if (
+                    key == "split_expression"
+                    and isinstance(owner_local, str)
+                    and _select_order_expression_is_cast_of(expression, owner_local)
+                    and _select_order_expression_safe_to_bind(owner_local)
+                ):
+                    expression = owner_local.strip()
                 break
         if expression is None:
             value = candidate.get("expression")
