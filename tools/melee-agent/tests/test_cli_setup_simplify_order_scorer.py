@@ -16,6 +16,7 @@ on any machine. Covers:
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import stat
 import textwrap
@@ -199,6 +200,161 @@ def test_setup_writes_spec_settings_and_compile(
     assert mode & stat.S_IXUSR
 
 
+def test_setup_uses_bootstrap_full_unit_source_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    function = "fn_test"
+    perm_root = _make_perm_dir(tmp_path, function=function)
+    perm_dir = perm_root / "nonmatchings" / function
+    baseline = _make_baseline_dump(tmp_path, function)
+    retained_source = tmp_path / "retained-fulltu.c"
+    retained_source.write_text(
+        textwrap.dedent(
+            f"""\
+            int helper(void) {{ return 1; }}
+
+            void {function}(void) {{
+                helper();
+            }}
+
+            int untouched(void) {{ return 0; }}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (perm_dir / "melee_agent_bootstrap.json").write_text(
+        json.dumps({
+            "function": function,
+            "source": str(retained_source),
+            "import_source": "/repo/src/melee/mn/sample.c",
+            "source_staged": True,
+            "candidate_source_context": "full-unit",
+        }),
+        encoding="utf-8",
+    )
+    _stub_wibo_and_compiler(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "permute", "setup-simplify-order-scorer",
+            "--function", function,
+            "--scorer-mode", "force-phys",
+            "--force-phys", "42:30",
+            "--baseline-dump", str(baseline),
+            "--perm-root", str(perm_root),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+    csh = (perm_dir / "compile.sh").read_text(encoding="utf-8")
+    assert "MELEE_FULL_UNIT_SOURCE=" in csh
+    assert str(retained_source) in csh
+    assert "find_function_definitions" in csh
+    assert "replace_function" in csh
+
+
+def test_full_unit_compile_wrapper_splices_candidate_into_retained_unit(
+    tmp_path: Path,
+) -> None:
+    function = "fn_test"
+    project_root = tmp_path / "project"
+    (project_root / "tools").mkdir(parents=True)
+    package_root = Path(__file__).resolve().parents[1]
+    os.symlink(package_root, project_root / "tools" / "melee-agent")
+
+    retained_source = tmp_path / "retained-fulltu.c"
+    retained_source.write_text(
+        textwrap.dedent(
+            f"""\
+            int helper(void)
+            {{
+                return 1;
+            }}
+
+            int {function}(void)
+            {{
+                return helper();
+            }}
+
+            int untouched(void)
+            {{
+                return 0;
+            }}
+            """
+        ),
+        encoding="utf-8",
+    )
+    candidate_source = tmp_path / "candidate.c"
+    candidate_source.write_text(
+        textwrap.dedent(
+            f"""\
+            int helper(void)
+            {{
+                return 7;
+            }}
+
+            int {function}(void)
+            {{
+                return helper() + 3;
+            }}
+            """
+        ),
+        encoding="utf-8",
+    )
+    wibo = tmp_path / "wibo"
+    wibo.write_text(
+        textwrap.dedent(
+            """\
+            #!/bin/sh
+            input=""
+            output=""
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                -c) shift; input="$1" ;;
+                -o) shift; output="$1" ;;
+              esac
+              shift
+            done
+            cp "$input" "$output"
+            : > "${MWCC_DEBUG_PCDUMP_PATH}"
+            """
+        ),
+        encoding="utf-8",
+    )
+    wibo.chmod(0o755)
+    compiler = tmp_path / "mwcceppc_debug.exe"
+    compiler.write_text("", encoding="utf-8")
+    compile_sh = tmp_path / "compile.sh"
+    compile_sh.write_text(
+        cli_debug._build_simplify_order_compile_sh(
+            wibo_path=wibo,
+            debug_compiler=compiler,
+            project_root=project_root,
+            cflags="-O4,p",
+            full_unit_source=retained_source,
+            function=function,
+        ),
+        encoding="utf-8",
+    )
+    compile_sh.chmod(0o755)
+    output = tmp_path / "candidate.o"
+    output.touch()
+
+    proc = __import__("subprocess").run(
+        [str(compile_sh), str(candidate_source), "-o", str(output)],
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    compiled_source = output.read_text(encoding="utf-8")
+    assert "return 7;" in compiled_source
+    assert "return helper() + 3;" in compiled_source
+    assert "int untouched(void)" in compiled_source
+    assert (tmp_path / "candidate.o.pcdump.txt").exists()
+
+
 def test_setup_preserves_existing_weight_overrides(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -329,7 +485,9 @@ def test_setup_can_bootstrap_and_auto_generate_baseline(
     src_path.write_text(f"void {function}(void) {{}}\n")
     _stub_wibo_and_compiler(tmp_path, monkeypatch)
 
-    bootstrap_calls: list[tuple[str, Path]] = []
+    retained_source = tmp_path / "retained-fulltu.c"
+    retained_source.write_text(f"void {function}(void) {{}}\n", encoding="utf-8")
+    bootstrap_calls: list[tuple[str, Path, Path | None]] = []
     dump_calls: list[list[str]] = []
 
     def fake_bootstrap_permuter_dir(
@@ -341,7 +499,7 @@ def test_setup_can_bootstrap_and_auto_generate_baseline(
         preserve_macros: str,
         force: bool,
     ) -> dict:
-        bootstrap_calls.append((function_arg, perm_root))
+        bootstrap_calls.append((function_arg, perm_root, source_file))
         perm_dir = perm_root / "nonmatchings" / function_arg
         perm_dir.mkdir(parents=True)
         (perm_dir / "base.c").write_text(f"void {function_arg}(void) {{}}\n")
@@ -386,12 +544,13 @@ def test_setup_can_bootstrap_and_auto_generate_baseline(
             "--force-phys", "32:25,35:26,36:27,41:30",
             "--perm-root", str(perm_root),
             "--bootstrap",
+            "--source-file", str(retained_source),
             "--auto-baseline-dump",
         ],
     )
 
     assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
-    assert bootstrap_calls == [(function, perm_root)]
+    assert bootstrap_calls == [(function, perm_root, retained_source)]
     assert len(dump_calls) == 1
     assert dump_calls[0][:5] == [
         os.sys.executable, "-m", "src.cli", "debug", "dump",

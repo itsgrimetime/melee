@@ -7,7 +7,7 @@
 │ --active                   Show only jobs with active tmux sessions.         │
 │ --dead                     Show only jobs with stopped/missing tmux          │
 │                            sessions.                                         │
-│ --timeout           FLOAT  Per-job SSH probe timeout in seconds.             │
+│ --timeout           FLOAT  Per-host SSH probe timeout in seconds.            │
 │                            [default: 10.0]                                   │
 │ --prune-dead               Delete metadata for dead jobs.                    │
 │ --help                     Show this message and exit.                       │

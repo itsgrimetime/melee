@@ -48,6 +48,7 @@ from ...mwcc_debug.diff_capture import (
     _run_with_process_group_timeout,
 )
 from ...mwcc_debug.source_patch import (
+    find_function as find_source_function,
     transfer_candidate,
 )
 
@@ -3026,11 +3027,50 @@ def _render_force_phys_target_yaml(
     return "\n".join(lines) + "\n"
 
 
+_BOOTSTRAP_METADATA_NAME = "melee_agent_bootstrap.json"
+
+
 def _portable_path_for_base(path: Path, base: Path) -> Path | str:
     try:
         return path.relative_to(base)
     except ValueError:
         return path
+
+
+def _read_bootstrap_full_unit_source(perm_dir: Path, function: str) -> Path | None:
+    metadata_path = perm_dir / _BOOTSTRAP_METADATA_NAME
+    if not metadata_path.exists():
+        return None
+    try:
+        data = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if data.get("function") not in {None, function}:
+        return None
+    if (
+        data.get("candidate_source_context") != "full-unit"
+        and data.get("source_staged") is not True
+        and data.get("full_unit_source") is not True
+    ):
+        return None
+    raw_source = data.get("source")
+    if not isinstance(raw_source, str) or not raw_source:
+        return None
+    return Path(raw_source).expanduser()
+
+
+def _validate_full_unit_source(path: Path, function: str) -> Path:
+    path = path.expanduser().resolve()
+    if not path.is_file():
+        raise typer.BadParameter(f"full-unit source file not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    if find_source_function(text, function) is None:
+        typer.echo(
+            f"full-unit source file does not contain function {function!r}: {path}",
+            err=True,
+        )
+        raise typer.Exit(2)
+    return path
 
 
 def _build_simplify_order_compile_sh(
@@ -3039,6 +3079,8 @@ def _build_simplify_order_compile_sh(
     debug_compiler: Path,
     project_root: Path,
     cflags: str,
+    full_unit_source: Path | None = None,
+    function: str | None = None,
 ) -> str:
     """Generate a compile.sh that produces .o + sibling pcdump per call.
 
@@ -3056,6 +3098,53 @@ def _build_simplify_order_compile_sh(
     ``debug target score-simplify-order`` consumes — it reads
     ``<o>.pcdump.txt`` to compute the score, no recompile.
     """
+    if full_unit_source is None:
+        stage_lines = [
+            "cp \"$INPUT_ABS\" \"$STAGE\"",
+        ]
+    else:
+        if not function:
+            raise ValueError("function is required with full_unit_source")
+        stage_lines = [
+            f"MELEE_FULL_UNIT_SOURCE={shlex.quote(str(full_unit_source))}",
+            f"MELEE_TARGET_FUNCTION={shlex.quote(function)}",
+            "PYTHON_BIN=\"${PYTHON:-python3}\"",
+            (
+                "PYTHONPATH=\"tools/melee-agent${PYTHONPATH:+:$PYTHONPATH}\" "
+                "\"$PYTHON_BIN\" - "
+                "\"$MELEE_FULL_UNIT_SOURCE\" \"$INPUT_ABS\" "
+                "\"$MELEE_TARGET_FUNCTION\" \"$STAGE\" <<'PY'"
+            ),
+            "import sys",
+            "from pathlib import Path",
+            "from src.mwcc_debug.source_patch import (",
+            "    find_function,",
+            "    find_function_definitions,",
+            "    replace_function,",
+            ")",
+            "unit_arg, candidate_arg, function_name, stage_arg = sys.argv[1:5]",
+            "unit_path = Path(unit_arg)",
+            "candidate_path = Path(candidate_arg)",
+            "stage_path = Path(stage_arg)",
+            "unit_text = unit_path.read_text(encoding='utf-8')",
+            "candidate_text = candidate_path.read_text(encoding='utf-8')",
+            "patched = unit_text",
+            "replaced = []",
+            "for span in find_function_definitions(candidate_text):",
+            "    candidate_fn = candidate_text[span.sig_start:span.full_end]",
+            "    next_patched = replace_function(patched, span.name, candidate_fn)",
+            "    if next_patched is None:",
+            "        continue",
+            "    patched = next_patched",
+            "    replaced.append(span.name)",
+            "if function_name not in replaced:",
+            "    if find_function(candidate_text, function_name) is None:",
+            "        raise SystemExit(f'candidate source lacks {function_name}')",
+            "    raise SystemExit(f'full-unit source lacks {function_name}')",
+            "stage_path.write_text(patched, encoding='utf-8')",
+            "PY",
+        ]
+
     return "\n".join([
         "#!/usr/bin/env bash",
         _SIMPLIFY_SCORER_COMPILE_MARKER,
@@ -3065,7 +3154,7 @@ def _build_simplify_order_compile_sh(
         f"cd {shlex.quote(str(project_root))}",
         "STAGE=\"nonmatchings/.permuter_stage_$$.c\"",
         "mkdir -p nonmatchings",
-        "cp \"$INPUT_ABS\" \"$STAGE\"",
+        *stage_lines,
         "trap 'rm -f \"$STAGE\"' EXIT",
         "# Deposit the pcdump as a sibling of the .o so",
         "# `debug target score-simplify-order` finds it via the fast path.",
@@ -3163,6 +3252,18 @@ def setup_simplify_order_scorer(
                  "the simplify-order scorer.",
         ),
     ] = False,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            "--annotated-source-file",
+            help=(
+                "Retained/full-unit source used for bootstrap or candidate "
+                "staging. When set, candidate .c files are spliced back into "
+                "this source before MWCC debug compiles the pcdump sidecar."
+            ),
+        ),
+    ] = None,
     auto_baseline_dump: Annotated[
         bool,
         typer.Option(
@@ -3268,7 +3369,7 @@ def setup_simplify_order_scorer(
             _bootstrap_permuter_dir(
                 function,
                 perm_root=perm_root,
-                source_file=None,
+                source_file=source_file,
                 melee_root=None,
                 preserve_macros=_PERMUTER_DEFAULT_PRESERVE_MACROS,
                 force=force,
@@ -3453,6 +3554,12 @@ def setup_simplify_order_scorer(
         )
         raise typer.Exit(2)
     existing_compile_text = existing_compile_sh.read_text(encoding="utf-8")
+    full_unit_source = (
+        source_file.expanduser() if source_file is not None
+        else _read_bootstrap_full_unit_source(perm_dir, function)
+    )
+    if full_unit_source is not None:
+        full_unit_source = _validate_full_unit_source(full_unit_source, function)
 
     # Refuse to clobber an already-wrapped compile.sh unless --force.
     # The marker indicates a previous run of this command, in which
@@ -3615,6 +3722,8 @@ def setup_simplify_order_scorer(
         debug_compiler=debug_compiler,
         project_root=project_root,
         cflags=cflags,
+        full_unit_source=full_unit_source,
+        function=function,
     )
     existing_compile_sh.write_text(new_compile, encoding="utf-8")
     existing_compile_sh.chmod(0o755)

@@ -11172,6 +11172,73 @@ def test_debug_permute_bootstrap_promotes_fresh_worktree_import(
     assert not (melee_root / "nonmatchings" / "fn_80000000-2").exists()
 
 
+def test_debug_permute_bootstrap_records_full_unit_source_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    perm_root = tmp_path / "decomp-permuter"
+    src_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    src_path.parent.mkdir(parents=True)
+    src_path.write_text("void fn_80000000(void) { repo_current(); }\n")
+    retained_source = tmp_path / "retained-fulltu.c"
+    retained_source.write_text(
+        "void helper(void) {}\nvoid fn_80000000(void) { helper(); }\n",
+        encoding="utf-8",
+    )
+    perm_root.mkdir()
+    (perm_root / "import.py").write_text("")
+
+    def fake_run(argv, *, cwd=None, capture_output=False, text=False, check=False, **kwargs):
+        argv = [str(part) for part in argv]
+        if "import.py" in argv[1]:
+            imported = melee_root / "nonmatchings" / "fn_80000000"
+            imported.mkdir(parents=True)
+            (imported / "base.c").write_text(
+                "void fn_80000000(void) { helper(); }\n",
+                encoding="utf-8",
+            )
+            (imported / "compile.sh").write_text("#!/usr/bin/env bash\n")
+            (imported / "target.s").write_text("target asm\n")
+            (imported / "target.o").write_bytes(b"target")
+            (imported / "settings.toml").write_text("stock = true\n")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "bootstrap",
+            "-f",
+            "fn_80000000",
+            "--perm-root",
+            str(perm_root),
+            "--source-file",
+            str(retained_source),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["source_staged"] is True
+    assert payload["full_unit_source"] is True
+    assert payload["candidate_source_context"] == "full-unit"
+    metadata_path = Path(payload["bootstrap_metadata"]["path"])
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["source"] == str(retained_source)
+    assert metadata["candidate_source_context"] == "full-unit"
+
+
 def test_permuter_function_dir_accepts_worktree_import_path(tmp_path: Path) -> None:
     melee_root = tmp_path / "melee"
     perm_root = tmp_path / "decomp-permuter"

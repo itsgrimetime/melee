@@ -6485,12 +6485,35 @@ def _bootstrap_permuter_dir(
         elif recommended_randomize_funcs is not None:
             randomize_funcs_status = "existing-settings-kept"
 
+    candidate_source_context = "full-unit" if source_staged else "standalone"
+    bootstrap_metadata_path = fn_dir / "melee_agent_bootstrap.json"
+    bootstrap_metadata = {
+        "version": 1,
+        "function": function,
+        "unit": unit,
+        "source": str(requested_source),
+        "import_source": str(src_path),
+        "source_staged": source_staged,
+        "full_unit_source": source_staged,
+        "candidate_source_context": candidate_source_context,
+    }
+    bootstrap_metadata_path.write_text(
+        json.dumps(bootstrap_metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
     return {
         "function": function,
         "unit": unit,
         "source": str(requested_source),
         "import_source": str(src_path),
         "source_staged": source_staged,
+        "full_unit_source": source_staged,
+        "candidate_source_context": candidate_source_context,
+        "bootstrap_metadata": {
+            "path": str(bootstrap_metadata_path),
+            **bootstrap_metadata,
+        },
         "preserve_macros": preserve_macros,
         "source_contains_perm_macros": source_contains_perm_macros,
         "base_contains_perm_macros": base_contains_perm_macros,
