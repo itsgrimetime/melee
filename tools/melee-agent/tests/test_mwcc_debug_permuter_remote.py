@@ -941,15 +941,18 @@ def test_cleanup_remote_run_dir_deletes_only_remote_runs_child(tmp_path: Path) -
         *,
         cwd: Path | None = None,
         check: bool = True,
+        timeout: float | None = None,
     ) -> pr.CommandResult:
-        del cwd
+        del cwd, timeout
         calls.append((argv, check))
+        if "tmux has-session" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="stopped", stderr="")
         return pr.CommandResult(returncode=0, stdout="", stderr="")
 
     pr.cleanup_remote_run_dir(job, runner=fake_runner)
 
-    assert len(calls) == 1
-    argv, check = calls[0]
+    assert len(calls) == 2
+    argv, check = calls[1]
     assert check is False
     assert argv[0] == "ssh"
     assert argv[1] == job.ssh
@@ -965,6 +968,28 @@ def test_cleanup_remote_run_dir_rejects_path_outside_remote_runs(tmp_path: Path)
         pr.cleanup_remote_run_dir(job, runner=lambda argv, **kwargs: pytest.fail("no ssh"))
 
 
+def test_cleanup_remote_run_dir_refuses_active_job(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        del cwd, check, timeout
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="active", stderr="")
+
+    with pytest.raises(pr.RemoteJobError, match="still active"):
+        pr.cleanup_remote_run_dir(job, runner=fake_runner)
+
+    assert len(calls) == 1
+    assert "tmux has-session" in calls[0][2]
+
+
 def test_fetch_all_jobs_deletes_remote_when_requested(tmp_path: Path) -> None:
     job = _sample_job(tmp_path)
     calls: list[list[str]] = []
@@ -975,9 +1000,12 @@ def test_fetch_all_jobs_deletes_remote_when_requested(tmp_path: Path) -> None:
         *,
         cwd: Path | None = None,
         check: bool = True,
+        timeout: float | None = None,
     ) -> pr.CommandResult:
-        del cwd, check
+        del cwd, check, timeout
         calls.append(argv)
+        if argv[0] == "ssh" and "tmux has-session" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="stopped", stderr="")
         return pr.CommandResult(returncode=0, stdout="", stderr="")
 
     fetched = pr.fetch_all_jobs(
@@ -990,7 +1018,7 @@ def test_fetch_all_jobs_deletes_remote_when_requested(tmp_path: Path) -> None:
     )
 
     assert fetched == [Path(job.local_perm_dir) / "remote-runs" / job.job_id]
-    assert [call[0] for call in calls] == ["rsync", "rsync", "ssh"]
+    assert [call[0] for call in calls] == ["rsync", "rsync", "ssh", "ssh"]
     assert cleanup_results == [(job.job_id, None)]
     assert job.remote_run_dir in calls[-1][2]
 

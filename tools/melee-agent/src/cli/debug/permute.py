@@ -973,7 +973,10 @@ def remote_fetch(
         bool,
         typer.Option(
             "--delete-remote",
-            help="Delete each fetched job's remote run directory after a successful fetch.",
+            help=(
+                "Delete each fetched stopped job's remote run directory after "
+                "a successful fetch."
+            ),
         ),
     ] = False,
 ) -> None:

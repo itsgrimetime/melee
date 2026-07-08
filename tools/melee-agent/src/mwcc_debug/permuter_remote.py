@@ -1215,6 +1215,18 @@ def cleanup_remote_run_dir(
 ) -> None:
     """Delete a fetched job's remote run directory from its remote coder."""
     remote_runs_root = _remote_runs_root_from_job(job)
+    status = status_job(job, runner=runner, timeout=10.0)
+    if status.state == "active":
+        raise RemoteJobError(
+            f"remote job {job.job_id} is still active; refusing to delete "
+            f"{job.remote_run_dir}"
+        )
+    if status.state != "stopped":
+        detail = f": {status.detail}" if status.detail else ""
+        raise RemoteJobError(
+            f"remote job {job.job_id} status is {status.state!r}{detail}; "
+            f"refusing to delete {job.remote_run_dir}"
+        )
     result = runner(
         ["ssh", job.ssh, _remote_sh(_remote_cleanup_run_dir_script(job, remote_runs_root))],
         check=False,
