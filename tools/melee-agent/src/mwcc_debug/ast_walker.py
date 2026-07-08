@@ -10,6 +10,7 @@ raised at first call and the bridge falls back to its slim regex walker
 """
 from __future__ import annotations
 
+import bisect
 import collections
 from dataclasses import dataclass, field
 from typing import Optional
@@ -182,6 +183,7 @@ def _walk_body(
     source_bytes: bytes,
     scope_path: tuple[str, ...],
     counter: list[int],
+    line_starts: list[int],
 ) -> list[LocalDecl]:
     """Recursive walk of a compound_statement body. Each nested
     compound_statement (``{ ... }``) gets its own scope_path element of
@@ -192,20 +194,35 @@ def _walk_body(
     for child in body_node.children:
         if child.type == "declaration":
             out.extend(_extract_decls_from_declaration(
-                child, source_bytes, scope_path, scope_byte_range, counter,
+                child,
+                source_bytes,
+                scope_path,
+                scope_byte_range,
+                counter,
+                line_starts,
             ))
         elif child.type == "compound_statement":
-            line, col = _byte_offset_to_line_col(source_bytes, child.start_byte)
+            line, col = _byte_offset_to_line_col(
+                source_bytes,
+                child.start_byte,
+                line_starts,
+            )
             new_path = scope_path + (f"block@l{line}c{col}",)
-            out.extend(_walk_body(child, source_bytes, new_path, counter))
+            out.extend(_walk_body(child, source_bytes, new_path, counter, line_starts))
         else:
             # Other statement types may contain nested compound statements
             # (if_statement, for_statement, while_statement, do_statement,
             # switch_statement). Walk their compound_statement children.
             for grand in _iter_compound_statements(child):
-                line, col = _byte_offset_to_line_col(source_bytes, grand.start_byte)
+                line, col = _byte_offset_to_line_col(
+                    source_bytes,
+                    grand.start_byte,
+                    line_starts,
+                )
                 new_path = scope_path + (f"block@l{line}c{col}",)
-                out.extend(_walk_body(grand, source_bytes, new_path, counter))
+                out.extend(
+                    _walk_body(grand, source_bytes, new_path, counter, line_starts)
+                )
     return out
 
 
@@ -217,17 +234,22 @@ def _check_ts() -> None:
         )
 
 
-def _byte_offset_to_line_col(source_bytes: bytes, offset: int) -> tuple[int, int]:
+def _line_start_offsets(source_bytes: bytes) -> list[int]:
+    """Return byte offsets for the first byte of each 1-indexed line."""
+    return [0, *[idx + 1 for idx, b in enumerate(source_bytes) if b == 0x0A]]
+
+
+def _byte_offset_to_line_col(
+    source_bytes: bytes,
+    offset: int,
+    line_starts: list[int] | None = None,
+) -> tuple[int, int]:
     """Return (1-indexed line, 0-indexed col) for a byte offset."""
-    line = 1
-    col = 0
-    for b in source_bytes[:offset]:
-        if b == 0x0A:  # '\n'
-            line += 1
-            col = 0
-        else:
-            col += 1
-    return (line, col)
+    if line_starts is None:
+        line_starts = _line_start_offsets(source_bytes)
+    bounded_offset = max(0, min(offset, len(source_bytes)))
+    line_index = bisect.bisect_right(line_starts, bounded_offset) - 1
+    return (line_index + 1, bounded_offset - line_starts[line_index])
 
 
 _DECLARATOR_NODE_TYPES = {
@@ -309,6 +331,7 @@ def _build_type_str(source_bytes: bytes, decl_node, declarator_node) -> str:
 def _extract_decls_from_declaration(
     decl_node, source_bytes: bytes, scope_path: tuple[str, ...],
     scope_byte_range: tuple[int, int], counter: list[int],
+    line_starts: list[int],
 ) -> list[LocalDecl]:
     """Given a `declaration` node, yield one LocalDecl per declarator."""
     out: list[LocalDecl] = []
@@ -332,7 +355,11 @@ def _extract_decls_from_declaration(
             if value is not None:
                 has_init = True
                 start_byte = value.start_byte
-                init_line, _ = _byte_offset_to_line_col(source_bytes, start_byte)
+                init_line, _ = _byte_offset_to_line_col(
+                    source_bytes,
+                    start_byte,
+                    line_starts,
+                )
             inner = d.child_by_field_name("declarator")
         else:
             inner = d
@@ -366,7 +393,7 @@ def _extract_decls_from_declaration(
 
         name = _node_text(source_bytes, name_node)
         type_str = _build_type_str(source_bytes, decl_node, d)
-        line, _ = _byte_offset_to_line_col(source_bytes, d.start_byte)
+        line, _ = _byte_offset_to_line_col(source_bytes, d.start_byte, line_starts)
         out.append(LocalDecl(
             name=name,
             type_str=type_str,
@@ -402,11 +429,13 @@ def walk_function(
 
     # Macro-tolerance check: only fail on decl-enclosing ERROR nodes.
     if _has_decl_enclosing_error(body, source_bytes):
-        line, _ = _byte_offset_to_line_col(source_bytes, body.start_byte)
+        line_starts = _line_start_offsets(source_bytes)
+        line, _ = _byte_offset_to_line_col(source_bytes, body.start_byte, line_starts)
         raise AstWalkError(
             f"function body for {fn_name!r} contains decl-enclosing ERROR nodes",
             line_no=line,
         )
 
     counter = [0]
-    return _walk_body(body, source_bytes, (fn_name,), counter)
+    line_starts = _line_start_offsets(source_bytes)
+    return _walk_body(body, source_bytes, (fn_name,), counter, line_starts)

@@ -831,10 +831,17 @@ def _source_for_virtual(
     binding_pass = passes[-1] if passes else None
     first_def = _find_first_def_site(virtual, pre_pass, reg_kind=reg_kind)
     if reg_kind == "r" and source_text and binding_pass is not None:
-        try:
-            binding = find_var_for_virtual(source_text, function, virtual, binding_pass)
-        except Exception:
-            binding = None
+        binding = bindings_by_virtual.get(virtual)
+        if binding is None:
+            try:
+                binding = find_var_for_virtual(
+                    source_text,
+                    function,
+                    virtual,
+                    binding_pass,
+                )
+            except Exception:
+                binding = None
     if (
         binding is not None
         and getattr(binding, "confidence", None) != "low-confidence"
@@ -1049,6 +1056,7 @@ def explain_virtuals(
     source_text: str | None = None,
     source_file: str | None = None,
     reg_class: str | None = "gpr",
+    enable_field_context: bool = True,
 ) -> VirtualAttributionReport:
     """Explain source provenance, pcdump live blocks, and pair interference."""
     requested: list[int] = []
@@ -1077,7 +1085,7 @@ def explain_virtuals(
             function=function,
             source_file=source_file,
         )
-        if source_text else None
+        if source_text and enable_field_context else None
     )
     source_cache: dict[tuple[str, int], SourceAttribution | None] = {}
     events = find_function(parse_hook_events(pcdump_text), function)

@@ -37,6 +37,8 @@ def facts_from_pcdump(
     source_text: str | None = None,
     source_path: str | Path | None = None,
     class_filter: tuple[int, ...] | None = None,
+    enable_field_context: bool = True,
+    enable_virtual_attribution: bool = True,
 ) -> AllocatorFacts:
     hook_events = parse_hook_events(pcdump_text)
     events = find_function(hook_events, function)
@@ -55,6 +57,8 @@ def facts_from_pcdump(
             class_id=class_id,
             source_text=source_text,
             source_path=source_path,
+            enable_field_context=enable_field_context,
+            enable_virtual_attribution=enable_virtual_attribution,
         )
         for class_id in class_ids
     )
@@ -109,6 +113,8 @@ def _class_facts_from_pcdump(
     class_id: int,
     source_text: str | None,
     source_path: str | Path | None,
+    enable_field_context: bool,
+    enable_virtual_attribution: bool,
 ) -> AllocatorClassFacts:
     section = class_section(events, class_id)
     ig = build_ig(section) if section is not None else None
@@ -147,13 +153,18 @@ def _class_facts_from_pcdump(
         for node in ig.nodes.values():
             ig_ids.update(n for n in node.neighbors if n >= 32)
 
-    attribution = _virtual_attribution(
-        pcdump_text,
-        function,
-        class_id=class_id,
-        ig_ids=ig_ids,
-        source_text=source_text,
-        source_path=source_path,
+    attribution = (
+        _virtual_attribution(
+            pcdump_text,
+            function,
+            class_id=class_id,
+            ig_ids=ig_ids,
+            source_text=source_text,
+            source_path=source_path,
+            enable_field_context=enable_field_context,
+        )
+        if enable_virtual_attribution
+        else {}
     )
     nodes = tuple(
         _node_from_pcdump(
@@ -440,6 +451,7 @@ def _virtual_attribution(
     ig_ids: set[int],
     source_text: str | None,
     source_path: str | Path | None,
+    enable_field_context: bool = True,
 ) -> dict[int, Any]:
     if not ig_ids:
         return {}
@@ -451,6 +463,7 @@ def _virtual_attribution(
             source_text=source_text,
             source_file=_path_str(source_path),
             reg_class=_class_name(class_id),
+            enable_field_context=enable_field_context,
         )
     except ValueError:
         return {}

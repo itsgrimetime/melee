@@ -120,6 +120,41 @@ def test_explain_virtuals_attaches_source_and_interference() -> None:
     assert second.live_overlap is True
 
 
+def test_explain_virtuals_reuses_precomputed_bindings(monkeypatch) -> None:
+    binding = types.SimpleNamespace(
+        virtual=33,
+        var_name="extra",
+        kind="param",
+        confidence="best-guess",
+        type_str="int",
+    )
+    monkeypatch.setattr(
+        virtual_attribution,
+        "list_bindings",
+        lambda source, function, pre_pass: [binding],
+    )
+
+    def reject_per_virtual_lookup(*args, **kwargs):
+        raise AssertionError("per-virtual binding lookup should not run")
+
+    monkeypatch.setattr(
+        virtual_attribution,
+        "find_var_for_virtual",
+        reject_per_virtual_lookup,
+    )
+
+    report = explain_virtuals(
+        PCDUMP,
+        "fn_80000000",
+        virtuals=[33],
+        source_text=SOURCE,
+        source_file="sample.c",
+    )
+
+    assert report.virtuals[0].source is not None
+    assert report.virtuals[0].source.name == "extra"
+
+
 def test_explain_virtuals_ignores_colorgraph_interferer_rows_as_occurrences() -> None:
     pcdump = textwrap.dedent("""\
         Starting function fn_80000001

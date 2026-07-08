@@ -7,6 +7,8 @@ from src.mwcc_debug.ast_walker import (
     AstUnavailableError,
     AstWalkError,
     LocalDecl,
+    _byte_offset_to_line_col,
+    _line_start_offsets,
     clear_cache,
     walk_function,
 )
@@ -38,6 +40,15 @@ def test_walk_function_unavailable_raises_subclass() -> None:
 def test_clear_cache_exists_and_returns_none() -> None:
     """clear_cache() is callable for test isolation."""
     assert clear_cache() is None
+
+
+def test_byte_offset_to_line_col_uses_indexed_line_starts() -> None:
+    source = b"alpha\nbeta\ngamma"
+    line_starts = _line_start_offsets(source)
+
+    assert _byte_offset_to_line_col(source, 0, line_starts) == (1, 0)
+    assert _byte_offset_to_line_col(source, 6, line_starts) == (2, 0)
+    assert _byte_offset_to_line_col(source, len(source), line_starts) == (3, 5)
 
 
 def test_walk_function_simple_top_level() -> None:

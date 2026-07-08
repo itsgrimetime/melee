@@ -701,6 +701,33 @@ def test_extract_function_text_still_importable() -> None:
     assert start_line == 1
 
 
+def test_extract_function_text_uses_targeted_function_lookup(monkeypatch) -> None:
+    import src.mwcc_debug.symbol_bridge as symbol_bridge
+
+    class RejectBroadHeaderScan:
+        def finditer(self, text):
+            raise AssertionError("broad header scan should not run before lookup")
+
+    source = (
+        "static void helper(void) { }\n"
+        "\n"
+        "int target_function(int x, float y)\n"
+        "{\n"
+        "    int local;\n"
+        "    return x + (int) y + local;\n"
+        "}\n"
+    )
+    monkeypatch.setattr(symbol_bridge, "_FN_HEADER_RE", RejectBroadHeaderScan())
+
+    extracted = symbol_bridge._extract_function_text(source, "target_function")
+
+    assert extracted is not None
+    params, body, start_line = extracted
+    assert params == "int x, float y"
+    assert "int local;" in body
+    assert start_line == 3
+
+
 def test_strip_strings_and_comments_still_importable() -> None:
     """mutators.py uses _strip_strings_and_comments. Phase 1 keeps it."""
     from src.mwcc_debug.symbol_bridge import _strip_strings_and_comments

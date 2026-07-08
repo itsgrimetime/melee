@@ -64,6 +64,8 @@ def compare_candidate_pcdumps(
     source_text: str | None = None,
     require_reanchor: bool = False,
     validation_evidence: dict[str, dict[str, object]] | None = None,
+    enable_field_context: bool = True,
+    enable_virtual_attribution: bool = True,
 ) -> tuple[CandidateComparison, ...]:
     return tuple(
         _compare_candidate_pcdump(
@@ -76,6 +78,8 @@ def compare_candidate_pcdumps(
             validation_evidence=(
                 None if validation_evidence is None else validation_evidence.get(label)
             ),
+            enable_field_context=enable_field_context,
+            enable_virtual_attribution=enable_virtual_attribution,
         )
         for label, path in candidates
     )
@@ -90,6 +94,8 @@ def _compare_candidate_pcdump(
     source_text: str | None,
     require_reanchor: bool,
     validation_evidence: dict[str, object] | None,
+    enable_field_context: bool,
+    enable_virtual_attribution: bool,
 ) -> CandidateComparison:
     candidate_text = path.read_text()
     function = baseline.function.name
@@ -102,6 +108,8 @@ def _compare_candidate_pcdump(
             pcdump_path=path,
             source_text=source_text,
             class_filter=tuple(_target_class_ids(target_set)),
+            enable_field_context=enable_field_context,
+            enable_virtual_attribution=enable_virtual_attribution,
         )
     except ValueError as exc:
         if "not found in pcdump" in str(exc):

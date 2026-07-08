@@ -45,6 +45,13 @@ def build_lifetime_pressure_report(
         class_id=class_id,
     )
     effective_source_text = _effective_source_text(source_text, source_path)
+    candidate_specs = parse_candidate_specs(candidates, validate_mode=validate_mode)
+    readonly_pcdump_comparison = _is_readonly_pcdump_candidate_comparison(
+        candidate_specs,
+        validate_mode=validate_mode,
+    )
+    enable_field_context = not readonly_pcdump_comparison
+    enable_virtual_attribution = not readonly_pcdump_comparison
     facts = (
         facts_from_backend_trace(backend_trace_path, function=function)
         if backend_trace_path is not None
@@ -54,6 +61,8 @@ def build_lifetime_pressure_report(
             pcdump_path=pcdump_path,
             source_text=effective_source_text,
             source_path=source_path,
+            enable_field_context=enable_field_context,
+            enable_virtual_attribution=enable_virtual_attribution,
         )
     )
 
@@ -70,13 +79,14 @@ def build_lifetime_pressure_report(
             allow_stale_pcdump=allow_stale_pcdump,
         )
 
-    candidate_specs = parse_candidate_specs(candidates, validate_mode=validate_mode)
     report = _attach_candidate_comparisons(
         report,
         facts=facts,
         target_set=target_set,
         candidate_specs=candidate_specs,
         source_text=effective_source_text,
+        enable_field_context=enable_field_context,
+        enable_virtual_attribution=enable_virtual_attribution,
     )
     report = _attach_validation(
         report,
@@ -93,6 +103,18 @@ def build_lifetime_pressure_report(
         max_candidates=max_candidates,
     )
     return report
+
+
+def _is_readonly_pcdump_candidate_comparison(
+    candidate_specs: tuple[CandidateSpec, ...],
+    *,
+    validate_mode: str,
+) -> bool:
+    return (
+        validate_mode == "none"
+        and bool(candidate_specs)
+        and all(candidate.kind == "pcdump" for candidate in candidate_specs)
+    )
 
 
 def _effective_pcdump_text(pcdump_text: str | None, pcdump_path: Path | None) -> str:
@@ -134,6 +156,8 @@ def _attach_candidate_comparisons(
     target_set: TargetSet | None,
     candidate_specs: tuple[CandidateSpec, ...],
     source_text: str | None,
+    enable_field_context: bool,
+    enable_virtual_attribution: bool,
 ) -> LifetimePressureReport:
     pcdump_candidates = [
         (candidate.label, Path(candidate.path))
@@ -156,6 +180,8 @@ def _attach_candidate_comparisons(
         target_set,
         candidates=pcdump_candidates,
         source_text=source_text,
+        enable_field_context=enable_field_context,
+        enable_virtual_attribution=enable_virtual_attribution,
     )
     return replace(
         report,

@@ -3380,6 +3380,54 @@ def test_build_lifetime_pressure_report_attaches_pcdump_candidate_comparisons(
     assert report.candidate_comparisons[0].path == str(candidate)
 
 
+def test_build_lifetime_pressure_report_pcdump_candidates_skip_field_context(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    from src.mwcc_debug import virtual_attribution
+    from src.mwcc_debug.pressure_explorer import facts
+    from src.mwcc_debug.pressure_explorer.lifetime_pressure import (
+        build_lifetime_pressure_report,
+    )
+
+    def reject_field_context(*args, **kwargs):
+        raise AssertionError("pcdump-only comparison should not build field context")
+
+    monkeypatch.setattr(
+        virtual_attribution,
+        "build_source_field_context",
+        reject_field_context,
+    )
+    monkeypatch.setattr(
+        facts,
+        "explain_virtuals",
+        reject_field_context,
+    )
+    pcdump = tmp_path / "base.pcdump.txt"
+    candidate = tmp_path / "candidate.pcdump.txt"
+    pcdump.write_text(PCDUMP)
+    candidate.write_text(CANDIDATE_PCDUMP)
+
+    report = build_lifetime_pressure_report(
+        function="fn_80000000",
+        pcdump_text=PCDUMP,
+        pcdump_path=pcdump,
+        source_text=SOURCE,
+        source_path=None,
+        force_phys="40:25",
+        target_path=None,
+        candidates=[f"try1={candidate}"],
+        backend_trace_path=None,
+        class_id=0,
+        allow_stale_pcdump=False,
+        validate_mode="none",
+        timeout=120,
+        max_candidates=100,
+    )
+
+    assert [comparison.label for comparison in report.candidate_comparisons] == ["try1"]
+
+
 def test_build_lifetime_pressure_report_remote_source_candidate_is_dry_run_only(
     tmp_path: pathlib.Path,
 ) -> None:
