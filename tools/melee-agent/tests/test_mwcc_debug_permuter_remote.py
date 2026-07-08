@@ -932,6 +932,69 @@ def test_fetch_job_writes_candidate_audit_summary(tmp_path: Path) -> None:
     assert json.loads(sidecar.read_text())["status"] == "corrupt-candidate"
 
 
+def test_cleanup_remote_run_dir_deletes_only_remote_runs_child(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[tuple[list[str], bool]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        del cwd
+        calls.append((argv, check))
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    pr.cleanup_remote_run_dir(job, runner=fake_runner)
+
+    assert len(calls) == 1
+    argv, check = calls[0]
+    assert check is False
+    assert argv[0] == "ssh"
+    assert argv[1] == job.ssh
+    assert "remote_runs_root=/home/coder/decomp-permuter/remote-runs" in argv[2]
+    assert "rm -rf --" in argv[2]
+    assert "refusing to clean path outside remote-runs" in argv[2]
+
+
+def test_cleanup_remote_run_dir_rejects_path_outside_remote_runs(tmp_path: Path) -> None:
+    job = replace(_sample_job(tmp_path), remote_run_dir="/tmp/not-a-remote-run")
+
+    with pytest.raises(pr.RemoteJobError, match="outside remote-runs"):
+        pr.cleanup_remote_run_dir(job, runner=lambda argv, **kwargs: pytest.fail("no ssh"))
+
+
+def test_fetch_all_jobs_deletes_remote_when_requested(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+    cleanup_results: list[tuple[str, str | None]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        del cwd, check
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    fetched = pr.fetch_all_jobs(
+        [job],
+        runner=fake_runner,
+        delete_remote=True,
+        after_cleanup=lambda cleanup_job, warning, index, total: cleanup_results.append(
+            (cleanup_job.job_id, warning)
+        ),
+    )
+
+    assert fetched == [Path(job.local_perm_dir) / "remote-runs" / job.job_id]
+    assert [call[0] for call in calls] == ["rsync", "rsync", "ssh"]
+    assert cleanup_results == [(job.job_id, None)]
+    assert job.remote_run_dir in calls[-1][2]
+
+
 def test_tail_job_snapshots_remote_permuter_log_by_default(tmp_path: Path) -> None:
     job = _sample_job(tmp_path)
     calls: list[list[str]] = []
@@ -2906,6 +2969,38 @@ def test_remote_fetch_cli_all_flag(
     assert "Fetched" in result.stdout
 
 
+def test_remote_fetch_cli_delete_remote_after_single_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    cleaned: list[str] = []
+
+    monkeypatch.setattr(pr, "read_job", lambda job_id, jobs_dir=None: job)
+    monkeypatch.setattr(pr, "fetch_job", lambda loaded_job: Path("/tmp/fetched"))
+
+    def fake_cleanup(loaded_job: pr.RemoteJob) -> None:
+        cleaned.append(loaded_job.job_id)
+
+    monkeypatch.setattr(pr, "cleanup_remote_run_dir", fake_cleanup)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "fetch",
+            job.job_id,
+            "--delete-remote",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert cleaned == [job.job_id]
+    assert f"Deleted remote run dir: {job.remote_run_dir}" in result.stdout
+
+
 def test_remote_fetch_all_prints_progress_and_triage_for_each_job(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2951,6 +3046,40 @@ def test_remote_fetch_all_prints_progress_and_triage_for_each_job(
     assert result.stdout.count("Triage manually with:") == 2
     assert f"--function {job.function}" in result.stdout
     assert "Fetched 2 job(s)." in result.stdout
+
+
+def test_remote_fetch_all_delete_remote_passes_cleanup_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    seen_delete_remote: list[bool] = []
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job])
+
+    def fake_fetch_all(jobs, **kwargs):
+        del jobs
+        seen_delete_remote.append(kwargs["delete_remote"])
+        kwargs["after_cleanup"](job, None, 1, 1)
+        return [Path("/tmp/fetched")]
+
+    monkeypatch.setattr(pr, "fetch_all_jobs", fake_fetch_all)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "fetch",
+            "--all",
+            "--delete-remote",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen_delete_remote == [True]
+    assert f"Deleted remote run dir: {job.remote_run_dir}" in result.stdout
 
 
 def test_remote_fetch_cli_requires_job_id_or_all(

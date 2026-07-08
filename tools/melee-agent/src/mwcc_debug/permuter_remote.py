@@ -1182,18 +1182,60 @@ def _remote_submit_script(job: RemoteJob, target: RemoteTarget) -> str:
     )
 
 
-def _remote_cleanup_run_dir_script(job: RemoteJob, target: RemoteTarget) -> str:
-    remote_root = target.remote_perm_root.rstrip("/")
-    remote_runs_root = f"{remote_root}/remote-runs"
+def _remote_cleanup_run_dir_script(job: RemoteJob, remote_runs_root: str) -> str:
     return "\n".join([
         "set -eu",
         f"remote_run_dir={shlex.quote(job.remote_run_dir)}",
-        f"remote_runs_root={shlex.quote(remote_runs_root)}",
+        f"remote_runs_root={shlex.quote(remote_runs_root.rstrip('/'))}",
         'case "$remote_run_dir" in',
         '  "$remote_runs_root"/*) rm -rf -- "$remote_run_dir" ;;',
         '  *) echo "refusing to clean path outside remote-runs: $remote_run_dir" >&2; exit 2 ;;',
         "esac",
     ])
+
+
+def _remote_runs_root_from_job(job: RemoteJob) -> str:
+    run_dir = job.remote_run_dir.rstrip("/")
+    marker = "/remote-runs/"
+    if marker not in run_dir:
+        raise RemoteJobError(
+            f"refusing to clean path outside remote-runs: {job.remote_run_dir}"
+        )
+    root, leaf = run_dir.split(marker, 1)
+    if not root or not leaf:
+        raise RemoteJobError(
+            f"refusing to clean path outside remote-runs: {job.remote_run_dir}"
+        )
+    return f"{root}/remote-runs"
+
+
+def cleanup_remote_run_dir(
+    job: RemoteJob,
+    runner: Callable[..., CommandResult] = run_command,
+) -> None:
+    """Delete a fetched job's remote run directory from its remote coder."""
+    remote_runs_root = _remote_runs_root_from_job(job)
+    result = runner(
+        ["ssh", job.ssh, _remote_sh(_remote_cleanup_run_dir_script(job, remote_runs_root))],
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise RemoteJobError(
+            f"remote run dir cleanup failed: {_compact_submit_failure_text(detail)}"
+        )
+
+
+def cleanup_remote_run_dir_best_effort(
+    job: RemoteJob,
+    runner: Callable[..., CommandResult] = run_command,
+) -> str | None:
+    """Delete a remote run directory, returning a warning string on failure."""
+    try:
+        cleanup_remote_run_dir(job, runner=runner)
+    except Exception as exc:
+        return f"remote run dir cleanup failed: {_compact_submit_failure_detail(exc)}"
+    return None
 
 
 def _cleanup_remote_run_dir_best_effort(
@@ -1202,9 +1244,11 @@ def _cleanup_remote_run_dir_best_effort(
     *,
     runner: Callable[..., CommandResult],
 ) -> str | None:
+    remote_root = target.remote_perm_root.rstrip("/")
+    remote_runs_root = f"{remote_root}/remote-runs"
     try:
         result = runner(
-            ["ssh", target.ssh, _remote_sh(_remote_cleanup_run_dir_script(job, target))],
+            ["ssh", target.ssh, _remote_sh(_remote_cleanup_run_dir_script(job, remote_runs_root))],
             check=False,
         )
     except Exception as exc:
@@ -2531,6 +2575,8 @@ def fetch_all_jobs(
     target_filter: str | None = None,
     before_fetch: Callable[[RemoteJob, int, int], None] | None = None,
     after_fetch: Callable[[RemoteJob, Path, int, int], None] | None = None,
+    delete_remote: bool = False,
+    after_cleanup: Callable[[RemoteJob, str | None, int, int], None] | None = None,
 ) -> list[Path]:
     """Fetch remote outputs for all (or filtered) jobs."""
     selected_jobs = [
@@ -2548,6 +2594,10 @@ def fetch_all_jobs(
         fetched.append(fetched_path)
         if after_fetch is not None:
             after_fetch(job, fetched_path, index, total)
+        if delete_remote:
+            warning = cleanup_remote_run_dir_best_effort(job, runner=runner)
+            if after_cleanup is not None:
+                after_cleanup(job, warning, index, total)
     return fetched
 
 

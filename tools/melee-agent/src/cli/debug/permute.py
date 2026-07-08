@@ -463,6 +463,27 @@ def _remote_read_job(job_id: str) -> permuter_remote.RemoteJob:
     return permuter_remote.read_job(job_id, permuter_remote.JOBS_DIR)
 
 
+def _remote_cleanup_after_fetch(job: permuter_remote.RemoteJob) -> str | None:
+    try:
+        permuter_remote.cleanup_remote_run_dir(job)
+    except permuter_remote.RemoteJobError as exc:
+        return str(exc)
+    return None
+
+
+def _print_remote_cleanup_after_fetch(
+    job: permuter_remote.RemoteJob,
+    warning: str | None,
+) -> None:
+    if warning:
+        typer.echo(
+            f"Remote cleanup warning for {job.job_id}: {warning}",
+            err=True,
+        )
+        return
+    print(f"Deleted remote run dir: {job.remote_run_dir}", flush=True)
+
+
 def _remote_stream_runner(
     argv: list[str],
     *,
@@ -948,6 +969,13 @@ def remote_fetch(
         bool,
         typer.Option("--triage", help="Print the follow-up triage command."),
     ] = False,
+    delete_remote: Annotated[
+        bool,
+        typer.Option(
+            "--delete-remote",
+            help="Delete each fetched job's remote run directory after a successful fetch.",
+        ),
+    ] = False,
 ) -> None:
     """Fetch remote permuter outputs into the local permuter directory."""
     try:
@@ -976,12 +1004,23 @@ def remote_fetch(
                 fetched_jobs.append((job, path))
                 print(f"Fetched: {path}", flush=True)
 
+            def after_cleanup(
+                job: permuter_remote.RemoteJob,
+                warning: str | None,
+                index: int,
+                total: int,
+            ) -> None:
+                del index, total
+                _print_remote_cleanup_after_fetch(job, warning)
+
             fetched = permuter_remote.fetch_all_jobs(
                 jobs,
                 function_filter=function,
                 target_filter=target,
                 before_fetch=before_fetch,
                 after_fetch=after_fetch,
+                delete_remote=delete_remote,
+                after_cleanup=after_cleanup,
             )
             if not fetched_jobs:
                 for path in fetched:
@@ -1006,10 +1045,13 @@ def remote_fetch(
 
         job = _remote_read_job(job_id)
         fetched = permuter_remote.fetch_job(job)
+        cleanup_warning = _remote_cleanup_after_fetch(job) if delete_remote else None
     except (permuter_remote.RemoteConfigError, permuter_remote.RemoteJobError) as exc:
         _remote_error(exc)
 
     print(f"Fetched: {fetched}")
+    if delete_remote:
+        _print_remote_cleanup_after_fetch(job, cleanup_warning)
     if triage:
         print(
             "Triage manually with: "
