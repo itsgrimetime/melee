@@ -404,6 +404,120 @@ def test_score_source_cli_forwards_full_unit_source_to_checkdiff_guard(
     assert payload["full_unit_source"] is False
 
 
+def test_score_source_cli_auto_full_unit_guard_for_staged_generated_source(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    melee_root = tmp_path / "repo"
+    unit_source = melee_root / "src" / "melee" / "demo.c"
+    unit_source.parent.mkdir(parents=True)
+    unit_source.write_text("void fn_80000000(void) {}\n", encoding="utf-8")
+    generated = melee_root / "build" / "demo" / "cases" / "candidate.c"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("void fn_80000000(void) {}\n", encoding="utf-8")
+    target = tmp_path / "target.json"
+    target.write_text("{}", encoding="utf-8")
+    wibo = tmp_path / "wibo"
+    wibo.write_text("", encoding="utf-8")
+    compiler_dir = tmp_path / "compiler"
+    compiler_dir.mkdir()
+    (compiler_dir / "mwcceppc_debug.exe").write_text("", encoding="utf-8")
+    captured_full_unit_flags = []
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_unsafe_lane_payload",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda unit: ("", "mwcc"))
+    monkeypatch.setattr(debug_cli, "_load_target_spec", lambda path: {})
+    monkeypatch.setattr(
+        debug_cli,
+        "_score_source_target_details",
+        lambda result, target_spec: {
+            "matched": 0,
+            "targeted": 0,
+            "virtuals": {},
+        },
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_read_expression_source",
+        lambda path, *, melee_root: ("void fn_80000000(void) {}\n", str(path)),
+    )
+    monkeypatch.setattr(debug_cli, "_score_expression_anchors", lambda **kwargs: None)
+    monkeypatch.setattr(
+        target_cli,
+        "_score_source_compile_source_rel",
+        lambda **kwargs: nullcontext(kwargs["source_rel"]),
+    )
+
+    def fake_run_command(args, *, cwd, env, timeout=None):
+        (cwd / env["MWCC_DEBUG_PCDUMP_PATH"]).write_text(
+            "pcdump\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def fake_real_tree(candidate_path, **kwargs):
+        captured_full_unit_flags.append(kwargs.get("full_unit_source", False))
+        return SimpleNamespace(
+            structural_guard={"accepted": True},
+            structural_guard_error=None,
+            match_percent_error=None,
+        )
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_command_with_optional_timeout",
+        fake_run_command,
+    )
+    monkeypatch.setattr(debug_cli, "_score_source_candidate_real_tree", fake_real_tree)
+    monkeypatch.setattr(
+        mwcc_debug_module,
+        "parse_pcdump",
+        lambda text: [SimpleNamespace(name="fn_80000000")],
+    )
+    monkeypatch.setattr(mwcc_debug_module, "parse_hook_events", lambda text: [])
+    monkeypatch.setattr(
+        mwcc_debug_module,
+        "find_function",
+        lambda events, function: None,
+    )
+    monkeypatch.setattr(
+        mwcc_debug_module,
+        "score_function",
+        lambda fn, target_spec, events=None: SimpleNamespace(total=0),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(generated),
+            "--function",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--cflags-from",
+            str(unit_source),
+            "--checkdiff-guard",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert captured_full_unit_flags == [True]
+    assert payload["full_unit_source"] is True
+
+
 def test_score_source_cli_rejects_structural_guard_when_target_score_misses_all(
     tmp_path,
     monkeypatch,

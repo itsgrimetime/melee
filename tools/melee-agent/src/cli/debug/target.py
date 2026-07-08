@@ -2799,6 +2799,13 @@ def score_source(
     # cflags: from the explicit unit OR from c_file's ninja block
     cflags_unit = cflags_from if cflags_from else c_file
     cflags_unit_rel = _resolve_src_relative(cflags_unit)
+    stages_candidate_through_unit = _score_source_should_stage_through_unit(
+        source_rel=src_rel,
+        cflags_unit_rel=cflags_unit_rel,
+    )
+    effective_full_unit_source = bool(
+        full_unit_source or stages_candidate_through_unit
+    )
     related_source_prefixes = _score_source_related_prefixes(
         source_rel=src_rel,
         cflags_unit_rel=cflags_unit_rel,
@@ -2837,7 +2844,7 @@ def score_source(
                         returncode=124,
                         unsafe_lane=unsafe_lane,
                     )
-                    payload["full_unit_source"] = full_unit_source
+                    payload["full_unit_source"] = effective_full_unit_source
                     _apply_score_source_scope(
                         payload,
                         function=function,
@@ -2855,10 +2862,7 @@ def score_source(
     if use_remote_pcdump:
         stage_source_path = (
             melee_root / src_rel
-            if _score_source_should_stage_through_unit(
-                source_rel=src_rel,
-                cflags_unit_rel=cflags_unit_rel,
-            )
+            if stages_candidate_through_unit
             else None
         )
         remote_result = _run_remote_pcdump(
@@ -2917,7 +2921,7 @@ def score_source(
                 payload["remote_stage_source"] = remote_result.remote_stage_source
             if remote_result.stage_source_sha256 is not None:
                 payload["stage_source_sha256"] = remote_result.stage_source_sha256
-            payload["full_unit_source"] = full_unit_source
+            payload["full_unit_source"] = effective_full_unit_source
             _apply_score_source_scope(
                 payload,
                 function=function,
@@ -3011,7 +3015,7 @@ def score_source(
                     timeout=compile_timeout if proc.returncode == 124 else None,
                     unsafe_lane=unsafe_lane,
                 )
-                payload["full_unit_source"] = full_unit_source
+                payload["full_unit_source"] = effective_full_unit_source
                 _apply_score_source_scope(
                     payload,
                     function=function,
@@ -3054,7 +3058,7 @@ def score_source(
     )
     if force_phys_payload is not None:
         score_value = int(force_phys_payload.get("score", 2**30))
-        force_phys_payload["full_unit_source"] = full_unit_source
+        force_phys_payload["full_unit_source"] = effective_full_unit_source
         _apply_score_source_scope(
             force_phys_payload,
             function=function,
@@ -3079,7 +3083,7 @@ def score_source(
                 function=function,
                 timeout=active_timeout,
                 deadline=command_deadline,
-                full_unit_source=full_unit_source,
+                full_unit_source=effective_full_unit_source,
                 score_real_tree=_score_source_candidate_real_tree,
             )
         if json_out:
@@ -3103,7 +3107,7 @@ def score_source(
             payload = {
                 "score": score_value,
                 "error": f"function {function!r} not in compiled pcdump",
-                "full_unit_source": full_unit_source,
+                "full_unit_source": effective_full_unit_source,
             }
             _apply_score_source_scope(
                 payload,
@@ -3136,7 +3140,7 @@ def score_source(
             raise typer.Exit(2)
         payload: dict[str, object] = {
             "score": 0,
-            "full_unit_source": full_unit_source,
+            "full_unit_source": effective_full_unit_source,
         }
         _apply_score_source_scope(
             payload,
@@ -3162,7 +3166,7 @@ def score_source(
                 function=function,
                 timeout=active_timeout,
                 deadline=command_deadline,
-                full_unit_source=full_unit_source,
+                full_unit_source=effective_full_unit_source,
                 score_real_tree=_score_source_candidate_real_tree,
                 update_score_from_normalized=True,
             )
@@ -3182,7 +3186,7 @@ def score_source(
         payload: dict[str, object] = {
             "score": score_value,
             "target_score": target_details,
-            "full_unit_source": full_unit_source,
+            "full_unit_source": effective_full_unit_source,
         }
         _apply_score_source_scope(
             payload,
@@ -3243,7 +3247,7 @@ def score_source(
                 timeout=active_timeout,
                 deadline=command_deadline,
                 include_structural_guard=True,
-                full_unit_source=full_unit_source,
+                full_unit_source=effective_full_unit_source,
             )
             payload["structural_guard"] = real_score.structural_guard
             payload["structural_guard_error"] = (
