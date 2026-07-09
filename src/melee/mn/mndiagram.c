@@ -1094,10 +1094,10 @@ static inline u8 mnDiagram_GetVisibleNameCursorFrom(u8* sorted, int start,
     return p[0x1C];
 }
 
-static inline u8 mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
-                                                       int rank)
+static inline int mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
+                                                        int rank)
 {
-    u8 result;
+    int result;
     int remaining;
     u8* p2;
     u8* p;
@@ -1128,10 +1128,10 @@ static inline u8 mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
     return result;
 }
 
-static inline u8 mnDiagram_GetVisibleFighterCursorFrom2(u8* sorted, int start,
-                                                        int rank)
+static inline int mnDiagram_GetVisibleFighterCursorFrom2(u8* sorted, int start,
+                                                         int rank)
 {
-    u8 result;
+    int result;
     int remaining;
     int idx;
     u8* p;
@@ -2669,28 +2669,21 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
     HSD_JObj* new_var;
     s32 count;
-    u8* pr;
-    u8* p2;
-    int remr;
-    HSD_JObj* jobj;
     Diagram* data = GET_DIAGRAM(arg0);
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     void** joint_data;
-    u8 stack_obj[8];
+    u8 stack_obj[4];
     HSD_JObj* sp_jobj;
     u8 stack_obj2[4];
     HSD_JObj* sp_jobj2;
-    u8 stack_obj3[12];
-    int idx;
-    int remaining;
-    u8* p;
+    u8 stack_obj3[4];
     u8* sorted;
     int fighter_id;
-    u8* pr2;
     f32 x_spacing;
     f32 y_spacing;
     int fighter_idr;
     int i;
+    HSD_JObj* jobj;
 
     (void) &stack_obj;
     (void) &stack_obj2;
@@ -2702,29 +2695,8 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
         joint_data = assets->FaceB;
         count = mnDiagram_CountUnlockedFightersInline();
         if (count > i) {
-            remaining = i;
-            idx = arg2;
-            p = sorted + idx;
-            while (remaining >= 0) {
-                if (remaining == 0) {
-                    fighter_id = sorted[idx];
-                    goto col_found;
-                }
-                p2 = p;
-            col_inner:
-                idx++;
-                p2++;
-                p++;
-                if (idx >= 0x19) {
-                    fighter_id = 0x19;
-                    goto col_found;
-                }
-                if (mn_IsFighterUnlocked(*p2) == 0) {
-                    goto col_inner;
-                }
-                remaining--;
-            }
-        col_found:
+            fighter_id =
+                mnDiagram_GetVisibleFighterCursorFrom(sorted, arg2, i);
             jobj = HSD_JObjLoadJoint(joint_data[0]);
             HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2],
                                joint_data[3]);
@@ -2748,29 +2720,8 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
         sorted = mnDiagram_804A0750.sorted_fighters;
         count = mnDiagram_CountUnlockedFightersInline();
         if (count > i) {
-            remr = i;
-            idx = arg1;
-            pr = sorted + idx;
-            while (remr >= 0) {
-                if (remr == 0) {
-                    fighter_idr = sorted[idx];
-                    goto row_found;
-                }
-                pr2 = pr;
-            row_inner:
-                idx++;
-                pr2++;
-                pr++;
-                if (idx >= 0x19) {
-                    fighter_idr = 0x19;
-                    goto row_found;
-                }
-                if (mn_IsFighterUnlocked(*pr2) == 0) {
-                    goto row_inner;
-                }
-                remr--;
-            }
-        row_found:
+            fighter_idr =
+                mnDiagram_GetVisibleFighterCursorFrom2(sorted, arg1, i);
             jobj = HSD_JObjLoadJoint(joint_data[0]);
             HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2],
                                joint_data[3]);
