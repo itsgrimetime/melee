@@ -2597,15 +2597,16 @@ void mnDiagram_DrawNameHeaders(void* arg0, s32 arg1, s32 arg2)
         {
             int i;
             for (i = 0; i < 7; i++) {
-            if (GetNameCount() > i) {
-                f32 x_spacing;
-                name_byte = mnDiagram_GetVisibleNameFrom(sorted, arg2, i);
-                name_id = name_byte;
-                x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
-                            HSD_JObjGetTranslationX(data->jobjs[7]);
-                HSD_SisLib_803A6B98(text, (x_spacing * i) / 0.02f,
-                                    mnDiagram_804DBF84, GetNameText(name_id));
-            }
+                if (GetNameCount() > i) {
+                    f32 x_spacing;
+                    name_byte = mnDiagram_GetVisibleNameFrom(sorted, arg2, i);
+                    name_id = name_byte;
+                    x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
+                                HSD_JObjGetTranslationX(data->jobjs[7]);
+                    HSD_SisLib_803A6B98(text, (x_spacing * i) / 0.02f,
+                                        mnDiagram_804DBF84,
+                                        GetNameText(name_id));
+                }
             }
         }
     }
@@ -2628,16 +2629,16 @@ void mnDiagram_DrawNameHeaders(void* arg0, s32 arg1, s32 arg2)
     {
         int i;
         for (i = 0; i < 0xA; i++) {
-        if (GetNameCount() > i) {
-            f32 y_spacing;
-            name_id = mnDiagram_GetVisibleNameFrom2(sorted, arg1, i) &
-                      0xFFFFFFFFFFFFFFFFu;
-            y_spacing = HSD_JObjGetTranslationY(data->jobjs[10]) -
-                        HSD_JObjGetTranslationY(data->jobjs[9]);
-            HSD_SisLib_803A6B98(row_text, mnDiagram_804DBF84,
-                                -((y_spacing * i) / 0.03f),
-                                GetNameText(name_id));
-        }
+            if (GetNameCount() > i) {
+                f32 y_spacing;
+                name_id = mnDiagram_GetVisibleNameFrom2(sorted, arg1, i) &
+                          0xFFFFFFFFFFFFFFFFu;
+                y_spacing = HSD_JObjGetTranslationY(data->jobjs[10]) -
+                            HSD_JObjGetTranslationY(data->jobjs[9]);
+                HSD_SisLib_803A6B98(row_text, mnDiagram_804DBF84,
+                                    -((y_spacing * i) / 0.03f),
+                                    GetNameText(name_id));
+            }
         }
     }
 }
