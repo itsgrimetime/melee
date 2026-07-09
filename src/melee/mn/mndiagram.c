@@ -2665,6 +2665,11 @@ HSD_JObj* mnDiagram_CreateFighterIcon(int idx, int arg1)
     return temp_r3;
 }
 
+static inline void** mnDiagram_GetFaceB(void)
+{
+    return ((mnDiagram_Assets*) &mnDiagram_804A0750)->FaceB;
+}
+
 void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
     HSD_JObj* new_var;
@@ -2695,7 +2700,7 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     // Column headers (fighter icons)
     for (i = 0; i < 7; i++) {
         sorted = mnDiagram_804A0750.sorted_fighters;
-        joint_data = assets->FaceB;
+        joint_data = mnDiagram_GetFaceB();
         count = mnDiagram_CountUnlockedFightersInline();
         if (count > i) {
             fighter_id =
