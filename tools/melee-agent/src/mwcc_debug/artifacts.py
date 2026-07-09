@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
+import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -28,6 +30,8 @@ _ACTIVE_STATE = "active"
 _MANIFEST_NAME = "manifest.json"
 _EVIDENCE_DIRNAME = "evidence"
 _TRANSIENT_DIRNAME = "transient"
+_ARTIFACT_FORMAT = "melee-agent.mwcc-debug-artifact-run/v1"
+_RUN_NAME_PATTERN = re.compile(r"\d{8}T\d{6}\.\d{6}Z-[0-9a-f]{32}\Z")
 
 
 @dataclass(frozen=True)
@@ -77,6 +81,9 @@ class ArtifactRun:
         manifest = _read_regular_manifest(self.manifest_path)
         if manifest.get("state") != _ACTIVE_STATE:
             raise ValueError("only an active artifact run can be finalized")
+        ownership_reason = _owned_manifest_reason(self.run_dir, manifest)
+        if ownership_reason is not None:
+            raise ValueError(f"artifact run is not owned: {ownership_reason}")
 
         evidence = _regular_file_sizes(self.evidence_dir)
         reclaimed_transient_bytes = _regular_tree_size(self.transient_dir)
@@ -135,6 +142,12 @@ class _ScannedRun:
     finished_at: datetime | None
 
 
+@dataclass(frozen=True)
+class _GitContext:
+    root: Path | None
+    failed: bool
+
+
 def create_run(
     melee_root: Path,
     *,
@@ -156,6 +169,8 @@ def create_run(
     manifest_path = run_dir / _MANIFEST_NAME
 
     manifest: dict[str, Any] = {
+        "artifact_format": _ARTIFACT_FORMAT,
+        "run_id": run_name,
         "state": _ACTIVE_STATE,
         "created_at": _utc_now(),
         "command": list(command),
@@ -212,12 +227,20 @@ def prune_runs(
 
     root = _resolve_artifact_root(melee_root, artifact_root)
     scanned, skipped = _scan_runs(root)
+    git_context = _git_context(_resolve_melee_root(melee_root))
     terminal: list[_ScannedRun] = []
     for item in scanned:
         if item.summary.state == _ACTIVE_STATE:
             skipped.append(SkippedRun(item.summary.run_dir, "active"))
-        else:
-            terminal.append(item)
+            continue
+        if _contains_nested_symlink(item.summary.run_dir):
+            skipped.append(SkippedRun(item.summary.run_dir, "nested-symlink"))
+            continue
+        git_reason = _git_candidate_safety_reason(git_context, item.summary.run_dir)
+        if git_reason is not None:
+            skipped.append(SkippedRun(item.summary.run_dir, git_reason))
+            continue
+        terminal.append(item)
 
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
     selected: list[_ScannedRun] = []
@@ -252,10 +275,11 @@ def prune_runs(
 
     removed: list[Path] = []
     for run_dir in selected_paths:
-        if _remove_owned_run_dir(root, run_dir):
+        removal_reason = _remove_owned_run_dir(root, run_dir, git_context)
+        if removal_reason is None:
             removed.append(run_dir)
         else:
-            skipped.append(SkippedRun(run_dir, "changed-before-removal"))
+            skipped.append(SkippedRun(run_dir, removal_reason))
     return PrunePlan(
         planned_run_dirs=selected_paths,
         removed_run_dirs=tuple(removed),
@@ -439,6 +463,10 @@ def _scan_runs(root: Path) -> tuple[list[_ScannedRun], list[SkippedRun]]:
             continue
         if state == _ACTIVE_STATE:
             finished_at = None
+        ownership_reason = _owned_manifest_reason(entry, manifest)
+        if ownership_reason is not None:
+            skipped.append(SkippedRun(entry, ownership_reason))
+            continue
 
         scanned.append(
             _ScannedRun(
@@ -455,34 +483,151 @@ def _scan_runs(root: Path) -> tuple[list[_ScannedRun], list[SkippedRun]]:
     return scanned, skipped
 
 
-def _remove_owned_run_dir(root: Path, run_dir: Path) -> bool:
+def _remove_owned_run_dir(
+    root: Path,
+    run_dir: Path,
+    git_context: _GitContext,
+) -> str | None:
     """Remove one still-valid direct-child terminal bundle, never a symlink."""
     try:
         root_mode = root.lstat().st_mode
         run_mode = run_dir.lstat().st_mode
     except FileNotFoundError:
-        return False
+        return "changed-before-removal"
     if stat.S_ISLNK(root_mode) or not stat.S_ISDIR(root_mode):
-        return False
+        return "changed-before-removal"
     if run_dir.parent != root or stat.S_ISLNK(run_mode) or not stat.S_ISDIR(run_mode):
-        return False
+        return "changed-before-removal"
 
     manifest_path = run_dir / _MANIFEST_NAME
     try:
         manifest_mode = manifest_path.lstat().st_mode
     except FileNotFoundError:
-        return False
+        return "changed-before-removal"
     if stat.S_ISLNK(manifest_mode) or not stat.S_ISREG(manifest_mode):
-        return False
+        return "changed-before-removal"
     try:
         manifest = _read_regular_manifest(manifest_path)
     except (OSError, ValueError, json.JSONDecodeError):
-        return False
+        return "changed-before-removal"
     if manifest.get("state") not in TERMINAL_STATES:
-        return False
+        return "changed-before-removal"
+    ownership_reason = _owned_manifest_reason(run_dir, manifest)
+    if ownership_reason is not None:
+        return ownership_reason
+    git_reason = _git_candidate_safety_reason(git_context, run_dir)
+    if git_reason is not None:
+        return git_reason
+    if _contains_nested_symlink(run_dir):
+        return "nested-symlink"
 
     shutil.rmtree(run_dir)
-    return True
+    return None
+
+
+def _owned_manifest_reason(run_dir: Path, manifest: Mapping[str, Any]) -> str | None:
+    """Return why a manifest/layout is not an artifact bundle we created."""
+    if manifest.get("artifact_format") != _ARTIFACT_FORMAT:
+        return "not-owned-manifest"
+    run_id = manifest.get("run_id")
+    if not isinstance(run_id, str) or run_id != run_dir.name:
+        return "not-owned-manifest"
+    if _RUN_NAME_PATTERN.fullmatch(run_id) is None:
+        return "not-owned-manifest"
+
+    if not _is_non_symlink_directory(run_dir / _EVIDENCE_DIRNAME):
+        return "invalid-owned-layout"
+    transient_dir = run_dir / _TRANSIENT_DIRNAME
+    if manifest.get("state") == _ACTIVE_STATE:
+        if not _is_non_symlink_directory(transient_dir):
+            return "invalid-owned-layout"
+    elif transient_dir.exists() or transient_dir.is_symlink():
+        return "invalid-owned-layout"
+    return None
+
+
+def _git_context(melee_root: Path) -> _GitContext:
+    """Locate a Git worktree once; non-repositories need no Git safety gate."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(melee_root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return _GitContext(root=None, failed=(melee_root / ".git").exists())
+    if result.returncode == 0:
+        return _GitContext(
+            root=Path(result.stdout.strip()).resolve(strict=False),
+            failed=False,
+        )
+    return _GitContext(root=None, failed=(melee_root / ".git").exists())
+
+
+def _git_candidate_safety_reason(git_context: _GitContext, run_dir: Path) -> str | None:
+    """Allow pruning only untracked, ignored bundles in a Git worktree."""
+    if git_context.failed:
+        return "git-check-failed"
+    if git_context.root is None:
+        return None
+    try:
+        relative_run_dir = run_dir.relative_to(git_context.root)
+    except ValueError:
+        return "git-check-failed"
+
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(git_context.root), "ls-files", "--error-unmatch", "--", str(relative_run_dir)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "git-check-failed"
+    if tracked.returncode == 0:
+        return "git-tracked"
+    if tracked.returncode != 1:
+        return "git-check-failed"
+
+    try:
+        ignored = subprocess.run(
+            ["git", "-C", str(git_context.root), "check-ignore", "-q", "--", str(relative_run_dir)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "git-check-failed"
+    if ignored.returncode == 0:
+        return None
+    if ignored.returncode == 1:
+        return "not-git-ignored"
+    return "git-check-failed"
+
+
+def _contains_nested_symlink(root: Path) -> bool:
+    """Conservatively reject a bundle if any descendant is a symlink."""
+    def visit(directory: Path) -> bool:
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            return True
+        for entry in entries:
+            try:
+                entry_mode = entry.stat(follow_symlinks=False).st_mode
+            except OSError:
+                return True
+            if stat.S_ISLNK(entry_mode):
+                return True
+            if stat.S_ISDIR(entry_mode) and visit(Path(entry.path)):
+                return True
+        return False
+
+    return visit(root)
 
 
 def _regular_file_sizes(root: Path) -> dict[str, int]:
@@ -536,6 +681,14 @@ def _require_regular_file_not_symlink(path: Path, label: str) -> None:
         raise ValueError(f"{label} does not exist") from error
     if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
         raise ValueError(f"{label} must be a regular non-symlink file")
+
+
+def _is_non_symlink_directory(path: Path) -> bool:
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return False
+    return not stat.S_ISLNK(mode) and stat.S_ISDIR(mode)
 
 
 def _parse_utc_timestamp(value: str | None) -> datetime | None:

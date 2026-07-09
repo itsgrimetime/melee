@@ -1,4 +1,5 @@
 import json
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -95,3 +96,61 @@ def test_prune_skips_active_malformed_and_symlinked_entries(tmp_path: Path) -> N
         "missing-manifest",
         "symlink",
     }
+
+
+def test_prune_keeps_terminal_shaped_user_directory(tmp_path: Path) -> None:
+    user_dir = tmp_path / "build/diagnostics/runs/user-notes"
+    user_dir.mkdir(parents=True)
+    (user_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "state": "completed",
+                "created_at": "2000-01-01T00:00:00+00:00",
+                "finished_at": "2000-01-01T00:00:00+00:00",
+            }
+        )
+    )
+
+    plan = prune_runs(tmp_path, max_age_days=30, max_total_bytes=0, apply=True)
+
+    assert user_dir.exists()
+    assert (user_dir / "manifest.json").exists()
+    assert {item.reason for item in plan.skipped} >= {"not-owned-manifest"}
+
+
+def test_prune_skips_git_tracked_owned_bundle(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    run = _completed_run(tmp_path, "tracked", age_days=31, evidence_bytes=8)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "--", str(run.run_dir.relative_to(tmp_path))],
+        check=True,
+    )
+
+    plan = prune_runs(tmp_path, max_age_days=30, max_total_bytes=0, apply=True)
+
+    assert run.run_dir.exists()
+    assert {item.reason for item in plan.skipped} >= {"git-tracked"}
+
+
+def test_prune_skips_git_visible_owned_bundle(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    run = _completed_run(tmp_path, "visible", age_days=31, evidence_bytes=8)
+
+    plan = prune_runs(tmp_path, max_age_days=30, max_total_bytes=0, apply=True)
+
+    assert run.run_dir.exists()
+    assert {item.reason for item in plan.skipped} >= {"not-git-ignored"}
+
+
+def test_prune_skips_owned_bundle_with_nested_symlink(tmp_path: Path) -> None:
+    run = _completed_run(tmp_path, "linked", age_days=31, evidence_bytes=8)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (run.evidence_dir / "nested-link").symlink_to(outside, target_is_directory=True)
+
+    plan = prune_runs(tmp_path, max_age_days=30, max_total_bytes=0, apply=True)
+
+    assert run.run_dir.exists()
+    assert outside.exists()
+    assert plan.planned_run_dirs == ()
+    assert {item.reason for item in plan.skipped} >= {"nested-symlink"}
