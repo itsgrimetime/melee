@@ -2668,6 +2668,7 @@ HSD_JObj* mnDiagram_CreateFighterIcon(int idx, int arg1)
 void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
     HSD_JObj* new_var;
+    HSD_JObj* row_parent;
     s32 count;
     Diagram* data_alias;
     Diagram* data = GET_DIAGRAM(arg0);
@@ -2732,9 +2733,9 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
             lb_80011E24(jobj, &sp_jobj2, 2, -1);
             HSD_JObjReqAnimAll(sp_jobj2, (f32) (fighter_idr & 0xFF));
             HSD_JObjAnimAll(sp_jobj2);
+            row_parent = data_alias->jobjs[9];
             y_spacing = HSD_JObjGetTranslationY(data_alias->jobjs[10]) -
-                        HSD_JObjGetTranslationY(
-                            new_var = data_alias->jobjs[9]);
+                        HSD_JObjGetTranslationY(row_parent);
             HSD_JObjSetTranslateY(jobj, y_spacing * i);
             HSD_JObjAddChild(data_alias->jobjs[9], jobj);
         }
