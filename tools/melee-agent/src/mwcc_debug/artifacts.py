@@ -233,7 +233,12 @@ def prune_runs(
 
     root = _resolve_artifact_root(melee_root, artifact_root)
     scanned, skipped = _scan_runs(root)
-    git_context = _git_context(_resolve_melee_root(melee_root))
+    resolved_melee_root = _resolve_melee_root(melee_root)
+    git_context = (
+        _git_context(resolved_melee_root)
+        if _has_git_marker(resolved_melee_root)
+        else _GitContext(root=None, failed=False)
+    )
     terminal: list[_ScannedRun] = []
     for item in scanned:
         if item.summary.state == _ACTIVE_STATE:
@@ -378,6 +383,8 @@ def _transient_cleanup_safety_reason(run: ArtifactRun) -> str | None:
     """Return why finalization must preserve transient output intact."""
     if _contains_nested_symlink(run.transient_dir):
         return "nested-symlink"
+    if not _has_git_marker(run.root):
+        return None
     return _git_candidate_safety_reason(_git_context(run.root), run.transient_dir)
 
 

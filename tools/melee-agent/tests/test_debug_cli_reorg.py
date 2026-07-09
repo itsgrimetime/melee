@@ -19,6 +19,7 @@ import typer
 from typer.testing import CliRunner
 
 import src.cli.debug as debug_cli
+import src.cli.debug.target as target_cli
 from src.cli import app
 from src.mwcc_debug import tier3_search as tier3_mod
 from src.mwcc_debug.artifacts import ArtifactRun, create_run
@@ -7827,6 +7828,329 @@ def _score_source_force_phys_pcdump_text(
     return "\n".join(lines) + "\n"
 
 
+def _score_source_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "src/melee/mn/sample.c"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("void fn_80000000(void) {}\n")
+    compiler_dir = tmp_path / "compiler"
+    compiler_dir.mkdir()
+    (compiler_dir / "mwcceppc_debug.exe").write_text("")
+    wibo = tmp_path / "wibo"
+    wibo.write_text("")
+    baseline = tmp_path / "baseline.pcdump.txt"
+    baseline.write_text(
+        _score_source_force_phys_pcdump_text(
+            "fn_80000000", assigned_by_ig={53: 5}
+        )
+    )
+    target = tmp_path / "force_phys_target.yaml"
+    target.write_text(
+        textwrap.dedent(f"""\
+            function: fn_80000000
+            class_id: 0
+            baseline_dump: {baseline}
+            force_phys:
+              53: 4
+        """)
+    )
+    return melee_root, candidate, compiler_dir, wibo, target
+
+
+def _stub_score_source_compiler(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pcdump: str,
+    compiler_dir: Path,
+    wibo: Path,
+) -> None:
+    def fake_process_tree_runner(cmd, *, cwd, timeout, env=None):
+        (cwd / env["MWCC_DEBUG_PCDUMP_PATH"]).write_text(pcdump)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(
+        debug_cli, "_resolve_src_relative", lambda _path: "src/melee/mn/sample.c"
+    )
+    monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
+    monkeypatch.setattr(
+        debug_cli,
+        "_ninja_cflags_for_unit",
+        lambda _unit: ("-proc gekko", "mwcc"),
+    )
+    monkeypatch.setattr(
+        debug_cli, "_score_source_unsafe_lane_payload", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_with_process_group_timeout",
+        fake_process_tree_runner,
+        raising=False,
+    )
+
+
+def test_score_source_retains_source_score_and_pcdump_in_one_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root, candidate, compiler_dir, wibo, target = _score_source_fixture(tmp_path)
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    _stub_score_source_compiler(
+        monkeypatch,
+        compiler_dir=compiler_dir,
+        wibo=wibo,
+        pcdump=_score_source_force_phys_pcdump_text(
+            "fn_80000000", assigned_by_ig={53: 4}
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(candidate.relative_to(melee_root)),
+            "-f",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--json",
+            "--retain-pcdump",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.output)
+    run_dir = Path(payload["artifact_run"])
+    assert (run_dir / "evidence/source/candidate.c").read_text() == candidate.read_text()
+    assert (run_dir / "evidence/score.json").is_file()
+    assert Path(payload["artifact_manifest"]).is_file()
+    assert Path(payload["artifact_source"]) == run_dir / "evidence/source/candidate.c"
+    assert Path(payload["artifact_score"]) == run_dir / "evidence/score.json"
+    assert Path(payload["pcdump_path"]).is_relative_to(run_dir / "evidence")
+    assert not (run_dir / "transient").exists()
+
+
+def test_score_source_preserves_explicit_pcdump_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root, candidate, compiler_dir, wibo, target = _score_source_fixture(tmp_path)
+    explicit = melee_root / "user-evidence" / "candidate.pcdump.txt"
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    _stub_score_source_compiler(
+        monkeypatch,
+        compiler_dir=compiler_dir,
+        wibo=wibo,
+        pcdump=_score_source_force_phys_pcdump_text(
+            "fn_80000000", assigned_by_ig={53: 4}
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(candidate.relative_to(melee_root)),
+            "-f",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--json",
+            "--pcdump-output",
+            str(explicit),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert Path(json.loads(result.output)["pcdump_path"]) == explicit
+    assert "Starting function fn_80000000" in explicit.read_text()
+
+
+def test_score_source_failed_compile_retains_error_source_and_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root, candidate, compiler_dir, wibo, target = _score_source_fixture(tmp_path)
+
+    def failed_process_tree_runner(cmd, *, cwd, timeout, env=None):
+        return subprocess.CompletedProcess(cmd, 1, "", "compiler failed")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    _stub_score_source_compiler(
+        monkeypatch,
+        compiler_dir=compiler_dir,
+        wibo=wibo,
+        pcdump="unused",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_with_process_group_timeout",
+        failed_process_tree_runner,
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(candidate.relative_to(melee_root)),
+            "-f",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["error"] == "pcdump missing"
+    run_dir = Path(payload["artifact_run"])
+    assert (run_dir / "evidence/source/candidate.c").read_text() == candidate.read_text()
+    assert json.loads((run_dir / "manifest.json").read_text())["state"] == "failed"
+    assert not (run_dir / "transient").exists()
+
+
+def test_score_source_quiet_output_stays_a_single_integer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root, candidate, compiler_dir, wibo, target = _score_source_fixture(tmp_path)
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    _stub_score_source_compiler(
+        monkeypatch,
+        compiler_dir=compiler_dir,
+        wibo=wibo,
+        pcdump=_score_source_force_phys_pcdump_text(
+            "fn_80000000", assigned_by_ig={53: 4}
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(candidate.relative_to(melee_root)),
+            "-f",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--quiet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert result.output == "0\n"
+    run_dirs = list((melee_root / "build/diagnostics/runs").iterdir())
+    assert len(run_dirs) == 1
+    manifest = json.loads((run_dirs[0] / "manifest.json").read_text())
+    assert manifest["state"] == "completed"
+    assert manifest["result"]["score"] == 0
+
+
+def test_score_source_cflags_setup_failure_finalizes_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root, candidate, compiler_dir, wibo, target = _score_source_fixture(tmp_path)
+
+    def unavailable_cflags(_unit: str) -> tuple[str, str]:
+        typer.echo("cflags unavailable", err=True)
+        raise typer.Exit(2)
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    _stub_score_source_compiler(
+        monkeypatch,
+        compiler_dir=compiler_dir,
+        wibo=wibo,
+        pcdump="unused",
+    )
+    monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", unavailable_cflags)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(candidate.relative_to(melee_root)),
+            "-f",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    run_dir = next((melee_root / "build/diagnostics/runs").iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["state"] == "failed"
+    assert manifest["result"] == {"error": "compiler flags unavailable"}
+    assert (run_dir / "evidence/source/candidate.c").read_text() == candidate.read_text()
+    assert json.loads((run_dir / "evidence/score.json").read_text()) == manifest["result"]
+    assert not (run_dir / "transient").exists()
+
+
+def test_score_source_staging_timeout_finalizes_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root, candidate, compiler_dir, wibo, target = _score_source_fixture(tmp_path)
+
+    @contextmanager
+    def timing_out_staging(**_kwargs):
+        raise TimeoutError("timed out waiting for repo-wide source-scoring lock")
+        yield "unused"
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    _stub_score_source_compiler(
+        monkeypatch,
+        compiler_dir=compiler_dir,
+        wibo=wibo,
+        pcdump="unused",
+    )
+    monkeypatch.setattr(
+        target_cli,
+        "_score_source_compile_source_rel",
+        timing_out_staging,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(candidate.relative_to(melee_root)),
+            "-f",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--json",
+        ],
+    )
+
+    assert isinstance(result.exception, TimeoutError)
+    run_dir = next((melee_root / "build/diagnostics/runs").iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["state"] == "failed"
+    assert manifest["result"] == {
+        "error": "timed out waiting for repo-wide source-scoring lock"
+    }
+    assert (run_dir / "evidence/source/candidate.c").read_text() == candidate.read_text()
+    assert json.loads((run_dir / "evidence/score.json").read_text()) == manifest["result"]
+    assert not (run_dir / "transient").exists()
+
+
 def test_target_score_source_scores_force_phys_target_yaml(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -8188,8 +8512,9 @@ def test_target_score_source_remote_fallback_scores_retained_candidate_when_loca
     payload = json.loads(result.stdout)
     assert payload["score"] == 7
     assert payload["target_score"]["matched"] == 1
-    assert Path(payload["pcdump_path"]) == retained.with_suffix(".pcdump.txt")
-    assert retained.with_suffix(".pcdump.txt").read_text(encoding="utf-8") == "pcdump text"
+    retained_pcdump = Path(payload["pcdump_path"])
+    assert retained_pcdump.is_relative_to(Path(payload["artifact_run"]) / "evidence")
+    assert retained_pcdump.read_text(encoding="utf-8") == "pcdump text"
     assert payload["remote_fallback"]["used"] is True
     assert payload["remote_fallback"]["reason"] == "unsafe local pcdump lane"
     assert payload["remote_fallback"]["staged_source"] == retained_rel
@@ -9354,7 +9679,7 @@ def test_target_score_source_retained_node_set_candidate_uses_real_tu(
     payload = json.loads(result.stdout)
     assert payload["score"] == 0
     retained_pcdump = Path(payload["pcdump_path"])
-    assert retained_pcdump == retained.with_suffix(".pcdump.txt")
+    assert retained_pcdump.is_relative_to(Path(payload["artifact_run"]) / "evidence")
     assert retained_pcdump.read_text(encoding="utf-8") == "pcdump text"
     assert compile_cmds
     assert compile_cmds[0][compile_cmds[0].index("-c") + 1] == source_rel
@@ -9484,7 +9809,7 @@ def test_target_score_source_diagnostics_combine_candidate_uses_real_tu(
     payload = json.loads(result.stdout)
     assert payload["score"] == 0
     retained_pcdump = Path(payload["pcdump_path"])
-    assert retained_pcdump == retained.with_suffix(".pcdump.txt")
+    assert retained_pcdump.is_relative_to(Path(payload["artifact_run"]) / "evidence")
     assert retained_pcdump.read_text(encoding="utf-8") == "pcdump text"
     assert compile_cmds
     assert compile_cmds[0][compile_cmds[0].index("-c") + 1] == source_rel

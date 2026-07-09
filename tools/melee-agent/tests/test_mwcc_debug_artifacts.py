@@ -26,6 +26,21 @@ def test_completed_run_keeps_evidence_and_removes_transient(tmp_path: Path) -> N
     assert manifest["evidence"]["source/candidate.c"] == len(source.read_bytes())
 
 
+def test_finalize_non_git_root_skips_git_probe(monkeypatch, tmp_path: Path) -> None:
+    import src.mwcc_debug.artifacts as artifacts
+
+    def fail_git_probe(*args, **kwargs):
+        raise AssertionError("non-Git finalization must not probe Git")
+
+    run = create_run(tmp_path, command=["debug"])
+    monkeypatch.setattr(artifacts.subprocess, "run", fail_git_probe)
+
+    manifest = run.finalize("completed")
+
+    assert manifest["state"] == "completed"
+    assert not run.transient_dir.exists()
+
+
 def test_failed_run_retains_existing_pcdump_and_score(tmp_path: Path) -> None:
     run = create_run(tmp_path, command=["debug", "target", "score-source"])
     run.retain_text("pcdump/candidate.txt", "Starting function fn\n")
@@ -76,6 +91,22 @@ def test_prune_removes_whole_oldest_terminal_bundle_only(tmp_path: Path) -> None
     assert plan.removed_run_dirs == (oldest.run_dir,)
     assert not oldest.run_dir.exists()
     assert newest.run_dir.exists()
+
+
+def test_prune_non_git_root_skips_git_probe(monkeypatch, tmp_path: Path) -> None:
+    import src.mwcc_debug.artifacts as artifacts
+
+    run = _completed_run(tmp_path, "old", age_days=31, evidence_bytes=8)
+
+    def fail_git_probe(*args, **kwargs):
+        raise AssertionError("non-Git pruning must not probe Git")
+
+    monkeypatch.setattr(artifacts.subprocess, "run", fail_git_probe)
+
+    plan = prune_runs(tmp_path, max_age_days=30, max_total_bytes=0, apply=True)
+
+    assert plan.removed_run_dirs == (run.run_dir,)
+    assert not run.run_dir.exists()
 
 
 def test_prune_skips_active_malformed_and_symlinked_entries(tmp_path: Path) -> None:
