@@ -8151,6 +8151,79 @@ def test_score_source_staging_timeout_finalizes_bundle(
     assert not (run_dir / "transient").exists()
 
 
+def test_score_source_timeout_cleans_compiler_probe_products(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root, candidate, compiler_dir, wibo, target = _score_source_fixture(tmp_path)
+    created: dict[str, Path] = {}
+
+    def timing_out_process_tree_runner(cmd, *, cwd, timeout, env=None):
+        pcdump_path = cwd / env["MWCC_DEBUG_PCDUMP_PATH"]
+        discard_path = Path(cmd[cmd.index("-o") + 1])
+        discard_path.parent.mkdir(parents=True, exist_ok=True)
+        pcdump_path.write_text("partial pcdump")
+        discard_path.write_bytes(b"discard")
+        created["pcdump"] = pcdump_path
+        created["discard"] = discard_path
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    def run_without_timeout_translation(cmd, *, cwd, timeout=None, env=None):
+        try:
+            return debug_cli._run_with_process_group_timeout(
+                cmd,
+                cwd=cwd,
+                timeout=timeout,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("compiler timed out") from exc
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    _stub_score_source_compiler(
+        monkeypatch,
+        compiler_dir=compiler_dir,
+        wibo=wibo,
+        pcdump="unused",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_with_process_group_timeout",
+        timing_out_process_tree_runner,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_run_command_with_optional_timeout",
+        run_without_timeout_translation,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "score-source",
+            str(candidate.relative_to(melee_root)),
+            "-f",
+            "fn_80000000",
+            "--target",
+            str(target),
+            "--quiet",
+        ],
+    )
+
+    assert isinstance(result.exception, TimeoutError)
+    assert str(result.exception) == "compiler timed out"
+    assert result.output == ""
+    run_dir = next((melee_root / "build/diagnostics/runs").iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["state"] == "failed"
+    assert manifest["result"] == {"error": "compiler timed out"}
+    assert not created["pcdump"].exists()
+    assert not created["discard"].exists()
+
+
 def test_target_score_source_scores_force_phys_target_yaml(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

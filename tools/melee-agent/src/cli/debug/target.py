@@ -3037,77 +3037,72 @@ def score_source(
         compile_timeout = active_timeout
 
         try:
-            with _score_source_compile_source_rel(
-                source_rel=src_rel,
-                cflags_unit_rel=cflags_unit_rel,
-                melee_root=melee_root,
-                timeout=compile_timeout,
-            ) as compile_source_rel:
-                args = (
-                    [str(wibo_path), str(debug_compiler)]
-                    + shlex.split(cflags)
-                    + ["-c", compile_source_rel, "-o", discard_o]
-                )
-                proc = _run_command_with_optional_timeout(
-                    args,
-                    cwd=melee_root,
-                    env=env,
-                    timeout=compile_timeout,
-                )
-        except TimeoutError as exc:
-            _emit_score_source_result(
-                {"error": str(exc)},
-                state="failed",
-                emit_stdout=False,
-            )
-            raise
-        if not pcdump_path.exists():
-            if not quiet:
-                typer.echo(proc.stderr, err=True)
             try:
-                os.unlink(discard_o)
-            except OSError:
-                pass
-            # Penalty for unscoreable candidates
-            score_value = 2**30
-            error = "pcdump missing"
-            unsafe_lane = None
-            if proc.returncode == 124:
-                error = proc.stderr or _timeout_message(args, compile_timeout)
-                unsafe_lane = _score_source_unsafe_lane_payload(
+                with _score_source_compile_source_rel(
                     source_rel=src_rel,
-                    function=function,
                     cflags_unit_rel=cflags_unit_rel,
-                    allow_unsafe=False,
-                    related_source_prefixes=related_source_prefixes,
+                    melee_root=melee_root,
+                    timeout=compile_timeout,
+                ) as compile_source_rel:
+                    args = (
+                        [str(wibo_path), str(debug_compiler)]
+                        + shlex.split(cflags)
+                        + ["-c", compile_source_rel, "-o", discard_o]
+                    )
+                    proc = _run_command_with_optional_timeout(
+                        args,
+                        cwd=melee_root,
+                        env=env,
+                        timeout=compile_timeout,
+                    )
+            except TimeoutError as exc:
+                _emit_score_source_result(
+                    {"error": str(exc)},
+                    state="failed",
+                    emit_stdout=False,
                 )
-            payload = _score_source_failure_payload(
-                score_value=score_value,
-                error=error,
-                proc=proc,
-                timeout=compile_timeout if proc.returncode == 124 else None,
-                unsafe_lane=unsafe_lane,
-            )
-            payload["full_unit_source"] = effective_full_unit_source
-            _apply_score_source_scope(
-                payload,
-                function=function,
-                c_file=c_file,
-                source_rel=src_rel,
-                cflags_unit_rel=cflags_unit_rel,
-            )
-            _emit_score_source_result(payload, state="failed")
-            raise typer.Exit(0)
+                raise
+            if not pcdump_path.exists():
+                if not quiet:
+                    typer.echo(proc.stderr, err=True)
+                # Penalty for unscoreable candidates
+                score_value = 2**30
+                error = "pcdump missing"
+                unsafe_lane = None
+                if proc.returncode == 124:
+                    error = proc.stderr or _timeout_message(args, compile_timeout)
+                    unsafe_lane = _score_source_unsafe_lane_payload(
+                        source_rel=src_rel,
+                        function=function,
+                        cflags_unit_rel=cflags_unit_rel,
+                        allow_unsafe=False,
+                        related_source_prefixes=related_source_prefixes,
+                    )
+                payload = _score_source_failure_payload(
+                    score_value=score_value,
+                    error=error,
+                    proc=proc,
+                    timeout=compile_timeout if proc.returncode == 124 else None,
+                    unsafe_lane=unsafe_lane,
+                )
+                payload["full_unit_source"] = effective_full_unit_source
+                _apply_score_source_scope(
+                    payload,
+                    function=function,
+                    c_file=c_file,
+                    source_rel=src_rel,
+                    cflags_unit_rel=cflags_unit_rel,
+                )
+                _emit_score_source_result(payload, state="failed")
+                raise typer.Exit(0)
 
-        try:
             pcdump_text = pcdump_path.read_text()
         finally:
-            pcdump_path.unlink(missing_ok=True)  # don't pollute repo
-        # Clean up the discarded .o
-        try:
-            os.unlink(discard_o)
-        except OSError:
-            pass
+            for compiler_product in (pcdump_path, Path(discard_o)):
+                try:
+                    compiler_product.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     retained_pcdump_path: Path | None = None
     pcdump_retention_error: str | None = None
