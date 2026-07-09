@@ -24,7 +24,7 @@ def test_command_capabilities_include_known_commands():
     caps = cap.command_capabilities()
     names = {c.name for c in caps}
     # Known leaf commands from the real tree (verified against live introspection):
-    assert "debug target score-source" in names   # NOTE: there is NO `debug score`
+    assert "debug target score-source" in names
     assert "debug search source-model-synthesis" in names
     assert "debug search source-family-continuation" in names
     assert "extract files" in names
@@ -89,7 +89,11 @@ def test_search_relevance_regression():
     assert "debug target score-source" in [c.name for c in cap.run_search("scorer", REPO)]
     assert "extract files" in [c.name for c in cap.run_search("per-file progress", REPO)]
     assert any(c.name in {"ghidra", "commit check-callers"} for c in cap.run_search("find callers", REPO))
-    assert any(c.name in {"mwcc-debug", "mwcc-inspect"} for c in cap.run_search("register allocation", REPO))
+    register_alloc_names = [
+        c.name for c in cap.run_search("register allocation", REPO)
+    ]
+    assert "debug inspect lifetime-pressure" in register_alloc_names
+    assert any(name in {"mwcc-debug", "mwcc-inspect"} for name in register_alloc_names)
     assert "mismatch add" in [c.name for c in cap.run_search("inline pattern recording", REPO)]
     assert "debug search plan-transforms" in [
         c.name for c in cap.run_search("transform corpus source-shape probes", REPO)
@@ -251,6 +255,8 @@ def test_render_brief_is_compact_and_grouped():
     assert brief.startswith("# melee-agent capabilities")
     assert "debug:" in brief                     # grouped by top-level group
     assert "/decomp" in brief or "decomp" in brief
+    assert "register allocation:" in brief
+    assert "melee-agent debug inspect lifetime-pressure" in brief
     # Stays small enough to auto-load every session (emitter appends ~700 bytes
     # of nudge/remote text on top of this).
     assert len(brief.encode("utf-8")) < 9_000

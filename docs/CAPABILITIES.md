@@ -59,6 +59,7 @@
 - `melee-agent debug inspect first-divergence` — Find the earliest allocator decision diverging from a same-source target.
 - `melee-agent debug inspect frame-reservations` — Inspect stack-frame gaps and implicit reserved ranges.
 - `melee-agent debug inspect guide` — Tier 4: human-readable diagnostic for stuck-function debugging.
+- `melee-agent debug inspect lifetime-pressure` — Explain register-allocation lifetime pressure blockers and validation.
 - `melee-agent debug inspect rank-callees` — Predict the callee-save cascade for a function before compiling.
 - `melee-agent debug inspect simulate` — Simulate MWCC's coloring algorithm on a function and diff against actuals.
 - `melee-agent debug inspect stack-homes` — Explain final-only FPR stack-home targets and source-shape leads.
@@ -110,6 +111,7 @@
 - `melee-agent debug search directed` — Run the directed (pcdump-guided) search layer for FUNCTION in UNIT.
 - `melee-agent debug search minimize` — Delta-reduce candidate subhunks while preserving proof assignments.
 - `melee-agent debug search plan-transforms` — Plan source-transform families and instantiate bounded probes.
+- `melee-agent debug search post-source-ceiling-axis` — Rank backend/codegen axes after terminal source-family exhaustion.
 - `melee-agent debug search post-source-context-next-dimension` — Discover the next explicit handoff after Draw source-context exhaustion.
 - `melee-agent debug search retained-frontiers` — Rank retained frontiers and suppress lanes closed by terminal evidence.
 - `melee-agent debug search run` — Run a search over source variants for FUNCTION in UNIT.
@@ -142,7 +144,7 @@
 - `melee-agent debug target score-dump` — Tier 4: score a pcdump's coloring decisions against a target spec.
 - `melee-agent debug target score-force-phys` — Permuter scorer: lex-encoded force-phys assignment hits.
 - `melee-agent debug target score-simplify-order` — Permuter scorer: lex-encoded simplify-order + precolor distance.
-- `melee-agent debug target score-source` — Compile a source via debug dump local, then score against a target.
+- `melee-agent debug target score-source` — Compile a source via debug dump local, then score target or checkdiff evidence.
 - `melee-agent debug util name-magic` — Rename anonymous @N symbols in a .o's .sdata2 to user-supplied names.
 - `melee-agent debug util patterns` — Tier 7c: dump the catalog of recurring MWCC mutation patterns.
 - `melee-agent debug util verify-name-magic` — Compile, optionally rename anonymous SDA2 constants, then checkdiff.
@@ -279,7 +281,6 @@
 - `/decomp-remote` — Match decompiled C code using the remote decomp.me server workflow. Use this skill when you want to iterate on a scratch using the remote server. For most tasks, prefer /decomp which uses the faster local workflow.
 - `/discord-knowledge` — Search Discord knowledge base for decompilation patterns, compiler tricks, and historical context. Use when stuck on matching or need background on a technique.
 - `/first-pass-decomp` — Generate initial C code from assembly using local m2c. Use this skill to get first-pass decompilations for unmatched functions before manual refinement.
-- `/fresh-eyes` — Use when a Melee match is stuck or plateaued (especially >=95%), has accumulated a long string of tool-extension issues, or has been called a ceiling / banked / unreachable / exhausted / "below the source" — or when mwcc-debug/solve/force-phys are giving diminishing returns.
 - `/ghidra` — Use cached Ghidra-derived xrefs and string lookups (fast SQLite queries) for cross-reference discovery and string-based naming. Also offers live Ghidra decompile as a heavy fallback. Use when finding callers across the whole binary or naming functions from debug strings.
 - `/item-decomp` — Conventions and domain knowledge for item-related code in Melee. Use when decompiling item functions (it_* prefix).
 - `/melee-debug` — [EXPERIMENTAL] Debug Melee in Dolphin emulator. Breakpoints are unreliable with JIT mode. Use for memory inspection only until stability improves.

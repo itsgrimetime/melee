@@ -1,8 +1,8 @@
-                                                                                
- Usage: melee-agent debug inspect lifetime-pressure [OPTIONS]                   
-                                                                                
- Explain allocator lifetime pressure blockers and follow-up validation.         
-                                                                                
+
+ Usage: melee-agent debug inspect lifetime-pressure [OPTIONS]
+
+ Explain register-allocation lifetime pressure blockers and validation.
+
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
 │ *  --function            -f      TEXT     Function name to inspect.          │
 │                                           [required]                         │
@@ -42,4 +42,3 @@
 │                                           [default: 100]                     │
 │    --help                                 Show this message and exit.        │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-

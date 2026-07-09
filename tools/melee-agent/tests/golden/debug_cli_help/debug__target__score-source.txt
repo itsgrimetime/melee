@@ -1,16 +1,16 @@
-                                                                                
- Usage: melee-agent debug target score-source [OPTIONS] C_FILE                  
-                                                                                
+
+ Usage: melee-agent debug target score-source [OPTIONS] C_FILE
+
  Compile a source via debug dump local, then score target or checkdiff
  evidence.
-                                                                                
- Single-command flow for use as decomp-permuter's external scorer.              
- Outputs an integer score (lower = better; 0 = perfect target match).           
- Use `--quiet` to silence everything except the score itself.                   
-                                                                                
- Wires:                                                                         
-     c_file → mwcceppc_debug.exe → pcdump.txt → parse → score_function          
-                                                                                
+
+ Single-command flow for use as decomp-permuter's external scorer.
+ Outputs an integer score (lower = better; 0 = perfect target match).
+ Use `--quiet` to silence everything except the score itself.
+
+ Wires:
+     c_file → mwcceppc_debug.exe → pcdump.txt → parse → score_function
+
 ╭─ Arguments ──────────────────────────────────────────────────────────────────╮
 │ *    c_file      TEXT  Path to a .c file to compile (relative to melee       │
 │                        root). Can be a staging path inside `nonmatchings/`.  │

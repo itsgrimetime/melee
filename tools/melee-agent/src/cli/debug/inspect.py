@@ -2364,7 +2364,7 @@ def inspect_lifetime_pressure(
         ),
     ] = 100,
 ):
-    """Explain allocator lifetime pressure blockers and follow-up validation."""
+    """Explain register-allocation lifetime pressure blockers and validation."""
     from src.cli.debug import (  # noqa: PLC0415
         DEFAULT_MELEE_ROOT,
         _resolve_pcdump_path,
