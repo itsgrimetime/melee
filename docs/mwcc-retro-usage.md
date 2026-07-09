@@ -5,10 +5,11 @@ doc (`docs/mwcc-retro.md`) and spec (`docs/superpowers/specs/2026-06-10-mwcc-ret
 
 ## TL;DR — when to reach for it
 
-Reach for mwcc-retro when you need to see **what the front-end IRO optimizer did
-to your C** — loop unrolling, CSE, copy/constant propagation, induction-variable
-rewrites, temp creation — on the **real retail GC/1.2.5n compiler**, with zero
-perturbation. It is the only tool that dumps the IR **after each front-end pass**.
+Reach for mwcc-retro when you need the **real retail GC/1.2.5n compiler** with
+zero perturbation: either front-end IRO optimizer pass visibility or exact
+backend/regalloc facts. For front-end work it shows what the optimizer did to
+your C — loop unrolling, CSE, copy/constant propagation, induction-variable
+rewrites, temp creation — after each pass.
 
 It is **diagnosis-grade, not first-resort**. Try `mismatch-db`, `opseq`, `ghidra`,
 `discord-knowledge`, and `mwcc-debug` (DLL pcdump) first. Emulated compiles are
@@ -26,7 +27,7 @@ facts, then compare or iterate with the faster `mwcc-debug` DLL pcdump path.
 # One-time: clone + build the vendored retrowin32 + cadmic at pinned SHAs
 melee-agent debug retro setup
 
-# Front-end IRO per-phase trace on RETAIL 1.2.5n (THE headline; scoped to one fn)
+# Front-end IRO per-phase trace on retail 1.2.5n, scoped to one function
 melee-agent debug retro dump src/melee/mn/mnvibration.c -f mnVibration_802474C4 --phases frontend
 
 # Backend (AST + per-pass PCode + regalloc + stack) — GC/1.1 donor/reference path

@@ -13,7 +13,11 @@ decisions, and scheduled instructions.
 Use this after lighter tools (`mismatch-db`, `opseq`, `ghidra`, and
 Discord knowledge) fail to explain a last-mile mismatch. For front-end
 parse structure, use `/mwcc-inspect`; for back-end allocator and codegen
-shape, use `/mwcc-debug`.
+shape, use `/mwcc-debug`. If the remaining question is whether the patched
+debug DLL differs from the unmodified retail GC/1.2.5n compiler, use
+`melee-agent debug retro backend ... --verify-debug` or
+`melee-agent debug retro verify-backend`; retail is authoritative when they
+disagree.
 
 ## Quick Workflow
 
@@ -94,6 +98,7 @@ For a one-off exploratory feature issue, pass
 | Need callers, callees, or string xrefs | Use `/ghidra`. |
 | Need parsed expression trees or ObjObject IDs | Use `/mwcc-inspect`. |
 | Need basic blocks, virtual registers, allocator decisions, or scheduling | Use this skill. |
+| Need exact retail GC/1.2.5n PCode/regalloc facts or DLL-vs-retail fidelity | Use `/mwcc-retro` with `melee-agent debug retro backend`. |
 
 `mwcc-debug` and `mwcc-inspect` answer different questions:
 

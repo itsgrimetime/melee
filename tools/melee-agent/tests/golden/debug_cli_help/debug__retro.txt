@@ -11,7 +11,8 @@
 │ setup                Clone + build retrowin32 and cadmic at pinned SHAs      │
 │                      (idempotent).                                           │
 │ dump                 Dump retail compiler internals for FN in SRC.           │
-│ backend              Gated retail GC/1.2.5n backend/regalloc trace command.  │
+│ backend              Generate an exact retail GC/1.2.5n backend/regalloc     │
+│                      trace.                                                  │
 │ backend-candidate    Assemble a candidate retail GC/1.2.5n backend trace.    │
 │ probe-backend-map    Probe retail GC/1.2.5n backend map candidates without   │
 │                      emitting traces.                                        │

@@ -1,6 +1,6 @@
 ---
 name: mwcc-retro
-description: Dump retail MWCC GC/1.2.5n front-end IRO per-pass traces via retrowin32+gdb; GC/1.1 also has backend PCode, register-allocator, and stack-map dumps. Use when you need front-end optimizer pass visibility (CSE, loop unrolling, propagation, DCE) or a retail-vs-debug-DLL fidelity check. Not first-resort — reach for mismatch-db, opseq, ghidra, discord-knowledge, and mwcc-debug first.
+description: Dump retail MWCC GC/1.2.5n front-end IRO and exact backend/regalloc traces via retrowin32+gdb. Use when you need optimizer pass visibility, retail PCode/allocator facts, or retail-vs-debug-DLL fidelity after lighter matching tools and mwcc-debug.
 ---
 
 # MWCC Retro
@@ -13,8 +13,9 @@ others) plus exact retail backend/regalloc traces. Lower-level backend map,
 interference-graph, PCode, and candidate probes remain available for diagnostics.
 
 Use this after the lighter tools have been exhausted and you specifically
-need to see what the front-end optimizer did, or when you suspect a residual
-mismatch is a debug-DLL artifact rather than genuine retail behavior.
+need to see what the front-end optimizer did, need exact retail allocator/PCode
+facts, or suspect a residual mismatch is a debug-DLL artifact rather than
+genuine retail behavior.
 
 ## Quick Workflow
 
@@ -79,7 +80,8 @@ ledger: which IROLinear indices appeared or disappeared between passes).
 
 `mwcc-retro` is diagnosis-grade: the emulated compile is slower than the
 wibo/DLL path. Use it when `mwcc-debug` and source-shape experiments have not
-explained the residual and front-end pass visibility is specifically needed.
+explained the residual and you need either front-end pass visibility or exact
+retail GC/1.2.5n backend/regalloc facts.
 
 If `iro-summary.txt` shows no node changes across all passes, the mismatch is
 purely back-end. Start with `/mwcc-debug` for speed, then use

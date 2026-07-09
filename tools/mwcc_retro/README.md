@@ -6,16 +6,19 @@ It runs the compiler under the [retrowin32](https://github.com/evmar/retrowin32)
 x86 emulator with a gdb stub, attaches a GDB-protocol debugger, and reads
 compiler-internal data structures directly from the emulated process.
 
-The headline capability is **front-end IRO optimizer per-pass tracing**: AST
-dumps and IR node snapshots after each optimizer phase (CSE, loop unrolling,
+The headline capabilities are **front-end IRO optimizer per-pass tracing** and
+**exact retail GC/1.2.5n backend/regalloc tracing**. The front-end path records
+AST dumps and IR node snapshots after each optimizer phase (CSE, loop unrolling,
 constant propagation, dead-code elimination, and others). Neither existing tool
-provides this: `mwcc-debug` (the pcdump/DLL path) covers only back-end PCode;
-`mwcc-inspect` gives one front-end IR snapshot on demand. In addition to the
-front-end trace, on the **GC/1.1** compiler (`--compiler 1.1`) `mwcc-retro`
-produces retail-faithful back-end PCode passes, register-allocator
-priority/cost/adjacency dumps, and stack-allocation maps. On **GC/1.2.5n** it
-emits exact retail backend/regalloc traces through `debug retro backend`, plus
-lower-level map, interference-graph, PCode, and candidate probes for diagnostics.
+provides that per-pass front-end view: `mwcc-debug` (the pcdump/DLL path) covers
+only back-end PCode; `mwcc-inspect` gives one front-end IR snapshot on demand.
+For backend work, `debug retro backend` runs the unmodified retail GC/1.2.5n
+compiler and emits machine-readable PCode, frame, interference-graph, coalesce,
+simplify/select, color, and register-assignment facts. On the **GC/1.1**
+compiler (`--compiler 1.1`), `mwcc-retro` also produces retail-faithful back-end
+PCode passes, register-allocator priority/cost/adjacency dumps, and
+stack-allocation maps. Lower-level map, interference-graph, PCode, and
+candidate probes remain available for GC/1.2.5n diagnostics.
 
 ## Commands
 

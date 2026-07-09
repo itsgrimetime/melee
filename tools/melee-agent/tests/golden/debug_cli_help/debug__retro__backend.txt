@@ -1,7 +1,7 @@
 
  Usage: melee-agent debug retro backend [OPTIONS] SRC
 
- Gated retail GC/1.2.5n backend/regalloc trace command.
+ Generate an exact retail GC/1.2.5n backend/regalloc trace.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────╮
 │ *    src      TEXT  TU source path, e.g. src/melee/mn/mndiagram.c [required] │

@@ -24,7 +24,8 @@ binary.
 `mwcc-retro` is **diagnosis-grade** (emulated compile is slower than the
 wibo/DLL path). Do not reach for it in the inner search loop. Use it when
 lighter tools have failed to explain a residual and you specifically need
-front-end visibility or retail-vs-DLL confirmation.
+front-end visibility, exact retail backend/regalloc facts, or retail-vs-DLL
+confirmation.
 
 ## Quick workflow
 
@@ -170,7 +171,9 @@ reduction), which can influence register pressure downstream.
 
 If the summary shows no changes across all passes, the function's IR was
 stable through the entire front-end optimizer and the mismatch is purely
-back-end — switch to `mwcc-debug` for register-coloring investigation.
+back-end. Start with `mwcc-debug` for the fast pcdump path; use
+`melee-agent debug retro backend` when you need exact unmodified retail
+GC/1.2.5n allocator facts or a retail-vs-debug-DLL fidelity report.
 
 ## Verify semantics
 

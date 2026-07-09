@@ -59,6 +59,7 @@
 - `melee-agent debug inspect first-divergence` — Find the earliest allocator decision diverging from a same-source target.
 - `melee-agent debug inspect frame-reservations` — Inspect stack-frame gaps and implicit reserved ranges.
 - `melee-agent debug inspect guide` — Tier 4: human-readable diagnostic for stuck-function debugging.
+- `melee-agent debug inspect lifetime-pressure` — Explain allocator lifetime pressure blockers and follow-up validation.
 - `melee-agent debug inspect rank-callees` — Predict the callee-save cascade for a function before compiling.
 - `melee-agent debug inspect simulate` — Simulate MWCC's coloring algorithm on a function and diff against actuals.
 - `melee-agent debug inspect stack-homes` — Explain final-only FPR stack-home targets and source-shape leads.
@@ -102,10 +103,10 @@
 - `melee-agent debug permute setup-simplify-order-scorer` — Wire decomp-permuter to save candidates that improve simplify-order.
 - `melee-agent debug permute triage` — Tier 7e: batch-triage decomp-permuter output candidates.
 - `melee-agent debug permute verify` — Tier 7a: apply a permuter candidate to the real source and verify.
-- `melee-agent debug retro backend` — Gated retail GC/1.2.5n backend/regalloc trace command.
-- `melee-agent debug retro backend-candidate` — Assemble a candidate GC/1.2.5n backend trace from validated partial probes.
+- `melee-agent debug retro backend` — Generate an exact retail GC/1.2.5n backend/regalloc trace.
+- `melee-agent debug retro backend-candidate` — Assemble a candidate retail GC/1.2.5n backend trace.
 - `melee-agent debug retro dump` — Dump retail compiler internals for FN in SRC.
-- `melee-agent debug retro probe-backend-ig` — Probe retail GC/1.2.5n partial backend IG/order/coalesce snapshots.
+- `melee-agent debug retro probe-backend-ig` — Probe retail GC/1.2.5n partial IG/order/coalesce/observed-color snapshots.
 - `melee-agent debug retro probe-backend-map` — Probe retail GC/1.2.5n backend map candidates without emitting traces.
 - `melee-agent debug retro probe-backend-pcode` — Probe retail GC/1.2.5n backend PCode/block snapshots.
 - `melee-agent debug retro setup` — Clone + build retrowin32 and cadmic at pinned SHAs (idempotent).
@@ -116,6 +117,7 @@
 - `melee-agent debug search directed` — Run the directed (pcdump-guided) search layer for FUNCTION in UNIT.
 - `melee-agent debug search minimize` — Delta-reduce candidate subhunks while preserving proof assignments.
 - `melee-agent debug search plan-transforms` — Plan source-transform families and instantiate bounded probes.
+- `melee-agent debug search post-source-ceiling-axis` — Rank backend/codegen axes after terminal source-family exhaustion.
 - `melee-agent debug search post-source-context-next-dimension` — Discover the next explicit handoff after Draw source-context exhaustion.
 - `melee-agent debug search retained-frontiers` — Rank retained frontiers and suppress lanes closed by terminal evidence.
 - `melee-agent debug search run` — Run a search over source variants for FUNCTION in UNIT.
@@ -148,7 +150,7 @@
 - `melee-agent debug target score-dump` — Tier 4: score a pcdump's coloring decisions against a target spec.
 - `melee-agent debug target score-force-phys` — Permuter scorer: lex-encoded force-phys assignment hits.
 - `melee-agent debug target score-simplify-order` — Permuter scorer: lex-encoded simplify-order + precolor distance.
-- `melee-agent debug target score-source` — Compile a source via debug dump local, then score against a target.
+- `melee-agent debug target score-source` — Compile a source via debug dump local, then score target or checkdiff evidence.
 - `melee-agent debug util name-magic` — Rename anonymous @N symbols in a .o's .sdata2 to user-supplied names.
 - `melee-agent debug util patterns` — Tier 7c: dump the catalog of recurring MWCC mutation patterns.
 - `melee-agent debug util verify-name-magic` — Compile, optionally rename anonymous SDA2 constants, then checkdiff.
@@ -292,7 +294,7 @@
 - `/mismatch-db` — Knowledge base for common assembly mismatches. Use to interpret diffs when matching functions.
 - `/mwcc-debug` — Dump MWCC's internal codegen passes (BEFORE/AFTER REGISTER COLORING, instruction scheduling, etc.) for a Melee TU. Runs locally on macOS (via wibo+Zig-built DLL) by default, or on a remote Windows host as a fallback. Use when stuck on register-allocation cascades or other last-mile matching issues; complement to mwcc-inspect (which shows front-end IR / ENodes / ObjObjects).
 - `/mwcc-inspect` — Inspect MWCC's internal IR (ENodes, ObjObjects, Statements) for a Melee TU by running RootCubed/mwcc-inspector on a remote Windows host. Use when stuck on register-allocation cascades or other last-mile matching issues that mismatch-db, opseq, ghidra, and discord-knowledge haven't explained — this is the next tool to reach for, not the first.
-- `/mwcc-retro` — Dump retail MWCC GC/1.2.5n front-end IRO per-pass traces via retrowin32+gdb; GC/1.1 also has backend PCode, register-allocator, and stack-map dumps. Use when you need front-end optimizer pass visibility (CSE, loop unrolling, propagation, DCE) or a retail-vs-debug-DLL fidelity check. Not first-resort — reach for mismatch-db, opseq, ghidra, discord-knowledge, and mwcc-debug first.
+- `/mwcc-retro` — Dump retail MWCC GC/1.2.5n front-end IRO and exact backend/regalloc traces via retrowin32+gdb. Use when you need optimizer pass visibility, retail PCode/allocator facts, or retail-vs-debug-DLL fidelity after lighter matching tools and mwcc-debug.
 - `/opseq` — Find functions by opcode sequence patterns. Use when stuck on a function and want to find similar already-decompiled code for reference.
 - `/ppc-ref` — Look up PowerPC instruction set documentation. Use when you need to understand what a specific instruction does, its operands, or behavior.
 - `/prepare-pr` — Use this skill when the user wants to prepare decomp work for an upstream PR.

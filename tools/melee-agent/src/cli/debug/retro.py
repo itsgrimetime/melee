@@ -2144,7 +2144,7 @@ def backend_cmd(
         help="Also compare the retail backend trace to the mwcc-debug pcdump.",
     ),
 ):
-    """Gated retail GC/1.2.5n backend/regalloc trace command."""
+    """Generate an exact retail GC/1.2.5n backend/regalloc trace."""
     active_root = _resolve_melee_root(melee_root)
     out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
     try:
