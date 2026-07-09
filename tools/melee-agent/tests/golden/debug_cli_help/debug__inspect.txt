@@ -1,8 +1,8 @@
-                                                                                
- Usage: melee-agent debug inspect [OPTIONS] COMMAND [ARGS]...                   
-                                                                                
- Read, compare, and explain MWCC pcdumps.                                       
-                                                                                
+
+ Usage: melee-agent debug inspect [OPTIONS] COMMAND [ARGS]...
+
+ Read, compare, and explain MWCC pcdumps.
+
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
 │ --help          Show this message and exit.                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -14,8 +14,8 @@
 │                     diff against actuals.                                    │
 │ first-divergence    Find the earliest allocator decision diverging from a    │
 │                     same-source target.                                      │
-│ lifetime-pressure   Explain allocator lifetime pressure blockers and         │
-│                     follow-up validation.                                    │
+│ lifetime-pressure   Explain register-allocation lifetime pressure blockers   │
+│                     and validation.                                          │
 │ diff                Compare two source or pcdump inputs through the          │
 │                     mwcc-debug pipeline.                                     │
 │ asm                 Show the current compiled assembly for a function.       │
@@ -67,4 +67,3 @@
 │                     IR op                                                    │
 │                     so you can correlate to the C source manually.           │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-

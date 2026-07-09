@@ -59,7 +59,7 @@
 - `melee-agent debug inspect first-divergence` — Find the earliest allocator decision diverging from a same-source target.
 - `melee-agent debug inspect frame-reservations` — Inspect stack-frame gaps and implicit reserved ranges.
 - `melee-agent debug inspect guide` — Tier 4: human-readable diagnostic for stuck-function debugging.
-- `melee-agent debug inspect lifetime-pressure` — Explain allocator lifetime pressure blockers and follow-up validation.
+- `melee-agent debug inspect lifetime-pressure` — Explain register-allocation lifetime pressure blockers and validation.
 - `melee-agent debug inspect rank-callees` — Predict the callee-save cascade for a function before compiling.
 - `melee-agent debug inspect simulate` — Simulate MWCC's coloring algorithm on a function and diff against actuals.
 - `melee-agent debug inspect stack-homes` — Explain final-only FPR stack-home targets and source-shape leads.

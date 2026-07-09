@@ -244,7 +244,7 @@ cd ../melee-pr
 - `/opseq` - Find similar already-matched functions by opcode sequence patterns
 - `/ppc-ref` - Look up PowerPC instruction documentation
 - `/ghidra` - Cross-references (callers/callees) and debug-string lookups via cached SQLite queries (sub-ms). Heavy `ghidra decompile` is also available as a second-opinion fallback.
-- `/mwcc-debug` - Fast patched-DLL pcdump path for backend PCode, virtual registers, allocator decisions, scheduling, and source-shape experiments.
+- `/mwcc-debug` - Fast patched-DLL pcdump path for backend PCode, virtual registers, allocator decisions, scheduling, and source-shape experiments. For confirmed allocator-only mismatches with a desired `IG:phys` target, use `melee-agent debug inspect lifetime-pressure -f <func> --force-phys "IG:PHYS,..."` before speculative source edits.
 - `/mwcc-retro` - Unmodified retail MWCC GC/1.2.5n tracing via retrowin32+gdb. Use `melee-agent debug retro backend <src.c> -f <fn> --verify-debug` when you need exact retail backend/regalloc facts or suspect a debug-DLL artifact.
 - `/mwcc-inspect` - Front-end ENodes, ObjObjects, and Statements when source expression shape is unclear.
 
@@ -291,6 +291,7 @@ When a session runs out of context and gets summarized, **preserve this state**:
 - **Use CLI tools, not curl** - All API operations should go through `melee-agent` commands, not raw curl/HTTP calls
 - **Think like a developer, not like the ASM** - Developers write simple, natural code. Complex ASM patterns (partial loop unrolling, `bdnz` with manual stores) are compiler optimizations, not developer intent. Ask "why would a developer write this?" before trying exotic tricks.
 - **Structure first, registers last** - Don't fix register allocation until the instruction sequence matches. Registers often "fall into place" when structure is correct; chasing registers early leads to local maxima. For true allocator questions, use `mwcc-debug` first, then `melee-agent debug retro backend <src.c> -f <fn> --verify-debug` when exact unmodified retail GC/1.2.5n facts matter.
+- **Use lifetime-pressure for allocator-only blockers** - Once instruction shape is close and the remaining diff is a virtual/physical register assignment, run `debug inspect lifetime-pressure` to identify live-range/interference/simplify/coalesce blockers and validation commands. Do not treat its source suggestions as correct until a compile/checkdiff validation passes.
 - **Match % can drop when correct** - Don't revert structurally correct changes just because match % dropped. A correct `bl` (function call) at 60% is better than incorrect inlined code at 85%. You can improve from correct structure.
 - **PAD_STACK is a last resort** - Stack mismatches usually mean missing inlines or variables, not "add padding." Investigate missing inline functions, local variables, or type differences before using PAD_STACK.
 - **Name hidden string/data offsets** - Do not leave `OSReport`/`__assert` strings or other data references as raw `base + offset` pointer math in PR code. If the bytes live inside a nearby data blob, model the blob with a file-local struct and reference the named field, or use another direct named string/data reference that preserves matching codegen.

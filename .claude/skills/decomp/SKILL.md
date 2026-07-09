@@ -70,6 +70,19 @@ melee-agent debug retro backend src/melee/<module>/<file>.c -f FunctionName --ve
 melee-agent debug retro verify-backend src/melee/<module>/<file>.c -f FunctionName --debug-pcdump /tmp/pcdump.txt
 ```
 
+If the instruction sequence is already close and the remaining issue is a target
+virtual/register assignment, switch to the read-only lifetime-pressure explorer
+before guessing at source edits:
+
+```bash
+melee-agent debug inspect lifetime-pressure -f Func_80000000 --force-phys "53:25,50:22"
+```
+
+It reports live ranges, interference blockers, simplify/select order,
+coalescing, source-variable attribution, and concrete validation commands.
+Treat its source actions as hypotheses until a compile/checkdiff guard validates
+the candidate.
+
 For large state machines or asset-heavy functions, use `docs/large-function-checkpoint.md` before a serious rewrite. For `mn` menu code, check `docs/mn-module-notes.md` for module-specific known local maxima and successful source shapes.
 
 If `docs/discord-knowledge` is missing, use `docs/discord-search-recipes.md` and the installed `discord-search` skill/tooling fallback with focused terms from the mismatch, compiler symptom, function family, or API name. Record useful hits in the attempt note instead of relying on memory.

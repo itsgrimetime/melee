@@ -38,7 +38,15 @@ melee-agent debug target derive -f fn_80247510 > /tmp/target.yaml
 melee-agent debug target score-dump -f fn_80247510 --target /tmp/target.yaml
 melee-agent debug target score-source src/melee/mn/foo.c -f fn_80247510 --target /tmp/target.yaml
 melee-agent debug target match-iter-first -f fn_80247510
+melee-agent debug inspect lifetime-pressure -f fn_80247510 --force-phys "53:25,50:22"
 ```
+
+For allocator-only register mismatches, run `inspect lifetime-pressure` before
+hand-editing source. It is read-only by default: it explains live ranges,
+interference blockers, simplify/select order, coalescing, spills, and
+source-attribution confidence, then emits exact follow-up validation commands.
+Use `--validate quick` or `--validate bounded` only when you explicitly want it
+to compile candidates.
 
 When diagnostics point at source shape:
 
@@ -172,6 +180,10 @@ by pass through MWCC's pipeline and reports the earliest divergence.
 Use `inspect lifetime-pressure` to inventory allocator facts, explain
 register-pressure blockers for target assignments, and emit follow-up
 validation commands.
+
+Use this when the instruction sequence is close and the remaining mismatch is
+"IG X should be phys Y", or when `target score-source` says a register target
+is moving but you need the first meaningful lifetime/interference blocker.
 
 Default output is read-only. Source actions are hypotheses until validated by compile/checkdiff or supplied candidate evidence. When multiple target assignments are supplied, every target is protected by default.
 

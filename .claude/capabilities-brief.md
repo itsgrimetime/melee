@@ -32,6 +32,12 @@ Before building any tool/script/command, run `melee-agent capabilities search <t
 - sync: auth, clear, dedup, fetch, find-duplicates, fix-ownership, list, production, slugs, status, validate
 - transform-corpus: mine
 
+## Common task shortcuts
+- register allocation: `melee-agent debug inspect lifetime-pressure`, `/mwcc-debug`, `/mwcc-inspect`
+- score candidate: `melee-agent debug target score-source`, `melee-agent debug target score-dump`
+- find callers: `/ghidra`, `melee-agent commit check-callers`
+- transform corpus pressure coalesce select order: `melee-agent debug mutate lifetime-layout`, `melee-agent debug coalesce-search`, `melee-agent debug select-order-search`
+
 ## Skills (invoke `/<name>`)
 - backfill-analysis — Analyze matched functions to discover mismatch patterns. Use when backfilling the mismatch-db from git history.
 - collect-for-pr — Collect pending worktree commits into a PR for review. Use this skill when subdirectory worktrees have accumulated 4-7+ commits that should be batched together and submitted for review. Invoked with /collect-for-pr or automatically when monitoring worktree status.
