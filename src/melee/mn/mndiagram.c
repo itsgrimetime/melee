@@ -392,8 +392,8 @@ int mnDiagram_GetFighterTotalFalls(u8 field_index)
 /// @return Number of unlocked fighters.
 static inline int mnDiagram_CountUnlockedFightersInline(void)
 {
-    int count = 0;
     int i;
+    int count = 0;
     for (i = 0; i < 0x19; i++) {
         if (mn_IsFighterUnlocked(i)) {
             count++;
@@ -2667,6 +2667,7 @@ HSD_JObj* mnDiagram_CreateFighterIcon(int idx, int arg1)
 
 void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
+    HSD_JObj* new_var;
     s32 count;
     u8* pr;
     u8* p2;
@@ -2679,13 +2680,11 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     HSD_JObj* sp_jobj;
     u8 stack_obj2[4];
     HSD_JObj* sp_jobj2;
-    u8 stack_obj3[20];
-    int k;
+    u8 stack_obj3[12];
     int idx;
     int remaining;
     u8* p;
     u8* sorted;
-    HSD_JObj* new_var;
     int fighter_id;
     u8* pr2;
     f32 x_spacing;
@@ -2701,11 +2700,7 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     for (i = 0; i < 7; i++) {
         sorted = mnDiagram_804A0750.sorted_fighters;
         joint_data = assets->FaceB;
-        for (count = (k = 0); k < 0x19; k++) {
-            if (mn_IsFighterUnlocked(k) != 0) {
-                count++;
-            }
-        }
+        count = mnDiagram_CountUnlockedFightersInline();
         if (count > i) {
             remaining = i;
             idx = arg2;
@@ -2738,10 +2733,12 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
             lb_80011E24(jobj, &sp_jobj, 2, -1);
             HSD_JObjReqAnimAll(sp_jobj, (f32) (fighter_id & 0xFF));
             HSD_JObjAnimAll(sp_jobj);
+            new_var = jobj;
+            jobj = data->jobjs[7];
             x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
-                        HSD_JObjGetTranslationX(data->jobjs[7]);
-            HSD_JObjSetTranslateX(jobj, x_spacing * i);
-            HSD_JObjAddChild(data->jobjs[7], jobj);
+                        HSD_JObjGetTranslationX(jobj);
+            HSD_JObjSetTranslateX(new_var, x_spacing * i);
+            HSD_JObjAddChild(data->jobjs[7], new_var);
         }
     }
 
@@ -2749,12 +2746,7 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     joint_data = assets->FaceB;
     for (i = 0; i < 0xA; i++) {
         sorted = mnDiagram_804A0750.sorted_fighters;
-        count = 0;
-        for (k = 0; k < 0x19; k++) {
-            if (mn_IsFighterUnlocked(k) != 0) {
-                count++;
-            }
-        }
+        count = mnDiagram_CountUnlockedFightersInline();
         if (count > i) {
             remr = i;
             idx = arg1;
