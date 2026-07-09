@@ -2669,6 +2669,7 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
     HSD_JObj* new_var;
     s32 count;
+    Diagram* data_alias;
     Diagram* data = GET_DIAGRAM(arg0);
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     void** joint_data;
@@ -2686,6 +2687,7 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     HSD_JObj* jobj;
 
     (void) &stack_obj;
+    data_alias = data;
     (void) &stack_obj2;
     (void) &stack_obj3;
 
@@ -2706,10 +2708,10 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
             HSD_JObjReqAnimAll(sp_jobj, (f32) (fighter_id & 0xFF));
             HSD_JObjAnimAll(sp_jobj);
             new_var = jobj;
-            x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
-                        HSD_JObjGetTranslationX(data->jobjs[7]);
+            x_spacing = HSD_JObjGetTranslationX(data_alias->jobjs[8]) -
+                        HSD_JObjGetTranslationX(data_alias->jobjs[7]);
             HSD_JObjSetTranslateX(new_var, x_spacing * i);
-            jobj = data->jobjs[7];
+            jobj = data_alias->jobjs[7];
             HSD_JObjAddChild(jobj, new_var);
         }
     }
@@ -2730,10 +2732,11 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
             lb_80011E24(jobj, &sp_jobj2, 2, -1);
             HSD_JObjReqAnimAll(sp_jobj2, (f32) (fighter_idr & 0xFF));
             HSD_JObjAnimAll(sp_jobj2);
-            y_spacing = HSD_JObjGetTranslationY(data->jobjs[10]) -
-                        HSD_JObjGetTranslationY(new_var = data->jobjs[9]);
+            y_spacing = HSD_JObjGetTranslationY(data_alias->jobjs[10]) -
+                        HSD_JObjGetTranslationY(
+                            new_var = data_alias->jobjs[9]);
             HSD_JObjSetTranslateY(jobj, y_spacing * i);
-            HSD_JObjAddChild(data->jobjs[9], jobj);
+            HSD_JObjAddChild(data_alias->jobjs[9], jobj);
         }
     }
 }
