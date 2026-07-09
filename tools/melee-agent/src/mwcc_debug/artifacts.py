@@ -86,8 +86,13 @@ class ArtifactRun:
             raise ValueError(f"artifact run is not owned: {ownership_reason}")
 
         evidence = _regular_file_sizes(self.evidence_dir)
-        reclaimed_transient_bytes = _regular_tree_size(self.transient_dir)
-        _remove_owned_transient_dir(self)
+        transient_bytes = _regular_tree_size(self.transient_dir)
+        cleanup_skipped_reason = _transient_cleanup_safety_reason(self)
+        if cleanup_skipped_reason is None:
+            _remove_owned_transient_dir(self)
+            reclaimed_transient_bytes = transient_bytes
+        else:
+            reclaimed_transient_bytes = 0
 
         manifest.update(
             {
@@ -96,6 +101,7 @@ class ArtifactRun:
                 "result": dict(result) if result is not None else None,
                 "evidence": evidence,
                 "reclaimed_transient_bytes": reclaimed_transient_bytes,
+                "cleanup_skipped_reason": cleanup_skipped_reason,
             }
         )
         _write_json_atomically(self.manifest_path, manifest)
@@ -368,6 +374,13 @@ def _remove_owned_transient_dir(run: ArtifactRun) -> None:
     shutil.rmtree(run.transient_dir)
 
 
+def _transient_cleanup_safety_reason(run: ArtifactRun) -> str | None:
+    """Return why finalization must preserve transient output intact."""
+    if _contains_nested_symlink(run.transient_dir):
+        return "nested-symlink"
+    return _git_candidate_safety_reason(_git_context(run.root), run.transient_dir)
+
+
 def _write_json_atomically(path: Path, payload: Mapping[str, Any]) -> None:
     _require_directory_not_symlink(path.parent, "manifest parent")
     try:
@@ -541,8 +554,18 @@ def _owned_manifest_reason(run_dir: Path, manifest: Mapping[str, Any]) -> str | 
     if manifest.get("state") == _ACTIVE_STATE:
         if not _is_non_symlink_directory(transient_dir):
             return "invalid-owned-layout"
-    elif transient_dir.exists() or transient_dir.is_symlink():
-        return "invalid-owned-layout"
+    else:
+        try:
+            transient_mode = transient_dir.lstat().st_mode
+        except FileNotFoundError:
+            if manifest.get("cleanup_skipped_reason") is not None:
+                return "invalid-owned-layout"
+        else:
+            if stat.S_ISLNK(transient_mode) or not stat.S_ISDIR(transient_mode):
+                return "invalid-owned-layout"
+            cleanup_reason = manifest.get("cleanup_skipped_reason")
+            if not isinstance(cleanup_reason, str) or not cleanup_reason:
+                return "invalid-owned-layout"
     return None
 
 
@@ -557,13 +580,17 @@ def _git_context(melee_root: Path) -> _GitContext:
             timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return _GitContext(root=None, failed=(melee_root / ".git").exists())
+        return _GitContext(root=None, failed=_has_git_marker(melee_root))
     if result.returncode == 0:
         return _GitContext(
             root=Path(result.stdout.strip()).resolve(strict=False),
             failed=False,
         )
-    return _GitContext(root=None, failed=(melee_root / ".git").exists())
+    return _GitContext(root=None, failed=_has_git_marker(melee_root))
+
+
+def _has_git_marker(path: Path) -> bool:
+    return any((candidate / ".git").exists() for candidate in (path, *path.parents))
 
 
 def _git_candidate_safety_reason(git_context: _GitContext, run_dir: Path) -> str | None:

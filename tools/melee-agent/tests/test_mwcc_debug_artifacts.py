@@ -154,3 +154,38 @@ def test_prune_skips_owned_bundle_with_nested_symlink(tmp_path: Path) -> None:
     assert outside.exists()
     assert plan.planned_run_dirs == ()
     assert {item.reason for item in plan.skipped} >= {"nested-symlink"}
+
+
+def test_finalize_preserves_transient_with_nested_symlink(tmp_path: Path) -> None:
+    run = create_run(tmp_path, command=["debug"])
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (run.transient_dir / "nested-link").symlink_to(outside, target_is_directory=True)
+
+    manifest = run.finalize("failed")
+
+    assert run.transient_dir.exists()
+    assert outside.exists()
+    assert manifest["state"] == "failed"
+    assert manifest["cleanup_skipped_reason"] == "nested-symlink"
+    assert json.loads(run.manifest_path.read_text())["cleanup_skipped_reason"] == "nested-symlink"
+
+
+def test_finalize_preserves_git_tracked_transient(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("build/\n")
+    run = create_run(tmp_path, command=["debug"])
+    tracked = run.transient_dir / "compiler/discard.o"
+    tracked.parent.mkdir()
+    tracked.write_bytes(b"object")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "-f", "--", str(tracked.relative_to(tmp_path))],
+        check=True,
+    )
+
+    manifest = run.finalize("failed")
+
+    assert tracked.exists()
+    assert run.transient_dir.exists()
+    assert manifest["state"] == "failed"
+    assert manifest["cleanup_skipped_reason"] == "git-tracked"
