@@ -466,6 +466,7 @@ from src.cli.debug.suggest import suggest_app as _suggest_app  # noqa: E402
 from src.cli.debug.suggest import *  # noqa: E402,F401,F403
 from src.cli.debug.permute import permute_app as _permute_app  # noqa: E402
 from src.cli.debug.permute import *  # noqa: E402,F401,F403
+from src.cli.debug.artifacts import artifacts_app as _artifacts_app  # noqa: E402
 from src.cli.debug.dump import dump_app as _dump_app  # noqa: E402
 from src.cli.debug.solve import solve_app as _solve_app  # noqa: E402
 from src.cli.debug.util import util_app as _util_app  # noqa: E402
@@ -491,6 +492,7 @@ debug_app.add_typer(_mutate_app, name="mutate")
 from src.cli.debug.mutate import *  # noqa: E402,F401,F403
 debug_app.add_typer(_intervene_app, name="intervene")
 debug_app.add_typer(_permute_app, name="permute")
+debug_app.add_typer(_artifacts_app, name="artifacts")
 debug_app.add_typer(_util_app, name="util")
 debug_app.add_typer(_solve_app, name="solve")
 debug_app.add_typer(measure_app, name="measure")

@@ -22,6 +22,7 @@
 │ intervene            Run backend-backed allocator interventions and report   │
 │                      allocator deltas.                                       │
 │ permute              Run, verify, and triage decomp-permuter candidates.     │
+│ artifacts            Inspect and safely prune retained diagnostic evidence.  │
 │ util                 Low-level helpers outside the main mwcc-debug loop.     │
 │ solve                Inverse-coloring solver: surrogate-checked,             │
 │                      §1.5-filtered C-move worksheets for register-only       │

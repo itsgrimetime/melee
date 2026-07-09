@@ -10,6 +10,7 @@ import subprocess
 import textwrap
 import tomllib
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,8 +21,57 @@ from typer.testing import CliRunner
 import src.cli.debug as debug_cli
 from src.cli import app
 from src.mwcc_debug import tier3_search as tier3_mod
+from src.mwcc_debug.artifacts import ArtifactRun, create_run
 
 runner = CliRunner()
+
+
+def _make_cli_completed_run(
+    root: Path,
+    *,
+    age_days: int = 0,
+    evidence_bytes: int = 0,
+) -> ArtifactRun:
+    run = create_run(root, command=["test", "cli"])
+    run.retain_text("source/candidate.c", "x" * evidence_bytes)
+    run.finalize("completed")
+    manifest = json.loads(run.manifest_path.read_text())
+    manifest["finished_at"] = (
+        datetime.now(UTC) - timedelta(days=age_days)
+    ).isoformat()
+    run.manifest_path.write_text(json.dumps(manifest))
+    return run
+
+
+def test_debug_artifacts_report_json(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    _make_cli_completed_run(tmp_path, evidence_bytes=12)
+
+    result = runner.invoke(app, ["debug", "artifacts", "report", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["completed_runs"] == 1
+    assert payload["completed_bytes"] == 12
+
+
+def test_debug_artifacts_prune_requires_apply(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    run = _make_cli_completed_run(tmp_path, age_days=31, evidence_bytes=12)
+
+    preview = runner.invoke(
+        app,
+        ["debug", "artifacts", "prune", "--max-age-days", "30"],
+    )
+    assert preview.exit_code == 0, preview.output
+    assert run.run_dir.exists()
+
+    applied = runner.invoke(
+        app,
+        ["debug", "artifacts", "prune", "--max-age-days", "30", "--apply"],
+    )
+    assert applied.exit_code == 0, applied.output
+    assert not run.run_dir.exists()
 
 
 INLINE_BOUNDARY_SOURCE = """
@@ -177,7 +227,16 @@ def test_debug_help_shows_only_workflow_groups() -> None:
 
     assert result.exit_code == 0
     out = strip_ansi(result.stdout)
-    for group in ("dump", "inspect", "target", "suggest", "mutate", "permute", "util"):
+    for group in (
+        "dump",
+        "inspect",
+        "target",
+        "suggest",
+        "mutate",
+        "permute",
+        "artifacts",
+        "util",
+    ):
         assert group in out
     assert "Collect pcdumps" in out
     assert "Read, compare, and explain" in out
@@ -235,6 +294,8 @@ def test_representative_grouped_command_help_works() -> None:
         ["debug", "permute", "remote", "submit", "--help"],
         ["debug", "permute", "remote", "fetch", "--help"],
         ["debug", "permute", "remote", "triage", "--help"],
+        ["debug", "artifacts", "report", "--help"],
+        ["debug", "artifacts", "prune", "--help"],
         ["debug", "util", "name-magic", "--help"],
     ]
     for command in commands:
