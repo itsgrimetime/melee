@@ -1098,9 +1098,9 @@ static inline int mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
                                                         int rank)
 {
     int result;
-    int remaining;
-    u8* p2;
     u8* p;
+    u8* p2;
+    int remaining;
     int idx;
 
     remaining = rank;
@@ -2706,11 +2706,11 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
             HSD_JObjReqAnimAll(sp_jobj, (f32) (fighter_id & 0xFF));
             HSD_JObjAnimAll(sp_jobj);
             new_var = jobj;
-            jobj = data->jobjs[7];
             x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
-                        HSD_JObjGetTranslationX(jobj);
+                        HSD_JObjGetTranslationX(data->jobjs[7]);
             HSD_JObjSetTranslateX(new_var, x_spacing * i);
-            HSD_JObjAddChild(data->jobjs[7], new_var);
+            jobj = data->jobjs[7];
+            HSD_JObjAddChild(jobj, new_var);
         }
     }
 
