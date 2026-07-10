@@ -792,8 +792,9 @@ def _load_checkdiff_normalized_structural_lines(melee_root: Path):
     global _CHECKDIFF_NORMALIZE_FN
     if _CHECKDIFF_NORMALIZE_FN is None:
         import importlib.util
+        from src.cli.debug import _checkdiff_script_path
 
-        path = melee_root / "tools" / "checkdiff.py"
+        path = _checkdiff_script_path(melee_root)
         spec = importlib.util.spec_from_file_location("checkdiff_inproc", path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -1259,10 +1260,13 @@ def _order_target_forced_dump(
         "--force-iter-first-class", str(class_id),
         "--force-iter-first-fn", function,
     ]
+    child_env = _env_with_current_melee_agent_package(
+        _checkdiff_env_for_locked_child(disable_fingerprint=False)
+    )
     proc = subprocess.run(
-        argv, cwd=melee_root / "tools" / "melee-agent",
+        argv, cwd=melee_root,
         capture_output=True, text=True, timeout=600,
-        env=os.environ.copy(),
+        env=child_env,
     )
     if proc.returncode != 0 or not out_path.exists():
         out_path.unlink(missing_ok=True)
@@ -1361,7 +1365,9 @@ def _collect_order_target_inputs(
     from src.search.directed.order_target import FORCE_CAP
 
     tu_c = melee_root / "src" / f"{unit}.c"
-    child_env = _checkdiff_env_for_locked_child(disable_fingerprint=False)
+    child_env = _env_with_current_melee_agent_package(
+        _checkdiff_env_for_locked_child(disable_fingerprint=False)
+    )
     retained_force_vector_dir = (
         melee_root
         / "build"
@@ -1464,7 +1470,7 @@ def _collect_order_target_inputs(
             [sys.executable, "-m", "src.cli", "debug", "dump", "local",
              str(tu_c), "--function", function,
              "--output", str(baseline_dump), "--no-cache-sync"],
-            cwd=melee_root / "tools" / "melee-agent",
+            cwd=melee_root,
             capture_output=True, text=True, timeout=600, env=child_env,
         )
         if proc.returncode != 0 or not baseline_dump.exists():

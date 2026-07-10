@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -3879,6 +3881,140 @@ def test_collect_order_target_inputs_uses_package_checkdiff_for_worktree(
     argv, kwargs = calls[0]
     assert argv[1] == str(package_checkdiff)
     assert kwargs["cwd"] == worktree
+
+
+def test_load_checkdiff_normalizer_uses_package_tooling_for_raw_worktree(
+    monkeypatch,
+    tmp_path,
+):
+    import src.cli.debug.inspect as inspect_cli
+
+    package_root = tmp_path / "package"
+    worktree = tmp_path / "worktree"
+    package_checkdiff = package_root / "tools" / "checkdiff.py"
+    package_checkdiff.parent.mkdir(parents=True)
+    package_checkdiff.write_text(
+        "def normalized_structural_lines(lines):\n"
+        "    return ['package-normalized', *lines]\n",
+        encoding="utf-8",
+    )
+    (worktree / "src" / "melee").mkdir(parents=True)
+
+    monkeypatch.setattr(debugcli, "_package_melee_root", lambda: package_root)
+    monkeypatch.setattr(inspect_cli, "_CHECKDIFF_NORMALIZE_FN", None)
+
+    normalize = debugcli._load_checkdiff_normalized_structural_lines(worktree)
+
+    assert normalize(["line"]) == ["package-normalized", "line"]
+
+
+def test_collect_order_target_inputs_runs_baseline_child_from_raw_worktree(
+    monkeypatch,
+    tmp_path,
+):
+    package_root = tmp_path / "package"
+    worktree = tmp_path / "worktree"
+    source = worktree / "src" / "melee" / "mn" / "mndiagram.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void f(void) {}\n", encoding="utf-8")
+    calls = []
+
+    class ReachedBaselineParse(Exception):
+        pass
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "checkdiff.py" in str(argv[1]):
+            return SimpleNamespace(
+                returncode=1,
+                stdout=json.dumps({
+                    "classification": {"primary": "backend-ceiling"},
+                    "target_asm": [],
+                    "current_asm": [],
+                }),
+                stderr="",
+            )
+        output = Path(argv[argv.index("--output") + 1])
+        output.write_text("Starting function f\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(debugcli, "_package_melee_root", lambda: package_root)
+    monkeypatch.setattr(debugcli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        debugcli,
+        "parse_pcdump",
+        lambda _text: (_ for _ in ()).throw(ReachedBaselineParse()),
+    )
+
+    with pytest.raises(ReachedBaselineParse):
+        debugcli._collect_order_target_inputs(
+            function="f",
+            unit="melee/mn/mndiagram",
+            class_id=0,
+            melee_root=worktree,
+            checkdiff_timeout=1.0,
+        )
+
+    baseline_argv, baseline_kwargs = calls[1]
+    assert baseline_argv[:6] == [
+        sys.executable,
+        "-m",
+        "src.cli",
+        "debug",
+        "dump",
+        "local",
+    ]
+    assert baseline_kwargs["cwd"] == worktree
+    assert baseline_kwargs["env"]["CHECKDIFF_NO_LOCK"] == "1"
+    assert baseline_kwargs["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(
+        package_root / "tools" / "melee-agent"
+    )
+
+
+def test_order_target_forced_dump_runs_child_from_raw_worktree(
+    monkeypatch,
+    tmp_path,
+):
+    package_root = tmp_path / "package"
+    worktree = tmp_path / "worktree"
+    source = worktree / "src" / "melee" / "mn" / "mndiagram.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void f(void) {}\n", encoding="utf-8")
+    captured = {}
+
+    class ReachedForcedDump(Exception):
+        pass
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        raise ReachedForcedDump
+
+    monkeypatch.setattr(debugcli, "_package_melee_root", lambda: package_root)
+    monkeypatch.setattr(debugcli.subprocess, "run", fake_run)
+
+    with pytest.raises(ReachedForcedDump):
+        debugcli._order_target_forced_dump(
+            tu_c=source,
+            function="f",
+            class_id=0,
+            force_iter_first=[42],
+            melee_root=worktree,
+        )
+
+    assert captured["argv"][:6] == [
+        sys.executable,
+        "-m",
+        "src.cli",
+        "debug",
+        "dump",
+        "local",
+    ]
+    assert captured["kwargs"]["cwd"] == worktree
+    assert captured["kwargs"]["env"]["CHECKDIFF_NO_LOCK"] == "1"
+    assert captured["kwargs"]["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(
+        package_root / "tools" / "melee-agent"
+    )
 
 
 def test_package_melee_root_resolves_repo_root():
