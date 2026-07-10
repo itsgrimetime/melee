@@ -19,7 +19,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_pr_worktree_create_overlays_missing_fork_tools(tmp_path: Path) -> None:
+def _make_pr_worktree_fixture(tmp_path: Path) -> Path:
     repo = tmp_path / "melee"
     repo.mkdir()
     _git(repo, "init", "-b", "master")
@@ -57,6 +57,12 @@ def test_pr_worktree_create_overlays_missing_fork_tools(tmp_path: Path) -> None:
     )
     _git(repo, "commit", "-m", "fork tooling")
 
+    return repo
+
+
+def test_pr_worktree_create_overlays_missing_fork_tools(tmp_path: Path) -> None:
+    repo = _make_pr_worktree_fixture(tmp_path)
+
     result = subprocess.run(
         ["bash", "tools/workflow/pr-worktree.sh", "create", "pr/demo"],
         cwd=repo,
@@ -77,3 +83,42 @@ def test_pr_worktree_create_overlays_missing_fork_tools(tmp_path: Path) -> None:
     assert "tools/worktree-doctor.py" in exclude_text
     assert "tools/melee-agent/" in exclude_text
     assert "\ntools/\n" not in exclude_text
+
+
+def test_pr_worktree_create_hydrates_assets_from_main_checkout(tmp_path: Path) -> None:
+    repo = _make_pr_worktree_fixture(tmp_path)
+    (repo / "tools" / "worktree-doctor.py").write_text(
+        "import pathlib, sys\n"
+        "pathlib.Path.cwd().joinpath('asset-source.txt').write_text(sys.argv[-1])\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", "tools/workflow/pr-worktree.sh", "create", "pr/demo"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "melee-pr" / "asset-source.txt").read_text(
+        encoding="utf-8"
+    ) == str(repo)
+
+
+def test_pr_worktree_create_survives_asset_hydration_failure(tmp_path: Path) -> None:
+    repo = _make_pr_worktree_fixture(tmp_path)
+    (repo / "tools" / "worktree-doctor.py").write_text(
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", "tools/workflow/pr-worktree.sh", "create", "pr/demo"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Warning: shared asset hydration skipped" in result.stdout

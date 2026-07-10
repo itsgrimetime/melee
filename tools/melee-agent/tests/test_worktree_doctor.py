@@ -29,7 +29,11 @@ def load_worktree_doctor(script: Path | None = None):
     return module
 
 
-def test_symlinked_doctor_uses_current_git_root(monkeypatch, tmp_path: Path) -> None:
+def test_symlinked_doctor_uses_current_git_root_after_package_is_cached(
+    monkeypatch, tmp_path: Path
+) -> None:
+    load_worktree_doctor()
+
     source_repo = tmp_path / "source"
     pr_worktree = tmp_path / "pr"
     source_tools = source_repo / "tools"
