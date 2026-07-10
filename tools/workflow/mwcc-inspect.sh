@@ -289,11 +289,9 @@ set +e
   printf 'REL_SRC_LOCAL=%s\n' "$(shell_quote "${REL_SRC}")"
   printf 'MWCC_ARGS_REMOTE=%s\n' "$(shell_quote "${MWCC_ARGS}")"
   printf 'if [[ -n "${REMOTE_TMP}" ]]; then\n'
-  printf '  REMOTE_TMP_REL="${REMOTE_TMP#${REMOTE_DIR}/}"\n'
   printf '  MWCC_ARGS_REMOTE="${MWCC_ARGS_REMOTE/$REL_SRC_LOCAL/$REMOTE_SOURCE}"\n'
-  printf '  MWCC_ARGS_REMOTE="-i ${REMOTE_TMP_REL}/src -i ${REMOTE_TMP}/src -i ${REMOTE_TMP_REL}/src/melee -i ${REMOTE_TMP}/src/melee ${MWCC_ARGS_REMOTE}"\n'
-  printf '  MWCC_ARGS_REMOTE="${MWCC_ARGS_REMOTE/ -i src / -i src -i ${REMOTE_TMP_REL}/src -i ${REMOTE_TMP}/src }"\n'
-  printf '  MWCC_ARGS_REMOTE="${MWCC_ARGS_REMOTE/ -i src\\/melee / -i src\\/melee -i ${REMOTE_TMP_REL}\\/src\\/melee -i ${REMOTE_TMP}\\/src\\/melee }"\n'
+  printf '  MWCC_ARGS_REMOTE="$(sed -E "s@(^|[[:space:]])-i[[:space:]]+([^/[:space:]][^[:space:]]*)@\\1-i ${REMOTE_DIR}/\\2@g" <<< "${MWCC_ARGS_REMOTE}")"\n'
+  printf '  MWCC_ARGS_REMOTE="-i ${REMOTE_TMP}/src -i ${REMOTE_TMP}/src/melee ${MWCC_ARGS_REMOTE}"\n'
   printf 'fi\n'
   printf 'echo "[mwcc-inspect:remote] stage=inspector source=${REMOTE_SOURCE}" >&2\n'
   printf '%s %s ${MWCC_ARGS_REMOTE}\n' \
@@ -322,6 +320,20 @@ if [[ "${REMOTE_EXIT}" -ne 0 ]]; then
   fi
   rm -f "${TMP_ERR}"
   exit "${REMOTE_EXIT}"
+fi
+
+if grep -Eq '^[[:space:]]*#[[:space:]]*Error:' "${TMP_OUT}"; then
+  mv "${TMP_OUT}" "${OUT_FILE}"
+  rm -f "${TMP_ERR}"
+  echo "[mwcc-inspect] inspector output contains compiler diagnostics; preserved: ${OUT_FILE}" >&2
+  exit 1
+fi
+
+if ! grep -q '^FUNCTION:' "${TMP_OUT}"; then
+  mv "${TMP_OUT}" "${OUT_FILE}"
+  rm -f "${TMP_ERR}"
+  echo "[mwcc-inspect] inspector output has no FUNCTION: section; preserved: ${OUT_FILE}" >&2
+  exit 1
 fi
 
 mv "${TMP_OUT}" "${OUT_FILE}"
