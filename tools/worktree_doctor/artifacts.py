@@ -2,17 +2,19 @@
 
 Every directory walk is bound to file descriptors opened with ``O_NOFOLLOW``.
 Apply-mode cleanup also binds the reviewed device/inode pair, moves the direct
-candidate into a same-parent quarantine, and deletes only after confirming the
-quarantined directory still has that identity.
+candidate into a private same-parent quarantine with no-replace semantics, and
+deletes only after confirming the quarantined directory still has that identity.
 """
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import os
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -26,6 +28,10 @@ DEFAULT_MIN_BYTES = 1024**3
 _GIT_TIMEOUT_SECONDS = 15
 _PROCESS_TIMEOUT_SECONDS = 15
 _ARTIFACT_KINDS = frozenset(item.as_posix() for item in ARTIFACT_DIRS)
+_QUARANTINED_CHILD = "candidate"
+_DARWIN_RENAME_EXCL = 0x00000004
+_DARWIN_RENAME_NOFOLLOW_ANY = 0x00000010
+_LINUX_RENAME_NOREPLACE = 0x00000001
 
 
 @dataclass(frozen=True)
@@ -76,6 +82,20 @@ class _DirectoryHandle:
     inode: int
 
 
+@dataclass(frozen=True)
+class _ScannedDirectory:
+    path: Path
+    fd: int
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
+class _QuarantineContainer:
+    name: str
+    fd: int
+
+
 def discover_worktrees(repo_root: Path, scan_roots: Sequence[Path] = ()) -> tuple[Path, ...]:
     """Return registered worktrees plus opt-in, descriptor-scanned roots."""
     discovered: list[Path] = []
@@ -93,7 +113,11 @@ def discover_worktrees(repo_root: Path, scan_roots: Sequence[Path] = ()) -> tupl
 
     for scan_root in scan_roots:
         for directory in _scan_directories(scan_root):
-            worktree = _validated_git_toplevel(directory)
+            worktree = _validated_git_toplevel(
+                directory.path,
+                directory_fd=directory.fd,
+                expected_identity=(directory.device, directory.inode),
+            )
             if worktree is not None:
                 _append_unique(discovered, seen, worktree)
 
@@ -314,7 +338,11 @@ def _revalidate_candidate(
 
 
 def _quarantine_and_delete(candidate: ArtifactCandidate) -> str | None:
-    if candidate.kind not in _ARTIFACT_KINDS or candidate.root_device is None or candidate.root_inode is None:
+    if (
+        candidate.kind not in _ARTIFACT_KINDS
+        or candidate.root_device is None
+        or candidate.root_inode is None
+    ):
         return "invalid-candidate"
 
     worktree = _absolute_path(candidate.worktree)
@@ -336,58 +364,217 @@ def _quarantine_and_delete(candidate: ArtifactCandidate) -> str | None:
         finally:
             os.close(current_handle.fd)
 
-        quarantine = _quarantine_name(parent_handle.fd, artifact_name)
-        if quarantine is None:
+        container = _create_quarantine_container(parent_handle.fd, artifact_name)
+        if container is None:
             return "cleanup-error"
         try:
-            os.rename(
+            move_result = _rename_no_replace(
+                parent_handle.fd,
                 artifact_name,
-                quarantine,
-                src_dir_fd=parent_handle.fd,
-                dst_dir_fd=parent_handle.fd,
+                container.fd,
+                _QUARANTINED_CHILD,
             )
-        except OSError as exc:
-            return "replaced-during-cleanup" if exc.errno in {errno.ENOENT, errno.ENOTDIR} else "cleanup-error"
-
-        quarantined_handle, _ = _open_directory_child(parent_handle.fd, quarantine)
-        if quarantined_handle is None:
-            _restore_quarantine(parent_handle.fd, artifact_name, quarantine)
-            return "replaced-during-cleanup"
-        try:
-            if not _matches_identity(quarantined_handle, candidate.root_device, candidate.root_inode):
-                _restore_quarantine(parent_handle.fd, artifact_name, quarantine)
+            if move_result == "destination-exists":
+                return "quarantine-destination-exists"
+            if move_result == "unsupported":
+                _remove_empty_container(parent_handle.fd, container.name)
+                return "safe-rename-unavailable"
+            if move_result == "source-replaced":
+                _remove_empty_container(parent_handle.fd, container.name)
                 return "replaced-during-cleanup"
-        finally:
-            os.close(quarantined_handle.fd)
+            if move_result != "ok":
+                _remove_empty_container(parent_handle.fd, container.name)
+                return "cleanup-error"
 
-        if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
-            _restore_quarantine(parent_handle.fd, artifact_name, quarantine)
-            return "cleanup-error"
-        try:
-            shutil.rmtree(quarantine, dir_fd=parent_handle.fd)
-        except OSError:
-            _restore_quarantine(parent_handle.fd, artifact_name, quarantine)
-            return "cleanup-error"
-        return None
+            quarantined_handle, _ = _open_directory_child(container.fd, _QUARANTINED_CHILD)
+            if quarantined_handle is None:
+                return "quarantine-child-replaced"
+            try:
+                if not _matches_identity(quarantined_handle, candidate.root_device, candidate.root_inode):
+                    return "quarantine-child-replaced"
+            finally:
+                os.close(quarantined_handle.fd)
+
+            removal_name = f".removal-{uuid4().hex}"
+            move_result = _rename_no_replace(
+                container.fd,
+                _QUARANTINED_CHILD,
+                container.fd,
+                removal_name,
+            )
+            if move_result != "ok":
+                restored = _restore_quarantined_child(
+                    parent_handle.fd,
+                    artifact_name,
+                    container.fd,
+                    _QUARANTINED_CHILD,
+                    candidate.root_device,
+                    candidate.root_inode,
+                )
+                if not restored:
+                    return "quarantine-retained"
+                return "cleanup-error" if move_result == "error" else "safe-rename-unavailable"
+
+            removal_handle, _ = _open_directory_child(container.fd, removal_name)
+            if removal_handle is None:
+                return "quarantine-child-replaced"
+            try:
+                if not _matches_identity(removal_handle, candidate.root_device, candidate.root_inode):
+                    return "quarantine-child-replaced"
+            finally:
+                os.close(removal_handle.fd)
+
+            if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+                restored = _restore_quarantined_child(
+                    parent_handle.fd,
+                    artifact_name,
+                    container.fd,
+                    removal_name,
+                    candidate.root_device,
+                    candidate.root_inode,
+                )
+                return "cleanup-error" if restored else "quarantine-retained"
+            try:
+                shutil.rmtree(removal_name, dir_fd=container.fd)
+            except OSError:
+                restored = _restore_quarantined_child(
+                    parent_handle.fd,
+                    artifact_name,
+                    container.fd,
+                    removal_name,
+                    candidate.root_device,
+                    candidate.root_inode,
+                )
+                return "cleanup-error" if restored else "quarantine-retained"
+            _remove_empty_container(parent_handle.fd, container.name)
+            return None
+        finally:
+            os.close(container.fd)
     finally:
         os.close(parent_handle.fd)
 
 
-def _restore_quarantine(parent_fd: int, artifact_name: str, quarantine: str) -> None:
-    if not _entry_missing(parent_fd, artifact_name):
-        return
+def _create_quarantine_container(parent_fd: int, artifact_name: str) -> _QuarantineContainer | None:
+    for _ in range(8):
+        name = f".{artifact_name}.artifact-quarantine-{uuid4().hex}"
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        except OSError:
+            return None
+        handle, _ = _open_directory_child(parent_fd, name)
+        if handle is None:
+            return None
+        try:
+            os.fchmod(handle.fd, 0o700)
+        except OSError:
+            os.close(handle.fd)
+            return None
+        return _QuarantineContainer(name, handle.fd)
+    return None
+
+
+def _restore_quarantined_child(
+    parent_fd: int,
+    artifact_name: str,
+    container_fd: int,
+    child_name: str,
+    device: int,
+    inode: int,
+) -> bool:
+    child, _ = _open_directory_child(container_fd, child_name)
+    if child is None:
+        return False
     try:
-        os.rename(quarantine, artifact_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        if not _matches_identity(child, device, inode) or not _entry_missing(parent_fd, artifact_name):
+            return False
+    finally:
+        os.close(child.fd)
+    return _rename_no_replace(container_fd, child_name, parent_fd, artifact_name) == "ok"
+
+
+def _remove_empty_container(parent_fd: int, name: str) -> None:
+    try:
+        os.rmdir(name, dir_fd=parent_fd)
     except OSError:
         pass
 
 
-def _quarantine_name(parent_fd: int, artifact_name: str) -> str | None:
-    for _ in range(8):
-        name = f".{artifact_name}.artifact-quarantine-{uuid4().hex}"
-        if _entry_missing(parent_fd, name):
-            return name
-    return None
+def _rename_no_replace(
+    source_fd: int,
+    source_name: str,
+    destination_fd: int,
+    destination_name: str,
+) -> str:
+    """Atomically move one directory entry without overwriting a destination.
+
+    Standard ``rename`` can overwrite a destination inserted after a caller has
+    checked it.  Do not emulate exclusive rename: platforms without a native
+    primitive must skip deletion rather than widening this race window.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    source = os.fsencode(source_name)
+    destination = os.fsencode(destination_name)
+
+    if sys.platform == "darwin":
+        renameatx_np = getattr(libc, "renameatx_np", None)
+        if renameatx_np is None:
+            return "unsupported"
+        renameatx_np.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        renameatx_np.restype = ctypes.c_int
+        ctypes.set_errno(0)
+        result = renameatx_np(
+            source_fd,
+            source,
+            destination_fd,
+            destination,
+            _DARWIN_RENAME_EXCL | _DARWIN_RENAME_NOFOLLOW_ANY,
+        )
+    elif sys.platform.startswith("linux"):
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            return "unsupported"
+        renameat2.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        renameat2.restype = ctypes.c_int
+        ctypes.set_errno(0)
+        result = renameat2(
+            source_fd,
+            source,
+            destination_fd,
+            destination,
+            _LINUX_RENAME_NOREPLACE,
+        )
+    else:
+        return "unsupported"
+
+    if result == 0:
+        return "ok"
+    error = ctypes.get_errno()
+    if error in {errno.EEXIST, errno.ENOTEMPTY}:
+        return "destination-exists"
+    if error in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+        return "source-replaced"
+    if error in {
+        errno.EINVAL,
+        getattr(errno, "ENOSYS", -1),
+        getattr(errno, "ENOTSUP", -1),
+        getattr(errno, "EOPNOTSUPP", -1),
+    }:
+        return "unsupported"
+    return "error"
 
 
 def _check_git_ownership(
@@ -518,17 +705,55 @@ def _has_active_command(worktree: Path, root: Path, commands: Sequence[str]) -> 
     return any(worktree_path in command or root_path in command for command in commands)
 
 
-def _validated_git_toplevel(directory: Path) -> Path | None:
+def _validated_git_toplevel(
+    directory: Path,
+    *,
+    directory_fd: int | None = None,
+    expected_identity: tuple[int, int] | None = None,
+) -> Path | None:
+    """Accept a Git root only if its path and descriptor keep one identity."""
     directory = _absolute_path(directory)
-    result = _run_git(directory, ["rev-parse", "--show-toplevel"])
-    if result is None or result.returncode != 0 or not result.stdout.strip():
-        return None
+    owned_handle: _DirectoryHandle | None = None
     try:
-        expected = directory.resolve(strict=True)
-        reported = Path(result.stdout.strip()).resolve(strict=True)
-    except (OSError, RuntimeError):
+        if directory_fd is None:
+            owned_handle, _ = _open_directory_path(directory)
+            if owned_handle is None:
+                return None
+            directory_fd = owned_handle.fd
+            expected_identity = (owned_handle.device, owned_handle.inode)
+        elif expected_identity is None:
+            current = os.fstat(directory_fd)
+            if not stat.S_ISDIR(current.st_mode):
+                return None
+            expected_identity = (current.st_dev, current.st_ino)
+
+        assert expected_identity is not None
+        if not _fd_matches_identity(directory_fd, *expected_identity):
+            return None
+        if not _path_matches_identity(directory, *expected_identity):
+            return None
+
+        result = _run_git(
+            directory,
+            ["rev-parse", "--show-toplevel"],
+            cwd_fd=directory_fd,
+        )
+        if result is None or result.returncode != 0 or not result.stdout.strip():
+            return None
+        if not _fd_matches_identity(directory_fd, *expected_identity):
+            return None
+        if not _path_matches_identity(directory, *expected_identity):
+            return None
+
+        reported = _absolute_path(Path(result.stdout.strip()))
+        if not _path_matches_identity(reported, *expected_identity):
+            return None
+        return directory
+    except OSError:
         return None
-    return expected if reported == expected else None
+    finally:
+        if owned_handle is not None:
+            os.close(owned_handle.fd)
 
 
 def _git_metadata_reason(worktree: Path) -> str | None:
@@ -545,19 +770,21 @@ def _git_metadata_reason(worktree: Path) -> str | None:
     return None
 
 
-def _scan_directories(scan_root: Path) -> Iterator[Path]:
+def _scan_directories(scan_root: Path) -> Iterator[_ScannedDirectory]:
     root = _absolute_path(scan_root)
     root_handle, _ = _open_directory_path(root)
     if root_handle is None:
         return
-    pending: list[tuple[int, Path]] = [(root_handle.fd, root)]
+    pending: list[_ScannedDirectory] = [
+        _ScannedDirectory(root, root_handle.fd, root_handle.device, root_handle.inode)
+    ]
 
     try:
         while pending:
-            directory_fd, directory = pending.pop()
+            directory = pending.pop()
             try:
                 try:
-                    with os.scandir(directory_fd) as entries:
+                    with os.scandir(directory.fd) as entries:
                         directory_entries = sorted(entries, key=lambda entry: entry.name, reverse=True)
                 except OSError:
                     continue
@@ -566,20 +793,27 @@ def _scan_directories(scan_root: Path) -> Iterator[Path]:
                     if entry.name == ".git":
                         continue
                     try:
-                        entry_stat = os.stat(entry.name, dir_fd=directory_fd, follow_symlinks=False)
+                        entry_stat = os.stat(entry.name, dir_fd=directory.fd, follow_symlinks=False)
                     except OSError:
                         continue
                     if not stat.S_ISDIR(entry_stat.st_mode) or stat.S_ISLNK(entry_stat.st_mode):
                         continue
-                    child, _ = _open_directory_child(directory_fd, entry.name)
+                    child, _ = _open_directory_child(directory.fd, entry.name)
                     if child is not None:
-                        pending.append((child.fd, directory / entry.name))
+                        pending.append(
+                            _ScannedDirectory(
+                                directory.path / entry.name,
+                                child.fd,
+                                child.device,
+                                child.inode,
+                            )
+                        )
                 yield directory
             finally:
-                os.close(directory_fd)
+                os.close(directory.fd)
     finally:
-        for directory_fd, _ in pending:
-            os.close(directory_fd)
+        for directory in pending:
+            os.close(directory.fd)
 
 
 def _open_directory_path(path: Path) -> tuple[_DirectoryHandle | None, str | None]:
@@ -681,6 +915,24 @@ def _same_stat_identity(first: os.stat_result, second: os.stat_result) -> bool:
     return first.st_dev == second.st_dev and first.st_ino == second.st_ino
 
 
+def _fd_matches_identity(fd: int, device: int, inode: int) -> bool:
+    try:
+        current = os.fstat(fd)
+    except OSError:
+        return False
+    return stat.S_ISDIR(current.st_mode) and (current.st_dev, current.st_ino) == (device, inode)
+
+
+def _path_matches_identity(path: Path, device: int, inode: int) -> bool:
+    handle, _ = _open_directory_path(path)
+    if handle is None:
+        return False
+    try:
+        return _matches_identity(handle, device, inode)
+    finally:
+        os.close(handle.fd)
+
+
 def _entry_missing(parent_fd: int, name: str) -> bool:
     try:
         os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
@@ -691,15 +943,32 @@ def _entry_missing(parent_fd: int, name: str) -> bool:
     return False
 
 
-def _run_git(cwd: Path, args: Sequence[str]) -> subprocess.CompletedProcess[str] | None:
+def _run_git(
+    cwd: Path,
+    args: Sequence[str],
+    *,
+    cwd_fd: int | None = None,
+) -> subprocess.CompletedProcess[str] | None:
+    run_options: dict[str, object] = {}
+    if cwd_fd is None:
+        run_options["cwd"] = cwd
+    else:
+        # Darwin's /dev/fd/N cannot be used as a subprocess cwd.  fchdir in
+        # the child preserves the opened directory identity without resolving
+        # any attacker-controlled pathname.
+        def chdir_to_open_directory() -> None:
+            os.fchdir(cwd_fd)
+
+        run_options["pass_fds"] = (cwd_fd,)
+        run_options["preexec_fn"] = chdir_to_open_directory
     try:
         return subprocess.run(
             ["git", *args],
-            cwd=cwd,
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
             check=False,
+            **run_options,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

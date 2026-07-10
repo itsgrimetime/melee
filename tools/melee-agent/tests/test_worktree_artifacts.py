@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -99,6 +100,20 @@ def test_cleanup_dry_run_then_revalidation_preserves_late_nonignored_file(tmp_pa
     assert (linked / "build").exists()
 
 
+def test_cleanup_removes_identity_checked_ignored_artifact(tmp_path: Path) -> None:
+    _, linked = _make_repo_and_linked_worktree(tmp_path)
+    _write_ignored_file(linked / "build/obj.o", b"x" * 32)
+    report = artifacts.inspect_artifacts(
+        [linked], min_age_days=0, min_bytes=0, now=NOW, active_commands=[]
+    )
+
+    result = artifacts.cleanup_artifacts(report.candidates, apply=True, active_commands=[])
+
+    assert result.removed == (linked / "build",)
+    assert result.reclaimed_bytes == 32
+    assert not (linked / "build").exists()
+
+
 def test_inspection_rejects_unignored_root_with_ignored_child(tmp_path: Path) -> None:
     _, linked = _make_repo_and_linked_worktree(tmp_path)
     _write_ignored_file(linked / "build/obj.o", b"x")
@@ -192,23 +207,23 @@ def test_cleanup_preserves_replaced_candidate_and_outside_data(
     sentinel = outside / "sentinel.txt"
     sentinel.write_text("do not delete", encoding="utf-8")
     original_build = tmp_path / "original-build"
-    real_rename = artifacts.os.rename
+    real_move = artifacts._rename_no_replace
     raced = False
 
-    def replace_before_quarantine(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
+    def replace_before_quarantine(source_fd, source_name, destination_fd, destination_name):
         nonlocal raced
-        if source == "build" and src_dir_fd is not None and not raced:
-            real_rename(linked / "build", original_build)
+        if source_name == "build" and not raced:
+            os.rename(linked / "build", original_build)
             (linked / "build").symlink_to(outside, target_is_directory=True)
             raced = True
-        return real_rename(source, destination, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+        return real_move(source_fd, source_name, destination_fd, destination_name)
 
-    monkeypatch.setattr(artifacts.os, "rename", replace_before_quarantine)
+    monkeypatch.setattr(artifacts, "_rename_no_replace", replace_before_quarantine)
     result = artifacts.cleanup_artifacts(report.candidates, apply=True, active_commands=[])
 
     assert raced is True
     assert result.removed == ()
-    assert result.skipped[0].reason == "replaced-during-cleanup"
+    assert result.skipped[0].reason == "quarantine-child-replaced"
     assert sentinel.read_text(encoding="utf-8") == "do not delete"
     assert (original_build / "obj.o").read_bytes() == b"x"
 
@@ -236,6 +251,168 @@ def test_scan_root_replacement_never_traverses_outside_symlink(
 
     monkeypatch.setattr(artifacts.os, "open", replace_before_open)
     discovered = artifacts.discover_worktrees(repo, scan_roots=[scan_root])
+
+    assert raced is True
+    assert outside.resolve() not in discovered
+
+
+def test_cleanup_destination_collision_preserves_candidate_and_sentinel(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _, linked = _make_repo_and_linked_worktree(tmp_path)
+    _write_ignored_file(linked / "build/obj.o", b"x")
+    report = artifacts.inspect_artifacts(
+        [linked], min_age_days=0, min_bytes=0, now=NOW, active_commands=[]
+    )
+    selected: dict[str, int | str] = {}
+
+    def collide(source_fd, source_name, destination_fd, destination_name):
+        if source_name == "build":
+            os.mkdir(destination_name, dir_fd=destination_fd)
+            child_fd = os.open(destination_name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=destination_fd)
+            try:
+                sentinel_fd = os.open(
+                    "sentinel.txt",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=child_fd,
+                )
+                try:
+                    os.write(sentinel_fd, b"preserve collision")
+                finally:
+                    os.close(sentinel_fd)
+            finally:
+                os.close(child_fd)
+            selected["fd"] = os.dup(destination_fd)
+            selected["name"] = destination_name
+            return "destination-exists"
+        return "unsupported"
+
+    monkeypatch.setattr(artifacts, "_rename_no_replace", collide, raising=False)
+    result = artifacts.cleanup_artifacts(report.candidates, apply=True, active_commands=[])
+
+    assert "fd" in selected
+    assert result.removed == ()
+    assert result.skipped[0].reason == "quarantine-destination-exists"
+    assert (linked / "build/obj.o").read_bytes() == b"x"
+    container_fd = selected["fd"]
+    assert isinstance(container_fd, int)
+    child_fd = os.open(str(selected["name"]), os.O_RDONLY | os.O_DIRECTORY, dir_fd=container_fd)
+    try:
+        sentinel_fd = os.open("sentinel.txt", os.O_RDONLY, dir_fd=child_fd)
+        try:
+            assert os.read(sentinel_fd, 64) == b"preserve collision"
+        finally:
+            os.close(sentinel_fd)
+    finally:
+        os.close(child_fd)
+        os.close(container_fd)
+
+
+def test_cleanup_skips_when_no_safe_rename_is_available(tmp_path: Path, monkeypatch) -> None:
+    _, linked = _make_repo_and_linked_worktree(tmp_path)
+    _write_ignored_file(linked / "build/obj.o", b"x")
+    report = artifacts.inspect_artifacts(
+        [linked], min_age_days=0, min_bytes=0, now=NOW, active_commands=[]
+    )
+    monkeypatch.setattr(artifacts, "_rename_no_replace", lambda *_: "unsupported")
+
+    result = artifacts.cleanup_artifacts(report.candidates, apply=True, active_commands=[])
+
+    assert result.removed == ()
+    assert result.skipped[0].reason == "safe-rename-unavailable"
+    assert (linked / "build/obj.o").read_bytes() == b"x"
+
+
+def test_cleanup_preserves_child_replaced_after_identity_check(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _, linked = _make_repo_and_linked_worktree(tmp_path)
+    _write_ignored_file(linked / "build/obj.o", b"x")
+    report = artifacts.inspect_artifacts(
+        [linked], min_age_days=0, min_bytes=0, now=NOW, active_commands=[]
+    )
+    real_move = getattr(artifacts, "_rename_no_replace", None)
+    selected: dict[str, int | str] = {}
+
+    def replace_child(source_fd, source_name, destination_fd, destination_name):
+        if source_name == "candidate" and "fd" not in selected:
+            os.rename("candidate", "reviewed", src_dir_fd=source_fd, dst_dir_fd=source_fd)
+            os.mkdir("candidate", dir_fd=source_fd)
+            replacement_fd = os.open("candidate", os.O_RDONLY | os.O_DIRECTORY, dir_fd=source_fd)
+            try:
+                sentinel_fd = os.open(
+                    "sentinel.txt",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=replacement_fd,
+                )
+                try:
+                    os.write(sentinel_fd, b"preserve replacement")
+                finally:
+                    os.close(sentinel_fd)
+            finally:
+                os.close(replacement_fd)
+            selected["fd"] = os.dup(source_fd)
+            selected["name"] = destination_name
+        if real_move is None:
+            return "unsupported"
+        return real_move(source_fd, source_name, destination_fd, destination_name)
+
+    monkeypatch.setattr(artifacts, "_rename_no_replace", replace_child, raising=False)
+    result = artifacts.cleanup_artifacts(report.candidates, apply=True, active_commands=[])
+
+    assert "fd" in selected
+    assert result.removed == ()
+    assert result.skipped[0].reason == "quarantine-child-replaced"
+    container_fd = selected["fd"]
+    assert isinstance(container_fd, int)
+    replacement_fd = os.open(str(selected["name"]), os.O_RDONLY | os.O_DIRECTORY, dir_fd=container_fd)
+    try:
+        sentinel_fd = os.open("sentinel.txt", os.O_RDONLY, dir_fd=replacement_fd)
+        try:
+            assert os.read(sentinel_fd, 64) == b"preserve replacement"
+        finally:
+            os.close(sentinel_fd)
+    finally:
+        os.close(replacement_fd)
+        os.close(container_fd)
+
+
+def test_scan_root_child_replaced_before_git_validation_is_skipped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    nonrepo = tmp_path / "nonrepo"
+    nonrepo.mkdir()
+    scan_root = tmp_path / "scan-root"
+    victim = scan_root / "victim"
+    victim.mkdir(parents=True)
+    _run_git(victim, "init")
+    outside = tmp_path / "outside-repo"
+    outside.mkdir()
+    _run_git(outside, "init")
+    victim_stat = victim.stat()
+    real_run_git = artifacts._run_git
+    raced = False
+
+    def replace_before_git(cwd, args, **kwargs):
+        nonlocal raced
+        if args == ["rev-parse", "--show-toplevel"] and not raced:
+            try:
+                cwd_stat = os.stat(cwd)
+            except OSError:
+                cwd_stat = None
+            if cwd_stat is not None and (cwd_stat.st_dev, cwd_stat.st_ino) == (
+                victim_stat.st_dev,
+                victim_stat.st_ino,
+            ):
+                victim.rename(scan_root / "victim-original")
+                victim.symlink_to(outside, target_is_directory=True)
+                raced = True
+        return real_run_git(cwd, args, **kwargs)
+
+    monkeypatch.setattr(artifacts, "_run_git", replace_before_git)
+    discovered = artifacts.discover_worktrees(nonrepo, scan_roots=[scan_root])
 
     assert raced is True
     assert outside.resolve() not in discovered
