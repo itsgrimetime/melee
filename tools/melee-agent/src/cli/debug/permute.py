@@ -128,8 +128,19 @@ def _signal_process_group(proc: subprocess.Popen[Any], sig: int) -> None:
             proc.terminate()
 
 
-def _terminate_local_permuter_group(proc: subprocess.Popen[Any]) -> None:
-    _signal_process_group(proc, signal.SIGTERM)
+class _LocalPermuterInterrupted(BaseException):
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _terminate_local_permuter_group(
+    proc: subprocess.Popen[Any],
+    *,
+    sigterm_sent: bool = False,
+) -> None:
+    if not sigterm_sent:
+        _signal_process_group(proc, signal.SIGTERM)
     try:
         proc.wait(timeout=5)
         return
@@ -155,31 +166,45 @@ def _run_local_permuter(
         cwd=cwd,
         start_new_session=True,
     )
-    terminated = False
     signals = [signal.SIGINT, signal.SIGTERM]
     if hasattr(signal, "SIGHUP"):
         signals.append(signal.SIGHUP)
     previous_handlers: dict[int, Any] = {}
+    termination_requested = False
+    termination_finished = False
 
-    def terminate_once() -> None:
-        nonlocal terminated
-        if terminated:
+    def request_termination() -> None:
+        nonlocal termination_requested
+        if termination_requested:
             return
-        terminated = True
-        _terminate_local_permuter_group(proc)
+        termination_requested = True
+        _signal_process_group(proc, signal.SIGTERM)
+
+    def finish_termination() -> None:
+        nonlocal termination_finished
+        if termination_finished:
+            return
+        termination_finished = True
+        _terminate_local_permuter_group(
+            proc,
+            sigterm_sent=termination_requested,
+        )
 
     def _handler(signum: int, _frame: Any) -> NoReturn:
-        terminate_once()
-        raise SystemExit(128 + signum)
+        request_termination()
+        raise _LocalPermuterInterrupted(signum)
 
     for signum in signals:
         previous_handlers[signum] = signal.signal(signum, _handler)
     try:
         try:
             return proc.wait()
+        except _LocalPermuterInterrupted as exc:
+            finish_termination()
+            raise SystemExit(128 + exc.signum)
         finally:
             if proc.poll() is None:
-                terminate_once()
+                finish_termination()
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)

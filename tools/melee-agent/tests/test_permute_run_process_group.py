@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
 import signal
 import subprocess
+import sys
+import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -63,6 +67,71 @@ def test_run_local_permuter_terminates_process_group_on_sigterm(monkeypatch):
     assert calls["popen_kwargs"]["env"] == {"KEY": "value"}
     assert calls["popen_kwargs"]["cwd"] == Path("/tmp/permuter")
     assert killed == [(9876, signal.SIGTERM)]
+
+
+def test_run_local_permuter_sigint_does_not_deadlock_inside_wait(tmp_path):
+    child_pid_file = tmp_path / "child.pid"
+    parent_code = textwrap.dedent(
+        f"""
+        import os
+        import sys
+        from pathlib import Path
+        from src.cli.debug.permute import _run_local_permuter
+
+        child_code = {f'''
+import os
+import time
+from pathlib import Path
+Path({str(child_pid_file)!r}).write_text(str(os.getpid()))
+print("child-ready", flush=True)
+time.sleep(30)
+'''.strip()!r}
+
+        rc = _run_local_permuter(
+            [sys.executable, "-c", child_code],
+            env=os.environ.copy(),
+            cwd=Path.cwd(),
+        )
+        sys.exit(rc)
+        """
+    )
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path("tools/melee-agent").resolve())
+    proc = subprocess.Popen(
+        [sys.executable, "-c", parent_code],
+        cwd=Path.cwd(),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not child_pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert child_pid_file.exists(), "child process did not start"
+
+        os.kill(proc.pid, signal.SIGINT)
+        try:
+            stdout, stderr = proc.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            pytest.fail(
+                "parent deadlocked during SIGINT cleanup; "
+                f"stdout={stdout!r} stderr={stderr!r}"
+            )
+    finally:
+        if child_pid_file.exists():
+            try:
+                child_pid = int(child_pid_file.read_text())
+                os.killpg(os.getpgid(child_pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    assert proc.returncode == 128 + signal.SIGINT
+    assert "child-ready" in stdout
 
 
 def test_debug_permute_run_uses_local_permuter_helper(monkeypatch, tmp_path):
