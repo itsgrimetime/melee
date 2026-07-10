@@ -138,6 +138,10 @@ def test_mwcc_inspect_upload_uses_remote_bash_stdin_for_candidate(tmp_path: Path
     assert "git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'" in inspector_log
     assert "if ! git rev-parse --verify 'master'" not in inspector_log
     assert "git cat-file -e 'master^{commit}'" in inspector_log
+    assert (
+        inspector_log.index("git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'")
+        < inspector_log.index("git cat-file -e 'master^{commit}'")
+    )
     assert "remote is missing ref 'master'" in inspector_log
     assert "codex/local-only" not in inspector_log
     assert "REMOTE_DIR='/remote/melee'" in inspector_log
