@@ -616,6 +616,7 @@ DEFAULT_TRANSFORM_FAMILIES: tuple[TransformFamily, ...] = (
             "steer_indexed_byte_implicit_store_index_temp",
             "steer_indexed_byte_implicit_init_loop_indexed_store",
             "steer_indexed_byte_max_current_value_temp",
+            "steer_indexed_byte_helper_result_temp",
         ),
         semantic_risk="medium",
         source_region_selector=(

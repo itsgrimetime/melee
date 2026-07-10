@@ -89,6 +89,19 @@ _BYTE_POINTER_DECL_RE = re.compile(
 )
 
 
+_U8_HELPER_DECL_RE = re.compile(
+    r"(?m)^[ \t]*(?:(?:static|inline)\s+)*u8\s+"
+    r"(?P<helper>[A-Za-z_]\w*)\s*\([^;{}()]*\)\s*(?:;|\{)"
+)
+
+
+_U8_HELPER_RESULT_ASSIGN_RE = re.compile(
+    r"(?m)^(?P<indent>[ \t]+)(?P<target>[A-Za-z_]\w*)\s*=\s*"
+    r"(?P<helper>[A-Za-z_]\w*)\s*\((?P<arguments>[^(){};]*)\)\s*&\s*"
+    r"0xFFFFFFFFFFFFFFFFu\s*;"
+)
+
+
 def _byte_decl_lines(
     body_text: str,
 ) -> dict[str, tuple[str, int, int, int]]:
@@ -196,6 +209,67 @@ def _fresh_index_temp(searchable: str, base: str) -> str | None:
 
 def _fresh_base_alias_temp(searchable: str, base: str) -> str | None:
     return _fresh_byte_temp(searchable, f"{_base_leaf_name(base)}_base")
+
+
+def _safe_helper_result_arguments(arguments: str) -> bool:
+    """Return whether helper call arguments are simple, side-effect-free terms."""
+    stripped = arguments.strip()
+    if not stripped:
+        return False
+    if any(token in stripped for token in ("++", "--", "?", ":", ";")):
+        return False
+    if re.search(r"(?<![=!<>])=(?!=)", stripped):
+        return False
+    return re.fullmatch(
+        r"[A-Za-z0-9_ \t\r\n,+\-*/%&|^~<>]+",
+        stripped,
+    ) is not None
+
+
+def _iter_u8_helper_result_temp_anchors(
+    *,
+    source_text: str,
+    body_text: str,
+    body_start: int,
+):
+    u8_helpers = {
+        match.group("helper")
+        for match in _U8_HELPER_DECL_RE.finditer(
+            _blank_literals_and_comments(source_text)
+        )
+    }
+    if not u8_helpers:
+        return
+    searchable = _blank_literals_and_comments(body_text)
+    for match in _U8_HELPER_RESULT_ASSIGN_RE.finditer(searchable):
+        helper = match.group("helper")
+        arguments = match.group("arguments")
+        if helper not in u8_helpers or not _safe_helper_result_arguments(arguments):
+            continue
+        temp_name = _fresh_byte_temp(searchable, helper)
+        if temp_name is None:
+            continue
+        statement_start, statement_end = match.span()
+        span_text = body_text
+        replacement_text = (
+            f"    u8 {temp_name};\n"
+            f"{body_text[:statement_start]}"
+            f"{match.group('indent')}{temp_name} = {helper}({arguments});\n"
+            f"{match.group('indent')}{match.group('target')} = {temp_name};\n"
+            f"{body_text[statement_end:]}"
+        )
+        yield Anchor(
+            mutator_key="steer_indexed_byte_helper_result_temp",
+            span=(body_start, body_start + len(body_text)),
+            payload={
+                "span_text": span_text,
+                "replacement_text": replacement_text,
+                "strategy": "indexed-byte-helper-result-temp",
+                "helper": helper,
+                "target_local": match.group("target"),
+                "temp_local": temp_name,
+            },
+        )
 
 
 def _index_is_parenthesized(index: str) -> bool:
@@ -1528,6 +1602,12 @@ def _iter_indexed_byte_address_temp_anchors(source_text: str, _function: str, sp
     body_text = source_text[body_start:body_end]
     if re.search(r"(?m)^[ \t]*#", body_text):
         return
+
+    yield from _iter_u8_helper_result_temp_anchors(
+        source_text=source_text,
+        body_text=body_text,
+        body_start=body_start,
+    )
 
     yield from _iter_implicit_indexed_store_anchors(
         source_text=source_text,
