@@ -13692,12 +13692,65 @@ def test_dump_local_function_scoped_output_keeps_full_cache_sync(
     wibo.chmod(0o755)
     output = tmp_path / "pcdump.out"
     cache = melee_root / "build" / "mwcc_debug_cache" / "melee" / "mn" / "sample.txt"
+    locked = False
+    events: list[str] = []
+
+    class FakeLock:
+        def __enter__(self):
+            nonlocal locked
+            assert not locked
+            locked = True
+            events.append("lock-enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            nonlocal locked
+            assert locked
+            events.append("lock-exit")
+            locked = False
+
+    def fake_lock(root: Path, *, label: str = "checkdiff build/report"):
+        assert root == melee_root
+        assert label == "local pcdump cache sync"
+        return FakeLock()
+
+    original_source_digest = dump_cli.pcdump_cache.source_digest
+
+    def recording_source_digest(path: Path) -> str:
+        assert locked
+        events.append("source-digest")
+        return original_source_digest(path)
+
+    original_snapshot = dump_cli._compiled_source_snapshot_still_current
+
+    def recording_snapshot(*args, **kwargs):
+        assert locked
+        events.append("snapshot")
+        return original_snapshot(*args, **kwargs)
+
+    original_write_sidecar = dump_cli.pcdump_cache.write_hash_sidecar_digest
+
+    def recording_write_sidecar(path: Path, digest: str) -> None:
+        assert locked
+        events.append("sidecar")
+        original_write_sidecar(path, digest)
 
     monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
     monkeypatch.setattr(debug_cli, "_find_wibo", lambda: wibo)
     monkeypatch.setattr(debug_cli, "_find_compiler_dir", lambda: compiler_dir)
     monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
     monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", fake_lock)
+    monkeypatch.setattr(dump_cli.pcdump_cache, "source_digest", recording_source_digest)
+    monkeypatch.setattr(
+        dump_cli,
+        "_compiled_source_snapshot_still_current",
+        recording_snapshot,
+    )
+    monkeypatch.setattr(
+        dump_cli.pcdump_cache,
+        "write_hash_sidecar_digest",
+        recording_write_sidecar,
+    )
 
     result = runner.invoke(
         app,
@@ -13717,6 +13770,14 @@ def test_dump_local_function_scoped_output_keeps_full_cache_sync(
     assert output.read_text() == "Starting function fn_80000001\ntarget\n"
     assert cache.read_text() == full_dump
     assert cache.with_suffix(".hash").exists()
+    assert events == [
+        "lock-enter",
+        "source-digest",
+        "snapshot",
+        "source-digest",
+        "sidecar",
+        "lock-exit",
+    ]
 
 
 def test_dump_local_forced_default_output_uses_managed_scratch_root(
