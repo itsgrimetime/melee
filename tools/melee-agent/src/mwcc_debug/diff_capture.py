@@ -715,20 +715,7 @@ def _run_with_process_group_timeout(
     )
     result: dict[str, object] = {}
 
-    def _communicate() -> None:
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-            result["stdout"] = stdout
-            result["stderr"] = stderr
-        except BaseException as exc:  # communicate can raise TimeoutExpired.
-            result["exc"] = exc
-
-    thread = threading.Thread(target=_communicate, daemon=True)
-    thread.start()
-    thread.join(timeout)
-
-    if thread.is_alive() or isinstance(result.get("exc"), subprocess.TimeoutExpired):
-        exc = result.get("exc")
+    def _cleanup() -> None:
         _kill_process_tree(proc.pid, proc)
         for pipe in (getattr(proc, "stdout", None), getattr(proc, "stderr", None)):
             if pipe is not None:
@@ -740,8 +727,35 @@ def _run_with_process_group_timeout(
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
-        if thread.is_alive():
-            thread.join(1)
+
+    def _communicate() -> None:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+            result["stdout"] = stdout
+            result["stderr"] = stderr
+        except BaseException as exc:  # communicate can raise TimeoutExpired.
+            result["exc"] = exc
+
+    thread = threading.Thread(target=_communicate, daemon=True)
+    thread.start()
+
+    try:
+        thread.join(timeout)
+        timed_out = thread.is_alive() or isinstance(
+            result.get("exc"), subprocess.TimeoutExpired
+        )
+        if timed_out:
+            _cleanup()
+            if thread.is_alive():
+                thread.join(1)
+        elif "exc" in result:
+            raise result["exc"]  # type: ignore[misc]
+    except BaseException:
+        _cleanup()
+        raise
+
+    if timed_out:
+        exc = result.get("exc")
         stderr = getattr(exc, "stderr", None)
         survivor_note = _unreaped_wibo_timeout_note()
         if survivor_note:
@@ -755,9 +769,6 @@ def _run_with_process_group_timeout(
             output=getattr(exc, "output", None),
             stderr=stderr,
         ) from exc
-
-    if "exc" in result:
-        raise result["exc"]  # type: ignore[misc]
 
     stdout = result.get("stdout", "")
     stderr = result.get("stderr", "")

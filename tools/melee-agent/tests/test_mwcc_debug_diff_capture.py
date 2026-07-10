@@ -923,6 +923,75 @@ def test_process_group_timeout_bounds_hung_communicate(
     assert calls["wait_timeout"] == 5
 
 
+def test_process_group_interrupt_cleans_up_child(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {"closed_pipes": [], "killpg": []}
+    interrupt = KeyboardInterrupt("cancel")
+
+    class FakePipe:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            calls["closed_pipes"].append(self.name)
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe("stdout")
+        stderr = FakePipe("stderr")
+
+        def wait(self, timeout: int) -> None:
+            calls["wait_timeout"] = timeout
+
+        def kill(self) -> None:
+            calls["kill"] = True
+
+    class FakeThread:
+        def __init__(self, *, target, daemon: bool) -> None:
+            calls["thread_target"] = target
+            calls["thread_daemon"] = daemon
+
+        def start(self) -> None:
+            calls["thread_started"] = True
+
+        def join(self, timeout: float) -> None:
+            calls["thread_join_timeout"] = timeout
+            raise interrupt
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        calls["start_new_session"] = start_new_session
+        return FakeProc()
+
+    def fake_getpgid(pid: int) -> int:
+        assert pid == 4321
+        return 4321
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        calls["killpg"].append((pgid, sig))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(diff_capture.threading, "Thread", FakeThread)
+    monkeypatch.setattr(diff_capture, "_descendant_pids", lambda root_pid: [])
+    monkeypatch.setattr("os.getpgid", fake_getpgid)
+    monkeypatch.setattr("os.killpg", fake_killpg)
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=10,
+        )
+
+    assert excinfo.value is interrupt
+    assert calls["start_new_session"] is True
+    assert calls["killpg"] == [(4321, signal.SIGKILL)]
+    assert calls["closed_pipes"] == ["stdout", "stderr"]
+    assert calls["wait_timeout"] == 5
+
+
 def test_process_group_timeout_kills_descendant_process_groups(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
