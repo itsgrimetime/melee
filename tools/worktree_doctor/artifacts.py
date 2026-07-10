@@ -1,13 +1,14 @@
 """Conservative discovery and cleanup of ignored worktree artifacts.
 
-Only direct ``build`` and ``.cache`` directories in Git worktrees are ever
-considered.  The checks deliberately favour a skipped candidate over a risky
-deletion: Git, process, filesystem, and symlink uncertainty all make a
-candidate ineligible.
+Every directory walk is bound to file descriptors opened with ``O_NOFOLLOW``.
+Apply-mode cleanup also binds the reviewed device/inode pair, moves the direct
+candidate into a same-parent quarantine, and deletes only after confirming the
+quarantined directory still has that identity.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import stat
@@ -16,6 +17,7 @@ import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 ARTIFACT_DIRS = (Path("build"), Path(".cache"))
 DEFAULT_MIN_AGE_DAYS = 7.0
@@ -23,6 +25,7 @@ DEFAULT_MIN_BYTES = 1024**3
 
 _GIT_TIMEOUT_SECONDS = 15
 _PROCESS_TIMEOUT_SECONDS = 15
+_ARTIFACT_KINDS = frozenset(item.as_posix() for item in ARTIFACT_DIRS)
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,8 @@ class ArtifactCandidate:
     newest_mtime: float | None
     eligible: bool
     skip_reasons: tuple[str, ...]
+    root_device: int | None = None
+    root_inode: int | None = None
 
 
 @dataclass(frozen=True)
@@ -64,26 +69,27 @@ class _TreeFacts:
     reasons: tuple[str, ...]
 
 
-def discover_worktrees(repo_root: Path, scan_roots: Sequence[Path] = ()) -> tuple[Path, ...]:
-    """Return real Git worktrees registered by ``repo_root``, plus safe scans.
+@dataclass(frozen=True)
+class _DirectoryHandle:
+    fd: int
+    device: int
+    inode: int
 
-    Default discovery is intentionally limited to ``git worktree list``.  A
-    scan root is opt-in and only contributes a directory Git itself identifies
-    as that directory's top-level worktree; symlinks are never traversed.
-    """
+
+def discover_worktrees(repo_root: Path, scan_roots: Sequence[Path] = ()) -> tuple[Path, ...]:
+    """Return registered worktrees plus opt-in, descriptor-scanned roots."""
     discovered: list[Path] = []
     seen: set[Path] = set()
 
     repo = _absolute_path(repo_root)
-    if _is_real_directory(repo):
-        result = _run_git(repo, ["worktree", "list", "--porcelain"])
-        if result is not None and result.returncode == 0:
-            for line in result.stdout.splitlines():
-                if not line.startswith("worktree "):
-                    continue
-                registered = _validated_git_toplevel(Path(line.removeprefix("worktree ")))
-                if registered is not None:
-                    _append_unique(discovered, seen, registered)
+    result = _run_git(repo, ["worktree", "list", "--porcelain"])
+    if result is not None and result.returncode == 0:
+        for line in result.stdout.splitlines():
+            if not line.startswith("worktree "):
+                continue
+            registered = _validated_git_toplevel(Path(line.removeprefix("worktree ")))
+            if registered is not None:
+                _append_unique(discovered, seen, registered)
 
     for scan_root in scan_roots:
         for directory in _scan_directories(scan_root):
@@ -102,7 +108,7 @@ def inspect_artifacts(
     now: float | None = None,
     active_commands: Sequence[str] | None = None,
 ) -> ArtifactReport:
-    """Inspect direct ignored artifact directories without modifying them."""
+    """Inspect direct artifact directories without following any symlinks."""
     if min_age_days < 0:
         raise ValueError("min_age_days must be non-negative")
     if min_bytes < 0:
@@ -115,21 +121,17 @@ def inspect_artifacts(
 
     for worktree in normalized_worktrees:
         for artifact_dir in ARTIFACT_DIRS:
-            root = worktree / artifact_dir
-            if not _path_exists_without_following(root):
-                continue
-            candidates.append(
-                _inspect_candidate(
-                    worktree,
-                    root,
-                    artifact_dir,
-                    min_age_days=min_age_days,
-                    min_bytes=min_bytes,
-                    now=reference_time,
-                    active_commands=commands,
-                    process_error=process_error,
-                )
+            candidate = _inspect_candidate(
+                worktree,
+                artifact_dir,
+                min_age_days=min_age_days,
+                min_bytes=min_bytes,
+                now=reference_time,
+                active_commands=commands,
+                process_error=process_error,
             )
+            if candidate is not None:
+                candidates.append(candidate)
 
     return ArtifactReport(worktrees=tuple(normalized_worktrees), candidates=tuple(candidates))
 
@@ -140,13 +142,7 @@ def cleanup_artifacts(
     apply: bool,
     active_commands: Sequence[str] | None = None,
 ) -> CleanupResult:
-    """Plan or apply conservative cleanup of inspected artifact candidates.
-
-    ``apply=False`` is purely a plan.  Before every actual removal, the
-    candidate is freshly inspected with the same structural, Git, symlink, and
-    active-process checks.  A changed artifact is skipped as an additional
-    guard against a report becoming stale between planning and deletion.
-    """
+    """Plan or apply cleanup, with identity-checked quarantine deletion."""
     planned: list[Path] = []
     removed: list[Path] = []
     skipped: list[CleanupSkip] = []
@@ -165,48 +161,38 @@ def cleanup_artifacts(
         seen.add(root)
 
         if not candidate.eligible:
-            skipped.append(CleanupSkip(root=root, reason=_first_reason(candidate, "ineligible")))
+            skipped.append(CleanupSkip(root, _first_reason(candidate, "ineligible")))
             continue
 
         planned.append(root)
         if not apply:
             continue
-
         if process_error is not None:
-            skipped.append(CleanupSkip(root=root, reason=process_error))
+            skipped.append(CleanupSkip(root, process_error))
             continue
 
         current, invalid_reason = _revalidate_candidate(candidate, commands)
         if invalid_reason is not None:
-            skipped.append(CleanupSkip(root=root, reason=invalid_reason))
+            skipped.append(CleanupSkip(root, invalid_reason))
             continue
         assert current is not None
-
         if not current.eligible:
-            skipped.append(CleanupSkip(root=root, reason=_first_reason(current, "ineligible")))
+            skipped.append(CleanupSkip(root, _first_reason(current, "ineligible")))
             continue
-
+        if not _same_candidate_identity(candidate, current):
+            skipped.append(CleanupSkip(root, "replaced-during-cleanup"))
+            continue
         if (
             current.size_bytes != candidate.size_bytes
             or current.newest_mtime != candidate.newest_mtime
         ):
-            skipped.append(CleanupSkip(root=root, reason="artifact-changed"))
+            skipped.append(CleanupSkip(root, "artifact-changed"))
             continue
 
-        # Re-check the candidate identity immediately before rmtree.  The
-        # preceding inspection has already walked this exact directory without
-        # following links; this final lstat closes the ordinary replacement
-        # race before delegating deletion to shutil's symlink-safe rmtree.
-        if not _is_removal_root(candidate, root):
-            skipped.append(CleanupSkip(root=root, reason="invalid-candidate"))
+        deletion_reason = _quarantine_and_delete(candidate)
+        if deletion_reason is not None:
+            skipped.append(CleanupSkip(root, deletion_reason))
             continue
-
-        try:
-            shutil.rmtree(root)
-        except OSError:
-            skipped.append(CleanupSkip(root=root, reason="cleanup-error"))
-            continue
-
         removed.append(root)
         reclaimed_bytes += current.size_bytes
 
@@ -220,7 +206,6 @@ def cleanup_artifacts(
 
 def _inspect_candidate(
     worktree: Path,
-    root: Path,
     artifact_dir: Path,
     *,
     min_age_days: float,
@@ -228,36 +213,39 @@ def _inspect_candidate(
     now: float,
     active_commands: Sequence[str],
     process_error: str | None,
-) -> ArtifactCandidate:
+) -> ArtifactCandidate | None:
     worktree = _absolute_path(worktree)
-    root = _absolute_path(root)
-    kind = artifact_dir.as_posix()
-    reasons: list[str] = []
+    root = worktree / artifact_dir
+    worktree_handle, _ = _open_directory_path(worktree)
+    if worktree_handle is None:
+        return None
 
-    valid_layout = True
-    if not _is_real_directory(worktree):
-        _add_reason(reasons, "worktree-symlink" if _is_symlink(worktree) else "worktree-not-directory")
-        valid_layout = False
-    if root != worktree / artifact_dir:
-        _add_reason(reasons, "invalid-candidate")
-        valid_layout = False
-    if not _is_real_directory(root):
-        _add_reason(reasons, "candidate-symlink" if _is_symlink(root) else "candidate-not-directory")
-        valid_layout = False
+    try:
+        root_handle, root_error = _open_directory_child(worktree_handle.fd, artifact_dir.name)
+        if root_error == "missing":
+            return None
+        if root_handle is None:
+            return _ineligible_candidate(
+                worktree,
+                root,
+                artifact_dir,
+                _candidate_open_reason(root_error),
+            )
 
-    tree_facts = _walk_regular_files(root) if _is_real_directory(root) else _TreeFacts(0, None, (), ())
-    for reason in tree_facts.reasons:
-        _add_reason(reasons, reason)
+        root_device = root_handle.device
+        root_inode = root_handle.inode
+        tree_facts = _walk_regular_files(root_handle.fd)
+    finally:
+        os.close(worktree_handle.fd)
 
-    git_root = _validated_git_toplevel(worktree) if _is_real_directory(worktree) else None
-    if not valid_layout:
-        pass
-    elif git_root is None:
+    reasons = list(tree_facts.reasons)
+    git_root = _validated_git_toplevel(worktree)
+    if git_root is None:
         _add_reason(reasons, "git-error")
     elif (metadata_reason := _git_metadata_reason(worktree)) is not None:
         _add_reason(reasons, metadata_reason)
     else:
-        _check_git_ownership(worktree, root, tree_facts.regular_files, reasons)
+        _check_git_ownership(worktree, artifact_dir, tree_facts.regular_files, reasons)
 
     if process_error is not None:
         _add_reason(reasons, process_error)
@@ -274,11 +262,30 @@ def _inspect_candidate(
     return ArtifactCandidate(
         worktree=worktree,
         root=root,
-        kind=kind,
+        kind=artifact_dir.as_posix(),
         size_bytes=tree_facts.size_bytes,
         newest_mtime=tree_facts.newest_mtime,
         eligible=not reasons,
         skip_reasons=tuple(reasons),
+        root_device=root_device,
+        root_inode=root_inode,
+    )
+
+
+def _ineligible_candidate(
+    worktree: Path,
+    root: Path,
+    artifact_dir: Path,
+    reason: str,
+) -> ArtifactCandidate:
+    return ArtifactCandidate(
+        worktree=worktree,
+        root=root,
+        kind=artifact_dir.as_posix(),
+        size_bytes=0,
+        newest_mtime=None,
+        eligible=False,
+        skip_reasons=(reason,),
     )
 
 
@@ -286,9 +293,8 @@ def _revalidate_candidate(
     candidate: ArtifactCandidate,
     active_commands: Sequence[str],
 ) -> tuple[ArtifactCandidate | None, str | None]:
-    if candidate.kind not in {item.as_posix() for item in ARTIFACT_DIRS}:
+    if candidate.kind not in _ARTIFACT_KINDS:
         return None, "invalid-candidate"
-
     worktree = _absolute_path(candidate.worktree)
     root = _absolute_path(candidate.root)
     artifact_dir = Path(candidate.kind)
@@ -307,25 +313,98 @@ def _revalidate_candidate(
     return current, None
 
 
-def _is_removal_root(candidate: ArtifactCandidate, root: Path) -> bool:
-    if candidate.kind not in {item.as_posix() for item in ARTIFACT_DIRS}:
-        return False
+def _quarantine_and_delete(candidate: ArtifactCandidate) -> str | None:
+    if candidate.kind not in _ARTIFACT_KINDS or candidate.root_device is None or candidate.root_inode is None:
+        return "invalid-candidate"
+
     worktree = _absolute_path(candidate.worktree)
-    expected = worktree / Path(candidate.kind)
-    return root == expected and _is_real_directory(worktree) and _is_real_directory(root)
+    root = _absolute_path(candidate.root)
+    artifact_name = candidate.kind
+    if root != worktree / artifact_name:
+        return "invalid-candidate"
+
+    parent_handle, _ = _open_directory_path(worktree)
+    if parent_handle is None:
+        return "replaced-during-cleanup"
+    try:
+        current_handle, current_error = _open_directory_child(parent_handle.fd, artifact_name)
+        if current_handle is None:
+            return "replaced-during-cleanup" if current_error is not None else "cleanup-error"
+        try:
+            if not _matches_identity(current_handle, candidate.root_device, candidate.root_inode):
+                return "replaced-during-cleanup"
+        finally:
+            os.close(current_handle.fd)
+
+        quarantine = _quarantine_name(parent_handle.fd, artifact_name)
+        if quarantine is None:
+            return "cleanup-error"
+        try:
+            os.rename(
+                artifact_name,
+                quarantine,
+                src_dir_fd=parent_handle.fd,
+                dst_dir_fd=parent_handle.fd,
+            )
+        except OSError as exc:
+            return "replaced-during-cleanup" if exc.errno in {errno.ENOENT, errno.ENOTDIR} else "cleanup-error"
+
+        quarantined_handle, _ = _open_directory_child(parent_handle.fd, quarantine)
+        if quarantined_handle is None:
+            _restore_quarantine(parent_handle.fd, artifact_name, quarantine)
+            return "replaced-during-cleanup"
+        try:
+            if not _matches_identity(quarantined_handle, candidate.root_device, candidate.root_inode):
+                _restore_quarantine(parent_handle.fd, artifact_name, quarantine)
+                return "replaced-during-cleanup"
+        finally:
+            os.close(quarantined_handle.fd)
+
+        if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+            _restore_quarantine(parent_handle.fd, artifact_name, quarantine)
+            return "cleanup-error"
+        try:
+            shutil.rmtree(quarantine, dir_fd=parent_handle.fd)
+        except OSError:
+            _restore_quarantine(parent_handle.fd, artifact_name, quarantine)
+            return "cleanup-error"
+        return None
+    finally:
+        os.close(parent_handle.fd)
+
+
+def _restore_quarantine(parent_fd: int, artifact_name: str, quarantine: str) -> None:
+    if not _entry_missing(parent_fd, artifact_name):
+        return
+    try:
+        os.rename(quarantine, artifact_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    except OSError:
+        pass
+
+
+def _quarantine_name(parent_fd: int, artifact_name: str) -> str | None:
+    for _ in range(8):
+        name = f".{artifact_name}.artifact-quarantine-{uuid4().hex}"
+        if _entry_missing(parent_fd, name):
+            return name
+    return None
 
 
 def _check_git_ownership(
     worktree: Path,
-    root: Path,
+    artifact_dir: Path,
     files: Sequence[Path],
     reasons: list[str],
 ) -> None:
+    root_tracked = _git_tracked(worktree, artifact_dir, reasons)
+    if root_tracked is True:
+        _add_reason(reasons, "root-git-tracked")
+        return
+    if root_tracked is None:
+        return
+
     for file_path in files:
-        relative = _relative_to_worktree(file_path, worktree)
-        if relative is None:
-            _add_reason(reasons, "invalid-candidate")
-            continue
+        relative = artifact_dir / file_path
         tracked = _git_tracked(worktree, relative, reasons)
         if tracked is True:
             _add_reason(reasons, "git-tracked")
@@ -334,6 +413,9 @@ def _check_git_ownership(
             continue
         if not _git_ignored(worktree, relative, reasons):
             _add_reason(reasons, "contains-nonignored")
+
+    if not _git_ignored(worktree, artifact_dir, reasons):
+        _add_reason(reasons, "root-not-git-ignored")
 
 
 def _git_ignored(worktree: Path, relative: Path, reasons: list[str]) -> bool:
@@ -345,52 +427,69 @@ def _git_ignored(worktree: Path, relative: Path, reasons: list[str]) -> bool:
 
 
 def _git_tracked(worktree: Path, relative: Path, reasons: list[str]) -> bool | None:
-    result = _run_git(worktree, ["ls-files", "--error-unmatch", "--", relative.as_posix()])
+    result = _run_git(worktree, ["ls-files", "--error-unmatch", "--stage", "--", relative.as_posix()])
     if result is None or result.returncode not in (0, 1):
         _add_reason(reasons, "git-error")
         return None
-    return result.returncode == 0
+    if result.returncode == 1:
+        return False
+    expected = relative.as_posix()
+    return any(line.rpartition("\t")[2] == expected for line in result.stdout.splitlines())
 
 
-def _walk_regular_files(root: Path) -> _TreeFacts:
+def _walk_regular_files(root_fd: int) -> _TreeFacts:
     size_bytes = 0
     newest_mtime: float | None = None
     files: list[Path] = []
     reasons: list[str] = []
-    pending = [root]
+    pending: list[tuple[int, Path]] = [(root_fd, Path())]
 
-    while pending:
-        directory = pending.pop()
-        try:
-            with os.scandir(directory) as entries:
-                sorted_entries = sorted(entries, key=lambda entry: entry.name)
-        except OSError:
-            _add_reason(reasons, "filesystem-error")
-            continue
-
-        for entry in sorted_entries:
-            path = Path(entry.path)
+    try:
+        while pending:
+            directory_fd, relative_directory = pending.pop()
             try:
-                entry_stat = entry.stat(follow_symlinks=False)
-            except OSError:
-                _add_reason(reasons, "filesystem-error")
-                continue
+                try:
+                    with os.scandir(directory_fd) as entries:
+                        directory_entries = sorted(entries, key=lambda entry: entry.name)
+                except OSError:
+                    _add_reason(reasons, "filesystem-error")
+                    continue
 
-            mode = entry_stat.st_mode
-            if stat.S_ISLNK(mode):
-                _add_reason(reasons, "nested-symlink")
-            elif stat.S_ISDIR(mode):
-                pending.append(path)
-            elif stat.S_ISREG(mode):
-                files.append(path)
-                size_bytes += entry_stat.st_size
-                newest_mtime = (
-                    entry_stat.st_mtime
-                    if newest_mtime is None
-                    else max(newest_mtime, entry_stat.st_mtime)
-                )
-            else:
-                _add_reason(reasons, "non-regular-entry")
+                for entry in directory_entries:
+                    try:
+                        entry_stat = os.stat(entry.name, dir_fd=directory_fd, follow_symlinks=False)
+                    except OSError:
+                        _add_reason(reasons, "filesystem-error")
+                        continue
+
+                    mode = entry_stat.st_mode
+                    relative_path = relative_directory / entry.name
+                    if stat.S_ISLNK(mode):
+                        _add_reason(reasons, "nested-symlink")
+                    elif stat.S_ISDIR(mode):
+                        child, child_error = _open_directory_child(directory_fd, entry.name)
+                        if child is None:
+                            _add_reason(
+                                reasons,
+                                "nested-symlink" if child_error == "symlink" else "filesystem-error",
+                            )
+                            continue
+                        pending.append((child.fd, relative_path))
+                    elif stat.S_ISREG(mode):
+                        files.append(relative_path)
+                        size_bytes += entry_stat.st_size
+                        newest_mtime = (
+                            entry_stat.st_mtime
+                            if newest_mtime is None
+                            else max(newest_mtime, entry_stat.st_mtime)
+                        )
+                    else:
+                        _add_reason(reasons, "non-regular-entry")
+            finally:
+                os.close(directory_fd)
+    finally:
+        for directory_fd, _ in pending:
+            os.close(directory_fd)
 
     return _TreeFacts(size_bytes, newest_mtime, tuple(files), tuple(reasons))
 
@@ -421,8 +520,6 @@ def _has_active_command(worktree: Path, root: Path, commands: Sequence[str]) -> 
 
 def _validated_git_toplevel(directory: Path) -> Path | None:
     directory = _absolute_path(directory)
-    if not _is_real_directory(directory):
-        return None
     result = _run_git(directory, ["rev-parse", "--show-toplevel"])
     if result is None or result.returncode != 0 or not result.stdout.strip():
         return None
@@ -449,26 +546,149 @@ def _git_metadata_reason(worktree: Path) -> str | None:
 
 
 def _scan_directories(scan_root: Path) -> Iterator[Path]:
-    pending = [_absolute_path(scan_root)]
-    while pending:
-        directory = pending.pop()
-        if not _is_real_directory(directory):
-            continue
-        yield directory
-        try:
-            with os.scandir(directory) as entries:
-                children = sorted(entries, key=lambda entry: entry.name, reverse=True)
-        except OSError:
-            continue
-        for entry in children:
-            if entry.name == ".git":
-                continue
+    root = _absolute_path(scan_root)
+    root_handle, _ = _open_directory_path(root)
+    if root_handle is None:
+        return
+    pending: list[tuple[int, Path]] = [(root_handle.fd, root)]
+
+    try:
+        while pending:
+            directory_fd, directory = pending.pop()
             try:
-                mode = entry.stat(follow_symlinks=False).st_mode
-            except OSError:
-                continue
-            if stat.S_ISDIR(mode) and not stat.S_ISLNK(mode):
-                pending.append(Path(entry.path))
+                try:
+                    with os.scandir(directory_fd) as entries:
+                        directory_entries = sorted(entries, key=lambda entry: entry.name, reverse=True)
+                except OSError:
+                    continue
+
+                for entry in directory_entries:
+                    if entry.name == ".git":
+                        continue
+                    try:
+                        entry_stat = os.stat(entry.name, dir_fd=directory_fd, follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if not stat.S_ISDIR(entry_stat.st_mode) or stat.S_ISLNK(entry_stat.st_mode):
+                        continue
+                    child, _ = _open_directory_child(directory_fd, entry.name)
+                    if child is not None:
+                        pending.append((child.fd, directory / entry.name))
+                yield directory
+            finally:
+                os.close(directory_fd)
+    finally:
+        for directory_fd, _ in pending:
+            os.close(directory_fd)
+
+
+def _open_directory_path(path: Path) -> tuple[_DirectoryHandle | None, str | None]:
+    flags = _directory_open_flags()
+    if flags is None:
+        return None, "filesystem-error"
+    try:
+        before = os.lstat(path)
+    except OSError as exc:
+        return None, _open_error_reason(exc)
+    if stat.S_ISLNK(before.st_mode):
+        return None, "symlink"
+    if not stat.S_ISDIR(before.st_mode):
+        return None, "not-directory"
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        return None, _open_error_reason(exc)
+    try:
+        after = os.fstat(fd)
+        if not stat.S_ISDIR(after.st_mode) or not _same_stat_identity(before, after):
+            return None, "replaced"
+        return _DirectoryHandle(fd, after.st_dev, after.st_ino), None
+    except OSError:
+        return None, "filesystem-error"
+    finally:
+        if "after" not in locals() or not stat.S_ISDIR(after.st_mode) or not _same_stat_identity(before, after):
+            os.close(fd)
+
+
+def _open_directory_child(parent_fd: int, name: str) -> tuple[_DirectoryHandle | None, str | None]:
+    flags = _directory_open_flags()
+    if flags is None:
+        return None, "filesystem-error"
+    try:
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        return None, _open_error_reason(exc)
+    if stat.S_ISLNK(before.st_mode):
+        return None, "symlink"
+    if not stat.S_ISDIR(before.st_mode):
+        return None, "not-directory"
+    try:
+        fd = os.open(name, flags, dir_fd=parent_fd)
+    except OSError as exc:
+        return None, _open_error_reason(exc)
+    try:
+        after = os.fstat(fd)
+        if not stat.S_ISDIR(after.st_mode) or not _same_stat_identity(before, after):
+            return None, "replaced"
+        return _DirectoryHandle(fd, after.st_dev, after.st_ino), None
+    except OSError:
+        return None, "filesystem-error"
+    finally:
+        if "after" not in locals() or not stat.S_ISDIR(after.st_mode) or not _same_stat_identity(before, after):
+            os.close(fd)
+
+
+def _directory_open_flags() -> int | None:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        return None
+    return os.O_RDONLY | directory | nofollow | getattr(os, "O_CLOEXEC", 0)
+
+
+def _candidate_open_reason(reason: str | None) -> str:
+    if reason == "symlink":
+        return "candidate-symlink"
+    if reason == "not-directory":
+        return "candidate-not-directory"
+    if reason == "replaced":
+        return "replaced-during-inspection"
+    return "filesystem-error"
+
+
+def _open_error_reason(exc: OSError) -> str:
+    if exc.errno in {errno.ENOENT, errno.ENOTDIR}:
+        return "missing"
+    if exc.errno == errno.ELOOP:
+        return "symlink"
+    return "filesystem-error"
+
+
+def _same_candidate_identity(first: ArtifactCandidate, second: ArtifactCandidate) -> bool:
+    return (
+        first.root_device is not None
+        and first.root_inode is not None
+        and first.root_device == second.root_device
+        and first.root_inode == second.root_inode
+    )
+
+
+def _matches_identity(handle: _DirectoryHandle, device: int, inode: int) -> bool:
+    return handle.device == device and handle.inode == inode
+
+
+def _same_stat_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    return first.st_dev == second.st_dev and first.st_ino == second.st_ino
+
+
+def _entry_missing(parent_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _run_git(cwd: Path, args: Sequence[str]) -> subprocess.CompletedProcess[str] | None:
@@ -503,36 +723,6 @@ def _append_unique(paths: list[Path], seen: set[Path], path: Path) -> None:
 
 def _absolute_path(path: Path) -> Path:
     return Path(os.path.abspath(Path(path).expanduser()))
-
-
-def _path_exists_without_following(path: Path) -> bool:
-    try:
-        os.lstat(path)
-    except OSError:
-        return False
-    return True
-
-
-def _is_real_directory(path: Path) -> bool:
-    try:
-        mode = os.lstat(path).st_mode
-    except OSError:
-        return False
-    return stat.S_ISDIR(mode) and not stat.S_ISLNK(mode)
-
-
-def _is_symlink(path: Path) -> bool:
-    try:
-        return stat.S_ISLNK(os.lstat(path).st_mode)
-    except OSError:
-        return False
-
-
-def _relative_to_worktree(path: Path, worktree: Path) -> Path | None:
-    try:
-        return path.relative_to(worktree)
-    except ValueError:
-        return None
 
 
 def _add_reason(reasons: list[str], reason: str) -> None:
