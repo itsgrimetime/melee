@@ -8,6 +8,7 @@ import os
 import stat
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -137,20 +138,31 @@ def test_artifacts_cli_cleanup_requires_apply(monkeypatch, capsys) -> None:
         reclaimed_bytes=32,
         skipped=(),
     )
-    calls: list[bool] = []
+    inspection_protection: list[tuple[Path, ...]] = []
+    cleanup_protection: list[tuple[bool, tuple[Path, ...]]] = []
     monkeypatch.setattr(artifacts, "discover_worktrees", lambda root, scan_roots=(): (Path("/repo"),))
-    monkeypatch.setattr(artifacts, "inspect_artifacts", lambda *args, **kwargs: report)
+
+    def inspect(*args, **kwargs):
+        inspection_protection.append(tuple(kwargs["protected_worktrees"]))
+        return report
+
+    def cleanup(candidates, *, apply, protected_worktrees):
+        cleanup_protection.append((apply, tuple(protected_worktrees)))
+        return result
+
+    monkeypatch.setattr(artifacts, "inspect_artifacts", inspect)
     monkeypatch.setattr(
         artifacts,
         "cleanup_artifacts",
-        lambda candidates, *, apply: calls.append(apply) or result,
+        cleanup,
     )
 
     assert doctor.main(["artifacts", "cleanup", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["mode"] == "dry-run"
     assert doctor.main(["artifacts", "cleanup", "--apply", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["mode"] == "cleanup"
-    assert calls == [False, True]
+    assert inspection_protection == [(doctor.ROOT,), (doctor.ROOT,)]
+    assert cleanup_protection == [(False, (doctor.ROOT,)), (True, (doctor.ROOT,))]
 
 
 def test_artifacts_cli_dispatches_process_arguments(monkeypatch, capsys) -> None:
@@ -189,6 +201,53 @@ def test_default_discovery_only_uses_registered_worktrees(tmp_path: Path) -> Non
 
     assert artifacts.discover_worktrees(repo) == (repo.resolve(), linked.resolve())
     assert unregistered.resolve() not in artifacts.discover_worktrees(repo)
+
+
+def test_current_worktree_is_reported_but_never_eligible_for_cleanup(tmp_path: Path) -> None:
+    repo, linked = _make_repo_and_linked_worktree(tmp_path)
+    _write_ignored_file(repo / "build/primary.o", b"primary")
+    _write_ignored_file(linked / "build/linked.o", b"linked")
+
+    report = artifacts.inspect_artifacts(
+        [repo, linked],
+        min_age_days=0,
+        min_bytes=0,
+        now=NOW,
+        active_commands=[],
+        protected_worktrees=[linked],
+    )
+
+    assert report.worktrees == (repo.resolve(), linked.resolve())
+    primary = _candidate(report, repo, "build")
+    assert primary.eligible is False
+    assert primary.skip_reasons == ("main-worktree",)
+    current = _candidate(report, linked, "build")
+    assert current.eligible is False
+    assert current.skip_reasons == ("protected-worktree",)
+
+    # Revalidation must preserve the protection even if an untrusted caller
+    # supplies a forged eligible candidate from the current checkout.
+    forged_current = replace(current, eligible=True, skip_reasons=())
+    revalidated, invalid_reason = artifacts._revalidate_candidate(
+        forged_current,
+        (),
+        (linked,),
+    )
+    assert invalid_reason is None
+    assert revalidated is not None
+    assert revalidated.skip_reasons == ("protected-worktree",)
+
+    result = artifacts.cleanup_artifacts(
+        [forged_current],
+        apply=True,
+        active_commands=[],
+        protected_worktrees=[linked],
+    )
+
+    assert result.planned == ()
+    assert result.removed == ()
+    assert result.skipped[0].reason == "protected-worktree"
+    assert (linked / "build" / "linked.o").read_bytes() == b"linked"
 
 
 def test_inspection_rejects_tracked_and_symlinked_build(tmp_path: Path) -> None:

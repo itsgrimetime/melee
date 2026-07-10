@@ -240,9 +240,14 @@ def _artifacts_main(argv: Sequence[str]) -> int:
         worktrees,
         min_age_days=args.min_age_days,
         min_bytes=args.min_bytes,
+        protected_worktrees=(ROOT,),
     )
     if args.command == "cleanup":
-        result = artifacts.cleanup_artifacts(report.candidates, apply=args.apply)
+        result = artifacts.cleanup_artifacts(
+            report.candidates,
+            apply=args.apply,
+            protected_worktrees=(ROOT,),
+        )
         mode = "cleanup" if args.apply else "dry-run"
     else:
         result = artifacts.CleanupResult((), (), 0, ())

@@ -16,7 +16,7 @@ import stat
 import subprocess
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -132,8 +132,14 @@ def inspect_artifacts(
     min_bytes: int,
     now: float | None = None,
     active_commands: Sequence[str] | None = None,
+    protected_worktrees: Sequence[Path] = (),
 ) -> ArtifactReport:
-    """Inspect direct artifact directories without following any symlinks."""
+    """Inspect direct artifact directories without following any symlinks.
+
+    ``protected_worktrees`` remain visible in the report but never become
+    eligible for cleanup.  Callers must pass their current checkout so a
+    worktree-doctor invocation cannot remove its own active build products.
+    """
     if min_age_days < 0:
         raise ValueError("min_age_days must be non-negative")
     if min_bytes < 0:
@@ -142,6 +148,7 @@ def inspect_artifacts(
     reference_time = time.time() if now is None else now
     commands, process_error = _active_commands(active_commands)
     normalized_worktrees = _unique_paths(worktrees)
+    protected = frozenset(_unique_paths(protected_worktrees))
     candidates: list[ArtifactCandidate] = []
 
     for worktree in normalized_worktrees:
@@ -154,6 +161,7 @@ def inspect_artifacts(
                 now=reference_time,
                 active_commands=commands,
                 process_error=process_error,
+                protected_worktrees=protected,
             )
             if candidate is not None:
                 candidates.append(candidate)
@@ -166,6 +174,7 @@ def cleanup_artifacts(
     *,
     apply: bool,
     active_commands: Sequence[str] | None = None,
+    protected_worktrees: Sequence[Path] = (),
 ) -> CleanupResult:
     """Plan or apply cleanup, with identity-checked quarantine deletion."""
     planned: list[Path] = []
@@ -178,12 +187,17 @@ def cleanup_artifacts(
     process_error: str | None = None
     if apply:
         commands, process_error = _active_commands(active_commands)
+    protected = tuple(_unique_paths(protected_worktrees))
 
     for candidate in candidates:
         root = _absolute_path(candidate.root)
         if root in seen:
             continue
         seen.add(root)
+
+        if _absolute_path(candidate.worktree) in protected:
+            skipped.append(CleanupSkip(root, "protected-worktree"))
+            continue
 
         if not candidate.eligible:
             skipped.append(CleanupSkip(root, _first_reason(candidate, "ineligible")))
@@ -196,7 +210,7 @@ def cleanup_artifacts(
             skipped.append(CleanupSkip(root, process_error))
             continue
 
-        current, invalid_reason = _revalidate_candidate(candidate, commands)
+        current, invalid_reason = _revalidate_candidate(candidate, commands, protected)
         if invalid_reason is not None:
             skipped.append(CleanupSkip(root, invalid_reason))
             continue
@@ -246,6 +260,7 @@ def _inspect_candidate(
     now: float,
     active_commands: Sequence[str],
     process_error: str | None,
+    protected_worktrees: Collection[Path],
 ) -> ArtifactCandidate | None:
     worktree = _absolute_path(worktree)
     root = worktree / artifact_dir
@@ -272,6 +287,8 @@ def _inspect_candidate(
         os.close(worktree_handle.fd)
 
     reasons = list(tree_facts.reasons)
+    if worktree in protected_worktrees:
+        _add_reason(reasons, "protected-worktree")
     git_root = _validated_git_toplevel(worktree)
     if git_root is None:
         _add_reason(reasons, "git-error")
@@ -325,6 +342,7 @@ def _ineligible_candidate(
 def _revalidate_candidate(
     candidate: ArtifactCandidate,
     active_commands: Sequence[str],
+    protected_worktrees: Sequence[Path],
 ) -> tuple[ArtifactCandidate | None, str | None]:
     if candidate.kind not in _ARTIFACT_KINDS:
         return None, "invalid-candidate"
@@ -339,6 +357,7 @@ def _revalidate_candidate(
         min_age_days=0,
         min_bytes=0,
         active_commands=active_commands,
+        protected_worktrees=protected_worktrees,
     )
     current = next((item for item in report.candidates if item.root == root), None)
     if current is None:
