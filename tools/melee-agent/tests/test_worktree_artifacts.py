@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import stat
 import subprocess
@@ -14,6 +15,7 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 artifacts = importlib.import_module("worktree_doctor.artifacts")
+doctor = importlib.import_module("worktree_doctor")
 
 
 NOW = 2_000_000_000.0
@@ -57,6 +59,101 @@ def _candidate(report: artifacts.ArtifactReport, worktree: Path, kind: str) -> a
         for candidate in report.candidates
         if candidate.worktree == worktree.resolve() and candidate.kind == kind
     )
+
+
+def test_artifacts_cli_report_json_is_read_only(monkeypatch, capsys) -> None:
+    candidate = artifacts.ArtifactCandidate(
+        worktree=Path("/repo"),
+        root=Path("/repo/build"),
+        kind="build",
+        size_bytes=32,
+        newest_mtime=NOW - 8 * 24 * 60 * 60,
+        eligible=True,
+        skip_reasons=(),
+    )
+    report = artifacts.ArtifactReport(worktrees=(Path("/repo"),), candidates=(candidate,))
+    monkeypatch.setattr(doctor.time, "time", lambda: NOW)
+    monkeypatch.setattr(artifacts, "discover_worktrees", lambda root, scan_roots=(): (Path("/repo"),))
+    monkeypatch.setattr(artifacts, "inspect_artifacts", lambda *args, **kwargs: report)
+    monkeypatch.setattr(
+        artifacts,
+        "cleanup_artifacts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("report must not clean up")),
+    )
+
+    assert doctor.main(["artifacts", "report", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "report"
+    assert payload["schema_version"] == 1
+    assert payload["candidates"] == [
+        {
+            "age_seconds": 8 * 24 * 60 * 60,
+            "worktree": "/repo",
+            "root": "/repo/build",
+            "kind": "build",
+            "size_bytes": 32,
+            "newest_mtime": NOW - 8 * 24 * 60 * 60,
+            "eligible": True,
+            "skip_reasons": [],
+        }
+    ]
+    assert payload["planned"] == []
+    assert payload["removed"] == []
+    assert payload["reclaimed_bytes"] == 0
+    assert payload["skipped"] == []
+
+
+def test_artifacts_cli_cleanup_requires_apply(monkeypatch, capsys) -> None:
+    candidate = artifacts.ArtifactCandidate(
+        worktree=Path("/repo"),
+        root=Path("/repo/build"),
+        kind="build",
+        size_bytes=32,
+        newest_mtime=NOW - 8 * 24 * 60 * 60,
+        eligible=True,
+        skip_reasons=(),
+    )
+    report = artifacts.ArtifactReport(worktrees=(Path("/repo"),), candidates=(candidate,))
+    result = artifacts.CleanupResult(
+        planned=(Path("/repo/build"),),
+        removed=(Path("/repo/build"),),
+        reclaimed_bytes=32,
+        skipped=(),
+    )
+    calls: list[bool] = []
+    monkeypatch.setattr(artifacts, "discover_worktrees", lambda root, scan_roots=(): (Path("/repo"),))
+    monkeypatch.setattr(artifacts, "inspect_artifacts", lambda *args, **kwargs: report)
+    monkeypatch.setattr(
+        artifacts,
+        "cleanup_artifacts",
+        lambda candidates, *, apply: calls.append(apply) or result,
+    )
+
+    assert doctor.main(["artifacts", "cleanup", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["mode"] == "dry-run"
+    assert doctor.main(["artifacts", "cleanup", "--apply", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["mode"] == "cleanup"
+    assert calls == [False, True]
+
+
+def test_artifacts_cli_dispatches_process_arguments(monkeypatch, capsys) -> None:
+    report = artifacts.ArtifactReport(worktrees=(), candidates=())
+    monkeypatch.setattr(sys, "argv", ["worktree-doctor.py", "artifacts", "report", "--json"])
+    monkeypatch.setattr(artifacts, "discover_worktrees", lambda root, scan_roots=(): ())
+    monkeypatch.setattr(artifacts, "inspect_artifacts", lambda *args, **kwargs: report)
+
+    assert doctor.main() == 0
+
+    assert json.loads(capsys.readouterr().out)["mode"] == "report"
+
+
+def test_artifacts_cli_preserves_legacy_banner(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(doctor, "banner_line", lambda root: "legacy banner")
+
+    assert doctor.main(["--banner"]) == 0
+
+    assert capsys.readouterr().out == "legacy banner\n"
 
 
 def test_default_discovery_only_uses_registered_worktrees(tmp_path: Path) -> None:
