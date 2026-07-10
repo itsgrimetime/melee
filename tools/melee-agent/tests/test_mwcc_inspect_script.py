@@ -125,17 +125,23 @@ def test_mwcc_inspect_upload_uses_remote_bash_stdin_for_candidate(tmp_path: Path
     assert all("'-s'" in argv for argv in argv_logs)
     stdin_logs = [path.read_text(encoding="utf-8") for path in sorted(log_dir.glob("*.stdin"))]
     assert "mktemp -d '/remote/melee/build/mwcc-inspect-plbonuslib.XXXXXX'" in stdin_logs[0]
+    assert stdin_logs[0].rstrip().endswith("exit")
     assert "mkdir -p '/tmp/mwcc-inspect-plbonuslib.ABCDEF/src/melee/pl'" in stdin_logs[1]
+    assert stdin_logs[1].rstrip().endswith("exit")
     upload_log = next(log for log in stdin_logs if "plbonuslib.c" in log)
     assert "cat > '/tmp/mwcc-inspect-plbonuslib.ABCDEF/src/melee/pl/plbonuslib.c'" in upload_log
     assert "int candidate = 1;" in upload_log
+    assert upload_log.rstrip().endswith("exit")
     header_log = next(log for log in stdin_logs if "plbonuslib.h" in log)
     assert "cat > '/tmp/mwcc-inspect-plbonuslib.ABCDEF/src/melee/pl/plbonuslib.h'" in header_log
     assert "#define LOCAL_HEADER 1" in header_log
-    assert any(
-        "find '/remote/melee/src/melee/pl'" in log and "-name '*.h'" in log
+    assert header_log.rstrip().endswith("exit")
+    headers_copy_log = next(
+        log
         for log in stdin_logs
+        if "find '/remote/melee/src/melee/pl'" in log and "-name '*.h'" in log
     )
+    assert headers_copy_log.rstrip().endswith("exit")
     inspector_log = next(log for log in stdin_logs if "MwccInspectorCLI" in log)
     assert "checkout --quiet 'master'" in inspector_log
     assert "git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'" in inspector_log
@@ -161,6 +167,7 @@ def test_mwcc_inspect_upload_uses_remote_bash_stdin_for_candidate(tmp_path: Path
     assert "-i extern/dolphin/include -i /opt/external" in inspector_log
     assert "${REMOTE_DIR}//opt/external" not in inspector_log
     assert "REMOTE_TMP_REL" not in inspector_log
+    assert inspector_log.rstrip().endswith("exit")
 
 
 def test_mwcc_inspect_remote_failure_preserves_diagnostics_and_no_empty_output(

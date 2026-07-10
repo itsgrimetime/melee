@@ -220,12 +220,14 @@ if [[ "${UPLOAD_SOURCE}" == "1" ]]; then
 set -euo pipefail
 mkdir -p $(shell_quote "${REMOTE_DIR}/build")
 mktemp -d $(shell_quote "${REMOTE_DIR}/build/mwcc-inspect-${TU_BASE}.XXXXXX")
+exit
 REMOTE_PREP
 )
   REMOTE_SOURCE="${REMOTE_TMP}/${REL_SRC}"
   remote_bash <<REMOTE_MKDIR
 set -euo pipefail
 mkdir -p $(shell_quote "${REMOTE_TMP}/$(dirname "${REL_SRC}")")
+exit
 REMOTE_MKDIR
   REMOTE_SOURCE_DIR="${REMOTE_DIR}/$(dirname "${REL_SRC}")"
   REMOTE_CANDIDATE_DIR="${REMOTE_TMP}/$(dirname "${REL_SRC}")"
@@ -234,6 +236,7 @@ set -euo pipefail
 if [[ -d $(shell_quote "${REMOTE_SOURCE_DIR}") ]]; then
   find $(shell_quote "${REMOTE_SOURCE_DIR}") -maxdepth 1 -type f \\( -name '*.h' -o -name '*.inc' \\) -exec cp -p '{}' $(shell_quote "${REMOTE_CANDIDATE_DIR}/") \\;
 fi
+exit
 REMOTE_HEADERS
   UPLOAD_DELIM="MWCC_INSPECT_UPLOAD_$$_$(date +%s)"
   {
@@ -256,6 +259,7 @@ REMOTE_HEADERS
     printf 'cat > %s <<'"'"'%s'"'"'\n' "$(shell_quote "${REMOTE_SOURCE}")" "${UPLOAD_DELIM}"
     cat "${SRC_ABS}"
     printf '\n%s\n' "${UPLOAD_DELIM}"
+    printf 'exit\n'
   } | remote_bash
 fi
 
@@ -297,6 +301,7 @@ set +e
   printf '%s %s ${MWCC_ARGS_REMOTE}\n' \
     "$(shell_quote "${REMOTE_CLI}")" \
     "$(shell_quote "${REMOTE_MWCCEPPC}")"
+  printf 'exit\n'
 } | ssh -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT}" "${HOST}" "${REMOTE_BASH}" -s > "${TMP_OUT}" 2> "${TMP_ERR}"
 REMOTE_EXIT=$?
 set -e
