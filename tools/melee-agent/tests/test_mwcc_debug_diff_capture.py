@@ -1258,6 +1258,68 @@ def test_process_group_timeout_cleanup_interrupt_propagates(
     assert calls["waits"] == [5, 5]
 
 
+def test_process_group_timeout_suppresses_pipe_close_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {"closed_pipes": [], "join_timeouts": [], "waits": []}
+
+    class FakePipe:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            calls["closed_pipes"].append(self.name)
+            if self.name == "stdout":
+                raise OSError("pipe close failed")
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe("stdout")
+        stderr = FakePipe("stderr")
+
+        def wait(self, timeout: int) -> None:
+            calls["waits"].append(timeout)
+
+    class FakeThread:
+        def __init__(self, *, target, daemon: bool) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def join(self, timeout: float) -> None:
+            calls["join_timeouts"].append(timeout)
+
+        def is_alive(self) -> bool:
+            return True
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        calls["start_new_session"] = start_new_session
+        return FakeProc()
+
+    def fake_kill_process_tree(pid, proc) -> None:
+        calls["cleanup_pid"] = pid
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(diff_capture.threading, "Thread", FakeThread)
+    monkeypatch.setattr(diff_capture, "_kill_process_tree", fake_kill_process_tree)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=10,
+        )
+
+    assert calls["start_new_session"] is True
+    assert calls["cleanup_pid"] == 4321
+    assert calls["closed_pipes"] == ["stdout", "stderr"]
+    assert calls["waits"] == [5]
+    assert calls["join_timeouts"] == [10, 1]
+
+
 def test_process_group_timeout_kills_descendant_process_groups(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

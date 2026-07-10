@@ -729,6 +729,8 @@ def _run_with_process_group_timeout(
             if pipe is not None:
                 try:
                     pipe.close()
+                except OSError:
+                    pass
                 except BaseException:
                     if not suppress_errors:
                         raise
