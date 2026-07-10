@@ -716,30 +716,34 @@ def _run_with_process_group_timeout(
     result: dict[str, object] = {}
     cleanup_done = False
 
-    def _cleanup() -> None:
+    def _cleanup(*, suppress_errors: bool) -> None:
         nonlocal cleanup_done
         if cleanup_done:
             return
-        cleanup_done = True
         try:
             _kill_process_tree(proc.pid, proc)
         except BaseException:
-            pass
+            if not suppress_errors:
+                raise
         for pipe in (getattr(proc, "stdout", None), getattr(proc, "stderr", None)):
             if pipe is not None:
                 try:
                     pipe.close()
                 except BaseException:
-                    pass
+                    if not suppress_errors:
+                        raise
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             try:
                 proc.kill()
             except BaseException:
-                pass
+                if not suppress_errors:
+                    raise
         except BaseException:
-            pass
+            if not suppress_errors:
+                raise
+        cleanup_done = True
 
     def _communicate() -> None:
         try:
@@ -758,13 +762,13 @@ def _run_with_process_group_timeout(
             result.get("exc"), subprocess.TimeoutExpired
         )
         if timed_out:
-            _cleanup()
+            _cleanup(suppress_errors=False)
             if thread.is_alive():
                 thread.join(1)
         elif "exc" in result:
             raise result["exc"]  # type: ignore[misc]
     except BaseException:
-        _cleanup()
+        _cleanup(suppress_errors=True)
         raise
 
     if timed_out:
