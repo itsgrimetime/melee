@@ -3078,7 +3078,7 @@ def test_bounded_validation_skips_mixed_class_lifetime_layout(
     assert all(result["candidate"] != "lifetime-layout" for result in results)
 
 
-def test_bounded_validation_runs_select_order_for_direct_blockers(
+def test_bounded_validation_defers_select_order_for_direct_blockers(
     tmp_path: pathlib.Path,
 ) -> None:
     from src.mwcc_debug.pressure_explorer.validation import run_bounded_validation
@@ -3100,27 +3100,74 @@ def test_bounded_validation_runs_select_order_for_direct_blockers(
         runner=runner,
     )
 
-    assert len(results) == 3
-    select_order = calls[2]
-    assert select_order[:4] == [
+    assert [call[3] for call in calls] == ["lifetime-layout", "simplify-order"]
+    assert "lifetime-layout" in calls[0]
+    assert "simplify-order" in calls[1]
+    select_order = results[2]
+    assert select_order["candidate"] == "select-order-0-40-37"
+    assert select_order["status"] == "deferred"
+    assert select_order["reason"] == "select-order search is deferred from bounded validation"
+    argv = select_order["argv"]
+    assert isinstance(argv, list)
+    assert argv[:4] == [
         "melee-agent",
         "debug",
         "select-order-search",
         "-f",
     ]
-    assert "debug" in select_order
-    assert "select-order-search" in select_order
-    assert select_order[select_order.index("--target") + 1] == "r40<r37"
-    assert select_order[select_order.index("--force-phys") + 1] == "40:25"
-    assert select_order[select_order.index("--pcdump") + 1] == str(
+    assert "debug" in argv
+    assert "select-order-search" in argv
+    assert argv[argv.index("--target") + 1] == "r40<r37"
+    assert argv[argv.index("--force-phys") + 1] == "40:25"
+    assert argv[argv.index("--pcdump") + 1] == str(
         tmp_path / "base.pcdump.txt"
     )
-    assert select_order[select_order.index("--source-file") + 1] == str(
+    assert argv[argv.index("--source-file") + 1] == str(
         tmp_path / "source.c"
     )
-    assert select_order[select_order.index("--max-probes") + 1] == "7"
-    assert select_order[select_order.index("--timeout") + 1] == "60"
-    assert "--json" in select_order
+    assert argv[argv.index("--max-probes") + 1] == "7"
+    assert argv[argv.index("--timeout") + 1] == "60"
+    assert "--json" in argv
+
+
+def test_bounded_validation_skips_remaining_workflows_when_deadline_expires(
+    tmp_path: pathlib.Path,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_bounded_validation
+
+    calls: list[list[str]] = []
+    now = 100.0
+
+    def clock() -> float:
+        return now
+
+    def runner(argv: list[str], _timeout: int) -> dict[str, object]:
+        nonlocal now
+        calls.append(argv)
+        now += 6.0
+        return {"returncode": 0, "stdout": '{"ok": true}', "stderr": ""}
+
+    results = run_bounded_validation(
+        function="fn_80000000",
+        force_phys="40:25",
+        pcdump_path=tmp_path / "base.pcdump.txt",
+        source_path=tmp_path / "source.c",
+        timeout=5,
+        max_candidates=7,
+        clock=clock,
+        runner=runner,
+    )
+
+    assert len(calls) == 1
+    assert "lifetime-layout" in calls[0]
+    skipped = results[1]
+    assert skipped["candidate"] == "simplify-order"
+    assert skipped["status"] == "skipped_timeout"
+    assert skipped["reason"] == "bounded validation deadline expired"
+    argv = skipped["argv"]
+    assert isinstance(argv, list)
+    assert "simplify-order" in argv
+    assert argv[argv.index("--timeout") + 1] == "5"
 
 
 def test_bounded_validation_uses_fpr_direct_blocker_target(
@@ -3134,7 +3181,7 @@ def test_bounded_validation_uses_fpr_direct_blocker_target(
         calls.append(argv)
         return {"returncode": 0, "stdout": '{"ok": true}', "stderr": ""}
 
-    run_bounded_validation(
+    results = run_bounded_validation(
         function="fn_80000000",
         force_phys="1:40:25",
         pcdump_path=tmp_path / "base.pcdump.txt",
@@ -3145,7 +3192,15 @@ def test_bounded_validation_uses_fpr_direct_blocker_target(
         runner=runner,
     )
 
-    select_order = calls[2]
+    assert len(calls) == 2
+    select_order = results[2]["argv"]
+    assert isinstance(select_order, list)
+    assert select_order[:4] == [
+        "melee-agent",
+        "debug",
+        "select-order-search",
+        "-f",
+    ]
     assert select_order[select_order.index("--target") + 1] == "f40<f37"
     assert "r40<r37" not in select_order
     assert "--class" in select_order

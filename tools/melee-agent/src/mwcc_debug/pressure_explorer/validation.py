@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -157,6 +158,7 @@ def run_bounded_validation(
     max_candidates: int,
     direct_blockers: list[tuple[int, int, int]] | None = None,
     runner: ValidationRunner | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> list[dict[str, object]]:
     if pcdump_path is None or source_path is None:
         return []
@@ -164,6 +166,7 @@ def run_bounded_validation(
     active_runner = runner or _subprocess_runner
     direct_blockers = direct_blockers or []
     commands: list[tuple[str, list[str]]] = []
+    deferred_results: list[dict[str, object]] = []
     lifetime_layout_argv = _lifetime_layout_argv(
         function=function,
         force_phys=force_phys,
@@ -223,11 +226,31 @@ def run_bounded_validation(
         ]
         if class_id == 1:
             argv[5:5] = ["--class", "1"]
-        commands.append((f"select-order-{class_id}-{target_ig}-{blocker_ig}", argv))
+        deferred_results.append(
+            {
+                "candidate": f"select-order-{class_id}-{target_ig}-{blocker_ig}",
+                "status": "deferred",
+                "reason": "select-order search is deferred from bounded validation",
+                "argv": argv,
+            }
+        )
 
     results: list[dict[str, object]] = []
-    for workflow, argv in commands:
-        proc = active_runner(argv, timeout)
+    deadline = clock() + timeout
+    for index, (workflow, argv) in enumerate(commands):
+        remaining_timeout = int(deadline - clock())
+        if remaining_timeout <= 0:
+            for skipped_workflow, skipped_argv in commands[index:]:
+                results.append(
+                    {
+                        "candidate": skipped_workflow,
+                        "status": "skipped_timeout",
+                        "reason": "bounded validation deadline expired",
+                        "argv": skipped_argv,
+                    }
+                )
+            break
+        proc = active_runner(argv, remaining_timeout)
         payload = _json_payload(proc.get("stdout", ""))
         results.append(
             {
@@ -240,7 +263,7 @@ def run_bounded_validation(
                 "raw_score": payload,
             }
         )
-    return results
+    return results + deferred_results
 
 
 def _lifetime_layout_argv(
