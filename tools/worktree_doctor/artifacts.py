@@ -29,6 +29,7 @@ _GIT_TIMEOUT_SECONDS = 15
 _PROCESS_TIMEOUT_SECONDS = 15
 _ARTIFACT_KINDS = frozenset(item.as_posix() for item in ARTIFACT_DIRS)
 _QUARANTINED_CHILD = "candidate"
+_QUARANTINE_CONTAINER_RETAINED = "quarantine-container-retained"
 _DARWIN_RENAME_EXCL = 0x00000004
 _DARWIN_RENAME_NOFOLLOW_ANY = 0x00000010
 _LINUX_RENAME_NOREPLACE = 0x00000001
@@ -214,6 +215,14 @@ def cleanup_artifacts(
             continue
 
         deletion_reason = _quarantine_and_delete(candidate)
+        if deletion_reason == _QUARANTINE_CONTAINER_RETAINED:
+            # The artifact is gone, but its random quarantine container is
+            # intentionally left in place rather than removed by its mutable
+            # pathname after the descriptor-bound deletion.
+            removed.append(root)
+            reclaimed_bytes += current.size_bytes
+            skipped.append(CleanupSkip(root, deletion_reason))
+            continue
         if deletion_reason is not None:
             skipped.append(CleanupSkip(root, deletion_reason))
             continue
@@ -377,21 +386,28 @@ def _quarantine_and_delete(candidate: ArtifactCandidate) -> str | None:
             if move_result == "destination-exists":
                 return "quarantine-destination-exists"
             if move_result == "unsupported":
-                _remove_empty_container(parent_handle.fd, container.name)
                 return "safe-rename-unavailable"
             if move_result == "source-replaced":
-                _remove_empty_container(parent_handle.fd, container.name)
                 return "replaced-during-cleanup"
             if move_result != "ok":
-                _remove_empty_container(parent_handle.fd, container.name)
                 return "cleanup-error"
 
             quarantined_handle, _ = _open_directory_child(container.fd, _QUARANTINED_CHILD)
             if quarantined_handle is None:
-                return "quarantine-child-replaced"
+                return _restore_replaced_quarantine_child(
+                    parent_handle.fd,
+                    artifact_name,
+                    container.fd,
+                    _QUARANTINED_CHILD,
+                )
             try:
                 if not _matches_identity(quarantined_handle, candidate.root_device, candidate.root_inode):
-                    return "quarantine-child-replaced"
+                    return _restore_replaced_quarantine_child(
+                        parent_handle.fd,
+                        artifact_name,
+                        container.fd,
+                        _QUARANTINED_CHILD,
+                    )
             finally:
                 os.close(quarantined_handle.fd)
 
@@ -417,14 +433,43 @@ def _quarantine_and_delete(candidate: ArtifactCandidate) -> str | None:
 
             removal_handle, _ = _open_directory_child(container.fd, removal_name)
             if removal_handle is None:
-                return "quarantine-child-replaced"
+                return _restore_replaced_quarantine_child(
+                    parent_handle.fd,
+                    artifact_name,
+                    container.fd,
+                    removal_name,
+                )
             try:
                 if not _matches_identity(removal_handle, candidate.root_device, candidate.root_inode):
-                    return "quarantine-child-replaced"
+                    return _restore_replaced_quarantine_child(
+                        parent_handle.fd,
+                        artifact_name,
+                        container.fd,
+                        removal_name,
+                    )
+                deletion_reason = _rmtree_expected(
+                    container.fd,
+                    removal_name,
+                    os.fstat(removal_handle.fd),
+                )
             finally:
                 os.close(removal_handle.fd)
 
-            if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+            if deletion_reason == "quarantine-child-replaced":
+                return _restore_replaced_quarantine_child(
+                    parent_handle.fd,
+                    artifact_name,
+                    container.fd,
+                    removal_name,
+                )
+            if deletion_reason == "quarantine-child-missing":
+                return _restore_replaced_quarantine_child(
+                    parent_handle.fd,
+                    artifact_name,
+                    container.fd,
+                    removal_name,
+                )
+            if deletion_reason is not None:
                 restored = _restore_quarantined_child(
                     parent_handle.fd,
                     artifact_name,
@@ -434,20 +479,7 @@ def _quarantine_and_delete(candidate: ArtifactCandidate) -> str | None:
                     candidate.root_inode,
                 )
                 return "cleanup-error" if restored else "quarantine-retained"
-            try:
-                shutil.rmtree(removal_name, dir_fd=container.fd)
-            except OSError:
-                restored = _restore_quarantined_child(
-                    parent_handle.fd,
-                    artifact_name,
-                    container.fd,
-                    removal_name,
-                    candidate.root_device,
-                    candidate.root_inode,
-                )
-                return "cleanup-error" if restored else "quarantine-retained"
-            _remove_empty_container(parent_handle.fd, container.name)
-            return None
+            return _QUARANTINE_CONTAINER_RETAINED
         finally:
             os.close(container.fd)
     finally:
@@ -494,11 +526,54 @@ def _restore_quarantined_child(
     return _rename_no_replace(container_fd, child_name, parent_fd, artifact_name) == "ok"
 
 
-def _remove_empty_container(parent_fd: int, name: str) -> None:
+def _restore_replaced_quarantine_child(
+    parent_fd: int,
+    artifact_name: str,
+    container_fd: int,
+    child_name: str,
+) -> str:
+    """Return a moved replacement only if its original root name is absent."""
     try:
-        os.rmdir(name, dir_fd=parent_fd)
+        os.stat(child_name, dir_fd=container_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return "quarantine-restore-source-missing"
     except OSError:
-        pass
+        return "quarantine-restore-source-error"
+
+    if not _entry_missing(parent_fd, artifact_name):
+        return "quarantine-restore-root-exists"
+
+    restore_result = _rename_no_replace(container_fd, child_name, parent_fd, artifact_name)
+    if restore_result == "ok":
+        return "quarantine-child-replaced"
+    if restore_result == "destination-exists":
+        return "quarantine-restore-root-exists"
+    if restore_result == "source-replaced":
+        return "quarantine-restore-source-missing"
+    if restore_result == "unsupported":
+        return "quarantine-restore-unavailable"
+    return "quarantine-restore-error"
+
+
+def _rmtree_expected(parent_fd: int, name: str, expected_stat: os.stat_result) -> str | None:
+    """Delete only the child that still matches the descriptor-held artifact."""
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return "quarantine-child-missing"
+    except OSError:
+        return "cleanup-error"
+    if not _same_stat_identity(current, expected_stat):
+        return "quarantine-child-replaced"
+    if not stat.S_ISDIR(current.st_mode):
+        return "quarantine-child-replaced"
+    if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        return "cleanup-error"
+    try:
+        shutil.rmtree(name, dir_fd=parent_fd)
+    except OSError:
+        return "cleanup-error"
+    return None
 
 
 def _rename_no_replace(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -224,6 +225,8 @@ def test_cleanup_preserves_replaced_candidate_and_outside_data(
     assert raced is True
     assert result.removed == ()
     assert result.skipped[0].reason == "quarantine-child-replaced"
+    assert (linked / "build").is_symlink()
+    assert (linked / "build").resolve() == outside.resolve()
     assert sentinel.read_text(encoding="utf-8") == "do not delete"
     assert (original_build / "obj.o").read_bytes() == b"x"
 
@@ -365,17 +368,107 @@ def test_cleanup_preserves_child_replaced_after_identity_check(
     assert "fd" in selected
     assert result.removed == ()
     assert result.skipped[0].reason == "quarantine-child-replaced"
+    assert (linked / "build/sentinel.txt").read_bytes() == b"preserve replacement"
     container_fd = selected["fd"]
     assert isinstance(container_fd, int)
-    replacement_fd = os.open(str(selected["name"]), os.O_RDONLY | os.O_DIRECTORY, dir_fd=container_fd)
+    replacement_fd = os.open("reviewed", os.O_RDONLY | os.O_DIRECTORY, dir_fd=container_fd)
     try:
-        sentinel_fd = os.open("sentinel.txt", os.O_RDONLY, dir_fd=replacement_fd)
+        sentinel_fd = os.open("obj.o", os.O_RDONLY, dir_fd=replacement_fd)
         try:
-            assert os.read(sentinel_fd, 64) == b"preserve replacement"
+            assert os.read(sentinel_fd, 64) == b"x"
         finally:
             os.close(sentinel_fd)
     finally:
         os.close(replacement_fd)
+        os.close(container_fd)
+
+
+def test_cleanup_preserves_replacement_before_expected_rmtree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _, linked = _make_repo_and_linked_worktree(tmp_path)
+    _write_ignored_file(linked / "build/obj.o", b"x")
+    report = artifacts.inspect_artifacts(
+        [linked], min_age_days=0, min_bytes=0, now=NOW, active_commands=[]
+    )
+    real_rmtree_expected = getattr(artifacts, "_rmtree_expected", None)
+    selected: dict[str, int | str] = {}
+
+    def replace_before_rmtree(parent_fd, name, expected_stat):
+        if "fd" not in selected:
+            os.rename(name, "reviewed", src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.mkdir(name, dir_fd=parent_fd)
+            replacement_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=parent_fd)
+            try:
+                sentinel_fd = os.open(
+                    "sentinel.txt",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=replacement_fd,
+                )
+                try:
+                    os.write(sentinel_fd, b"preserve before rmtree")
+                finally:
+                    os.close(sentinel_fd)
+            finally:
+                os.close(replacement_fd)
+            selected["fd"] = os.dup(parent_fd)
+            selected["name"] = name
+        if real_rmtree_expected is None:
+            return "quarantine-child-replaced"
+        return real_rmtree_expected(parent_fd, name, expected_stat)
+
+    monkeypatch.setattr(artifacts, "_rmtree_expected", replace_before_rmtree, raising=False)
+    result = artifacts.cleanup_artifacts(report.candidates, apply=True, active_commands=[])
+
+    assert "fd" in selected
+    assert result.removed == ()
+    assert result.skipped[0].reason == "quarantine-child-replaced"
+    assert (linked / "build/sentinel.txt").read_bytes() == b"preserve before rmtree"
+    container_fd = selected["fd"]
+    assert isinstance(container_fd, int)
+    reviewed_fd = os.open("reviewed", os.O_RDONLY | os.O_DIRECTORY, dir_fd=container_fd)
+    try:
+        object_fd = os.open("obj.o", os.O_RDONLY, dir_fd=reviewed_fd)
+        try:
+            assert os.read(object_fd, 1) == b"x"
+        finally:
+            os.close(object_fd)
+    finally:
+        os.close(reviewed_fd)
+        os.close(container_fd)
+
+
+def test_cleanup_retains_replaced_quarantine_container(tmp_path: Path, monkeypatch) -> None:
+    _, linked = _make_repo_and_linked_worktree(tmp_path)
+    _write_ignored_file(linked / "build/obj.o", b"x")
+    report = artifacts.inspect_artifacts(
+        [linked], min_age_days=0, min_bytes=0, now=NOW, active_commands=[]
+    )
+    real_create_container = artifacts._create_quarantine_container
+    selected: dict[str, int | str] = {}
+
+    def replace_opened_container(parent_fd, artifact_name):
+        container = real_create_container(parent_fd, artifact_name)
+        assert container is not None
+        reviewed_name = f"{container.name}.reviewed"
+        os.rename(container.name, reviewed_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.mkdir(container.name, dir_fd=parent_fd)
+        selected["fd"] = os.dup(parent_fd)
+        selected["name"] = container.name
+        return container
+
+    monkeypatch.setattr(artifacts, "_create_quarantine_container", replace_opened_container)
+    result = artifacts.cleanup_artifacts(report.candidates, apply=True, active_commands=[])
+
+    assert result.removed == (linked / "build",)
+    assert result.skipped[0].reason == "quarantine-container-retained"
+    container_fd = selected["fd"]
+    assert isinstance(container_fd, int)
+    try:
+        replacement_stat = os.stat(str(selected["name"]), dir_fd=container_fd, follow_symlinks=False)
+        assert stat.S_ISDIR(replacement_stat.st_mode)
+    finally:
         os.close(container_fd)
 
 
