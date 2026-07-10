@@ -2701,12 +2701,14 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
         sorted = (u8*) assets;
         if (mnDiagram_CountUnlockedFightersInline() > i) {
             int fighter_id;
+            HSD_JObj* right;
             fighter_id =
                 mnDiagram_GetVisibleFighterCursorFrom(sorted, arg2, i);
             header = mnDiagram_CreateFighterHeader(fighter_id, assets);
             spacing = HSD_JObjGetTranslationX(
                           parent = data->jobjs[8]) -
-                      HSD_JObjGetTranslationX(data->jobjs[7]);
+                      HSD_JObjGetTranslationX(
+                          right = data->jobjs[7]);
             HSD_JObjSetTranslateX(header, spacing * i);
             parent = data->jobjs[7];
             HSD_JObjAddChild(parent, header);
