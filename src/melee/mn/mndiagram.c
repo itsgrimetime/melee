@@ -1098,6 +1098,7 @@ static inline int mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
                                                         int rank)
 {
     int result;
+    int result_alias;
     u8* p;
     u8* p2;
     int remaining;
@@ -1125,7 +1126,7 @@ static inline int mnDiagram_GetVisibleFighterCursorFrom(u8* sorted, int start,
         }
         remaining--;
     }
-    return result;
+    return result_alias = result;
 }
 
 static inline int mnDiagram_GetVisibleFighterCursorFrom2(u8* sorted, int start,
