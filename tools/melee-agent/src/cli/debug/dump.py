@@ -85,6 +85,7 @@ __all__ = [
     '_remote_retained_source_blocker_payload',
     '_remote_retained_source_blocker_sidecar_path',
     '_remote_retained_source_dependency_context_evidence',
+    '_remote_retained_source_missing_includes',
     '_remote_stage_source_via_scp',
     '_remote_staging_ack_confirmed',
     '_remote_staging_ack_error',
@@ -122,6 +123,31 @@ class _RemotePcdumpResult:
 
 
 _REMOTE_STAGE_SOURCE_STDIN_MAX_BYTES = 64 * 1024
+
+
+_MISSING_INCLUDE_PATTERNS = (
+    re.compile(
+        r"""
+        \bfile\s+
+        (?P<quote>["'])
+        (?P<path>[^"']+\.(?:h|hpp|inc))
+        (?P=quote)
+        \s+cannot\s+be\s+opened\b
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    ),
+    re.compile(
+        r"""
+        \bcannot\s+open\s+include
+        (?:\s+file)?
+        [:\s]+
+        (?P<quote>["'])?
+        (?P<path>[^"'\s:]+)
+        (?P=quote)?
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    ),
+)
 
 
 
@@ -263,6 +289,8 @@ def _remote_retained_source_dependency_context_evidence(
     stderr_text: str,
 ) -> bool:
     lowered = stderr_text.lower()
+    if _remote_retained_source_missing_includes(stderr_text):
+        return True
     return any(
         marker in lowered
         for marker in (
@@ -279,6 +307,19 @@ def _remote_retained_source_dependency_context_evidence(
             "not found",
         )
     )
+
+
+def _remote_retained_source_missing_includes(stderr_text: str) -> list[str]:
+    missing: list[str] = []
+    seen: set[str] = set()
+    for pattern in _MISSING_INCLUDE_PATTERNS:
+        for match in pattern.finditer(stderr_text):
+            include = match.group("path").strip().replace("\\", "/")
+            if not include or include in seen:
+                continue
+            missing.append(include)
+            seen.add(include)
+    return missing
 
 
 
@@ -329,9 +370,13 @@ def _remote_retained_source_blocker_payload(
     if sidecar_path is not None:
         payload["blocker_json"] = str(sidecar_path)
     if terminal_blocker == "remote-retained-source-dependency-context-mismatch":
+        missing_includes = _remote_retained_source_missing_includes(
+            remote_result.stderr or ""
+        )
         required_files = [
             remote_result.compile_source_rel,
             remote_result.staged_source,
+            *missing_includes,
         ]
         payload["dependency_context"] = {
             "kind": "detached-or-local dependency context",
@@ -344,6 +389,8 @@ def _remote_retained_source_blocker_payload(
                 "other local dependency context needed to compile it."
             ),
         }
+        if missing_includes:
+            payload["dependency_context"]["missing_includes"] = missing_includes
         payload["next_steps"] = [
             "Push a branch containing the local dependency context and rerun "
             "`debug dump remote --branch <remote-ref>`.",
@@ -3376,4 +3423,3 @@ def pcdump_local(
 
     print(f"wrote: {output}", file=sys.stderr)
     _finish_pcdump_local_run()
-

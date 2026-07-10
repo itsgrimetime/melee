@@ -7370,6 +7370,79 @@ def test_dump_remote_retained_source_dependency_context_writes_blocker_sidecar(
     assert stderr_json["blocker_json"] == str(sidecar)
 
 
+def test_dump_remote_retained_source_missing_include_is_dependency_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    source = melee_root / "src" / "melee" / "mn" / "sample.c"
+    source.parent.mkdir(parents=True)
+    source.write_text('#include "lb/lbspdisplay.h"\n', encoding="utf-8")
+    retained = melee_root / "build" / "diagnostics" / "case" / "candidate.c"
+    retained.parent.mkdir(parents=True)
+    retained_text = '#include "lb/lbspdisplay.h"\nvoid fn(void) {}\n'
+    retained.write_text(retained_text, encoding="utf-8")
+    output = tmp_path / "force_phys.pcdump.txt"
+    source_rel = "src/melee/mn/sample.c"
+    retained_rel = "build/diagnostics/case/candidate.c"
+    ack = _remote_staging_ack(retained_text.encode("utf-8"))
+
+    class FakePopen:
+        def __init__(self, cmd, *, stdin, stdout, stderr):
+            self.returncode = 1
+
+        def communicate(self, input=None, timeout=None):
+            return (
+                b"",
+                ack
+                + (
+                    '### mwcceppc.exe Compiler:\n'
+                    'File "lb/lbspdisplay.h" cannot be opened\n'
+                ).encode("utf-8"),
+            )
+
+    def fake_resolve(path, *, label="source file"):
+        if str(path) == str(retained):
+            return retained_rel
+        if str(path) in {str(source), source_rel}:
+            return source_rel
+        return str(path)
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(debug_cli, "_resolve_src_relative", fake_resolve)
+    monkeypatch.setattr(debug_cli.subprocess, "Popen", FakePopen)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "dump",
+            "remote",
+            str(retained),
+            "--unit-source",
+            source_rel,
+            "--function",
+            "mnDiagram_DrawNameHeaders",
+            "--output",
+            str(output),
+            "--branch",
+            "master",
+        ],
+    )
+
+    assert result.exit_code == 1, result.stdout + result.stderr
+    sidecar = Path(f"{output}.blocker.json")
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert (
+        payload["terminal_blocker"]
+        == "remote-retained-source-dependency-context-mismatch"
+    )
+    assert payload["dependency_context"]["missing_includes"] == [
+        "lb/lbspdisplay.h"
+    ]
+    assert "lb/lbspdisplay.h" in payload["dependency_context"]["required_files"]
+
+
 def test_dump_remote_retained_source_inference_requires_unit_hint(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
