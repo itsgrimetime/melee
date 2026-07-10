@@ -480,7 +480,11 @@ def _is_member_access_identifier(text: str, start: int) -> bool:
     return arrow_start >= 0 and text[arrow_start] == "-"
 
 
-def _is_unary_address_of_identifier(text: str, start: int) -> bool:
+def _is_direct_unary_address_of_identifier(
+    text: str,
+    start: int,
+    end: int,
+) -> bool:
     operator_index = _previous_nonspace_index(text, start)
     if operator_index < 0 or text[operator_index] != "&":
         return False
@@ -490,11 +494,21 @@ def _is_unary_address_of_identifier(text: str, start: int) -> bool:
     previous = text[previous_index]
     if previous in {"&", "*"}:
         return False
-    return not (
+    if (
         previous.isalnum()
         or previous == "_"
         or previous in ")]"
-    )
+    ):
+        return False
+
+    after_index = end
+    while after_index < len(text) and text[after_index].isspace():
+        after_index += 1
+    if after_index >= len(text):
+        return True
+    if text[after_index] in {"[", ".", "("}:
+        return False
+    return not text.startswith(("->", "++", "--"), after_index)
 
 
 def _local_reads(text: str, known_locals: set[str]) -> list[tuple[str, int]]:
@@ -505,7 +519,11 @@ def _local_reads(text: str, known_locals: set[str]) -> list[tuple[str, int]]:
             continue
         if _is_member_access_identifier(text, match.start()):
             continue
-        if _is_unary_address_of_identifier(text, match.start()):
+        if _is_direct_unary_address_of_identifier(
+            text,
+            match.start(),
+            match.end(),
+        ):
             continue
         if _is_simple_assignment_lhs(text, match.start(), match.end()):
             continue
