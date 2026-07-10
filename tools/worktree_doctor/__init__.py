@@ -44,6 +44,7 @@ TOOLING_FILES = [
     "tools/mwcc_debug/win/run_pcdump.ps1",
     "tools/workflow/status.sh",
     "tools/workflow/create-pr.sh",
+    "tools/workflow/mwcc-inspect.sh",
     "tools/workflow/update-pr.sh",
     "tools/workflow/pr-worktree.sh",
 ]

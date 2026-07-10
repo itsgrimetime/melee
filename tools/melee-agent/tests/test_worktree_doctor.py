@@ -265,6 +265,41 @@ def test_fix_refreshes_stale_mwcc_debug_overlay_from_master(
     )
 
 
+def test_fix_refreshes_stale_mwcc_inspect_workflow_from_master(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+
+    assert "tools/workflow/mwcc-inspect.sh" in doctor_mod.TOOLING_FILES
+
+    subprocess.run(["git", "init", "-b", "master"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Agent"], cwd=tmp_path, check=True)
+    wrapper = tmp_path / "tools" / "workflow" / "mwcc-inspect.sh"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("new\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tools/workflow/mwcc-inspect.sh"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "master inspect wrapper"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "switch", "-c", "matcher"], cwd=tmp_path, check=True, capture_output=True)
+    wrapper.write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-am", "stale inspect wrapper"], cwd=tmp_path, check=True, capture_output=True)
+
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod.doctor, "TOOLING_FILES", ["tools/workflow/mwcc-inspect.sh"])
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_tooling_overlay()
+
+    assert wrapper.read_text(encoding="utf-8") == "new\n"
+    assert any(
+        result.level == "ok"
+        and "refreshed stale tooling from master: tools/workflow/mwcc-inspect.sh"
+        in result.message
+        for result in doctor.results
+    )
+
+
 def test_fix_removes_local_exclude_that_hides_tracked_melee_agent(tmp_path: Path) -> None:
     doctor_mod = load_worktree_doctor()
     subprocess.run(["git", "init", "-b", "master"], cwd=tmp_path, check=True, capture_output=True)
