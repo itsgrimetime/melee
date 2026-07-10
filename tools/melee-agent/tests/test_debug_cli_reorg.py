@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -19,12 +20,69 @@ import typer
 from typer.testing import CliRunner
 
 import src.cli.debug as debug_cli
+import src.cli.debug.dump as dump_cli
 import src.cli.debug.target as target_cli
 from src.cli import app
 from src.mwcc_debug import tier3_search as tier3_mod
 from src.mwcc_debug.artifacts import ArtifactRun, create_run
 
 runner = CliRunner()
+
+
+def test_cache_syncing_local_dump_decorator_locks_only_when_syncing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    @contextmanager
+    def fake_lock(root: Path, *, label: str = "checkdiff build/report"):
+        assert root == tmp_path
+        assert label == "local pcdump cache sync"
+        events.append("lock-enter")
+        try:
+            yield
+        finally:
+            events.append("lock-exit")
+
+    def callback(no_cache_sync: bool) -> None:
+        events.append("callback")
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", tmp_path)
+    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", fake_lock)
+
+    decorator = getattr(dump_cli, "_lock_cache_syncing_local_dump", None)
+    assert decorator is not None
+    wrapped = decorator(callback)
+    assert inspect.signature(wrapped) == inspect.signature(callback)
+
+    wrapped(no_cache_sync=False)
+    assert events == ["lock-enter", "callback", "lock-exit"]
+
+    events.clear()
+    wrapped(True)
+    assert events == ["callback"]
+
+
+def test_checkdiff_repo_lock_reenters_same_thread_and_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fcntl = pytest.importorskip("fcntl")
+    operations: list[int] = []
+
+    def fake_flock(_fd: int, operation: int) -> None:
+        operations.append(operation)
+
+    monkeypatch.delenv("CHECKDIFF_NO_LOCK", raising=False)
+    monkeypatch.setattr(fcntl, "flock", fake_flock)
+
+    with debug_cli._acquire_checkdiff_repo_lock(tmp_path):
+        with debug_cli._acquire_checkdiff_repo_lock(tmp_path):
+            assert operations == [fcntl.LOCK_EX | fcntl.LOCK_NB]
+        assert operations == [fcntl.LOCK_EX | fcntl.LOCK_NB]
+
+    assert operations == [fcntl.LOCK_EX | fcntl.LOCK_NB, fcntl.LOCK_UN]
 
 
 def _make_cli_completed_run(
@@ -13256,20 +13314,25 @@ def test_dump_local_diff_holds_checkdiff_lock_while_staging_object(
     build_o.write_bytes(b"original-object")
 
     locked = False
+    lock_depth = 0
     events: list[str] = []
 
     class FakeLock:
         def __enter__(self):
-            nonlocal locked
-            locked = True
-            events.append("lock-enter")
+            nonlocal lock_depth, locked
+            if lock_depth == 0:
+                locked = True
+                events.append("lock-enter")
+            lock_depth += 1
 
         def __exit__(self, exc_type, exc, tb):
-            nonlocal locked
-            events.append("lock-exit")
-            locked = False
+            nonlocal lock_depth, locked
+            lock_depth -= 1
+            if lock_depth == 0:
+                events.append("lock-exit")
+                locked = False
 
-    def fake_lock(root: Path):
+    def fake_lock(root: Path, *, label: str = "checkdiff build/report"):
         assert root == melee_root
         return FakeLock()
 
@@ -13348,18 +13411,23 @@ def test_dump_local_force_frame_from_diff_patches_before_final_checkdiff(
     build_o.write_bytes(b"original-object")
 
     locked = False
+    lock_depth = 0
     events: list[str] = []
 
     class FakeLock:
         def __enter__(self):
-            nonlocal locked
-            locked = True
-            events.append("lock-enter")
+            nonlocal lock_depth, locked
+            if lock_depth == 0:
+                locked = True
+                events.append("lock-enter")
+            lock_depth += 1
 
         def __exit__(self, exc_type, exc, tb):
-            nonlocal locked
-            events.append("lock-exit")
-            locked = False
+            nonlocal lock_depth, locked
+            lock_depth -= 1
+            if lock_depth == 0:
+                events.append("lock-exit")
+                locked = False
 
     def fake_run(cmd, **kwargs):
         nonlocal locked
@@ -13403,7 +13471,11 @@ def test_dump_local_force_frame_from_diff_patches_before_final_checkdiff(
     monkeypatch.setattr(debug_cli, "_ninja_cflags_for_unit", lambda src_rel: ("", "mwcc"))
     monkeypatch.setattr(debug_cli, "_find_unit_for_function", lambda function, root: "melee/mn/sample")
     monkeypatch.setattr(debug_cli, "_cache_settle_seconds", lambda env=None: 0.0)
-    monkeypatch.setattr(debug_cli, "_acquire_checkdiff_repo_lock", lambda root: FakeLock())
+    monkeypatch.setattr(
+        debug_cli,
+        "_acquire_checkdiff_repo_lock",
+        lambda root, **_kwargs: FakeLock(),
+    )
     monkeypatch.setattr(debug_cli.subprocess, "run", fake_run)
     monkeypatch.setattr(force_frame_mod, "derive_force_frame_patch_plan", fake_derive)
     monkeypatch.setattr(force_frame_mod, "apply_force_frame_patch_plan", fake_apply)

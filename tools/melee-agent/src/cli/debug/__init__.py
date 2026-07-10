@@ -24,6 +24,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from enum import Enum
@@ -392,6 +393,7 @@ def _checkdiff_env_without_fingerprint() -> dict[str, str]:
     return env
 
 
+_CHECKDIFF_REPO_LOCK_STATE = threading.local()
 
 
 @contextmanager
@@ -412,9 +414,24 @@ def _acquire_checkdiff_repo_lock(
         yield
         return
 
+    root_key = str(melee_root.resolve())
+    depths = getattr(_CHECKDIFF_REPO_LOCK_STATE, "depths", None)
+    if depths is None:
+        depths = {}
+        _CHECKDIFF_REPO_LOCK_STATE.depths = depths
+    if depths.get(root_key, 0):
+        depths[root_key] += 1
+        try:
+            yield
+        finally:
+            depths[root_key] -= 1
+            if depths[root_key] == 0:
+                del depths[root_key]
+        return
+
     lock_dir = Path(tempfile.gettempdir()) / "melee-checkdiff-locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha1(str(melee_root.resolve()).encode()).hexdigest()[:12]
+    digest = hashlib.sha1(root_key.encode()).hexdigest()[:12]
     lock_path = lock_dir / f"repo.{digest}.lock"
     lock_file = lock_path.open("w")
     try:
@@ -441,7 +458,13 @@ def _acquire_checkdiff_repo_lock(
                     continue
             elapsed = time.monotonic() - start
             print(f"acquired {label} lock after {elapsed:.1f}s", file=sys.stderr)
-        yield
+        depths[root_key] = 1
+        try:
+            yield
+        finally:
+            depths[root_key] -= 1
+            if depths[root_key] == 0:
+                del depths[root_key]
     finally:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

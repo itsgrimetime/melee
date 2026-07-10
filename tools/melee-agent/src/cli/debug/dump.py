@@ -14,7 +14,9 @@ semantics, since the patched name must resolve against __init__ at call time.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -2009,7 +2011,31 @@ def restore_object_report(
         raise typer.Exit(proc.returncode)
 
 
+def _lock_cache_syncing_local_dump(callback: Callable[..., Any]) -> Callable[..., Any]:
+    """Serialize cache-syncing local dumps with source-scoring work."""
+
+    @functools.wraps(callback)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        bound_args = inspect.signature(callback).bind_partial(*args, **kwargs)
+        if bound_args.arguments.get("no_cache_sync", False):
+            return callback(*args, **kwargs)
+
+        from src.cli.debug import (  # noqa: PLC0415
+            DEFAULT_MELEE_ROOT,
+            _acquire_checkdiff_repo_lock,
+        )
+
+        with _acquire_checkdiff_repo_lock(
+            DEFAULT_MELEE_ROOT,
+            label="local pcdump cache sync",
+        ):
+            return callback(*args, **kwargs)
+
+    return wrapped
+
+
 @dump_app.command(name="local")
+@_lock_cache_syncing_local_dump
 def pcdump_local(
     c_file: Annotated[
         Optional[str],
@@ -3350,6 +3376,4 @@ def pcdump_local(
 
     print(f"wrote: {output}", file=sys.stderr)
     _finish_pcdump_local_run()
-
-
 
