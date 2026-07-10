@@ -2425,7 +2425,8 @@ void gm_80164910(int arg0)
 void gm_80164A0C(u8 arg0)
 {
     u16* unlockable_character_bitfield = gmMainLib_8015ED8C();
-    u8 idx = fn_801605EC(lbl_803B78A4[arg0]);
+    s32 tmp_p52845 = lbl_803B78A4[arg0];
+    u8 idx = fn_801605EC(tmp_p52845);
     if (idx != NUM_UNLOCKABLE_CHARACTERS) {
         *unlockable_character_bitfield &= (u16) ~(1ULL << idx);
     }
@@ -2628,20 +2629,20 @@ bool gm_80165084(void)
 
 void fn_801650E8(void)
 {
-    Ground_801C5800();
+    Ground_EnableMatchCamera();
 }
 
-void fn_80165108(int slot, int arg1)
+void gm_EnablePlayerPauseCamera(int playerSlot, int playerId)
 {
-    if (slot == -1) {
-        Camera_8002F73C(0xB, 5);
+    if (playerSlot == -1) {
+        Camera_SetUpPauseCameraWithDefaultZoom(0xB, 5);
         return;
     }
-    if (((Player_GetPlayerSlotType(slot) == Gm_PKind_Human) ||
-         (Player_GetPlayerSlotType(slot) == Gm_PKind_Cpu)) &&
-        (Player_GetEntity(slot) != NULL))
+    if (((Player_GetPlayerSlotType(playerSlot) == Gm_PKind_Human) ||
+         (Player_GetPlayerSlotType(playerSlot) == Gm_PKind_Cpu)) &&
+        (Player_GetEntity(playerSlot) != NULL))
     {
-        Camera_8002F73C(slot, arg1);
+        Camera_SetUpPauseCameraWithDefaultZoom(playerSlot, playerId);
     }
 }
 
@@ -2672,7 +2673,7 @@ void gm_80165268(int unused)
 
 void gm_80165290(int x)
 {
-    Camera_8002F8F4();
+    Camera_SetModeToFixed();
 }
 
 void fn_801652B0(s32 arg0, s32 arg1)
@@ -3843,9 +3844,9 @@ void gm_80167BC8(VsModeData* vs_data)
     }
 
     if (rules->pause != 0) {
-        vs_data->data.rules.x2_4 = 0;
+        vs_data->data.rules.disable_pausing = 0;
     } else {
-        vs_data->data.rules.x2_4 = 1;
+        vs_data->data.rules.disable_pausing = 1;
     }
     if ((rules->score_display != 0) && (rules->mode == 0)) {
         vs_data->data.rules.x3_0 = 1;

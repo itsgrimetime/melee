@@ -688,7 +688,7 @@ u8 mnDiagram_GetLeastPlayedFighter(u8 name_idx)
 {
     int i;
     int min_fighter;
-    register int count;
+    s32 count;
 
     if (mnDiagram_AllPlayTimesZero(name_idx)) {
         return 0x19;
@@ -916,7 +916,7 @@ static inline u8 mnDiagram_GetVisibleNameFrom(u8* sorted, int start, int rank)
 
 static inline u8 mnDiagram_GetVisibleNameFrom2(u8* sorted, int start, int rank)
 {
-    register int remaining;
+    int remaining;
     int idx;
     u8* p;
     u8* p2;
@@ -2120,10 +2120,10 @@ void mnDiagram_UpdateScrollArrows(HSD_GObj* gobj)
     u8 result2;
     Diagram* data = gobj->user_data;
     mnDiagram_AnimTable* tbl = GET_DIAGRAM_ANIM_TABLE();
-    register HSD_JObj* jobj;
+    HSD_JObj* jobj;
     u8* ptr2;
     u8* ptr;
-    register s32 count;
+    s32 count;
     s32 i;
     u8* sorted = mnDiagram_804A0750.sorted_fighters;
     s32 result;
@@ -2561,6 +2561,13 @@ void mnDiagram_DrawGridValues(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     } while (var_r30 <= 0xA);
 }
 
+static inline void mnDiagram_TextSetPos(HSD_Text* text, f32 x, f32 y, f32 z)
+{
+    text->pos_x = x;
+    text->pos_y = y;
+    text->pos_z = z;
+}
+
 void mnDiagram_DrawNameHeaders(void* arg0, s32 arg1, s32 arg2)
 {
     Diagram* data = ((HSD_GObj*) arg0)->user_data;
@@ -2568,30 +2575,20 @@ void mnDiagram_DrawNameHeaders(void* arg0, s32 arg1, s32 arg2)
     HSD_Text* row_text;
     u8 name_byte;
     s32 name_id;
-    Vec3 pos;
+    Vec2 pos;
 
     // Column headers
     {
         HSD_Text* text;
-        register f32 blocker;
         text = HSD_SisLib_803A6754(0, 1);
         data->col_header_text = text;
-        text->font_size.x = mnDiagram_804DBFA4;
-        text->font_size.y = mnDiagram_804DBFA8;
+        text->font_size.x = 0.02f;
+        text->font_size.y = 0.03f;
         {
             HSD_JObj* j = data->jobjs[7];
-            f32 y;
-            f32 z;
-            f32 x;
-            (j ? (void) 0 : __assert("jobj.h", 1019, "jobj"));
-            z = j->translate.z;
-            y = mnDiagram_804DBFAC - HSD_JObjGetTranslationY(j);
-            x = mnDiagram_804DBFB0 + HSD_JObjGetTranslationX(j);
-            text->pos_x = x;
-            text->pos_y = y;
-            text->pos_z = z;
-            // Keeps the column header FPR allocation aligned.
-            blocker == blocker;
+            mnDiagram_TextSetPos(text, -1.3f + HSD_JObjGetTranslationX(j),
+                                 -0.5f - HSD_JObjGetTranslationY(j),
+                                 HSD_JObjGetTranslationZ(j));
         }
 
         {
@@ -2614,16 +2611,16 @@ void mnDiagram_DrawNameHeaders(void* arg0, s32 arg1, s32 arg2)
     // Row headers
     row_text = HSD_SisLib_803A6754(0, 1);
     data->row_header_text = row_text;
-    row_text->font_size.x = mnDiagram_804DBFA4;
-    row_text->font_size.y = mnDiagram_804DBFA8;
+    row_text->font_size.x = 0.02f;
+    row_text->font_size.y = 0.03f;
     {
         HSD_JObj* j = data->jobjs[9];
-        pos.z = HSD_JObjGetTranslationZ(j);
-        pos.y = mnDiagram_804DBFAC - HSD_JObjGetTranslationY(j);
-        pos.x = mnDiagram_804DBFB0 + HSD_JObjGetTranslationX(j);
+        f32 z = HSD_JObjGetTranslationZ(j);
+        pos.y = -0.5f - HSD_JObjGetTranslationY(j);
+        pos.x = -1.3f + HSD_JObjGetTranslationX(j);
         row_text->pos_x = pos.x;
         row_text->pos_y = pos.y;
-        row_text->pos_z = pos.z;
+        row_text->pos_z = z;
     }
 
     {

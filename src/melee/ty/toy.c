@@ -1454,6 +1454,15 @@ void Toy_80306BB8(HSD_GObj* gobj)
     }
 }
 
+static inline void _Toy_80306C5C_GetOffset(unsigned char idx, s32* offset)
+{
+    unsigned char tmp;
+    *offset = (tmp = idx) * 0xC;
+}
+static inline void _Toy_80306C5C_InitIdx(s32* idx)
+{
+    *idx = 0;
+}
 void _Toy_80306C5C(HSD_GObj* arg0)
 {
     s32 idx;
@@ -1461,13 +1470,13 @@ void _Toy_80306C5C(HSD_GObj* arg0)
     TyLightData* base;
     HSD_GObj* data;
     u8* table;
-    unsigned char new_var;
+    unsigned char pad;
     HSD_LObj* lobj;
     HSD_LObj* next;
     void* unused1;
     void* unused2;
-    idx = 0;
-    offset = (new_var = idx) * 0xC;
+    _Toy_80306C5C_InitIdx(&idx);
+    _Toy_80306C5C_GetOffset(idx, &offset);
     base = (TyLightData*) Toy_sbss_804D6ED4;
     data = base->gobj;
     table = (u8*) base + offset;
@@ -1486,7 +1495,7 @@ void _Toy_80306C5C(HSD_GObj* arg0)
         data = base->gobj;
     }
 
-    HSD_LObjAnimAll(((HSD_GObj*) arg0)->hsd_obj);
+    HSD_LObjAnimAll(arg0->hsd_obj);
 }
 
 void Toy_RemoveUserData(void* ptr)
@@ -2641,7 +2650,7 @@ void _Toy_80308F04(HSD_CObj* cobj)
 
             _Toy_80308DC8(cobj);
 
-            _Toy_sbss_804D6E80 = _Toy_sbss_804D6E80 + 0.0013187003F;
+            _Toy_sbss_804D6E80 += 0.0013187003F;
             if (top != _Toy_sbss_804D6E80) {
                 f32 val = _Toy_sbss_804D6E80;
                 if (val > 0.049584F) {
@@ -2650,7 +2659,7 @@ void _Toy_80308F04(HSD_CObj* cobj)
                 HSD_CObjSetTop(cobj, val);
             }
 
-            _Toy_sbss_804D6E84 = _Toy_sbss_804D6E84 + 0.00008119978F;
+            _Toy_sbss_804D6E84 += 0.00008119978F;
             if (bottom != _Toy_sbss_804D6E84) {
                 f32 val = _Toy_sbss_804D6E84;
                 if (val > -0.035585F) {
@@ -2659,7 +2668,7 @@ void _Toy_80308F04(HSD_CObj* cobj)
                 HSD_CObjSetBottom(cobj, val);
             }
 
-            _Toy_sbss_804D6E88 = _Toy_sbss_804D6E88 + 0.0032531999F;
+            _Toy_sbss_804D6E88 += 0.0032531999F;
             if (right != _Toy_sbss_804D6E88) {
                 f32 val = _Toy_sbss_804D6E88;
                 if (val > 0.076839F) {
@@ -2668,7 +2677,7 @@ void _Toy_80308F04(HSD_CObj* cobj)
                 HSD_CObjSetRight(cobj, val);
             }
 
-            _Toy_sbss_804D6E8C = _Toy_sbss_804D6E8C + 0.0017468001F;
+            _Toy_sbss_804D6E8C += 0.0017468001F;
             if (left != _Toy_sbss_804D6E8C) {
                 HSD_CObjSetLeft(cobj, _Toy_sbss_804D6E8C);
             }
