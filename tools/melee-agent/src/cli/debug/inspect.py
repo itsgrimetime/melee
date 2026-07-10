@@ -1303,6 +1303,9 @@ def _collect_order_target_inputs(
     force_vector_timeout: float | None = None,
     retain_force_vector_pcdumps: bool = False,
     node_set_delta_fallback: bool = False,
+    checkdiff_payload: dict | None = None,
+    checkdiff_payload_path: Path | None = None,
+    baseline_pcdump: Path | None = None,
 ):
     """Collect the §4.2 tool outputs for order-target derivation.
 
@@ -1376,25 +1379,45 @@ def _collect_order_target_inputs(
         / "force_vector"
     )
     fresh_natural_pcdump: str | None = None
+    baseline_pcdump_sha256 = ""
 
     with _acquire_checkdiff_repo_lock(melee_root, label="order-target derivation"):
-        # ---- Step 1: FRESH checkdiff (WITH build) --------------------------
-        proc = subprocess.run(
-            [sys.executable, str(_checkdiff_script_path(melee_root)),
-             function, "--format", "json"],
-            capture_output=True, text=True,
-            timeout=max(checkdiff_timeout, 600),  # the build dominates
-            cwd=melee_root, env=child_env,
-        )
-        # rc 0=match, 1=mismatch (both emit JSON); anything else, or an empty
-        # stdout (e.g. "ninja failed:" goes to stderr with rc=1), is a hard
-        # failure — surface it cleanly instead of a raw JSONDecodeError.
-        if proc.returncode not in (0, 1) or not (proc.stdout or "").strip():
-            raise RuntimeError(
-                f"checkdiff failed (rc={proc.returncode}): "
-                f"{(proc.stderr or proc.stdout or '')[-500:]}"
+        # ---- Step 1: checkdiff evidence ------------------------------------
+        if checkdiff_payload is None and checkdiff_payload_path is not None:
+            try:
+                checkdiff_payload = json.loads(
+                    checkdiff_payload_path.read_text(encoding="utf-8")
+                )
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"checkdiff JSON could not be parsed: {exc}"
+                ) from exc
+            except OSError as exc:
+                raise RuntimeError(
+                    f"checkdiff JSON could not be read: {exc}"
+                ) from exc
+        if checkdiff_payload is None:
+            proc = subprocess.run(
+                [sys.executable, str(_checkdiff_script_path(melee_root)),
+                 function, "--format", "json"],
+                capture_output=True, text=True,
+                timeout=max(checkdiff_timeout, 600),  # the build dominates
+                cwd=melee_root, env=child_env,
             )
-        checkdiff_payload = json.loads(proc.stdout)
+            # rc 0=match, 1=mismatch (both emit JSON); anything else, or an
+            # empty stdout (e.g. "ninja failed:" goes to stderr with rc=1), is a
+            # hard failure — surface it cleanly instead of a raw JSONDecodeError.
+            if proc.returncode not in (0, 1) or not (proc.stdout or "").strip():
+                raise RuntimeError(
+                    f"checkdiff failed (rc={proc.returncode}): "
+                    f"{(proc.stderr or proc.stdout or '')[-500:]}"
+                )
+            checkdiff_payload = json.loads(proc.stdout)
+        payload_function = checkdiff_payload.get("function")
+        if isinstance(payload_function, str) and payload_function != function:
+            raise RuntimeError(
+                f"checkdiff JSON is for {payload_function}, not {function}"
+            )
         classification = checkdiff_payload.get("classification") or {}
         checkdiff_primary = (
             classification.get("primary")
@@ -1445,7 +1468,7 @@ def _collect_order_target_inputs(
                 forced_decisions_sha256=[],
                 baseline_source_sha256=hashlib.sha256(
                     tu_c.read_bytes()).hexdigest()[:32],
-                baseline_pcdump_sha256="",
+                baseline_pcdump_sha256=baseline_pcdump_sha256,
                 force_cap_exceeded=False,
                 direct_evidence_register_only=direct_evidence_register_only,
                 coupled_residual=None,
@@ -1461,48 +1484,63 @@ def _collect_order_target_inputs(
             # solve loop turns the empty phys_target into the exit-3 abstain.
             return _inert()
 
-        # ---- FRESH baseline pcdump (explicit temp path, never the cache) ---
-        baseline_dump = (
-            tu_c.parent
-            / f".{function}.order-target.baseline.{os.getpid()}.pcdump.txt"
-        )
-        proc = subprocess.run(
-            [sys.executable, "-m", "src.cli", "debug", "dump", "local",
-             str(tu_c), "--function", function,
-             "--output", str(baseline_dump), "--no-cache-sync"],
-            cwd=melee_root,
-            capture_output=True, text=True, timeout=600, env=child_env,
-        )
-        if proc.returncode != 0 or not baseline_dump.exists():
-            baseline_dump.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"baseline dump failed (rc={proc.returncode}): "
-                f"{(proc.stderr or proc.stdout or '')[-500:]}"
-            )
-        pcdump_text = baseline_dump.read_text(encoding="utf-8")
-        retained_natural_pcdump: Path | None = None
-        if retain_force_vector_pcdumps:
-            retained_force_vector_dir.mkdir(parents=True, exist_ok=True)
-            retained_natural_pcdump = (
-                retained_force_vector_dir / baseline_dump.name.lstrip(".")
-            )
+        # ---- Baseline pcdump ----------------------------------------------
+        # Default contract remains fresh: compile the current TU to an explicit
+        # temp pcdump. Explicit evidence mode is opt-in: callers that already
+        # have a current pcdump and checkdiff JSON can pass both to avoid the
+        # unsafe local-wibo lane and derive a read-only target.
+        retained_natural_pcdump: Path | None = baseline_pcdump
+        if baseline_pcdump is not None:
             try:
-                shutil.move(str(baseline_dump), str(retained_natural_pcdump))
-            except OSError:
-                retained_natural_pcdump = baseline_dump
+                pcdump_text = baseline_pcdump.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise RuntimeError(
+                    f"baseline pcdump could not be read: {exc}"
+                ) from exc
         else:
-            baseline_dump.unlink(missing_ok=True)
+            baseline_dump = (
+                tu_c.parent
+                / f".{function}.order-target.baseline.{os.getpid()}.pcdump.txt"
+            )
+            proc = subprocess.run(
+                [sys.executable, "-m", "src.cli", "debug", "dump", "local",
+                 str(tu_c), "--function", function,
+                 "--output", str(baseline_dump), "--no-cache-sync"],
+                cwd=melee_root,
+                capture_output=True, text=True, timeout=600, env=child_env,
+            )
+            if proc.returncode != 0 or not baseline_dump.exists():
+                baseline_dump.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"baseline dump failed (rc={proc.returncode}): "
+                    f"{(proc.stderr or proc.stdout or '')[-500:]}"
+                )
+            pcdump_text = baseline_dump.read_text(encoding="utf-8")
+            if retain_force_vector_pcdumps:
+                retained_force_vector_dir.mkdir(parents=True, exist_ok=True)
+                retained_natural_pcdump = (
+                    retained_force_vector_dir / baseline_dump.name.lstrip(".")
+                )
+                try:
+                    shutil.move(str(baseline_dump), str(retained_natural_pcdump))
+                except OSError:
+                    retained_natural_pcdump = baseline_dump
+            else:
+                baseline_dump.unlink(missing_ok=True)
         fresh_natural_pcdump = (
             str(retained_natural_pcdump)
             if retained_natural_pcdump is not None
             else None
         )
+        baseline_pcdump_sha256 = hashlib.sha256(
+            pcdump_text.encode()
+        ).hexdigest()[:32]
 
-        # ---- Step 2: phys target + conflicts (from the FRESH artifacts) ----
+        # ---- Step 2: phys target + conflicts (from baseline artifacts) -----
         fns = parse_pcdump(pcdump_text)
         fn = next((f for f in fns if f.name == function), None)
         if fn is None:
-            raise RuntimeError(f"{function} not found in fresh baseline pcdump")
+            raise RuntimeError(f"{function} not found in baseline pcdump")
         pre_pass = fn.last_precolor_pass()
         events_fn = find_function(parse_hook_events(pcdump_text), function)
         vector = _derive_force_phys_from_register_diff_lines(
@@ -1667,8 +1705,7 @@ def _collect_order_target_inputs(
             forced_decisions_sha256=[sha1, sha2],
             baseline_source_sha256=hashlib.sha256(
                 tu_c.read_bytes()).hexdigest()[:32],
-            baseline_pcdump_sha256=hashlib.sha256(
-                pcdump_text.encode()).hexdigest()[:32],
+            baseline_pcdump_sha256=baseline_pcdump_sha256,
             force_cap_exceeded=False,
             direct_evidence_register_only=direct_evidence_register_only,
             natural_pcdump=fresh_natural_pcdump,

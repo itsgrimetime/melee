@@ -4625,6 +4625,7 @@ def _register_tiebreak_window_order_fallback(
 
 
 def _run_solve_coloring(*, function: str, class_id: int, pcdump,
+                        checkdiff_json=None,
                         max_perturb: int, frontier: int, kinds: list,
                         experimental_kinds: list, catalog_dir,
                         force_vector_probes: bool = False,
@@ -4650,6 +4651,10 @@ def _run_solve_coloring(*, function: str, class_id: int, pcdump,
     unit = _find_unit_for_function(function, melee_root)
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
     pcdump_text = pcdump_path.read_text(encoding="utf-8")
+    explicit_input_baseline = (
+        pcdump_path if pcdump is not None and checkdiff_json is not None
+        else None
+    )
     tu_c = melee_root / "src" / f"{unit}.c" if unit else None
     source_text = tu_c.read_text(encoding="utf-8") if tu_c and tu_c.exists() else ""
 
@@ -4672,6 +4677,8 @@ def _run_solve_coloring(*, function: str, class_id: int, pcdump,
         force_vector_probes=force_vector_probes,
         force_vector_timeout=force_vector_timeout,
         retain_force_vector_pcdumps=retain_force_vector_pcdumps,
+        checkdiff_payload_path=checkdiff_json,
+        baseline_pcdump=explicit_input_baseline,
         # #705 enabled the not-register-only node-set-delta fallback for FPR
         # (class 1); #714 extends it to GPR (class 0) so structurally-different-
         # virtual GPR residuals that are not register-only (e.g.

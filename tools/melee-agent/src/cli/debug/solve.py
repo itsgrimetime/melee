@@ -457,6 +457,18 @@ def solve_coloring_cmd(
     register_class: Annotated[str, typer.Option(
         "--class", help="Register class: gpr (default) or fpr.")] = "gpr",
     pcdump: Annotated[Optional[Path], typer.Option("--pcdump")] = None,
+    checkdiff_json: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--checkdiff-json",
+            help=(
+                "Existing `tools/checkdiff.py <function> --format json` "
+                "payload. When used with --pcdump, solve-coloring derives "
+                "inputs from those explicit artifacts instead of compiling a "
+                "fresh natural baseline."
+            ),
+        ),
+    ] = None,
     max_perturb: Annotated[int, typer.Option("--max-perturb")] = 2,
     frontier: Annotated[int, typer.Option("--frontier")] = 32,
     kinds: Annotated[str, typer.Option(
@@ -510,7 +522,8 @@ def solve_coloring_cmd(
         DEFAULT_MELEE_ROOT / "docs" / "superpowers" / "lever-catalog")
     res = _run_solve_coloring(
         function=function, class_id=class_id,
-        pcdump=pcdump, max_perturb=max_perturb, frontier=frontier,
+        pcdump=pcdump, checkdiff_json=checkdiff_json,
+        max_perturb=max_perturb, frontier=frontier,
         kinds=requested_kinds,
         experimental_kinds=[k.strip() for k in experimental_kinds.split(",")
                             if k.strip()],
