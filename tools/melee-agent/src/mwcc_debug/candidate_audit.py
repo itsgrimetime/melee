@@ -76,7 +76,8 @@ def _mask_comments_and_strings(text: str) -> str:
             continue
         if ch in {"'", '"'}:
             quote = ch
-            out.append(" ")
+            # Preserve a value token for adjacent operator classification.
+            out.append("0")
             i += 1
             continue
         if ch == "/" and i + 1 < n:
@@ -487,7 +488,7 @@ def _is_unary_address_of_identifier(text: str, start: int) -> bool:
     if previous_index < 0:
         return True
     previous = text[previous_index]
-    if previous == "&":
+    if previous in {"&", "*"}:
         return False
     return not (
         previous.isalnum()
