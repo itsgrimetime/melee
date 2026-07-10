@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 TOOLS_ROOT = Path(__file__).resolve().parents[2]
 if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
@@ -146,6 +148,16 @@ def test_artifacts_cli_dispatches_process_arguments(monkeypatch, capsys) -> None
     assert doctor.main() == 0
 
     assert json.loads(capsys.readouterr().out)["mode"] == "report"
+
+
+def test_artifacts_cli_help_includes_required_prefix(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "argv", ["worktree-doctor.py"])
+
+    with pytest.raises(SystemExit) as error:
+        doctor.main(["artifacts", "report", "--help"])
+
+    assert error.value.code == 0
+    assert "usage: worktree-doctor.py artifacts report" in capsys.readouterr().out
 
 
 def test_artifacts_cli_preserves_legacy_banner(monkeypatch, capsys) -> None:

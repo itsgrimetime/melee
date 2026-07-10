@@ -186,7 +186,10 @@ def _print_artifact_payload(payload: dict[str, object]) -> None:
 def _artifacts_main(argv: Sequence[str]) -> int:
     from . import artifacts
 
-    parser = argparse.ArgumentParser(description="Report and clean ignored worktree artifacts")
+    parser = argparse.ArgumentParser(
+        prog=f"{Path(sys.argv[0]).name} artifacts",
+        description="Report and clean ignored worktree artifacts",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("report", "cleanup"):
         command = commands.add_parser(name)
