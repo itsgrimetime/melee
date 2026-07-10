@@ -3082,6 +3082,13 @@ def _portable_path_for_base(path: Path, base: Path) -> Path | str:
         return path
 
 
+def _repo_relative_path(path: Path, root: Path) -> str | None:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
 def _read_bootstrap_full_unit_source(perm_dir: Path, function: str) -> Path | None:
     metadata_path = perm_dir / _BOOTSTRAP_METADATA_NAME
     if not metadata_path.exists():
@@ -3126,6 +3133,9 @@ def _build_simplify_order_compile_sh(
     cflags: str,
     full_unit_source: Path | None = None,
     function: str | None = None,
+    full_unit_source_expr: str | None = None,
+    stage_path: str = "nonmatchings/.permuter_stage_$$.c",
+    remote_portable: bool = False,
 ) -> str:
     """Generate a compile.sh that produces .o + sibling pcdump per call.
 
@@ -3150,8 +3160,13 @@ def _build_simplify_order_compile_sh(
     else:
         if not function:
             raise ValueError("function is required with full_unit_source")
+        source_expr = (
+            full_unit_source_expr
+            if full_unit_source_expr is not None
+            else shlex.quote(str(full_unit_source))
+        )
         stage_lines = [
-            f"MELEE_FULL_UNIT_SOURCE={shlex.quote(str(full_unit_source))}",
+            f"MELEE_FULL_UNIT_SOURCE={source_expr}",
             f"MELEE_TARGET_FUNCTION={shlex.quote(function)}",
             "PYTHON_BIN=\"${PYTHON:-python3}\"",
             (
@@ -3190,22 +3205,35 @@ def _build_simplify_order_compile_sh(
             "PY",
         ]
 
+    if remote_portable:
+        cd_line = 'cd "${MELEE_ROOT:?MELEE_ROOT must be set}"'
+        compiler_prefix = (
+            '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}" '
+            '"${MWCC_DEBUG_COMPILER:-$MELEE_ROOT/build/compilers/GC/1.2.5n/'
+            'mwcceppc_debug.exe}"'
+        )
+    else:
+        cd_line = f"cd {shlex.quote(str(project_root))}"
+        compiler_prefix = (
+            f"{shlex.quote(str(wibo_path))} {shlex.quote(str(debug_compiler))}"
+        )
+
     return "\n".join([
         "#!/usr/bin/env bash",
         _SIMPLIFY_SCORER_COMPILE_MARKER,
         "set -e",
+        "PERM_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"",
         "INPUT_ABS=\"$(realpath \"$1\")\"",
         "OUTPUT_ABS=\"$(realpath \"$3\")\"",
-        f"cd {shlex.quote(str(project_root))}",
-        "STAGE=\"nonmatchings/.permuter_stage_$$.c\"",
-        "mkdir -p nonmatchings",
+        cd_line,
+        f"STAGE=\"{stage_path}\"",
+        "mkdir -p \"$(dirname \"$STAGE\")\"",
         *stage_lines,
         "trap 'rm -f \"$STAGE\"' EXIT",
         "# Deposit the pcdump as a sibling of the .o so",
         "# `debug target score-simplify-order` finds it via the fast path.",
         "export MWCC_DEBUG_PCDUMP_PATH=\"${OUTPUT_ABS}.pcdump.txt\"",
-        f"{shlex.quote(str(wibo_path))} {shlex.quote(str(debug_compiler))} "
-        f"{cflags} -c \"$STAGE\" -o \"$OUTPUT_ABS\"",
+        f"{compiler_prefix} {cflags} -c \"$STAGE\" -o \"$OUTPUT_ABS\"",
         "",
     ])
 
@@ -3388,10 +3416,12 @@ def setup_simplify_order_scorer(
     from src.cli.debug import DEFAULT_MELEE_ROOT  # noqa: PLC0415
     from src.cli.debug import (  # noqa: PLC0415
         _bootstrap_permuter_dir,
+        _cflags_with_same_tu_include_dir,
         _detect_existing_compile_sh_project_root,
         _extract_cflags_from_compile_sh,
         _find_compiler_dir,
         _find_wibo,
+        _ninja_cflags_for_unit,
     )
     from src.cli.debug import _find_unit_for_function  # noqa: PLC0415
     from ...mwcc_debug.permuter_config import (
@@ -3644,6 +3674,38 @@ def setup_simplify_order_scorer(
         )
         raise typer.Exit(2)
 
+    baseline_dump_for_spec_path = baseline_dump
+    full_unit_source_expr: str | None = None
+    full_unit_stage_path = "nonmatchings/.permuter_stage_$$.c"
+    remote_portable_compile = False
+    if full_unit_source is not None:
+        staged_baseline = perm_dir / "baseline.pcdump.txt"
+        if baseline_dump.resolve() != staged_baseline.resolve():
+            shutil.copy2(baseline_dump, staged_baseline)
+        baseline_dump_for_spec_path = staged_baseline
+
+        source_rel = _repo_relative_path(full_unit_source, DEFAULT_MELEE_ROOT)
+        if source_rel is not None and source_rel.startswith("src/"):
+            cflags, _mw_version = _ninja_cflags_for_unit(
+                source_rel, melee_root=DEFAULT_MELEE_ROOT
+            )
+            cflags = _cflags_with_same_tu_include_dir(cflags, source_rel)
+            full_unit_source_expr = (
+                '"${MELEE_ROOT:?MELEE_ROOT must be set}/'
+                f'{source_rel}"'
+            )
+            full_unit_stage_path = (
+                f"{Path(source_rel).parent.as_posix()}/.permuter_stage_$$.c"
+            )
+            remote_portable_compile = True
+        else:
+            retained_copy = perm_dir / "full-unit.c"
+            if full_unit_source.resolve() != retained_copy.resolve():
+                shutil.copy2(full_unit_source, retained_copy)
+            full_unit_source = retained_copy
+            full_unit_source_expr = '"$PERM_DIR/full-unit.c"'
+            remote_portable_compile = True
+
     # ----------------------------------------------------------------
     # Parse optional --force-phys mapping for the polarity check.
     # ----------------------------------------------------------------
@@ -3692,7 +3754,9 @@ def setup_simplify_order_scorer(
         raise typer.Exit(2)
 
     coalesce_preservation = not no_coalesce_preservation
-    baseline_dump_for_spec = _portable_path_for_base(baseline_dump, perm_dir)
+    baseline_dump_for_spec = _portable_path_for_base(
+        baseline_dump_for_spec_path, perm_dir
+    )
     if force_phys_mode:
         spec_yaml = _render_force_phys_target_yaml(
             function=function,
@@ -3769,6 +3833,9 @@ def setup_simplify_order_scorer(
         cflags=cflags,
         full_unit_source=full_unit_source,
         function=function,
+        full_unit_source_expr=full_unit_source_expr,
+        stage_path=full_unit_stage_path,
+        remote_portable=remote_portable_compile,
     )
     existing_compile_sh.write_text(new_compile, encoding="utf-8")
     existing_compile_sh.chmod(0o755)

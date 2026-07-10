@@ -3442,6 +3442,37 @@ def _pcdump_for_object(
     return None
 
 
+def _resolve_permuter_scorer_target(target: Path, object_file: Path) -> Path:
+    """Resolve portable scorer target paths against the candidate object tree."""
+    target = target.expanduser()
+    if target.is_absolute() or target.exists():
+        return target
+
+    object_path = object_file.expanduser()
+    if not object_path.is_absolute():
+        object_path = (Path.cwd() / object_path).resolve()
+    else:
+        object_path = object_path.resolve()
+    parts = object_path.parts
+    if "nonmatchings" not in parts:
+        return target
+    nonmatchings_index = parts.index("nonmatchings")
+    if nonmatchings_index + 1 >= len(parts):
+        return target
+
+    perm_root = Path(*parts[:nonmatchings_index])
+    function_dir = Path(*parts[:nonmatchings_index + 2])
+    candidates: list[Path] = []
+    if target.parts and target.parts[0] == "nonmatchings":
+        candidates.append(perm_root / target)
+    candidates.append(function_dir / target)
+    candidates.append(function_dir / target.name)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0] if candidates else target
+
+
 
 @target_app.command(name="score-force-phys")
 def score_force_phys(
@@ -3511,6 +3542,7 @@ def score_force_phys(
 
     if not object_file.exists():
         _emit_sentinel(f"object file not found: {object_file}")
+    target = _resolve_permuter_scorer_target(target, object_file)
 
     try:
         import yaml  # type: ignore
@@ -3756,6 +3788,7 @@ def score_simplify_order(
     if not object_file.exists():
         _emit_sentinel(f"object file not found: {object_file}")
         return  # for typing — Exit() raises
+    target = _resolve_permuter_scorer_target(target, object_file)
 
     try:
         spec = load_simplify_order_target_spec(target)

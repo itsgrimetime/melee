@@ -249,9 +249,97 @@ def test_setup_uses_bootstrap_full_unit_source_metadata(
     assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
     csh = (perm_dir / "compile.sh").read_text(encoding="utf-8")
     assert "MELEE_FULL_UNIT_SOURCE=" in csh
-    assert str(retained_source) in csh
+    assert (perm_dir / "full-unit.c").read_text(encoding="utf-8") == (
+        retained_source.read_text(encoding="utf-8")
+    )
+    assert 'MELEE_FULL_UNIT_SOURCE="$PERM_DIR/full-unit.c"' in csh
+    assert str(retained_source) not in csh
     assert "find_function_definitions" in csh
     assert "replace_function" in csh
+
+
+def test_setup_source_file_force_phys_writes_remote_ready_full_tu_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    function = "fn_test"
+    melee_root = tmp_path / "melee"
+    source = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        textwrap.dedent(
+            f"""\
+            #include "mndiagram.static.h"
+
+            void {function}(void) {{
+            }}
+            """
+        ),
+        encoding="utf-8",
+    )
+    (melee_root / "build.ninja").write_text(
+        textwrap.dedent(
+            """\
+            build build/GALE01/src/melee/mn/mndiagram.o: mwcc src/melee/mn/mndiagram.c
+              mw_version = GC/1.2.5n
+              cflags = -O4,p -nodefaults -DREAL_TU_FLAG=1
+            """
+        ),
+        encoding="utf-8",
+    )
+    perm_root = _make_perm_dir(
+        tmp_path,
+        function=function,
+        compile_sh=(
+            "#!/usr/bin/env bash\n"
+            "set -e\n"
+            'INPUT_ABS="$(realpath "$1")"\n'
+            'OUTPUT_ABS="$(realpath "$3")"\n'
+            "cd /Users/mike/code/melee\n"
+            'STAGE="nonmatchings/.permuter_stage_$$.c"\n'
+            'cp "$INPUT_ABS" "$STAGE"\n'
+            "wine build/compilers/GC/1.2.5n/mwcceppc.exe "
+            "-O0 -standalone -c \"$STAGE\" -o \"$OUTPUT_ABS\"\n"
+        ),
+    )
+    baseline = _make_baseline_dump(tmp_path, function)
+    _stub_wibo_and_compiler(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli_debug, "DEFAULT_MELEE_ROOT", melee_root)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "permute", "setup-simplify-order-scorer",
+            "--function", function,
+            "--scorer-mode", "force-phys",
+            "--force-phys", "42:30",
+            "--class", "0",
+            "--baseline-dump", str(baseline),
+            "--source-file", str(source),
+            "--perm-root", str(perm_root),
+            "--force",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+    perm_dir = perm_root / "nonmatchings" / function
+    target_yaml = (perm_dir / "simplify_order_target.yaml").read_text(
+        encoding="utf-8"
+    )
+    settings = tomllib.loads((perm_dir / "settings.toml").read_text())
+    compile_sh = (perm_dir / "compile.sh").read_text(encoding="utf-8")
+
+    assert (perm_dir / "baseline.pcdump.txt").read_text() == baseline.read_text()
+    assert "baseline_dump: baseline.pcdump.txt" in target_yaml
+    assert str(tmp_path) not in target_yaml
+    assert str(tmp_path) not in settings["scorer"]["command"]
+    assert "nonmatchings/fn_test/simplify_order_target.yaml" in settings["scorer"]["command"]
+    assert "cd \"${MELEE_ROOT:?MELEE_ROOT must be set}\"" in compile_sh
+    assert 'MELEE_FULL_UNIT_SOURCE="${MELEE_ROOT:?MELEE_ROOT must be set}/src/melee/mn/mndiagram.c"' in compile_sh
+    assert 'STAGE="src/melee/mn/.permuter_stage_$$.c"' in compile_sh
+    assert "-DREAL_TU_FLAG=1" in compile_sh
+    assert "-i src/melee/mn" in compile_sh
+    assert "/Users/" not in compile_sh
+    assert str(tmp_path) not in compile_sh
 
 
 def test_full_unit_compile_wrapper_splices_candidate_into_retained_unit(
@@ -849,6 +937,59 @@ def test_score_force_phys_scores_assignment_hits_when_simplify_order_is_unusable
     assert payload["force_phys_hits"] == 1
     assert payload["targeted"] == 1
     assert payload["matched_igs"] == [53]
+
+
+def test_score_force_phys_resolves_relative_target_from_candidate_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    function = "fn_test"
+    perm_root = tmp_path / "decomp-permuter"
+    perm_dir = perm_root / "nonmatchings" / function
+    out_dir = perm_dir / "output-0001"
+    out_dir.mkdir(parents=True)
+    baseline = _make_force_phys_pcdump(
+        perm_dir / "baseline.pcdump.txt",
+        function,
+        assigned_by_ig={53: 5},
+        simplify_order=[-1, -1],
+    )
+    (perm_dir / "simplify_order_target.yaml").write_text(
+        textwrap.dedent(f"""\
+            function: {function}
+            class_id: 0
+            baseline_dump: {baseline.name}
+            force_phys:
+              53: 4
+        """),
+        encoding="utf-8",
+    )
+    obj = out_dir / "candidate.o"
+    obj.write_bytes(b"\0")
+    _make_force_phys_pcdump(
+        Path(str(obj) + ".pcdump.txt"),
+        function,
+        assigned_by_ig={53: 4},
+        simplify_order=[-1, -1],
+    )
+    other_cwd = tmp_path / "some-other-cwd"
+    other_cwd.mkdir()
+
+    monkeypatch.chdir(other_cwd)
+    result = runner.invoke(
+        app,
+        [
+            "debug", "target", "score-force-phys",
+            str(obj),
+            "--function", function,
+            "--target", f"nonmatchings/{function}/simplify_order_target.yaml",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+    payload = __import__("json").loads(result.stdout)
+    assert payload["score"] == 0
+    assert payload["force_phys_hits"] == 1
 
 
 def test_setup_force_phys_scorer_wires_settings_without_simplify_target(
