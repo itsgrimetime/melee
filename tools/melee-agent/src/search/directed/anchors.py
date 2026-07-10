@@ -196,6 +196,44 @@ def _find_block_end(
     return None
 
 
+def _leading_close_brace_count(line: str) -> int:
+    stripped = line.lstrip(" \t")
+    count = 0
+    for ch in stripped:
+        if ch == "}":
+            count += 1
+            continue
+        break
+    return count
+
+
+def _line_scope_paths(
+    records: list[tuple[int, int, str]],
+) -> list[tuple[int, ...]]:
+    paths: list[tuple[int, ...]] = []
+    stack: list[int] = []
+    for idx, (_start, _end, line) in enumerate(records):
+        leading_closes = min(_leading_close_brace_count(line), len(stack))
+        if leading_closes:
+            del stack[-leading_closes:]
+        paths.append(tuple(stack))
+
+        non_leading_closes = max(0, line.count("}") - leading_closes)
+        net_after_leading_closes = line.count("{") - non_leading_closes
+        if net_after_leading_closes > 0:
+            stack.extend([idx] * net_after_leading_closes)
+        elif net_after_leading_closes < 0:
+            del stack[max(0, len(stack) + net_after_leading_closes):]
+    return paths
+
+
+def _scope_path_visible(
+    decl_path: tuple[int, ...],
+    use_path: tuple[int, ...],
+) -> bool:
+    return len(decl_path) <= len(use_path) and use_path[: len(decl_path)] == decl_path
+
+
 def _source_shape_span(
     records: list[tuple[int, int, str]],
     start_idx: int,
@@ -375,14 +413,20 @@ _IF_NULL_LINE_RE = re.compile(
 
 
 def _iter_reuse_loop_counter_anchors(source_text: str, records: list[tuple[int, int, str]]):
-    outer_decls: dict[str, str] = {}
+    visible_decls: dict[str, tuple[str, tuple[int, ...]]] = {}
+    scope_paths = _line_scope_paths(records)
     for idx, (_start, _end, line) in enumerate(records):
+        current_path = scope_paths[idx] if idx < len(scope_paths) else ()
+        for name, (_decl_line, decl_path) in tuple(visible_decls.items()):
+            if not _scope_path_visible(decl_path, current_path):
+                del visible_decls[name]
         match = _LOOP_COUNTER_DECL_RE.match(line)
         if match is None:
             continue
         var = match.group("var")
-        if var not in outer_decls:
-            outer_decls[var] = line
+        outer_decl = visible_decls.get(var)
+        if outer_decl is None:
+            visible_decls[var] = (line, current_path)
             continue
         next_idx = next(
             (p for p in range(idx + 1, len(records)) if records[p][2].strip()),
@@ -401,7 +445,7 @@ def _iter_reuse_loop_counter_anchors(source_text: str, records: list[tuple[int, 
             mutator_key="reuse_loop_counter_scope",
             span=_source_shape_span(records, idx, end_idx),
             payload={
-                "outer_decl_line": outer_decls[var],
+                "outer_decl_line": outer_decl[0],
                 "block": block,
                 "decl_line": line,
             },
