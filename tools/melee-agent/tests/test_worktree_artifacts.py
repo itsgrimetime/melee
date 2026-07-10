@@ -17,6 +17,7 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 artifacts = importlib.import_module("worktree_doctor.artifacts")
+assets = importlib.import_module("worktree_doctor.assets")
 doctor = importlib.import_module("worktree_doctor")
 
 
@@ -53,6 +54,19 @@ def _track_file(root: Path, relative: str, contents: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(contents, encoding="utf-8")
     _run_git(root, "add", "--force", relative)
+
+
+def _asset_source(root: Path) -> Path:
+    compiler = root / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
+    compiler.parent.mkdir(parents=True)
+    compiler.write_bytes(b"compiler")
+    wibo = root / "build" / "tools" / "wibo"
+    wibo.parent.mkdir(parents=True)
+    wibo.write_bytes(b"wibo")
+    table_typer = root / "tools" / "table-typer" / "table-typer"
+    table_typer.parent.mkdir(parents=True)
+    table_typer.write_bytes(b"table-typer")
+    return root
 
 
 def _candidate(report: artifacts.ArtifactReport, worktree: Path, kind: str) -> artifacts.ArtifactCandidate:
@@ -718,3 +732,169 @@ def test_scan_root_child_replaced_before_git_validation_is_skipped(
 
     assert raced is True
     assert outside.resolve() not in discovered
+
+
+def test_seed_and_hydrate_uses_file_level_symlinks(tmp_path: Path) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    result = assets.hydrate_shared_assets(target, cache)
+    assert result.status == "hydrated"
+    consumer = target / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
+    assert consumer.is_symlink()
+    assert consumer.read_bytes() == b"compiler"
+    assert consumer in result.linked
+    consumer.unlink()
+    assert (
+        cache / "files" / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
+    ).read_bytes() == b"compiler"
+
+
+def test_hydrate_preserves_real_file_and_rejects_bad_digest(tmp_path: Path) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    existing = target / "build" / "tools" / "wibo"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"local")
+    result = assets.hydrate_shared_assets(target, cache)
+    assert "build/tools/wibo" in result.skipped
+    assert existing.read_bytes() == b"local"
+
+    manifest_path = cache / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert assets.hydrate_shared_assets(target, cache).status == "invalid-cache"
+
+
+def test_seed_rejects_symlinked_asset_source(tmp_path: Path) -> None:
+    source = _asset_source(tmp_path / "source")
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"outside")
+    (source / "build" / "tools" / "unsafe").symlink_to(outside)
+    cache = tmp_path / "cache"
+
+    result = assets.seed_shared_assets(source, cache)
+
+    assert result.status == "invalid-source"
+    assert not cache.exists()
+
+
+def test_seed_makes_cache_payload_files_and_directories_read_only(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+
+    assert assets.seed_shared_assets(_asset_source(tmp_path / "source"), cache).status == "seeded"
+
+    payload = cache / "files" / "build" / "tools" / "wibo"
+    assert payload.stat().st_mode & 0o222 == 0
+    for directory in (cache, cache / "files", cache / "files" / "build"):
+        assert directory.stat().st_mode & 0o222 == 0
+
+
+def test_seed_preserves_a_valid_different_cache(tmp_path: Path) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    (source / "build" / "tools" / "wibo").write_bytes(b"new-source")
+
+    result = assets.seed_shared_assets(source, cache)
+
+    assert result.status == "cache-exists"
+    assert (cache / "files" / "build" / "tools" / "wibo").read_bytes() == b"wibo"
+
+
+def test_hydrate_rejects_manifest_platform_and_path_tampering_before_mutation(
+    tmp_path: Path,
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    manifest_path = cache / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["platform"]["machine"] = "other-machine"
+    manifest["files"][0]["path"] = "../outside"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = assets.hydrate_shared_assets(target, cache)
+
+    assert result.status == "invalid-cache"
+    assert not (target / "build").exists()
+
+
+def test_hydrate_seeds_missing_cache_only_with_explicit_source(tmp_path: Path) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+
+    assert assets.hydrate_shared_assets(target, cache).status == "cache-missing"
+    result = assets.hydrate_shared_assets(target, cache, asset_source=source)
+
+    assert result.status == "hydrated"
+    assert (target / "build" / "tools" / "wibo").is_symlink()
+
+
+def test_hydrate_preserves_a_mismatched_consumer_symlink(tmp_path: Path) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    consumer = target / "build" / "tools" / "wibo"
+    consumer.parent.mkdir(parents=True)
+    other = tmp_path / "other"
+    other.write_bytes(b"other")
+    consumer.symlink_to(os.path.relpath(other, start=consumer.parent))
+
+    result = assets.hydrate_shared_assets(target, cache)
+
+    assert "build/tools/wibo" in result.skipped
+    assert consumer.is_symlink()
+    assert consumer.read_bytes() == b"other"
+
+
+def test_seed_retains_replaced_staging_entry(tmp_path: Path, monkeypatch) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    replacement: dict[str, Path] = {}
+
+    def replace_staging_before_publish(staging: Path, cache_root: Path) -> str:
+        staging.rename(staging.with_name(f"{staging.name}.reviewed"))
+        staging.mkdir()
+        sentinel = staging / "sentinel.txt"
+        sentinel.write_text("preserve replacement", encoding="utf-8")
+        replacement["sentinel"] = sentinel
+        return "cache-exists"
+
+    monkeypatch.setattr(assets, "_publish_staging", replace_staging_before_publish)
+    result = assets.seed_shared_assets(source, cache)
+
+    assert result.status == "cache-exists"
+    assert replacement["sentinel"].read_text(encoding="utf-8") == "preserve replacement"
+
+
+def test_assets_cli_seeds_and_hydrates_with_explicit_paths(tmp_path: Path, capsys) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+
+    assert doctor.main(["assets", "seed", "--source", str(source), "--cache-root", str(cache)]) == 0
+    assert "status: seeded" in capsys.readouterr().out
+
+    original_root = doctor.ROOT
+    try:
+        doctor.ROOT = target
+        assert doctor.main(["assets", "hydrate", "--cache-root", str(cache)]) == 0
+    finally:
+        doctor.ROOT = original_root
+    assert "status: hydrated" in capsys.readouterr().out
+    assert (target / "tools" / "table-typer" / "table-typer").is_symlink()

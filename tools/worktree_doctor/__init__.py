@@ -108,6 +108,14 @@ from .banner import (  # noqa: E402, F401
     banner_line,
     collect_banner_tooling_status,
 )
+from .assets import (  # noqa: E402, F401
+    ASSET_PATHS,
+    CACHE_SCHEMA_VERSION,
+    AssetResult,
+    default_cache_root,
+    hydrate_shared_assets,
+    seed_shared_assets,
+)
 
 # Re-export detect_repo_root so tests that access module.ROOT and
 # module.detect_repo_root both work without extra imports.
@@ -253,10 +261,58 @@ def _artifacts_main(argv: Sequence[str]) -> int:
     return 0
 
 
+def _print_asset_result(result: AssetResult) -> None:
+    print(f"status: {result.status}")
+    print(f"cache_root: {result.cache_root}")
+    print(f"linked: {len(result.linked)}")
+    for linked in result.linked:
+        print(f"  {linked}")
+    print(f"skipped: {len(result.skipped)}")
+    for skipped in result.skipped:
+        print(f"  {skipped}")
+
+
+def _assets_main(argv: Sequence[str]) -> int:
+    from . import assets
+
+    parser = argparse.ArgumentParser(
+        prog=f"{Path(sys.argv[0]).name} assets",
+        description="Seed and hydrate immutable shared worktree assets",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    seed = commands.add_parser("seed")
+    seed.add_argument("--source", required=True, type=Path, metavar="PATH")
+    seed.add_argument("--cache-root", type=Path, metavar="PATH")
+    hydrate = commands.add_parser("hydrate")
+    hydrate.add_argument("--asset-source", type=Path, metavar="PATH")
+    hydrate.add_argument("--cache-root", type=Path, metavar="PATH")
+    args = parser.parse_args(argv)
+
+    cache_root = args.cache_root or assets.default_cache_root()
+    if args.command == "seed":
+        result = assets.seed_shared_assets(args.source, cache_root)
+    else:
+        result = assets.hydrate_shared_assets(
+            ROOT,
+            cache_root,
+            asset_source=args.asset_source,
+        )
+    _print_asset_result(result)
+    return 0 if result.status in {
+        "seeded",
+        "cache-exists",
+        "hydrated",
+        "cache-missing",
+        "no-assets",
+    } else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] == "artifacts":
         return _artifacts_main(arguments[1:])
+    if arguments and arguments[0] == "assets":
+        return _assets_main(arguments[1:])
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fix", action="store_true", help="Apply safe local bootstrap fixes")
