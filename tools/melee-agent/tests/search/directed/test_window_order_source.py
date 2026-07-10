@@ -2481,6 +2481,54 @@ def test_window_order_plan_attributes_unattributed_implicit_add_to_indexed_byte_
     assert synthetic_probe["materialized_ranked_indexed_byte_source_candidates"]
 
 
+def test_window_order_plan_attributes_rlwinm_byte_temp_to_indexed_byte_candidates(
+) -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+        void fn(u8* sorted, int i)
+        {
+            u8 temp;
+            temp = sorted[i];
+            use(temp);
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 79, "order_move": ["after", 34]}],
+        source_attributions={
+            79: {
+                "kind": "implicit-temp",
+                "expression": "rlwinm r79,r59,0,24,31",
+            },
+            59: {
+                "kind": "implicit-temp",
+                "expression": "lbz r59,r42,0",
+            },
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    diag = plan.lead_diagnostics[0]
+    assert diag["status"] == "materialized"
+    assert plan.probes
+    assert any(
+        probe.provenance["kind"] == "window-order-ranked-indexed-byte-source-probe"
+        for probe in plan.probes
+    )
+    synthetic_probe = diag["synthetic_source_probe"]
+    assert synthetic_probe["expression"] == "rlwinm r79,r59,0,24,31"
+    candidates = synthetic_probe["ranked_indexed_byte_source_candidates"]
+    assert any(
+        candidate["array_base"] == "sorted" and candidate["index_expr"] == "i"
+        for candidate in candidates
+    )
+    assert synthetic_probe["materialized_ranked_indexed_byte_source_candidates"]
+
+
 def test_window_order_plan_rejects_array_declarator_indexed_byte_candidate(
 ) -> None:
     source = textwrap.dedent("""\

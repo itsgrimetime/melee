@@ -544,6 +544,19 @@ def _parse_virtual_expression(expression: object) -> _VirtualExpression | None:
     return _VirtualExpression(opcode=opcode, dest=dest, sources=sources)
 
 
+def _is_byte_result_rlwinm_expression(expression: object) -> bool:
+    if not isinstance(expression, str):
+        return False
+    return (
+        re.fullmatch(
+            r"\s*rlwinm\s+r\d+\s*,\s*r\d+\s*,\s*0\s*,\s*24\s*,\s*31\s*",
+            expression,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _source_attr_base_virtual(source_attr: Any) -> int | None:
     raw = _attr_value(source_attr, "base_virtual")
     if isinstance(raw, bool):
@@ -5249,7 +5262,10 @@ def _implicit_add_owner(
     virtual_expr = _parse_virtual_expression(_attr_value(source_attr, "expression"))
     if virtual_expr is None:
         return _SyntheticOwnerResult((), {}, "synthetic-temp-unsupported-shape")
-    if virtual_expr.opcode not in {"add", "addi"}:
+    byte_result_mask = _is_byte_result_rlwinm_expression(
+        _attr_value(source_attr, "expression")
+    )
+    if virtual_expr.opcode not in {"add", "addi"} and not byte_result_mask:
         return _SyntheticOwnerResult((), {}, "synthetic-temp-unsupported-shape")
     if virtual_expr.dest is not None and virtual_expr.dest != target_ig:
         return _SyntheticOwnerResult((), {}, "synthetic-temp-unsupported-shape")
@@ -5298,6 +5314,8 @@ def _implicit_add_owner(
         owner_order = ["indexed_byte", "pointer_walk_add", "end_pointer"]
     base_metadata = {
         "expression": _attr_value(source_attr, "expression"),
+        "opcode": virtual_expr.opcode,
+        "byte_result_mask": byte_result_mask,
         "copy_chain": copy_chain,
         "copy_chain_truncated": copy_chain_truncated,
         "ranked_indexed_byte_source_candidates": indexed_candidates,

@@ -9069,6 +9069,63 @@ def test_select_order_search_auto_includes_indexed_byte_transform_probes(
     )
 
 
+def test_select_order_search_auto_materializes_indexed_byte_helper_result(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "gpr-baseline.txt"
+    source = tmp_path / "helper.c"
+    baseline.write_text(BASELINE)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef unsigned char u8;
+            static inline u8 visible_name(u8* sorted, int i) { return sorted[i]; }
+            void fn_80000000(u8* sorted, int i) {
+                int name_id;
+                name_id = visible_name(sorted, i) &
+                          0xFFFFFFFFFFFFFFFFu;
+                use(name_id);
+            }
+            """
+        )
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--class",
+            "0",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--transform-force-phys",
+            "79:25",
+            "--no-compile-probes",
+            "--max-probes",
+            "4",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["auto_transform_families"] == [
+        "indexed_byte_address_temp_steering"
+    ]
+    assert any(
+        probe["operator"] == "transform-corpus:indexed_byte_address_temp_steering"
+        and probe["mutator_key"] == "steer_indexed_byte_helper_result_temp"
+        for probe in payload["probes"]
+    )
+
+
 def test_select_order_signal_restore_handler_restores_active_source(
     tmp_path: pathlib.Path,
 ) -> None:
