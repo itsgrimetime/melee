@@ -408,8 +408,23 @@ def _quarantine_and_delete(candidate: ArtifactCandidate) -> str | None:
                         container.fd,
                         _QUARANTINED_CHILD,
                     )
+                ownership_reason = _quarantined_ownership_reason(
+                    candidate,
+                    quarantined_handle.fd,
+                )
             finally:
                 os.close(quarantined_handle.fd)
+
+            if ownership_reason is not None:
+                restored = _restore_quarantined_child(
+                    parent_handle.fd,
+                    artifact_name,
+                    container.fd,
+                    _QUARANTINED_CHILD,
+                    candidate.root_device,
+                    candidate.root_inode,
+                )
+                return ownership_reason if restored else "quarantine-retained"
 
             removal_name = f".removal-{uuid4().hex}"
             move_result = _rename_no_replace(
@@ -447,11 +462,30 @@ def _quarantine_and_delete(candidate: ArtifactCandidate) -> str | None:
                         container.fd,
                         removal_name,
                     )
+                expected_stat = os.fstat(removal_handle.fd)
                 deletion_reason = _rmtree_expected(
-                    container.fd,
-                    removal_name,
-                    os.fstat(removal_handle.fd),
+                    removal_handle.fd,
+                    expected_stat,
                 )
+                if deletion_reason is None:
+                    named_handle, _ = _open_directory_child(container.fd, removal_name)
+                    if named_handle is None:
+                        return _restore_replaced_quarantine_child(
+                            parent_handle.fd,
+                            artifact_name,
+                            container.fd,
+                            removal_name,
+                        )
+                    try:
+                        if not _same_stat_identity(os.fstat(named_handle.fd), expected_stat):
+                            return _restore_replaced_quarantine_child(
+                                parent_handle.fd,
+                                artifact_name,
+                                container.fd,
+                                removal_name,
+                            )
+                    finally:
+                        os.close(named_handle.fd)
             finally:
                 os.close(removal_handle.fd)
 
@@ -555,12 +589,47 @@ def _restore_replaced_quarantine_child(
     return "quarantine-restore-error"
 
 
-def _rmtree_expected(parent_fd: int, name: str, expected_stat: os.stat_result) -> str | None:
-    """Delete only the child that still matches the descriptor-held artifact."""
+def _quarantined_ownership_reason(candidate: ArtifactCandidate, root_fd: int) -> str | None:
+    """Recheck the moved directory against its original Git-relative paths."""
+    tree_facts = _walk_regular_files(os.dup(root_fd))
+    reasons = list(tree_facts.reasons)
+    worktree = _absolute_path(candidate.worktree)
+    artifact_dir = Path(candidate.kind)
+
+    git_root = _validated_git_toplevel(worktree)
+    if git_root is None:
+        _add_reason(reasons, "git-error")
+    elif (metadata_reason := _git_metadata_reason(worktree)) is not None:
+        _add_reason(reasons, metadata_reason)
+    else:
+        _check_git_ownership(
+            worktree,
+            artifact_dir,
+            tree_facts.regular_files,
+            reasons,
+            no_index_ignore=True,
+        )
+
+    if reasons:
+        return reasons[0]
+    if (
+        tree_facts.size_bytes != candidate.size_bytes
+        or tree_facts.newest_mtime != candidate.newest_mtime
+    ):
+        return "artifact-changed"
+    return None
+
+
+def _rmtree_expected(directory_fd: int, expected_stat: os.stat_result) -> str | None:
+    """Clear only the directory object held by ``directory_fd``.
+
+    ``shutil.rmtree('.', dir_fd=directory_fd)`` resolves the root through the
+    descriptor rather than a mutable parent/name pair.  It clears the object
+    but cannot remove ``.`` itself, so the empty private quarantine directory
+    is intentionally retained.
+    """
     try:
-        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return "quarantine-child-missing"
+        current = os.fstat(directory_fd)
     except OSError:
         return "cleanup-error"
     if not _same_stat_identity(current, expected_stat):
@@ -570,8 +639,12 @@ def _rmtree_expected(parent_fd: int, name: str, expected_stat: os.stat_result) -
     if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
         return "cleanup-error"
     try:
-        shutil.rmtree(name, dir_fd=parent_fd)
-    except OSError:
+        shutil.rmtree(".", dir_fd=directory_fd)
+    except OSError as exc:
+        # rmtree successfully clears the descriptor-bound directory, then
+        # rmdir(".") fails because a directory cannot remove itself.
+        if exc.errno == errno.EINVAL:
+            return None
         return "cleanup-error"
     return None
 
@@ -657,6 +730,8 @@ def _check_git_ownership(
     artifact_dir: Path,
     files: Sequence[Path],
     reasons: list[str],
+    *,
+    no_index_ignore: bool = False,
 ) -> None:
     root_tracked = _git_tracked(worktree, artifact_dir, reasons)
     if root_tracked is True:
@@ -673,15 +748,35 @@ def _check_git_ownership(
             continue
         if tracked is None:
             continue
-        if not _git_ignored(worktree, relative, reasons):
+        if not _git_ignored(worktree, relative, reasons, no_index=no_index_ignore):
             _add_reason(reasons, "contains-nonignored")
 
-    if not _git_ignored(worktree, artifact_dir, reasons):
+    if not _git_ignored(
+        worktree,
+        artifact_dir,
+        reasons,
+        no_index=no_index_ignore,
+        directory=True,
+    ):
         _add_reason(reasons, "root-not-git-ignored")
 
 
-def _git_ignored(worktree: Path, relative: Path, reasons: list[str]) -> bool:
-    result = _run_git(worktree, ["check-ignore", "--quiet", "--", relative.as_posix()])
+def _git_ignored(
+    worktree: Path,
+    relative: Path,
+    reasons: list[str],
+    *,
+    no_index: bool = False,
+    directory: bool = False,
+) -> bool:
+    args = ["check-ignore", "--quiet"]
+    if no_index:
+        args.append("--no-index")
+    path = relative.as_posix()
+    if directory:
+        path += "/"
+    args.extend(("--", path))
+    result = _run_git(worktree, args)
     if result is None or result.returncode not in (0, 1):
         _add_reason(reasons, "git-error")
         return False
