@@ -16,6 +16,7 @@ import platform
 import stat
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -29,7 +30,6 @@ CACHE_SCHEMA_VERSION = 1
 _BUFFER_SIZE = 1024 * 1024
 _DARWIN_RENAME_EXCL = 0x00000004
 _DARWIN_RENAME_NOFOLLOW_ANY = 0x00000010
-_LINUX_RENAME_NOREPLACE = 0x00000001
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,23 @@ class _AssetFile:
     relative: Path
     size_bytes: int
     sha256: str
+
+
+@dataclass(frozen=True)
+class _CacheIdentity:
+    root_device: int
+    root_inode: int
+    manifest_device: int
+    manifest_inode: int
+    files: dict[Path, tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class _CreatedLink:
+    parent_fd: int
+    name: str
+    target: str
+    identity: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -99,13 +116,20 @@ def seed_shared_assets(source: Path, cache_root: Path) -> AssetResult:
         _write_manifest(staging, manifest)
         if not _seal_cache_directories(staging, include_root=False):
             return _result("cache-unavailable", cache_root)
-        staged_state, _ = _validated_cache(staging)
-        if staged_state != "valid":
+        staged_state, staged_files = _validated_cache(staging, allow_writable_root=True)
+        if staged_state != "valid" or staged_files is None:
+            return _result("invalid-cache", cache_root)
+        staged_identity = _capture_cache_identity(
+            staging, staged_files, allow_writable_root=True
+        )
+        if staged_identity is None:
             return _result("invalid-cache", cache_root)
 
-        publish_status = _publish_staging(staging, cache_root)
+        publish_status = _publish_staging(staging, cache_root, staged_identity)
         if publish_status == "published":
             if not _seal_cache_directories(cache_root):
+                return _result("cache-unavailable", cache_root)
+            if not _cache_identity_matches(cache_root, staged_identity):
                 return _result("cache-unavailable", cache_root)
             return _result("seeded", cache_root)
         if publish_status == "cache-exists":
@@ -140,6 +164,9 @@ def hydrate_shared_assets(
 
     if cache_state != "valid" or cache_files is None:
         return _result("invalid-cache", cache_root)
+    cache_identity = _capture_cache_identity(cache_root, cache_files)
+    if cache_identity is None:
+        return _result("invalid-cache", cache_root)
 
     target_fd = _open_directory(target)
     if target_fd is None:
@@ -147,13 +174,24 @@ def hydrate_shared_assets(
 
     linked: list[Path] = []
     skipped: list[str] = []
+    created_links: list[_CreatedLink] = []
     try:
         for cached_file in cache_files:
+            if not _cache_identity_matches(cache_root, cache_identity, cached_file):
+                _rollback_created_links(created_links)
+                return _result("invalid-cache", cache_root)
             parent_fd, parent_relative = _ensure_real_target_parent(
-                target_fd, cached_file.relative.parts[:-1]
+                target_fd,
+                cached_file.relative.parts[:-1],
+                before_create=lambda: _cache_identity_matches(
+                    cache_root, cache_identity, cached_file
+                ),
             )
             relative_text = cached_file.relative.as_posix()
             if parent_fd is None:
+                if not _cache_identity_matches(cache_root, cache_identity, cached_file):
+                    _rollback_created_links(created_links)
+                    return _result("invalid-cache", cache_root)
                 skipped.append(relative_text)
                 continue
             try:
@@ -166,6 +204,9 @@ def hydrate_shared_assets(
                 try:
                     existing = os.stat(filename, dir_fd=parent_fd, follow_symlinks=False)
                 except FileNotFoundError:
+                    if not _cache_identity_matches(cache_root, cache_identity, cached_file):
+                        _rollback_created_links(created_links)
+                        return _result("invalid-cache", cache_root)
                     try:
                         os.symlink(expected_link, filename, dir_fd=parent_fd)
                     except FileExistsError:
@@ -173,6 +214,23 @@ def hydrate_shared_assets(
                     except OSError:
                         skipped.append(relative_text)
                     else:
+                        created_identity = _symlink_identity(
+                            parent_fd, filename, expected_link
+                        )
+                        if created_identity is None:
+                            skipped.append(relative_text)
+                            continue
+                        created_links.append(
+                            _CreatedLink(
+                                parent_fd=os.dup(parent_fd),
+                                name=filename,
+                                target=expected_link,
+                                identity=created_identity,
+                            )
+                        )
+                        if not _cache_identity_matches(cache_root, cache_identity, cached_file):
+                            _rollback_created_links(created_links)
+                            return _result("invalid-cache", cache_root)
                         linked.append(target / cached_file.relative)
                     continue
                 except OSError:
@@ -191,8 +249,13 @@ def hydrate_shared_assets(
                     skipped.append(relative_text)
             finally:
                 os.close(parent_fd)
+        if not _cache_identity_matches(cache_root, cache_identity):
+            _rollback_created_links(created_links)
+            return _result("invalid-cache", cache_root)
     finally:
         os.close(target_fd)
+        for created_link in created_links:
+            os.close(created_link.parent_fd)
 
     return AssetResult(
         status="hydrated",
@@ -352,6 +415,7 @@ def _write_manifest(staging: Path, manifest: dict[str, object]) -> None:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    manifest_path.chmod(0o444)
 
 
 def _seal_cache_directories(staging: Path, *, include_root: bool = True) -> bool:
@@ -378,14 +442,119 @@ def _make_staging_directory(cache_root: Path) -> Path | None:
         return None
 
 
-def _validated_cache(cache_root: Path) -> tuple[str, tuple[_AssetFile, ...] | None]:
+def _capture_cache_identity(
+    cache_root: Path,
+    cache_files: tuple[_AssetFile, ...],
+    *,
+    allow_writable_root: bool = False,
+) -> _CacheIdentity | None:
+    try:
+        root_stat = os.lstat(cache_root)
+        manifest_stat = os.lstat(cache_root / "manifest.json")
+    except OSError:
+        return None
+    if (
+        stat.S_ISLNK(root_stat.st_mode)
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or (not allow_writable_root and root_stat.st_mode & 0o222)
+        or stat.S_ISLNK(manifest_stat.st_mode)
+        or not stat.S_ISREG(manifest_stat.st_mode)
+        or manifest_stat.st_mode & 0o222
+    ):
+        return None
+    identities: dict[Path, tuple[int, int]] = {}
+    for cached_file in cache_files:
+        file_path = _safe_cache_file_path(
+            cache_root,
+            cached_file.relative,
+            allow_writable_root=allow_writable_root,
+        )
+        if file_path is None:
+            return None
+        try:
+            file_stat = os.lstat(file_path)
+        except OSError:
+            return None
+        if (
+            stat.S_ISLNK(file_stat.st_mode)
+            or not stat.S_ISREG(file_stat.st_mode)
+            or file_stat.st_mode & 0o222
+        ):
+            return None
+        identities[cached_file.relative] = (file_stat.st_dev, file_stat.st_ino)
+    return _CacheIdentity(
+        root_device=root_stat.st_dev,
+        root_inode=root_stat.st_ino,
+        manifest_device=manifest_stat.st_dev,
+        manifest_inode=manifest_stat.st_ino,
+        files=identities,
+    )
+
+
+def _cache_identity_matches(
+    cache_root: Path,
+    identity: _CacheIdentity,
+    cached_file: _AssetFile | None = None,
+    *,
+    allow_writable_root: bool = False,
+) -> bool:
+    try:
+        root_stat = os.lstat(cache_root)
+        manifest_stat = os.lstat(cache_root / "manifest.json")
+    except OSError:
+        return False
+    if (
+        stat.S_ISLNK(root_stat.st_mode)
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or (not allow_writable_root and root_stat.st_mode & 0o222)
+        or (root_stat.st_dev, root_stat.st_ino) != (identity.root_device, identity.root_inode)
+        or stat.S_ISLNK(manifest_stat.st_mode)
+        or not stat.S_ISREG(manifest_stat.st_mode)
+        or manifest_stat.st_mode & 0o222
+        or (manifest_stat.st_dev, manifest_stat.st_ino)
+        != (identity.manifest_device, identity.manifest_inode)
+    ):
+        return False
+    if cached_file is None:
+        return True
+    expected_identity = identity.files.get(cached_file.relative)
+    if expected_identity is None:
+        return False
+    file_path = _safe_cache_file_path(
+        cache_root,
+        cached_file.relative,
+        allow_writable_root=allow_writable_root,
+    )
+    if file_path is None:
+        return False
+    try:
+        file_stat = os.lstat(file_path)
+    except OSError:
+        return False
+    return (
+        not stat.S_ISLNK(file_stat.st_mode)
+        and stat.S_ISREG(file_stat.st_mode)
+        and file_stat.st_mode & 0o222 == 0
+        and (file_stat.st_dev, file_stat.st_ino) == expected_identity
+    )
+
+
+def _validated_cache(
+    cache_root: Path,
+    *,
+    allow_writable_root: bool = False,
+) -> tuple[str, tuple[_AssetFile, ...] | None]:
     try:
         root_stat = os.lstat(cache_root)
     except FileNotFoundError:
         return "missing", None
     except OSError:
         return "invalid", None
-    if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+    if (
+        stat.S_ISLNK(root_stat.st_mode)
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or (not allow_writable_root and root_stat.st_mode & 0o222)
+    ):
         return "invalid", None
 
     manifest_path = cache_root / "manifest.json"
@@ -393,7 +562,11 @@ def _validated_cache(cache_root: Path) -> tuple[str, tuple[_AssetFile, ...] | No
         manifest_stat = os.lstat(manifest_path)
     except OSError:
         return "invalid", None
-    if stat.S_ISLNK(manifest_stat.st_mode) or not stat.S_ISREG(manifest_stat.st_mode):
+    if (
+        stat.S_ISLNK(manifest_stat.st_mode)
+        or not stat.S_ISREG(manifest_stat.st_mode)
+        or manifest_stat.st_mode & 0o222
+    ):
         return "invalid", None
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -417,7 +590,11 @@ def _validated_cache(cache_root: Path) -> tuple[str, tuple[_AssetFile, ...] | No
         if path_text in seen:
             return "invalid", None
         seen.add(path_text)
-        if not _validate_cached_file(cache_root, parsed):
+        if not _validate_cached_file(
+            cache_root,
+            parsed,
+            allow_writable_root=allow_writable_root,
+        ):
             return "invalid", None
         cache_files.append(parsed)
     if [item.relative.as_posix() for item in cache_files] != sorted(seen):
@@ -472,8 +649,17 @@ def _is_approved_asset_path(relative: Path) -> bool:
     return relative == ASSET_PATHS[-1]
 
 
-def _validate_cached_file(cache_root: Path, cached_file: _AssetFile) -> bool:
-    file_path = _safe_cache_file_path(cache_root, cached_file.relative)
+def _validate_cached_file(
+    cache_root: Path,
+    cached_file: _AssetFile,
+    *,
+    allow_writable_root: bool = False,
+) -> bool:
+    file_path = _safe_cache_file_path(
+        cache_root,
+        cached_file.relative,
+        allow_writable_root=allow_writable_root,
+    )
     if file_path is None:
         return False
     try:
@@ -509,15 +695,34 @@ def _validate_cached_file(cache_root: Path, cached_file: _AssetFile) -> bool:
         os.close(fd)
 
 
-def _safe_cache_file_path(cache_root: Path, relative: Path) -> Path | None:
+def _safe_cache_file_path(
+    cache_root: Path,
+    relative: Path,
+    *,
+    allow_writable_root: bool = False,
+) -> Path | None:
     current = cache_root
+    try:
+        root_stat = os.lstat(current)
+    except OSError:
+        return None
+    if (
+        stat.S_ISLNK(root_stat.st_mode)
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or (not allow_writable_root and root_stat.st_mode & 0o222)
+    ):
+        return None
     for component in ("files", *relative.parts[:-1]):
         current = current / component
         try:
             entry_stat = os.lstat(current)
         except OSError:
             return None
-        if stat.S_ISLNK(entry_stat.st_mode) or not stat.S_ISDIR(entry_stat.st_mode):
+        if (
+            stat.S_ISLNK(entry_stat.st_mode)
+            or not stat.S_ISDIR(entry_stat.st_mode)
+            or entry_stat.st_mode & 0o222
+        ):
             return None
     return current / relative.name
 
@@ -525,6 +730,8 @@ def _safe_cache_file_path(cache_root: Path, relative: Path) -> Path | None:
 def _ensure_real_target_parent(
     target_fd: int,
     parent_parts: tuple[str, ...],
+    *,
+    before_create: Callable[[], bool] | None = None,
 ) -> tuple[int | None, Path]:
     current_fd = os.dup(target_fd)
     relative = Path()
@@ -532,11 +739,15 @@ def _ensure_real_target_parent(
         for component in parent_parts:
             child_fd, status = _open_child_directory(current_fd, component)
             if status == "missing":
+                if before_create is not None and not before_create():
+                    os.close(current_fd)
+                    return None, relative
                 try:
                     os.mkdir(component, mode=0o755, dir_fd=current_fd)
                 except FileExistsError:
                     pass
                 except OSError:
+                    os.close(current_fd)
                     return None, relative
                 child_fd, status = _open_child_directory(current_fd, component)
             if child_fd is None or status != "ok":
@@ -549,6 +760,47 @@ def _ensure_real_target_parent(
     except Exception:
         os.close(current_fd)
         raise
+
+
+def _symlink_identity(
+    parent_fd: int,
+    name: str,
+    expected_target: str,
+) -> tuple[int, int] | None:
+    try:
+        entry_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        target = os.readlink(name, dir_fd=parent_fd)
+    except OSError:
+        return None
+    if not stat.S_ISLNK(entry_stat.st_mode) or target != expected_target:
+        return None
+    return entry_stat.st_dev, entry_stat.st_ino
+
+
+def _unlink_expected_symlink(
+    parent_fd: int,
+    name: str,
+    expected_target: str,
+    expected_identity: tuple[int, int],
+) -> bool:
+    """Remove only the symlink this hydrate invocation just created."""
+    if _symlink_identity(parent_fd, name, expected_target) != expected_identity:
+        return False
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except OSError:
+        return False
+    return True
+
+
+def _rollback_created_links(created_links: list[_CreatedLink]) -> None:
+    for created_link in reversed(created_links):
+        _unlink_expected_symlink(
+            created_link.parent_fd,
+            created_link.name,
+            created_link.target,
+            created_link.identity,
+        )
 
 
 def _open_directory(path: Path) -> int | None:
@@ -619,21 +871,59 @@ def _open_child_directory(parent_fd: int, name: str) -> tuple[int | None, str]:
     return fd, "ok"
 
 
-def _publish_staging(staging: Path, cache_root: Path) -> str:
+def _publish_staging(
+    staging: Path,
+    cache_root: Path,
+    expected_identity: _CacheIdentity,
+) -> str:
     parent_fd = _open_directory(cache_root.parent)
     if parent_fd is None:
         return "unavailable"
     try:
+        if not _directory_entry_matches(parent_fd, staging.name, expected_identity):
+            return "staging-replaced"
         result = _rename_no_replace(parent_fd, staging.name, cache_root.name)
+        if result == "ok" and not _directory_entry_matches(
+            parent_fd, cache_root.name, expected_identity
+        ):
+            return "staging-replaced"
     finally:
         os.close(parent_fd)
     if result == "ok":
-        cache_state, _ = _validated_cache(cache_root)
-        return "published" if cache_state == "valid" else "unavailable"
+        cache_state, cache_files = _validated_cache(cache_root, allow_writable_root=True)
+        if cache_state != "valid" or cache_files is None:
+            return "unavailable"
+        return (
+            "published"
+            if _cache_identity_matches(
+                cache_root, expected_identity, allow_writable_root=True
+            )
+            else "staging-replaced"
+        )
     if result == "destination-exists":
         cache_state, _ = _validated_cache(cache_root)
         return "cache-exists" if cache_state == "valid" else "invalid-cache"
     return "unavailable"
+
+
+def _directory_entry_matches(
+    parent_fd: int,
+    name: str,
+    expected_identity: _CacheIdentity,
+) -> bool:
+    directory_fd, status = _open_child_directory(parent_fd, name)
+    if directory_fd is None or status != "ok":
+        return False
+    try:
+        current = os.fstat(directory_fd)
+    except OSError:
+        return False
+    finally:
+        os.close(directory_fd)
+    return (current.st_dev, current.st_ino) == (
+        expected_identity.root_device,
+        expected_identity.root_inode,
+    )
 
 
 def _rename_no_replace(parent_fd: int, source_name: str, destination_name: str) -> str:
@@ -661,25 +951,10 @@ def _rename_no_replace(parent_fd: int, source_name: str, destination_name: str) 
             _DARWIN_RENAME_EXCL | _DARWIN_RENAME_NOFOLLOW_ANY,
         )
     elif sys.platform.startswith("linux"):
-        renameat2 = getattr(libc, "renameat2", None)
-        if renameat2 is None:
-            return "unsupported"
-        renameat2.argtypes = (
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        )
-        renameat2.restype = ctypes.c_int
-        ctypes.set_errno(0)
-        result = renameat2(
-            parent_fd,
-            source,
-            parent_fd,
-            destination,
-            _LINUX_RENAME_NOREPLACE,
-        )
+        # renameat2(RENAME_NOREPLACE) excludes destination replacement but
+        # does not provide the source nofollow guarantee required to publish
+        # an untrusted directory entry.  Fail closed instead of emulating it.
+        return "unsupported"
     else:
         return "unsupported"
     if result == 0:

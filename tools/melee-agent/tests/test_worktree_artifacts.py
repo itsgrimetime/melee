@@ -769,6 +769,7 @@ def test_hydrate_preserves_real_file_and_rejects_bad_digest(tmp_path: Path) -> N
     manifest_path = cache / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["files"][0]["sha256"] = "0" * 64
+    manifest_path.chmod(0o644)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     assert assets.hydrate_shared_assets(target, cache).status == "invalid-cache"
 
@@ -793,8 +794,39 @@ def test_seed_makes_cache_payload_files_and_directories_read_only(tmp_path: Path
 
     payload = cache / "files" / "build" / "tools" / "wibo"
     assert payload.stat().st_mode & 0o222 == 0
+    assert (cache / "manifest.json").stat().st_mode & 0o222 == 0
     for directory in (cache, cache / "files", cache / "files" / "build"):
         assert directory.stat().st_mode & 0o222 == 0
+
+
+def test_hydrate_rejects_writable_manifest_before_target_mutation(tmp_path: Path) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    (cache / "manifest.json").chmod(0o644)
+
+    result = assets.hydrate_shared_assets(target, cache)
+
+    assert result.status == "invalid-cache"
+    assert not (target / "build").exists()
+
+
+def test_hydrate_rejects_writable_cache_directories_before_target_mutation(
+    tmp_path: Path,
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    (cache / "files").chmod(0o755)
+
+    result = assets.hydrate_shared_assets(target, cache)
+
+    assert result.status == "invalid-cache"
+    assert not (target / "build").exists()
 
 
 def test_seed_preserves_a_valid_different_cache(tmp_path: Path) -> None:
@@ -821,6 +853,7 @@ def test_hydrate_rejects_manifest_platform_and_path_tampering_before_mutation(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["platform"]["machine"] = "other-machine"
     manifest["files"][0]["path"] = "../outside"
+    manifest_path.chmod(0o644)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     result = assets.hydrate_shared_assets(target, cache)
@@ -861,12 +894,166 @@ def test_hydrate_preserves_a_mismatched_consumer_symlink(tmp_path: Path) -> None
     assert consumer.read_bytes() == b"other"
 
 
+def test_hydrate_rejects_cache_root_replacement_before_target_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    reviewed = tmp_path / "cache-reviewed"
+    real_ensure_parent = assets._ensure_real_target_parent
+    replaced = False
+
+    def replace_cache_before_target_mutation(*args, **kwargs):
+        nonlocal replaced
+        if not replaced:
+            cache.chmod(0o755)
+            cache.rename(reviewed)
+            cache.mkdir()
+            replaced = True
+        return real_ensure_parent(*args, **kwargs)
+
+    monkeypatch.setattr(assets, "_ensure_real_target_parent", replace_cache_before_target_mutation)
+    result = assets.hydrate_shared_assets(target, cache)
+
+    assert replaced is True
+    assert result.status == "invalid-cache"
+    assert not (target / "build").exists()
+
+
+def test_hydrate_removes_its_link_when_cache_changes_after_link_creation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    reviewed = tmp_path / "cache-reviewed"
+    real_symlink = assets.os.symlink
+    replaced = False
+
+    def replace_cache_after_link(link_target, link_name, *, dir_fd=None):
+        nonlocal replaced
+        real_symlink(link_target, link_name, dir_fd=dir_fd)
+        if not replaced:
+            cache.chmod(0o755)
+            cache.rename(reviewed)
+            cache.mkdir()
+            replaced = True
+
+    monkeypatch.setattr(assets.os, "symlink", replace_cache_after_link)
+    result = assets.hydrate_shared_assets(target, cache)
+
+    consumer = target / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
+    assert replaced is True
+    assert result.status == "invalid-cache"
+    assert not consumer.is_symlink()
+
+
+def test_hydrate_rolls_back_earlier_links_when_cache_changes_after_second_link(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    reviewed = tmp_path / "cache-reviewed"
+    real_symlink = assets.os.symlink
+    links_created = 0
+
+    def replace_cache_after_second_link(link_target, link_name, *, dir_fd=None):
+        nonlocal links_created
+        real_symlink(link_target, link_name, dir_fd=dir_fd)
+        links_created += 1
+        if links_created == 2:
+            cache.chmod(0o755)
+            cache.rename(reviewed)
+            cache.mkdir()
+
+    monkeypatch.setattr(assets.os, "symlink", replace_cache_after_second_link)
+    result = assets.hydrate_shared_assets(target, cache)
+
+    compiler = target / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
+    wibo = target / "build" / "tools" / "wibo"
+    assert links_created == 2
+    assert result.status == "invalid-cache"
+    assert not compiler.is_symlink()
+    assert not wibo.is_symlink()
+
+
+def test_seed_rejects_valid_staging_directory_replacement_before_publish(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    replacement = tmp_path / "replacement-cache"
+    assert assets.seed_shared_assets(source, replacement).status == "seeded"
+    real_rename = assets._rename_no_replace
+    replaced = False
+
+    def replace_staging_before_rename(parent_fd, source_name, destination_name):
+        nonlocal replaced
+        if source_name.startswith(".cache.staging-") and not replaced:
+            os.rename(source_name, f"{source_name}.reviewed", src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            replacement.chmod(0o755)
+            os.rename(replacement, source_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            replaced = True
+        return real_rename(parent_fd, source_name, destination_name)
+
+    monkeypatch.setattr(assets, "_rename_no_replace", replace_staging_before_rename)
+    result = assets.seed_shared_assets(source, cache)
+
+    assert replaced is True
+    assert result.status == "cache-unavailable"
+    assert cache.exists()
+    assert not cache.is_symlink()
+    assert assets.hydrate_shared_assets(target, cache).status == "invalid-cache"
+    assert not (target / "build").exists()
+
+
+def test_seed_rejects_staging_symlink_replacement_before_publish(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real_rename = assets._rename_no_replace
+    replaced = False
+
+    def replace_staging_before_rename(parent_fd, source_name, destination_name):
+        nonlocal replaced
+        if source_name.startswith(".cache.staging-") and not replaced:
+            os.rename(source_name, f"{source_name}.reviewed", src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.symlink(outside, source_name, dir_fd=parent_fd)
+            replaced = True
+        return real_rename(parent_fd, source_name, destination_name)
+
+    monkeypatch.setattr(assets, "_rename_no_replace", replace_staging_before_rename)
+    result = assets.seed_shared_assets(source, cache)
+
+    assert replaced is True
+    assert result.status == "cache-unavailable"
+    assert cache.is_symlink()
+    assert list(outside.iterdir()) == []
+    assert assets.hydrate_shared_assets(target, cache).status == "invalid-cache"
+    assert not (target / "build").exists()
+
+
 def test_seed_retains_replaced_staging_entry(tmp_path: Path, monkeypatch) -> None:
     source = _asset_source(tmp_path / "source")
     cache = tmp_path / "cache"
     replacement: dict[str, Path] = {}
 
-    def replace_staging_before_publish(staging: Path, cache_root: Path) -> str:
+    def replace_staging_before_publish(staging: Path, cache_root: Path, expected_identity) -> str:
         staging.rename(staging.with_name(f"{staging.name}.reviewed"))
         staging.mkdir()
         sentinel = staging / "sentinel.txt"
