@@ -2670,6 +2670,23 @@ static inline void** mnDiagram_GetFaceB(void)
     return ((mnDiagram_Assets*) &mnDiagram_804A0750)->FaceB;
 }
 
+static inline HSD_JObj* mnDiagram_CreateFighterHeader(
+    mnDiagram_Assets* assets, int fighter_id)
+{
+    void** joint_data = assets->FaceB;
+    HSD_JObj* child;
+    HSD_JObj* jobj;
+
+    jobj = HSD_JObjLoadJoint(joint_data[0]);
+    HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2], joint_data[3]);
+    HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);
+    HSD_JObjAnimAll(jobj);
+    lb_80011E24(jobj, &child, 2, -1);
+    HSD_JObjReqAnimAll(child, (f32) (fighter_id & 0xFF));
+    HSD_JObjAnimAll(child);
+    return jobj;
+}
+
 void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
     HSD_JObj* new_var;
@@ -2678,12 +2695,6 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     Diagram* data_alias;
     Diagram* data = GET_DIAGRAM(arg0);
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
-    void** joint_data;
-    u8 stack_obj[4];
-    HSD_JObj* sp_jobj;
-    u8 stack_obj2[4];
-    HSD_JObj* sp_jobj2;
-    u8 stack_obj3[4];
     u8* sorted;
     int fighter_id;
     f32 x_spacing;
@@ -2692,28 +2703,16 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     int i;
     HSD_JObj* jobj;
 
-    (void) &stack_obj;
     data_alias = data;
-    (void) &stack_obj2;
-    (void) &stack_obj3;
 
     // Column headers (fighter icons)
     for (i = 0; i < 7; i++) {
         sorted = mnDiagram_804A0750.sorted_fighters;
-        joint_data = mnDiagram_GetFaceB();
         count = mnDiagram_CountUnlockedFightersInline();
         if (count > i) {
             fighter_id =
                 mnDiagram_GetVisibleFighterCursorFrom(sorted, arg2, i);
-            jobj = HSD_JObjLoadJoint(joint_data[0]);
-            HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2],
-                               joint_data[3]);
-            HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);
-            HSD_JObjAnimAll(jobj);
-            lb_80011E24(jobj, &sp_jobj, 2, -1);
-            HSD_JObjReqAnimAll(sp_jobj, (f32) (fighter_id & 0xFF));
-            HSD_JObjAnimAll(sp_jobj);
-            new_var = jobj;
+            new_var = mnDiagram_CreateFighterHeader(assets, fighter_id);
             x_spacing = HSD_JObjGetTranslationX(data_alias->jobjs[8]) -
                         HSD_JObjGetTranslationX(data_alias->jobjs[7]);
             HSD_JObjSetTranslateX(new_var, x_spacing * i);
@@ -2723,21 +2722,13 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     }
 
     // Row headers (fighter icons)
-    joint_data = assets->FaceB;
     for (i = 0; i < 0xA; i++) {
         sorted = mnDiagram_804A0750.sorted_fighters;
         count = mnDiagram_CountUnlockedFightersInline();
         if (count > i) {
             fighter_idr =
                 mnDiagram_GetVisibleFighterCursorFrom2(sorted, arg1, i);
-            jobj = HSD_JObjLoadJoint(joint_data[0]);
-            HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2],
-                               joint_data[3]);
-            HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);
-            HSD_JObjAnimAll(jobj);
-            lb_80011E24(jobj, &sp_jobj2, 2, -1);
-            HSD_JObjReqAnimAll(sp_jobj2, (f32) (fighter_idr & 0xFF));
-            HSD_JObjAnimAll(sp_jobj2);
+            jobj = mnDiagram_CreateFighterHeader(assets, fighter_idr);
             row_parent = data_alias->jobjs[9];
             y_spacing = HSD_JObjGetTranslationY(data_alias->jobjs[10]) -
                         HSD_JObjGetTranslationY(row_parent);
