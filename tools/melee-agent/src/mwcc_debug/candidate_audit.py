@@ -504,11 +504,8 @@ def _is_direct_unary_address_of_identifier(
     after_index = end
     while after_index < len(text) and text[after_index].isspace():
         after_index += 1
-    if after_index >= len(text):
-        return True
-    if text[after_index] in {"[", ".", "("}:
-        return False
-    return not text.startswith(("->", "++", "--"), after_index)
+    # Only accept direct initializer and non-final call-argument forms.
+    return after_index < len(text) and text[after_index] in {";", ","}
 
 
 def _local_reads(text: str, known_locals: set[str]) -> list[tuple[str, int]]:

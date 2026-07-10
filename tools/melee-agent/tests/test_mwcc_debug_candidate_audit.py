@@ -283,6 +283,44 @@ void f(void)
     )
 
 
+def test_candidate_audit_rejects_parenthesized_address_dereference() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    use(*(&local));
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_indexed_parenthesized_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    use((&local)[0]);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
 def test_candidate_audit_rejects_literal_binary_and_uninitialized_local() -> None:
     report = candidate_audit.audit_candidate_source(
         """
