@@ -605,7 +605,7 @@ def fetch_job(
         "target.o",
         "target.s",
     ]
-    runner(
+    fetch_commands = [
         [
             "rsync",
             "-az",
@@ -619,9 +619,7 @@ def fetch_job(
             "*",
             f"{job.ssh}:{job.remote_perm_dir}/",
             f"{fetch_dest}/",
-        ]
-    )
-    runner(
+        ],
         [
             "rsync",
             "-az",
@@ -645,10 +643,94 @@ def fetch_job(
             "*",
             f"{job.ssh}:{job.remote_run_dir}/",
             f"{remote_run_dest}/",
-        ]
-    )
+        ],
+    ]
+    rsync_failures: list[dict[str, Any]] = []
+    for command in fetch_commands:
+        result = runner(command, check=False)
+        if result.returncode != 0:
+            rsync_failures.append(_remote_fetch_rsync_failure(command, result))
+    if rsync_failures:
+        status = status_job(job, runner=runner)
+        _write_remote_fetch_warning(
+            fetch_dest,
+            job=job,
+            remote_status=status,
+            rsync_failures=rsync_failures,
+        )
+        if status.state == "active":
+            detail = _format_remote_fetch_failure_detail(
+                status,
+                rsync_failures,
+            )
+            raise RemoteJobError(
+                f"remote fetch failed for active job {job.job_id}: {detail}"
+            )
     candidate_audit.audit_candidate_tree(fetch_dest, function=job.function)
     return fetch_dest
+
+
+def _remote_fetch_rsync_failure(
+    command: list[str],
+    result: CommandResult,
+) -> dict[str, Any]:
+    failure: dict[str, Any] = {
+        "command": shlex.join(command),
+        "returncode": result.returncode,
+    }
+    if result.stdout.strip():
+        failure["stdout"] = _truncate_middle(result.stdout.strip(), 1200)
+    if result.stderr.strip():
+        failure["stderr"] = _truncate_middle(result.stderr.strip(), 1200)
+    return failure
+
+
+def _write_remote_fetch_warning(
+    fetch_dest: Path,
+    *,
+    job: RemoteJob,
+    remote_status: RemoteStatus,
+    rsync_failures: list[dict[str, Any]],
+) -> None:
+    payload: dict[str, Any] = {
+        "status": "partial",
+        "job_id": job.job_id,
+        "function": job.function,
+        "target": job.target,
+        "remote_status": remote_status.state,
+        "remote_run_dir": job.remote_run_dir,
+        "remote_perm_dir": job.remote_perm_dir,
+        "rsync_failures": rsync_failures,
+        "message": (
+            "Remote fetch preserved available local artifacts, but one or "
+            "more rsync passes failed. For stopped or unknown jobs this is "
+            "treated as a partial fetch so triage can continue."
+        ),
+    }
+    if remote_status.detail:
+        payload["remote_status_detail"] = remote_status.detail
+    (fetch_dest / "remote-fetch-warning.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _format_remote_fetch_failure_detail(
+    remote_status: RemoteStatus,
+    rsync_failures: list[dict[str, Any]],
+) -> str:
+    failure_text = "; ".join(
+        _compact_submit_failure_text(
+            str(failure.get("stderr") or failure.get("stdout") or failure)
+        )
+        for failure in rsync_failures
+    )
+    detail = f"remote status {remote_status.state!r}"
+    if remote_status.detail:
+        detail += f" ({remote_status.detail})"
+    if failure_text:
+        detail += f"; {failure_text}"
+    return detail
 
 
 def tail_job(

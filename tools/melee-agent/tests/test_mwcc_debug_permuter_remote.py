@@ -932,6 +932,78 @@ def test_fetch_job_writes_candidate_audit_summary(tmp_path: Path) -> None:
     assert json.loads(sidecar.read_text())["status"] == "corrupt-candidate"
 
 
+def test_fetch_job_preserves_stopped_job_rsync_eof_for_triage(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        del cwd, timeout
+        calls.append(argv)
+        if argv[0] == "ssh" and "tmux has-session" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="stopped", stderr="")
+        if argv[0] == "rsync":
+            result = pr.CommandResult(
+                returncode=229,
+                stdout="",
+                stderr="rsync error: unexpected end of file",
+            )
+            if check:
+                raise pr.RemoteJobError(
+                    f"Command failed ({result.returncode}): rsync: {result.stderr}"
+                )
+            return result
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    dest = pr.fetch_job(job, runner=fake_runner)
+
+    assert dest == Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    assert [call[0] for call in calls] == ["rsync", "rsync", "ssh"]
+    warning_path = dest / "remote-fetch-warning.json"
+    assert warning_path.exists()
+    warning = json.loads(warning_path.read_text())
+    assert warning["status"] == "partial"
+    assert warning["remote_status"] == "stopped"
+    assert warning["job_id"] == job.job_id
+    assert len(warning["rsync_failures"]) == 2
+    assert warning["rsync_failures"][0]["returncode"] == 229
+    assert "unexpected end of file" in warning["rsync_failures"][0]["stderr"]
+
+
+def test_fetch_job_rsync_failure_still_raises_for_active_job(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        del cwd, check, timeout
+        if argv[0] == "ssh" and "tmux has-session" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="active", stderr="")
+        if argv[0] == "rsync":
+            return pr.CommandResult(
+                returncode=229,
+                stdout="",
+                stderr="rsync error: unexpected end of file",
+            )
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(pr.RemoteJobError, match="active job"):
+        pr.fetch_job(job, runner=fake_runner)
+
+
 def test_cleanup_remote_run_dir_deletes_only_remote_runs_child(tmp_path: Path) -> None:
     job = _sample_job(tmp_path)
     calls: list[tuple[list[str], bool]] = []
