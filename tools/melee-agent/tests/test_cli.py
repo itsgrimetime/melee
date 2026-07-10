@@ -93,8 +93,14 @@ def test_opseq_like_uses_shared_helper_in_pr_worktree(monkeypatch, tmp_path):
         events.append(("run", cmd, cwd, timeout, env))
         return subprocess.CompletedProcess(cmd, 0, "derived pattern\n", "")
 
+    class FakeDistribution:
+        def read_text(self, name):
+            assert name == "direct_url.json"
+            agent_dir = shared_helper.parents[1] / "melee-agent"
+            return '{"url": "file://' + str(agent_dir) + '"}'
+
     monkeypatch.setattr(cli, "DEFAULT_MELEE_ROOT", worktree)
-    monkeypatch.setattr(cli, "_shared_table_typer_binary", lambda: shared_helper)
+    monkeypatch.setattr(cli.metadata, "distribution", lambda name: FakeDistribution())
     monkeypatch.setattr(cli, "_acquire_checkdiff_repo_lock", lambda *args, **kwargs: FakeLock())
     monkeypatch.setattr(cli, "_run_with_process_group_timeout", fake_run)
 

@@ -10,11 +10,14 @@ Usage:
     melee-agent <command>
 """
 
+import json
 import os
 import shlex
 import subprocess
 import sys
+from importlib import metadata
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from dotenv import load_dotenv
 
@@ -190,9 +193,25 @@ def _opseq_requests_like(args: list[str]) -> bool:
     )
 
 
-def _shared_table_typer_binary() -> Path:
-    """Return the table-typer binary shipped with this editable agent install."""
-    return Path(__file__).resolve().parents[4] / "tools" / "table-typer" / "table-typer"
+def _shared_table_typer_binary() -> Path | None:
+    """Return the helper from melee-agent's authoritative editable install.
+
+    This cannot be inferred from ``__file__``: branch-local validation imports
+    this module from a PR worktree, while the globally installed agent still
+    points at the shared master tooling checkout.
+    """
+    try:
+        direct_url = metadata.distribution("melee-agent").read_text("direct_url.json")
+        if direct_url is None:
+            raise ValueError("editable install has no direct URL")
+        source_url = json.loads(direct_url)["url"]
+        parsed_url = urlparse(source_url)
+        if parsed_url.scheme != "file":
+            raise ValueError(f"unsupported editable install URL: {source_url!r}")
+        agent_dir = Path(unquote(parsed_url.path))
+    except (KeyError, ValueError, metadata.PackageNotFoundError):
+        return None
+    return agent_dir.parent.parent / "tools" / "table-typer" / "table-typer"
 
 
 def _opseq_timeout_seconds() -> int:
