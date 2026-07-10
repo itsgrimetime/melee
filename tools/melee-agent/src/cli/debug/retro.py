@@ -195,6 +195,101 @@ def _process_text(value) -> str:
     return str(value)
 
 
+def _dedupe_strings(values) -> tuple[str, ...]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        text = value.strip()
+        if not text or text in seen:
+            continue
+        result.append(text)
+        seen.add(text)
+    return tuple(result)
+
+
+def _parse_symbol_function_addresses(melee_root: Path) -> dict[str, int]:
+    import re
+
+    symbols_path = melee_root / "config" / "GALE01" / "symbols.txt"
+    try:
+        lines = symbols_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+
+    parsed: dict[str, int] = {}
+    pattern = re.compile(
+        r"^\s*(?P<name>\S+)\s*=\s*\.text:0x(?P<addr>[0-9A-Fa-f]+);.*\btype:function\b"
+    )
+    for line in lines:
+        match = pattern.match(line)
+        if not match:
+            continue
+        try:
+            parsed[match.group("name")] = int(match.group("addr"), 16)
+        except ValueError:
+            continue
+    return parsed
+
+
+def _address_from_fn_alias(function: str) -> int | None:
+    import re
+
+    match = re.fullmatch(r"fn_([0-9A-Fa-f]{8})", function)
+    if not match:
+        return None
+    return int(match.group(1), 16)
+
+
+def _address_style_name(function: str, address: int) -> str | None:
+    if "_" not in function or function.startswith("fn_"):
+        return None
+    prefix = function.split("_", 1)[0]
+    if not prefix:
+        return None
+    return f"{prefix}_{address:08X}"
+
+
+def _symbol_function_aliases(function: str, melee_root: Path) -> tuple[str, ...]:
+    symbols = _parse_symbol_function_addresses(melee_root)
+    address = symbols.get(function)
+    if address is None:
+        address = _address_from_fn_alias(function)
+    if address is None:
+        return ()
+
+    same_address = [
+        name for name, value in symbols.items() if value == address and name != function
+    ]
+    return _dedupe_strings(
+        (
+            *same_address,
+            f"fn_{address:08X}",
+            _address_style_name(function, address),
+        )
+    )
+
+
+def _backend_function_aliases(fn: str, *, melee_root: Path) -> tuple[str, ...]:
+    try:
+        from src.mwcc_debug.diff_capture import function_pcdump_aliases
+
+        pcdump_aliases = function_pcdump_aliases(fn, melee_root)
+    except Exception:  # noqa: BLE001 - aliases are best-effort diagnostics
+        pcdump_aliases = ()
+    return _dedupe_strings(
+        (
+            *pcdump_aliases,
+            *_symbol_function_aliases(fn, melee_root),
+        )
+    )
+
+
+def _backend_function_aliases_json(fn: str, *, melee_root: Path) -> str:
+    return json.dumps(list(_backend_function_aliases(fn, melee_root=melee_root)))
+
+
 def _format_parity_mismatch(parity: dict) -> str:
     def object_line(label: str, data: dict | None) -> str:
         data = data or {}
@@ -353,7 +448,11 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
     ]
     hook = _retro_script("backend_onepass_trace_hook.py")
     cmd[-1:-1] = ["--gdb-py", str(hook)]
-    env = _retro_subprocess_env(RETRO_SOURCE=src, RETRO_FUNCTION=fn)
+    env = _retro_subprocess_env(
+        RETRO_SOURCE=src,
+        RETRO_FUNCTION=fn,
+        RETRO_FUNCTION_ALIASES=_backend_function_aliases_json(fn, melee_root=melee_root),
+    )
     command_text = shlex.join([str(part) for part in cmd])
     launch_log = out_dir / "launch.log"
 
@@ -1657,26 +1756,35 @@ def _validate_onepass_candidate_summary(out_dir: Path, *, fn: str) -> None:
             )
 
 
+def _function_start_names(event: dict) -> set[str]:
+    names: set[str] = set()
+    name = event.get("name")
+    if isinstance(name, str):
+        names.add(name)
+    identity = event.get("identity")
+    if isinstance(identity, dict):
+        for key in ("requested", "canonical_name", "symbol_name", "source_name"):
+            value = identity.get(key)
+            if isinstance(value, str):
+                names.add(value)
+        aliases = identity.get("aliases")
+        if isinstance(aliases, list):
+            names.update(alias for alias in aliases if isinstance(alias, str))
+    return names
+
+
 def _validate_onepass_event_function_start(events: list[dict], *, fn: str) -> None:
     starts = [event for event in events if event.get("event") == "function_start"]
     if not starts:
         raise RuntimeError("backend one-pass candidate events missing function_start")
     for event in starts:
-        name = event.get("name")
-        if name != fn:
+        names = _function_start_names(event)
+        if fn not in names:
+            name = event.get("name")
             raise RuntimeError(
                 "backend one-pass candidate event function_start mismatch: "
-                f"{name!r} != {fn!r}"
+                f"{name!r} does not identify {fn!r}"
             )
-        identity = event.get("identity")
-        if isinstance(identity, dict):
-            for key in ("requested", "canonical_name", "symbol_name", "source_name"):
-                value = identity.get(key)
-                if isinstance(value, str) and value != fn:
-                    raise RuntimeError(
-                        "backend one-pass candidate event identity mismatch: "
-                        f"{key}={value!r} != {fn!r}"
-                    )
 
 
 def _promote_onepass_summary_for_full_backend(out_dir: Path) -> None:
@@ -1858,7 +1966,11 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
     out_dir.mkdir(parents=True, exist_ok=True)
     if phases in ("backend", "all"):
         _remove_backend_dump_text_artifacts(out_dir)
-    env = _retro_subprocess_env(RETRO_SOURCE=src, RETRO_FUNCTION=fn)
+    env = _retro_subprocess_env(
+        RETRO_SOURCE=src,
+        RETRO_FUNCTION=fn,
+        RETRO_FUNCTION_ALIASES=_backend_function_aliases_json(fn, melee_root=melee_root),
+    )
     log = (out_dir / "launch.log")
     try:
         proc = _run_with_process_group_timeout(

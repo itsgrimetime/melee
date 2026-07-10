@@ -1282,7 +1282,7 @@ def test_run_backend_candidate_trace_one_pass_rejects_event_function_mismatch(
 
     with pytest.raises(
         RuntimeError,
-        match="backend one-pass candidate event function_start mismatch: 'other_fn' != 'test_fn'",
+        match="backend one-pass candidate event function_start mismatch: 'other_fn' does not identify 'test_fn'",
     ):
         retro._run_backend_candidate_trace(
             src="src/melee/test/unit.c",
@@ -2806,6 +2806,116 @@ def test_launch_backend_events_uses_onepass_hook_and_validates_summary(monkeypat
     assert summary["schema_version"] == "mwcc-retro-backend-onepass-summary.v1"
     assert summary["source_sidecar"] == "backend-onepass-candidate.json"
     assert not any("candidate" in note.lower() for note in summary["notes"])
+
+
+def test_backend_function_aliases_include_symbol_address_names(tmp_path):
+    import src.cli.debug.retro as retro
+
+    symbols = tmp_path / "config" / "GALE01" / "symbols.txt"
+    symbols.parent.mkdir(parents=True)
+    symbols.write_text(
+        "\n".join(
+            [
+                "mnDiagram_DrawFighterHeaders = .text:0x80242C0C; // type:function size:0x42C scope:global",
+                "mnDiagram_Init = .text:0x802437E8; // type:function size:0x254 scope:global",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    aliases = retro._backend_function_aliases(
+        "mnDiagram_DrawFighterHeaders",
+        melee_root=tmp_path,
+    )
+
+    assert "fn_80242C0C" in aliases
+    assert "mnDiagram_80242C0C" in aliases
+    assert "mnDiagram_DrawFighterHeaders" not in aliases
+
+
+def test_launch_backend_events_accepts_objobject_alias_function_start(
+    monkeypatch, tmp_path
+):
+    import subprocess
+
+    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+
+    class SetupResult:
+        retrowin32_bin = tmp_path / "retrowin32"
+
+    _write_valid_backend_map(tmp_path)
+    monkeypatch.setattr(retro_setup, "ensure_for_root", lambda root, force=False: SetupResult())
+    monkeypatch.setattr(retro, "_retro_tables_dir", lambda root: tmp_path)
+    monkeypatch.setattr(
+        retro,
+        "_backend_function_aliases",
+        lambda fn, melee_root: ("mnDiagram_80242C0C", "fn_80242C0C"),
+    )
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda src, melee_root: "build/compilers/GC/1.2.5n/mwcceppc.exe -c source.c -o source.o",
+    )
+
+    def fake_run(cmd, **kwargs):
+        assert json.loads(kwargs["env"]["RETRO_FUNCTION_ALIASES"]) == [
+            "mnDiagram_80242C0C",
+            "fn_80242C0C",
+        ]
+        (tmp_path / "backend-events.v1.jsonl").write_text(
+            json.dumps(
+                {
+                    "event": "function_start",
+                    "name": "mnDiagram_80242C0C",
+                    "identity": {
+                        "requested": "mnDiagram_DrawFighterHeaders",
+                        "canonical_name": "mnDiagram_DrawFighterHeaders",
+                        "symbol_name": "mnDiagram_80242C0C",
+                        "source_name": "mnDiagram_DrawFighterHeaders",
+                        "aliases": ["fn_80242C0C"],
+                        "source_file": "src/melee/mn/mndiagram.c",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "backend-onepass-candidate.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "mwcc-retro-backend-onepass-candidate.v1",
+                    "requested_function": "mnDiagram_DrawFighterHeaders",
+                    "requested_function_matched": True,
+                    "classes_seen": [
+                        {
+                            "class_id": 0,
+                            "class_name": "gpr",
+                            "nodes": 1,
+                            "order_nodes": 0,
+                            "exact_color_decisions": 0,
+                        }
+                    ],
+                    "errors": [],
+                    "warnings": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    events = retro._launch_backend_events(
+        src="src/melee/mn/mndiagram.c",
+        fn="mnDiagram_DrawFighterHeaders",
+        out_dir=tmp_path,
+        melee_root=Path.cwd(),
+    )
+
+    assert events == tmp_path / "backend-events.v1.jsonl"
 
 
 def test_launch_backend_events_uses_package_scripts_with_explicit_melee_root(

@@ -44,6 +44,54 @@ def intervene(ctx):
     source_file = os.environ.get("RETRO_SOURCE", "")
     requested = os.environ.get("RETRO_FUNCTION", ctx.fn)
 
+    def parse_aliases():
+        try:
+            values = json.loads(os.environ.get("RETRO_FUNCTION_ALIASES", "[]"))
+        except Exception:  # noqa: BLE001 - malformed caller env should not kill tracing
+            return []
+        if not isinstance(values, list):
+            return []
+        result = []
+        seen = set()
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            text = value.strip()
+            if not text or text in seen:
+                continue
+            result.append(text)
+            seen.add(text)
+        return result
+
+    function_aliases = parse_aliases()
+    match_names = {
+        name
+        for name in [requested, ctx.fn, *function_aliases]
+        if isinstance(name, str) and name
+    }
+
+    def function_matches(info):
+        return info.get("name") in match_names
+
+    def identity_payload(matched_name):
+        aliases = []
+        seen = set()
+        for name in [*function_aliases, matched_name]:
+            if not isinstance(name, str) or not name or name in {requested, ctx.fn}:
+                continue
+            if name in seen:
+                continue
+            aliases.append(name)
+            seen.add(name)
+        return {
+            "requested": requested,
+            "canonical_name": requested,
+            "symbol_name": matched_name or requested,
+            "source_name": ctx.fn,
+            "aliases": aliases,
+            "source_file": source_file,
+        }
+
     def entry_va(key, fallback=None):
         entry = entries.get(key)
         if isinstance(entry, dict) and isinstance(entry.get("va"), int):
@@ -150,6 +198,7 @@ def intervene(ctx):
         "current_decision": None,
         "class_iters": {},
         "exact_decisions_by_class": {},
+        "matched_function_name": None,
         "functions_seen": [],
         "passes_seen": [],
         "classes_seen": [],
@@ -164,15 +213,8 @@ def intervene(ctx):
         append_event(
             {
                 "event": "function_start",
-                "name": ctx.fn,
-                "identity": {
-                    "requested": requested,
-                    "canonical_name": ctx.fn,
-                    "symbol_name": ctx.fn,
-                    "source_name": ctx.fn,
-                    "aliases": [],
-                    "source_file": source_file,
-                },
+                "name": requested,
+                "identity": identity_payload(state.get("matched_function_name") or ctx.fn),
                 "source_file": source_file,
             }
         )
@@ -251,13 +293,15 @@ def intervene(ctx):
         state["current_decision"] = None
         state["class_iters"] = {}
         state["exact_decisions_by_class"] = {}
+        state["matched_function_name"] = None
 
     class CodegenStart(gdb.Breakpoint):
         def stop(self):
             info = current_function_name()
             state["functions_seen"].append(info)
-            if info.get("name") == ctx.fn:
+            if function_matches(info):
                 reset_for_function()
+                state["matched_function_name"] = info.get("name")
                 emit_function_start()
                 append_event(
                     {
