@@ -236,20 +236,22 @@ def run_bounded_validation(
         )
 
     results: list[dict[str, object]] = []
-    deadline = clock() + timeout
+    deadline = clock() + timeout if timeout > 0 else None
     for index, (workflow, argv) in enumerate(commands):
-        remaining_timeout = int(deadline - clock())
-        if remaining_timeout <= 0:
-            for skipped_workflow, skipped_argv in commands[index:]:
-                results.append(
-                    {
-                        "candidate": skipped_workflow,
-                        "status": "skipped_timeout",
-                        "reason": "bounded validation deadline expired",
-                        "argv": skipped_argv,
-                    }
-                )
-            break
+        remaining_timeout = timeout
+        if deadline is not None:
+            remaining_timeout = int(deadline - clock())
+            if remaining_timeout <= 0:
+                for skipped_workflow, skipped_argv in commands[index:]:
+                    results.append(
+                        {
+                            "candidate": skipped_workflow,
+                            "status": "skipped_timeout",
+                            "reason": "bounded validation deadline expired",
+                            "argv": skipped_argv,
+                        }
+                    )
+                break
         proc = active_runner(argv, remaining_timeout)
         payload = _json_payload(proc.get("stdout", ""))
         results.append(

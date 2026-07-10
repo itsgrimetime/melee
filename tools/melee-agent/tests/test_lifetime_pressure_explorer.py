@@ -3170,6 +3170,39 @@ def test_bounded_validation_skips_remaining_workflows_when_deadline_expires(
     assert argv[argv.index("--timeout") + 1] == "5"
 
 
+@pytest.mark.parametrize("timeout", [0, -1])
+def test_bounded_validation_treats_non_positive_timeout_as_unlimited(
+    tmp_path: pathlib.Path,
+    timeout: int,
+) -> None:
+    from src.mwcc_debug.pressure_explorer.validation import run_bounded_validation
+
+    calls: list[tuple[list[str], int]] = []
+
+    def runner(argv: list[str], runner_timeout: int) -> dict[str, object]:
+        calls.append((argv, runner_timeout))
+        return {"returncode": 0, "stdout": '{"ok": true}', "stderr": ""}
+
+    results = run_bounded_validation(
+        function="fn_80000000",
+        force_phys="40:25",
+        pcdump_path=tmp_path / "base.pcdump.txt",
+        source_path=tmp_path / "source.c",
+        timeout=timeout,
+        max_candidates=7,
+        direct_blockers=[(0, 40, 37)],
+        runner=runner,
+    )
+
+    assert [argv[3] for argv, _runner_timeout in calls] == [
+        "lifetime-layout",
+        "simplify-order",
+    ]
+    assert [runner_timeout for _argv, runner_timeout in calls] == [timeout, timeout]
+    assert results[2]["candidate"] == "select-order-0-40-37"
+    assert results[2]["status"] == "deferred"
+
+
 def test_bounded_validation_uses_fpr_direct_blocker_target(
     tmp_path: pathlib.Path,
 ) -> None:
