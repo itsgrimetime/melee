@@ -10,6 +10,8 @@ ReadCString = Callable[[int, int], str]
 
 POINTER_LOW = 0x600000
 POINTER_HIGH = 0x2000000
+IMAGE_POINTER_LOW = 0x400000
+IMAGE_POINTER_HIGH = POINTER_LOW
 MAX_OBJECTS = 256
 PROBE_MAX_OBJECTS = 6
 
@@ -155,8 +157,10 @@ def _snapshot_probe_object_row(
     }
     if _bounded_ptr(obj):
         name_record = _read_u32(read_u32, obj + OBJECT_NAME_RECORD, "ObjObject name")
-        row["name_ptr"] = name_record + NAME_RECORD_TEXT if _bounded_ptr(name_record) else 0
-        if _bounded_ptr(row["name_ptr"]):
+        row["name_ptr"] = (
+            name_record + NAME_RECORD_TEXT if _readable_ptr(name_record) else 0
+        )
+        if _readable_ptr(row["name_ptr"]):
             row["name"] = read_cstr(row["name_ptr"], 96)
         row["stack_offset"] = _read_s32(
             read_s32, obj + OBJECT_STACK_OFFSET, "ObjObject stack offset"
@@ -165,7 +169,7 @@ def _snapshot_probe_object_row(
         row["type"] = type_ptr
         row["size"] = (
             _read_s32(read_s32, type_ptr + TYPE_SIZE, "ObjObject type size")
-            if _bounded_ptr(type_ptr)
+            if _readable_ptr(type_ptr)
             else 0
         )
     return row
@@ -208,7 +212,7 @@ def _snapshot_object_list(
             raise ValueError(f"invalid {area} ObjObject pointer 0x{obj:x}")
 
         type_ptr = _read_u32(read_u32, obj + OBJECT_TYPE, f"{area} ObjObject type")
-        if not _bounded_ptr(type_ptr):
+        if not _readable_ptr(type_ptr):
             raise ValueError(f"invalid {area} ObjObject type pointer 0x{type_ptr:x}")
         size = _read_s32(read_s32, type_ptr + TYPE_SIZE, f"{area} ObjObject type size")
         if size < 0:
@@ -250,7 +254,7 @@ def _frame_object_name(
     stack_offset: int,
     name_record: int,
 ) -> tuple[str, str]:
-    if _bounded_ptr(name_record):
+    if _readable_ptr(name_record):
         try:
             name = read_cstr(name_record + NAME_RECORD_TEXT, 96)
         except Exception:  # noqa: BLE001 - unnamed frame slots are still useful facts
@@ -262,6 +266,11 @@ def _frame_object_name(
 
 def _bounded_ptr(value: int) -> bool:
     return POINTER_LOW <= int(value) < POINTER_HIGH
+
+
+def _readable_ptr(value: int) -> bool:
+    value = int(value)
+    return IMAGE_POINTER_LOW <= value < IMAGE_POINTER_HIGH or _bounded_ptr(value)
 
 
 def _read_u32(read_u32: ReadU32, addr: int, label: str) -> int:

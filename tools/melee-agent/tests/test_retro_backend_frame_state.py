@@ -160,6 +160,47 @@ def test_snapshot_frame_state_names_invalid_name_records_by_area_and_offset() ->
     ]
 
 
+def test_snapshot_frame_state_accepts_static_image_type_pointers() -> None:
+    mem = Memory()
+    mem.u32(0x700000, 0x710000)
+    mem.u32(0x700004, 0)
+    mem.u32(0x700008, 0)
+    mem.s32(0x70000C, 32)
+    mem.s32(0x700010, 16)
+    add_frame_object(
+        mem,
+        list_node=0x710000,
+        obj=0x711000,
+        name_record=0x712000,
+        name="row_child",
+        stack_offset=0x44,
+        type_ptr=0x55F5F0,
+        size=4,
+    )
+
+    event = backend_frame_state.snapshot_frame_state(
+        mem.read_u32,
+        mem.read_s32,
+        mem.read_cstr,
+        list_vas={"locals": 0x700000, "arguments": 0x700004, "temps": 0x700008},
+        frame_base_size_va=0x70000C,
+        frame_call_args_size_va=0x700010,
+        source_stage="final_scheduler",
+    )
+
+    assert event["objects"] == [
+        {
+            "area": "locals",
+            "name": "row_child",
+            "stack_offset": 0x44,
+            "size": 4,
+            "type": "type@0x55f5f0",
+            "confidence": "observed",
+            "provenance": "frame_locals",
+        }
+    ]
+
+
 def test_snapshot_probe_frame_state_emits_map_probe_evidence_shape() -> None:
     mem = Memory()
     mem.u32(0x700000, 0x710000)
@@ -174,7 +215,7 @@ def test_snapshot_probe_frame_state_emits_map_probe_evidence_shape() -> None:
         name_record=0x712000,
         name="tmp_a",
         stack_offset=-8,
-        type_ptr=0x713000,
+        type_ptr=0x55F5F0,
         size=4,
     )
     add_frame_object(
@@ -209,7 +250,7 @@ def test_snapshot_probe_frame_state_emits_map_probe_evidence_shape() -> None:
                     "name_ptr": 0x71200A,
                     "name": "tmp_a",
                     "stack_offset": -8,
-                    "type": 0x713000,
+                    "type": 0x55F5F0,
                     "size": 4,
                 }
             ],
