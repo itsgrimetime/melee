@@ -321,6 +321,89 @@ void f(void)
     )
 
 
+def test_candidate_audit_rejects_declaration_initializer_indexed_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    int *value = &local[0];
+    use(value);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_declaration_initializer_arrow_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+struct S {
+    int field;
+};
+void f(void)
+{
+    struct S *local;
+    int *value = &local->field;
+    use(value);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_declaration_initializer_called_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    int *value = &local();
+    use(value);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_declaration_initializer_postfix_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    int *value = &local++;
+    use(value);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
 def test_candidate_audit_rejects_literal_binary_and_uninitialized_local() -> None:
     report = candidate_audit.audit_candidate_source(
         """

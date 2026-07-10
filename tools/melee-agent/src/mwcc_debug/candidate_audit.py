@@ -489,17 +489,16 @@ def _is_direct_unary_address_of_identifier(
     if operator_index < 0 or text[operator_index] != "&":
         return False
     previous_index = _previous_nonspace_index(text, operator_index)
-    if previous_index < 0:
-        return True
-    previous = text[previous_index]
-    if previous in {"&", "*"}:
-        return False
-    if (
-        previous.isalnum()
-        or previous == "_"
-        or previous in ")]"
-    ):
-        return False
+    if previous_index >= 0:
+        previous = text[previous_index]
+        if previous in {"&", "*"}:
+            return False
+        if (
+            previous.isalnum()
+            or previous == "_"
+            or previous in ")]"
+        ):
+            return False
 
     after_index = end
     while after_index < len(text) and text[after_index].isspace():
@@ -887,7 +886,11 @@ def _raw_use_before_def_risks(masked: str) -> list[SourceRisk]:
             for name, initializer in declarations:
                 known_locals.add(name)
                 if initializer is not None:
-                    for read_name, read_offset in _local_reads(initializer, known_locals):
+                    # Restore the declaration terminator for tail classification.
+                    for read_name, read_offset in _local_reads(
+                        initializer + ";",
+                        known_locals,
+                    ):
                         if read_name in defined_locals:
                             continue
                         key = f"{read_name}:{start + read_offset}"
