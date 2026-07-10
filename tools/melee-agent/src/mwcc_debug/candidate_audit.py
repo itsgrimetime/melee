@@ -479,6 +479,23 @@ def _is_member_access_identifier(text: str, start: int) -> bool:
     return arrow_start >= 0 and text[arrow_start] == "-"
 
 
+def _is_unary_address_of_identifier(text: str, start: int) -> bool:
+    operator_index = _previous_nonspace_index(text, start)
+    if operator_index < 0 or text[operator_index] != "&":
+        return False
+    previous_index = _previous_nonspace_index(text, operator_index)
+    if previous_index < 0:
+        return True
+    previous = text[previous_index]
+    if previous == "&":
+        return False
+    return not (
+        previous.isalnum()
+        or previous == "_"
+        or previous in ")]"
+    )
+
+
 def _local_reads(text: str, known_locals: set[str]) -> list[tuple[str, int]]:
     reads: list[tuple[str, int]] = []
     for match in _IDENT_RE.finditer(text):
@@ -486,6 +503,8 @@ def _local_reads(text: str, known_locals: set[str]) -> list[tuple[str, int]]:
         if name not in known_locals:
             continue
         if _is_member_access_identifier(text, match.start()):
+            continue
+        if _is_unary_address_of_identifier(text, match.start()):
             continue
         if _is_simple_assignment_lhs(text, match.start(), match.end()):
             continue

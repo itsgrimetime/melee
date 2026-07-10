@@ -178,6 +178,51 @@ void f(void)
     )
 
 
+def test_candidate_audit_allows_address_taken_uninitialized_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef struct HSD_JObj HSD_JObj;
+void f(HSD_JObj* jobj)
+{
+    HSD_JObj* out;
+    void* alias = &out;
+    lb_80011E24(jobj, &out, 2, -1);
+}
+"""
+    )
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(
+        r.kind == "use-before-def" and r.name == "out"
+        for r in report.risks
+    )
+
+
+def test_candidate_audit_rejects_local_read_via_binary_and_operators() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int flags;
+    int local;
+    use(flags & local);
+    use(flags && local);
+}
+"""
+    )
+
+    local_risks = [
+        risk
+        for risk in report.risks
+        if risk.kind == "use-before-def" and risk.name == "local"
+    ]
+    assert report.status == "unsafe-candidate"
+    assert report.semantic_risk_bucket == "semantic-risk-high"
+    assert report.should_reject is True
+    assert len(local_risks) == 2
+
+
 def test_candidate_audit_allows_local_after_assignment_or_initializer() -> None:
     report = candidate_audit.audit_candidate_source(
         """
