@@ -923,7 +923,46 @@ def test_hydrate_rejects_cache_root_replacement_before_target_mutation(
     assert not (target / "build").exists()
 
 
-def test_hydrate_removes_its_link_when_cache_changes_after_link_creation(
+def test_hydrate_rejects_cache_replacement_between_validation_and_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    replacement_source = _asset_source(tmp_path / "replacement-source")
+    (replacement_source / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe").write_bytes(
+        b"replacement"
+    )
+    cache = tmp_path / "cache"
+    replacement = tmp_path / "replacement-cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    assert assets.seed_shared_assets(replacement_source, replacement).status == "seeded"
+    reviewed = tmp_path / "cache-reviewed"
+    real_validate = assets._validated_cache
+    armed = False
+    replaced = False
+
+    def replace_after_validation(cache_root, *args, **kwargs):
+        nonlocal replaced
+        result = real_validate(cache_root, *args, **kwargs)
+        if armed and cache_root == cache and not replaced:
+            cache.chmod(0o755)
+            replacement.chmod(0o755)
+            cache.rename(reviewed)
+            replacement.rename(cache)
+            replaced = True
+        return result
+
+    monkeypatch.setattr(assets, "_validated_cache", replace_after_validation)
+    armed = True
+    result = assets.hydrate_shared_assets(target, cache)
+
+    assert replaced is True
+    assert result.status == "invalid-cache"
+    assert not (target / "build").exists()
+
+
+def test_hydrate_retains_its_link_when_cache_changes_after_link_creation(
     tmp_path: Path, monkeypatch
 ) -> None:
     source = _asset_source(tmp_path / "source")
@@ -950,10 +989,10 @@ def test_hydrate_removes_its_link_when_cache_changes_after_link_creation(
     consumer = target / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
     assert replaced is True
     assert result.status == "invalid-cache"
-    assert not consumer.is_symlink()
+    assert consumer.is_symlink()
 
 
-def test_hydrate_rolls_back_earlier_links_when_cache_changes_after_second_link(
+def test_hydrate_retains_earlier_links_when_cache_changes_after_second_link(
     tmp_path: Path, monkeypatch
 ) -> None:
     source = _asset_source(tmp_path / "source")
@@ -981,8 +1020,106 @@ def test_hydrate_rolls_back_earlier_links_when_cache_changes_after_second_link(
     wibo = target / "build" / "tools" / "wibo"
     assert links_created == 2
     assert result.status == "invalid-cache"
-    assert not compiler.is_symlink()
-    assert not wibo.is_symlink()
+    assert compiler.is_symlink()
+    assert wibo.is_symlink()
+
+
+def test_hydrate_rejects_prior_payload_replacement_at_final_verification(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    original = cache / "files" / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
+    real_symlink = assets.os.symlink
+    links_created = 0
+
+    def replace_prior_payload_after_last_link(link_target, link_name, *, dir_fd=None):
+        nonlocal links_created
+        real_symlink(link_target, link_name, dir_fd=dir_fd)
+        links_created += 1
+        if links_created == 3:
+            original.parent.chmod(0o755)
+            replacement = original.with_name("mwcceppc.exe.replacement")
+            replacement.write_bytes(b"replacement")
+            os.replace(replacement, original)
+            original.parent.chmod(0o555)
+
+    monkeypatch.setattr(assets.os, "symlink", replace_prior_payload_after_last_link)
+    result = assets.hydrate_shared_assets(target, cache)
+
+    assert links_created == 3
+    assert result.status == "invalid-cache"
+
+
+def test_rollback_retains_consumer_replaced_after_identity_check(
+    tmp_path: Path, monkeypatch
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    consumer = target / "consumer"
+    expected_target = "../cache/file"
+    consumer.symlink_to(expected_target)
+    target_fd = assets._open_directory(target)
+    assert target_fd is not None
+    expected_identity = assets._symlink_identity(target_fd, "consumer", expected_target)
+    assert expected_identity is not None
+    real_identity = assets._symlink_identity
+    replaced = False
+
+    def replace_after_identity_check(parent_fd, name, link_target):
+        nonlocal replaced
+        identity = real_identity(parent_fd, name, link_target)
+        if identity == expected_identity and not replaced:
+            os.unlink(name, dir_fd=parent_fd)
+            replacement_fd = os.open(
+                name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o644,
+                dir_fd=parent_fd,
+            )
+            os.close(replacement_fd)
+            replaced = True
+        return identity
+
+    monkeypatch.setattr(assets, "_symlink_identity", replace_after_identity_check)
+    try:
+        removed = assets._unlink_expected_symlink(
+            target_fd, "consumer", expected_target, expected_identity
+        )
+    finally:
+        os.close(target_fd)
+
+    assert replaced is True
+    assert removed is False
+    assert consumer.exists()
+    assert not consumer.is_symlink()
+
+
+def test_seed_never_follows_staging_path_replaced_after_creation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real_make_staging = assets._make_staging_directory
+
+    def replace_staging_after_creation(cache_root):
+        staging = real_make_staging(cache_root)
+        assert staging is not None
+        staging_path = staging if isinstance(staging, Path) else cache_root.parent / staging.name
+        staging_path.rename(staging_path.with_name(f"{staging_path.name}.reviewed"))
+        staging_path.symlink_to(outside, target_is_directory=True)
+        return staging
+
+    monkeypatch.setattr(assets, "_make_staging_directory", replace_staging_after_creation)
+    result = assets.seed_shared_assets(source, cache)
+
+    assert list(outside.iterdir()) == []
+    assert result.status == "cache-unavailable"
 
 
 def test_seed_rejects_valid_staging_directory_replacement_before_publish(
@@ -1053,10 +1190,11 @@ def test_seed_retains_replaced_staging_entry(tmp_path: Path, monkeypatch) -> Non
     cache = tmp_path / "cache"
     replacement: dict[str, Path] = {}
 
-    def replace_staging_before_publish(staging: Path, cache_root: Path, expected_identity) -> str:
-        staging.rename(staging.with_name(f"{staging.name}.reviewed"))
-        staging.mkdir()
-        sentinel = staging / "sentinel.txt"
+    def replace_staging_before_publish(staging, cache_root: Path, expected_identity) -> str:
+        staging_path = cache_root.parent / staging.name
+        staging_path.rename(staging_path.with_name(f"{staging.name}.reviewed"))
+        staging_path.mkdir()
+        sentinel = staging_path / "sentinel.txt"
         sentinel.write_text("preserve replacement", encoding="utf-8")
         replacement["sentinel"] = sentinel
         return "cache-exists"
