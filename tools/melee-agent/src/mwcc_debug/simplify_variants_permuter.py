@@ -27,7 +27,7 @@ import os
 from pathlib import Path
 from typing import Iterator
 
-from .simplify_search import FunctionContext, SourceVariant
+from .simplify_search import FunctionContext, LazySourceVariant
 
 
 _DEFAULT_PERMUTER_ROOTS: tuple[Path, ...] = (
@@ -86,13 +86,15 @@ def permuter_source(
     *,
     perm_dir_override: Path | None = None,
     perm_root: Path | None = None,
-) -> Iterator[SourceVariant]:
-    """Yield `SourceVariant`s from existing decomp-permuter output dirs.
+) -> Iterator[LazySourceVariant]:
+    """Yield lazy source variants from existing decomp-permuter output dirs.
 
     Walks `<perm_dir>/output-*/source.c` and yields each candidate as a
-    `SourceVariant`. The provenance string includes the output dir name
+    `LazySourceVariant`. The provenance string includes the output dir name
     so callers can trace candidates back to a specific permuter session
-    (e.g. ``"permuter output-0042-1/source.c"``).
+    (e.g. ``"permuter output-0042-1/source.c"``). Candidate source text is
+    read only if the search driver actually compiles the variant, so skip
+    controls can discard large remote harvest prefixes cheaply.
 
     Args:
       ctx: Function being searched. `ctx.source_path` is reused as the
@@ -148,14 +150,10 @@ def permuter_source(
         # to a missing target, fifo, etc.).
         if not candidate.is_file():
             continue
-        try:
-            text = candidate.read_text(encoding="utf-8")
-        except OSError:
-            # Race against the permuter process or a permissions issue —
-            # treat as a soft skip rather than aborting the harvest.
-            continue
-        yield SourceVariant(
-            text=text,
+        yield LazySourceVariant(
             provenance=f"permuter {output_dir.name}/source.c",
             parent_baseline=ctx.source_path,
+            materialize=lambda candidate=candidate: candidate.read_text(
+                encoding="utf-8",
+            ),
         )

@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from src.mwcc_debug.simplify_search import FunctionContext
+from src.mwcc_debug.simplify_search import LazySourceVariant
 from src.mwcc_debug.simplify_variants_permuter import (
     permuter_source,
     resolve_permuter_function_dir,
@@ -84,12 +85,45 @@ def test_permuter_source_yields_single_variant(tmp_path: Path) -> None:
 
     assert len(variants) == 1
     v = variants[0]
+    assert isinstance(v, LazySourceVariant)
     assert v.text == src_content
     assert v.parent_baseline == ctx.source_path
     assert "output-0001-0" in v.provenance
     # Provenance string should start with the "permuter" prefix so callers
     # can tell at a glance which adapter produced it.
     assert v.provenance.startswith("permuter ")
+
+
+def test_permuter_source_defers_source_reads_until_materialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _ctx(tmp_path)
+    perm_dir = tmp_path / "permdir"
+    outputs = []
+    for name in ("output-0001-0", "output-0002-0"):
+        out = perm_dir / name
+        out.mkdir(parents=True)
+        source = out / "source.c"
+        source.write_text(f"// {name}\n", encoding="utf-8")
+        outputs.append(source)
+
+    original_read_text = Path.read_text
+    read_paths: list[Path] = []
+
+    def tracking_read_text(self: Path, *args, **kwargs) -> str:
+        if self.name == "source.c":
+            read_paths.append(self)
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", tracking_read_text)
+
+    variants = list(permuter_source(ctx, perm_dir_override=perm_dir))
+
+    assert len(variants) == 2
+    assert read_paths == []
+    assert variants[0].text == "// output-0001-0\n"
+    assert read_paths == [outputs[0]]
 
 
 def test_permuter_source_yields_in_deterministic_sorted_order(

@@ -29,6 +29,9 @@ except ImportError:
 # --- Locate + import the vendored cadmic module (works in both modes) ---
 PKG_ROOT = Path(__file__).resolve().parent
 CADMIC_DIR = PKG_ROOT / "vendor" / "mwcc-debugger"
+REPO_ROOT = PKG_ROOT.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 def _load_cadmic():
@@ -167,10 +170,24 @@ def run_in_gdb():
         _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path)
         return
 
-    if phases == "backend":  # 1.2.5n backend — needs the P3 address-table port
-        print("[retro] 1.2.5n backend address table not populated (P3 "
-              "follow-on); use the DLL pcdump path for backend on 1.2.5n.")
-        _continue_to_exit(gdb)
+    if phases == "backend" and compiler == "1.2.5n":
+        from tools.mwcc_retro import struct_map
+
+        errors = struct_map.validate_required_backend_map(table)
+        if errors:
+            print("[retro] ABORT: backend map confidence gate failed")
+            for error in errors:
+                print(f"[retro] ABORT: {error}")
+            _continue_to_exit(gdb)
+            return
+        reader_errors = struct_map.validate_backend_reader_capability(table)
+        if reader_errors:
+            print("[retro] ABORT: backend reader capability gate failed")
+            for error in reader_errors:
+                print(f"[retro] ABORT: {error}")
+            _continue_to_exit(gdb)
+            return
+        _enable_backend_tracing(gdb, cad, table, out_dir, fn)
     else:  # "frontend" or "all"
         _enable_frontend_tracing(gdb, cad, table, out_dir, fn)
 
@@ -240,6 +257,76 @@ class RetroContext:
                         for a in int_args)
         return int(self.gdb.parse_and_eval(
             f"((int(*)({sig})){fn_va:#x})({args})"))
+
+
+def _jsonl_append(path, obj):
+    import json
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(obj, sort_keys=True) + "\n")
+
+
+def _backend_events_path(out_dir):
+    return os.path.join(out_dir, "backend-events.v1.jsonl")
+
+
+def _enable_backend_tracing(gdb, cad, table, out_dir, fn):
+    """Emit a minimal backend JSONL stream behind the accepted struct-map gate."""
+    del cad  # reserved for later typed readers once the live map is accepted
+    os.makedirs(out_dir, exist_ok=True)
+    events_path = _backend_events_path(out_dir)
+    if os.path.exists(events_path):
+        os.remove(events_path)
+
+    source_file = os.environ.get("RETRO_SOURCE", "")
+    requested = os.environ.get("RETRO_FUNCTION", fn)
+    _jsonl_append(events_path, {
+        "event": "function_start",
+        "name": fn,
+        "identity": {
+            "requested": requested,
+            "canonical_name": fn,
+            "symbol_name": fn,
+            "source_name": fn,
+            "aliases": [],
+            "source_file": source_file,
+        },
+        "source_file": source_file,
+    })
+
+    entries = table.get("entries", {})
+    runtime_required = [
+        "codegen_start",
+        "colorgraph",
+        "simplifygraph",
+        "interferencegraph",
+    ]
+    missing = [
+        key for key in runtime_required
+        if not isinstance(entries.get(key), dict) or not entries[key].get("va")
+    ]
+    if missing:
+        print(f"[retro] ABORT: backend trace missing entries {', '.join(missing)}")
+        if os.path.exists(events_path):
+            os.remove(events_path)
+        _continue_to_exit(gdb)
+        return
+
+    codegen_start = entries["codegen_start"]["va"]
+
+    class _CodegenStart(gdb.Breakpoint):
+        def stop(self):
+            _jsonl_append(events_path, {
+                "event": "backend_marker",
+                "name": "codegen_start",
+                "pc": int(gdb.parse_and_eval("$pc")),
+                "function": fn,
+                "source_file": source_file,
+            })
+            return False
+
+    _CodegenStart(f"*{codegen_start:#x}")
+    print(f"[retro] backend tracing enabled; events -> {events_path}")
+    _continue_to_exit(gdb)
 
 
 def _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path):

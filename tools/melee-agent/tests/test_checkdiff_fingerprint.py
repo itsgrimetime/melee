@@ -623,6 +623,73 @@ def test_no_build_json_suppresses_stale_report_match_percent(
     assert payload["fuzzy_match_percent_source"] == "suppressed_stale_report_no_build"
 
 
+def test_summary_suppresses_report_percent_when_report_was_not_refreshed(
+    checkdiff, tmp_path, monkeypatch, capsys,
+):
+    _make_stub_repo(tmp_path, "fn_alpha", match_pct=98.5)
+    _patch_paths(checkdiff, monkeypatch, tmp_path)
+    ref_obj = tmp_path / "build" / "GALE01" / "obj" / "melee" / "mn" / "sample.o"
+    our_obj = tmp_path / "build" / "GALE01" / "src" / "melee" / "mn" / "sample.o"
+    ref_obj.parent.mkdir(parents=True)
+    our_obj.parent.mkdir(parents=True)
+    ref_obj.write_bytes(b"ref")
+    report = tmp_path / "build" / "GALE01" / "report.json"
+    os.utime(report, ns=(1_000_000_000, 1_000_000_000))
+
+    monkeypatch.setattr(
+        checkdiff,
+        "missing_source_build_target_error",
+        lambda *args, **kwargs: None,
+    )
+
+    def fake_build(cmd, **kwargs):
+        if cmd[:2] == ["ninja", "./build/GALE01/src/melee/mn/sample.o"]:
+            our_obj.write_bytes(b"ours-new")
+            os.utime(our_obj, ns=(2_000_000_000, 2_000_000_000))
+            return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[:2] == ["ninja", "build/GALE01/report.json"]:
+            return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
+        raise AssertionError(f"unexpected build command: {cmd!r}")
+
+    ref_asm = (
+        "00000000 <fn_alpha>:\n"
+        "   0:\t4e 80 00 20\tblr\n"
+    )
+    current_asm = (
+        "00000000 <fn_alpha>:\n"
+        "   0:\t38 60 00 01\tli r3,1\n"
+        "   4:\t4e 80 00 20\tblr\n"
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:1] == ["killall"]:
+            return checkdiff.subprocess.CompletedProcess(cmd, 0, "", "")
+        obj_path = str(cmd[-1])
+        stdout = ref_asm if "/obj/" in obj_path else current_asm
+        return checkdiff.subprocess.CompletedProcess(cmd, 0, stdout, "")
+
+    monkeypatch.setattr(checkdiff, "_run_build_command", fake_build)
+    monkeypatch.setattr(checkdiff, "ensure_disassembler", lambda: ("objdump", "objdump"))
+    monkeypatch.setattr(checkdiff.subprocess, "run", fake_run)
+    monkeypatch.setattr(checkdiff, "apply_name_magic_if_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        checkdiff,
+        "collect_section_anchor_aliases",
+        lambda path, peer_path=None: {},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["checkdiff.py", "fn_alpha", "--summary", "--no-fingerprint"],
+    )
+
+    rc = checkdiff.main()
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "match_percent=unknown" in out
+    assert "98.50" not in out
+
+
 def test_no_build_json_falls_back_to_dtk_when_objdump_extracts_no_function(
     checkdiff, tmp_path, monkeypatch, capsys,
 ):

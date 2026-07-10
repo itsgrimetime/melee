@@ -1,0 +1,11 @@
+
+ Usage: melee-agent debug artifacts report [OPTIONS]
+
+ Report retained diagnostic evidence without modifying it.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --artifact-root        PATH  Artifact root, relative to the Melee root       │
+│                              unless absolute.                                │
+│ --json                       Emit machine-readable JSON.                     │
+│ --help                       Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯

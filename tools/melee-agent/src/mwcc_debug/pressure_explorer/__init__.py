@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from ._helpers import *  # noqa: F403
+from .commands import *  # noqa: F403,E402
+from .facts import *  # noqa: F403,E402
+from .hypotheses import *  # noqa: F403,E402
+from .render import *  # noqa: F403,E402
+from .validation import *  # noqa: F403,E402
+
 
 @dataclass(frozen=True)
 class TargetPairState:
@@ -597,7 +603,7 @@ def generate_frame_directed_probes(
         _append_probe(probes, probe)
         if len(probes) >= max_probes:
             return probes
-    for probe in _probe_frame_split_fp_const_lifetimes(
+    for probe in _probe_frame_magic_scratch_relocations(
         source_text,
         body,
         body_start,
@@ -606,7 +612,7 @@ def generate_frame_directed_probes(
         _append_probe(probes, probe)
         if len(probes) >= max_probes:
             return probes
-    for probe in _probe_frame_magic_scratch_relocations(
+    for probe in _probe_frame_split_fp_const_lifetimes(
         source_text,
         body,
         body_start,
@@ -3529,10 +3535,10 @@ def _fp_source_value_candidates(body: str) -> list[_FpConstCandidate]:
             assign_start=assign_start,
             assign_end=assign_end,
             assign_text=assign_text,
-            call_start=call.start(),
-            call_end=call.end(),
+            call_start=call.call_start,
+            call_end=call.call_end,
             call_replacement=call_replacement,
-            call_name=call.group("callee"),
+            call_name=call.callee,
         ))
     return candidates
 
@@ -9643,3 +9649,10 @@ def _find_matching_paren(source: str, open_idx: int) -> int | None:
             if depth == 0:
                 return idx
     return None
+
+
+from .models import *  # noqa: F403,E402
+from .targets import *  # noqa: F403,E402
+from .analyzer import *  # noqa: F403,E402
+from .candidates import *  # noqa: F403,E402
+from .lifetime_pressure import *  # noqa: F403,E402

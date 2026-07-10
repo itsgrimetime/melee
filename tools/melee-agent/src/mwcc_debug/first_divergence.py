@@ -867,8 +867,9 @@ def attach_source_ideas(fact: AllocatorFact, source_text: str, fn_name: str,
             "before more declaration-order cycling."
         )
         ideas.append(
-            "source probe route: run select-order-search with "
-            "--transform-family indexed_byte_address_temp_steering for "
+            "source probe route: run melee-agent debug select-order-search with "
+            "--include-transform-corpus --transform-family "
+            "indexed_byte_address_temp_steering for "
             "non-struct byte-array base+index temps before trying pointer walks."
         )
         negative_diagnostics.extend((

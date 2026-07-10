@@ -1897,6 +1897,16 @@ def debug_select_order_search_cmd(
             timeout_error=timeout_error,
         )
 
+    def _skipped_timeout_summary(kind: str) -> dict[str, Any]:
+        return {
+            "status": "skipped-timeout",
+            "summary": kind,
+            "reason": timeout_error or "select-order command budget exhausted",
+            "partial": True,
+            "timed_out": True,
+            "timeout_error": timeout_error,
+        }
+
     def _score_candidate(
         *,
         label: str,
@@ -1913,6 +1923,13 @@ def debug_select_order_search_cmd(
         full_unit_source: bool = False,
     ) -> dict:
         nonlocal candidate_pcdump_key
+        def _finish_timeout_action() -> str:
+            if repair_seed_label is not None:
+                return f"finishing select-order guard repair candidate {label}"
+            if depth is not None:
+                return f"finishing select-order beam candidate {label}"
+            return f"finishing select-order candidate {label}"
+
         candidate_source_text: str | None = None
         candidate_text: str | None = None
         candidate_deadline = command_deadline
@@ -2113,6 +2130,7 @@ def debug_select_order_search_cmd(
             candidate_pcdump_key += 1
             variant["_pcdump_key"] = candidate_pcdump_key
             candidate_pcdump_by_key[candidate_pcdump_key] = candidate_text
+            _remaining_command_timeout(_finish_timeout_action())
             variants.append(variant)
             return variant
         except Exception as exc:
@@ -2172,6 +2190,7 @@ def debug_select_order_search_cmd(
                     )
             if isinstance(exc, _SourceRestoreBytesError) and exc.backup_path is not None:
                 failed["restore_backup_path"] = str(exc.backup_path)
+            _remaining_command_timeout(_finish_timeout_action())
             variants.append(failed)
             return failed
 
@@ -3195,6 +3214,10 @@ def debug_select_order_search_cmd(
     def _build_source_bridge_summary(
         force_phys_map: Mapping[int, int],
     ) -> dict[str, Any]:
+        if timed_out and _command_budget_exhausted(
+            "building select-order source bridge summary"
+        ):
+            return _skipped_timeout_summary("source bridge summary")
         try:
             summary = _select_order_source_bridge_summary(
                 ranked_variants=ranked_variants,
@@ -3240,16 +3263,24 @@ def debug_select_order_search_cmd(
 
     try:
         if proof_force_map:
-            guard_repair_summary = _select_order_guard_repair_summary(
-                ranked_variants,
-                force_phys=proof_force_map,
-                guard_repair_ledger=guard_repair_ledger_path,
-                function=function,
-                target_orders=target_orders,
-                class_id=class_id,
-                window_order_source_attributions=window_order_source_attributions,
-                window_order_probe_diagnostics=window_order_probe_diagnostics,
-            )
+            if timed_out and _command_budget_exhausted(
+                "building select-order guard repair summary"
+            ):
+                guard_repair_summary = _skipped_timeout_summary(
+                    "guard repair summary"
+                )
+                guard_repair_summary["lanes"] = []
+            else:
+                guard_repair_summary = _select_order_guard_repair_summary(
+                    ranked_variants,
+                    force_phys=proof_force_map,
+                    guard_repair_ledger=guard_repair_ledger_path,
+                    function=function,
+                    target_orders=target_orders,
+                    class_id=class_id,
+                    window_order_source_attributions=window_order_source_attributions,
+                    window_order_probe_diagnostics=window_order_probe_diagnostics,
+                )
             source_bridge_summary = _build_source_bridge_summary(proof_force_map)
         else:
             source_bridge_summary = _build_source_bridge_summary({})
@@ -3260,17 +3291,24 @@ def debug_select_order_search_cmd(
             }
             if not blocker_targets:
                 blocker_targets = set(proof_force_map)
-            terminal_exhaustion_summary = (
-                _select_order_terminal_exhaustion_summary(
-                    ranked_variants=ranked_variants,
-                    force_phys=proof_force_map,
-                    blocker_targets=blocker_targets,
-                    diagnostic_buckets=diagnostic_buckets,
-                    source_bridge_summary=source_bridge_summary,
-                    timed_out=timed_out,
-                    class_id=class_id,
+            if timed_out and _command_budget_exhausted(
+                "building select-order terminal exhaustion summary"
+            ):
+                terminal_exhaustion_summary = _skipped_timeout_summary(
+                    "terminal exhaustion summary"
                 )
-            )
+            else:
+                terminal_exhaustion_summary = (
+                    _select_order_terminal_exhaustion_summary(
+                        ranked_variants=ranked_variants,
+                        force_phys=proof_force_map,
+                        blocker_targets=blocker_targets,
+                        diagnostic_buckets=diagnostic_buckets,
+                        source_bridge_summary=source_bridge_summary,
+                        timed_out=timed_out,
+                        class_id=class_id,
+                    )
+                )
         for variant in ranked_variants:
             variant.pop("_pcdump_key", None)
             variant.pop("_checkdiff_payload", None)

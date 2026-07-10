@@ -37,7 +37,15 @@ melee-agent debug target derive -f fn_80247510 > /tmp/target.yaml
 melee-agent debug target score-dump -f fn_80247510 --target /tmp/target.yaml
 melee-agent debug target score-source src/melee/mn/foo.c -f fn_80247510 --target /tmp/target.yaml
 melee-agent debug target match-iter-first -f fn_80247510
+melee-agent debug inspect lifetime-pressure -f fn_80247510 --force-phys "53:25,50:22"
 ```
+
+Use `inspect lifetime-pressure` when the instruction sequence is already close
+and the remaining mismatch is a virtual/register assignment. It is read-only by
+default: it explains live ranges, interference blockers, simplify/select order,
+coalescing, spill state, and source attribution, then emits exact validation
+commands. Use `--validate quick` or `--validate bounded` only when you
+explicitly want candidate compiles.
 
 If the issue is source shape, try the targeted suggestion and mutation
 commands before broad permutation:
@@ -112,6 +120,35 @@ melee-agent debug inspect diagnose fn_80247510
 The raw dump still matters when checking exact pass output. Look for
 `BEFORE REGISTER COLORING`, `COLORGRAPH DECISIONS`, `SIMPLIFY GRAPH`,
 `AFTER REGISTER COLORING`, and `AFTER INSTRUCTION SCHEDULING`.
+
+### Lifetime Pressure Explorer
+
+Use `inspect lifetime-pressure` to inventory allocator facts, explain
+register-pressure blockers for target assignments, and emit follow-up
+validation commands.
+
+Use this when `target score-source` or a manual target says "IG X should be
+phys Y" and you need the first meaningful live-range/interference/simplify
+blocker instead of another generic "register allocation differs" report.
+
+Default output is read-only. Source actions are hypotheses until validated by compile/checkdiff or supplied candidate evidence. When multiple target assignments are supplied, every target is protected by default.
+
+```bash
+melee-agent debug inspect lifetime-pressure \
+  -f mnDiagram_UpdateScrollArrows \
+  --force-phys "53:25,50:22"
+
+melee-agent debug inspect lifetime-pressure \
+  -f lbDvd_80018A2C \
+  --pcdump tools/melee-agent/tests/fixtures/mwcc_debug/lbDvd_80018A2C_pcdump.txt \
+  --force-phys "44:10,46:12" \
+  --json
+
+melee-agent debug inspect lifetime-pressure \
+  -f FUNCTION \
+  --force-phys "53:25" \
+  --validate bounded --timeout 120 --max-candidates 500
+```
 
 ## Force options
 

@@ -13,7 +13,11 @@ decisions, and scheduled instructions.
 Use this after lighter tools (`mismatch-db`, `opseq`, `ghidra`, and
 Discord knowledge) fail to explain a last-mile mismatch. For front-end
 parse structure, use `/mwcc-inspect`; for back-end allocator and codegen
-shape, use `/mwcc-debug`.
+shape, use `/mwcc-debug`. If the remaining question is whether the patched
+debug DLL differs from the unmodified retail GC/1.2.5n compiler, use
+`melee-agent debug retro backend ... --verify-debug` or
+`melee-agent debug retro verify-backend`; retail is authoritative when they
+disagree.
 
 ## Quick Workflow
 
@@ -34,7 +38,15 @@ melee-agent debug target derive -f fn_80247510 > /tmp/target.yaml
 melee-agent debug target score-dump -f fn_80247510 --target /tmp/target.yaml
 melee-agent debug target score-source src/melee/mn/foo.c -f fn_80247510 --target /tmp/target.yaml
 melee-agent debug target match-iter-first -f fn_80247510
+melee-agent debug inspect lifetime-pressure -f fn_80247510 --force-phys "53:25,50:22"
 ```
+
+For allocator-only register mismatches, run `inspect lifetime-pressure` before
+hand-editing source. It is read-only by default: it explains live ranges,
+interference blockers, simplify/select order, coalescing, spills, and
+source-attribution confidence, then emits exact follow-up validation commands.
+Use `--validate quick` or `--validate bounded` only when you explicitly want it
+to compile candidates.
 
 When diagnostics point at source shape:
 
@@ -94,6 +106,7 @@ For a one-off exploratory feature issue, pass
 | Need callers, callees, or string xrefs | Use `/ghidra`. |
 | Need parsed expression trees or ObjObject IDs | Use `/mwcc-inspect`. |
 | Need basic blocks, virtual registers, allocator decisions, or scheduling | Use this skill. |
+| Need exact retail GC/1.2.5n PCode/regalloc facts or DLL-vs-retail fidelity | Use `/mwcc-retro` with `melee-agent debug retro backend`. |
 
 `mwcc-debug` and `mwcc-inspect` answer different questions:
 
@@ -161,6 +174,35 @@ melee-agent debug inspect diagnose fn_80247510
 `inspect guide` turns allocator facts into source-shape hypotheses.
 `inspect diff` compares two source variants (or two pcdump files) pass
 by pass through MWCC's pipeline and reports the earliest divergence.
+
+### Lifetime Pressure Explorer
+
+Use `inspect lifetime-pressure` to inventory allocator facts, explain
+register-pressure blockers for target assignments, and emit follow-up
+validation commands.
+
+Use this when the instruction sequence is close and the remaining mismatch is
+"IG X should be phys Y", or when `target score-source` says a register target
+is moving but you need the first meaningful lifetime/interference blocker.
+
+Default output is read-only. Source actions are hypotheses until validated by compile/checkdiff or supplied candidate evidence. When multiple target assignments are supplied, every target is protected by default.
+
+```bash
+melee-agent debug inspect lifetime-pressure \
+  -f mnDiagram_UpdateScrollArrows \
+  --force-phys "53:25,50:22"
+
+melee-agent debug inspect lifetime-pressure \
+  -f lbDvd_80018A2C \
+  --pcdump tools/melee-agent/tests/fixtures/mwcc_debug/lbDvd_80018A2C_pcdump.txt \
+  --force-phys "44:10,46:12" \
+  --json
+
+melee-agent debug inspect lifetime-pressure \
+  -f FUNCTION \
+  --force-phys "53:25" \
+  --validate bounded --timeout 120 --max-candidates 500
+```
 
 ### Reading `inspect diff` output
 

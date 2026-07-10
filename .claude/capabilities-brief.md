@@ -32,6 +32,12 @@ Before building any tool/script/command, run `melee-agent capabilities search <t
 - sync: auth, clear, dedup, fetch, find-duplicates, fix-ownership, list, production, slugs, status, validate
 - transform-corpus: mine
 
+## Common task shortcuts
+- register allocation: `melee-agent debug inspect lifetime-pressure`, `/mwcc-debug`, `/mwcc-inspect`
+- score candidate: `melee-agent debug target score-source`, `melee-agent debug target score-dump`
+- find callers: `/ghidra`, `melee-agent commit check-callers`
+- transform corpus pressure coalesce select order: `melee-agent debug mutate lifetime-layout`, `melee-agent debug coalesce-search`, `melee-agent debug select-order-search`
+
 ## Skills (invoke `/<name>`)
 - backfill-analysis — Analyze matched functions to discover mismatch patterns. Use when backfilling the mismatch-db from git history.
 - collect-for-pr — Collect pending worktree commits into a PR for review. Use this skill when subdirectory worktrees have accumulated 4-7+ commits that should be batched together and submitted for review. Invoked with /collect-for-pr or automatically when monitoring worktree status.
@@ -47,7 +53,7 @@ Before building any tool/script/command, run `melee-agent capabilities search <t
 - mismatch-db — Knowledge base for common assembly mismatches. Use to interpret diffs when matching functions.
 - mwcc-debug — Dump MWCC's internal codegen passes (BEFORE/AFTER REGISTER COLORING, instruction scheduling, etc.) for a Melee TU. Runs locally on macOS (via wibo+Zig-built DLL) by default, or on a remote Windows host as a fallback. Use when stuck on register-allocation cascades or other last-mile matching issues; complement to mwcc-inspect (which shows front-end IR / ENodes / ObjObjects).
 - mwcc-inspect — Inspect MWCC's internal IR (ENodes, ObjObjects, Statements) for a Melee TU by running RootCubed/mwcc-inspector on a remote Windows host. Use when stuck on register-allocation cascades or other last-mile matching issues that mismatch-db, opseq, ghidra, and discord-knowledge haven't explained — this is the next tool to reach for, not the first.
-- mwcc-retro — Dump retail MWCC GC/1.2.5n front-end IRO per-pass traces + backend PCode, register-allocator internals, and stack maps via retrowin32+gdb. Use when you need front-end optimizer pass visibility (CSE, loop unrolling, propagation, DCE) or a retail-vs-debug-DLL fidelity check. Not first-resort — reach for mismatch-db, opseq, ghidra, discord-knowledge, and mwcc-debug first.
+- mwcc-retro — Dump retail MWCC GC/1.2.5n front-end IRO and exact backend/regalloc traces via retrowin32+gdb. Use when you need optimizer pass visibility, retail PCode/allocator facts, or retail-vs-debug-DLL fidelity after lighter matching tools and mwcc-debug.
 - opseq — Find functions by opcode sequence patterns. Use when stuck on a function and want to find similar already-decompiled code for reference.
 - ppc-ref — Look up PowerPC instruction set documentation. Use when you need to understand what a specific instruction does, its operands, or behavior.
 - prepare-pr — Use this skill when the user wants to prepare decomp work for an upstream PR.

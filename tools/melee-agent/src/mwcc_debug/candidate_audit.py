@@ -76,7 +76,8 @@ def _mask_comments_and_strings(text: str) -> str:
             continue
         if ch in {"'", '"'}:
             quote = ch
-            out.append(" ")
+            # Preserve a value token for adjacent operator classification.
+            out.append("0")
             i += 1
             continue
         if ch == "/" and i + 1 < n:
@@ -479,6 +480,33 @@ def _is_member_access_identifier(text: str, start: int) -> bool:
     return arrow_start >= 0 and text[arrow_start] == "-"
 
 
+def _is_direct_unary_address_of_identifier(
+    text: str,
+    start: int,
+    end: int,
+) -> bool:
+    operator_index = _previous_nonspace_index(text, start)
+    if operator_index < 0 or text[operator_index] != "&":
+        return False
+    previous_index = _previous_nonspace_index(text, operator_index)
+    if previous_index >= 0:
+        previous = text[previous_index]
+        if previous in {"&", "*"}:
+            return False
+        if (
+            previous.isalnum()
+            or previous == "_"
+            or previous in ")]"
+        ):
+            return False
+
+    after_index = end
+    while after_index < len(text) and text[after_index].isspace():
+        after_index += 1
+    # Only accept direct initializer and non-final call-argument forms.
+    return after_index < len(text) and text[after_index] in {";", ","}
+
+
 def _local_reads(text: str, known_locals: set[str]) -> list[tuple[str, int]]:
     reads: list[tuple[str, int]] = []
     for match in _IDENT_RE.finditer(text):
@@ -486,6 +514,12 @@ def _local_reads(text: str, known_locals: set[str]) -> list[tuple[str, int]]:
         if name not in known_locals:
             continue
         if _is_member_access_identifier(text, match.start()):
+            continue
+        if _is_direct_unary_address_of_identifier(
+            text,
+            match.start(),
+            match.end(),
+        ):
             continue
         if _is_simple_assignment_lhs(text, match.start(), match.end()):
             continue
@@ -852,7 +886,11 @@ def _raw_use_before_def_risks(masked: str) -> list[SourceRisk]:
             for name, initializer in declarations:
                 known_locals.add(name)
                 if initializer is not None:
-                    for read_name, read_offset in _local_reads(initializer, known_locals):
+                    # Restore the declaration terminator for tail classification.
+                    for read_name, read_offset in _local_reads(
+                        initializer + ";",
+                        known_locals,
+                    ):
                         if read_name in defined_locals:
                             continue
                         key = f"{read_name}:{start + read_offset}"

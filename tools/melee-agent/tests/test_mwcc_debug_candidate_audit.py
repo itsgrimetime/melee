@@ -178,6 +178,251 @@ void f(void)
     )
 
 
+def test_candidate_audit_allows_address_taken_uninitialized_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+typedef struct HSD_JObj HSD_JObj;
+void f(HSD_JObj* jobj)
+{
+    HSD_JObj* out;
+    void* alias = &out;
+    lb_80011E24(jobj, &out, 2, -1);
+}
+"""
+    )
+
+    assert report.status == "ok"
+    assert report.semantic_risk_bucket == "plausible-C-shape"
+    assert not any(
+        r.kind == "use-before-def" and r.name == "out"
+        for r in report.risks
+    )
+
+
+def test_candidate_audit_rejects_local_read_via_binary_and_operators() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int flags;
+    int local;
+    use(flags & local);
+    use(flags && local);
+}
+"""
+    )
+
+    local_risks = [
+        risk
+        for risk in report.risks
+        if risk.kind == "use-before-def" and risk.name == "local"
+    ]
+    assert report.status == "unsafe-candidate"
+    assert report.semantic_risk_bucket == "semantic-risk-high"
+    assert report.should_reject is True
+    assert len(local_risks) == 2
+
+
+def test_candidate_audit_rejects_dereferenced_address_of_uninitialized_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int local;
+    use(*&local);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_address_of_indexed_uninitialized_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    use(&local[0]);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_address_of_arrow_member_uninitialized_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+struct S {
+    int field;
+};
+void f(void)
+{
+    struct S *local;
+    use(&local->field);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_parenthesized_address_dereference() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    use(*(&local));
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_indexed_parenthesized_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    use((&local)[0]);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_declaration_initializer_indexed_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    int *value = &local[0];
+    use(value);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_declaration_initializer_arrow_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+struct S {
+    int field;
+};
+void f(void)
+{
+    struct S *local;
+    int *value = &local->field;
+    use(value);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_declaration_initializer_called_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    int *value = &local();
+    use(value);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_declaration_initializer_postfix_address() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int *local;
+    int *value = &local++;
+    use(value);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
+def test_candidate_audit_rejects_literal_binary_and_uninitialized_local() -> None:
+    report = candidate_audit.audit_candidate_source(
+        """
+void f(void)
+{
+    int local;
+    use('x' & local);
+}
+"""
+    )
+
+    assert report.status == "unsafe-candidate"
+    assert report.should_reject is True
+    assert any(
+        risk.kind == "use-before-def" and risk.name == "local"
+        for risk in report.risks
+    )
+
+
 def test_candidate_audit_allows_local_after_assignment_or_initializer() -> None:
     report = candidate_audit.audit_candidate_source(
         """

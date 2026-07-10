@@ -22,6 +22,7 @@
 │ intervene            Run backend-backed allocator interventions and report   │
 │                      allocator deltas.                                       │
 │ permute              Run, verify, and triage decomp-permuter candidates.     │
+│ artifacts            Inspect and safely prune retained diagnostic evidence.  │
 │ util                 Low-level helpers outside the main mwcc-debug loop.     │
 │ solve                Inverse-coloring solver: surrogate-checked,             │
 │                      §1.5-filtered C-move worksheets for register-only       │
@@ -30,7 +31,7 @@
 │                      functions.                                              │
 │ search               Fast+directed match-search substrate (Spec 1).          │
 │ retro                Retail-binary MWCC introspection via retrowin32 + gdb   │
-│                      (front-end IRO tracing, backend PCode, regalloc, stack  │
-│                      maps).                                                  │
+│                      (GC/1.2.5n front-end IRO and backend/regalloc traces,   │
+│                      plus GC/1.1 backend dumps).                             │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 

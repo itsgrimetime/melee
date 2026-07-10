@@ -13,6 +13,8 @@
 │ --idle-hours         FLOAT  Recommend stopping active jobs whose log is idle │
 │                             this many hours.                                 │
 │                             [default: 12.0]                                  │
+│ --timeout            FLOAT  Per remote status/log probe timeout in seconds.  │
+│                             [default: 15.0]                                  │
 │ --help                      Show this message and exit.                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 

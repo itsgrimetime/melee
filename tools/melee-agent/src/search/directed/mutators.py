@@ -964,6 +964,14 @@ def _steer_indexed_byte_max_current_value_temp(anchor: Anchor, source_text: str)
     return _replace_validated_span(anchor, source_text)
 
 
+def _steer_indexed_byte_helper_result_temp(
+    anchor: Anchor,
+    source_text: str,
+) -> Optional[str]:
+    """Split one validated u8 helper result through an explicit byte temp."""
+    return _replace_validated_span(anchor, source_text)
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -1081,6 +1089,7 @@ _DISPATCH = {
         _steer_indexed_byte_implicit_init_loop_indexed_store
     ),
     "steer_indexed_byte_max_current_value_temp": _steer_indexed_byte_max_current_value_temp,
+    "steer_indexed_byte_helper_result_temp": _steer_indexed_byte_helper_result_temp,
     "swap_independent_adjacent_statements": _swap_independent_adjacent_statements,
     "scheduler_anchor_iv_init_before_bias": _replace_validated_span,
     "scheduler_split_float_cast_temp": _replace_validated_span,

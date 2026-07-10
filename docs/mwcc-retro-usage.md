@@ -5,22 +5,21 @@ doc (`docs/mwcc-retro.md`) and spec (`docs/superpowers/specs/2026-06-10-mwcc-ret
 
 ## TL;DR — when to reach for it
 
-Reach for mwcc-retro when you need to see **what the front-end IRO optimizer did
-to your C** — loop unrolling, CSE, copy/constant propagation, induction-variable
-rewrites, temp creation — on the **real retail GC/1.2.5n compiler**, with zero
-perturbation. It is the only tool that dumps the IR **after each front-end pass**.
+Reach for mwcc-retro when you need the **real retail GC/1.2.5n compiler** with
+zero perturbation: either front-end IRO optimizer pass visibility or exact
+backend/regalloc facts. For front-end work it shows what the optimizer did to
+your C — loop unrolling, CSE, copy/constant propagation, induction-variable
+rewrites, temp creation — after each pass.
 
 It is **diagnosis-grade, not first-resort**. Try `mismatch-db`, `opseq`, `ghidra`,
 `discord-knowledge`, and `mwcc-debug` (DLL pcdump) first. Emulated compiles are
 slower than the wibo path; this is for understanding a mismatch, not inner-loop search.
 
-**Scope boundary (important):** it helps **front-end-shaped** mismatches (the IR
-the compiler builds differs between your source and the target). It does **not**
-directly help **register-coloring last-mile ceilings** (r30-vs-r27 tiebreaks,
-spill order) — those are back-end. Per the near-100% census, the stuck pool is
-ceiling-dominated, so a random 99%+ function is usually the *wrong* class for this
-tool. The right candidates are lower-% functions with loops or structural diffs
-(different instruction counts, extra/missing temps), not register swaps.
+**Scope boundary (important):** the frontend dump helps **front-end-shaped**
+mismatches (the IR the compiler builds differs between your source and the
+target). For **register-coloring last-mile ceilings** (r30-vs-r27 tiebreaks,
+spill order), use `debug retro backend` for exact retail GC/1.2.5n allocator
+facts, then compare or iterate with the faster `mwcc-debug` DLL pcdump path.
 
 ## Commands
 
@@ -28,11 +27,26 @@ tool. The right candidates are lower-% functions with loops or structural diffs
 # One-time: clone + build the vendored retrowin32 + cadmic at pinned SHAs
 melee-agent debug retro setup
 
-# Front-end IRO per-phase trace on RETAIL 1.2.5n (THE headline; scoped to one fn)
+# Front-end IRO per-phase trace on retail 1.2.5n, scoped to one function
 melee-agent debug retro dump src/melee/mn/mnvibration.c -f mnVibration_802474C4 --phases frontend
 
-# Backend (AST + per-pass PCode + regalloc + stack) — GC/1.1 only today
+# Backend (AST + per-pass PCode + regalloc + stack) — GC/1.1 donor/reference path
 melee-agent debug retro dump src/melee/lb/lbarq.c -f lbArq_80014ABC --phases backend --compiler 1.1
+
+# Exact retail GC/1.2.5n backend/regalloc trace
+melee-agent debug retro backend src/melee/lb/lb_00B0.c -f lb_8000CE30
+
+# Exact retail trace plus retail-vs-debug-DLL fidelity report
+melee-agent debug retro backend src/melee/lb/lb_00B0.c -f lb_8000CE30 --verify-debug
+
+# GC/1.2.5n backend map evidence probe; writes candidates/probe JSON, not a trace
+melee-agent debug retro probe-backend-map src/melee/lb/lbarq.c -f lbArq_80014ABC
+
+# GC/1.2.5n partial retail interference graph snapshot
+melee-agent debug retro probe-backend-ig src/melee/lb/lbarq.c -f lbArq_80014ABC
+
+# GC/1.2.5n candidate backend trace assembled from partial map/PCode/IG/colorgraph probes
+melee-agent debug retro backend-candidate src/melee/lb/lb_00B0.c -f lb_8000CE30
 
 # Fidelity gate: is the emulator byte-faithful for this TU?
 melee-agent debug retro verify --unit src/melee/mn/mnvibration.c
@@ -42,7 +56,23 @@ Notes:
 - `-f/--function` takes the **C function name** (e.g. `mnVibration_802474C4`), not a
   mangled symbol. It scopes the dump to that one function.
 - Default is `--phases all --compiler 1.2.5n`, which delivers the **frontend** trace
-  (1.2.5n backend is follow-on #542; use `--compiler 1.1` or the DLL pcdump for backend).
+  through `dump`; use `debug retro backend` for the exact retail 1.2.5n backend trace.
+- `probe-backend-map` validates GC/1.2.5n backend map candidates. It does not emit
+  backend trace files and is not a replacement for `mwcc-debug`.
+- `probe-backend-ig` emits partial retail IG/order/coalesce/color facts (`regclass`,
+  `node`, `edge`, `coalesce_mapping`, `coalesce_mapping_empty`,
+  `simplify_order`, `select_order`, optional `color_decision`) for GC/1.2.5n.
+  It is not the full backend trace.
+- `backend-candidate` runs the map, PCode, IG, and colorgraph probes in separate
+  retail compiles and assembles `backend-trace.candidate.v1.json` plus compact
+  summaries. It remains useful for diagnostics and schema fixture work; prefer
+  `debug retro backend` for normal full-trace use.
+- `backend-candidate --one-pass` uses an experimental single-compile hook that
+  writes one `backend-events.v1.jsonl` before normalizing the same candidate-only
+  JSON and summaries.
+- `verify-backend` prefers `backend-trace.v1.json` and falls back to
+  `backend-trace.candidate.v1.json` in the selected output directory when the
+  full trace is absent. Pass `--trace` to compare a specific file.
 - Output lands in `build/mwcc_retro/<unit>/<fn>/` (gitignored).
 
 ## Output files
@@ -52,10 +82,18 @@ Notes:
 | `iro-trace.txt` | frontend | Raw retail IRO dump stream for the target fn (the full thing) |
 | `iro-NN-<phase>.txt` | frontend | The flowgraph/IR after each front-end pass, split out, in order |
 | `iro-summary.txt` | frontend | Per-phase **node ledger** — which IR node indices appear/disappear per pass |
+| `backend-events.v1.jsonl` | backend (1.2.5n) | Raw retail backend/regalloc event stream for the requested function |
+| `backend-onepass-summary.json` | backend (1.2.5n) | Hook completeness summary and warnings for full trace assembly |
+| `backend-trace.v1.json` | backend (1.2.5n) | Stable machine-readable PCode, frame, and allocator facts |
+| `regalloc-summary.txt` | backend (1.2.5n) | Compact per-function allocator summary for diffs |
+| `backend-summary.txt` | backend (1.2.5n) | Human-readable backend/PCode/frame summary |
+| `backend-fidelity.json` / `backend-fidelity.txt` | backend verify | Retail-vs-mwcc-debug comparison report |
 | `frontend-NN-ast-<pass>.txt` | backend (1.1) | AST: initial / after-optimizations / final |
 | `backend-NN-<pass>.txt` | backend (1.1) | PCode after each back-end pass (CSE, copy-prop, scheduling, regalloc, peephole…) |
 | `regalloc-<cls>-pass-N-{all,assigned}.txt` | backend (1.1) | Chaitin allocator: nodes in priority order, cost, adjusted cost, neighbors |
 | `variables.txt` | backend (1.1) | Stack allocation map (r1+offset ranges) for args/locals/temps/spills |
+| `backend-ig-snapshot.json` | backend IG probe | Partial retail GC/1.2.5n IG/order/coalesce/color snapshot status |
+| `backend-ig-snapshot-events.v1.jsonl` | backend IG probe | Partial `regclass`/`node`/`edge`/coalesce/order/color event stream |
 | `launch.log` | both | gdb + emulator session log (read this when something looks wrong) |
 | `provenance.json` | both | True compiler id, pins, exit code, what was produced |
 
@@ -114,9 +152,78 @@ across phases; the temp/var *names* are, which is why the timeline keys on them.
   spilled first.
 - `previous neighbors` / `neighbors` = interference. The allocator gives each variable
   the lowest free register not taken by a previous neighbor.
-- Note: this is GC/1.1 (a proxy for the 1.0–1.2.5 family). For exact 1.2.5n back-end
-  behavior today, use the `mwcc-debug` DLL pcdump (`debug dump local`). Retrowin32
-  backend on 1.2.5n is follow-on #542.
+- Note: this is GC/1.1 (a proxy for the 1.0-1.2.5 family). For exact 1.2.5n
+  back-end behavior, use `debug retro backend`; use `mwcc-debug` when you need
+  the faster DLL pcdump path.
+
+## GC/1.2.5n backend map probe
+
+`probe-backend-map` is a bring-up command for the exact retail backend tracer:
+
+```bash
+melee-agent debug retro probe-backend-map src/melee/lb/lbarq.c -f lbArq_80014ABC
+```
+
+It writes `backend-map-candidates.json` with static PE evidence for every
+required backend key, then, unless `--static-only` is passed, runs the raw object
+byte-parity gate and a live retrowin32+gdb probe. The live output
+(`backend-map-probe.json`) records function scoping, backend stage hit counts,
+sampled globals, frame-list state, PCode block rows, and sampled
+interference-graph rows. `backend-map-evidence.json` classifies those samples
+into `live-invariant` promotable entries and blocked entries with reasons.
+
+It deliberately does not write `backend-events.v1.jsonl` or
+`backend-trace.v1.json`; use `debug retro backend` for the full trace. Use at
+least one GPR-allocating function and one FPR-allocating function when
+validating class-specific globals such as `used_vreg_gpr` and `used_vreg_fpr`.
+
+## GC/1.2.5n backend IG snapshot probe
+
+```bash
+melee-agent debug retro probe-backend-ig src/melee/lb/lbarq.c -f lbArq_80014ABC
+```
+
+This command runs the raw object-byte parity gate, then captures the retail
+interference graph, colorgraph-head order, coalesced-alias facts, and observed
+post-`colorgraph` assignments for the requested function. It writes:
+
+- `backend-ig-snapshot.json`: hook status, functions seen, classes captured, and
+  errors.
+- `backend-ig-snapshot-events.v1.jsonl`: partial backend events for
+  `function_start`, `backend_marker`, `regclass`, `node`, `edge`,
+  `coalesce_mapping`, `coalesce_mapping_empty`, `simplify_order`,
+  `select_order`, and optional `color_decision`.
+- `backend-colorgraph-trace.json`: sidecar status for exact internal
+  `colorgraph` decision breakpoints.
+- `backend-colorgraph-decisions.v1.jsonl`: sidecar exact internal
+  `color_decision` rows when the function exercises retail color selection.
+
+It does not write `backend-trace.v1.json`, `regalloc-summary.txt`, or
+`backend-summary.txt`; use `debug retro backend` when you need allocator replay,
+PCode, and frame maps in one normalized trace. Color decisions in
+`backend-ig-snapshot-events.v1.jsonl` are observed post-return assignments and
+blocker rows, not a replay of candidate filtering or tie rules. Exact
+in-colorgraph decisions live in the `backend-colorgraph-*` sidecar for probe
+diagnostics and are normalized by the full backend command.
+
+## GC/1.2.5n backend PCode snapshot probe
+
+```bash
+melee-agent debug retro probe-backend-pcode src/melee/lb/lbarq.c -f lbArq_80014ABC
+```
+
+This command runs the raw object-byte parity gate, then captures a retail
+PCode/block snapshot for the requested function. It writes:
+
+- `backend-pcode-snapshot.json`: hook status, functions seen, captured pass
+  counts, and errors.
+- `backend-pcode-snapshot-events.v1.jsonl`: partial backend events for
+  `function_start`, `backend_marker`, `block`, and `pcode_instruction`.
+
+It does not write `backend-trace.v1.json`, `regalloc-summary.txt`, or
+`backend-summary.txt`; use `debug retro backend` when you need allocator
+classes, color decisions, coalescing, simplify/select order, scheduler output,
+and frame maps together.
 
 ## The matching workflow (where it earns its keep)
 
@@ -229,26 +336,30 @@ writes hit the emulated inferior only — the exe on disk is never modified. See
 read, register, write+readback, continue). This generalizes "intervene at
 stage k, replay forward" beyond the DLL's force-phys/coalesce.
 
-## Back-end on 1.2.5n via retrowin32 (#542): why it's the DLL's job
+## Back-end on 1.2.5n via retrowin32
 
-Porting cadmic's GC/1.1 backend address table to 1.2.5n was attempted and is
-**not reliably achievable by byte-correlation alone**, so 1.2.5n backend stays on
-the DLL pcdump path. The evidence (recorded in `tables/gc_125n.json` under
-`backend_partial`): drift is **non-uniform** across the binary — the codegen
-region drifts `+0x10` (codegen_start 0x4351B0→0x4351C0, verified prologue) but
-the regalloc region drifts `-0x710` (regalloc-end 0x4CEB04→0x4CE3F4, verified
-just inside colorgraph). Worse, the correlator produces **false matches** for
-some functions (cmangler_getlinkname 0x4C2C70 collides with the DLL-known
-pcode_traverse 0x4C2560). Since `cad.run_compiler` needs the *complete, correct*
-set (incl. cmangler + the `.bss` data globals: interference graph,
-used_virtual_registers, pcbasicblocks, frame lists), a partial/false port would
-be worse than the DLL pcdump — which #543 proved **byte-identical to retail** for
-front-end IRO. The confidently-ported addresses are recorded (not wired in) for a
-future full port via a region-drift map or instruction-operand extraction.
+Exact retail GC/1.2.5n backend/regalloc tracing is available through the
+dedicated backend command:
 
-**Use the DLL pcdump for 1.2.5n backend** (`melee-agent debug dump local`), and
-`explain-virtual --ig` for coloring-node provenance.
+```bash
+melee-agent debug retro backend src/melee/mn/mndiagram2.c \
+    -f mnDiagram2_UpdateScrollArrows \
+    -O build/mwcc_retro/mnDiagram2_UpdateScrollArrows
+```
+
+The compatibility route also uses the same tracer for backend-only requests:
+
+```bash
+melee-agent debug retro dump src/melee/mn/mndiagram2.c \
+    -f mnDiagram2_UpdateScrollArrows --phases backend --compiler 1.2.5n
+```
+
+The tracer keeps the older map/PCode/IG probes as diagnostic tools, but the
+public `backend` output is `backend-trace.v1.json`, `regalloc-summary.txt`, and
+`backend-summary.txt`. Use `--verify-debug` when you want a retail-vs-DLL pcdump
+comparison; retail remains authoritative when the two differ.
 
 ## What it does NOT do (yet)
 
-- Full back-end / regalloc / stack on **1.2.5n** via retrowin32 (#542, above).
+- Treat CR/LR/CTR/condition-code state as allocator classes in the v1
+  `AllocatorFacts` subset; GPR/FPR are the modeled classes.

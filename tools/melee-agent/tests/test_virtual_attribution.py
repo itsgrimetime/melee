@@ -6,10 +6,12 @@ import json
 import pathlib
 import subprocess
 import textwrap
+import types
 
 from typer.testing import CliRunner
 
 from src.cli import app
+from src.mwcc_debug import virtual_attribution
 from src.mwcc_debug.source_field_attribution import (
     build_source_field_context,
     source_for_field_offset,
@@ -116,6 +118,41 @@ def test_explain_virtuals_attaches_source_and_interference() -> None:
     assert second.other_virtual == 33
     assert second.colorgraph_interference is True
     assert second.live_overlap is True
+
+
+def test_explain_virtuals_reuses_precomputed_bindings(monkeypatch) -> None:
+    binding = types.SimpleNamespace(
+        virtual=33,
+        var_name="extra",
+        kind="param",
+        confidence="best-guess",
+        type_str="int",
+    )
+    monkeypatch.setattr(
+        virtual_attribution,
+        "list_bindings",
+        lambda source, function, pre_pass: [binding],
+    )
+
+    def reject_per_virtual_lookup(*args, **kwargs):
+        raise AssertionError("per-virtual binding lookup should not run")
+
+    monkeypatch.setattr(
+        virtual_attribution,
+        "find_var_for_virtual",
+        reject_per_virtual_lookup,
+    )
+
+    report = explain_virtuals(
+        PCDUMP,
+        "fn_80000000",
+        virtuals=[33],
+        source_text=SOURCE,
+        source_file="sample.c",
+    )
+
+    assert report.virtuals[0].source is not None
+    assert report.virtuals[0].source.name == "extra"
 
 
 def test_explain_virtuals_ignores_colorgraph_interferer_rows_as_occurrences() -> None:
@@ -254,6 +291,37 @@ def test_explain_virtuals_classifies_ir_first_def_provenance_without_source() ->
     assert by_virtual[44].source.field_offset == 12
 
 
+def test_explain_virtuals_classifies_fpr_load_first_def_as_field_address() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function fn_80000004
+        BEFORE REGISTER COLORING
+        fn_80000004
+        B0: Succ={} Pred={} Labels={}
+            lfs f41,60(r44)
+        AFTER REGISTER COLORING
+        fn_80000004
+        B0: Succ={} Pred={} Labels={}
+            lfs f30,60(r31)
+    """)
+
+    report = explain_virtuals(
+        pcdump,
+        "fn_80000004",
+        virtuals=[41],
+        reg_class="fpr",
+    )
+
+    source_info = report.virtuals[0].source
+    assert source_info is not None
+    assert source_info.kind == "load/store-address"
+    assert source_info.confidence == "pcode-first-def"
+    assert source_info.expression == "lfs f41,60(r44)"
+    assert source_info.base_virtual == 44
+    assert source_info.field_offset == 60
+    assert source_info.first_def is not None
+    assert source_info.first_def.opcode == "lfs"
+
+
 def test_explain_virtuals_resolves_chained_pcode_loads_to_typed_source() -> None:
     pcdump = textwrap.dedent("""\
         Starting function fn_80000010
@@ -331,6 +399,55 @@ def test_explain_virtuals_resolves_chained_pcode_loads_to_typed_source() -> None
     assert copied_global.expression == "gGlobalObj"
     assert copied_global.type == "HSD_GObj*"
     assert copied_global.copy_chain == (88, 106)
+
+
+def test_source_from_load_rejects_low_confidence_scalar_field_base() -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+        struct HSD_GObj {
+            /* +00 */ int pad0;
+            /* +2C */ void* user_data;
+        };
+        typedef struct HSD_GObj HSD_GObj;
+        extern HSD_GObj* gGlobalObj;
+
+        void fn_80000014(void) {
+            int result;
+            void* data2;
+            result = input();
+            data2 = gGlobalObj->user_data;
+            sink(result, data2);
+        }
+    """)
+    context = build_source_field_context(source, function="fn_80000014")
+    site = virtual_attribution.InstructionSite(
+        "BEFORE REGISTER COLORING",
+        0,
+        1,
+        "lwz",
+        "r38,44(r34)",
+    )
+    low_confidence_scalar = types.SimpleNamespace(
+        var_name="result",
+        confidence="low-confidence",
+        type_str="int",
+        decl_line=10,
+    )
+
+    source_info = virtual_attribution._source_from_load(
+        site,
+        bindings_by_virtual={34: low_confidence_scalar},
+        source_text=source,
+        source_file="sample.c",
+        field_context=context,
+    )
+
+    assert source_info is not None
+    assert source_info.kind == "field-load"
+    assert source_info.expression == "gGlobalObj->user_data"
+    assert source_info.base_var == "gGlobalObj"
+    assert source_info.base_confidence == "global-source-expression"
+    assert source_info.field_name == "user_data"
 
 
 def test_source_field_attribution_ignores_locals_and_prefers_near_alias() -> None:
@@ -421,6 +538,97 @@ def test_source_field_attribution_refines_void_field_base_from_alias_type() -> N
     assert resolved.expression == "data2->is_name_mode"
     assert resolved.type == "u8"
     assert resolved.source_line == 21
+
+
+def test_source_field_attribution_resolves_nested_struct_offsets() -> None:
+    source = textwrap.dedent("""\
+        typedef float f32;
+        typedef struct {
+            f32 x, y, z;
+        } Vec3, *Vec3Ptr;
+        typedef struct HSD_JObj {
+            /* 0x2C */ Vec3 scale;
+            /* 0x38 */ Vec3 translate;
+        } HSD_JObj;
+
+        void fn_80000013(HSD_JObj* row0) {
+            sink(row0);
+        }
+    """)
+
+    context = build_source_field_context(source, function="fn_80000013")
+
+    y = source_for_field_offset(
+        context,
+        base_expression="row0",
+        base_type="HSD_JObj*",
+        offset=0x3C,
+    )
+    z = source_for_field_offset(
+        context,
+        base_expression="row0",
+        base_type="HSD_JObj*",
+        offset=0x40,
+    )
+
+    assert y is not None
+    assert y.expression == "row0->translate.y"
+    assert y.field_name == "translate.y"
+    assert y.type == "f32"
+    assert z is not None
+    assert z.expression == "row0->translate.z"
+    assert z.field_name == "translate.z"
+    assert z.type == "f32"
+
+
+def test_source_field_attribution_resolves_nested_offsets_through_extern_include(
+    tmp_path: pathlib.Path,
+) -> None:
+    root = tmp_path / "melee"
+    source_path = root / "src" / "melee" / "mn" / "sample.c"
+    jobj_path = root / "src" / "sysdolphin" / "baselib" / "jobj.h"
+    mtx_path = root / "extern" / "dolphin" / "include" / "dolphin" / "mtx.h"
+    source_path.parent.mkdir(parents=True)
+    jobj_path.parent.mkdir(parents=True)
+    mtx_path.parent.mkdir(parents=True)
+    mtx_path.write_text(textwrap.dedent("""\
+        typedef float f32;
+        typedef struct {
+            f32 x, y, z;
+        } Vec, Vec3, *VecPtr, Point3d, *Point3dPtr;
+    """))
+    jobj_path.write_text(textwrap.dedent("""\
+        #include <dolphin/mtx.h>
+        typedef struct HSD_JObj {
+            /* +2C */ Vec3 scale;
+            /* +38 */ Vec3 translate;
+        } HSD_JObj;
+    """))
+    source = textwrap.dedent("""\
+        #include <baselib/jobj.h>
+        void sample(HSD_JObj* row0) {
+            sink(row0);
+        }
+    """)
+    source_path.write_text(source)
+
+    context = build_source_field_context(
+        source,
+        function="sample",
+        source_file=source_path,
+        melee_root=root,
+    )
+    resolved = source_for_field_offset(
+        context,
+        base_expression="row0",
+        base_type="HSD_JObj*",
+        offset=0x3C,
+    )
+
+    assert resolved is not None
+    assert resolved.expression == "row0->translate.y"
+    assert resolved.field_name == "translate.y"
+    assert resolved.type == "f32"
 
 
 def test_explain_virtuals_prefers_pcode_over_low_confidence_binding() -> None:

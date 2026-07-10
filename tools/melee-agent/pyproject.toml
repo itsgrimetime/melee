@@ -61,6 +61,7 @@ markers = [
 ]
 
 [tool.coverage.run]
+data_file = ".pytest_cache/.coverage"
 source = ["src"]
 omit = ["src/cli/__main__.py"]
 

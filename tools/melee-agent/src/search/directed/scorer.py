@@ -23,6 +23,7 @@ from src.search.directed.metric import (
     phys_match_fraction,
     phys_mismatch_count,
 )
+from src.search.directed.objective import FORCE_PHYS_ASSIGNMENT_FALLBACK_REASONS
 from src.search.directed.order_metric import score_candidate_reanchored
 
 
@@ -193,9 +194,7 @@ class DirectedScorePipeline:
 
         # --- validity gates 2-4: case, report, coverage ---
         case = _case_str(state.fact.case)
-        if case == "none":
-            return self._invalid(art, call, "case_none")
-        if case == "abstained":
+        if f"case_{case}" in FORCE_PHYS_ASSIGNMENT_FALLBACK_REASONS:
             decisions = self._decisions_for_compile(compile, obj)
             fallback = self._force_phys_assignment_fallback(
                 art,
@@ -205,6 +204,9 @@ class DirectedScorePipeline:
             )
             if fallback is not None:
                 return fallback
+        if case == "none":
+            return self._invalid(art, call, "case_none")
+        if case == "abstained":
             return self._invalid(art, call, "case_abstained")
         if report is None:
             return self._invalid(art, call, "no_report")

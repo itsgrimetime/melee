@@ -273,12 +273,26 @@ class _StatementSpan:
 
 
 @dataclass(frozen=True)
+class _RowFirstDefAnchor:
+    local: str
+    span: _StatementSpan
+    expression: str
+    call_expr: str
+    base_local: str
+    call_span: _StatementSpan | None = None
+    subtract_span: _StatementSpan | None = None
+    ignored_spans: tuple[_StatementSpan, ...] = ()
+    split: bool = False
+
+
+@dataclass(frozen=True)
 class _RowProductSourceModel:
     function_span: Any
     function_text: str
     row_unscaled_local: str
     row_scaled_local: str
     row_cast_expr: str
+    row_first_anchor: _RowFirstDefAnchor
     row_first_def: _StatementSpan
     row_scaled_def: _StatementSpan
     row_adj_def: _StatementSpan | None
@@ -1137,7 +1151,7 @@ def _source_generation_candidates_with_text(
             candidate_id="product-local-materialize",
             family="product_sink_ownership",
             strategy="product-local-materialize",
-            priority=83,
+            priority=88,
             rationale=(
                 "Restore an explicit col_offset_product_fpr materialization "
                 "when retained source only has a direct col_offset product."
@@ -1491,15 +1505,10 @@ def _source_generation_missing_patterns(
     if function_span is None:
         return [f"function {function}"]
     function_text = source_text[function_span.sig_start:function_span.full_end]
+    missing: list[str] = []
+    if _find_row_first_def_anchor(function_text) is None:
+        missing.append("row first-def HSD_JObjGetTranslationY minus base")
     checks: tuple[tuple[str, str], ...] = (
-        (
-            "row first-def HSD_JObjGetTranslationY minus base",
-            r"(?m)(?:^\s*(?:row_offset|y_offset)\s*=\s*"
-            r"HSD_JObjGetTranslationY\(\s*jobj2\s*\)\s*-\s*base\s*;\s*$|"
-            r"^\s*(?:row_offset|y_offset)\s*=\s*"
-            r"HSD_JObjGetTranslationY\(\s*jobj2\s*\)\s*;\s*\n"
-            r"\s*(?:row_offset|y_offset)\s*-=\s*base\s*;\s*$)",
-        ),
         (
             "row scaled product assignment",
             r"(?m)(?:^\s*row_offset\s*\*=\s*[^;]+;\s*$|"
@@ -1515,7 +1524,10 @@ def _source_generation_missing_patterns(
             r"(?m)^\s*digit_count\s*=\s*mn_GetDigitCount\(\s*.+?\s*\)\s*;\s*$",
         ),
     )
-    missing = [label for label, pattern in checks if re.search(pattern, function_text) is None]
+    missing.extend(
+        label for label, pattern in checks
+        if re.search(pattern, function_text) is None
+    )
     return missing
 
 
@@ -1587,25 +1599,12 @@ def _extract_row_product_source_model(
     function_span: Any,
 ) -> _RowProductSourceModel | None:
     function_text = source_text[function_span.sig_start:function_span.full_end]
-    row_first_def = _find_statement_span(
-        function_text,
-        r"(?m)^(?P<indent>[ \t]*)(?P<lhs>row_offset|y_offset)\s*=\s*"
-        r"HSD_JObjGetTranslationY\(\s*jobj2\s*\)\s*-\s*base\s*;\s*$",
-        label="row first-def",
-    )
-    if row_first_def is None:
-        row_first_def = _find_statement_span(
-            function_text,
-            r"(?m)^(?P<indent>[ \t]*)(?P<lhs>row_offset|y_offset)\s*=\s*"
-            r"HSD_JObjGetTranslationY\(\s*jobj2\s*\)\s*;\s*\n"
-            r"(?P=indent)(?P=lhs)\s*-=\s*base\s*;\s*$",
-            label="split row first-def",
-        )
-    if row_first_def is None or row_first_def.lhs is None:
+    row_first_anchor = _find_row_first_def_anchor(function_text)
+    if row_first_anchor is None:
         return None
 
     row_scaled_def, row_scaled_local, row_unscaled_local, row_cast_expr = (
-        _find_row_scaled_statement(function_text, row_first_def.lhs)
+        _find_row_scaled_statement(function_text, row_first_anchor.local)
     )
     if row_scaled_def is None:
         return None
@@ -1645,7 +1644,8 @@ def _extract_row_product_source_model(
         row_unscaled_local=row_unscaled_local,
         row_scaled_local=row_scaled_local,
         row_cast_expr=row_cast_expr,
-        row_first_def=row_first_def,
+        row_first_anchor=row_first_anchor,
+        row_first_def=row_first_anchor.span,
         row_scaled_def=row_scaled_def,
         row_adj_def=row_adj_def,
         digit_count_call=digit_count_call,
@@ -1662,6 +1662,127 @@ def _extract_row_product_source_model(
     )
 
 
+def _find_row_first_def_anchor(function_text: str) -> _RowFirstDefAnchor | None:
+    direct_match = re.search(
+        r"(?m)^(?P<indent>[ \t]*)(?P<lhs>row_offset|y_offset)\s*=\s*"
+        r"HSD_JObjGetTranslationY\(\s*(?P<jobj>[A-Za-z_]\w*)\s*\)"
+        r"\s*-\s*(?P<base>[A-Za-z_]\w*)\s*;\s*(?://.*)?$",
+        function_text,
+    )
+    if direct_match is not None:
+        span = _statement_span_from_match(function_text, direct_match)
+        call_expr = f"HSD_JObjGetTranslationY({direct_match.group('jobj')})"
+        base_local = direct_match.group("base")
+        return _RowFirstDefAnchor(
+            local=direct_match.group("lhs"),
+            span=span,
+            expression=f"{call_expr} - {base_local}",
+            call_expr=call_expr,
+            base_local=base_local,
+            call_span=span,
+            split=False,
+        )
+
+    line_records: list[tuple[int, str]] = []
+    offset = 0
+    for raw_line in function_text.splitlines(keepends=True):
+        line = raw_line[:-1] if raw_line.endswith("\n") else raw_line
+        line_records.append((offset, line))
+        offset += len(raw_line)
+
+    call_re = re.compile(
+        r"^(?P<indent>[ \t]*)(?P<lhs>row_offset|y_offset)\s*=\s*"
+        r"HSD_JObjGetTranslationY\(\s*(?P<jobj>[A-Za-z_]\w*)\s*\)"
+        r"\s*;\s*(?://.*)?$"
+    )
+
+    for index, (line_start, line) in enumerate(line_records):
+        call_match = call_re.match(line)
+        if call_match is None:
+            continue
+        indent = call_match.group("indent")
+        lhs = call_match.group("lhs")
+        call_start = line_start + call_match.start()
+        call_end = line_start + call_match.end()
+        call_span = _StatementSpan(
+            start=call_start,
+            end=call_end,
+            text=function_text[call_start:call_end],
+            indent=indent,
+            lhs=lhs,
+        )
+        ignored_spans: list[_StatementSpan] = []
+        void_re = re.compile(
+            rf"^{re.escape(indent)}\(void\)\s*{re.escape(lhs)}\s*;\s*(?://.*)?$"
+        )
+        subtract_re = re.compile(
+            rf"^{re.escape(indent)}{re.escape(lhs)}\s*-=\s*"
+            r"(?P<base>[A-Za-z_]\w*)\s*;\s*(?://.*)?$"
+        )
+        for next_index in range(index + 1, len(line_records)):
+            next_start, next_line = line_records[next_index]
+            stripped = next_line.strip()
+            if not stripped or _is_comment_only_line(stripped):
+                continue
+            void_match = void_re.match(next_line)
+            if void_match is not None:
+                void_start = next_start + void_match.start()
+                void_end = next_start + void_match.end()
+                ignored_spans.append(
+                    _StatementSpan(
+                        start=void_start,
+                        end=void_end,
+                        text=function_text[void_start:void_end],
+                        indent=indent,
+                        lhs=lhs,
+                    )
+                )
+                continue
+            subtract_match = subtract_re.match(next_line)
+            if subtract_match is None:
+                break
+            subtract_start = next_start + subtract_match.start()
+            subtract_end = next_start + subtract_match.end()
+            subtract_span = _StatementSpan(
+                start=subtract_start,
+                end=subtract_end,
+                text=function_text[subtract_start:subtract_end],
+                indent=indent,
+                lhs=lhs,
+            )
+            full_span = _StatementSpan(
+                start=call_span.start,
+                end=subtract_span.end,
+                text=function_text[call_span.start:subtract_span.end],
+                indent=indent,
+                lhs=lhs,
+            )
+            call_expr = f"HSD_JObjGetTranslationY({call_match.group('jobj')})"
+            base_local = subtract_match.group("base")
+            return _RowFirstDefAnchor(
+                local=lhs,
+                span=full_span,
+                expression=f"{call_expr} - {base_local}",
+                call_expr=call_expr,
+                base_local=base_local,
+                call_span=call_span,
+                subtract_span=subtract_span,
+                ignored_spans=tuple(ignored_spans),
+                split=True,
+            )
+    return None
+
+
+def _is_comment_only_line(stripped_line: str) -> bool:
+    return (
+        stripped_line.startswith("//")
+        or (
+            stripped_line.startswith("/*")
+            and stripped_line.endswith("*/")
+        )
+    )
+
+
 def _find_row_scaled_statement(
     function_text: str,
     row_first_local: str,
@@ -1671,7 +1792,10 @@ def _find_row_scaled_statement(
         r"(?P<cast>[^;]+?)\s*;\s*$",
         function_text,
     )
-    if multiply_match is not None:
+    if (
+        multiply_match is not None
+        and multiply_match.group("lhs") == row_first_local
+    ):
         return (
             _statement_span_from_match(function_text, multiply_match),
             multiply_match.group("lhs"),
@@ -1681,10 +1805,13 @@ def _find_row_scaled_statement(
 
     assign_match = re.search(
         r"(?m)^(?P<indent>[ \t]*)(?P<lhs>row_offset)\s*=\s*"
-        r"(?P<base>row_offset|y_offset)\s*\*\s*(?P<cast>[^;]+?)\s*;\s*$",
+        r"(?P<base>[A-Za-z_]\w*)\s*\*\s*(?P<cast>[^;]+?)\s*;\s*$",
         function_text,
     )
-    if assign_match is not None:
+    if (
+        assign_match is not None
+        and assign_match.group("base") == row_first_local
+    ):
         return (
             _statement_span_from_match(function_text, assign_match),
             assign_match.group("lhs"),
@@ -2044,11 +2171,15 @@ def _has_duplicate_f32_declarations(function_text: str) -> bool:
     return len(names) != len(set(names))
 
 
-def _row_first_def_rhs(span: _StatementSpan) -> str | None:
-    match = re.search(r"=\s*(?P<rhs>.+?)\s*;\s*$", span.text, flags=re.DOTALL)
-    if match is None:
+def _row_first_def_normalized_fsubs(
+    model: _RowProductSourceModel,
+) -> tuple[str, str, str] | None:
+    anchor = model.row_first_anchor
+    parsed = _row_fsubs_call_minus_local(anchor.expression)
+    if parsed is None:
         return None
-    return " ".join(match.group("rhs").split())
+    call_expr, base_local = parsed
+    return anchor.expression, call_expr, base_local
 
 
 def _patch_row_first_def_owner_copy(
@@ -2094,10 +2225,8 @@ def _patch_row_fsubs_call_result_owner(
     model = _extract_row_product_source_model(source_text, function_span)
     if model is None:
         return None
-    parsed = _row_fsubs_call_minus_local(_row_first_def_rhs(model.row_first_def))
-    if parsed is None:
+    if _row_first_def_normalized_fsubs(model) is None:
         return None
-    call_expr, base_local = parsed
     patched = _insert_decl_after_any(
         model.function_text,
         (model.row_unscaled_local, model.row_scaled_local, "row_offset"),
@@ -2108,12 +2237,34 @@ def _patch_row_fsubs_call_result_owner(
     model = _model_after_function_patch(source_text, function_span, patched)
     if model is None:
         return None
-    replacement = (
-        f"{model.row_first_def.indent}row_offset_call_owner_fpr = {call_expr};\n"
-        f"{model.row_first_def.indent}{model.row_unscaled_local} = "
-        f"row_offset_call_owner_fpr - {base_local};"
-    )
-    patched = _replace_statement(model.function_text, model.row_first_def, replacement)
+    parsed = _row_first_def_normalized_fsubs(model)
+    if parsed is None:
+        return None
+    _expression, call_expr, base_local = parsed
+    anchor = model.row_first_anchor
+    if anchor.split:
+        if anchor.call_span is None:
+            return None
+        replacement = (
+            f"{anchor.call_span.indent}row_offset_call_owner_fpr = {call_expr};\n"
+            f"{anchor.call_span.indent}{anchor.local} = row_offset_call_owner_fpr;"
+        )
+        patched = _replace_statement(
+            model.function_text,
+            anchor.call_span,
+            replacement,
+        )
+    else:
+        replacement = (
+            f"{model.row_first_def.indent}row_offset_call_owner_fpr = {call_expr};\n"
+            f"{model.row_first_def.indent}{model.row_unscaled_local} = "
+            f"row_offset_call_owner_fpr - {base_local};"
+        )
+        patched = _replace_statement(
+            model.function_text,
+            model.row_first_def,
+            replacement,
+        )
     return _apply_model_patch(source_text, model, patched)
 
 
@@ -2124,8 +2275,7 @@ def _patch_row_fsubs_owner_temp(
     model = _extract_row_product_source_model(source_text, function_span)
     if model is None:
         return None
-    rhs = _row_first_def_rhs(model.row_first_def)
-    if _row_fsubs_call_minus_local(rhs) is None:
+    if _row_first_def_normalized_fsubs(model) is None:
         return None
     patched = _insert_decl_after_any(
         model.function_text,
@@ -2137,12 +2287,37 @@ def _patch_row_fsubs_owner_temp(
     model = _model_after_function_patch(source_text, function_span, patched)
     if model is None:
         return None
-    replacement = (
-        f"{model.row_first_def.indent}row_offset_fsubs_owner_fpr = {rhs};\n"
-        f"{model.row_first_def.indent}{model.row_unscaled_local} = "
-        "row_offset_fsubs_owner_fpr;"
-    )
-    patched = _replace_statement(model.function_text, model.row_first_def, replacement)
+    parsed = _row_first_def_normalized_fsubs(model)
+    if parsed is None:
+        return None
+    expression, _call_expr, base_local = parsed
+    anchor = model.row_first_anchor
+    if anchor.split:
+        if anchor.subtract_span is None:
+            return None
+        replacement = (
+            f"{anchor.subtract_span.indent}row_offset_fsubs_owner_fpr = "
+            f"{anchor.local} - {base_local};\n"
+            f"{anchor.subtract_span.indent}{anchor.local} = "
+            "row_offset_fsubs_owner_fpr;"
+        )
+        patched = _replace_statement(
+            model.function_text,
+            anchor.subtract_span,
+            replacement,
+        )
+    else:
+        replacement = (
+            f"{model.row_first_def.indent}row_offset_fsubs_owner_fpr = "
+            f"{expression};\n"
+            f"{model.row_first_def.indent}{model.row_unscaled_local} = "
+            "row_offset_fsubs_owner_fpr;"
+        )
+        patched = _replace_statement(
+            model.function_text,
+            model.row_first_def,
+            replacement,
+        )
     return _apply_model_patch(source_text, model, patched)
 
 

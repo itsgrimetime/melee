@@ -26,101 +26,115 @@
  0 = perfect prefix hit with no precolor disturbance.                           
                                                                                 
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ *  --function                  -f      TEXT     Function to set up the       │
-│                                                 simplify-order scorer for    │
-│                                                 (required). Must match the   │
-│                                                 function name inside the     │
-│                                                 perm dir's base.c.           │
-│                                                 [required]                   │
-│    --want-first                        TEXT     Target simplify-order        │
-│                                                 prefix, comma-separated      │
-│                                                 ig_idx values. E.g. '42,32'  │
-│                                                 means we want ig_idx 42 to   │
-│                                                 be the first simplification  │
-│                                                 target and 32 to be the      │
-│                                                 second. Mutually exclusive   │
-│                                                 with --want-late.            │
-│    --want-late                         TEXT     Target ig_idx sequence at    │
-│                                                 the END of simplify order,   │
-│                                                 comma-separated (e.g.,       │
-│                                                 '46,44'). Mutually exclusive │
-│                                                 with --want-first. Use for   │
-│                                                 high-volatile target         │
-│                                                 physicals (r10-r12) per      │
-│                                                 deferred-debt #20 Phase 3.   │
-│    --class                             INTEGER  Register class to score      │
-│                                                 against. 0 = GPR (default),  │
-│                                                 1 = FPR.                     │
-│                                                 [default: 0]                 │
-│    --baseline-dump                     PATH     Path to a pre-search         │
-│                                                 pcdump.txt for the function. │
-│                                                 If omitted, the command will │
-│                                                 fail with instructions on    │
-│                                                 how to generate one via      │
-│                                                 `debug dump local`.          │
-│    --perm-root                         PATH     Root of decomp-permuter      │
-│                                                 clone.                       │
-│                                                 [default:                    │
-│                                                 /Users/mike/code/decomp-per… │
-│    --scorer-timeout                    FLOAT    Per-candidate scorer timeout │
-│                                                 in seconds (passed through   │
-│                                                 to permuter's                │
-│                                                 .timeout_seconds).           │
-│                                                 [default: 5.0]               │
-│    --scorer-mode                       TEXT     Permuter scorer objective:   │
-│                                                 simplify-order (default) or  │
-│                                                 force-phys. force-phys       │
-│                                                 scores candidate pcdumps by  │
-│                                                 whether target ig_idx values │
-│                                                 receive their requested      │
-│                                                 physical regs.               │
-│                                                 [default: simplify-order]    │
-│    --bootstrap                                  If the permuter function dir │
-│                                                 is missing, create it first  │
-│                                                 with `debug permute          │
-│                                                 bootstrap` semantics before  │
-│                                                 wiring the simplify-order    │
-│                                                 scorer.                      │
-│    --auto-baseline-dump                         Generate                     │
-│                                                 <perm-dir>/baseline.pcdump.… │
-│                                                 with `debug dump local` when │
-│                                                 --baseline-dump is omitted.  │
-│    --melee-agent                       TEXT     Command to invoke            │
-│                                                 melee-agent. Default         │
-│                                                 'melee-agent' assumes the    │
-│                                                 wrapper is on $PATH.         │
-│                                                 Override for testing or      │
-│                                                 non-standard installs.       │
-│                                                 [default: melee-agent]       │
-│    --force-phys                        TEXT     Optional force-phys mapping  │
-│                                                 (comma-separated ig_idx:phys │
-│                                                 pairs, e.g.                  │
-│                                                 '34:31,37:30,32:29').        │
-│                                                 Captured into target.yaml    │
-│                                                 for the pre-flight polarity  │
-│                                                 check. Pass the same mapping │
-│                                                 you used in --force-phys     │
-│                                                 when proving the function's  │
-│                                                 force allocation.            │
-│    --no-coalesce-preservation                   Disable the                  │
-│                                                 coalesce-preservation        │
-│                                                 constraint in the scorer. By │
-│                                                 default (when --force-phys   │
-│                                                 is provided), candidates     │
-│                                                 that coalesce any force_phys │
-│                                                 key ig_idx into another root │
-│                                                 are rejected as structurally │
-│                                                 infeasible. Pass this flag   │
-│                                                 to opt out — useful for      │
-│                                                 diagnostic runs or when the  │
-│                                                 target tolerates coalescing. │
-│    --force                                      Overwrite existing           │
-│                                                 simplify_order_target.yaml / │
-│                                                 settings.toml / compile.sh   │
-│                                                 without prompting. Use when  │
-│                                                 you've already set up a      │
-│                                                 campaign and want to         │
-│                                                 retarget.                    │
-│    --help                                       Show this message and exit.  │
+│ *  --function                   -f      TEXT     Function to set up the      │
+│                                                  simplify-order scorer for   │
+│                                                  (required). Must match the  │
+│                                                  function name inside the    │
+│                                                  perm dir's base.c.          │
+│                                                  [required]                  │
+│    --want-first                         TEXT     Target simplify-order       │
+│                                                  prefix, comma-separated     │
+│                                                  ig_idx values. E.g. '42,32' │
+│                                                  means we want ig_idx 42 to  │
+│                                                  be the first simplification │
+│                                                  target and 32 to be the     │
+│                                                  second. Mutually exclusive  │
+│                                                  with --want-late.           │
+│    --want-late                          TEXT     Target ig_idx sequence at   │
+│                                                  the END of simplify order,  │
+│                                                  comma-separated (e.g.,      │
+│                                                  '46,44'). Mutually          │
+│                                                  exclusive with              │
+│                                                  --want-first. Use for       │
+│                                                  high-volatile target        │
+│                                                  physicals (r10-r12) per     │
+│                                                  deferred-debt #20 Phase 3.  │
+│    --class                              INTEGER  Register class to score     │
+│                                                  against. 0 = GPR (default), │
+│                                                  1 = FPR.                    │
+│                                                  [default: 0]                │
+│    --baseline-dump                      PATH     Path to a pre-search        │
+│                                                  pcdump.txt for the          │
+│                                                  function. If omitted, the   │
+│                                                  command will fail with      │
+│                                                  instructions on how to      │
+│                                                  generate one via `debug     │
+│                                                  dump local`.                │
+│    --perm-root                          PATH     Root of decomp-permuter     │
+│                                                  clone.                      │
+│                                                  [default:                   │
+│                                                  /Users/mike/code/decomp-pe… │
+│    --scorer-timeout                     FLOAT    Per-candidate scorer        │
+│                                                  timeout in seconds (passed  │
+│                                                  through to permuter's       │
+│                                                  .timeout_seconds).          │
+│                                                  [default: 5.0]              │
+│    --scorer-mode                        TEXT     Permuter scorer objective:  │
+│                                                  simplify-order (default) or │
+│                                                  force-phys. force-phys      │
+│                                                  scores candidate pcdumps by │
+│                                                  whether target ig_idx       │
+│                                                  values receive their        │
+│                                                  requested physical regs.    │
+│                                                  [default: simplify-order]   │
+│    --bootstrap                                   If the permuter function    │
+│                                                  dir is missing, create it   │
+│                                                  first with `debug permute   │
+│                                                  bootstrap` semantics before │
+│                                                  wiring the simplify-order   │
+│                                                  scorer.                     │
+│    --source-file,--annotated-…          PATH     Retained/full-unit source   │
+│                                                  used for bootstrap or       │
+│                                                  candidate staging. When     │
+│                                                  set, candidate .c files are │
+│                                                  spliced back into this      │
+│                                                  source before MWCC debug    │
+│                                                  compiles the pcdump         │
+│                                                  sidecar.                    │
+│    --auto-baseline-dump                          Generate                    │
+│                                                  <perm-dir>/baseline.pcdump… │
+│                                                  with `debug dump local`     │
+│                                                  when --baseline-dump is     │
+│                                                  omitted.                    │
+│    --melee-agent                        TEXT     Command to invoke           │
+│                                                  melee-agent. Default        │
+│                                                  'melee-agent' assumes the   │
+│                                                  wrapper is on $PATH.        │
+│                                                  Override for testing or     │
+│                                                  non-standard installs.      │
+│                                                  [default: melee-agent]      │
+│    --force-phys                         TEXT     Optional force-phys mapping │
+│                                                  (comma-separated            │
+│                                                  ig_idx:phys pairs, e.g.     │
+│                                                  '34:31,37:30,32:29').       │
+│                                                  Captured into target.yaml   │
+│                                                  for the pre-flight polarity │
+│                                                  check. Pass the same        │
+│                                                  mapping you used in         │
+│                                                  --force-phys when proving   │
+│                                                  the function's force        │
+│                                                  allocation.                 │
+│    --no-coalesce-preservation                    Disable the                 │
+│                                                  coalesce-preservation       │
+│                                                  constraint in the scorer.   │
+│                                                  By default (when            │
+│                                                  --force-phys is provided),  │
+│                                                  candidates that coalesce    │
+│                                                  any force_phys key ig_idx   │
+│                                                  into another root are       │
+│                                                  rejected as structurally    │
+│                                                  infeasible. Pass this flag  │
+│                                                  to opt out — useful for     │
+│                                                  diagnostic runs or when the │
+│                                                  target tolerates            │
+│                                                  coalescing.                 │
+│    --force                                       Overwrite existing          │
+│                                                  simplify_order_target.yaml  │
+│                                                  / settings.toml /           │
+│                                                  compile.sh without          │
+│                                                  prompting. Use when you've  │
+│                                                  already set up a campaign   │
+│                                                  and want to retarget.       │
+│    --help                                        Show this message and exit. │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 

@@ -220,12 +220,14 @@ if [[ "${UPLOAD_SOURCE}" == "1" ]]; then
 set -euo pipefail
 mkdir -p $(shell_quote "${REMOTE_DIR}/build")
 mktemp -d $(shell_quote "${REMOTE_DIR}/build/mwcc-inspect-${TU_BASE}.XXXXXX")
+exit
 REMOTE_PREP
 )
   REMOTE_SOURCE="${REMOTE_TMP}/${REL_SRC}"
   remote_bash <<REMOTE_MKDIR
 set -euo pipefail
 mkdir -p $(shell_quote "${REMOTE_TMP}/$(dirname "${REL_SRC}")")
+exit
 REMOTE_MKDIR
   REMOTE_SOURCE_DIR="${REMOTE_DIR}/$(dirname "${REL_SRC}")"
   REMOTE_CANDIDATE_DIR="${REMOTE_TMP}/$(dirname "${REL_SRC}")"
@@ -234,6 +236,7 @@ set -euo pipefail
 if [[ -d $(shell_quote "${REMOTE_SOURCE_DIR}") ]]; then
   find $(shell_quote "${REMOTE_SOURCE_DIR}") -maxdepth 1 -type f \\( -name '*.h' -o -name '*.inc' \\) -exec cp -p '{}' $(shell_quote "${REMOTE_CANDIDATE_DIR}/") \\;
 fi
+exit
 REMOTE_HEADERS
   UPLOAD_DELIM="MWCC_INSPECT_UPLOAD_$$_$(date +%s)"
   {
@@ -256,6 +259,7 @@ REMOTE_HEADERS
     printf 'cat > %s <<'"'"'%s'"'"'\n' "$(shell_quote "${REMOTE_SOURCE}")" "${UPLOAD_DELIM}"
     cat "${SRC_ABS}"
     printf '\n%s\n' "${UPLOAD_DELIM}"
+    printf 'exit\n'
   } | remote_bash
 fi
 
@@ -272,10 +276,8 @@ set +e
   printf 'set -euo pipefail\n'
   printf 'cd %s\n' "$(shell_quote "${REMOTE_DIR}")"
   printf 'echo "[mwcc-inspect:remote] stage=checkout ref=%s" >&2\n' "$(shell_quote "${REMOTE_REF}")"
-  printf 'if ! git rev-parse --verify %s >/dev/null 2>&1; then\n' "$(shell_quote "${REMOTE_REF}")"
-  printf '  echo "[mwcc-inspect:remote] ref not present locally; fetching origin branches" >&2\n'
-  printf "  git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'\n"
-  printf 'fi\n'
+  printf 'echo "[mwcc-inspect:remote] stage=fetch ref=%s" >&2\n' "$(shell_quote "${REMOTE_REF}")"
+  printf "git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'\n"
   printf 'if ! git cat-file -e %s 2>/dev/null; then\n' "$(shell_quote "${REMOTE_REF}^{commit}")"
   printf '  echo "[mwcc-inspect:remote] remote is missing ref %s after fetch; push it to origin or set MWCC_INSPECT_REMOTE_REF" >&2\n' "$(shell_quote "${REMOTE_REF}")"
   printf '  exit 128\n'
@@ -291,16 +293,15 @@ set +e
   printf 'REL_SRC_LOCAL=%s\n' "$(shell_quote "${REL_SRC}")"
   printf 'MWCC_ARGS_REMOTE=%s\n' "$(shell_quote "${MWCC_ARGS}")"
   printf 'if [[ -n "${REMOTE_TMP}" ]]; then\n'
-  printf '  REMOTE_TMP_REL="${REMOTE_TMP#${REMOTE_DIR}/}"\n'
   printf '  MWCC_ARGS_REMOTE="${MWCC_ARGS_REMOTE/$REL_SRC_LOCAL/$REMOTE_SOURCE}"\n'
-  printf '  MWCC_ARGS_REMOTE="-i ${REMOTE_TMP_REL}/src -i ${REMOTE_TMP}/src -i ${REMOTE_TMP_REL}/src/melee -i ${REMOTE_TMP}/src/melee ${MWCC_ARGS_REMOTE}"\n'
-  printf '  MWCC_ARGS_REMOTE="${MWCC_ARGS_REMOTE/ -i src / -i src -i ${REMOTE_TMP_REL}/src -i ${REMOTE_TMP}/src }"\n'
-  printf '  MWCC_ARGS_REMOTE="${MWCC_ARGS_REMOTE/ -i src\\/melee / -i src\\/melee -i ${REMOTE_TMP_REL}\\/src\\/melee -i ${REMOTE_TMP}\\/src\\/melee }"\n'
+  printf '  MWCC_ARGS_REMOTE="$(sed -E "s@(^|[[:space:]])-i[[:space:]]+([^/[:space:]][^[:space:]]*)@\\1-i ${REMOTE_DIR}/\\2@g" <<< "${MWCC_ARGS_REMOTE}")"\n'
+  printf '  MWCC_ARGS_REMOTE="-i ${REMOTE_TMP}/src -i ${REMOTE_TMP}/src/melee ${MWCC_ARGS_REMOTE}"\n'
   printf 'fi\n'
   printf 'echo "[mwcc-inspect:remote] stage=inspector source=${REMOTE_SOURCE}" >&2\n'
   printf '%s %s ${MWCC_ARGS_REMOTE}\n' \
     "$(shell_quote "${REMOTE_CLI}")" \
     "$(shell_quote "${REMOTE_MWCCEPPC}")"
+  printf 'exit\n'
 } | ssh -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT}" "${HOST}" "${REMOTE_BASH}" -s > "${TMP_OUT}" 2> "${TMP_ERR}"
 REMOTE_EXIT=$?
 set -e
@@ -324,6 +325,20 @@ if [[ "${REMOTE_EXIT}" -ne 0 ]]; then
   fi
   rm -f "${TMP_ERR}"
   exit "${REMOTE_EXIT}"
+fi
+
+if grep -Eq '^[[:space:]]*#[[:space:]]*Error:' "${TMP_OUT}"; then
+  mv "${TMP_OUT}" "${OUT_FILE}"
+  rm -f "${TMP_ERR}"
+  echo "[mwcc-inspect] inspector output contains compiler diagnostics; preserved: ${OUT_FILE}" >&2
+  exit 1
+fi
+
+if ! grep -q '^FUNCTION:' "${TMP_OUT}"; then
+  mv "${TMP_OUT}" "${OUT_FILE}"
+  rm -f "${TMP_ERR}"
+  echo "[mwcc-inspect] inspector output has no FUNCTION: section; preserved: ${OUT_FILE}" >&2
+  exit 1
 fi
 
 mv "${TMP_OUT}" "${OUT_FILE}"

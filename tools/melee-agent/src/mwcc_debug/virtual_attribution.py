@@ -34,7 +34,7 @@ _LOAD_RE = re.compile(
 )
 _COPY_RE = re.compile(r"^r(?P<dest>\d+)\s*,\s*r(?P<src>\d+)\b")
 _LOAD_ADDRESS_RE = re.compile(
-    r"^r(?P<dest>\d+)\s*,\s*(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))"
+    r"^[rf](?P<dest>\d+)\s*,\s*(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))"
     r"\s*\(\s*r(?P<base>\d+)\s*\)"
 )
 
@@ -333,6 +333,23 @@ def _source_from_binding(
     )
 
 
+def _is_low_confidence_scalar_field_base(
+    *,
+    binding: object | None,
+    base_confidence: str | None,
+    direct: SourceAttribution | None,
+) -> bool:
+    if direct is None or base_confidence != "low-confidence":
+        return False
+    expression = direct.expression or ""
+    if direct.field_name is not None and "field_at_" not in expression:
+        return False
+    type_text = getattr(binding, "type_str", None) if binding is not None else None
+    if not isinstance(type_text, str):
+        return True
+    return "*" not in type_text
+
+
 def _source_from_load(
     site: InstructionSite,
     *,
@@ -394,11 +411,20 @@ def _source_from_load(
             field_name=field_name,
             first_def=site,
         )
-    if direct is not None and direct.source_line is not None:
+    invalid_low_confidence_scalar_base = _is_low_confidence_scalar_field_base(
+        binding=base_binding,
+        base_confidence=base_confidence,
+        direct=direct,
+    )
+    if (
+        direct is not None
+        and direct.source_line is not None
+        and not invalid_low_confidence_scalar_base
+    ):
         return direct
 
     if field_context is None:
-        return direct
+        return None if invalid_low_confidence_scalar_base else direct
     base_source = None
     if resolve_virtual is not None:
         base_source = resolve_virtual(base_virtual)
@@ -446,7 +472,7 @@ def _source_from_load(
             field_name=resolved.field_name,
             first_def=site,
         )
-    return direct
+    return None if invalid_low_confidence_scalar_base else direct
 
 
 def _source_from_symbolic_global_load(
@@ -529,7 +555,7 @@ def _source_from_first_def(site: InstructionSite, *, source_file: str | None) ->
         kind = "copy/coalesce-product"
     elif opcode in _COMPARE_TEMP_OPS:
         kind = "compare-temp"
-    elif opcode.startswith(("lw", "lb", "lha", "lhz")):
+    elif opcode.startswith(("lw", "lb", "lha", "lhz", "lf")):
         match = _LOAD_ADDRESS_RE.match(site.operands)
         if match:
             base_virtual = int(match.group("base"))
@@ -805,10 +831,17 @@ def _source_for_virtual(
     binding_pass = passes[-1] if passes else None
     first_def = _find_first_def_site(virtual, pre_pass, reg_kind=reg_kind)
     if reg_kind == "r" and source_text and binding_pass is not None:
-        try:
-            binding = find_var_for_virtual(source_text, function, virtual, binding_pass)
-        except Exception:
-            binding = None
+        binding = bindings_by_virtual.get(virtual)
+        if binding is None:
+            try:
+                binding = find_var_for_virtual(
+                    source_text,
+                    function,
+                    virtual,
+                    binding_pass,
+                )
+            except Exception:
+                binding = None
     if (
         binding is not None
         and getattr(binding, "confidence", None) != "low-confidence"
@@ -1023,6 +1056,7 @@ def explain_virtuals(
     source_text: str | None = None,
     source_file: str | None = None,
     reg_class: str | None = "gpr",
+    enable_field_context: bool = True,
 ) -> VirtualAttributionReport:
     """Explain source provenance, pcdump live blocks, and pair interference."""
     requested: list[int] = []
@@ -1051,7 +1085,7 @@ def explain_virtuals(
             function=function,
             source_file=source_file,
         )
-        if source_text else None
+        if source_text and enable_field_context else None
     )
     source_cache: dict[tuple[str, int], SourceAttribution | None] = {}
     events = find_function(parse_hook_events(pcdump_text), function)

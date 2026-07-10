@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import textwrap
+from types import SimpleNamespace
 
 from src.mwcc_debug.source_spans import (
     find_call_argument_spans,
@@ -47,6 +48,39 @@ def test_list_statement_spans_records_reads_and_writes() -> None:
     call = next(s for s in spans if "Use(x)" in s.text)
     assert call.reads == ("Use", "x")
     assert call.writes == ()
+
+
+def test_list_statement_spans_reuses_function_scope_walk(monkeypatch) -> None:
+    src = textwrap.dedent("""\
+        void f(void)
+        {
+            int x;
+            int y;
+            x = y + 1;
+            Use(x);
+        }
+    """)
+    calls = 0
+
+    def fake_walk_function(source: str, fn_name: str, path=None):
+        nonlocal calls
+        calls += 1
+        return [
+            SimpleNamespace(
+                scope_path=(fn_name,),
+                scope_byte_range=(0, len(source.encode("utf-8"))),
+            )
+        ]
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.source_spans.ast_walker.walk_function",
+        fake_walk_function,
+    )
+
+    spans = list_statement_spans(src, "f")
+
+    assert len(spans) >= 4
+    assert calls == 1
 
 
 def test_find_repeated_call_groups_matches_same_call_shape() -> None:

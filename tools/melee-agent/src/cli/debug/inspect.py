@@ -506,6 +506,7 @@ __all__ = [
     'inspect_explain_diff',
     'inspect_explain_schedule',
     'inspect_explain_virtual',
+    'inspect_lifetime_pressure',
     'inspect_stack_homes',
     'inspect_tiebreak',
     'rank_callees',
@@ -791,8 +792,9 @@ def _load_checkdiff_normalized_structural_lines(melee_root: Path):
     global _CHECKDIFF_NORMALIZE_FN
     if _CHECKDIFF_NORMALIZE_FN is None:
         import importlib.util
+        from src.cli.debug import _checkdiff_script_path
 
-        path = melee_root / "tools" / "checkdiff.py"
+        path = _checkdiff_script_path(melee_root)
         spec = importlib.util.spec_from_file_location("checkdiff_inproc", path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -1258,10 +1260,13 @@ def _order_target_forced_dump(
         "--force-iter-first-class", str(class_id),
         "--force-iter-first-fn", function,
     ]
+    child_env = _env_with_current_melee_agent_package(
+        _checkdiff_env_for_locked_child(disable_fingerprint=False)
+    )
     proc = subprocess.run(
-        argv, cwd=melee_root / "tools" / "melee-agent",
+        argv, cwd=melee_root,
         capture_output=True, text=True, timeout=600,
-        env=os.environ.copy(),
+        env=child_env,
     )
     if proc.returncode != 0 or not out_path.exists():
         out_path.unlink(missing_ok=True)
@@ -1298,6 +1303,9 @@ def _collect_order_target_inputs(
     force_vector_timeout: float | None = None,
     retain_force_vector_pcdumps: bool = False,
     node_set_delta_fallback: bool = False,
+    checkdiff_payload: dict | None = None,
+    checkdiff_payload_path: Path | None = None,
+    baseline_pcdump: Path | None = None,
 ):
     """Collect the §4.2 tool outputs for order-target derivation.
 
@@ -1360,7 +1368,9 @@ def _collect_order_target_inputs(
     from src.search.directed.order_target import FORCE_CAP
 
     tu_c = melee_root / "src" / f"{unit}.c"
-    child_env = _checkdiff_env_for_locked_child(disable_fingerprint=False)
+    child_env = _env_with_current_melee_agent_package(
+        _checkdiff_env_for_locked_child(disable_fingerprint=False)
+    )
     retained_force_vector_dir = (
         melee_root
         / "build"
@@ -1369,25 +1379,45 @@ def _collect_order_target_inputs(
         / "force_vector"
     )
     fresh_natural_pcdump: str | None = None
+    baseline_pcdump_sha256 = ""
 
     with _acquire_checkdiff_repo_lock(melee_root, label="order-target derivation"):
-        # ---- Step 1: FRESH checkdiff (WITH build) --------------------------
-        proc = subprocess.run(
-            [sys.executable, str(_checkdiff_script_path(melee_root)),
-             function, "--format", "json"],
-            capture_output=True, text=True,
-            timeout=max(checkdiff_timeout, 600),  # the build dominates
-            cwd=melee_root, env=child_env,
-        )
-        # rc 0=match, 1=mismatch (both emit JSON); anything else, or an empty
-        # stdout (e.g. "ninja failed:" goes to stderr with rc=1), is a hard
-        # failure — surface it cleanly instead of a raw JSONDecodeError.
-        if proc.returncode not in (0, 1) or not (proc.stdout or "").strip():
-            raise RuntimeError(
-                f"checkdiff failed (rc={proc.returncode}): "
-                f"{(proc.stderr or proc.stdout or '')[-500:]}"
+        # ---- Step 1: checkdiff evidence ------------------------------------
+        if checkdiff_payload is None and checkdiff_payload_path is not None:
+            try:
+                checkdiff_payload = json.loads(
+                    checkdiff_payload_path.read_text(encoding="utf-8")
+                )
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"checkdiff JSON could not be parsed: {exc}"
+                ) from exc
+            except OSError as exc:
+                raise RuntimeError(
+                    f"checkdiff JSON could not be read: {exc}"
+                ) from exc
+        if checkdiff_payload is None:
+            proc = subprocess.run(
+                [sys.executable, str(_checkdiff_script_path(melee_root)),
+                 function, "--format", "json"],
+                capture_output=True, text=True,
+                timeout=max(checkdiff_timeout, 600),  # the build dominates
+                cwd=melee_root, env=child_env,
             )
-        checkdiff_payload = json.loads(proc.stdout)
+            # rc 0=match, 1=mismatch (both emit JSON); anything else, or an
+            # empty stdout (e.g. "ninja failed:" goes to stderr with rc=1), is a
+            # hard failure — surface it cleanly instead of a raw JSONDecodeError.
+            if proc.returncode not in (0, 1) or not (proc.stdout or "").strip():
+                raise RuntimeError(
+                    f"checkdiff failed (rc={proc.returncode}): "
+                    f"{(proc.stderr or proc.stdout or '')[-500:]}"
+                )
+            checkdiff_payload = json.loads(proc.stdout)
+        payload_function = checkdiff_payload.get("function")
+        if isinstance(payload_function, str) and payload_function != function:
+            raise RuntimeError(
+                f"checkdiff JSON is for {payload_function}, not {function}"
+            )
         classification = checkdiff_payload.get("classification") or {}
         checkdiff_primary = (
             classification.get("primary")
@@ -1438,7 +1468,7 @@ def _collect_order_target_inputs(
                 forced_decisions_sha256=[],
                 baseline_source_sha256=hashlib.sha256(
                     tu_c.read_bytes()).hexdigest()[:32],
-                baseline_pcdump_sha256="",
+                baseline_pcdump_sha256=baseline_pcdump_sha256,
                 force_cap_exceeded=False,
                 direct_evidence_register_only=direct_evidence_register_only,
                 coupled_residual=None,
@@ -1454,48 +1484,63 @@ def _collect_order_target_inputs(
             # solve loop turns the empty phys_target into the exit-3 abstain.
             return _inert()
 
-        # ---- FRESH baseline pcdump (explicit temp path, never the cache) ---
-        baseline_dump = (
-            tu_c.parent
-            / f".{function}.order-target.baseline.{os.getpid()}.pcdump.txt"
-        )
-        proc = subprocess.run(
-            [sys.executable, "-m", "src.cli", "debug", "dump", "local",
-             str(tu_c), "--function", function,
-             "--output", str(baseline_dump), "--no-cache-sync"],
-            cwd=melee_root / "tools" / "melee-agent",
-            capture_output=True, text=True, timeout=600, env=child_env,
-        )
-        if proc.returncode != 0 or not baseline_dump.exists():
-            baseline_dump.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"baseline dump failed (rc={proc.returncode}): "
-                f"{(proc.stderr or proc.stdout or '')[-500:]}"
-            )
-        pcdump_text = baseline_dump.read_text(encoding="utf-8")
-        retained_natural_pcdump: Path | None = None
-        if retain_force_vector_pcdumps:
-            retained_force_vector_dir.mkdir(parents=True, exist_ok=True)
-            retained_natural_pcdump = (
-                retained_force_vector_dir / baseline_dump.name.lstrip(".")
-            )
+        # ---- Baseline pcdump ----------------------------------------------
+        # Default contract remains fresh: compile the current TU to an explicit
+        # temp pcdump. Explicit evidence mode is opt-in: callers that already
+        # have a current pcdump and checkdiff JSON can pass both to avoid the
+        # unsafe local-wibo lane and derive a read-only target.
+        retained_natural_pcdump: Path | None = baseline_pcdump
+        if baseline_pcdump is not None:
             try:
-                shutil.move(str(baseline_dump), str(retained_natural_pcdump))
-            except OSError:
-                retained_natural_pcdump = baseline_dump
+                pcdump_text = baseline_pcdump.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise RuntimeError(
+                    f"baseline pcdump could not be read: {exc}"
+                ) from exc
         else:
-            baseline_dump.unlink(missing_ok=True)
+            baseline_dump = (
+                tu_c.parent
+                / f".{function}.order-target.baseline.{os.getpid()}.pcdump.txt"
+            )
+            proc = subprocess.run(
+                [sys.executable, "-m", "src.cli", "debug", "dump", "local",
+                 str(tu_c), "--function", function,
+                 "--output", str(baseline_dump), "--no-cache-sync"],
+                cwd=melee_root,
+                capture_output=True, text=True, timeout=600, env=child_env,
+            )
+            if proc.returncode != 0 or not baseline_dump.exists():
+                baseline_dump.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"baseline dump failed (rc={proc.returncode}): "
+                    f"{(proc.stderr or proc.stdout or '')[-500:]}"
+                )
+            pcdump_text = baseline_dump.read_text(encoding="utf-8")
+            if retain_force_vector_pcdumps:
+                retained_force_vector_dir.mkdir(parents=True, exist_ok=True)
+                retained_natural_pcdump = (
+                    retained_force_vector_dir / baseline_dump.name.lstrip(".")
+                )
+                try:
+                    shutil.move(str(baseline_dump), str(retained_natural_pcdump))
+                except OSError:
+                    retained_natural_pcdump = baseline_dump
+            else:
+                baseline_dump.unlink(missing_ok=True)
         fresh_natural_pcdump = (
             str(retained_natural_pcdump)
             if retained_natural_pcdump is not None
             else None
         )
+        baseline_pcdump_sha256 = hashlib.sha256(
+            pcdump_text.encode()
+        ).hexdigest()[:32]
 
-        # ---- Step 2: phys target + conflicts (from the FRESH artifacts) ----
+        # ---- Step 2: phys target + conflicts (from baseline artifacts) -----
         fns = parse_pcdump(pcdump_text)
         fn = next((f for f in fns if f.name == function), None)
         if fn is None:
-            raise RuntimeError(f"{function} not found in fresh baseline pcdump")
+            raise RuntimeError(f"{function} not found in baseline pcdump")
         pre_pass = fn.last_precolor_pass()
         events_fn = find_function(parse_hook_events(pcdump_text), function)
         vector = _derive_force_phys_from_register_diff_lines(
@@ -1660,8 +1705,7 @@ def _collect_order_target_inputs(
             forced_decisions_sha256=[sha1, sha2],
             baseline_source_sha256=hashlib.sha256(
                 tu_c.read_bytes()).hexdigest()[:32],
-            baseline_pcdump_sha256=hashlib.sha256(
-                pcdump_text.encode()).hexdigest()[:32],
+            baseline_pcdump_sha256=baseline_pcdump_sha256,
             force_cap_exceeded=False,
             direct_evidence_register_only=direct_evidence_register_only,
             natural_pcdump=fresh_natural_pcdump,
@@ -2265,6 +2309,208 @@ def first_divergence_cmd(
         print(json.dumps(fd.report_to_dict(report), indent=2))
     else:
         typer.echo(fd.format_report(report))
+
+
+@inspect_app.command("lifetime-pressure")
+def inspect_lifetime_pressure(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function name to inspect."),
+    ],
+    pcdump: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--pcdump",
+            help=(
+                "Baseline pcdump. Auto-resolves from cache when omitted "
+                "unless --backend-trace is used."
+            ),
+        ),
+    ] = None,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            help="Source file for source attribution and validation commands.",
+        ),
+    ] = None,
+    force_phys: Annotated[
+        Optional[str],
+        typer.Option(
+            "--force-phys",
+            help="Target coloring as ig:phys[,ig:phys] or class:ig:phys entries.",
+        ),
+    ] = None,
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target",
+            help="JSON target file consumed by the pressure explorer.",
+        ),
+    ] = None,
+    candidates: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--candidate",
+            help="Candidate to compare or validate, repeatable. Format LABEL=PATH.",
+        ),
+    ] = None,
+    backend_trace: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--backend-trace",
+            help="Allocator backend trace JSON. Skips pcdump auto-resolution.",
+        ),
+    ] = None,
+    class_id: Annotated[
+        int,
+        typer.Option("--class", help="Default register class for --force-phys."),
+    ] = 0,
+    allow_stale_pcdump: Annotated[
+        bool,
+        typer.Option(
+            "--allow-stale-pcdump",
+            help="Allow stale pcdump/source freshness when ranking hypotheses.",
+        ),
+    ] = False,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit structured JSON instead of text."),
+    ] = False,
+    dot: Annotated[
+        Optional[Path],
+        typer.Option("--dot", help="Write Graphviz DOT blocker graph to PATH."),
+    ] = None,
+    blocker_table: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--blocker-table",
+            help="Write blocker table to PATH. Uses JSON for .json, CSV otherwise.",
+        ),
+    ] = None,
+    validate: Annotated[
+        str,
+        typer.Option(
+            "--validate",
+            help="Validation mode: none, quick, bounded, or remote.",
+        ),
+    ] = "none",
+    timeout: Annotated[
+        int,
+        typer.Option("--timeout", help="Validation subprocess timeout in seconds."),
+    ] = 120,
+    max_candidates: Annotated[
+        int,
+        typer.Option(
+            "--max-candidates",
+            help="Maximum bounded-validation candidates to try.",
+        ),
+    ] = 100,
+):
+    """Explain register-allocation lifetime pressure blockers and validation."""
+    from src.cli.debug import (  # noqa: PLC0415
+        DEFAULT_MELEE_ROOT,
+        _resolve_pcdump_path,
+        _source_path_for_function,
+    )
+    from src.mwcc_debug.pressure_explorer import (  # noqa: PLC0415
+        build_lifetime_pressure_report,
+        render_blocker_table_csv,
+        render_blocker_table_json,
+        render_dot,
+        render_json_report,
+        render_text_report,
+    )
+
+    validate_modes = {"none", "quick", "bounded", "remote"}
+    if validate not in validate_modes:
+        raise typer.BadParameter(
+            f"--validate must be one of {', '.join(sorted(validate_modes))}"
+        )
+
+    if backend_trace is not None:
+        try:
+            with backend_trace.open("r", encoding="utf-8"):
+                pass
+        except OSError:
+            typer.echo(
+                f"backend trace not found or unreadable: {backend_trace}",
+                err=True,
+            )
+            raise typer.Exit(2)
+
+    pcdump_path = pcdump
+    pcdump_text: str | None = None
+    if backend_trace is None:
+        pcdump_path = _resolve_pcdump_path(pcdump, function, DEFAULT_MELEE_ROOT)
+        pcdump_text = pcdump_path.read_text(encoding="utf-8", errors="replace")
+
+    warnings: list[str] = []
+    resolved_source = source_file
+    if resolved_source is None:
+        try:
+            resolved_source = _source_path_for_function(function, DEFAULT_MELEE_ROOT)
+        except Exception as exc:
+            warnings.append(f"source file auto-resolution failed: {exc}")
+            resolved_source = None
+
+    source_text: str | None = None
+    if resolved_source is None:
+        warnings.append("source file could not be resolved")
+    elif resolved_source.exists():
+        source_text = resolved_source.read_text(encoding="utf-8", errors="replace")
+    else:
+        warnings.append(f"source file not found: {resolved_source}")
+
+    try:
+        report = build_lifetime_pressure_report(
+            function=function,
+            pcdump_text=pcdump_text,
+            pcdump_path=pcdump_path,
+            source_text=source_text,
+            source_path=resolved_source,
+            force_phys=force_phys,
+            target_path=target,
+            candidates=list(candidates or []),
+            backend_trace_path=backend_trace,
+            class_id=class_id,
+            allow_stale_pcdump=allow_stale_pcdump,
+            validate_mode=validate,
+            timeout=timeout,
+            max_candidates=max_candidates,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+
+    if warnings:
+        report = dataclasses.replace(report, warnings=(*report.warnings, *warnings))
+
+    if dot is not None:
+        _write_text_creating_parent(dot, render_dot(report))
+    if blocker_table is not None:
+        if blocker_table.suffix.lower() == ".json":
+            _write_text_creating_parent(
+                blocker_table,
+                json.dumps(render_blocker_table_json(report), indent=2) + "\n",
+            )
+        else:
+            _write_text_creating_parent(
+                blocker_table,
+                render_blocker_table_csv(report),
+            )
+
+    if json_out:
+        print(json.dumps(render_json_report(report), indent=2))
+    else:
+        print(render_text_report(report), end="")
+
+
+def _write_text_creating_parent(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
 def _first_divergence_frame_case(report: dict) -> str:
     if report.get("expected") is None:
         return "frame-current-only"
@@ -8870,6 +9116,8 @@ def _run_checkdiff_json(
     timeout: float | None = None,
     no_build: bool = True,
     label: str = "checkdiff",
+    locked_child: bool = False,
+    disable_fingerprint: bool = False,
 ) -> tuple[dict | None, str | None]:
     cmd = [
         sys.executable,
@@ -8880,6 +9128,14 @@ def _run_checkdiff_json(
     ]
     if no_build:
         cmd.append("--no-build")
+    env = None
+    if locked_child:
+        env = _checkdiff_env_for_locked_child(
+            disable_fingerprint=disable_fingerprint
+        )
+    elif disable_fingerprint:
+        from src.cli.debug import _checkdiff_env_without_fingerprint
+        env = _checkdiff_env_without_fingerprint()
     try:
         proc = subprocess.run(
             cmd,
@@ -8887,6 +9143,7 @@ def _run_checkdiff_json(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return None, f"{label} timed out"
@@ -10638,6 +10895,20 @@ def _select_order_owner_split_candidates(
         if isinstance(raw_probe, Mapping):
             candidates.append(raw_probe)
     return candidates
+
+
+def _select_order_expression_is_cast_of(
+    expression: str,
+    owner_local: str,
+) -> bool:
+    text = expression.strip()
+    owner = owner_local.strip()
+    if not owner:
+        return False
+    match = re.fullmatch(r"\([^()]+\)\s*(?P<owner>[A-Za-z_][A-Za-z_0-9]*)", text)
+    return bool(match and match.group("owner") == owner)
+
+
 def _select_order_owner_split_safe_source(
     causal_target: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -10647,6 +10918,7 @@ def _select_order_owner_split_safe_source(
     if causal_target.get("source_actionable") is not True or not labels:
         return None
     for candidate in _select_order_owner_split_candidates(causal_target):
+        owner_local = candidate.get("owner_local")
         expression = None
         for key in (
             "safe_source_expression",
@@ -10661,6 +10933,13 @@ def _select_order_owner_split_safe_source(
                 and _select_order_expression_safe_to_bind(value)
             ):
                 expression = value.strip()
+                if (
+                    key == "split_expression"
+                    and isinstance(owner_local, str)
+                    and _select_order_expression_is_cast_of(expression, owner_local)
+                    and _select_order_expression_safe_to_bind(owner_local)
+                ):
+                    expression = owner_local.strip()
                 break
         if expression is None:
             value = candidate.get("expression")
@@ -13887,6 +14166,9 @@ def _select_order_terminal_owner_probe_summary(
         "field_load_source_candidates": 0,
         "materialized_field_load_source_candidates": 0,
         "field_load_terminal_blockers": [],
+        "param_alias_source_candidates": 0,
+        "materialized_param_alias_source_candidates": 0,
+        "param_alias_terminal_blockers": [],
         "reasons": {},
     }
 
@@ -13963,16 +14245,42 @@ def _select_order_terminal_owner_probe_summary(
             and terminal_blocker.startswith("field-load-")
         ):
             summary["field_load_terminal_blockers"].append(terminal_blocker)
+        raw_param_alias = diag.get("param_alias_source_candidates")
+        if isinstance(raw_param_alias, list):
+            summary["param_alias_source_candidates"] += len([
+                item for item in raw_param_alias if isinstance(item, Mapping)
+            ])
+        materialized_param_alias = diag.get(
+            "materialized_param_alias_source_candidates"
+        )
+        if isinstance(materialized_param_alias, list):
+            materialized_count = len([
+                item for item in materialized_param_alias
+                if isinstance(item, Mapping)
+            ])
+            summary[
+                "materialized_param_alias_source_candidates"
+            ] += materialized_count
+            if not isinstance(raw_param_alias, list):
+                summary["param_alias_source_candidates"] += materialized_count
+        add_reasons(diag.get("param_alias_materialization_summary"))
+        if isinstance(terminal_blocker, str) and terminal_blocker.startswith("param-"):
+            summary["param_alias_terminal_blockers"].append(terminal_blocker)
 
     if summary["field_load_terminal_blockers"]:
         summary["field_load_terminal_blockers"] = sorted(
             set(summary["field_load_terminal_blockers"])
+        )
+    if summary["param_alias_terminal_blockers"]:
+        summary["param_alias_terminal_blockers"] = sorted(
+            set(summary["param_alias_terminal_blockers"])
         )
 
     ranked_total = (
         int(summary["ranked_local_candidates"])
         + int(summary["ranked_indexed_byte_candidates"])
         + int(summary["field_load_source_candidates"])
+        + int(summary["param_alias_source_candidates"])
     )
     if ranked_total <= 0:
         return None
@@ -13980,6 +14288,7 @@ def _select_order_terminal_owner_probe_summary(
         int(summary["materialized_local_candidates"])
         + int(summary["materialized_indexed_byte_candidates"])
         + int(summary["materialized_field_load_source_candidates"])
+        + int(summary["materialized_param_alias_source_candidates"])
     )
     summary["ranked_candidates"] = ranked_total
     summary["materialized_candidates"] = materialized_total
@@ -13988,9 +14297,12 @@ def _select_order_terminal_owner_probe_summary(
     )
     if materialized_total == 0:
         field_load_blockers = summary["field_load_terminal_blockers"]
+        param_alias_blockers = summary["param_alias_terminal_blockers"]
         summary["terminal_blocker"] = (
             field_load_blockers[0]
             if field_load_blockers
+            else param_alias_blockers[0]
+            if param_alias_blockers
             else "ranked-owner-candidates-not-materializable"
         )
     return summary

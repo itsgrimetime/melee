@@ -73,6 +73,63 @@ def test_opseq_alias_forwards_to_table_typer(monkeypatch, tmp_path):
     ]
 
 
+def test_opseq_like_uses_shared_helper_in_pr_worktree(monkeypatch, tmp_path):
+    """`--like` must not regress when a PR worktree has an older helper."""
+    worktree = tmp_path / "pr-worktree"
+    (worktree / "config" / "GALE01").mkdir(parents=True)
+    shared_helper = tmp_path / "shared" / "tools" / "table-typer" / "table-typer"
+    shared_helper.parent.mkdir(parents=True)
+    shared_helper.touch()
+    events = []
+
+    class FakeLock:
+        def __enter__(self):
+            events.append("lock-enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("lock-exit")
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        events.append(("run", cmd, cwd, timeout, env))
+        return subprocess.CompletedProcess(cmd, 0, "derived pattern\n", "")
+
+    class FakeDistribution:
+        def read_text(self, name):
+            assert name == "direct_url.json"
+            agent_dir = shared_helper.parents[1] / "melee-agent"
+            return '{"url": "file://' + str(agent_dir) + '"}'
+
+    monkeypatch.setattr(cli, "DEFAULT_MELEE_ROOT", worktree)
+    monkeypatch.setattr(cli.metadata, "distribution", lambda name: FakeDistribution())
+    monkeypatch.setattr(cli, "_acquire_checkdiff_repo_lock", lambda *args, **kwargs: FakeLock())
+    monkeypatch.setattr(cli, "_run_with_process_group_timeout", fake_run)
+
+    result = runner.invoke(app, ["opseq", "--like", "fn_80000000:12-24"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "derived pattern\n"
+    assert events == [
+        "lock-enter",
+        (
+            "run",
+            [str(shared_helper), "opseq", "--like", "fn_80000000:12-24"],
+            worktree,
+            120,
+            None,
+        ),
+        "lock-exit",
+    ]
+
+
+def test_opseq_help_describes_derived_like_search():
+    result = runner.invoke(app, ["opseq", "--help"])
+
+    assert result.exit_code == 0
+    help_text = strip_ansi(result.stdout)
+    assert "--like" in help_text
+    assert "--with-operands" in help_text
+
+
 def test_opseq_alias_reports_bootstrap_command_when_sources_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "DEFAULT_MELEE_ROOT", tmp_path)
 

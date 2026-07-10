@@ -785,7 +785,7 @@ def scratch_recover_best(
     show_diff: Annotated[bool, typer.Option("--diff/--no-diff", help="Print retained compact diff after source")] = True,
 ) -> None:
     """Recover the best retained high-water source snapshot for a function."""
-    from .tracking import best_recoverable_attempt
+    from ..tracking import best_recoverable_attempt
 
     attempt = best_recoverable_attempt(function_name)
     if attempt is None:

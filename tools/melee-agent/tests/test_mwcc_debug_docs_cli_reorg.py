@@ -98,6 +98,7 @@ EXPECTED_FORMS = [
     "melee-agent debug dump restore-object-report",
     "melee-agent debug inspect guide",
     "melee-agent debug inspect analyze",
+    "melee-agent debug inspect lifetime-pressure",
     "melee-agent debug target derive",
     "melee-agent debug target score-dump",
     "melee-agent debug target score-source",

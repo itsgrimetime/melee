@@ -83,3 +83,40 @@ def test_simplify_retained_probe_interrupt_preserves_partial_records(
     assert len(excinfo.value.records) == 1
     assert excinfo.value.records[0]["provenance"] == "first-probe"
     assert excinfo.value.records[0]["source_retained"]
+
+
+def test_simplify_retained_probe_records_reports_progress(tmp_path) -> None:
+    result = SimpleNamespace(
+        scored_candidates=[
+            _scored_candidate(
+                provenance="first-probe",
+                text="void fn_test(void) {\n}\n",
+            ),
+            _scored_candidate(
+                provenance="second-probe",
+                text="void fn_test(void) {\n    int x;\n}\n",
+            ),
+        ],
+    )
+    progress: list[tuple[int, int, str]] = []
+
+    debug_mod._simplify_retained_probe_records(
+        result=result,
+        function="fn_test",
+        force_phys_target={},
+        retain_probes=tmp_path / "probes",
+        melee_root=tmp_path,
+        retain_count=2,
+        checkdiff_guard=False,
+        timeout=1,
+        progress_callback=lambda rank, total, provenance: progress.append((
+            rank,
+            total,
+            provenance,
+        )),
+    )
+
+    assert progress == [
+        (1, 2, "first-probe"),
+        (2, 2, "second-probe"),
+    ]

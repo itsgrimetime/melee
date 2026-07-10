@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -3790,6 +3792,29 @@ def test_solve_coloring_allows_force_vector_probe_opt_in_and_timeout(monkeypatch
     assert seen["force_vector_timeout"] == 45.0
 
 
+def test_solve_coloring_passes_checkdiff_json(monkeypatch, tmp_path):
+    seen = {}
+    checkdiff_json = tmp_path / "checkdiff.json"
+    checkdiff_json.write_text("{}", encoding="utf-8")
+    pcdump = tmp_path / "current.pcdump.txt"
+    pcdump.write_text("pcdump", encoding="utf-8")
+
+    def fake(**kw):
+        seen.update(kw)
+        return SolveResult(exit_code=4, reason="x", worksheet=_ws())
+
+    monkeypatch.setattr(debugcli, "_run_solve_coloring", fake)
+    result = runner.invoke(debugcli.debug_app, [
+        "solve", "coloring", "-f", "f",
+        "--pcdump", str(pcdump),
+        "--checkdiff-json", str(checkdiff_json),
+    ])
+
+    assert result.exit_code == 4
+    assert seen["pcdump"] == pcdump
+    assert seen["checkdiff_json"] == checkdiff_json
+
+
 def test_solve_coloring_fpr_order_emits_window_order_fallback(monkeypatch):
     seen = {}
     ws = _ws()
@@ -3879,6 +3904,208 @@ def test_collect_order_target_inputs_uses_package_checkdiff_for_worktree(
     argv, kwargs = calls[0]
     assert argv[1] == str(package_checkdiff)
     assert kwargs["cwd"] == worktree
+
+
+def test_load_checkdiff_normalizer_uses_package_tooling_for_raw_worktree(
+    monkeypatch,
+    tmp_path,
+):
+    import src.cli.debug.inspect as inspect_cli
+
+    package_root = tmp_path / "package"
+    worktree = tmp_path / "worktree"
+    package_checkdiff = package_root / "tools" / "checkdiff.py"
+    package_checkdiff.parent.mkdir(parents=True)
+    package_checkdiff.write_text(
+        "def normalized_structural_lines(lines):\n"
+        "    return ['package-normalized', *lines]\n",
+        encoding="utf-8",
+    )
+    (worktree / "src" / "melee").mkdir(parents=True)
+
+    monkeypatch.setattr(debugcli, "_package_melee_root", lambda: package_root)
+    monkeypatch.setattr(inspect_cli, "_CHECKDIFF_NORMALIZE_FN", None)
+
+    normalize = debugcli._load_checkdiff_normalized_structural_lines(worktree)
+
+    assert normalize(["line"]) == ["package-normalized", "line"]
+
+
+def test_collect_order_target_inputs_runs_baseline_child_from_raw_worktree(
+    monkeypatch,
+    tmp_path,
+):
+    package_root = tmp_path / "package"
+    worktree = tmp_path / "worktree"
+    source = worktree / "src" / "melee" / "mn" / "mndiagram.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void f(void) {}\n", encoding="utf-8")
+    calls = []
+
+    class ReachedBaselineParse(Exception):
+        pass
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "checkdiff.py" in str(argv[1]):
+            return SimpleNamespace(
+                returncode=1,
+                stdout=json.dumps({
+                    "classification": {"primary": "backend-ceiling"},
+                    "target_asm": [],
+                    "current_asm": [],
+                }),
+                stderr="",
+            )
+        output = Path(argv[argv.index("--output") + 1])
+        output.write_text("Starting function f\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(debugcli, "_package_melee_root", lambda: package_root)
+    monkeypatch.setattr(debugcli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        debugcli,
+        "parse_pcdump",
+        lambda _text: (_ for _ in ()).throw(ReachedBaselineParse()),
+    )
+
+    with pytest.raises(ReachedBaselineParse):
+        debugcli._collect_order_target_inputs(
+            function="f",
+            unit="melee/mn/mndiagram",
+            class_id=0,
+            melee_root=worktree,
+            checkdiff_timeout=1.0,
+        )
+
+    baseline_argv, baseline_kwargs = calls[1]
+    assert baseline_argv[:6] == [
+        sys.executable,
+        "-m",
+        "src.cli",
+        "debug",
+        "dump",
+        "local",
+    ]
+    assert baseline_kwargs["cwd"] == worktree
+    assert baseline_kwargs["env"]["CHECKDIFF_NO_LOCK"] == "1"
+    assert baseline_kwargs["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(
+        package_root / "tools" / "melee-agent"
+    )
+
+
+def test_collect_order_target_inputs_uses_explicit_evidence_without_fresh_dump(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "src" / "melee" / "mn" / "demo.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void f(void) {}\n", encoding="utf-8")
+    asm = tmp_path / "build" / "GALE01" / "asm" / "melee" / "mn" / "demo.s"
+    asm.parent.mkdir(parents=True)
+    asm.write_text("f:\n", encoding="utf-8")
+    pcdump = tmp_path / "current.pcdump.txt"
+    pcdump.write_text("pcdump", encoding="utf-8")
+    checkdiff_payload = {
+        "classification": {"primary": "register-allocation"},
+        "target_asm": ["target"],
+        "current_asm": ["current"],
+    }
+    fn = SimpleNamespace(name="f", last_precolor_pass=lambda: SimpleNamespace())
+
+    def fail_run(argv, **kwargs):
+        raise AssertionError(f"unexpected subprocess run: {argv}")
+
+    monkeypatch.setattr(debugcli.subprocess, "run", fail_run)
+    monkeypatch.setattr(debugcli, "parse_pcdump", lambda text: [fn])
+    monkeypatch.setattr(debugcli, "parse_hook_events", lambda text: [])
+    monkeypatch.setattr(debugcli, "find_function", lambda events, function: None)
+    monkeypatch.setattr(
+        debugcli,
+        "_derive_force_phys_from_register_diff_lines",
+        lambda target_asm, current_asm, pre_pass, events_fn: {
+            "targets": [{
+                "class_id": 1,
+                "ig_idx": 36,
+                "target_reg": 31,
+                "target_reg_name": "f31",
+                "already_target": False,
+                "force_vector_runnable": True,
+            }],
+            "conflicts": [],
+        },
+    )
+    monkeypatch.setattr(
+        debugcli,
+        "asm_extract_function",
+        lambda text, function: SimpleNamespace(instructions=[]),
+    )
+    monkeypatch.setattr(debugcli, "asm_parse_prologue_end", lambda instructions: 0)
+    monkeypatch.setattr(debugcli, "asm_find_first_def", lambda *args, **kwargs: None)
+
+    result = debugcli._collect_order_target_inputs(
+        function="f",
+        unit="melee/mn/demo",
+        class_id=1,
+        melee_root=tmp_path,
+        checkdiff_timeout=1.0,
+        register_only_gate=lambda *_args: {"admitted": True},
+        checkdiff_payload=checkdiff_payload,
+        baseline_pcdump=pcdump,
+    )
+
+    assert result.checkdiff_primary == "register-allocation"
+    assert result.phys_target == {36: 31}
+    assert result.force_iter_first == []
+    assert result.forced_class_clean is False
+    assert result.natural_pcdump == str(pcdump)
+    assert result.baseline_pcdump_sha256
+
+
+def test_order_target_forced_dump_runs_child_from_raw_worktree(
+    monkeypatch,
+    tmp_path,
+):
+    package_root = tmp_path / "package"
+    worktree = tmp_path / "worktree"
+    source = worktree / "src" / "melee" / "mn" / "mndiagram.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void f(void) {}\n", encoding="utf-8")
+    captured = {}
+
+    class ReachedForcedDump(Exception):
+        pass
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        raise ReachedForcedDump
+
+    monkeypatch.setattr(debugcli, "_package_melee_root", lambda: package_root)
+    monkeypatch.setattr(debugcli.subprocess, "run", fake_run)
+
+    with pytest.raises(ReachedForcedDump):
+        debugcli._order_target_forced_dump(
+            tu_c=source,
+            function="f",
+            class_id=0,
+            force_iter_first=[42],
+            melee_root=worktree,
+        )
+
+    assert captured["argv"][:6] == [
+        sys.executable,
+        "-m",
+        "src.cli",
+        "debug",
+        "dump",
+        "local",
+    ]
+    assert captured["kwargs"]["cwd"] == worktree
+    assert captured["kwargs"]["env"]["CHECKDIFF_NO_LOCK"] == "1"
+    assert captured["kwargs"]["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(
+        package_root / "tools" / "melee-agent"
+    )
 
 
 def test_package_melee_root_resolves_repo_root():

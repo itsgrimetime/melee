@@ -24,6 +24,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from enum import Enum
@@ -121,6 +122,100 @@ def _compute_melee_root() -> Path:
         if _looks_like_melee_root(candidate):
             return candidate
     return DEFAULT_MELEE_ROOT
+
+
+_CONTROL_FLOW_INCLUDE_RE = re.compile(
+    r"^\s*#\s*include\s+[<\"](?P<path>[^>\"]+)[>\"]",
+    re.MULTILINE,
+)
+
+
+def _control_flow_prototype_context(
+    source_path: Path,
+    melee_root: Path,
+    *,
+    source_text: str | None = None,
+    max_depth: int = 2,
+    max_headers: int = 64,
+    max_bytes: int = 2_000_000,
+) -> str:
+    """Return source plus bounded local include text for prototype discovery."""
+    root = melee_root.resolve()
+    source_path = source_path.resolve()
+    try:
+        source = (
+            source_text
+            if source_text is not None
+            else source_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except OSError:
+        return source_text or ""
+
+    chunks = [source]
+    queue: list[tuple[Path, str, int]] = [(source_path, source, 0)]
+    seen = {source_path}
+    header_count = 0
+    total_bytes = len(source.encode("utf-8", errors="replace"))
+
+    while queue and header_count < max_headers and total_bytes < max_bytes:
+        current_path, text, depth = queue.pop(0)
+        if depth >= max_depth:
+            continue
+        for match in _CONTROL_FLOW_INCLUDE_RE.finditer(text):
+            include_path = _resolve_control_flow_include(
+                match.group("path"),
+                including_path=current_path,
+                melee_root=root,
+            )
+            if include_path is None or include_path in seen:
+                continue
+            try:
+                include_text = include_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except OSError:
+                continue
+            include_bytes = len(include_text.encode("utf-8", errors="replace"))
+            if total_bytes + include_bytes > max_bytes:
+                continue
+            seen.add(include_path)
+            header_count += 1
+            total_bytes += include_bytes
+            rel = _repo_relative_for_control_flow_context(include_path, root)
+            chunks.append(
+                f"\n/* control-flow prototype context: {rel} */\n{include_text}"
+            )
+            queue.append((include_path, include_text, depth + 1))
+            if header_count >= max_headers or total_bytes >= max_bytes:
+                break
+    return "\n".join(chunks)
+
+
+def _resolve_control_flow_include(
+    include: str,
+    *,
+    including_path: Path,
+    melee_root: Path,
+) -> Path | None:
+    roots = (
+        including_path.parent,
+        melee_root / "src",
+        melee_root / "src" / "sysdolphin",
+        melee_root / "include",
+    )
+    for root in roots:
+        candidate = (root / include).resolve()
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _repo_relative_for_control_flow_context(path: Path, melee_root: Path) -> str:
+    try:
+        return str(path.relative_to(melee_root))
+    except ValueError:
+        return str(path)
 
 
 
@@ -298,6 +393,7 @@ def _checkdiff_env_without_fingerprint() -> dict[str, str]:
     return env
 
 
+_CHECKDIFF_REPO_LOCK_STATE = threading.local()
 
 
 @contextmanager
@@ -318,9 +414,24 @@ def _acquire_checkdiff_repo_lock(
         yield
         return
 
+    root_key = str(melee_root.resolve())
+    depths = getattr(_CHECKDIFF_REPO_LOCK_STATE, "depths", None)
+    if depths is None:
+        depths = {}
+        _CHECKDIFF_REPO_LOCK_STATE.depths = depths
+    if depths.get(root_key, 0):
+        depths[root_key] += 1
+        try:
+            yield
+        finally:
+            depths[root_key] -= 1
+            if depths[root_key] == 0:
+                del depths[root_key]
+        return
+
     lock_dir = Path(tempfile.gettempdir()) / "melee-checkdiff-locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha1(str(melee_root.resolve()).encode()).hexdigest()[:12]
+    digest = hashlib.sha1(root_key.encode()).hexdigest()[:12]
     lock_path = lock_dir / f"repo.{digest}.lock"
     lock_file = lock_path.open("w")
     try:
@@ -347,7 +458,13 @@ def _acquire_checkdiff_repo_lock(
                     continue
             elapsed = time.monotonic() - start
             print(f"acquired {label} lock after {elapsed:.1f}s", file=sys.stderr)
-        yield
+        depths[root_key] = 1
+        try:
+            yield
+        finally:
+            depths[root_key] -= 1
+            if depths[root_key] == 0:
+                del depths[root_key]
     finally:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
@@ -372,6 +489,7 @@ from src.cli.debug.suggest import suggest_app as _suggest_app  # noqa: E402
 from src.cli.debug.suggest import *  # noqa: E402,F401,F403
 from src.cli.debug.permute import permute_app as _permute_app  # noqa: E402
 from src.cli.debug.permute import *  # noqa: E402,F401,F403
+from src.cli.debug.artifacts import artifacts_app as _artifacts_app  # noqa: E402
 from src.cli.debug.dump import dump_app as _dump_app  # noqa: E402
 from src.cli.debug.solve import solve_app as _solve_app  # noqa: E402
 from src.cli.debug.util import util_app as _util_app  # noqa: E402
@@ -397,6 +515,7 @@ debug_app.add_typer(_mutate_app, name="mutate")
 from src.cli.debug.mutate import *  # noqa: E402,F401,F403
 debug_app.add_typer(_intervene_app, name="intervene")
 debug_app.add_typer(_permute_app, name="permute")
+debug_app.add_typer(_artifacts_app, name="artifacts")
 debug_app.add_typer(_util_app, name="util")
 debug_app.add_typer(_solve_app, name="solve")
 debug_app.add_typer(measure_app, name="measure")
@@ -1950,11 +2069,17 @@ def _score_source_candidate_real_tree(
                         structural_guard_error = deadline_error
                     stack_timeout = 0.0
                 else:
+                    # Full-unit retained probes replace the real TU source.
+                    # Re-run checkdiff's build step while the candidate is
+                    # applied so the guard cannot accept a stale pre-probe
+                    # object from a prior no-build state.
                     checkdiff_payload, checkdiff_error = _run_checkdiff_json(
                         function,
                         melee_root=melee_root,
                         timeout=stack_timeout,
-                        no_build=True,
+                        no_build=not full_unit_source,
+                        locked_child=True,
+                        disable_fingerprint=full_unit_source,
                         label=(
                             "checkdiff structural guard"
                             if include_structural_guard
@@ -3621,6 +3746,25 @@ def _select_order_source_bridge_summary(
                     action["field_load_materialization_summary"] = dict(
                         field_load_summary
                     )
+                param_alias = probe_diag.get("param_alias_source_candidate")
+                if isinstance(param_alias, Mapping):
+                    action["param_alias_source_candidate"] = dict(param_alias)
+                param_alias_candidates = probe_diag.get(
+                    "materialized_param_alias_source_candidates"
+                )
+                if isinstance(param_alias_candidates, list):
+                    action["materialized_param_alias_source_candidates"] = [
+                        dict(item)
+                        for item in param_alias_candidates
+                        if isinstance(item, Mapping)
+                    ]
+                param_alias_summary = probe_diag.get(
+                    "param_alias_materialization_summary"
+                )
+                if isinstance(param_alias_summary, Mapping):
+                    action["param_alias_materialization_summary"] = dict(
+                        param_alias_summary
+                    )
                 source_hunks = probe_diag.get("source_hunks")
                 if isinstance(source_hunks, list):
                     action["source_hunks"] = [
@@ -3781,6 +3925,11 @@ def _select_order_terminal_exhaustion_summary(
     best_retained = _select_order_terminal_summary_best_retained_variants(
         ranked_variants
     )
+    source_family_exhaustion = _select_order_param_alias_exhaustion_proof(
+        ranked_variants=ranked_variants,
+        force_phys=targets,
+        source_bridge_summary=source_bridge_summary,
+    )
     target_score = next(
         (
             candidate.get("target_score")
@@ -3815,7 +3964,137 @@ def _select_order_terminal_exhaustion_summary(
     }
     if isinstance(target_score, Mapping):
         summary["target_score"] = dict(target_score)
+    if source_family_exhaustion is not None:
+        summary["source_candidate_family_exhaustion"] = source_family_exhaustion
+        summary["terminal_blocker"] = "param-alias-source-family-exhausted"
     return summary
+
+
+def _select_order_probe_source_hunks_from_variant(
+    variant: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    raw_hunks = variant.get("source_hunks")
+    if not isinstance(raw_hunks, list):
+        probe = variant.get("probe")
+        provenance = (
+            probe.get("provenance")
+            if isinstance(probe, Mapping) else None
+        )
+        if isinstance(provenance, Mapping):
+            raw_hunks = provenance.get("source_hunks")
+    if not isinstance(raw_hunks, list):
+        return []
+    return [
+        dict(item) if isinstance(item, Mapping) else {"value": item}
+        for item in raw_hunks
+    ]
+
+
+def _select_order_param_alias_exhaustion_proof(
+    *,
+    ranked_variants: list[Mapping[str, Any]],
+    force_phys: Mapping[int, int],
+    source_bridge_summary: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    owner_summary = source_bridge_summary.get("terminal_owner_probe_summary")
+    if not isinstance(owner_summary, Mapping):
+        return None
+    generated = _first_int(owner_summary.get("param_alias_source_candidates"), 0)
+    materialized = _first_int(
+        owner_summary.get("materialized_param_alias_source_candidates"),
+        0,
+    )
+    if generated <= 0 or materialized <= 0:
+        return None
+
+    labels: list[str] = []
+    candidate_by_label: dict[str, dict[str, Any]] = {}
+    materialization_kinds: set[str] = set()
+    param_names: set[str] = set()
+    alias_names: set[str] = set()
+    actions = source_bridge_summary.get("ranked_actions")
+    for action in actions if isinstance(actions, list) else []:
+        if not isinstance(action, Mapping):
+            continue
+        for label in action.get("probe_labels") or []:
+            if isinstance(label, str) and label not in labels:
+                labels.append(label)
+        candidates = action.get("materialized_param_alias_source_candidates")
+        if not isinstance(candidates, list):
+            candidate = action.get("param_alias_source_candidate")
+            candidates = [candidate] if isinstance(candidate, Mapping) else []
+        for raw_candidate in candidates:
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            candidate = dict(raw_candidate)
+            label = candidate.get("probe_label")
+            if isinstance(label, str):
+                candidate_by_label[label] = candidate
+                if label not in labels:
+                    labels.append(label)
+            kind = candidate.get("materialization_kind") or candidate.get("kind")
+            if isinstance(kind, str) and kind:
+                materialization_kinds.add(kind)
+            param = candidate.get("param_name")
+            if isinstance(param, str) and param:
+                param_names.add(param)
+            alias = candidate.get("alias_name")
+            if isinstance(alias, str) and alias:
+                alias_names.add(alias)
+
+    results: list[dict[str, Any]] = []
+    for variant in ranked_variants:
+        label = variant.get("label")
+        if not isinstance(label, str):
+            continue
+        is_param_probe = label in labels or label.startswith(
+            "window-order-param-alias-"
+        )
+        if not is_param_probe:
+            continue
+        target_score = _select_order_variant_target_score(variant)
+        result = {
+            "label": label,
+            "rank": variant.get("rank"),
+            "status": variant.get("status"),
+            "operator": variant.get("operator"),
+            "source_retained": variant.get("source_retained") or variant.get("path"),
+            "pcdump_path": _select_order_variant_pcdump_path(variant),
+            "source_hunks": _select_order_probe_source_hunks_from_variant(variant),
+            "param_alias_source_candidate": candidate_by_label.get(label),
+        }
+        if target_score is not None:
+            result["target_score"] = target_score
+        results.append(result)
+
+    if not results:
+        return None
+    labels_text = ", ".join(labels[:4]) if labels else "param-alias probes"
+    param_text = ", ".join(sorted(param_names)) or "the attributed parameter"
+    alias_text = ", ".join(sorted(alias_names)) or "its alias local"
+    kind_text = ", ".join(sorted(materialization_kinds)) or "param-alias"
+    handoff_targets = ", ".join(
+        f"IG{ig}->r{phys}" for ig, phys in sorted(force_phys.items())
+    )
+    return {
+        "status": "exhausted",
+        "family": "param-alias-source-bridge",
+        "generated_candidates": generated,
+        "materialized_candidates": materialized,
+        "scored_candidates": len(results),
+        "materialization_kinds": sorted(materialization_kinds),
+        "force_phys_targets": {
+            str(key): force_phys[key] for key in sorted(force_phys)
+        },
+        "source_probe_results": results,
+        "source_level_handoff": (
+            f"Exhausted {kind_text} source probes for {param_text}/{alias_text} "
+            f"({labels_text}); none satisfied {handoff_targets}. Next source-level "
+            f"handoff is broader lifetime or interference shaping around {alias_text} "
+            "uses, or finding a non-param source owner, not retrying only alias "
+            "declaration-order or delayed-init moves."
+        ),
+    }
 
 
 def _select_order_refresh_window_order_probe_diagnostics(
@@ -4036,20 +4315,37 @@ def _select_order_source_attributions_for_leads(
         operand_virtuals: list[int] = []
         for source in attrs.values():
             source_dict = _solve_source_attribution_dict(source) or {}
-            if source_dict.get("kind") not in {
+            if source_dict.get("kind") in {
                 "implicit-temp",
                 "fpr-temp",
                 "copy/coalesce-product",
             }:
-                continue
-            operand_virtuals.extend(
-                _select_order_virtual_operands_from_expression(
-                    source_dict.get("expression")
+                operand_virtuals.extend(
+                    _select_order_virtual_operands_from_expression(
+                        source_dict.get("expression")
+                    )
                 )
-            )
+            if (
+                source_dict.get("kind")
+                in {
+                    "first-def",
+                    "load/store-address",
+                    "field-load",
+                    "copy/coalesce-source",
+                }
+                and source_dict.get("field_offset") is not None
+            ):
+                base_virtual = source_dict.get("base_virtual")
+                if isinstance(base_virtual, bool):
+                    continue
+                try:
+                    operand_virtuals.append(int(base_virtual))
+                except (TypeError, ValueError):
+                    pass
+        seen_virtuals = set(virtuals)
         new_operands = [
             virtual for virtual in operand_virtuals
-            if virtual not in set(virtuals)
+            if virtual not in seen_virtuals
         ]
         if new_operands:
             virtuals.extend(new_operands)
@@ -4329,6 +4625,7 @@ def _register_tiebreak_window_order_fallback(
 
 
 def _run_solve_coloring(*, function: str, class_id: int, pcdump,
+                        checkdiff_json=None,
                         max_perturb: int, frontier: int, kinds: list,
                         experimental_kinds: list, catalog_dir,
                         force_vector_probes: bool = False,
@@ -4354,6 +4651,10 @@ def _run_solve_coloring(*, function: str, class_id: int, pcdump,
     unit = _find_unit_for_function(function, melee_root)
     pcdump_path = _resolve_pcdump_path(pcdump, function, melee_root)
     pcdump_text = pcdump_path.read_text(encoding="utf-8")
+    explicit_input_baseline = (
+        pcdump_path if pcdump is not None and checkdiff_json is not None
+        else None
+    )
     tu_c = melee_root / "src" / f"{unit}.c" if unit else None
     source_text = tu_c.read_text(encoding="utf-8") if tu_c and tu_c.exists() else ""
 
@@ -4376,6 +4677,8 @@ def _run_solve_coloring(*, function: str, class_id: int, pcdump,
         force_vector_probes=force_vector_probes,
         force_vector_timeout=force_vector_timeout,
         retain_force_vector_pcdumps=retain_force_vector_pcdumps,
+        checkdiff_payload_path=checkdiff_json,
+        baseline_pcdump=explicit_input_baseline,
         # #705 enabled the not-register-only node-set-delta fallback for FPR
         # (class 1); #714 extends it to GPR (class 0) so structurally-different-
         # virtual GPR residuals that are not register-only (e.g.
@@ -4901,6 +5204,15 @@ def _probe_requires_full_unit_source(probe: Any) -> bool:
     )
 
 
+
+
+def _full_unit_source_for_probe(
+    probe: Any,
+    source_path_for_probes: Path | None,
+) -> Path | None:
+    if not _probe_requires_full_unit_source(probe):
+        return None
+    return source_path_for_probes
 
 
 def _append_transform_corpus_probes(
@@ -6205,12 +6517,35 @@ def _bootstrap_permuter_dir(
         elif recommended_randomize_funcs is not None:
             randomize_funcs_status = "existing-settings-kept"
 
+    candidate_source_context = "full-unit" if source_staged else "standalone"
+    bootstrap_metadata_path = fn_dir / "melee_agent_bootstrap.json"
+    bootstrap_metadata = {
+        "version": 1,
+        "function": function,
+        "unit": unit,
+        "source": str(requested_source),
+        "import_source": str(src_path),
+        "source_staged": source_staged,
+        "full_unit_source": source_staged,
+        "candidate_source_context": candidate_source_context,
+    }
+    bootstrap_metadata_path.write_text(
+        json.dumps(bootstrap_metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
     return {
         "function": function,
         "unit": unit,
         "source": str(requested_source),
         "import_source": str(src_path),
         "source_staged": source_staged,
+        "full_unit_source": source_staged,
+        "candidate_source_context": candidate_source_context,
+        "bootstrap_metadata": {
+            "path": str(bootstrap_metadata_path),
+            **bootstrap_metadata,
+        },
         "preserve_macros": preserve_macros,
         "source_contains_perm_macros": source_contains_perm_macros,
         "base_contains_perm_macros": base_contains_perm_macros,
@@ -7232,6 +7567,56 @@ def _run_auto_verify_command_with_status(
 
 
 
+def _expression_order_first_def_mismatch(
+    anchor: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> bool:
+    signature = anchor.get("signature")
+    if not isinstance(signature, Mapping):
+        return False
+    if signature.get("kind") != "source-expression":
+        return False
+    baseline_source = anchor.get("baseline_source")
+    candidate_source = candidate.get("source")
+    if not isinstance(baseline_source, Mapping) or not isinstance(
+        candidate_source,
+        Mapping,
+    ):
+        return False
+    if (
+        baseline_source.get("confidence") != "fpr-expression-order"
+        or candidate_source.get("confidence") != "fpr-expression-order"
+    ):
+        return False
+    baseline_first_def = baseline_source.get("first_def")
+    candidate_first_def = candidate_source.get("first_def")
+    if not isinstance(baseline_first_def, Mapping) or not isinstance(
+        candidate_first_def,
+        Mapping,
+    ):
+        return False
+    baseline_opcode = _normalize_expression_text(
+        baseline_first_def.get("opcode")
+    ).lower()
+    candidate_opcode = _normalize_expression_text(
+        candidate_first_def.get("opcode")
+    ).lower()
+    baseline_operands = _normalize_first_def_operands(
+        baseline_first_def.get("operands")
+    )
+    candidate_operands = _normalize_first_def_operands(
+        candidate_first_def.get("operands")
+    )
+    if not baseline_opcode or not candidate_opcode:
+        return False
+    if not baseline_operands or not candidate_operands:
+        return False
+    return (baseline_opcode, baseline_operands) != (
+        candidate_opcode,
+        candidate_operands,
+    )
+
+
 def _score_expression_anchors(
     *,
     target_spec: Mapping[str, Any],
@@ -7321,13 +7706,17 @@ def _score_expression_anchors(
                 actual = int(candidate.get("actual"))
             except (TypeError, ValueError):
                 actual = None
-            is_match = actual == expected
+            first_def_mismatch = _expression_order_first_def_mismatch(
+                anchor,
+                candidate,
+            )
+            is_match = actual == expected and not first_def_mismatch
             if is_match:
                 matched += 1
             if candidate_virtual is not None and candidate_virtual != baseline_virtual:
                 moved += 1
             entry.update({
-                "status": "ok",
+                "status": "first-def-mismatch" if first_def_mismatch else "ok",
                 "candidate_virtual": candidate_virtual,
                 "actual": actual,
                 "matched": is_match,
@@ -7337,6 +7726,10 @@ def _score_expression_anchors(
                 ),
                 "candidate_source": candidate.get("source"),
             })
+            if first_def_mismatch:
+                entry["mismatch_reason"] = (
+                    "fpr-expression-order source attribution first-def mismatch"
+                )
         false_positive = raw_matched and not bool(entry["matched"])
         entry["virtual_id_false_positive"] = false_positive
         if false_positive:

@@ -10,11 +10,14 @@ Usage:
     melee-agent <command>
 """
 
+import json
 import os
 import shlex
 import subprocess
 import sys
+from importlib import metadata
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from dotenv import load_dotenv
 
@@ -117,32 +120,47 @@ app.add_typer(backtest_app, name="backtest")
 @app.command(
     "opseq",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-    help="Alias for tools/table-typer opseq opcode-sequence search.",
+    help=(
+        "Alias for tools/table-typer opseq opcode-sequence search. Pass an "
+        "opcode pattern, or use --like FUNC[:START-END] to derive one. "
+        "Forwarded derive flags: --gap-cap, --slack, --max-landmarks, and "
+        "--with-operands."
+    ),
 )
 def opseq(ctx: typer.Context) -> None:
     """Run the table-typer opcode sequence matcher from melee-agent."""
     args = list(ctx.args)
     table_typer_dir = DEFAULT_MELEE_ROOT / "tools" / "table-typer"
-    if not table_typer_dir.exists():
+    shared_helper = _shared_table_typer_binary() if _opseq_requests_like(args) else None
+    if shared_helper is not None and shared_helper.exists():
+        # PR worktrees are based on upstream and can retain an older
+        # table-typer which predates --like. The editable melee-agent install
+        # and this helper advance together on the shared master checkout.
+        # Execute that helper from the requested worktree root so its normal
+        # root walk still searches the caller's source and asm, not master.
+        cmd = [str(shared_helper), "opseq", *args]
+        helper_cwd = DEFAULT_MELEE_ROOT
+    elif not table_typer_dir.exists():
         typer.echo(
             "opseq requires tools/table-typer. From a full melee checkout, run:\n"
             "  cd tools/table-typer && go run . opseq <comma,separated,opcodes>",
             err=True,
         )
         raise typer.Exit(2)
-
-    binary = table_typer_dir / "table-typer"
-    if binary.exists():
-        cmd = [str(binary), "opseq", *args]
     else:
-        cmd = ["go", "run", ".", "opseq", *args]
+        binary = table_typer_dir / "table-typer"
+        if binary.exists():
+            cmd = [str(binary), "opseq", *args]
+        else:
+            cmd = ["go", "run", ".", "opseq", *args]
+        helper_cwd = table_typer_dir
 
     timeout = _opseq_timeout_seconds()
     try:
         with _acquire_checkdiff_repo_lock(DEFAULT_MELEE_ROOT, label="opseq build/report"):
             proc = _run_with_process_group_timeout(
                 cmd,
-                cwd=table_typer_dir,
+                cwd=helper_cwd,
                 timeout=timeout,
             )
     except FileNotFoundError as exc:
@@ -163,6 +181,37 @@ def opseq(ctx: typer.Context) -> None:
     _forward_subprocess_output(proc)
     if proc.returncode != 0:
         raise typer.Exit(proc.returncode)
+
+
+def _opseq_requests_like(args: list[str]) -> bool:
+    """Whether forwarded opseq args request the derived-pattern workflow."""
+    return any(
+        arg in {"--like", "-like"}
+        or arg.startswith("--like=")
+        or arg.startswith("-like=")
+        for arg in args
+    )
+
+
+def _shared_table_typer_binary() -> Path | None:
+    """Return the helper from melee-agent's authoritative editable install.
+
+    This cannot be inferred from ``__file__``: branch-local validation imports
+    this module from a PR worktree, while the globally installed agent still
+    points at the shared master tooling checkout.
+    """
+    try:
+        direct_url = metadata.distribution("melee-agent").read_text("direct_url.json")
+        if direct_url is None:
+            raise ValueError("editable install has no direct URL")
+        source_url = json.loads(direct_url)["url"]
+        parsed_url = urlparse(source_url)
+        if parsed_url.scheme != "file":
+            raise ValueError(f"unsupported editable install URL: {source_url!r}")
+        agent_dir = Path(unquote(parsed_url.path))
+    except (KeyError, ValueError, metadata.PackageNotFoundError):
+        return None
+    return agent_dir.parent.parent / "tools" / "table-typer" / "table-typer"
 
 
 def _opseq_timeout_seconds() -> int:

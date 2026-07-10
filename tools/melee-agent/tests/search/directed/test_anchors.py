@@ -131,6 +131,33 @@ def test_source_shape_anchors_cover_control_flow_and_scope_mutators():
                 assert value in src
 
 
+def test_reuse_loop_counter_scope_rejects_closed_sibling_block_declaration():
+    src = (
+        "{\n"
+        "    if (show_columns) {\n"
+        "        int i;\n"
+        "        for (i = 0; i < 7; i++) {\n"
+        "            sink(i);\n"
+        "        }\n"
+        "    }\n"
+        "    if (show_rows) {\n"
+        "        int i;\n"
+        "        for (i = 0; i < 10; i++) {\n"
+        "            sink(i);\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    reuse_anchors = [
+        anchor
+        for anchor in iter_source_shape_anchors(src)
+        if anchor.mutator_key == "reuse_loop_counter_scope"
+    ]
+
+    assert reuse_anchors == []
+
+
 def test_source_shape_anchors_discover_unflatten_else_if():
     src = (
         "if (anim_id != -1) {\n"

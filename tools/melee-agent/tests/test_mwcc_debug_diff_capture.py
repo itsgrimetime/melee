@@ -4,12 +4,14 @@ from __future__ import annotations
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import src.mwcc_debug.diff_capture as diff_capture
 from src.mwcc_debug.diff_capture import (
     CompileFailure,
     DiffInput,
@@ -409,11 +411,126 @@ def test_compile_source_variant_stages_outside_repo_source_and_restores(monkeypa
         fake_run,
     )
 
-    diff_input = DiffInput(label="B", token=str(candidate), kind="source", path=candidate)
+    diff_input = DiffInput(
+        label="B",
+        token=str(candidate),
+        kind="source",
+        path=candidate,
+    )
     text = compile_source_variant(diff_input, function="fn_test", melee_root=tmp_path, timeout=30)
 
     assert text == "Starting function fn_test\n"
     assert real_src.read_text(encoding="utf-8") == original_text
+
+
+def test_compile_source_variant_holds_repo_source_lock_through_restore(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    real_src = tmp_path / "src" / "melee" / "mn" / "sample.c"
+    real_src.parent.mkdir(parents=True)
+    original_text = "void fn_test(void) { int original = 1; }\n"
+    real_src.write_text(original_text, encoding="utf-8")
+    report = tmp_path / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '{"units":[{"name":"main/melee/mn/sample","functions":[{"name":"fn_test"}]}]}',
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text(
+        "void fn_test(void) { int candidate = 2; }\n",
+        encoding="utf-8",
+    )
+
+    locked = False
+    events: list[str] = []
+
+    class FakeLock:
+        def __enter__(self):
+            nonlocal locked
+            locked = True
+            events.append("lock-enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            nonlocal locked
+            assert real_src.read_text(encoding="utf-8") == original_text
+            events.append("lock-exit")
+            locked = False
+
+    def fake_lock(
+        root: Path,
+        *,
+        label: str = "mwcc source compile",
+        timeout: float | None = None,
+    ):
+        assert root == tmp_path
+        assert label == "mwcc source compile"
+        assert timeout == 30
+        return FakeLock()
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        assert locked is True
+        assert "candidate = 2" in real_src.read_text(encoding="utf-8")
+        events.append("dump-local")
+        out_path = Path(cmd[cmd.index("--output") + 1])
+        out_path.write_text("Starting function fn_test\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(diff_capture, "_acquire_repo_source_mutation_lock", fake_lock)
+    monkeypatch.setattr(diff_capture, "_run_with_process_group_timeout", fake_run)
+
+    diff_input = DiffInput(label="B", token=str(candidate), kind="source", path=candidate)
+    text = compile_source_variant(
+        diff_input,
+        function="fn_test",
+        melee_root=tmp_path,
+        timeout=30,
+    )
+
+    assert text == "Starting function fn_test\n"
+    assert events == ["lock-enter", "dump-local", "lock-exit"]
+    assert real_src.read_text(encoding="utf-8") == original_text
+
+
+def test_compile_source_variant_repo_source_lock_uses_checkdiff_lock_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fcntl = pytest.importorskip("fcntl")
+    src = tmp_path / "src" / "melee" / "mn" / "sample.c"
+    src.parent.mkdir(parents=True)
+    original_text = "void fn_test(void) {}\n"
+    src.write_text(original_text, encoding="utf-8")
+
+    lock_dir = Path(tempfile.gettempdir()) / "melee-checkdiff-locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    digest = diff_capture.hashlib.sha1(
+        str(tmp_path.resolve()).encode(),
+    ).hexdigest()[:12]
+    lock_path = lock_dir / f"repo.{digest}.lock"
+    held_lock = lock_path.open("w")
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("compile must wait for the shared repo lock first")
+
+    monkeypatch.setattr(diff_capture, "_run_with_process_group_timeout", fake_run)
+
+    try:
+        fcntl.flock(held_lock.fileno(), fcntl.LOCK_EX)
+        diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
+        with pytest.raises(TimeoutError, match="repo-wide mwcc source compile lock"):
+            compile_source_variant(
+                diff_input,
+                function="fn_test",
+                melee_root=tmp_path,
+                timeout=0.01,
+            )
+    finally:
+        fcntl.flock(held_lock.fileno(), fcntl.LOCK_UN)
+        held_lock.close()
+
+    assert src.read_text(encoding="utf-8") == original_text
 
 
 def test_compile_source_variant_missing_target_function_fails_before_staging(
@@ -804,6 +921,403 @@ def test_process_group_timeout_bounds_hung_communicate(
     assert calls["start_new_session"] is True
     assert calls["killpg"] == (4321, signal.SIGKILL)
     assert calls["wait_timeout"] == 5
+
+
+def test_process_group_interrupt_cleans_up_child(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {"closed_pipes": [], "killpg": []}
+    interrupt = KeyboardInterrupt("cancel")
+
+    class FakePipe:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            calls["closed_pipes"].append(self.name)
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe("stdout")
+        stderr = FakePipe("stderr")
+
+        def wait(self, timeout: int) -> None:
+            calls["wait_timeout"] = timeout
+
+        def kill(self) -> None:
+            calls["kill"] = True
+
+    class FakeThread:
+        def __init__(self, *, target, daemon: bool) -> None:
+            calls["thread_target"] = target
+            calls["thread_daemon"] = daemon
+
+        def start(self) -> None:
+            calls["thread_started"] = True
+
+        def join(self, timeout: float) -> None:
+            calls["thread_join_timeout"] = timeout
+            raise interrupt
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        calls["start_new_session"] = start_new_session
+        return FakeProc()
+
+    def fake_getpgid(pid: int) -> int:
+        assert pid == 4321
+        return 4321
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        calls["killpg"].append((pgid, sig))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(diff_capture.threading, "Thread", FakeThread)
+    monkeypatch.setattr(diff_capture, "_descendant_pids", lambda root_pid: [])
+    monkeypatch.setattr("os.getpgid", fake_getpgid)
+    monkeypatch.setattr("os.killpg", fake_killpg)
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=10,
+        )
+
+    assert excinfo.value is interrupt
+    assert calls["start_new_session"] is True
+    assert calls["killpg"] == [(4321, signal.SIGKILL)]
+    assert calls["closed_pipes"] == ["stdout", "stderr"]
+    assert calls["wait_timeout"] == 5
+
+
+@pytest.mark.parametrize("interrupt_stage", ["construction", "start"])
+def test_process_group_thread_setup_interrupt_cleans_up_child(
+    interrupt_stage: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {"closed_pipes": [], "killpg": []}
+    interrupt = KeyboardInterrupt("cancel")
+
+    class FakePipe:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            calls["closed_pipes"].append(self.name)
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe("stdout")
+        stderr = FakePipe("stderr")
+
+        def wait(self, timeout: int) -> None:
+            calls["wait_timeout"] = timeout
+
+    class FakeThread:
+        def __init__(self, *, target, daemon: bool) -> None:
+            if interrupt_stage == "construction":
+                raise interrupt
+
+        def start(self) -> None:
+            if interrupt_stage == "start":
+                raise interrupt
+
+        def join(self, timeout: float) -> None:
+            raise AssertionError("join should not run after thread setup interruption")
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        calls["start_new_session"] = start_new_session
+        return FakeProc()
+
+    def fake_getpgid(pid: int) -> int:
+        assert pid == 4321
+        return 4321
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        calls["killpg"].append((pgid, sig))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(diff_capture.threading, "Thread", FakeThread)
+    monkeypatch.setattr(diff_capture, "_descendant_pids", lambda root_pid: [])
+    monkeypatch.setattr("os.getpgid", fake_getpgid)
+    monkeypatch.setattr("os.killpg", fake_killpg)
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=10,
+        )
+
+    assert excinfo.value is interrupt
+    assert calls["start_new_session"] is True
+    assert calls["killpg"] == [(4321, signal.SIGKILL)]
+    assert calls["closed_pipes"] == ["stdout", "stderr"]
+    assert calls["wait_timeout"] == 5
+
+
+@pytest.mark.parametrize(
+    "cleanup_failure",
+    ["kill_process_tree", "pipe_close", "wait", "fallback_kill"],
+)
+def test_process_group_interrupt_cleanup_failures_preserve_original_exception(
+    cleanup_failure: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {"closed_pipes": []}
+    interrupt = KeyboardInterrupt("cancel")
+
+    class FakePipe:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            calls["closed_pipes"].append(self.name)
+            if cleanup_failure == "pipe_close" and self.name == "stdout":
+                raise RuntimeError("pipe close failed")
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe("stdout")
+        stderr = FakePipe("stderr")
+
+        def wait(self, timeout: int) -> None:
+            calls["wait_timeout"] = timeout
+            if cleanup_failure == "wait":
+                raise RuntimeError("wait failed")
+            if cleanup_failure == "fallback_kill":
+                raise subprocess.TimeoutExpired(["python", "-c", "hang"], timeout)
+
+        def kill(self) -> None:
+            calls["kill"] = True
+            if cleanup_failure == "fallback_kill":
+                raise RuntimeError("kill failed")
+
+    class FakeThread:
+        def __init__(self, *, target, daemon: bool) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def join(self, timeout: float) -> None:
+            raise interrupt
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        return FakeProc()
+
+    def fake_kill_process_tree(pid, proc) -> None:
+        calls["kill_process_tree"] = pid
+        if cleanup_failure == "kill_process_tree":
+            raise RuntimeError("process tree kill failed")
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(diff_capture.threading, "Thread", FakeThread)
+    monkeypatch.setattr(diff_capture, "_kill_process_tree", fake_kill_process_tree)
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=10,
+        )
+
+    assert excinfo.value is interrupt
+    assert calls["kill_process_tree"] == 4321
+    assert calls["closed_pipes"] == ["stdout", "stderr"]
+    assert calls["wait_timeout"] == 5
+    assert ("kill" in calls) is (cleanup_failure == "fallback_kill")
+
+
+def test_process_group_interrupt_after_timeout_does_not_clean_up_twice(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {"closed_pipes": [], "join_timeouts": [], "waits": []}
+    interrupt = KeyboardInterrupt("cancel")
+
+    class FakePipe:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            calls["closed_pipes"].append(self.name)
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe("stdout")
+        stderr = FakePipe("stderr")
+
+        def wait(self, timeout: int) -> None:
+            calls["waits"].append(timeout)
+
+    class FakeThread:
+        def __init__(self, *, target, daemon: bool) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def join(self, timeout: float) -> None:
+            calls["join_timeouts"].append(timeout)
+            if timeout == 1:
+                raise interrupt
+
+        def is_alive(self) -> bool:
+            return True
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        return FakeProc()
+
+    def fake_kill_process_tree(pid, proc) -> None:
+        calls.setdefault("cleanup_pids", []).append(pid)
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(diff_capture.threading, "Thread", FakeThread)
+    monkeypatch.setattr(diff_capture, "_kill_process_tree", fake_kill_process_tree)
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=10,
+        )
+
+    assert excinfo.value is interrupt
+    assert calls["cleanup_pids"] == [4321]
+    assert calls["closed_pipes"] == ["stdout", "stderr"]
+    assert calls["waits"] == [5]
+    assert calls["join_timeouts"] == [10, 1]
+
+
+def test_process_group_timeout_cleanup_interrupt_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {"closed_pipes": [], "waits": []}
+    interrupt = KeyboardInterrupt("cancel")
+
+    class FakePipe:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            calls["closed_pipes"].append(self.name)
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe("stdout")
+        stderr = FakePipe("stderr")
+
+        def wait(self, timeout: int) -> None:
+            calls["waits"].append(timeout)
+            if len(calls["waits"]) == 1:
+                raise interrupt
+
+    class FakeThread:
+        def __init__(self, *, target, daemon: bool) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def join(self, timeout: float) -> None:
+            pass
+
+        def is_alive(self) -> bool:
+            return True
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        return FakeProc()
+
+    def fake_kill_process_tree(pid, proc) -> None:
+        calls.setdefault("cleanup_pids", []).append(pid)
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(diff_capture.threading, "Thread", FakeThread)
+    monkeypatch.setattr(diff_capture, "_kill_process_tree", fake_kill_process_tree)
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=10,
+        )
+
+    assert excinfo.value is interrupt
+    assert calls["cleanup_pids"] == [4321, 4321]
+    assert calls["closed_pipes"] == ["stdout", "stderr", "stdout", "stderr"]
+    assert calls["waits"] == [5, 5]
+
+
+def test_process_group_timeout_suppresses_pipe_close_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {"closed_pipes": [], "join_timeouts": [], "waits": []}
+
+    class FakePipe:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self) -> None:
+            calls["closed_pipes"].append(self.name)
+            if self.name == "stdout":
+                raise OSError("pipe close failed")
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe("stdout")
+        stderr = FakePipe("stderr")
+
+        def wait(self, timeout: int) -> None:
+            calls["waits"].append(timeout)
+
+    class FakeThread:
+        def __init__(self, *, target, daemon: bool) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def join(self, timeout: float) -> None:
+            calls["join_timeouts"].append(timeout)
+
+        def is_alive(self) -> bool:
+            return True
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        calls["start_new_session"] = start_new_session
+        return FakeProc()
+
+    def fake_kill_process_tree(pid, proc) -> None:
+        calls["cleanup_pid"] = pid
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(diff_capture.threading, "Thread", FakeThread)
+    monkeypatch.setattr(diff_capture, "_kill_process_tree", fake_kill_process_tree)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_with_process_group_timeout(
+            ["python", "-c", "hang"],
+            cwd=tmp_path,
+            timeout=10,
+        )
+
+    assert calls["start_new_session"] is True
+    assert calls["cleanup_pid"] == 4321
+    assert calls["closed_pipes"] == ["stdout", "stderr"]
+    assert calls["waits"] == [5]
+    assert calls["join_timeouts"] == [10, 1]
 
 
 def test_process_group_timeout_kills_descendant_process_groups(

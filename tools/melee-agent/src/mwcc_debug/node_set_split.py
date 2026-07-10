@@ -2373,6 +2373,73 @@ def _move_select_order(
     return moved
 
 
+def _node_deletion_renumbering_cascade(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    samples: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    reported_count = 0
+    for row in rows:
+        candidate_id = row.get("candidate_id")
+        for score_key in ("target_score", "expression_score"):
+            score = row.get(score_key)
+            if not isinstance(score, Mapping):
+                continue
+            raw_count = _as_int(score.get("renumbered"))
+            if raw_count is not None:
+                reported_count = max(reported_count, raw_count)
+            virtuals = score.get("virtuals")
+            if not isinstance(virtuals, Mapping):
+                continue
+            for baseline_key, virtual in virtuals.items():
+                if not isinstance(virtual, Mapping):
+                    continue
+                baseline_virtual = _as_int(
+                    virtual.get("baseline_virtual", baseline_key)
+                )
+                candidate_virtual = _as_int(virtual.get("candidate_virtual"))
+                if candidate_virtual is None:
+                    continue
+                renumbered = virtual.get("renumbered") is True or (
+                    baseline_virtual is not None
+                    and candidate_virtual != baseline_virtual
+                )
+                if not renumbered:
+                    continue
+                key = (candidate_id, score_key, baseline_virtual, candidate_virtual)
+                if key in seen:
+                    continue
+                seen.add(key)
+                samples.append({
+                    "candidate_id": candidate_id,
+                    "score": score_key,
+                    "baseline_virtual": baseline_virtual,
+                    "candidate_virtual": candidate_virtual,
+                    "expected": virtual.get("expected"),
+                    "actual": virtual.get("actual"),
+                    "matched": virtual.get("matched"),
+                    "signature": virtual.get("signature"),
+                })
+    renumbered_count = max(reported_count, len(samples))
+    if renumbered_count < 2:
+        return None
+    return {
+        "kind": "node-deletion-global-renumbering-cascade",
+        "status": "detected",
+        "source_model_layer_dimension_id": (
+            "node-deletion-virtual-renumbering-cascade"
+        ),
+        "renumbered_count": renumbered_count,
+        "sample": samples[:8],
+        "next_handoff": (
+            "Treat node-deletion-class transforms as global virtual-numbering "
+            "perturbations, not localized neighbor-set edits; next source-level "
+            "work should preserve virtual numbering while steering select-order "
+            "or force-phys assignments from the retained pcdump/source."
+        ),
+    }
+
+
 def summarize_node_set_split_scores(
     function: str,
     request: NodeSetSplitRequest,
@@ -2539,6 +2606,18 @@ def summarize_node_set_split_scores(
         ),
         "candidates": rows,
     }
+    renumbering_cascade = _node_deletion_renumbering_cascade(rows)
+    if renumbering_cascade is not None:
+        summary["global_renumbering_cascade"] = renumbering_cascade
+        if status != "improved":
+            summary.setdefault("terminal_proof", renumbering_cascade)
+            summary["next_steps"].append(
+                "global virtual renumbering cascade detected: do not model "
+                "this node-deletion-class transform as a local neighbor-set "
+                "change; use the retained pcdump/source to pursue source-level "
+                "select-order or force-phys steering that preserves virtual "
+                "numbering."
+            )
     if resume_mode is not None:
         summary["resume_mode"] = resume_mode
     case_c_order_repair = _case_c_order_repair_handoff(

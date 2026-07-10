@@ -3,6 +3,8 @@
 Pre-flight is the load-bearing gate that prevents "VOID" runs: a search must
 ABORT LOUDLY if the target cannot be diagnosed (empty roles, or divergence case
 NONE/ABSTAINED), so a silent non-result can never masquerade as "no progress."
+Callers may only continue from NONE/ABSTAINED when an explicit force-phys proof
+vector is present and the downstream scorer can grade the concrete assignment.
 
 build_directed_objective creates a fully-populated DirectedObjective from a
 function name, unit, and a proof_force_phys dict.  The live end-to-end path
@@ -65,6 +67,26 @@ class PreflightError(Exception):
 
 class DirectedObjectiveBuildError(Exception):
     """Raised when a DirectedObjective cannot be built from live artifacts."""
+
+
+FORCE_PHYS_ASSIGNMENT_FALLBACK_REASONS = frozenset({
+    "case_abstained",
+    "case_none",
+})
+
+
+def allows_force_phys_assignment_fallback(
+    reason: str,
+    *,
+    proof_force_phys: dict | None,
+    objective: DirectedObjective | None,
+) -> bool:
+    """Return whether a preflight failure can fall back to assignment scoring."""
+    return (
+        reason in FORCE_PHYS_ASSIGNMENT_FALLBACK_REASONS
+        and bool(proof_force_phys)
+        and objective is not None
+    )
 
 
 # ---------------------------------------------------------------------------

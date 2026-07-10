@@ -3523,6 +3523,38 @@ def get_fuzzy_match_percent(func_name: str) -> Optional[float]:
     return None
 
 
+def _path_mtime_ns(path: Path) -> Optional[int]:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def get_fuzzy_match_percent_checked(
+    func_name: str,
+    *,
+    report_regenerated: bool = True,
+    report_must_be_newer_than_ns: Optional[int] = None,
+) -> tuple[Optional[float], str]:
+    """Return a report.json match percent only when it is fresh enough.
+
+    checkdiff's object diff is produced from the just-built object. If the
+    follow-up report.json generation failed or left the report older than that
+    object, publishing the cached percentage is worse than returning unknown.
+    """
+    if not report_regenerated:
+        return None, "suppressed_stale_report_regeneration_failed"
+
+    if report_must_be_newer_than_ns is not None:
+        report_mtime_ns = _path_mtime_ns(REPORT_PATH)
+        if report_mtime_ns is None:
+            return None, "suppressed_stale_report_missing"
+        if report_mtime_ns < report_must_be_newer_than_ns:
+            return None, "suppressed_stale_report_older_than_object"
+
+    return get_fuzzy_match_percent(func_name), "report_json"
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("function", help="Function name")
@@ -3713,6 +3745,11 @@ def main() -> int:
         if fp is not None:
             prior_attempt = find_attempt_by_fp(func_name, fp.raw, fp.normalized)
 
+    report_regenerated = True
+    report_must_be_newer_than_ns: Optional[int] = None
+    guarded_fuzzy_pct: Optional[float] = None
+    guarded_fuzzy_pct_source = "not_checked"
+
     # fix includes (optional - lukechampine's repo has this)
     fix_includes = ROOT / "tools" / "fix_includes.py"
     if fix_includes.exists():
@@ -3741,6 +3778,7 @@ def main() -> int:
             print(result.stdout, file=sys.stderr)
             print(result.stderr, file=sys.stderr)
             return 1
+        report_must_be_newer_than_ns = _path_mtime_ns(ROOT / our_obj.lstrip("./"))
 
         # Regenerate report.json to get fresh fuzzy_match_percent
         # This is needed because the VS Code extension relies on accurate match percentages
@@ -3753,6 +3791,7 @@ def main() -> int:
             ),
         )
         if result.returncode != 0:
+            report_regenerated = False
             print(
                 format_subprocess_failure(
                     "warning: failed to regenerate report.json",
@@ -4001,8 +4040,13 @@ def main() -> int:
             fuzzy_pct = None
             fuzzy_pct_source = "suppressed_stale_report_no_build"
         else:
-            fuzzy_pct = get_fuzzy_match_percent(func_name)
-            fuzzy_pct_source = "report_json"
+            fuzzy_pct, fuzzy_pct_source = get_fuzzy_match_percent_checked(
+                func_name,
+                report_regenerated=report_regenerated,
+                report_must_be_newer_than_ns=report_must_be_newer_than_ns,
+            )
+        guarded_fuzzy_pct = fuzzy_pct
+        guarded_fuzzy_pct_source = fuzzy_pct_source
         metrics = compute_structural_metrics(ref_lines, our_lines)
         prev_metrics = load_history(func_name)
         progress_note = make_progress_note(fuzzy_pct, metrics, prev_metrics)
@@ -4113,7 +4157,22 @@ def main() -> int:
 
     # Post-build: dedup-on-write + banner.
     if _fingerprint_tracking_enabled(args) and _FINGERPRINT_AVAILABLE and fp is not None:
-        current_match = get_fuzzy_match_percent(func_name) or 0.0
+        if guarded_fuzzy_pct_source == "not_checked":
+            guarded_fuzzy_pct, guarded_fuzzy_pct_source = (
+                get_fuzzy_match_percent_checked(
+                    func_name,
+                    report_regenerated=report_regenerated,
+                    report_must_be_newer_than_ns=report_must_be_newer_than_ns,
+                )
+            )
+        if guarded_fuzzy_pct is None:
+            print(
+                "[checkdiff] skipped attempt ledger write: "
+                f"{guarded_fuzzy_pct_source}",
+                file=sys.stderr,
+            )
+            return result.returncode
+        current_match = guarded_fuzzy_pct
         try:
             snapshot_source = c_file.read_text()
         except OSError:

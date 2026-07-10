@@ -41,8 +41,8 @@ def test_catalog_has_expected_headline_counts() -> None:
     summary = catalog_summary()
 
     assert summary["surfaces"] == 13
-    assert summary["techniques"] == 182
-    assert summary["concrete_forms"] == 150
+    assert summary["techniques"] == 186
+    assert summary["concrete_forms"] == 154
 
 
 def test_control_flow_catalog_tracks_default_operator_tuple() -> None:
@@ -117,11 +117,12 @@ def test_directed_catalog_tracks_dispatch_and_families() -> None:
         "steer_retained_gpr_case_c_post_source_owner_backtrack",
         "steer_retained_gpr_case_c_target_live_range_repair",
         "steer_retained_gpr_case_c_simplify_order_continuation",
-        "steer_retained_gpr_common_subexpr_coalesce_source",
-        "steer_indexed_byte_index_temp",
-        "steer_indexed_byte_base_alias",
-        "introduce_named_zero_local",
-        "swap_independent_adjacent_statements",
+            "steer_retained_gpr_common_subexpr_coalesce_source",
+            "steer_indexed_byte_index_temp",
+            "steer_indexed_byte_base_alias",
+            "steer_indexed_byte_helper_result_temp",
+            "introduce_named_zero_local",
+            "swap_independent_adjacent_statements",
         "rewrite_raw_index_struct_field",
         "rewrite_data_table_indirection",
         "scheduler_anchor_iv_init_before_bias",
@@ -133,8 +134,8 @@ def test_directed_catalog_tracks_dispatch_and_families() -> None:
     assert set(DIRECTED_MUTATOR_KEYS) == dispatch_keys | materialized_probe_keys
     assert materialized_probe_keys.isdisjoint(dispatch_keys)
     assert set(entry.concrete_forms) == set(DIRECTED_MUTATOR_KEYS)
-    assert entry.technique_count == 54
-    assert entry.concrete_form_count == 97
+    assert entry.technique_count == 58
+    assert entry.concrete_form_count == 101
     assert "pcode_only_gpr_address_temp_repair" in entry.techniques
     assert "pcode_only_gpr_copy_product_case_c_repair" in entry.techniques
     assert "retained_gpr_case_c_sensitivity_search" in entry.techniques

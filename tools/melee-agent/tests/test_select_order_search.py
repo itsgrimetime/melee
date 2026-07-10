@@ -5745,6 +5745,142 @@ def test_select_order_source_bridge_reports_field_load_terminal_blocker(
     )
 
 
+def test_select_order_source_bridge_reports_materialized_param_alias_action(
+) -> None:
+    fallback = {
+        "ran": True,
+        "leads": [{"target_ig": 34, "order_move": ["before", 74]}],
+    }
+    attrs = {34: {"kind": "param", "name": "arg2", "type": "s32"}}
+    param_candidate = {
+        "kind": "adjacent-param-alias-decl-swap",
+        "materialization_kind": "declaration-order",
+        "param_name": "arg2",
+        "alias_name": "arg2_r",
+        "peer_param_name": "arg1",
+        "peer_alias_name": "arg1_r",
+    }
+    source_hunks = [{
+        "hunk_id": "param-alias001",
+        "base_range": {"start": 2408, "end": 2409},
+        "candidate_range": {"start": 2408, "end": 2409},
+    }]
+    diagnostics = {
+        "fallback_leads": 1,
+        "source_attributed_leads": 1,
+        "listed_source_probes": 1,
+        "lead_diagnostics": [{
+            "lead": fallback["leads"][0],
+            "target_ig": 34,
+            "direction": "before",
+            "status": "materialized",
+            "materialized_probe_labels": [
+                "window-order-param-alias-ig34-before-decl-swap-0"
+            ],
+            "source_attribution": attrs[34],
+            "source_diff": "@@ param-alias diff @@\n",
+            "source_hunks": source_hunks,
+            "param_alias_source_candidate": param_candidate,
+            "materialized_param_alias_source_candidates": [param_candidate],
+            "param_alias_materialization_summary": {
+                "param_name": "arg2",
+                "param_alias_source_candidates": 1,
+                "materialized_param_alias_source_candidates": 1,
+                "param_alias_candidates": 1,
+                "materialized_param_alias_candidates": 1,
+                "reasons": {},
+            },
+        }],
+    }
+
+    summary = debug_cli._select_order_source_bridge_summary(
+        ranked_variants=[],
+        force_phys={34: 29},
+        window_order_fallback=fallback,
+        window_order_source_attributions=attrs,
+        window_order_probe_diagnostics=diagnostics,
+        diagnostic_buckets={},
+    )
+
+    action = next(
+        action for action in summary["ranked_actions"]
+        if action["kind"] == "try-window-order-source-move"
+    )
+    assert action["probe_labels"] == [
+        "window-order-param-alias-ig34-before-decl-swap-0"
+    ]
+    assert action["param_alias_source_candidate"] == param_candidate
+    assert action["materialized_param_alias_source_candidates"] == [
+        param_candidate
+    ]
+    assert action["source_hunks"] == source_hunks
+    owner_summary = summary["terminal_owner_probe_summary"]
+    assert owner_summary["param_alias_source_candidates"] == 1
+    assert owner_summary["materialized_param_alias_source_candidates"] == 1
+    assert owner_summary["materialized_candidates"] == 1
+
+
+def test_select_order_source_bridge_reports_param_alias_terminal_blocker(
+) -> None:
+    fallback = {
+        "ran": True,
+        "leads": [{"target_ig": 34, "order_move": ["before", 74]}],
+    }
+    attrs = {34: {"kind": "param", "name": "arg2", "type": "s32"}}
+    diagnostics = {
+        "fallback_leads": 1,
+        "source_attributed_leads": 1,
+        "listed_source_probes": 0,
+        "lead_diagnostics": [{
+            "lead": fallback["leads"][0],
+            "target_ig": 34,
+            "direction": "before",
+            "status": "blocked",
+            "terminal_blocker": "param-alias-no-legal-source-movement",
+            "source_attribution": attrs[34],
+            "param_name": "arg2",
+            "param_alias_source_candidates": [{
+                "kind": "delayed-param-alias-init",
+                "param_name": "arg2",
+                "alias_name": "arg2_r",
+            }],
+            "param_alias_materialization_summary": {
+                "param_name": "arg2",
+                "param_alias_source_candidates": 1,
+                "materialized_param_alias_source_candidates": 0,
+                "param_alias_candidates": 1,
+                "materialized_param_alias_candidates": 0,
+                "reasons": {"param-alias-use-before-delayed-init": 1},
+            },
+        }],
+    }
+
+    summary = debug_cli._select_order_source_bridge_summary(
+        ranked_variants=[],
+        force_phys={34: 29},
+        window_order_fallback=fallback,
+        window_order_source_attributions=attrs,
+        window_order_probe_diagnostics=diagnostics,
+        diagnostic_buckets={},
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["dominant_blocker"] == "param-alias-no-legal-source-movement"
+    owner_summary = summary["terminal_owner_probe_summary"]
+    assert owner_summary["param_alias_source_candidates"] == 1
+    assert owner_summary["materialized_param_alias_source_candidates"] == 0
+    assert owner_summary["terminal_blocker"] == (
+        "param-alias-no-legal-source-movement"
+    )
+    assert owner_summary["param_alias_terminal_blockers"] == [
+        "param-alias-no-legal-source-movement"
+    ]
+    assert not any(
+        action["kind"] == "try-window-order-source-move"
+        for action in summary["ranked_actions"]
+    )
+
+
 def test_select_order_source_bridge_does_not_double_count_indexed_terminal_reasons(
 ) -> None:
     fallback = {
@@ -5977,6 +6113,103 @@ def test_select_order_terminal_exhaustion_reports_case_c_no_hit() -> None:
     assert summary["best_retained_variants"][0]["target_score"]["virtuals"]["46"][
         "actual"
     ] == 1
+
+
+def test_select_order_terminal_exhaustion_reports_param_alias_family() -> None:
+    source_hunks = [{
+        "hunk_id": "param-alias001",
+        "base_range": {"start": 2412, "end": 2413},
+        "candidate_range": {"start": 2412, "end": 2413},
+    }]
+    param_candidate = {
+        "probe_label": "window-order-param-alias-ig34-before-0",
+        "materialization_kind": "declaration-order",
+        "param_name": "arg2",
+        "alias_name": "arg2_r",
+    }
+    ranked_variants = [{
+        "label": "window-order-param-alias-ig34-before-0",
+        "rank": 1,
+        "status": "ok",
+        "operator": "window-order-source-steering",
+        "path": "/tmp/param-alias.c",
+        "source_retained": "/tmp/param-alias.c",
+        "pcdump_path": "/tmp/param-alias.pcdump.txt",
+        "probe": {
+            "provenance": {
+                "kind": "window-order-param-alias-source-order",
+                "source_hunks": source_hunks,
+            },
+        },
+        "objective": {
+            "force_phys_targets": {"34": 29},
+            "force_phys_satisfied": False,
+            "force_phys_satisfied_count": 0,
+            "force_phys_mismatches": {"34": {"expected": 29, "actual": 30}},
+            "force_phys_missing": [],
+            "force_phys_distance": 1,
+            "frame_delta": 0,
+        },
+        "target_score": {
+            "matched": 0,
+            "total": 1,
+            "targeted": 1,
+            "virtuals": {
+                "34": {
+                    "expected": 29,
+                    "actual": 30,
+                    "hit": False,
+                    "matched": False,
+                },
+            },
+        },
+    }]
+    source_bridge_summary = {
+        "status": "blocked",
+        "dominant_blocker": "source-probes-exhausted",
+        "blocker_classes": ["wrong-register"],
+        "terminal_owner_probe_summary": {
+            "param_alias_source_candidates": 1,
+            "materialized_param_alias_source_candidates": 1,
+        },
+        "ranked_actions": [{
+            "kind": "try-window-order-source-move",
+            "probe_labels": ["window-order-param-alias-ig34-before-0"],
+            "materialized_param_alias_source_candidates": [param_candidate],
+        }],
+    }
+
+    summary = debug_cli._select_order_terminal_exhaustion_summary(
+        ranked_variants=ranked_variants,
+        force_phys={34: 29},
+        blocker_targets={34},
+        diagnostic_buckets={
+            "force-phys-hit-34": [],
+            "global-top": ranked_variants,
+        },
+        source_bridge_summary=source_bridge_summary,
+        timed_out=False,
+        class_id=0,
+    )
+
+    assert summary["terminal_blocker"] == "param-alias-source-family-exhausted"
+    proof = summary["source_candidate_family_exhaustion"]
+    assert proof["status"] == "exhausted"
+    assert proof["family"] == "param-alias-source-bridge"
+    assert proof["generated_candidates"] == 1
+    assert proof["materialized_candidates"] == 1
+    assert proof["scored_candidates"] == 1
+    result = proof["source_probe_results"][0]
+    assert result["source_retained"] == "/tmp/param-alias.c"
+    assert result["pcdump_path"] == "/tmp/param-alias.pcdump.txt"
+    assert result["source_hunks"] == source_hunks
+    assert result["target_score"]["virtuals"]["34"] == {
+        "expected": 29,
+        "actual": 30,
+        "hit": False,
+        "matched": False,
+    }
+    assert "arg2/arg2_r" in proof["source_level_handoff"]
 
 
 def test_select_order_source_bridge_reports_terminal_frame_repair_lane() -> None:
@@ -7079,6 +7312,60 @@ def test_select_order_source_attributions_for_leads_loads_synthetic_operands(
     assert attrs[34].name == "dst_iter"
 
 
+def test_select_order_source_attributions_for_leads_loads_pcode_base_virtual(
+    monkeypatch,
+) -> None:
+    class PcodeFieldLoad:
+        kind = "load/store-address"
+        confidence = "pcode-first-def"
+        expression = "lwz r42,40(r263)"
+        base_virtual = 263
+        field_offset = 40
+
+    class BaseFieldLoad:
+        kind = "field-load"
+        expression = "data->popup_gobj"
+        base_var = "data"
+        field_offset = 0x74
+        type = "HSD_GObj*"
+
+    calls: list[tuple[int, ...]] = []
+
+    def fake_explain_virtuals(*args, **kwargs):
+        virtuals = tuple(kwargs["virtuals"])
+        calls.append(virtuals)
+        return virtuals
+
+    def fake_source_attr_of(report, ig_idx: int):
+        if ig_idx == 42:
+            return PcodeFieldLoad()
+        if ig_idx == 263 and 263 in report:
+            return BaseFieldLoad()
+        return None
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.virtual_attribution.explain_virtuals",
+        fake_explain_virtuals,
+    )
+    monkeypatch.setattr(
+        "src.search.solver.probe.source_attr_of",
+        fake_source_attr_of,
+    )
+
+    attrs = debug_cli._select_order_source_attributions_for_leads(
+        pcdump_text="pcdump",
+        function="fn_80000000",
+        class_id=0,
+        source_text="void fn_80000000(void) {}\n",
+        source_file="sample.c",
+        fallback={"leads": [{"target_ig": 42}]},
+    )
+
+    assert calls == [(42,), (42, 263)]
+    assert attrs[42].base_virtual == 263
+    assert attrs[263].expression == "data->popup_gobj"
+
+
 def test_select_order_source_attributions_load_copy_product_source_operand(
     monkeypatch,
 ) -> None:
@@ -7127,6 +7414,93 @@ def test_select_order_source_attributions_load_copy_product_source_operand(
     assert attrs[34].kind == "copy/coalesce-product"
     assert attrs[37].kind == "implicit-temp"
     assert attrs[37].expression == "addi r37,r52,28"
+
+
+def test_expression_score_rejects_fpr_order_source_with_mismatched_first_def(
+    monkeypatch,
+) -> None:
+    signature = {
+        "kind": "source-expression",
+        "source_kind": "local",
+        "name": "row_offset",
+        "expression": "y_offset * rowf",
+    }
+    key = debug_cli._expression_signature_key(signature)
+
+    def fake_candidate_expression_entries(**kwargs):
+        return {
+            key: [
+                {
+                    "virtual": 33,
+                    "actual": 26,
+                    "signature": dict(signature),
+                    "source": {
+                        "kind": "local",
+                        "confidence": "fpr-expression-order",
+                        "name": "row_offset",
+                        "expression": "y_offset * rowf",
+                        "first_def": {
+                            "opcode": "fmuls",
+                            "operands": "f33,f36,f52",
+                        },
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_candidate_expression_entries",
+        fake_candidate_expression_entries,
+    )
+
+    score = debug_cli._score_expression_anchors(
+        target_spec={
+            "virtuals": {"33": 26},
+            "expression_register_class": "fpr",
+            "expression_anchors": {
+                "33": {
+                    "expected": 26,
+                    "signature": signature,
+                    "baseline_source": {
+                        "kind": "local",
+                        "confidence": "fpr-expression-order",
+                        "name": "row_offset",
+                        "expression": "y_offset * rowf",
+                        "first_def": {
+                            "opcode": "fmuls",
+                            "operands": "f39,f32,f48",
+                        },
+                    },
+                }
+            },
+        },
+        target_details={
+            "virtuals": {
+                "33": {
+                    "actual": 26,
+                    "matched": True,
+                }
+            }
+        },
+        pcdump_text="candidate pcdump",
+        function="fn_80000000",
+        fn=object(),
+        candidate_source_text="void fn_80000000(void) {}\n",
+        candidate_source_file="sample.c",
+        baseline_pcdump_text=None,
+        baseline_source_text=None,
+        baseline_source_file=None,
+        reg_class="fpr",
+    )
+
+    assert score is not None
+    assert score["matched"] == 0
+    assert score["false_positive_virtual_id_hit_count"] == 1
+    detail = score["virtuals"]["33"]
+    assert detail["status"] == "first-def-mismatch"
+    assert detail["matched"] is False
+    assert detail["virtual_id_false_positive"] is True
 
 
 def test_select_order_source_attributions_keep_first_pass_when_operand_retry_fails(
@@ -8692,6 +9066,63 @@ def test_select_order_search_auto_includes_indexed_byte_transform_probes(
     )
     assert payload["probes"][0]["mutator_key"] == (
         "steer_indexed_byte_same_line_expr"
+    )
+
+
+def test_select_order_search_auto_materializes_indexed_byte_helper_result(
+    tmp_path: pathlib.Path,
+) -> None:
+    baseline = tmp_path / "gpr-baseline.txt"
+    source = tmp_path / "helper.c"
+    baseline.write_text(BASELINE)
+    source.write_text(
+        textwrap.dedent(
+            """\
+            typedef unsigned char u8;
+            static inline u8 visible_name(u8* sorted, int i) { return sorted[i]; }
+            void fn_80000000(u8* sorted, int i) {
+                int name_id;
+                name_id = visible_name(sorted, i) &
+                          0xFFFFFFFFFFFFFFFFu;
+                use(name_id);
+            }
+            """
+        )
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--class",
+            "0",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--transform-force-phys",
+            "79:25",
+            "--no-compile-probes",
+            "--max-probes",
+            "4",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["auto_transform_families"] == [
+        "indexed_byte_address_temp_steering"
+    ]
+    assert any(
+        probe["operator"] == "transform-corpus:indexed_byte_address_temp_steering"
+        and probe["mutator_key"] == "steer_indexed_byte_helper_result_temp"
+        for probe in payload["probes"]
     )
 
 
@@ -10689,7 +11120,9 @@ def test_select_order_search_json_returns_when_source_score_lock_is_held(
     assert result.exit_code == 0, result.stdout + result.stderr
     assert time.monotonic() - start < 2.5
     payload = json.loads(result.stdout)
-    assert payload["status"] == "ok"
+    assert payload["status"] == "timeout"
+    assert payload["timed_out"] is True
+    assert "finishing select-order candidate held-lock" in payload["timeout_error"]
     assert payload["variants"]
 
 
@@ -11077,6 +11510,122 @@ def test_select_order_search_emits_partial_guard_repair_json_on_top_level_timeou
     assert "guard repair" in ledger["timeout_error"]
     assert len(ledger["entries"]) == 1
     assert payload["variants"]
+
+
+def test_select_order_search_skips_optional_summaries_after_budget_exhausted(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    base = tmp_path / "base.c"
+    campaign = tmp_path / "campaign"
+    baseline.write_text(BASELINE)
+    base.write_text("void fn_80000000(void) { /* base */ }\n")
+    clock = {"now": 100.0}
+    source_bridge_calls: list[bool] = []
+    terminal_calls: list[bool] = []
+
+    def fake_probes(*args, **kwargs) -> list[LifetimeLayoutProbe]:
+        return [
+            LifetimeLayoutProbe(
+                label="slow-probe",
+                operator="block-scope",
+                description="Synthetic slow probe.",
+                source_text="void fn_80000000(void) { /* slow */ }\n",
+            )
+        ]
+
+    def fake_compile(*args, **kwargs) -> str:
+        clock["now"] += 1.2
+        return ONE_FORCE_PHYS_HIT
+
+    def fake_source_score(path: pathlib.Path, **kwargs):
+        return debug_cli._SourceCandidateRealScore(70.0, None)
+
+    def fake_source_bridge_summary(*args, **kwargs):
+        source_bridge_calls.append(True)
+        return {"status": "called"}
+
+    def fake_terminal_summary(*args, **kwargs):
+        terminal_calls.append(True)
+        return {"status": "called"}
+
+    monkeypatch.setattr(debug_cli.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        debug_cli,
+        "_register_tiebreak_window_order_fallback",
+        lambda **kwargs: {"ran": True, "leads": []},
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_source_attributions_for_leads",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "src.search.directed.window_order_source.generate_window_order_source_probes",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        fake_probes,
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(debug_cli, "_select_order_source_score", fake_source_score)
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_source_bridge_summary",
+        fake_source_bridge_summary,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_terminal_exhaustion_summary",
+        fake_terminal_summary,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(base),
+            "--force-phys",
+            "32:29,33:30",
+            "--beam-depth",
+            "1",
+            "--beam-width",
+            "1",
+            "--max-probes",
+            "1",
+            "--campaign-dir",
+            str(campaign),
+            "--timeout",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "timeout"
+    assert payload["partial"] is True
+    assert "finishing select-order beam candidate" in payload["timeout_error"]
+    assert payload["source_bridge_summary"]["status"] == "skipped-timeout"
+    assert payload["terminal_exhaustion_summary"]["status"] == "skipped-timeout"
+    assert source_bridge_calls == []
+    assert terminal_calls == []
+    ledger = json.loads(pathlib.Path(payload["beam_ledger"]).read_text())
+    assert ledger["stop_condition"] == "timeout"
+    assert ledger["timed_out"] is True
 
 
 def test_select_order_search_marks_source_score_deadline_error_as_timeout(

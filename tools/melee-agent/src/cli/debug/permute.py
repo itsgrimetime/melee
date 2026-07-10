@@ -48,6 +48,7 @@ from ...mwcc_debug.diff_capture import (
     _run_with_process_group_timeout,
 )
 from ...mwcc_debug.source_patch import (
+    find_function as find_source_function,
     transfer_candidate,
 )
 
@@ -107,6 +108,106 @@ __all__ = [
     "remote_app",
     "verify_perm",
 ]
+
+
+def _signal_process_group(proc: subprocess.Popen[Any], sig: int) -> None:
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        pgid = proc.pid
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        if sig == signal.SIGKILL:
+            proc.kill()
+        else:
+            proc.terminate()
+
+
+class _LocalPermuterInterrupted(BaseException):
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _terminate_local_permuter_group(
+    proc: subprocess.Popen[Any],
+    *,
+    sigterm_sent: bool = False,
+) -> None:
+    if not sigterm_sent:
+        _signal_process_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_process_group(proc, signal.SIGKILL)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _run_local_permuter(
+    cmd: list[str],
+    *,
+    env: Mapping[str, str],
+    cwd: Path,
+) -> int:
+    proc = subprocess.Popen(
+        cmd,
+        env=dict(env),
+        cwd=cwd,
+        start_new_session=True,
+    )
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        signals.append(signal.SIGHUP)
+    previous_handlers: dict[int, Any] = {}
+    termination_requested = False
+    termination_finished = False
+
+    def request_termination() -> None:
+        nonlocal termination_requested
+        if termination_requested:
+            return
+        termination_requested = True
+        _signal_process_group(proc, signal.SIGTERM)
+
+    def finish_termination() -> None:
+        nonlocal termination_finished
+        if termination_finished:
+            return
+        termination_finished = True
+        _terminate_local_permuter_group(
+            proc,
+            sigterm_sent=termination_requested,
+        )
+
+    def _handler(signum: int, _frame: Any) -> NoReturn:
+        request_termination()
+        raise _LocalPermuterInterrupted(signum)
+
+    for signum in signals:
+        previous_handlers[signum] = signal.signal(signum, _handler)
+    try:
+        try:
+            return proc.wait()
+        except _LocalPermuterInterrupted as exc:
+            finish_termination()
+            raise SystemExit(128 + exc.signum)
+        finally:
+            if proc.poll() is None:
+                finish_termination()
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 _PERMUTER_DEFAULT_PRESERVE_MACROS = (
@@ -387,6 +488,27 @@ def _remote_read_job(job_id: str) -> permuter_remote.RemoteJob:
     return permuter_remote.read_job(job_id, permuter_remote.JOBS_DIR)
 
 
+def _remote_cleanup_after_fetch(job: permuter_remote.RemoteJob) -> str | None:
+    try:
+        permuter_remote.cleanup_remote_run_dir(job)
+    except permuter_remote.RemoteJobError as exc:
+        return str(exc)
+    return None
+
+
+def _print_remote_cleanup_after_fetch(
+    job: permuter_remote.RemoteJob,
+    warning: str | None,
+) -> None:
+    if warning:
+        typer.echo(
+            f"Remote cleanup warning for {job.job_id}: {warning}",
+            err=True,
+        )
+        return
+    print(f"Deleted remote run dir: {job.remote_run_dir}", flush=True)
+
+
 def _remote_stream_runner(
     argv: list[str],
     *,
@@ -599,7 +721,7 @@ def remote_list(
     ] = False,
     timeout: Annotated[
         float,
-        typer.Option("--timeout", help="Per-job SSH probe timeout in seconds."),
+        typer.Option("--timeout", help="Per-host SSH probe timeout in seconds."),
     ] = 10.0,
     prune_dead: Annotated[
         bool,
@@ -636,13 +758,11 @@ def remote_list(
             print("No remote permuter jobs found.")
         return
 
-    # Probe which are active
-    active_map = permuter_remote.probe_jobs_active(jobs, timeout=timeout)
-
     if prune_dead:
         pruned = permuter_remote.prune_dead_jobs(
             jobs, dry_run=False,
             jobs_dir=permuter_remote.JOBS_DIR,
+            timeout=timeout,
         )
         if pruned:
             print(f"Pruned {len(pruned)} dead job metadata file(s):")
@@ -651,6 +771,9 @@ def remote_list(
         else:
             print("No dead job metadata to prune.")
         return
+
+    # Probe which are active with one SSH call per host instead of one per job.
+    active_map = permuter_remote.probe_jobs_active_batched(jobs, timeout=timeout)
 
     header_printed = False
     for job in jobs:
@@ -698,12 +821,16 @@ def remote_status(
             help="Recommend stopping active jobs whose log is idle this many hours.",
         ),
     ] = 12.0,
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Per remote status/log probe timeout in seconds."),
+    ] = 15.0,
 ) -> None:
     """Show remote permuter job activity and stale cleanup guidance."""
     try:
         job = _remote_read_job(job_id)
-        status = permuter_remote.status_job(job)
-        log_status = permuter_remote.remote_log_status(job)
+        status = _remote_status_job_for_triage(job, timeout=timeout)
+        log_status = _remote_log_status_for_triage(job, timeout=timeout)
     except (permuter_remote.RemoteConfigError, permuter_remote.RemoteJobError) as exc:
         _remote_error(exc)
 
@@ -867,18 +994,72 @@ def remote_fetch(
         bool,
         typer.Option("--triage", help="Print the follow-up triage command."),
     ] = False,
+    delete_remote: Annotated[
+        bool,
+        typer.Option(
+            "--delete-remote",
+            help=(
+                "Delete each fetched stopped job's remote run directory after "
+                "a successful fetch."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Fetch remote permuter outputs into the local permuter directory."""
     try:
         if all_jobs:
             jobs = permuter_remote.list_jobs(permuter_remote.JOBS_DIR)
+            fetched_jobs: list[tuple[permuter_remote.RemoteJob, Path]] = []
+
+            def before_fetch(
+                job: permuter_remote.RemoteJob,
+                index: int,
+                total: int,
+            ) -> None:
+                print(
+                    f"Fetching {index}/{total}: {job.job_id} "
+                    f"({job.function} on {job.target})",
+                    flush=True,
+                )
+
+            def after_fetch(
+                job: permuter_remote.RemoteJob,
+                path: Path,
+                index: int,
+                total: int,
+            ) -> None:
+                del index, total
+                fetched_jobs.append((job, path))
+                print(f"Fetched: {path}", flush=True)
+
+            def after_cleanup(
+                job: permuter_remote.RemoteJob,
+                warning: str | None,
+                index: int,
+                total: int,
+            ) -> None:
+                del index, total
+                _print_remote_cleanup_after_fetch(job, warning)
+
             fetched = permuter_remote.fetch_all_jobs(
                 jobs,
                 function_filter=function,
                 target_filter=target,
+                before_fetch=before_fetch,
+                after_fetch=after_fetch,
+                delete_remote=delete_remote,
+                after_cleanup=after_cleanup,
             )
-            for path in fetched:
-                print(f"Fetched: {path}")
+            if not fetched_jobs:
+                for path in fetched:
+                    print(f"Fetched: {path}")
+            if triage:
+                for job, path in fetched_jobs:
+                    print(
+                        "Triage manually with: "
+                        f"melee-agent debug permute triage {shlex.quote(str(path))} "
+                        f"--function {shlex.quote(job.function)}"
+                    )
             print(f"\nFetched {len(fetched)} job(s).")
             return
 
@@ -892,10 +1073,13 @@ def remote_fetch(
 
         job = _remote_read_job(job_id)
         fetched = permuter_remote.fetch_job(job)
+        cleanup_warning = _remote_cleanup_after_fetch(job) if delete_remote else None
     except (permuter_remote.RemoteConfigError, permuter_remote.RemoteJobError) as exc:
         _remote_error(exc)
 
     print(f"Fetched: {fetched}")
+    if delete_remote:
+        _print_remote_cleanup_after_fetch(job, cleanup_warning)
     if triage:
         print(
             "Triage manually with: "
@@ -2913,11 +3097,57 @@ def _render_force_phys_target_yaml(
     return "\n".join(lines) + "\n"
 
 
+_BOOTSTRAP_METADATA_NAME = "melee_agent_bootstrap.json"
+
+
 def _portable_path_for_base(path: Path, base: Path) -> Path | str:
     try:
         return path.relative_to(base)
     except ValueError:
         return path
+
+
+def _repo_relative_path(path: Path, root: Path) -> str | None:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def _read_bootstrap_full_unit_source(perm_dir: Path, function: str) -> Path | None:
+    metadata_path = perm_dir / _BOOTSTRAP_METADATA_NAME
+    if not metadata_path.exists():
+        return None
+    try:
+        data = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if data.get("function") not in {None, function}:
+        return None
+    if (
+        data.get("candidate_source_context") != "full-unit"
+        and data.get("source_staged") is not True
+        and data.get("full_unit_source") is not True
+    ):
+        return None
+    raw_source = data.get("source")
+    if not isinstance(raw_source, str) or not raw_source:
+        return None
+    return Path(raw_source).expanduser()
+
+
+def _validate_full_unit_source(path: Path, function: str) -> Path:
+    path = path.expanduser().resolve()
+    if not path.is_file():
+        raise typer.BadParameter(f"full-unit source file not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    if find_source_function(text, function) is None:
+        typer.echo(
+            f"full-unit source file does not contain function {function!r}: {path}",
+            err=True,
+        )
+        raise typer.Exit(2)
+    return path
 
 
 def _build_simplify_order_compile_sh(
@@ -2926,6 +3156,11 @@ def _build_simplify_order_compile_sh(
     debug_compiler: Path,
     project_root: Path,
     cflags: str,
+    full_unit_source: Path | None = None,
+    function: str | None = None,
+    full_unit_source_expr: str | None = None,
+    stage_path: str = "nonmatchings/.permuter_stage_$$.c",
+    remote_portable: bool = False,
 ) -> str:
     """Generate a compile.sh that produces .o + sibling pcdump per call.
 
@@ -2943,22 +3178,87 @@ def _build_simplify_order_compile_sh(
     ``debug target score-simplify-order`` consumes — it reads
     ``<o>.pcdump.txt`` to compute the score, no recompile.
     """
+    if full_unit_source is None:
+        stage_lines = [
+            "cp \"$INPUT_ABS\" \"$STAGE\"",
+        ]
+    else:
+        if not function:
+            raise ValueError("function is required with full_unit_source")
+        source_expr = (
+            full_unit_source_expr
+            if full_unit_source_expr is not None
+            else shlex.quote(str(full_unit_source))
+        )
+        stage_lines = [
+            f"MELEE_FULL_UNIT_SOURCE={source_expr}",
+            f"MELEE_TARGET_FUNCTION={shlex.quote(function)}",
+            "PYTHON_BIN=\"${PYTHON:-python3}\"",
+            (
+                "PYTHONPATH=\"tools/melee-agent${PYTHONPATH:+:$PYTHONPATH}\" "
+                "\"$PYTHON_BIN\" - "
+                "\"$MELEE_FULL_UNIT_SOURCE\" \"$INPUT_ABS\" "
+                "\"$MELEE_TARGET_FUNCTION\" \"$STAGE\" <<'PY'"
+            ),
+            "import sys",
+            "from pathlib import Path",
+            "from src.mwcc_debug.source_patch import (",
+            "    find_function,",
+            "    find_function_definitions,",
+            "    replace_function,",
+            ")",
+            "unit_arg, candidate_arg, function_name, stage_arg = sys.argv[1:5]",
+            "unit_path = Path(unit_arg)",
+            "candidate_path = Path(candidate_arg)",
+            "stage_path = Path(stage_arg)",
+            "unit_text = unit_path.read_text(encoding='utf-8')",
+            "candidate_text = candidate_path.read_text(encoding='utf-8')",
+            "patched = unit_text",
+            "replaced = []",
+            "for span in find_function_definitions(candidate_text):",
+            "    candidate_fn = candidate_text[span.sig_start:span.full_end]",
+            "    next_patched = replace_function(patched, span.name, candidate_fn)",
+            "    if next_patched is None:",
+            "        continue",
+            "    patched = next_patched",
+            "    replaced.append(span.name)",
+            "if function_name not in replaced:",
+            "    if find_function(candidate_text, function_name) is None:",
+            "        raise SystemExit(f'candidate source lacks {function_name}')",
+            "    raise SystemExit(f'full-unit source lacks {function_name}')",
+            "stage_path.write_text(patched, encoding='utf-8')",
+            "PY",
+        ]
+
+    if remote_portable:
+        cd_line = 'cd "${MELEE_ROOT:?MELEE_ROOT must be set}"'
+        compiler_prefix = (
+            '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}" '
+            '"${MWCC_DEBUG_COMPILER:-$MELEE_ROOT/build/compilers/GC/1.2.5n/'
+            'mwcceppc_debug.exe}"'
+        )
+    else:
+        cd_line = f"cd {shlex.quote(str(project_root))}"
+        compiler_prefix = (
+            f"{shlex.quote(str(wibo_path))} {shlex.quote(str(debug_compiler))}"
+        )
+
     return "\n".join([
         "#!/usr/bin/env bash",
         _SIMPLIFY_SCORER_COMPILE_MARKER,
         "set -e",
+        "PERM_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"",
         "INPUT_ABS=\"$(realpath \"$1\")\"",
         "OUTPUT_ABS=\"$(realpath \"$3\")\"",
-        f"cd {shlex.quote(str(project_root))}",
-        "STAGE=\"nonmatchings/.permuter_stage_$$.c\"",
-        "mkdir -p nonmatchings",
-        "cp \"$INPUT_ABS\" \"$STAGE\"",
+        cd_line,
+        f"STAGE=\"{stage_path}\"",
+        "mkdir -p \"$(dirname \"$STAGE\")\"",
+        *stage_lines,
         "trap 'rm -f \"$STAGE\"' EXIT",
         "# Deposit the pcdump as a sibling of the .o so",
         "# `debug target score-simplify-order` finds it via the fast path.",
         "export MWCC_DEBUG_PCDUMP_PATH=\"${OUTPUT_ABS}.pcdump.txt\"",
-        f"{shlex.quote(str(wibo_path))} {shlex.quote(str(debug_compiler))} "
-        f"{cflags} -c \"$STAGE\" -o \"$OUTPUT_ABS\"",
+        f"{compiler_prefix} {cflags} -c \"$STAGE\" -o \"$OUTPUT_ABS\"",
         "",
     ])
 
@@ -3050,6 +3350,18 @@ def setup_simplify_order_scorer(
                  "the simplify-order scorer.",
         ),
     ] = False,
+    source_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--source-file",
+            "--annotated-source-file",
+            help=(
+                "Retained/full-unit source used for bootstrap or candidate "
+                "staging. When set, candidate .c files are spliced back into "
+                "this source before MWCC debug compiles the pcdump sidecar."
+            ),
+        ),
+    ] = None,
     auto_baseline_dump: Annotated[
         bool,
         typer.Option(
@@ -3129,10 +3441,12 @@ def setup_simplify_order_scorer(
     from src.cli.debug import DEFAULT_MELEE_ROOT  # noqa: PLC0415
     from src.cli.debug import (  # noqa: PLC0415
         _bootstrap_permuter_dir,
+        _cflags_with_same_tu_include_dir,
         _detect_existing_compile_sh_project_root,
         _extract_cflags_from_compile_sh,
         _find_compiler_dir,
         _find_wibo,
+        _ninja_cflags_for_unit,
     )
     from src.cli.debug import _find_unit_for_function  # noqa: PLC0415
     from ...mwcc_debug.permuter_config import (
@@ -3155,7 +3469,7 @@ def setup_simplify_order_scorer(
             _bootstrap_permuter_dir(
                 function,
                 perm_root=perm_root,
-                source_file=None,
+                source_file=source_file,
                 melee_root=None,
                 preserve_macros=_PERMUTER_DEFAULT_PRESERVE_MACROS,
                 force=force,
@@ -3340,6 +3654,12 @@ def setup_simplify_order_scorer(
         )
         raise typer.Exit(2)
     existing_compile_text = existing_compile_sh.read_text(encoding="utf-8")
+    full_unit_source = (
+        source_file.expanduser() if source_file is not None
+        else _read_bootstrap_full_unit_source(perm_dir, function)
+    )
+    if full_unit_source is not None:
+        full_unit_source = _validate_full_unit_source(full_unit_source, function)
 
     # Refuse to clobber an already-wrapped compile.sh unless --force.
     # The marker indicates a previous run of this command, in which
@@ -3378,6 +3698,38 @@ def setup_simplify_order_scorer(
             err=True,
         )
         raise typer.Exit(2)
+
+    baseline_dump_for_spec_path = baseline_dump
+    full_unit_source_expr: str | None = None
+    full_unit_stage_path = "nonmatchings/.permuter_stage_$$.c"
+    remote_portable_compile = False
+    if full_unit_source is not None:
+        staged_baseline = perm_dir / "baseline.pcdump.txt"
+        if baseline_dump.resolve() != staged_baseline.resolve():
+            shutil.copy2(baseline_dump, staged_baseline)
+        baseline_dump_for_spec_path = staged_baseline
+
+        source_rel = _repo_relative_path(full_unit_source, DEFAULT_MELEE_ROOT)
+        if source_rel is not None and source_rel.startswith("src/"):
+            cflags, _mw_version = _ninja_cflags_for_unit(
+                source_rel, melee_root=DEFAULT_MELEE_ROOT
+            )
+            cflags = _cflags_with_same_tu_include_dir(cflags, source_rel)
+            full_unit_source_expr = (
+                '"${MELEE_ROOT:?MELEE_ROOT must be set}/'
+                f'{source_rel}"'
+            )
+            full_unit_stage_path = (
+                f"{Path(source_rel).parent.as_posix()}/.permuter_stage_$$.c"
+            )
+            remote_portable_compile = True
+        else:
+            retained_copy = perm_dir / "full-unit.c"
+            if full_unit_source.resolve() != retained_copy.resolve():
+                shutil.copy2(full_unit_source, retained_copy)
+            full_unit_source = retained_copy
+            full_unit_source_expr = '"$PERM_DIR/full-unit.c"'
+            remote_portable_compile = True
 
     # ----------------------------------------------------------------
     # Parse optional --force-phys mapping for the polarity check.
@@ -3427,7 +3779,9 @@ def setup_simplify_order_scorer(
         raise typer.Exit(2)
 
     coalesce_preservation = not no_coalesce_preservation
-    baseline_dump_for_spec = _portable_path_for_base(baseline_dump, perm_dir)
+    baseline_dump_for_spec = _portable_path_for_base(
+        baseline_dump_for_spec_path, perm_dir
+    )
     if force_phys_mode:
         spec_yaml = _render_force_phys_target_yaml(
             function=function,
@@ -3502,6 +3856,11 @@ def setup_simplify_order_scorer(
         debug_compiler=debug_compiler,
         project_root=project_root,
         cflags=cflags,
+        full_unit_source=full_unit_source,
+        function=function,
+        full_unit_source_expr=full_unit_source_expr,
+        stage_path=full_unit_stage_path,
+        remote_portable=remote_portable_compile,
     )
     existing_compile_sh.write_text(new_compile, encoding="utf-8")
     existing_compile_sh.chmod(0o755)
@@ -4423,7 +4782,5 @@ def permute(
     print(f"  {' '.join(cmd)}")
     print()
 
-    proc = subprocess.run(cmd, env=env, cwd=permuter_code_root)
-    raise typer.Exit(proc.returncode)
-
-
+    returncode = _run_local_permuter(cmd, env=env, cwd=permuter_code_root)
+    raise typer.Exit(returncode)

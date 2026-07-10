@@ -257,6 +257,12 @@ EOF
 
     ensure_base_dol
 
+    if python tools/worktree-doctor.py assets hydrate --asset-source "$REPO_ROOT"; then
+        echo "Shared immutable assets checked."
+    else
+        echo "Warning: shared asset hydration skipped; worktree remains usable."
+    fi
+
     echo ""
     echo -e "${GREEN}=== $(mode_label) Worktree Ready ===${NC}"
     echo ""

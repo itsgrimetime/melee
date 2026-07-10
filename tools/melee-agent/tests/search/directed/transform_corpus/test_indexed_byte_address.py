@@ -1,9 +1,133 @@
 """Tests for non-struct indexed byte-array address-temp steering probes."""
 from __future__ import annotations
 
+import pytest
+
 from src.search.directed.anchors import Anchor
 from src.search.directed.mutators import apply_mutator
 from src.search.directed.transform_corpus import generate_transform_probes
+
+
+def test_indexed_byte_address_temp_generates_helper_result_probe() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "static inline u8 visible_name(u8* sorted, int i) { return sorted[i]; }\n"
+        "void fn(u8* sorted, int i) {\n"
+        "    int name_id;\n"
+        "    name_id = visible_name(sorted, i) &\n"
+        "              0xFFFFFFFFFFFFFFFFu;\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="fn",
+        unit="melee/mn/mndiagram",
+        force_phys={79: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=8,
+    )
+
+    probe = next(
+        probe for probe in probes
+        if probe.mutator_key == "steer_indexed_byte_helper_result_temp"
+    )
+
+    assert probe.payload["helper"] == "visible_name"
+    assert probe.payload["strategy"] == "indexed-byte-helper-result-temp"
+    assert "u8 visible_name_probe;" in probe.candidate_text
+    assert "visible_name_probe = visible_name(sorted, i);" in probe.candidate_text
+    assert "name_id = visible_name_probe;" in probe.candidate_text
+
+
+@pytest.mark.parametrize("return_type, arguments", [
+    ("int", "sorted, i"),
+    ("u8", "sorted, i++"),
+])
+def test_indexed_byte_helper_result_rejects_unsafe_shape(
+    return_type: str,
+    arguments: str,
+) -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        f"static inline {return_type} visible_name(u8* sorted, int i) "
+        "{ return sorted[i]; }\n"
+        "void fn(u8* sorted, int i) {\n"
+        "    int name_id;\n"
+        f"    name_id = visible_name({arguments}) & 0xFFFFFFFFFFFFFFFFu;\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="fn",
+        unit="melee/mn/mndiagram",
+        force_phys={79: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=8,
+    )
+
+    assert not [
+        probe for probe in probes
+        if probe.mutator_key == "steer_indexed_byte_helper_result_temp"
+    ]
+
+
+def test_indexed_byte_helper_result_rejects_ambiguous_occurrences() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "static inline u8 visible_name(u8* sorted, int i) { return sorted[i]; }\n"
+        "void fn(u8* sorted, int i, int j) {\n"
+        "    int first;\n"
+        "    int second;\n"
+        "    first = visible_name(sorted, i) & 0xFFFFFFFFFFFFFFFFu;\n"
+        "    second = visible_name(sorted, j) & 0xFFFFFFFFFFFFFFFFu;\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="fn",
+        unit="melee/mn/mndiagram",
+        force_phys={79: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=8,
+    )
+
+    assert not [
+        probe for probe in probes
+        if probe.mutator_key == "steer_indexed_byte_helper_result_temp"
+    ]
+
+
+def test_indexed_byte_helper_result_temp_avoids_parameter_name_collision() -> None:
+    source = (
+        "typedef unsigned char u8;\n"
+        "static inline u8 visible_name(u8* sorted, int i) { return sorted[i]; }\n"
+        "void fn(u8* sorted, int i, int visible_name_probe) {\n"
+        "    int name_id;\n"
+        "    name_id = visible_name(sorted, i) & 0xFFFFFFFFFFFFFFFFu;\n"
+        "    use(name_id);\n"
+        "}\n"
+    )
+
+    probes = generate_transform_probes(
+        source,
+        function="fn",
+        unit="melee/mn/mndiagram",
+        force_phys={79: 25},
+        families=("indexed_byte_address_temp_steering",),
+        max_per_family=8,
+    )
+
+    probe = next(
+        probe for probe in probes
+        if probe.mutator_key == "steer_indexed_byte_helper_result_temp"
+    )
+    assert "u8 visible_name_probe;" not in probe.candidate_text
+    assert "u8 visible_name_probe_2;" in probe.candidate_text
+    assert "visible_name_probe_2 = visible_name(sorted, i);" in probe.candidate_text
+    assert "name_id = visible_name_probe_2;" in probe.candidate_text
 
 
 def test_indexed_byte_address_temp_generates_same_line_variants() -> None:

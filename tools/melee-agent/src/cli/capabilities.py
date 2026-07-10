@@ -150,8 +150,16 @@ _SCORE_THRESHOLD = 4  # >=4 requires either one name-token hit (score 5) or two 
 TASK_ALIASES: dict[str, list[str]] = {
     "find callers": ["ghidra", "commit check-callers"],
     "cross reference": ["ghidra", "commit check-callers"],
-    "debug registers": ["mwcc-debug", "mwcc-inspect"],
-    "register allocation": ["mwcc-debug", "mwcc-inspect"],
+    "debug registers": [
+        "debug inspect lifetime-pressure",
+        "mwcc-debug",
+        "mwcc-inspect",
+    ],
+    "register allocation": [
+        "debug inspect lifetime-pressure",
+        "mwcc-debug",
+        "mwcc-inspect",
+    ],
     "score candidate": ["debug target score-source", "debug target score-dump"],
     "scorer": ["debug target score-source", "debug target score-dump"],
     "permuter scorer": ["debug target score-source", "debug permute run"],
@@ -484,6 +492,13 @@ _BRIEF_HEADER = (
     "`melee-agent capabilities search <task>`.\n"
 )
 
+BRIEF_TASK_HINTS = [
+    "register allocation",
+    "score candidate",
+    "find callers",
+    "transform corpus pressure coalesce select order",
+]
+
 
 def _repo_root() -> Path:
     return DEFAULT_MELEE_ROOT
@@ -497,6 +512,7 @@ def _artifact_paths() -> tuple[Path, Path]:
 def render_brief(caps: list[Capability]) -> str:
     cmds = [c for c in caps if c.kind == "command"]
     skills = [c for c in caps if c.kind == "skill"]
+    by_name = {c.name: c for c in caps}
     lines = [_BRIEF_HEADER, "## CLI command groups (`melee-agent <group> --help`)"]
     keyfn = lambda c: c.group
     for group, members in itertools.groupby(sorted(cmds, key=keyfn), key=keyfn):
@@ -505,6 +521,17 @@ def render_brief(caps: list[Capability]) -> str:
         # deduped — keeps the brief compact instead of dumping every nested leaf path.
         verbs = ", ".join(sorted({m.name.split()[1] for m in members if " " in m.name})) or "(direct)"
         lines.append(f"- {group}: {verbs}")
+    lines.append("\n## Common task shortcuts")
+    for task in BRIEF_TASK_HINTS:
+        targets = [
+            by_name[target].invoke
+            for target in TASK_ALIASES.get(task, [])
+            if target in by_name
+        ]
+        if targets:
+            lines.append(
+                f"- {task}: " + ", ".join(f"`{target}`" for target in targets)
+            )
     lines.append("\n## Skills (invoke `/<name>`)")
     for s in sorted(skills, key=lambda c: c.name):
         lines.append(f"- {s.name} — {s.summary}")

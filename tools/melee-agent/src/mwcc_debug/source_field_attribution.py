@@ -36,6 +36,15 @@ class ResolvedSourceExpression:
 
 
 @dataclass(frozen=True)
+class FieldAccessor:
+    name: str
+    return_type: str | None
+    param_name: str
+    param_type: str | None
+    field_name: str
+
+
+@dataclass(frozen=True)
 class StackArrayLocal:
     name: str
     element_type: str
@@ -98,6 +107,41 @@ _STACK_ADDI_RE = re.compile(
     re.IGNORECASE,
 )
 _ARRAY_TYPE_RE = re.compile(r"^(?P<element>.+?)\s*\[(?P<size>[^\]]*)\]\s*$")
+_FUNCTION_DEF_RE = re.compile(
+    r"(?m)^[ \t]*"
+    r"(?:(?:static|inline|extern|const|volatile|register)\s+)*"
+    r"(?P<return_type>(?:struct\s+)?[A-Za-z_][A-Za-z_0-9]*"
+    r"(?:\s+[A-Za-z_][A-Za-z_0-9]*)*(?:\s*\*+)?)"
+    r"\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z_0-9]*)"
+    r"\s*\((?P<params>[^;{}()]*)\)\s*\{",
+)
+_TYPEDEF_ANON_STRUCT_RE = re.compile(
+    r"typedef\s+struct\s*\{(?P<body>.*?)\}\s*(?P<aliases>[^;]+);",
+    re.DOTALL,
+)
+_SIMPLE_FIELD_DECL_RE = re.compile(
+    r"(?m)^[ \t]*(?P<type>(?:struct\s+)?[A-Za-z_][A-Za-z_0-9]*"
+    r"(?:\s*\*+)?)\s+"
+    r"(?P<names>[A-Za-z_][A-Za-z_0-9]*(?:\s*,\s*\*?[A-Za-z_][A-Za-z_0-9]*)*)"
+    r"\s*;",
+)
+_SCALAR_TYPE_SIZES = {
+    "char": 1,
+    "s8": 1,
+    "u8": 1,
+    "short": 2,
+    "s16": 2,
+    "u16": 2,
+    "int": 4,
+    "long": 4,
+    "s32": 4,
+    "u32": 4,
+    "float": 4,
+    "f32": 4,
+    "double": 8,
+    "f64": 8,
+}
 
 
 def build_source_field_context(
@@ -130,8 +174,8 @@ def parse_pcode_load_expression(expression: str | None) -> tuple[int | None, int
     if not isinstance(expression, str):
         return None
     match = re.search(
-        r"\b(?:lwz|lbz|lha|lhz|stw|stb|sth)\s+"
-        r"r(?P<dest>\d+)\s*,\s*"
+        r"\b(?:lwz|lbz|lha|lhz|lfs|lfd|stw|stb|sth|stfs|stfd)\s+"
+        r"[rf](?P<dest>\d+)\s*,\s*"
         r"(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))\s*"
         r"\(\s*r(?P<base>\d+)\s*\)",
         expression,
@@ -257,14 +301,14 @@ def source_for_field_offset(
         context,
         base_expr,
     ):
-        alias_field = _field_for_type(context, alias_type, offset)
-        if alias_field is None:
+        alias_path = _field_path_for_type(context, alias_type, offset)
+        if alias_path is None:
             continue
-        resolved = _resolved_field_expression(
+        resolved = _resolved_field_path_expression(
             context,
             base=alias,
             base_type=alias_type,
-            field=alias_field,
+            field_path=alias_path,
             prefer_source_match=True,
         )
         if resolved is not None:
@@ -276,16 +320,16 @@ def source_for_field_offset(
         candidates.sort(key=lambda item: item[0])
         return candidates[0][1]
 
-    field = _field_for_type(context, base_type, offset)
-    if field is None:
+    field_path = _field_path_for_type(context, base_type, offset)
+    if field_path is None:
         return None
 
     if base_expr:
-        resolved = _resolved_field_expression(
+        resolved = _resolved_field_path_expression(
             context,
             base=base_expr,
             base_type=base_type,
-            field=field,
+            field_path=field_path,
             prefer_source_match=True,
         )
         if resolved is not None:
@@ -316,7 +360,7 @@ def infer_global_field_source(
     """Infer a field load source when the pcode base temp is not attributed."""
     candidates: list[ResolvedSourceExpression] = []
     for symbol, type_name in context.global_types.items():
-        if _field_for_type(context, type_name, offset) is None:
+        if _field_path_for_type(context, type_name, offset) is None:
             continue
         resolved = source_for_field_offset(
             context,
@@ -330,6 +374,54 @@ def infer_global_field_source(
         return None
     candidates.sort(key=lambda item: (item.source_line or 10**9, item.source_col or 0))
     return candidates[0]
+
+
+def accessors_for_field_path(
+    context: SourceFieldContext,
+    *,
+    base_type: str | None,
+    field_name: str | None,
+    max_results: int = 8,
+) -> tuple[FieldAccessor, ...]:
+    """Find simple one-argument accessors that return ``arg->field.path``."""
+    if not field_name or max_results <= 0:
+        return ()
+    accessors: list[FieldAccessor] = []
+    seen: set[tuple[str, str, str]] = set()
+    for text in context.texts:
+        for match in _FUNCTION_DEF_RE.finditer(text):
+            body = _struct_body(text, match.end())
+            if body is None:
+                continue
+            params = _parse_params(match.group("params"))
+            if len(params) != 1:
+                continue
+            param = params[0]
+            param_type = _clean_type(param.type_str)
+            if not _compatible_base_type(base_type, param_type):
+                continue
+            if not _body_returns_field_path(
+                body,
+                param_name=param.name,
+                field_name=field_name,
+            ):
+                continue
+            name = match.group("name")
+            return_type = _safe_type_or_none(match.group("return_type"))
+            key = (name, param.name, param_type)
+            if key in seen:
+                continue
+            seen.add(key)
+            accessors.append(FieldAccessor(
+                name=name,
+                return_type=return_type,
+                param_name=param.name,
+                param_type=param_type,
+                field_name=field_name,
+            ))
+            if len(accessors) >= max_results:
+                return tuple(accessors)
+    return tuple(accessors)
 
 
 def _coerce_existing_path(path: str | Path | None) -> Path | None:
@@ -407,6 +499,7 @@ def _resolve_include(
     if melee_root is not None:
         candidates.extend([
             melee_root / include,
+            melee_root / "extern" / "dolphin" / "include" / include,
             melee_root / "src" / include,
             melee_root / "src" / "melee" / include,
             melee_root / "src" / "sysdolphin" / include,
@@ -560,6 +653,25 @@ def _struct_fields(texts: list[str]) -> dict[str, dict[int, StructField]]:
                     type=_clean_type(field_match.group("type")),
                     name=field_match.group("name"),
                 ))
+        for match in _TYPEDEF_ANON_STRUCT_RE.finditer(text):
+            aliases = _typedef_struct_aliases(match.group("aliases"))
+            if not aliases:
+                continue
+            parsed_fields = _simple_struct_fields(
+                match.group("body"),
+                struct_name=aliases[0],
+            )
+            if not parsed_fields:
+                continue
+            for alias in aliases:
+                fields = out.setdefault(alias, {})
+                for offset, field in parsed_fields.items():
+                    fields.setdefault(offset, StructField(
+                        struct_name=alias,
+                        offset=field.offset,
+                        type=field.type,
+                        name=field.name,
+                    ))
     return out
 
 
@@ -578,6 +690,54 @@ def _struct_body(text: str, start: int) -> str | None:
     return None
 
 
+def _typedef_struct_aliases(aliases_text: str) -> tuple[str, ...]:
+    aliases: list[str] = []
+    for raw_alias in aliases_text.split(","):
+        alias = raw_alias.strip()
+        if not alias or alias.startswith("*"):
+            continue
+        alias = alias.replace("*", "").strip()
+        if _SIMPLE_IDENT_RE.fullmatch(alias) is not None:
+            aliases.append(alias)
+    return tuple(aliases)
+
+
+def _simple_struct_fields(
+    body: str,
+    *,
+    struct_name: str,
+) -> dict[int, StructField]:
+    fields: dict[int, StructField] = {}
+    offset = 0
+    stripped_body = _strip_comments_keep_newlines(body)
+    for match in _SIMPLE_FIELD_DECL_RE.finditer(stripped_body):
+        type_name = _clean_type(match.group("type"))
+        size = _simple_type_size(type_name)
+        if size is None:
+            return {}
+        for raw_name in match.group("names").split(","):
+            name = raw_name.strip().lstrip("*").strip()
+            if _SIMPLE_IDENT_RE.fullmatch(name) is None:
+                return {}
+            fields[offset] = StructField(
+                struct_name=struct_name,
+                offset=offset,
+                type=type_name,
+                name=name,
+            )
+            offset += size
+    return fields
+
+
+def _simple_type_size(type_name: str) -> int | None:
+    clean = _clean_type(type_name)
+    if "*" in clean:
+        return 4
+    clean = re.sub(r"\b(?:const|volatile|register|static)\b", "", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return _SCALAR_TYPE_SIZES.get(clean)
+
+
 def _field_for_type(
     context: SourceFieldContext,
     type_name: str | None,
@@ -587,6 +747,63 @@ def _field_for_type(
     if struct_name is None:
         return None
     return context.struct_fields.get(struct_name, {}).get(offset)
+
+
+def _field_path_for_type(
+    context: SourceFieldContext,
+    type_name: str | None,
+    offset: int,
+    *,
+    max_depth: int = 3,
+) -> tuple[StructField, ...] | None:
+    direct = _field_for_type(context, type_name, offset)
+    if direct is not None:
+        return (direct,)
+    if max_depth <= 1:
+        return None
+    struct_name = _struct_name_from_type(type_name)
+    if struct_name is None:
+        return None
+    fields = context.struct_fields.get(struct_name, {})
+    for field in sorted(fields.values(), key=lambda item: item.offset, reverse=True):
+        if field.offset >= offset:
+            continue
+        field_size = _known_type_size(context, field.type)
+        if field_size is None or offset >= field.offset + field_size:
+            continue
+        if _looks_like_pointer_type(field.type):
+            continue
+        remainder = offset - field.offset
+        nested = _field_path_for_type(
+            context,
+            field.type,
+            remainder,
+            max_depth=max_depth - 1,
+        )
+        if nested is not None:
+            return (field, *nested)
+    return None
+
+
+def _known_type_size(context: SourceFieldContext, type_name: str | None) -> int | None:
+    if type_name is None:
+        return None
+    simple = _simple_type_size(type_name)
+    if simple is not None:
+        return simple
+    struct_name = _struct_name_from_type(type_name)
+    if struct_name is None:
+        return None
+    fields = context.struct_fields.get(struct_name, {})
+    if not fields:
+        return None
+    max_end = 0
+    for field in fields.values():
+        field_size = _simple_type_size(field.type)
+        if field_size is None:
+            return None
+        max_end = max(max_end, field.offset + field_size)
+    return max_end or None
 
 
 def _struct_name_from_type(type_name: str | None) -> str | None:
@@ -605,6 +822,10 @@ def _struct_name_from_type(type_name: str | None) -> str | None:
     return text
 
 
+def _field_path_name(field_path: tuple[StructField, ...]) -> str:
+    return ".".join(field.name for field in field_path)
+
+
 def _resolved_field_expression(
     context: SourceFieldContext,
     *,
@@ -613,23 +834,113 @@ def _resolved_field_expression(
     field: StructField,
     prefer_source_match: bool,
 ) -> ResolvedSourceExpression | None:
+    return _resolved_field_path_expression(
+        context,
+        base=base,
+        base_type=base_type,
+        field_path=(field,),
+        prefer_source_match=prefer_source_match,
+    )
+
+
+def _resolved_field_path_expression(
+    context: SourceFieldContext,
+    *,
+    base: str,
+    base_type: str | None,
+    field_path: tuple[StructField, ...],
+    prefer_source_match: bool,
+) -> ResolvedSourceExpression | None:
+    if not field_path:
+        return None
     operator = "->" if _looks_like_pointer_type(base_type) else "."
-    expression = f"{base}{operator}{field.name}"
+    field_name = _field_path_name(field_path)
+    expression = f"{base}{operator}{field_path[0].name}"
+    for field in field_path[1:]:
+        expression += f".{field.name}"
     line = col = None
     if prefer_source_match:
         line, col = _first_function_occurrence(context, expression)
         if line is None and not _SIMPLE_IDENT_RE.match(base):
             return None
-    source_type = _refined_field_type(context, expression, field.type)
+    source_type = _refined_field_type(context, expression, field_path[-1].type)
     return ResolvedSourceExpression(
         expression=expression,
         type=source_type,
-        field_name=field.name,
+        field_name=field_name,
         source_line=line,
         source_col=col,
         base_var=base if _SIMPLE_IDENT_RE.match(base) else None,
         confidence="source-expression" if line is not None else "field-offset",
     )
+
+
+def _compatible_base_type(left: str | None, right: str | None) -> bool:
+    if not left:
+        return True
+    if not right:
+        return False
+    if _clean_type(left) == _clean_type(right):
+        return True
+    left_struct = _struct_name_from_type(left)
+    right_struct = _struct_name_from_type(right)
+    return left_struct is not None and left_struct == right_struct
+
+
+def _body_returns_field_path(
+    body: str,
+    *,
+    param_name: str,
+    field_name: str,
+) -> bool:
+    expected_arrow = _compact_expr(f"{param_name}->{field_name}")
+    expected_dot = _compact_expr(f"{param_name}.{field_name}")
+    for match in re.finditer(r"\breturn\s+(?P<expr>[^;]+);", body):
+        expr = _strip_outer_parens(match.group("expr").strip())
+        expr = _strip_leading_value_cast(expr)
+        compact = _compact_expr(expr)
+        if compact in {expected_arrow, expected_dot}:
+            return True
+    return False
+
+
+def _strip_outer_parens(expression: str) -> str:
+    text = expression.strip()
+    while text.startswith("(") and text.endswith(")"):
+        depth = 0
+        wraps = True
+        for index, char in enumerate(text):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and index != len(text) - 1:
+                    wraps = False
+                    break
+        if not wraps:
+            break
+        text = text[1:-1].strip()
+    return text
+
+
+def _strip_leading_value_cast(expression: str) -> str:
+    return re.sub(
+        r"^\(\s*(?:const\s+|volatile\s+)?(?:struct\s+)?"
+        r"[A-Za-z_][A-Za-z_0-9]*(?:\s+[A-Za-z_][A-Za-z_0-9]*)*"
+        r"(?:\s*\*+)?\s*\)\s*",
+        "",
+        expression,
+        count=1,
+    ).strip()
+
+
+def _safe_type_or_none(type_name: str | None) -> str | None:
+    if not type_name:
+        return None
+    text = _clean_type(type_name)
+    if any(char in text for char in "[]{}(),;="):
+        return None
+    return text
 
 
 def _first_stack_array_field_occurrence(

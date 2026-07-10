@@ -173,6 +173,22 @@ SOURCE_CALL_RETURN_CHAIN = textwrap.dedent("""\
 """)
 
 
+SOURCE_CALL_RETURN_CHAIN_WITH_SIBLING = textwrap.dedent("""\
+    void fn_80000001(void* other) {
+        int wrong;
+        wrong = helper_fn(other);
+    }
+
+    void fn_80000002(void* entity) {
+        int result;
+        result = helper_fn(entity);
+        if (result == 0) {
+            sink();
+        }
+    }
+""")
+
+
 def test_find_virtual_to_ig_reports_colorgraph_identity() -> None:
     result = find_virtual_to_ig(PCDUMP_WITH_COPY, "fn_80247510", 108)
 
@@ -262,6 +278,23 @@ def test_trace_copy_maps_call_return_origin_through_copy_chain() -> None:
     assert origin.copy_chain == (40, 43, 59, 3)
     assert origin.call_site.opcode == "bl"
     assert [site.opcode for site in origin.use_sites] == ["cmpi"]
+
+
+def test_trace_copy_call_return_origin_is_scoped_to_requested_function() -> None:
+    report = trace_copy_lifetime(
+        PCDUMP_CALL_RETURN_CHAIN,
+        "fn_80000002",
+        from_virtual=43,
+        to_virtual=40,
+        source_text=SOURCE_CALL_RETURN_CHAIN_WITH_SIBLING,
+        source_file="sample.c",
+    )
+
+    origin = report.to_mapping.call_return_origin
+    assert origin is not None
+    assert origin.expression == "helper_fn(entity)"
+    assert origin.assigned_local == "result"
+    assert origin.source_line == 8
 
 
 def test_trace_copy_defaults_to_gpr_class_for_r_copies() -> None:

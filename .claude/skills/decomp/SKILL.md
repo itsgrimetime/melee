@@ -60,6 +60,28 @@ melee-agent mismatch search "register allocation"
 ```
 
 Prefer fixing source shape, declaration order, visibility, struct types, helper inlines, or data placement before trying padding or register nudges.
+When the instruction stream is already structurally correct and the remaining
+question is allocator behavior, start with the fast `mwcc-debug` pcdump path.
+If you need exact unmodified retail GC/1.2.5n facts or need to check whether
+the patched DLL disagrees with retail, run:
+
+```bash
+melee-agent debug retro backend src/melee/<module>/<file>.c -f FunctionName --verify-debug
+melee-agent debug retro verify-backend src/melee/<module>/<file>.c -f FunctionName --debug-pcdump /tmp/pcdump.txt
+```
+
+If the instruction sequence is already close and the remaining issue is a target
+virtual/register assignment, switch to the read-only lifetime-pressure explorer
+before guessing at source edits:
+
+```bash
+melee-agent debug inspect lifetime-pressure -f Func_80000000 --force-phys "53:25,50:22"
+```
+
+It reports live ranges, interference blockers, simplify/select order,
+coalescing, source-variable attribution, and concrete validation commands.
+Treat its source actions as hypotheses until a compile/checkdiff guard validates
+the candidate.
 
 For large state machines or asset-heavy functions, use `docs/large-function-checkpoint.md` before a serious rewrite. For `mn` menu code, check `docs/mn-module-notes.md` for module-specific known local maxima and successful source shapes.
 

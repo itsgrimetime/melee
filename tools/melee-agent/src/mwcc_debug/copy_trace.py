@@ -8,6 +8,7 @@ from typing import Optional
 
 from .colorgraph_parser import find_function, parse_hook_events
 from .parser import Function, Pass, analyze_function, parse_pcdump
+from .symbol_bridge import _extract_function_text
 
 
 @dataclass(frozen=True)
@@ -419,31 +420,40 @@ def _find_call_in_source(
     *,
     source_text: Optional[str],
     source_file: Optional[str],
+    function: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[int], Optional[int], Optional[str], Optional[str]]:
     if not source_text:
         return None, None, None, None, None
+    line_offset = 0
+    search_text = source_text
+    if function:
+        extracted = _extract_function_text(source_text, function)
+        if extracted is None:
+            return None, None, None, None, None
+        _params_text, search_text, start_line = extracted
+        line_offset = start_line - 1
     escaped = re.escape(call_symbol)
     assign_re = re.compile(
         rf"\b(?P<lhs>[A-Za-z_]\w*)\s*=\s*"
         rf"(?P<expr>\b{escaped}\s*\([^;]*?\))"
     )
     call_re = re.compile(rf"(?P<expr>\b{escaped}\s*\([^;]*?\))")
-    for line_no, line in enumerate(source_text.splitlines(), start=1):
+    for line_no, line in enumerate(search_text.splitlines(), start=1):
         match = assign_re.search(line)
         if match:
             return (
                 source_file,
-                line_no,
+                line_offset + line_no,
                 match.start("expr") + 1,
                 match.group("expr").strip(),
                 match.group("lhs"),
             )
-    for line_no, line in enumerate(source_text.splitlines(), start=1):
+    for line_no, line in enumerate(search_text.splitlines(), start=1):
         match = call_re.search(line)
         if match:
             return (
                 source_file,
-                line_no,
+                line_offset + line_no,
                 match.start("expr") + 1,
                 match.group("expr").strip(),
                 None,
@@ -455,6 +465,7 @@ def _trace_call_return_origin_in_pass(
     pass_: Pass,
     virtual: int,
     *,
+    function: str,
     source_text: Optional[str],
     source_file: Optional[str],
     max_hops: int = 8,
@@ -504,6 +515,7 @@ def _trace_call_return_origin_in_pass(
                 call_symbol,
                 source_text=source_text,
                 source_file=source_file,
+                function=function,
             )
             use_sites = tuple(
                 _occurrence(pass_.name, block_idx, instr_idx, instr)
@@ -529,6 +541,7 @@ def _find_call_return_origin(
     fn: Function,
     virtual: int,
     *,
+    function: str,
     reg_kind: Optional[str],
     source_text: Optional[str],
     source_file: Optional[str],
@@ -541,6 +554,7 @@ def _find_call_return_origin(
         origin = _trace_call_return_origin_in_pass(
             pass_,
             virtual,
+            function=function,
             source_text=source_text,
             source_file=source_file,
         )
@@ -567,6 +581,7 @@ def find_call_return_origin(
     return _find_call_return_origin(
         fn,
         virtual,
+        function=function,
         reg_kind=_reg_kind_for_class_id(class_id),
         source_text=source_text,
         source_file=source_file,
@@ -659,6 +674,7 @@ def find_virtual_to_ig(
     call_return_origin = _find_call_return_origin(
         fn,
         virtual,
+        function=function,
         reg_kind=_reg_kind_for_class_id(selected_class_id),
         source_text=source_text,
         source_file=source_file,

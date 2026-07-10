@@ -605,7 +605,7 @@ def fetch_job(
         "target.o",
         "target.s",
     ]
-    runner(
+    fetch_commands = [
         [
             "rsync",
             "-az",
@@ -619,9 +619,7 @@ def fetch_job(
             "*",
             f"{job.ssh}:{job.remote_perm_dir}/",
             f"{fetch_dest}/",
-        ]
-    )
-    runner(
+        ],
         [
             "rsync",
             "-az",
@@ -645,10 +643,94 @@ def fetch_job(
             "*",
             f"{job.ssh}:{job.remote_run_dir}/",
             f"{remote_run_dest}/",
-        ]
-    )
+        ],
+    ]
+    rsync_failures: list[dict[str, Any]] = []
+    for command in fetch_commands:
+        result = runner(command, check=False)
+        if result.returncode != 0:
+            rsync_failures.append(_remote_fetch_rsync_failure(command, result))
+    if rsync_failures:
+        status = status_job(job, runner=runner)
+        _write_remote_fetch_warning(
+            fetch_dest,
+            job=job,
+            remote_status=status,
+            rsync_failures=rsync_failures,
+        )
+        if status.state == "active":
+            detail = _format_remote_fetch_failure_detail(
+                status,
+                rsync_failures,
+            )
+            raise RemoteJobError(
+                f"remote fetch failed for active job {job.job_id}: {detail}"
+            )
     candidate_audit.audit_candidate_tree(fetch_dest, function=job.function)
     return fetch_dest
+
+
+def _remote_fetch_rsync_failure(
+    command: list[str],
+    result: CommandResult,
+) -> dict[str, Any]:
+    failure: dict[str, Any] = {
+        "command": shlex.join(command),
+        "returncode": result.returncode,
+    }
+    if result.stdout.strip():
+        failure["stdout"] = _truncate_middle(result.stdout.strip(), 1200)
+    if result.stderr.strip():
+        failure["stderr"] = _truncate_middle(result.stderr.strip(), 1200)
+    return failure
+
+
+def _write_remote_fetch_warning(
+    fetch_dest: Path,
+    *,
+    job: RemoteJob,
+    remote_status: RemoteStatus,
+    rsync_failures: list[dict[str, Any]],
+) -> None:
+    payload: dict[str, Any] = {
+        "status": "partial",
+        "job_id": job.job_id,
+        "function": job.function,
+        "target": job.target,
+        "remote_status": remote_status.state,
+        "remote_run_dir": job.remote_run_dir,
+        "remote_perm_dir": job.remote_perm_dir,
+        "rsync_failures": rsync_failures,
+        "message": (
+            "Remote fetch preserved available local artifacts, but one or "
+            "more rsync passes failed. For stopped or unknown jobs this is "
+            "treated as a partial fetch so triage can continue."
+        ),
+    }
+    if remote_status.detail:
+        payload["remote_status_detail"] = remote_status.detail
+    (fetch_dest / "remote-fetch-warning.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _format_remote_fetch_failure_detail(
+    remote_status: RemoteStatus,
+    rsync_failures: list[dict[str, Any]],
+) -> str:
+    failure_text = "; ".join(
+        _compact_submit_failure_text(
+            str(failure.get("stderr") or failure.get("stdout") or failure)
+        )
+        for failure in rsync_failures
+    )
+    detail = f"remote status {remote_status.state!r}"
+    if remote_status.detail:
+        detail += f" ({remote_status.detail})"
+    if failure_text:
+        detail += f"; {failure_text}"
+    return detail
 
 
 def tail_job(
@@ -708,6 +790,7 @@ def doctor_target(
     target: RemoteTarget,
     local_perm_dir: Path | None = None,
     runner: Callable[..., CommandResult] = run_command,
+    require_remote_scorer_target: bool = True,
 ) -> DoctorReport:
     """Run read-only checks for a remote permuter target."""
     checks: list[DoctorCheck] = [
@@ -742,6 +825,7 @@ def doctor_target(
         target,
         scorer_info=scorer_info,
         objdump_info=objdump_info,
+        require_remote_scorer_target=require_remote_scorer_target,
     )
     result = runner(["ssh", target.ssh, _remote_sh(script)], check=False)
     if result.returncode != 0:
@@ -751,6 +835,11 @@ def doctor_target(
         checks.extend(_parse_remote_doctor_output(
             result.stdout,
             expect_scorer=scorer_info is not None,
+            expect_remote_scorer_target=(
+                require_remote_scorer_target
+                and scorer_info is not None
+                and scorer_info.target_path is not None
+            ),
             expect_objdump=objdump_info is not None,
         ))
 
@@ -799,6 +888,7 @@ def repair_target(
     local_perm_root = local_perm_root.expanduser()
     _require_dir(local_melee_root / "tools" / "melee-agent", "local melee-agent tools")
     _require_dir(local_melee_root / "tools" / "mwcc_debug", "local mwcc_debug tools")
+    _require_dir(local_melee_root / "tools" / "mwcc_retro", "local mwcc_retro tools")
     _require_file(_remote_compiler_file(local_melee_root, "mwcceppc_debug.exe"), "local debug compiler")
     _require_file(_remote_compiler_file(local_melee_root, "MWDBG326.dll"), "local debug compiler DLL")
     _require_dir(local_perm_root, "local decomp-permuter root")
@@ -838,6 +928,15 @@ def repair_target(
         f"{target.ssh}:{target.remote_melee_root}/tools/mwcc_debug/",
     ])
     actions.append("synced tools/mwcc_debug")
+
+    runner([
+        "rsync",
+        "-az",
+        "--delete",
+        f"{local_melee_root / 'tools' / 'mwcc_retro'}/",
+        f"{target.ssh}:{target.remote_melee_root}/tools/mwcc_retro/",
+    ])
+    actions.append("synced tools/mwcc_retro")
 
     runner([
         "rsync",
@@ -960,9 +1059,18 @@ def submit_job(
             f"{jobs_dir / f'{job.job_id}.json'}"
         )
 
-    with _staged_remote_perm_dir(local_perm_dir, target=target) as submit_perm_dir:
+    with _staged_remote_perm_dir(
+        local_perm_dir,
+        target=target,
+        remote_perm_dir=remote_perm_dir,
+    ) as submit_perm_dir:
         _validate_remote_ready_perm_dir(submit_perm_dir)
-        preflight = doctor_target(target, local_perm_dir=submit_perm_dir, runner=runner)
+        preflight = doctor_target(
+            target,
+            local_perm_dir=submit_perm_dir,
+            runner=runner,
+            require_remote_scorer_target=False,
+        )
         if (
             not preflight.ok
             and auto_repair
@@ -984,7 +1092,12 @@ def submit_job(
                     f"{_preflight_failure_detail(preflight)}; "
                     f"auto-repair failed: {exc}"
                 ) from exc
-            preflight = doctor_target(target, local_perm_dir=submit_perm_dir, runner=runner)
+            preflight = doctor_target(
+                target,
+                local_perm_dir=submit_perm_dir,
+                runner=runner,
+                require_remote_scorer_target=False,
+            )
         if not preflight.ok:
             raise RemoteJobError(
                 f"remote preflight failed for {target.name}: "
@@ -1151,18 +1264,72 @@ def _remote_submit_script(job: RemoteJob, target: RemoteTarget) -> str:
     )
 
 
-def _remote_cleanup_run_dir_script(job: RemoteJob, target: RemoteTarget) -> str:
-    remote_root = target.remote_perm_root.rstrip("/")
-    remote_runs_root = f"{remote_root}/remote-runs"
+def _remote_cleanup_run_dir_script(job: RemoteJob, remote_runs_root: str) -> str:
     return "\n".join([
         "set -eu",
         f"remote_run_dir={shlex.quote(job.remote_run_dir)}",
-        f"remote_runs_root={shlex.quote(remote_runs_root)}",
+        f"remote_runs_root={shlex.quote(remote_runs_root.rstrip('/'))}",
         'case "$remote_run_dir" in',
         '  "$remote_runs_root"/*) rm -rf -- "$remote_run_dir" ;;',
         '  *) echo "refusing to clean path outside remote-runs: $remote_run_dir" >&2; exit 2 ;;',
         "esac",
     ])
+
+
+def _remote_runs_root_from_job(job: RemoteJob) -> str:
+    run_dir = job.remote_run_dir.rstrip("/")
+    marker = "/remote-runs/"
+    if marker not in run_dir:
+        raise RemoteJobError(
+            f"refusing to clean path outside remote-runs: {job.remote_run_dir}"
+        )
+    root, leaf = run_dir.split(marker, 1)
+    if not root or not leaf:
+        raise RemoteJobError(
+            f"refusing to clean path outside remote-runs: {job.remote_run_dir}"
+        )
+    return f"{root}/remote-runs"
+
+
+def cleanup_remote_run_dir(
+    job: RemoteJob,
+    runner: Callable[..., CommandResult] = run_command,
+) -> None:
+    """Delete a fetched job's remote run directory from its remote coder."""
+    remote_runs_root = _remote_runs_root_from_job(job)
+    status = status_job(job, runner=runner, timeout=10.0)
+    if status.state == "active":
+        raise RemoteJobError(
+            f"remote job {job.job_id} is still active; refusing to delete "
+            f"{job.remote_run_dir}"
+        )
+    if status.state != "stopped":
+        detail = f": {status.detail}" if status.detail else ""
+        raise RemoteJobError(
+            f"remote job {job.job_id} status is {status.state!r}{detail}; "
+            f"refusing to delete {job.remote_run_dir}"
+        )
+    result = runner(
+        ["ssh", job.ssh, _remote_sh(_remote_cleanup_run_dir_script(job, remote_runs_root))],
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise RemoteJobError(
+            f"remote run dir cleanup failed: {_compact_submit_failure_text(detail)}"
+        )
+
+
+def cleanup_remote_run_dir_best_effort(
+    job: RemoteJob,
+    runner: Callable[..., CommandResult] = run_command,
+) -> str | None:
+    """Delete a remote run directory, returning a warning string on failure."""
+    try:
+        cleanup_remote_run_dir(job, runner=runner)
+    except Exception as exc:
+        return f"remote run dir cleanup failed: {_compact_submit_failure_detail(exc)}"
+    return None
 
 
 def _cleanup_remote_run_dir_best_effort(
@@ -1171,9 +1338,11 @@ def _cleanup_remote_run_dir_best_effort(
     *,
     runner: Callable[..., CommandResult],
 ) -> str | None:
+    remote_root = target.remote_perm_root.rstrip("/")
+    remote_runs_root = f"{remote_root}/remote-runs"
     try:
         result = runner(
-            ["ssh", target.ssh, _remote_sh(_remote_cleanup_run_dir_script(job, target))],
+            ["ssh", target.ssh, _remote_sh(_remote_cleanup_run_dir_script(job, remote_runs_root))],
             check=False,
         )
     except Exception as exc:
@@ -1250,6 +1419,7 @@ def _remote_doctor_script(
     target: RemoteTarget,
     scorer_info: ScorerCommandInfo | None = None,
     objdump_info: ObjdumpCommandInfo | None = None,
+    require_remote_scorer_target: bool = True,
 ) -> str:
     melee_root = shlex.quote(target.remote_melee_root)
     perm_root = shlex.quote(target.remote_perm_root)
@@ -1279,7 +1449,12 @@ def _remote_doctor_script(
     if objdump_info is not None:
         lines.extend(_remote_objdump_doctor_lines(objdump_info))
     if scorer_info is not None:
-        lines.extend(_remote_scorer_doctor_lines(scorer_info))
+        lines.extend(
+            _remote_scorer_doctor_lines(
+                scorer_info,
+                require_target=require_remote_scorer_target,
+            )
+        )
     return "\n".join(lines)
 
 
@@ -1309,7 +1484,11 @@ def _scorer_probe_schema(scorer_info: ScorerCommandInfo) -> tuple[str, str, str]
     return command, "--strict-polarity", "strict-polarity scorer schema supported"
 
 
-def _remote_scorer_doctor_lines(scorer_info: ScorerCommandInfo) -> list[str]:
+def _remote_scorer_doctor_lines(
+    scorer_info: ScorerCommandInfo,
+    *,
+    require_target: bool = True,
+) -> list[str]:
     scorer_command, schema_flag, schema_ok_detail = _scorer_probe_schema(scorer_info)
     lines = [
         'if grep -q "class CustomCommandScorer" "$perm_root/src/scorer.py" 2>/dev/null && grep -q "scorer_settings" "$perm_root/src/main.py" 2>/dev/null; then emit remote-custom-scorer ok "$perm_root"; else emit remote-custom-scorer fail "CustomCommandScorer missing in remote decomp-permuter"; fi',
@@ -1320,7 +1499,7 @@ def _remote_scorer_doctor_lines(scorer_info: ScorerCommandInfo) -> list[str]:
         'if test "${scorer_executable#/}" != "$scorer_executable"; then scorer_resolved="$scorer_executable"; elif test "$scorer_executable" = "melee-agent" && test -x "$melee_root/tools/melee-agent/.venv/bin/melee-agent"; then scorer_resolved="$melee_root/tools/melee-agent/.venv/bin/melee-agent"; elif command -v "$scorer_executable" >/dev/null 2>&1; then scorer_resolved="$(command -v "$scorer_executable")"; elif test "$scorer_executable" = "melee-agent" && test -x "$HOME/.local/bin/melee-agent"; then scorer_resolved="$HOME/.local/bin/melee-agent"; else scorer_resolved=""; fi',
         'if test -n "$scorer_resolved" && test -x "$scorer_resolved"; then scorer_tmp=/tmp/melee-remote-doctor-scorer.$$; (cd "$perm_root" && "$scorer_resolved" debug target "$scorer_command" --help) >"$scorer_tmp" 2>&1; scorer_rc=$?; scorer_out=$(head -40 "$scorer_tmp"); if test "$scorer_rc" -eq 0; then emit remote-scorer-command ok "$scorer_resolved debug target $scorer_command --help"; grep -q -- "$scorer_schema_flag" "$scorer_tmp" && emit remote-scorer-schema ok "$scorer_schema_ok_detail" || emit remote-scorer-schema fail "stale $scorer_command help; missing $scorer_schema_flag"; else emit remote-scorer-command fail "$scorer_out"; emit remote-scorer-schema fail "$scorer_command --help failed"; fi; rm -f "$scorer_tmp"; else emit remote-scorer-command fail "$scorer_executable not found or not executable"; emit remote-scorer-schema fail "$scorer_executable not found or not executable"; fi',
     ]
-    if scorer_info.target_path is not None:
+    if require_target and scorer_info.target_path is not None:
         lines.extend([
             f"scorer_target={shlex.quote(scorer_info.target_path)}",
             'test -f "$scorer_target" && emit remote-scorer-target ok "$scorer_target" || emit remote-scorer-target fail "$scorer_target missing on remote"',
@@ -1333,6 +1512,7 @@ def _staged_remote_perm_dir(
     local_perm_dir: Path,
     *,
     target: RemoteTarget | None = None,
+    remote_perm_dir: str | None = None,
 ) -> Any:
     with tempfile.TemporaryDirectory(prefix="melee_remote_perm_") as td:
         staged = Path(td) / local_perm_dir.name
@@ -1352,12 +1532,20 @@ def _staged_remote_perm_dir(
         settings_toml = staged / "settings.toml"
         if settings_toml.exists():
             text = settings_toml.read_text()
-            rewritten = _rewrite_settings_toml_for_remote(text, target=target)
+            rewritten = _rewrite_settings_toml_for_remote(
+                text,
+                target=target,
+                remote_perm_dir=remote_perm_dir,
+            )
             if rewritten != text:
                 settings_toml.write_text(rewritten)
         for yaml_path in [*staged.glob("*.yaml"), *staged.glob("*.yml")]:
             text = yaml_path.read_text()
-            rewritten = _rewrite_target_yaml_for_remote(text, target=target)
+            rewritten = _rewrite_target_yaml_for_remote(
+                text,
+                target=target,
+                remote_perm_dir=remote_perm_dir,
+            )
             if rewritten != text:
                 yaml_path.write_text(rewritten)
         yield staged
@@ -1438,11 +1626,33 @@ def _remote_objdump_command(command: str, target: RemoteTarget | None) -> str:
     return command
 
 
-def _remote_perm_path(path: str, target: RemoteTarget | None) -> str:
+def _remote_perm_path(
+    path: str,
+    target: RemoteTarget | None,
+    *,
+    remote_perm_dir: str | None = None,
+) -> str:
     if target is None:
         return path
     if not path:
         return path
+    if remote_perm_dir is not None:
+        remote_perm_dir = remote_perm_dir.rstrip("/")
+        if path == remote_perm_dir or path.startswith(remote_perm_dir + "/"):
+            return path
+        function = posixpath.basename(remote_perm_dir)
+        parts = [part for part in path.split("/") if part and part != "."]
+        if "nonmatchings" in parts:
+            index = parts.index("nonmatchings")
+            if index + 1 < len(parts) and parts[index + 1] == function:
+                suffix = parts[index + 2:]
+                return (
+                    posixpath.join(remote_perm_dir, *suffix)
+                    if suffix
+                    else remote_perm_dir
+                )
+        elif not path.startswith("/"):
+            return posixpath.normpath(posixpath.join(remote_perm_dir, path))
     if path.startswith(target.remote_perm_root + "/"):
         return path
     if path.startswith("/"):
@@ -1455,7 +1665,12 @@ def _remote_perm_path(path: str, target: RemoteTarget | None) -> str:
     return posixpath.normpath(posixpath.join(target.remote_perm_root, path))
 
 
-def _rewrite_scorer_command_for_remote(command: str, target: RemoteTarget | None) -> str:
+def _rewrite_scorer_command_for_remote(
+    command: str,
+    target: RemoteTarget | None,
+    *,
+    remote_perm_dir: str | None = None,
+) -> str:
     if target is None:
         return command
     try:
@@ -1465,14 +1680,22 @@ def _rewrite_scorer_command_for_remote(command: str, target: RemoteTarget | None
     changed = False
     for index, arg in enumerate(argv):
         if arg == "--target" and index + 1 < len(argv):
-            remote_path = _remote_perm_path(argv[index + 1], target)
+            remote_path = _remote_perm_path(
+                argv[index + 1],
+                target,
+                remote_perm_dir=remote_perm_dir,
+            )
             if remote_path != argv[index + 1]:
                 argv[index + 1] = remote_path
                 changed = True
             break
         if arg.startswith("--target="):
             value = arg.split("=", 1)[1]
-            remote_path = _remote_perm_path(value, target) if value.startswith("/") else value
+            remote_path = _remote_perm_path(
+                value,
+                target,
+                remote_perm_dir=remote_perm_dir,
+            )
             if remote_path != value:
                 argv[index] = f"--target={remote_path}"
                 changed = True
@@ -1484,6 +1707,7 @@ def _rewrite_target_yaml_for_remote(
     text: str,
     *,
     target: RemoteTarget | None = None,
+    remote_perm_dir: str | None = None,
 ) -> str:
     if target is None:
         return text
@@ -1501,7 +1725,11 @@ def _rewrite_target_yaml_for_remote(
             ):
                 quote = value[0]
                 value = value[1:-1]
-            remote_path = _remote_perm_path(value, target)
+            remote_path = _remote_perm_path(
+                value,
+                target,
+                remote_perm_dir=remote_perm_dir,
+            )
             rendered = f"{quote}{remote_path}{quote}" if quote else remote_path
             out.append(f"{indent}baseline_dump: {rendered}")
         else:
@@ -1514,6 +1742,7 @@ def _rewrite_settings_toml_for_remote(
     text: str,
     *,
     target: RemoteTarget | None = None,
+    remote_perm_dir: str | None = None,
 ) -> str:
     """Ensure remote jobs use a project-provided scorer disassembler."""
     lines = text.splitlines()
@@ -1546,6 +1775,7 @@ def _rewrite_settings_toml_for_remote(
                 rewritten = _rewrite_scorer_command_for_remote(
                     scorer_command,
                     target,
+                    remote_perm_dir=remote_perm_dir,
                 )
                 out.append(f'{prefix}{sep} "{rewritten}"')
             else:
@@ -1863,6 +2093,7 @@ def _parse_remote_doctor_output(
     stdout: str,
     *,
     expect_scorer: bool = False,
+    expect_remote_scorer_target: bool = False,
     expect_objdump: bool = False,
 ) -> list[DoctorCheck]:
     labels = {
@@ -1882,12 +2113,19 @@ def _parse_remote_doctor_output(
         "remote-custom-scorer": "remote custom scorer",
         "remote-scorer-command": "remote scorer command",
         "remote-scorer-schema": "remote scorer schema",
+    }
+    scorer_target_labels = {
         "remote-scorer-target": "remote scorer target",
     }
     objdump_labels = {
         "remote-objdump-command": "remote objdump command",
     }
-    known_labels = {**labels, **scorer_labels, **objdump_labels}
+    known_labels = {
+        **labels,
+        **scorer_labels,
+        **scorer_target_labels,
+        **objdump_labels,
+    }
     checks: list[DoctorCheck] = []
     seen: set[str] = set()
     last_check_idx: int | None = None
@@ -1914,6 +2152,8 @@ def _parse_remote_doctor_output(
     expected_labels = dict(labels)
     if expect_scorer:
         expected_labels.update(scorer_labels)
+    if expect_remote_scorer_target:
+        expected_labels.update(scorer_target_labels)
     if expect_objdump:
         expected_labels.update(objdump_labels)
     for key, label in expected_labels.items():
@@ -2427,15 +2667,31 @@ def fetch_all_jobs(
     runner: Callable[..., CommandResult] = run_command,
     function_filter: str | None = None,
     target_filter: str | None = None,
+    before_fetch: Callable[[RemoteJob, int, int], None] | None = None,
+    after_fetch: Callable[[RemoteJob, Path, int, int], None] | None = None,
+    delete_remote: bool = False,
+    after_cleanup: Callable[[RemoteJob, str | None, int, int], None] | None = None,
 ) -> list[Path]:
     """Fetch remote outputs for all (or filtered) jobs."""
+    selected_jobs = [
+        job
+        for job in jobs
+        if (function_filter is None or job.function == function_filter)
+        and (target_filter is None or job.target == target_filter)
+    ]
     fetched: list[Path] = []
-    for job in jobs:
-        if function_filter is not None and job.function != function_filter:
-            continue
-        if target_filter is not None and job.target != target_filter:
-            continue
-        fetched.append(fetch_job(job, runner=runner))
+    total = len(selected_jobs)
+    for index, job in enumerate(selected_jobs, 1):
+        if before_fetch is not None:
+            before_fetch(job, index, total)
+        fetched_path = fetch_job(job, runner=runner)
+        fetched.append(fetched_path)
+        if after_fetch is not None:
+            after_fetch(job, fetched_path, index, total)
+        if delete_remote:
+            warning = cleanup_remote_run_dir_best_effort(job, runner=runner)
+            if after_cleanup is not None:
+                after_cleanup(job, warning, index, total)
     return fetched
 
 
@@ -2457,6 +2713,48 @@ def probe_jobs_active(
     return result
 
 
+def probe_jobs_active_batched(
+    jobs: list[RemoteJob],
+    runner: Callable[..., CommandResult] = run_command,
+    timeout: float = 10.0,
+) -> dict[str, bool]:
+    """Probe active remote jobs with one tmux session query per SSH host."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    jobs_by_ssh: dict[str, list[RemoteJob]] = {}
+    for job in jobs:
+        jobs_by_ssh.setdefault(job.ssh, []).append(job)
+    if not jobs_by_ssh:
+        return {}
+
+    def probe_host(ssh: str, host_jobs: list[RemoteJob]) -> dict[str, bool]:
+        script = "tmux list-sessions -F '#{session_name}' 2>/dev/null || true"
+        result = runner(
+            ["ssh", ssh, _remote_sh(script)],
+            check=False,
+            timeout=timeout,
+        )
+        active_sessions = {
+            line.strip()
+            for line in result.stdout.splitlines()
+            if line.strip()
+        }
+        return {
+            job.job_id: job.tmux_session in active_sessions
+            for job in host_jobs
+        }
+
+    active: dict[str, bool] = {}
+    with ThreadPoolExecutor(max_workers=min(len(jobs_by_ssh), 8)) as executor:
+        futures = [
+            executor.submit(probe_host, ssh, host_jobs)
+            for ssh, host_jobs in jobs_by_ssh.items()
+        ]
+        for future in as_completed(futures):
+            active.update(future.result())
+    return active
+
+
 def prune_dead_jobs(
     jobs: list[RemoteJob],
     runner: Callable[..., CommandResult] = run_command,
@@ -2468,7 +2766,7 @@ def prune_dead_jobs(
 
     Returns the list of pruned (or would-prune) job_ids.
     """
-    active_map = probe_jobs_active(jobs, runner=runner, timeout=timeout)
+    active_map = probe_jobs_active_batched(jobs, runner=runner, timeout=timeout)
     pruned: list[str] = []
     for job in jobs:
         if not active_map.get(job.job_id, False):

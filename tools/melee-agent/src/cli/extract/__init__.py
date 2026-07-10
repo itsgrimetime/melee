@@ -1105,7 +1105,7 @@ def _run_local_m2c(function_name: str, melee_root: Path, timeout: int = 240) -> 
 def _print_no_server_guidance(func, *, already_ran_local_c: bool) -> None:
     """Point the agent at the local /decomp workflow when no decomp.me server is
     reachable, instead of dead-ending with a STOP message (issues #21/#23/#85)."""
-    from .api_helpers import LOCAL_DECOMP_CANDIDATES
+    from ..api_helpers import LOCAL_DECOMP_CANDIDATES
 
     tried = ", ".join(LOCAL_DECOMP_CANDIDATES)
     console.print("")

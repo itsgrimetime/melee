@@ -49,6 +49,7 @@ from ...mwcc_debug.asm_parser import (
     find_first_def as asm_find_first_def,
     parse_prologue_end as asm_parse_prologue_end,
 )
+from ...mwcc_debug.artifacts import ArtifactRun, create_run
 from ...mwcc_debug.temp_scratch import scratch_path as mwcc_debug_scratch_path
 
 target_app = typer.Typer(
@@ -2108,6 +2109,123 @@ def _apply_score_source_scope(
     return payload
 
 
+def _score_source_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _apply_score_source_target_verdict(payload: dict[str, Any]) -> None:
+    target_score = payload.get("target_score")
+    structural_guard = payload.get("structural_guard")
+    if not isinstance(target_score, dict) or not isinstance(structural_guard, dict):
+        return
+    matched = _score_source_int(target_score.get("matched"))
+    targeted = _score_source_int(target_score.get("targeted"))
+    if matched is None or targeted is None or targeted <= 0:
+        return
+
+    target_score_accepted = matched > 0
+    structural_guard["target_score_matched"] = matched
+    structural_guard["target_score_targeted"] = targeted
+    structural_guard["target_score_accepted"] = target_score_accepted
+
+    if not target_score_accepted:
+        reason = "target score missed all requested registers"
+        structural_guard["accepted"] = False
+        structural_guard["rejection_reason"] = (
+            structural_guard.get("rejection_reason") or reason
+        )
+        payload["candidate_verdict"] = {
+            "classification": "target-score-miss",
+            "ledger": "revert candidate",
+            "matched": matched,
+            "targeted": targeted,
+            "reason": reason,
+        }
+        return
+
+    if matched < targeted:
+        payload.setdefault(
+            "candidate_verdict",
+            {
+                "classification": "target-score-partial-hit",
+                "ledger": "active experiment",
+                "matched": matched,
+                "targeted": targeted,
+                "reason": "target score hit some requested registers",
+            },
+        )
+        return
+
+    payload.setdefault(
+        "candidate_verdict",
+        {
+            "classification": "target-score-hit",
+            "ledger": "active experiment",
+            "matched": matched,
+            "targeted": targeted,
+            "reason": "target score hit all requested registers",
+        },
+    )
+
+
+def _apply_score_source_checkdiff_guard(
+    payload: dict[str, Any],
+    *,
+    c_file: str,
+    source_rel: str,
+    melee_root: Path,
+    function: str,
+    timeout: float | None,
+    deadline: float | None,
+    full_unit_source: bool,
+    score_real_tree: Any,
+    update_score_from_normalized: bool = False,
+) -> None:
+    candidate_path = Path(c_file)
+    if not candidate_path.is_absolute():
+        candidate_path = melee_root / source_rel
+    real_score = score_real_tree(
+        candidate_path,
+        function=function,
+        melee_root=melee_root,
+        timeout=timeout,
+        deadline=deadline,
+        include_structural_guard=True,
+        full_unit_source=full_unit_source,
+    )
+    match_percent = getattr(real_score, "match_percent", None)
+    match_percent_error = getattr(real_score, "match_percent_error", None)
+    structural_guard = getattr(real_score, "structural_guard", None)
+    structural_guard_error = getattr(real_score, "structural_guard_error", None)
+
+    payload["match_percent"] = match_percent
+    payload["checkdiff_match_percent"] = match_percent
+    payload["structural_guard"] = structural_guard
+    payload["structural_guard_error"] = structural_guard_error or match_percent_error
+    guard = structural_guard if isinstance(structural_guard, dict) else {}
+    normalized = guard.get("normalized_diff_lines")
+    if (
+        update_score_from_normalized
+        and isinstance(normalized, int)
+        and not isinstance(normalized, bool)
+    ):
+        payload["score"] = normalized
+    _apply_score_source_target_verdict(payload)
+    payload["checkdiff_guard"] = {
+        "match_percent": match_percent,
+        "classification_primary": guard.get("classification_primary"),
+        "normalized_diff_lines": guard.get("normalized_diff_lines"),
+        "hunk_count": guard.get("hunk_count"),
+        "accepted": guard.get("accepted"),
+    }
+
+
 def _score_source_unsafe_lane_payload(
     *,
     source_rel: str,
@@ -2682,10 +2800,65 @@ def score_source(
     # cflags: from the explicit unit OR from c_file's ninja block
     cflags_unit = cflags_from if cflags_from else c_file
     cflags_unit_rel = _resolve_src_relative(cflags_unit)
+    stages_candidate_through_unit = _score_source_should_stage_through_unit(
+        source_rel=src_rel,
+        cflags_unit_rel=cflags_unit_rel,
+    )
+    effective_full_unit_source = bool(
+        full_unit_source or stages_candidate_through_unit
+    )
     related_source_prefixes = _score_source_related_prefixes(
         source_rel=src_rel,
         cflags_unit_rel=cflags_unit_rel,
     )
+    artifact_run: ArtifactRun = create_run(
+        melee_root,
+        command=["debug", "target", "score-source"],
+        provenance={
+            "function": function,
+            "source": str(src_rel),
+            "cflags_from": str(cflags_unit_rel),
+            "remote_requested": remote,
+        },
+    )
+    candidate_path = melee_root / src_rel
+    artifact_source: Path | None = None
+    if candidate_path.is_file():
+        artifact_source = artifact_run.retain_file(
+            candidate_path,
+            "source/candidate.c",
+        )
+    artifact_finalized = False
+
+    def _emit_score_source_result(
+        payload: dict[str, Any],
+        *,
+        state: str,
+        emit_stdout: bool = True,
+    ) -> None:
+        nonlocal artifact_finalized
+        if artifact_finalized:
+            raise RuntimeError("score-source artifact run already finalized")
+        artifact_score = artifact_run.retain_json("score.json", payload)
+        artifact_run.finalize(state, result=payload)
+        artifact_finalized = True
+        if not emit_stdout:
+            return
+        if json_out:
+            result = dict(payload)
+            result.update(
+                {
+                    "artifact_run": str(artifact_run.run_dir),
+                    "artifact_manifest": str(artifact_run.manifest_path),
+                    "artifact_source": (
+                        str(artifact_source) if artifact_source is not None else None
+                    ),
+                    "artifact_score": str(artifact_score),
+                }
+            )
+            print(json.dumps(result))
+        else:
+            print(payload["score"])
 
     active_timeout = timeout if timeout and timeout > 0 else None
     command_deadline = (
@@ -2713,24 +2886,21 @@ def score_source(
                 if not quiet:
                     typer.echo(unsafe_lane["message"], err=True)
                 score_value = 2**30
-                if json_out:
-                    payload = _score_source_failure_payload(
-                        score_value=score_value,
-                        error="unsafe local pcdump lane",
-                        returncode=124,
-                        unsafe_lane=unsafe_lane,
-                    )
-                    payload["full_unit_source"] = full_unit_source
-                    _apply_score_source_scope(
-                        payload,
-                        function=function,
-                        c_file=c_file,
-                        source_rel=src_rel,
-                        cflags_unit_rel=cflags_unit_rel,
-                    )
-                    print(json.dumps(payload))
-                else:
-                    print(score_value)
+                payload = _score_source_failure_payload(
+                    score_value=score_value,
+                    error="unsafe local pcdump lane",
+                    returncode=124,
+                    unsafe_lane=unsafe_lane,
+                )
+                payload["full_unit_source"] = effective_full_unit_source
+                _apply_score_source_scope(
+                    payload,
+                    function=function,
+                    c_file=c_file,
+                    source_rel=src_rel,
+                    cflags_unit_rel=cflags_unit_rel,
+                )
+                _emit_score_source_result(payload, state="failed")
                 raise typer.Exit(0)
 
     pcdump_text: str
@@ -2738,10 +2908,7 @@ def score_source(
     if use_remote_pcdump:
         stage_source_path = (
             melee_root / src_rel
-            if _score_source_should_stage_through_unit(
-                source_rel=src_rel,
-                cflags_unit_rel=cflags_unit_rel,
-            )
+            if stages_candidate_through_unit
             else None
         )
         remote_result = _run_remote_pcdump(
@@ -2800,7 +2967,7 @@ def score_source(
                 payload["remote_stage_source"] = remote_result.remote_stage_source
             if remote_result.stage_source_sha256 is not None:
                 payload["stage_source_sha256"] = remote_result.stage_source_sha256
-            payload["full_unit_source"] = full_unit_source
+            payload["full_unit_source"] = effective_full_unit_source
             _apply_score_source_scope(
                 payload,
                 function=function,
@@ -2808,10 +2975,7 @@ def score_source(
                 source_rel=src_rel,
                 cflags_unit_rel=cflags_unit_rel,
             )
-            if json_out:
-                print(json.dumps(payload))
-            else:
-                print(score_value)
+            _emit_score_source_result(payload, state="failed")
             raise typer.Exit(0)
         pcdump_text = remote_result.stdout
     else:
@@ -2819,6 +2983,11 @@ def score_source(
         wibo_path = _find_wibo()
         if wibo_path is None or not wibo_path.exists():
             typer.echo("wibo not found. Run `debug dump setup` first.", err=True)
+            _emit_score_source_result(
+                {"error": "wibo not found"},
+                state="failed",
+                emit_stdout=False,
+            )
             raise typer.Exit(2)
         debug_compiler = _find_compiler_dir() / "mwcceppc_debug.exe"
         if not debug_compiler.exists():
@@ -2826,9 +2995,23 @@ def score_source(
                 "patched compiler not found. Run `debug dump setup` first.",
                 err=True,
             )
+            _emit_score_source_result(
+                {"error": "patched compiler not found"},
+                state="failed",
+                emit_stdout=False,
+            )
             raise typer.Exit(2)
 
-        cflags, _mw_version = _ninja_cflags_for_unit(cflags_unit_rel)
+        try:
+            cflags, _mw_version = _ninja_cflags_for_unit(cflags_unit_rel)
+        except typer.Exit as exc:
+            if exc.exit_code == 2:
+                _emit_score_source_result(
+                    {"error": "compiler flags unavailable"},
+                    state="failed",
+                    emit_stdout=False,
+                )
+            raise
         if cflags_unit_rel != src_rel:
             cflags = _cflags_with_same_tu_include_dir(cflags, cflags_unit_rel)
 
@@ -2853,40 +3036,48 @@ def score_source(
 
         compile_timeout = active_timeout
 
-        with _score_source_compile_source_rel(
-            source_rel=src_rel,
-            cflags_unit_rel=cflags_unit_rel,
-            melee_root=melee_root,
-            timeout=compile_timeout,
-        ) as compile_source_rel:
-            args = (
-                [str(wibo_path), str(debug_compiler)]
-                + shlex.split(cflags)
-                + ["-c", compile_source_rel, "-o", discard_o]
-            )
-            proc = _run_command_with_optional_timeout(
-                args,
-                cwd=melee_root,
-                env=env,
-                timeout=compile_timeout,
-            )
-        if not pcdump_path.exists():
-            if not quiet:
-                typer.echo(proc.stderr, err=True)
-            # Penalty for unscoreable candidates
-            score_value = 2**30
-            error = "pcdump missing"
-            unsafe_lane = None
-            if proc.returncode == 124:
-                error = proc.stderr or _timeout_message(args, compile_timeout)
-                unsafe_lane = _score_source_unsafe_lane_payload(
+        try:
+            try:
+                with _score_source_compile_source_rel(
                     source_rel=src_rel,
-                    function=function,
                     cflags_unit_rel=cflags_unit_rel,
-                    allow_unsafe=False,
-                    related_source_prefixes=related_source_prefixes,
+                    melee_root=melee_root,
+                    timeout=compile_timeout,
+                ) as compile_source_rel:
+                    args = (
+                        [str(wibo_path), str(debug_compiler)]
+                        + shlex.split(cflags)
+                        + ["-c", compile_source_rel, "-o", discard_o]
+                    )
+                    proc = _run_command_with_optional_timeout(
+                        args,
+                        cwd=melee_root,
+                        env=env,
+                        timeout=compile_timeout,
+                    )
+            except TimeoutError as exc:
+                _emit_score_source_result(
+                    {"error": str(exc)},
+                    state="failed",
+                    emit_stdout=False,
                 )
-            if json_out:
+                raise
+            if not pcdump_path.exists():
+                if not quiet:
+                    typer.echo(proc.stderr, err=True)
+                # Penalty for unscoreable candidates
+                score_value = 2**30
+                error = "pcdump missing"
+                unsafe_lane = None
+                if proc.returncode == 124:
+                    error = proc.stderr or _timeout_message(args, compile_timeout)
+                    unsafe_lane = _score_source_unsafe_lane_payload(
+                        source_rel=src_rel,
+                        function=function,
+                        cflags_unit_rel=cflags_unit_rel,
+                        allow_unsafe=False,
+                        related_source_prefixes=related_source_prefixes,
+                    )
                 payload = _score_source_failure_payload(
                     score_value=score_value,
                     error=error,
@@ -2894,7 +3085,7 @@ def score_source(
                     timeout=compile_timeout if proc.returncode == 124 else None,
                     unsafe_lane=unsafe_lane,
                 )
-                payload["full_unit_source"] = full_unit_source
+                payload["full_unit_source"] = effective_full_unit_source
                 _apply_score_source_scope(
                     payload,
                     function=function,
@@ -2902,42 +3093,55 @@ def score_source(
                     source_rel=src_rel,
                     cflags_unit_rel=cflags_unit_rel,
                 )
-                print(json.dumps(payload))
-            else:
-                print(score_value)
-            raise typer.Exit(0)
+                _emit_score_source_result(payload, state="failed")
+                raise typer.Exit(0)
 
-        pcdump_text = pcdump_path.read_text()
-        pcdump_path.unlink()  # don't pollute repo
-        # Clean up the discarded .o
-        try:
-            os.unlink(discard_o)
-        except OSError:
-            pass
+            pcdump_text = pcdump_path.read_text()
+        finally:
+            for compiler_product in (pcdump_path, Path(discard_o)):
+                try:
+                    compiler_product.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     retained_pcdump_path: Path | None = None
     pcdump_retention_error: str | None = None
     if retain_pcdump or pcdump_output is not None:
-        destination = _score_source_retained_pcdump_path(
-            source_rel=src_rel,
-            melee_root=melee_root,
-            pcdump_output=pcdump_output,
-        )
         try:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(pcdump_text, encoding="utf-8")
-            retained_pcdump_path = destination
-        except OSError as exc:
+            if pcdump_output is not None:
+                destination = _score_source_retained_pcdump_path(
+                    source_rel=src_rel,
+                    melee_root=melee_root,
+                    pcdump_output=pcdump_output,
+                )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(pcdump_text, encoding="utf-8")
+                retained_pcdump_path = destination
+            else:
+                retained_pcdump_path = artifact_run.retain_text(
+                    "pcdump/candidate.txt",
+                    pcdump_text,
+                )
+        except (OSError, ValueError) as exc:
             pcdump_retention_error = str(exc)
 
-    force_phys_payload = _score_source_force_phys_payload(
-        pcdump_text,
-        target=target,
-        function=function,
-    )
+    try:
+        force_phys_payload = _score_source_force_phys_payload(
+            pcdump_text,
+            target=target,
+            function=function,
+        )
+    except typer.Exit as exc:
+        if exc.exit_code == 2:
+            _emit_score_source_result(
+                {"error": "invalid force-phys target"},
+                state="failed",
+                emit_stdout=False,
+            )
+        raise
     if force_phys_payload is not None:
         score_value = int(force_phys_payload.get("score", 2**30))
-        force_phys_payload["full_unit_source"] = full_unit_source
+        force_phys_payload["full_unit_source"] = effective_full_unit_source
         _apply_score_source_scope(
             force_phys_payload,
             function=function,
@@ -2953,10 +3157,19 @@ def score_source(
             force_phys_payload["remote_fallback"] = remote_fallback_meta
         if unsafe_lane is not None and remote_fallback_meta is not None:
             force_phys_payload["unsafe_local_pcdump_lane"] = dict(unsafe_lane)
-        if json_out:
-            print(json.dumps(force_phys_payload))
-        else:
-            print(score_value)
+        if checkdiff_guard:
+            _apply_score_source_checkdiff_guard(
+                force_phys_payload,
+                c_file=c_file,
+                source_rel=src_rel,
+                melee_root=melee_root,
+                function=function,
+                timeout=active_timeout,
+                deadline=command_deadline,
+                full_unit_source=effective_full_unit_source,
+                score_real_tree=_score_source_candidate_real_tree,
+            )
+        _emit_score_source_result(force_phys_payload, state="completed")
         raise typer.Exit(0)
 
     # Parse + score
@@ -2970,30 +3183,27 @@ def score_source(
                 err=True,
             )
         score_value = 2**30
-        if json_out:
-            payload = {
-                "score": score_value,
-                "error": f"function {function!r} not in compiled pcdump",
-                "full_unit_source": full_unit_source,
-            }
-            _apply_score_source_scope(
-                payload,
-                function=function,
-                c_file=c_file,
-                source_rel=src_rel,
-                cflags_unit_rel=cflags_unit_rel,
-            )
-            if retained_pcdump_path is not None:
-                payload["pcdump_path"] = str(retained_pcdump_path)
-            if pcdump_retention_error is not None:
-                payload["pcdump_retention_error"] = pcdump_retention_error
-            if remote_fallback_meta is not None:
-                payload["remote_fallback"] = remote_fallback_meta
-            if unsafe_lane is not None:
-                payload["unsafe_local_pcdump_lane"] = dict(unsafe_lane)
-            print(json.dumps(payload))
-        else:
-            print(score_value)
+        payload: dict[str, Any] = {
+            "score": score_value,
+            "error": f"function {function!r} not in compiled pcdump",
+            "full_unit_source": effective_full_unit_source,
+        }
+        _apply_score_source_scope(
+            payload,
+            function=function,
+            c_file=c_file,
+            source_rel=src_rel,
+            cflags_unit_rel=cflags_unit_rel,
+        )
+        if retained_pcdump_path is not None:
+            payload["pcdump_path"] = str(retained_pcdump_path)
+        if pcdump_retention_error is not None:
+            payload["pcdump_retention_error"] = pcdump_retention_error
+        if remote_fallback_meta is not None:
+            payload["remote_fallback"] = remote_fallback_meta
+        if unsafe_lane is not None:
+            payload["unsafe_local_pcdump_lane"] = dict(unsafe_lane)
+        _emit_score_source_result(payload, state="completed")
         raise typer.Exit(0)
 
     if target is None:
@@ -3004,10 +3214,15 @@ def score_source(
                     "checkdiff evidence.",
                     err=True,
                 )
+            _emit_score_source_result(
+                {"error": "--target is required unless --json is used"},
+                state="failed",
+                emit_stdout=False,
+            )
             raise typer.Exit(2)
-        payload: dict[str, object] = {
+        payload: dict[str, Any] = {
             "score": 0,
-            "full_unit_source": full_unit_source,
+            "full_unit_source": effective_full_unit_source,
         }
         _apply_score_source_scope(
             payload,
@@ -3025,73 +3240,60 @@ def score_source(
         if unsafe_lane is not None and remote_fallback_meta is not None:
             payload["unsafe_local_pcdump_lane"] = dict(unsafe_lane)
         if checkdiff_guard:
-            candidate_path = Path(c_file)
-            if not candidate_path.is_absolute():
-                candidate_path = melee_root / src_rel
-            real_score = _score_source_candidate_real_tree(
-                candidate_path,
-                function=function,
+            _apply_score_source_checkdiff_guard(
+                payload,
+                c_file=c_file,
+                source_rel=src_rel,
                 melee_root=melee_root,
+                function=function,
                 timeout=active_timeout,
                 deadline=command_deadline,
-                include_structural_guard=True,
-                full_unit_source=full_unit_source,
+                full_unit_source=effective_full_unit_source,
+                score_real_tree=_score_source_candidate_real_tree,
+                update_score_from_normalized=True,
             )
-            payload["match_percent"] = real_score.match_percent
-            payload["checkdiff_match_percent"] = real_score.match_percent
-            payload["structural_guard"] = real_score.structural_guard
-            payload["structural_guard_error"] = (
-                real_score.structural_guard_error
-                or real_score.match_percent_error
-            )
-            guard = (
-                real_score.structural_guard
-                if isinstance(real_score.structural_guard, dict)
-                else {}
-            )
-            normalized = guard.get("normalized_diff_lines")
-            if isinstance(normalized, int) and not isinstance(normalized, bool):
-                payload["score"] = normalized
-            payload["checkdiff_guard"] = {
-                "match_percent": real_score.match_percent,
-                "classification_primary": guard.get("classification_primary"),
-                "normalized_diff_lines": guard.get("normalized_diff_lines"),
-                "hunk_count": guard.get("hunk_count"),
-                "accepted": guard.get("accepted"),
-            }
-        print(json.dumps(payload, indent=2))
+        _emit_score_source_result(payload, state="completed")
         return
 
     events_list = parse_hook_events(pcdump_text)
     events = find_function(events_list, function)
 
-    target_spec = _load_target_spec(target)
+    try:
+        target_spec = _load_target_spec(target)
+    except typer.Exit as exc:
+        if exc.exit_code == 2:
+            _emit_score_source_result(
+                {"error": "invalid target spec"},
+                state="failed",
+                emit_stdout=False,
+            )
+        raise
     result = score_function(fn, target_spec, events=events)
 
     # Permuter expects an integer
     score_value = int(result.total)
+    payload: dict[str, Any] = {
+        "score": score_value,
+        "full_unit_source": effective_full_unit_source,
+    }
+    _apply_score_source_scope(
+        payload,
+        function=function,
+        c_file=c_file,
+        source_rel=src_rel,
+        cflags_unit_rel=cflags_unit_rel,
+    )
+    if retained_pcdump_path is not None:
+        payload["pcdump_path"] = str(retained_pcdump_path)
+    if pcdump_retention_error is not None:
+        payload["pcdump_retention_error"] = pcdump_retention_error
+    if remote_fallback_meta is not None:
+        payload["remote_fallback"] = remote_fallback_meta
+    if unsafe_lane is not None and remote_fallback_meta is not None:
+        payload["unsafe_local_pcdump_lane"] = dict(unsafe_lane)
     if json_out:
         target_details = _score_source_target_details(result, target_spec)
-        payload: dict[str, object] = {
-            "score": score_value,
-            "target_score": target_details,
-            "full_unit_source": full_unit_source,
-        }
-        _apply_score_source_scope(
-            payload,
-            function=function,
-            c_file=c_file,
-            source_rel=src_rel,
-            cflags_unit_rel=cflags_unit_rel,
-        )
-        if retained_pcdump_path is not None:
-            payload["pcdump_path"] = str(retained_pcdump_path)
-        if pcdump_retention_error is not None:
-            payload["pcdump_retention_error"] = pcdump_retention_error
-        if remote_fallback_meta is not None:
-            payload["remote_fallback"] = remote_fallback_meta
-        if unsafe_lane is not None and remote_fallback_meta is not None:
-            payload["unsafe_local_pcdump_lane"] = dict(unsafe_lane)
+        payload["target_score"] = target_details
         baseline_text = (
             expression_baseline.read_text(encoding="utf-8", errors="replace")
             if expression_baseline is not None
@@ -3136,16 +3338,29 @@ def score_source(
                 timeout=active_timeout,
                 deadline=command_deadline,
                 include_structural_guard=True,
-                full_unit_source=full_unit_source,
+                full_unit_source=effective_full_unit_source,
             )
             payload["structural_guard"] = real_score.structural_guard
             payload["structural_guard_error"] = (
                 real_score.structural_guard_error
                 or real_score.match_percent_error
             )
-        print(json.dumps(payload, indent=2))
+            guard = (
+                real_score.structural_guard
+                if isinstance(real_score.structural_guard, dict)
+                else {}
+            )
+            _apply_score_source_target_verdict(payload)
+            payload["checkdiff_guard"] = {
+                "match_percent": getattr(real_score, "match_percent", None),
+                "classification_primary": guard.get("classification_primary"),
+                "normalized_diff_lines": guard.get("normalized_diff_lines"),
+                "hunk_count": guard.get("hunk_count"),
+                "accepted": guard.get("accepted"),
+            }
+        _emit_score_source_result(payload, state="completed")
         return
-    print(score_value)
+    _emit_score_source_result(payload, state="completed")
 
 
 # ---------------------------------------------------------------------------
@@ -3227,6 +3442,37 @@ def _pcdump_for_object(
     return None
 
 
+def _resolve_permuter_scorer_target(target: Path, object_file: Path) -> Path:
+    """Resolve portable scorer target paths against the candidate object tree."""
+    target = target.expanduser()
+    if target.is_absolute() or target.exists():
+        return target
+
+    object_path = object_file.expanduser()
+    if not object_path.is_absolute():
+        object_path = (Path.cwd() / object_path).resolve()
+    else:
+        object_path = object_path.resolve()
+    parts = object_path.parts
+    if "nonmatchings" not in parts:
+        return target
+    nonmatchings_index = parts.index("nonmatchings")
+    if nonmatchings_index + 1 >= len(parts):
+        return target
+
+    perm_root = Path(*parts[:nonmatchings_index])
+    function_dir = Path(*parts[:nonmatchings_index + 2])
+    candidates: list[Path] = []
+    if target.parts and target.parts[0] == "nonmatchings":
+        candidates.append(perm_root / target)
+    candidates.append(function_dir / target)
+    candidates.append(function_dir / target.name)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0] if candidates else target
+
+
 
 @target_app.command(name="score-force-phys")
 def score_force_phys(
@@ -3296,6 +3542,7 @@ def score_force_phys(
 
     if not object_file.exists():
         _emit_sentinel(f"object file not found: {object_file}")
+    target = _resolve_permuter_scorer_target(target, object_file)
 
     try:
         import yaml  # type: ignore
@@ -3541,6 +3788,7 @@ def score_simplify_order(
     if not object_file.exists():
         _emit_sentinel(f"object file not found: {object_file}")
         return  # for typing — Exit() raises
+    target = _resolve_permuter_scorer_target(target, object_file)
 
     try:
         spec = load_simplify_order_target_spec(target)

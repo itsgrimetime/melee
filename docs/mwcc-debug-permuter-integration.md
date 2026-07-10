@@ -156,6 +156,28 @@ melee-agent debug permute triage \
 - On scoring failure (timeout, parse error, etc.), we fall back to
   the plain objdiff score so permuter never blocks on our infrastructure.
 
+### Diagnostic artifact retention
+
+`debug target score-source` stores its source and score payloads in
+`build/diagnostics/runs/<run-id>/evidence`. It retains a pcdump in that
+evidence directory only when `--retain-pcdump` is requested. This keeps the
+default evidence bundle small while allowing an operator to preserve the
+compiler dump needed for a deeper investigation.
+
+Inspect and maintain completed diagnostic bundles with:
+
+```bash
+melee-agent debug artifacts report
+melee-agent debug artifacts prune --max-age-days 30 --max-total-bytes 10737418240
+melee-agent debug artifacts prune --max-age-days 30 --max-total-bytes 10737418240 --apply
+```
+
+`report` is read-only. `prune` is also a preview until `--apply` is supplied:
+without it, the command reports the planned deletions and removes nothing.
+Active or incomplete bundles are never deleted. `mwcc_debug_cache` is
+report-only, so it is visible in retention accounting but is not a prune
+target.
+
 ### When NOT to use it
 
 - Pure byte-distance cases (functions where the byte scorer is doing
