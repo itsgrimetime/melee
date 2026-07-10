@@ -2688,44 +2688,39 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
     HSD_JObj* new_var;
     HSD_JObj* row_parent;
-    s32 count;
-    Diagram* data_alias;
     Diagram* data = GET_DIAGRAM(arg0);
+    Diagram* data_alias = data;
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     u8* sorted;
     int fighter_id;
     f32 x_spacing;
     f32 y_spacing;
-    int fighter_idr;
     int i;
     HSD_JObj* jobj;
 
-    data_alias = data;
-
     // Column headers (fighter icons)
     for (i = 0; i < 7; i++) {
-        sorted = mnDiagram_804A0750.sorted_fighters;
-        count = mnDiagram_CountUnlockedFightersInline();
-        if (count > i) {
+        sorted = (u8*) assets;
+        if (mnDiagram_CountUnlockedFightersInline() > i) {
             fighter_id =
                 mnDiagram_GetVisibleFighterCursorFrom(sorted, arg2, i);
             new_var = mnDiagram_CreateFighterHeader(assets, fighter_id);
-            x_spacing = HSD_JObjGetTranslationX(data_alias->jobjs[8]) -
-                        HSD_JObjGetTranslationX(data_alias->jobjs[7]);
+            x_spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
+                        HSD_JObjGetTranslationX(
+                            jobj = data->jobjs[7]);
             HSD_JObjSetTranslateX(new_var, x_spacing * i);
-            jobj = data_alias->jobjs[7];
+            jobj = data->jobjs[7];
             HSD_JObjAddChild(jobj, new_var);
         }
     }
 
     // Row headers (fighter icons)
     for (i = 0; i < 0xA; i++) {
-        sorted = mnDiagram_804A0750.sorted_fighters;
-        count = mnDiagram_CountUnlockedFightersInline();
-        if (count > i) {
-            fighter_idr =
-                mnDiagram_GetVisibleFighterCursorFrom2(sorted, arg1, i);
-            jobj = mnDiagram_CreateFighterHeader(assets, fighter_idr);
+        sorted = (u8*) assets;
+        if (mnDiagram_CountUnlockedFightersInline() > i) {
+            jobj = mnDiagram_CreateFighterHeader(
+                assets,
+                mnDiagram_GetVisibleFighterCursorFrom2(sorted, arg1, i));
             row_parent = data_alias->jobjs[9];
             y_spacing = HSD_JObjGetTranslationY(data_alias->jobjs[10]) -
                         HSD_JObjGetTranslationY(row_parent);
