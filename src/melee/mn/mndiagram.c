@@ -2717,8 +2717,9 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     for (i = 0; i < 7; i++) {
         sorted = (u8*) assets;
         if (mnDiagram_CountUnlockedFightersInline() > i) {
-            header = mnDiagram_CreateVisibleFighterHeader(sorted, arg2, i,
-                                                          assets);
+            header = mnDiagram_CreateFighterHeader(
+                mnDiagram_GetVisibleFighterCursorFrom(sorted, arg2, i),
+                assets);
             spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
                       HSD_JObjGetTranslationX(data->jobjs[7]);
             HSD_JObjSetTranslateX(header, spacing * i);
