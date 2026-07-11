@@ -27,6 +27,7 @@ class FunctionBinding:
     parameter_names: tuple[str, ...]
     parameter_span: tuple[int, int]
     direct_calls: tuple[CallBinding, ...]
+    parameter_texts: tuple[str, ...] = ()
     declaration_spans: tuple[tuple[int, int], ...] = ()
     declaration_parameter_spans: tuple[tuple[int, int], ...] = ()
 
@@ -148,7 +149,9 @@ def build_binding_index(source: str) -> BindingIndex:
             continue
 
         owner = _ancestor(call, "function_definition")
-        local_declarations = _function_local_declarations(owner, source_bytes, to_char) if owner is not None else {}
+        local_declarations = (
+            _visible_local_declarations(call, owner, source_bytes, to_char) if owner is not None else {}
+        )
         if callee in local_declarations:
             blockers.append(BindingBlocker(callee, "shadowed-call", call_span))
             if callee in unique_nodes:
@@ -183,6 +186,7 @@ def build_binding_index(source: str) -> BindingIndex:
             parameter_names=parameter_names,
             parameter_span=_span(parameters, to_char),
             direct_calls=tuple(sorted(calls_by_name[name], key=lambda item: item.call_span)),
+            parameter_texts=_parameter_texts(parameters, source_bytes),
             declaration_spans=tuple(
                 _span(declaration, to_char) for declaration, _, _ in declaration_nodes.get(name, ())
             ),
@@ -226,9 +230,9 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
     semantic_labels: dict[str, list[str]] = defaultdict(list)
     reclassified: dict[tuple[str, int], str] = {}
     for left_function, right_function, renamed in pairs:
-        permutation = _parameter_permutation(left_function, right_function)
-        if permutation is not None:
-            coupled = _couple_parameter_reorder(
+        if _has_parameter_list_patch(atoms, left_function, right_function):
+            permutation = _parameter_permutation(left_function, right_function)
+            coupled = _couple_signature_change(
                 groups,
                 atoms,
                 left_function,
@@ -236,7 +240,8 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
                 reclassified,
             )
             if coupled:
-                semantic_labels[coupled[0]].append(f"{right_function.name} parameter reorder")
+                change = "parameter reorder" if permutation is not None else "signature change"
+                semantic_labels[coupled[0]].append(f"{right_function.name} {change}")
         if renamed:
             coupled = _couple_rename(
                 groups,
@@ -298,10 +303,27 @@ def _parameter_permutation(left: FunctionBinding, right: FunctionBinding) -> tup
         return None
     order = tuple(left.parameter_names.index(name) for name in right.parameter_names)
     identity = tuple(range(len(order)))
-    return order if order != identity else None
+    if order == identity:
+        return None
+    if left.parameter_texts and right.parameter_texts:
+        reordered = tuple(left.parameter_texts[index] for index in order)
+        if reordered != right.parameter_texts:
+            return None
+    return order
 
 
-def _couple_parameter_reorder(
+def _has_parameter_list_patch(atoms, left: FunctionBinding, right: FunctionBinding) -> bool:
+    left_spans = (left.parameter_span, *left.declaration_parameter_spans)
+    right_spans = (right.parameter_span, *right.declaration_parameter_spans)
+    return any(
+        any(_spans_touch((patch.left_start, patch.left_end), span) for span in left_spans)
+        or any(_spans_touch((patch.right_start, patch.right_end), span) for span in right_spans)
+        for atom in atoms
+        for patch in atom.patches
+    )
+
+
+def _couple_signature_change(
     groups: UnionFind,
     atoms,
     left: FunctionBinding,
@@ -556,11 +578,22 @@ def _parameter_names(parameter_list, source_bytes: bytes) -> tuple[str, ...] | N
     return tuple(names)
 
 
-def _function_local_declarations(
+def _parameter_texts(parameter_list, source_bytes: bytes) -> tuple[str, ...]:
+    return tuple(
+        node_text(source_bytes, parameter).strip()
+        for parameter in parameter_list.named_children
+        if not (parameter.type == "primitive_type" and node_text(source_bytes, parameter) == "void")
+    )
+
+
+def _visible_local_declarations(
+    call,
     definition,
     source_bytes: bytes,
     to_char: list[int],
 ) -> dict[str, tuple[tuple[int, int], ...]]:
+    """Return declarations whose lexical scope contains and precedes ``call``."""
+
     spans_by_name: dict[str, list[tuple[int, int]]] = defaultdict(list)
     declarator = definition.child_by_field_name("declarator")
     parameters = _find_parameter_list(declarator)
@@ -572,18 +605,39 @@ def _function_local_declarations(
     body = definition.child_by_field_name("body")
     if body is not None:
         for declaration in _walk_type(body, "declaration"):
-            for child in declaration.named_children:
-                if child.type in {
-                    "identifier",
-                    "init_declarator",
-                    "pointer_declarator",
-                    "array_declarator",
-                    "function_declarator",
-                }:
-                    identifier = _declarator_identifier(child)
-                    if identifier is not None:
-                        spans_by_name[node_text(source_bytes, identifier)].append(_span(declaration, to_char))
+            scope = _local_declaration_scope(declaration)
+            if scope is None or not _contains_node(scope, call):
+                continue
+            for identifier in _local_declaration_identifiers(declaration):
+                if identifier.end_byte <= call.start_byte:
+                    spans_by_name[node_text(source_bytes, identifier)].append(_span(declaration, to_char))
     return {name: tuple(dict.fromkeys(spans)) for name, spans in spans_by_name.items()}
+
+
+def _local_declaration_identifiers(declaration):
+    declarator_types = {
+        "identifier",
+        "init_declarator",
+        "pointer_declarator",
+        "array_declarator",
+        "function_declarator",
+    }
+    for child in declaration.named_children:
+        if child.type in declarator_types:
+            identifier = _declarator_identifier(child)
+            if identifier is not None:
+                yield identifier
+
+
+def _local_declaration_scope(declaration):
+    parent = declaration.parent
+    if parent is not None and parent.type == "for_statement":
+        return parent
+    return _ancestor(declaration, "compound_statement")
+
+
+def _contains_node(container, node) -> bool:
+    return container.start_byte <= node.start_byte and node.end_byte <= container.end_byte
 
 
 def _declarator_identifier(node):

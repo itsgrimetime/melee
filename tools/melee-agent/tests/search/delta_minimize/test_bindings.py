@@ -46,6 +46,39 @@ static int *helper(int b, int a) { static int result; result = a - b; return &re
 int draw(int x, int y) { return *helper(y, x) + 2; }
 """
 
+ARITY_CHANGE_LEFT = """\
+static int helper(int a);
+static int helper(int a) { return a; }
+int draw(int x) { return helper(x) + 1; }
+"""
+ARITY_CHANGE_RIGHT = """\
+static int helper(int a, int b);
+static int helper(int a, int b) { return a; }
+int draw(int x) { return helper(x, 1) + 2; }
+"""
+
+TYPE_CHANGE_LEFT = """\
+static int helper(int a);
+static int helper(int a) { return a; }
+int draw(int x) { return helper(x); }
+"""
+TYPE_CHANGE_RIGHT = """\
+static int helper(unsigned int a);
+static int helper(unsigned int a) { return a; }
+int draw(int x) { return helper((unsigned int) x); }
+"""
+
+CALL_COUNT_CHANGE_RIGHT = """\
+static int helper(int a, int b);
+static int helper(int a, int b) { return a; }
+int draw(int x) { return helper(x, 1) + helper(x, 2); }
+"""
+
+DECLARATION_COUNT_CHANGE_RIGHT = """\
+static int helper(int a, int b) { return a; }
+int draw(int x) { return helper(x, 1); }
+"""
+
 UNIQUE_RENAME_LEFT = """\
 static int helper(int value);
 static int helper(int value) { return value + 1; }
@@ -142,6 +175,53 @@ int draw(int x, int y) {
 }
 """
 
+NESTED_SHADOW_THEN_OUTER_CALL_LEFT = """\
+int helper(int a, int b) { return a - b; }
+int draw(int x, int y) {
+    { int helper = 0; x += helper; }
+    return helper(x, y);
+}
+"""
+NESTED_SHADOW_THEN_OUTER_CALL_RIGHT = """\
+int helper(int b, int a) { return a - b; }
+int draw(int x, int y) {
+    { int helper = 0; x += helper; }
+    return helper(y, x);
+}
+"""
+
+CALL_THEN_SAME_BLOCK_SHADOW_LEFT = """\
+int helper(int a, int b) { return a - b; }
+int draw(int x, int y) {
+    int result = helper(x, y);
+    int helper = 0;
+    return result + helper;
+}
+"""
+CALL_THEN_SAME_BLOCK_SHADOW_RIGHT = """\
+int helper(int b, int a) { return a - b; }
+int draw(int x, int y) {
+    int result = helper(y, x);
+    int helper = 0;
+    return result + helper;
+}
+"""
+
+FOR_SHADOW_THEN_OUTER_CALL_LEFT = """\
+int helper(int a, int b) { return a - b; }
+int draw(int x, int y) {
+    for (int helper = 0; helper < 1; helper++) { x += helper; }
+    return helper(x, y);
+}
+"""
+FOR_SHADOW_THEN_OUTER_CALL_RIGHT = """\
+int helper(int b, int a) { return a - b; }
+int draw(int x, int y) {
+    for (int helper = 0; helper < 1; helper++) { x += helper; }
+    return helper(y, x);
+}
+"""
+
 
 def test_parameter_and_call_reorder_become_one_atom():
     manifest = delta.extract_delta_manifest(PARAM_LEFT, PARAM_RIGHT, function="draw")
@@ -190,6 +270,78 @@ def test_pointer_return_declaration_definition_and_calls_stay_coupled_for_every_
             (("a", "b"), ("x", "y")),
             (("b", "a"), ("y", "x")),
         }
+
+
+def test_arity_change_couples_declaration_definition_and_call_for_every_legal_mask():
+    manifest = delta.extract_delta_manifest(
+        ARITY_CHANGE_LEFT,
+        ARITY_CHANGE_RIGHT,
+        function="draw",
+    )
+
+    coupled = next(atom for atom in manifest.atoms if "helper signature change" in atom.summary)
+    assert [patch.anchor_kind for patch in coupled.patches].count("parameter_list") == 2
+    assert [patch.anchor_kind for patch in coupled.patches].count("argument_list") == 1
+    assert len(manifest.atoms) == 2
+
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+    candidates = {materialize_mask(ARITY_CHANGE_LEFT, manifest, mask) for mask in masks}
+    assert masks == (0b00, 0b01, 0b10, 0b11)
+    assert candidates >= {ARITY_CHANGE_LEFT, ARITY_CHANGE_RIGHT}
+    for candidate in candidates:
+        helper = build_binding_index(candidate).functions["helper"]
+        binding_shape = (helper.parameter_names, helper.direct_calls[0].argument_texts)
+        assert binding_shape in {
+            (("a",), ("x",)),
+            (("a", "b"), ("x", "1")),
+        }
+
+
+def test_parameter_type_change_uses_general_signature_coupling():
+    manifest = delta.extract_delta_manifest(
+        TYPE_CHANGE_LEFT,
+        TYPE_CHANGE_RIGHT,
+        function="draw",
+    )
+
+    assert len(manifest.atoms) == 1
+    assert "helper signature change" in manifest.atoms[0].summary
+    assert {patch.anchor_kind for patch in manifest.atoms[0].patches} == {
+        "parameter_list",
+        "argument_list",
+    }
+    assert enumerate_legal_masks(manifest, max_candidates=2) == (0, 1)
+    assert materialize_mask(TYPE_CHANGE_LEFT, manifest, 0) == TYPE_CHANGE_LEFT
+    assert materialize_mask(TYPE_CHANGE_LEFT, manifest, 1) == TYPE_CHANGE_RIGHT
+
+
+@pytest.mark.parametrize(
+    "right",
+    [CALL_COUNT_CHANGE_RIGHT, DECLARATION_COUNT_CHANGE_RIGHT],
+    ids=("call-count", "declaration-count"),
+)
+def test_signature_change_count_ambiguity_fails_closed(right):
+    with pytest.raises(DeltaMinimizeError, match="ambiguous-delta-coupling"):
+        delta.extract_delta_manifest(ARITY_CHANGE_LEFT, right, function="draw")
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (NESTED_SHADOW_THEN_OUTER_CALL_LEFT, NESTED_SHADOW_THEN_OUTER_CALL_RIGHT),
+        (CALL_THEN_SAME_BLOCK_SHADOW_LEFT, CALL_THEN_SAME_BLOCK_SHADOW_RIGHT),
+        (FOR_SHADOW_THEN_OUTER_CALL_LEFT, FOR_SHADOW_THEN_OUTER_CALL_RIGHT),
+    ],
+    ids=("completed-nested-block", "later-same-block-declaration", "completed-for-scope"),
+)
+def test_declarations_not_visible_at_call_do_not_block_coupling(left, right):
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+
+    assert len(manifest.atoms) == 1
+    assert "helper parameter reorder" in manifest.atoms[0].summary
+    assert enumerate_legal_masks(manifest, max_candidates=2) == (0, 1)
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 1) == right
 
 
 def test_function_pointer_object_is_not_indexed_as_a_function_declaration():
