@@ -74,8 +74,15 @@ def build_binding_index(source: str) -> BindingIndex:
     for node in _walk(root):
         if node.type == "ERROR":
             blockers.append(BindingBlocker("*", "parse-error", _span(node, to_char)))
-        elif node.type in {"preproc_if", "preproc_ifdef", "preproc_elif", "preproc_else"}:
-            blockers.append(BindingBlocker("*", "conditional-compilation", _span(node, to_char)))
+        elif (
+            node.type.startswith("preproc_")
+            and node.type not in {"preproc_def", "preproc_function_def"}
+            and not _has_preprocessor_ancestor(node)
+        ):
+            reason = (
+                "conditional-compilation" if node.type in {"preproc_if", "preproc_ifdef"} else "preprocessor-directive"
+            )
+            blockers.append(BindingBlocker("*", reason, _span(node, to_char)))
 
     for node in root.named_children:
         if node.type == "function_definition":
@@ -90,15 +97,10 @@ def build_binding_index(source: str) -> BindingIndex:
             function_nodes[name].append((node, name_node, parameters))
         elif node.type == "declaration":
             for declarator in node.named_children:
-                if declarator.type != "function_declarator":
+                parts = _function_declaration_parts(declarator)
+                if parts is None:
                     continue
-                inner = declarator.child_by_field_name("declarator")
-                if inner is None or inner.type == "parenthesized_declarator":
-                    continue
-                name_node = _declarator_identifier(declarator)
-                parameters = _find_parameter_list(declarator)
-                if name_node is None or parameters is None:
-                    continue
+                name_node, parameters = parts
                 name = node_text(source_bytes, name_node)
                 declaration_nodes[name].append((node, name_node, parameters))
         elif node.type in {"preproc_def", "preproc_function_def"}:
@@ -197,7 +199,6 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
 
     groups = UnionFind(tuple(atom.atom_id for atom in atoms))
     _union_overlaps(groups, atoms)
-    _union_dependency_cycles(groups, atoms)
 
     left_changed = _changed_binding_names(left_index, atoms, side="left")
     right_changed = _changed_binding_names(right_index, atoms, side="right")
@@ -228,6 +229,8 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
             )
             if coupled:
                 semantic_labels[coupled[0]].append(f"{left_function.name} to {right_function.name} rename")
+
+    _union_dependency_cycles(groups, atoms)
 
     # Semantic unions can change roots, so attach labels to their final roots.
     labels_by_root: dict[str, list[str]] = defaultdict(list)
@@ -420,6 +423,8 @@ def _materialize_composite_atoms(groups, atoms, labels_by_root, reclassified):
     by_root: dict[str, list] = defaultdict(list)
     for atom in atoms:
         by_root[groups.find(atom.atom_id)].append(atom)
+    for group in by_root.values():
+        group.sort(key=lambda atom: atom.atom_id)
     ordered_groups = sorted(
         by_root.values(),
         key=lambda group: min(
@@ -479,22 +484,38 @@ def _union_overlaps(groups: UnionFind, atoms) -> None:
 
 
 def _union_dependency_cycles(groups: UnionFind, atoms) -> None:
-    graph = {atom.atom_id: set(atom.requires) for atom in atoms}
-    reachable: dict[str, set[str]] = {}
-    for start in graph:
-        seen: set[str] = set()
-        stack = list(graph[start])
-        while stack:
-            current = stack.pop()
-            if current in seen or current not in graph:
-                continue
-            seen.add(current)
-            stack.extend(graph[current])
-        reachable[start] = seen
-    for left in graph:
-        for right in reachable[left]:
-            if left in reachable.get(right, set()):
-                groups.union(left, right)
+    while True:
+        graph: dict[str, set[str]] = defaultdict(set)
+        for atom in atoms:
+            source = groups.find(atom.atom_id)
+            graph[source]
+            for required in atom.requires:
+                if required not in groups.parent:
+                    continue
+                target = groups.find(required)
+                if source != target:
+                    graph[source].add(target)
+
+        reachable: dict[str, set[str]] = {}
+        for start in graph:
+            seen: set[str] = set()
+            stack = list(graph[start])
+            while stack:
+                current = stack.pop()
+                if current in seen or current not in graph:
+                    continue
+                seen.add(current)
+                stack.extend(graph[current])
+            reachable[start] = seen
+
+        changed = False
+        for left in sorted(graph):
+            for right in sorted(reachable[left]):
+                if left in reachable.get(right, set()) and groups.find(left) != groups.find(right):
+                    groups.union(left, right)
+                    changed = True
+        if not changed:
+            return
 
 
 def _union_ids(groups: UnionFind, atom_ids: Sequence[str]) -> None:
@@ -554,6 +575,33 @@ def _declarator_identifier(node):
             return None
         current = inner
     return current
+
+
+def _function_declaration_parts(node):
+    current = node
+    while current is not None:
+        if current.type == "function_declarator":
+            parameters = current.child_by_field_name("parameters")
+            name = _declared_function_identifier(current.child_by_field_name("declarator"))
+            if name is None or parameters is None:
+                return None
+            return name, parameters
+        current = current.child_by_field_name("declarator")
+    return None
+
+
+def _declared_function_identifier(node):
+    current = node
+    while current is not None:
+        if current.type == "identifier":
+            return current
+        if current.type == "pointer_declarator":
+            return None
+        if current.type == "parenthesized_declarator":
+            current = next(iter(current.named_children), None)
+        else:
+            current = current.child_by_field_name("declarator")
+    return None
 
 
 def _find_parameter_list(node):
