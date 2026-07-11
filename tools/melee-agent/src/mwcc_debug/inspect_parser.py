@@ -317,6 +317,8 @@ def parse_inspect_function(text: str, function: str) -> InspectFunction | None:
                     first_appearance_order=order if table_kind == "first" else None,
                     address_order=order if table_kind == "address" else None,
                 )
+            elif stripped and not (len(set(stripped)) == 1 and stripped[0] in "-="):
+                warnings.append(f"line {line.number}: unsupported inspector syntax: {stripped}")
             continue
 
         if not in_statements:

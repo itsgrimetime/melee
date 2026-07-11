@@ -153,6 +153,32 @@ STATEMENTS (IR):
     assert {node.opcode for node in fn.enodes} == {"ECOND", "EEQU", "EINTCONST"}
 
 
+def test_unknown_local_order_row_warns_and_recovers(tmp_path: Path) -> None:
+    text = """\
+FUNCTION: fn_test
+LOCAL VARIABLES (first appearance order, with ObjObject addresses):
+--------------------------------------------------------------------------------
+  [future] 0x00DEAD00  leaked
+  [7] 0x00ABCDEF  kept
+================================================================================
+"""
+
+    fn = parse_inspect_function(text, "fn_test")
+
+    assert fn is not None
+    assert fn.warnings == ("line 4: unsupported inspector syntax: [future] 0x00DEAD00  leaked",)
+    assert "0x00DEAD00" not in fn.objobjects
+    assert fn.objobjects["0x00ABCDEF"].name == "kept"
+    assert fn.objobjects["0x00ABCDEF"].first_appearance_order == 7
+
+    inspector = tmp_path / "unknown-table-row.txt"
+    inspector.write_text(text)
+    result = adapt_inspector(_bundle(inspector, function="fn_test"))
+    assert result.warnings == fn.warnings
+    assert all(node.attributes.get("address") != "0x00DEAD00" for node in result.nodes)
+    assert any(node.attributes.get("address") == "0x00ABCDEF" for node in result.nodes)
+
+
 def test_adapter_preserves_explicit_and_derived_confidence() -> None:
     result = adapt_inspector(_bundle(FIXTURE, function="mnDiagram_DrawFighterHeaders"))
 
