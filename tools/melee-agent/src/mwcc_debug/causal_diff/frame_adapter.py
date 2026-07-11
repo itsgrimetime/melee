@@ -12,7 +12,7 @@ from ..stack_slot_bridge import explain_stack_slot_localizer
 from .asm_adapter import CheckdiffEvidence
 from .backend_adapter import BackendEvidence
 from .bundles import BundleInputError, ValidatedBundle
-from .models import AdapterResult, Confidence, EvidenceNode, Provenance
+from .models import AdapterResult, Confidence, EvidenceEdge, EvidenceNode, Provenance
 
 _SUPPLIED_PARSER = "frame-reservations.v1"
 _DERIVED_PARSER = "causal-frame-derivation.v1"
@@ -123,15 +123,94 @@ def _validate_frame_report(report: Mapping[str, object], function: str) -> None:
     if not isinstance(current, Mapping):
         raise BundleInputError("frame report current frame must be an object")
     trace = current.get("frame_allocation_trace")
-    if not isinstance(trace, Mapping) or not isinstance(trace.get("objects"), (list, tuple)):
-        raise BundleInputError("frame report current frame_allocation_trace.objects must be a list")
+    _validate_frame_trace(trace, side="current")
     expected = report.get("expected")
     if expected is not None:
         if not isinstance(expected, Mapping):
             raise BundleInputError("frame report expected frame must be an object or null")
-        expected_trace = expected.get("frame_allocation_trace")
-        if not isinstance(expected_trace, Mapping) or not isinstance(expected_trace.get("objects"), (list, tuple)):
-            raise BundleInputError("frame report expected frame_allocation_trace.objects must be a list")
+        _validate_frame_trace(expected.get("frame_allocation_trace"), side="expected")
+    bridge = report.get("stack_slot_bridge")
+    if bridge is not None:
+        _validate_stack_bridge(bridge, function=function)
+
+
+def _validate_frame_trace(trace: object, *, side: str) -> None:
+    if not isinstance(trace, Mapping):
+        raise BundleInputError(f"frame report {side} frame_allocation_trace must be an object")
+    if not isinstance(trace.get("status"), str):
+        raise BundleInputError(f"frame report {side} frame_allocation_trace.status must be a string")
+    objects = trace.get("objects")
+    if not isinstance(objects, (list, tuple)):
+        raise BundleInputError(f"frame report {side} frame_allocation_trace.objects must be a list")
+    for index, obj in enumerate(objects):
+        if not isinstance(obj, Mapping):
+            raise BundleInputError(f"frame report {side} object {index} must be an object")
+        for field in ("start", "end", "size"):
+            if not isinstance(obj.get(field), int) or isinstance(obj.get(field), bool):
+                raise BundleInputError(f"frame report {side} object {index}.{field} must be an integer")
+        if int(obj["end"]) <= int(obj["start"]) or int(obj["size"]) != int(obj["end"]) - int(obj["start"]):
+            raise BundleInputError(f"frame report {side} object {index} has an invalid interval")
+        for field in ("kind", "origin_tag"):
+            if not isinstance(obj.get(field), str) or not obj.get(field):
+                raise BundleInputError(f"frame report {side} object {index}.{field} must be a nonempty string")
+        for field in ("symbol", "source"):
+            if field in obj and obj[field] is not None and not isinstance(obj[field], str):
+                raise BundleInputError(f"frame report {side} object {index}.{field} must be a string or null")
+        source_symbols = obj.get("source_symbols")
+        if source_symbols is not None and (
+            not isinstance(source_symbols, (list, tuple)) or any(not isinstance(item, str) for item in source_symbols)
+        ):
+            raise BundleInputError(f"frame report {side} object {index}.source_symbols must be a list of strings")
+        if "ambiguous" in obj and not isinstance(obj["ambiguous"], bool):
+            raise BundleInputError(f"frame report {side} object {index}.ambiguous must be a boolean")
+        for field in ("producer_confidence", "confidence"):
+            if field in obj and _declared_confidence(obj[field]) is None:
+                raise BundleInputError(f"frame report {side} object {index}.{field} has an unsupported confidence")
+        for field in ("layout_order", "symbolic_assignment_order"):
+            if field in obj and (not isinstance(obj[field], int) or isinstance(obj[field], bool)):
+                raise BundleInputError(f"frame report {side} object {index}.{field} must be an integer")
+
+
+def _validate_stack_bridge(bridge: object, *, function: str) -> None:
+    if not isinstance(bridge, Mapping):
+        raise BundleInputError("frame report stack_slot_bridge must be an object")
+    if not isinstance(bridge.get("status"), str):
+        raise BundleInputError("frame report stack_slot_bridge.status must be a string")
+    if bridge.get("function") != function:
+        raise BundleInputError("frame report stack_slot_bridge.function does not match")
+    candidates = bridge.get("candidates")
+    if not isinstance(candidates, (list, tuple)):
+        raise BundleInputError("frame report stack_slot_bridge.candidates must be a list")
+    candidate_count = bridge.get("candidate_count")
+    if not isinstance(candidate_count, int) or isinstance(candidate_count, bool) or candidate_count != len(candidates):
+        raise BundleInputError("frame report stack_slot_bridge.candidate_count does not match candidates")
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, Mapping):
+            raise BundleInputError(f"frame report bridge candidate {index} must be an object")
+        if not isinstance(candidate.get("current_offset"), int) or isinstance(candidate.get("current_offset"), bool):
+            raise BundleInputError(f"frame report bridge candidate {index}.current_offset must be an integer")
+        if not isinstance(candidate.get("opcode"), str) or not candidate.get("opcode"):
+            raise BundleInputError(f"frame report bridge candidate {index}.opcode must be a nonempty string")
+        for field in ("site_kind", "mapping_status"):
+            if not isinstance(candidate.get(field), str) or not candidate.get(field):
+                raise BundleInputError(f"frame report bridge candidate {index}.{field} must be a nonempty string")
+        evidence = candidate.get("evidence")
+        if (
+            not isinstance(evidence, (list, tuple))
+            or not evidence
+            or any(not isinstance(item, str) or not item for item in evidence)
+        ):
+            raise BundleInputError(f"frame report bridge candidate {index}.evidence must be a nonempty list of strings")
+        expression = candidate.get("nearest_source_expression")
+        if expression is not None:
+            if not isinstance(expression, Mapping):
+                raise BundleInputError(
+                    f"frame report bridge candidate {index}.nearest_source_expression must be an object"
+                )
+            if not isinstance(expression.get("expression"), str) or not isinstance(expression.get("confidence"), str):
+                raise BundleInputError(
+                    f"frame report bridge candidate {index} has malformed source expression evidence"
+                )
 
 
 def _artifact_digest(bundle: ValidatedBundle, name: str) -> str:
@@ -201,6 +280,152 @@ def _bridge_candidates(report: Mapping[str, object], obj: Mapping[str, object]) 
     return tuple(matches)
 
 
+def _bridge_access_operands(candidate: Mapping[str, object]) -> str:
+    opcode = str(candidate.get("opcode") or "")
+    evidence = candidate.get("evidence")
+    if not opcode or not isinstance(evidence, (list, tuple)):
+        return ""
+    marker = f" {opcode} "
+    for item in evidence:
+        if isinstance(item, str) and marker in item:
+            return item.split(marker, 1)[1].strip()
+    return ""
+
+
+def _bridge_records(
+    bundle: ValidatedBundle,
+    report: Mapping[str, object],
+    *,
+    input_nodes: tuple[EvidenceNode, ...],
+) -> tuple[
+    tuple[EvidenceNode, ...],
+    tuple[EvidenceEdge, ...],
+    Mapping[int, tuple[str, ...]],
+]:
+    bridge = report.get("stack_slot_bridge")
+    if not isinstance(bridge, Mapping):
+        return (), (), MappingProxyType({})
+    candidates = bridge.get("candidates")
+    if not isinstance(candidates, (list, tuple)):
+        return (), (), MappingProxyType({})
+
+    nodes: list[EvidenceNode] = []
+    edges: list[EvidenceEdge] = []
+    support_by_index: dict[int, tuple[str, ...]] = {}
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, Mapping):
+            continue
+        base_provenance = tuple(node.record_id for node in input_nodes)
+        base_confidences = tuple(node.confidence for node in input_nodes)
+        candidate_node = EvidenceNode.create(
+            compile_id=bundle.compile_id,
+            function=bundle.manifest.function,
+            kind="frame-bridge-candidate",
+            local_key=(index, candidate.get("current_offset"), candidate.get("virtual_token")),
+            role_key=None,
+            producer_confidence=Confidence.DERIVED_UNIQUE,
+            adapter_confidence=Confidence.DERIVED_UNIQUE,
+            provenance=Provenance(
+                artifact_sha256=bundle.compile_id,
+                parser="stack-slot-bridge.v1",
+                raw_start=None,
+                raw_end=None,
+                derivation_rule="normalize-stack-slot-bridge-candidate",
+                input_record_ids=base_provenance,
+            ),
+            input_confidences=base_confidences,
+            attributes={
+                key: value
+                for key, value in candidate.items()
+                if key not in {"nearest_source_expression", "evidence", "input_record_ids"}
+            },
+        )
+        operands = _bridge_access_operands(candidate)
+        access_node = EvidenceNode.create(
+            compile_id=bundle.compile_id,
+            function=bundle.manifest.function,
+            kind="frame-stack-access",
+            local_key=(index, candidate.get("opcode"), candidate.get("current_offset"), operands),
+            role_key=None,
+            producer_confidence=Confidence.OBSERVED,
+            adapter_confidence=Confidence.DERIVED_UNIQUE,
+            provenance=Provenance(
+                artifact_sha256=bundle.compile_id,
+                parser="stack-slot-bridge.v1",
+                raw_start=None,
+                raw_end=None,
+                derivation_rule="extract-bridge-stack-access",
+                input_record_ids=base_provenance,
+            ),
+            input_confidences=base_confidences,
+            attributes={
+                "opcode": candidate.get("opcode"),
+                "operands": operands,
+                "current_offset": candidate.get("current_offset"),
+                "evidence": candidate.get("evidence", ()),
+            },
+        )
+        local_nodes: list[EvidenceNode] = [candidate_node, access_node]
+        edge_pairs: list[tuple[str, EvidenceNode, Confidence]] = [
+            ("bridge-has-stack-access", access_node, Confidence.DERIVED_UNIQUE)
+        ]
+        expression = candidate.get("nearest_source_expression")
+        if isinstance(expression, Mapping):
+            hint_confidence = (
+                Confidence.DERIVED_UNIQUE
+                if expression.get("confidence") == Confidence.DERIVED_UNIQUE.value
+                else Confidence.HEURISTIC
+            )
+            hint_node = EvidenceNode.create(
+                compile_id=bundle.compile_id,
+                function=bundle.manifest.function,
+                kind="frame-bridge-source-hint",
+                local_key=(index, expression.get("expression")),
+                role_key=None,
+                producer_confidence=hint_confidence,
+                adapter_confidence=Confidence.OBSERVED,
+                provenance=Provenance(
+                    artifact_sha256=bundle.compile_id,
+                    parser="stack-slot-bridge.v1",
+                    raw_start=None,
+                    raw_end=None,
+                    derivation_rule="normalize-bridge-source-expression-hint",
+                    input_record_ids=base_provenance,
+                ),
+                input_confidences=base_confidences,
+                attributes=dict(expression),
+            )
+            local_nodes.append(hint_node)
+            edge_pairs.append(("bridge-has-source-hint", hint_node, hint_confidence))
+        local_edges: list[EvidenceEdge] = []
+        for edge_kind, target, confidence in edge_pairs:
+            edge = EvidenceEdge.create(
+                compile_id=bundle.compile_id,
+                function=bundle.manifest.function,
+                kind=edge_kind,
+                source_id=candidate_node.record_id,
+                target_id=target.record_id,
+                occurrence_ordinal=0,
+                producer_confidence=Confidence.DERIVED_UNIQUE,
+                adapter_confidence=confidence,
+                provenance=Provenance(
+                    artifact_sha256=bundle.compile_id,
+                    parser="stack-slot-bridge.v1",
+                    raw_start=None,
+                    raw_end=None,
+                    derivation_rule=edge_kind,
+                    input_record_ids=(candidate_node.record_id, target.record_id),
+                ),
+                input_confidences=(candidate_node.confidence, target.confidence),
+                attributes={},
+            )
+            local_edges.append(edge)
+        nodes.extend(local_nodes)
+        edges.extend(local_edges)
+        support_by_index[index] = tuple(record.record_id for record in (*local_nodes, *local_edges))
+    return tuple(nodes), tuple(edges), MappingProxyType(support_by_index)
+
+
 def frame_evidence_from_report(
     bundle: ValidatedBundle,
     report: Mapping[str, object],
@@ -219,6 +444,10 @@ def frame_evidence_from_report(
     parser = _SUPPLIED_PARSER if supplied else _DERIVED_PARSER
     raw_end = len(bundle.read_text("frame_report").encode("utf-8")) if supplied else None
     nodes: list[EvidenceNode] = list(input_nodes)
+    bridge_nodes, bridge_edges, bridge_support = _bridge_records(bundle, report, input_nodes=input_nodes)
+    nodes.extend(bridge_nodes)
+    edges: list[EvidenceEdge] = list(bridge_edges)
+    bridge_nodes_by_id = {node.record_id: node for node in bridge_nodes}
     side_objects = {
         "expected": _trace_objects(report.get("expected")),
         "current": _trace_objects(report.get("current")),
@@ -230,7 +459,19 @@ def frame_evidence_from_report(
             attributes["side"] = side
             candidates = _bridge_candidates(report, obj) if side == "current" else ()
             if candidates:
-                attributes["ownership_candidates"] = tuple(dict(item) for item in candidates)
+                bridge_candidates = report.get("stack_slot_bridge", {}).get("candidates", ())
+                candidate_indexes = {
+                    id(candidate): index
+                    for index, candidate in enumerate(bridge_candidates)
+                    if isinstance(candidate, Mapping)
+                }
+                attributes["ownership_candidates"] = tuple(
+                    {
+                        **dict(item),
+                        "input_record_ids": bridge_support.get(candidate_indexes.get(id(item), -1), ()),
+                    }
+                    for item in candidates
+                )
             node = EvidenceNode.create(
                 compile_id=bundle.compile_id,
                 function=bundle.manifest.function,
@@ -261,6 +502,55 @@ def frame_evidence_from_report(
                 attributes=attributes,
             )
             nodes.append(node)
+            for ordinal, ownership in enumerate(attributes.get("ownership_candidates", ())):
+                if not isinstance(ownership, Mapping):
+                    continue
+                support_ids = ownership.get("input_record_ids")
+                if not isinstance(support_ids, (list, tuple)):
+                    continue
+                candidate_node = next(
+                    (
+                        bridge_nodes_by_id[record_id]
+                        for record_id in support_ids
+                        if record_id in bridge_nodes_by_id
+                        and bridge_nodes_by_id[record_id].kind == "frame-bridge-candidate"
+                    ),
+                    None,
+                )
+                if candidate_node is None:
+                    continue
+                edges.append(
+                    EvidenceEdge.create(
+                        compile_id=bundle.compile_id,
+                        function=bundle.manifest.function,
+                        kind="bridge-candidate-materializes-stack-object",
+                        source_id=candidate_node.record_id,
+                        target_id=node.record_id,
+                        occurrence_ordinal=ordinal,
+                        producer_confidence=Confidence.DERIVED_UNIQUE,
+                        adapter_confidence=(
+                            Confidence.DERIVED_UNIQUE
+                            if len(attributes["ownership_candidates"]) == 1
+                            else Confidence.HEURISTIC
+                        ),
+                        provenance=Provenance(
+                            artifact_sha256=bundle.compile_id,
+                            parser="stack-slot-bridge.v1",
+                            raw_start=None,
+                            raw_end=None,
+                            derivation_rule="join-bridge-candidate-to-containing-stack-object",
+                            input_record_ids=(
+                                candidate_node.record_id,
+                                node.record_id,
+                            ),
+                        ),
+                        input_confidences=(
+                            candidate_node.confidence,
+                            node.confidence,
+                        ),
+                        attributes={"current_offset": ownership.get("current_offset")},
+                    )
+                )
 
     expected_roles: dict[str, tuple[int, int]] = {}
     expected_counts: dict[str, int] = {}
@@ -281,7 +571,7 @@ def frame_evidence_from_report(
             current_candidates.setdefault(role, []).append(node.record_id)
     current_nodes = {role: record_ids[0] for role, record_ids in current_candidates.items() if len(record_ids) == 1}
     return FrameEvidence(
-        result=AdapterResult(nodes=tuple(nodes)),
+        result=AdapterResult(nodes=tuple(nodes), edges=tuple(edges)),
         expected_stack_roles=MappingProxyType(expected_roles),
         current_stack_nodes=MappingProxyType(current_nodes),
     )

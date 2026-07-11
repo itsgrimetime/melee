@@ -140,11 +140,161 @@ def _scope_path(node: Any, owner: str) -> tuple[str, ...]:
     return (owner, *compounds)
 
 
-def _type_text(node: Any, source_bytes: bytes) -> str:
-    if node.type != "cast_expression":
+def _declarator_name(node: Any, source_bytes: bytes) -> str:
+    current = node
+    while current is not None:
+        if current.type == "identifier":
+            return node_text(source_bytes, current).strip()
+        child = current.child_by_field_name("declarator")
+        if child is None:
+            child = next(
+                (item for item in current.children if item.type == "identifier"),
+                None,
+            )
+        current = child
+    return ""
+
+
+def _contains_declarator_type(node: Any, node_type: str) -> bool:
+    current = node
+    while current is not None:
+        if current.type == node_type:
+            return True
+        current = current.child_by_field_name("declarator")
+    return False
+
+
+def _declared_type(
+    declaration: Any,
+    type_node: Any,
+    declarator: Any,
+    source_bytes: bytes,
+    *,
+    function_return: bool = False,
+) -> str:
+    qualifiers = [
+        node_text(source_bytes, child).strip() for child in declaration.children if child.type == "type_qualifier"
+    ]
+    base = node_text(source_bytes, type_node).strip()
+    modifiers: list[str] = []
+    current = declarator
+    while current is not None and current.type != "identifier":
+        if function_return and current.type == "function_declarator":
+            break
+        if current.type == "pointer_declarator":
+            modifiers.append("*")
+        elif current.type == "array_declarator":
+            text = node_text(source_bytes, current)
+            bracket = text.find("[")
+            if bracket < 0:
+                return ""
+            modifiers.append(text[bracket:].strip())
+        elif current.type in {"function_declarator", "parenthesized_declarator"}:
+            return ""
+        current = current.child_by_field_name("declarator")
+    if current is None and not (function_return and modifiers):
         return ""
-    type_node = node.child_by_field_name("type")
-    return "" if type_node is None else node_text(source_bytes, type_node).strip()
+    qualified = " ".join((*qualifiers, base))
+    return qualified if not modifiers else f"{qualified} {' '.join(modifiers)}"
+
+
+def _function_return_types(root: Any, source_bytes: bytes) -> Mapping[str, str]:
+    result: dict[str, str] = {}
+    for node in _walk(root):
+        if node.type not in {"function_definition", "declaration"}:
+            continue
+        declarator = node.child_by_field_name("declarator")
+        if declarator is None or not _contains_declarator_type(declarator, "function_declarator"):
+            continue
+        name = _declarator_name(declarator, source_bytes)
+        type_node = node.child_by_field_name("type")
+        if name and type_node is not None:
+            declared = _declared_type(
+                node,
+                type_node,
+                declarator,
+                source_bytes,
+                function_return=True,
+            )
+            if declared:
+                result[name] = declared
+    return MappingProxyType(result)
+
+
+def _symbol_types(function_node: Any, source_bytes: bytes) -> Mapping[str, str]:
+    result: dict[str, str] = {}
+    for node in _walk(function_node):
+        if node.type not in {"declaration", "parameter_declaration"}:
+            continue
+        type_node = node.child_by_field_name("type")
+        declarator = node.child_by_field_name("declarator")
+        if type_node is None or declarator is None:
+            continue
+        name = _declarator_name(declarator, source_bytes)
+        if name:
+            declared = _declared_type(
+                node,
+                type_node,
+                declarator,
+                source_bytes,
+            )
+            if declared:
+                result[name] = declared
+    return MappingProxyType(result)
+
+
+def _type_text(
+    node: Any,
+    source_bytes: bytes,
+    *,
+    symbols: Mapping[str, str],
+    function_types: Mapping[str, str],
+) -> str:
+    if node.type == "cast_expression":
+        type_node = node.child_by_field_name("type")
+        return "" if type_node is None else node_text(source_bytes, type_node).strip()
+    if node.type == "identifier":
+        return symbols.get(node_text(source_bytes, node).strip(), "")
+    if node.type == "call_expression":
+        function = node.child_by_field_name("function")
+        if function is None:
+            return ""
+        return function_types.get(node_text(source_bytes, function).strip(), "")
+    if node.type == "assignment_expression":
+        left = node.child_by_field_name("left")
+        return (
+            ""
+            if left is None
+            else _type_text(
+                left,
+                source_bytes,
+                symbols=symbols,
+                function_types=function_types,
+            )
+        )
+    if node.type == "number_literal":
+        text = node_text(source_bytes, node).casefold()
+        return "float" if any(marker in text for marker in (".", "f", "e")) else "int"
+    child_types = tuple(
+        type_text
+        for child in node.children
+        if child.is_named
+        and (
+            type_text := _type_text(
+                child,
+                source_bytes,
+                symbols=symbols,
+                function_types=function_types,
+            )
+        )
+    )
+    if not child_types:
+        return ""
+    if "double" in child_types:
+        return "double"
+    if "float" in child_types:
+        return "float"
+    return child_types[0] if len(set(child_types)) == 1 else ""
 
 
 def _signature(
@@ -207,6 +357,7 @@ def adapt_source(bundle: ValidatedBundle) -> SourceEvidence:
             inline_scopes_by_callee=MappingProxyType({}),
         )
 
+    function_types = _function_return_types(tree.root_node, source_bytes)
     direct_callees = set(_function_calls(target, source_bytes))
     selected: list[tuple[str, Any]] = [(target_name, target)]
     inline_scopes: dict[str, tuple[str, ...]] = {}
@@ -222,6 +373,7 @@ def adapt_source(bundle: ValidatedBundle) -> SourceEvidence:
 
     expressions: list[_Expression] = []
     for owner, function_node in selected:
+        symbols = _symbol_types(function_node, source_bytes)
         order = 0
         for item in _walk(function_node):
             if item.type not in _EXPRESSION_TYPES:
@@ -232,7 +384,12 @@ def adapt_source(bundle: ValidatedBundle) -> SourceEvidence:
             scope_path = _scope_path(item, owner)
             operator = _operator(item, source_bytes)
             operator_tree = _operator_tree(item, source_bytes)
-            type_text = _type_text(item, source_bytes)
+            type_text = _type_text(
+                item,
+                source_bytes,
+                symbols=symbols,
+                function_types=function_types,
+            )
             signature = _signature(
                 node_type=item.type,
                 operator=operator,

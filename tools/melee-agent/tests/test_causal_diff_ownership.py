@@ -22,6 +22,8 @@ from src.mwcc_debug.causal_diff.models import (
 )
 from src.mwcc_debug.causal_diff.source_adapter import adapt_source
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
+from tests.test_stack_slot_bridge import PCDUMP as BRIDGE_PCDUMP
+from tests.test_stack_slot_bridge import SOURCE as BRIDGE_SOURCE
 
 
 def _digest(data: bytes) -> str:
@@ -201,6 +203,52 @@ def test_supplied_frame_report_is_versioned_and_function_bound(
         adapt_frame(bundle, _checkdiff(), _backend())
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda report: report["current"]["frame_allocation_trace"]["objects"].append(
+            {"start": "24", "end": 28, "size": 4, "kind": "local", "origin_tag": "r1-access"}
+        ),
+        lambda report: report.update({"stack_slot_bridge": {"status": "ok", "candidates": [{"current_offset": "24"}]}}),
+        lambda report: report["current"]["frame_allocation_trace"]["objects"].append(
+            {
+                "start": 24,
+                "end": 28,
+                "size": 4,
+                "kind": "local",
+                "origin_tag": "symbolic-stack-home",
+                "symbol": "value",
+                "ambiguous": "true",
+            }
+        ),
+        lambda report: report["current"]["frame_allocation_trace"]["objects"].append(
+            {
+                "start": 24,
+                "end": 28,
+                "size": 4,
+                "kind": "local",
+                "origin_tag": "symbolic-stack-home",
+                "symbol": "value",
+                "producer_confidence": "certain",
+            }
+        ),
+    ),
+)
+def test_supplied_frame_report_rejects_malformed_object_and_bridge_fields(
+    tmp_path: Path,
+    mutate,
+) -> None:
+    report = {
+        "function": "fn_test",
+        "current": {"frame_allocation_trace": {"status": "computed", "objects": []}},
+        "expected": None,
+    }
+    mutate(report)
+
+    with pytest.raises(BundleInputError, match="frame report"):
+        adapt_frame(_bundle(tmp_path, frame_report=report), _checkdiff(), _backend())
+
+
 def test_derived_frame_nodes_cite_every_consumed_artifact(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
     pcdump = """\
@@ -239,6 +287,55 @@ B0: Succ={} Pred={} Labels={}
     }
 
 
+def test_derived_frame_adapts_real_stack_bridge_support_records(tmp_path: Path) -> None:
+    source_text = BRIDGE_SOURCE.replace("fn_80000000", "fn_test")
+    pcdump = BRIDGE_PCDUMP.replace("fn_80000000", "fn_test")
+    bundle = _bundle(tmp_path, source=source_text)
+    backend = BackendEvidence(
+        result=AdapterResult(),
+        pcdump_text=pcdump,
+        role_compile=None,
+        nodes_by_class_ig=MappingProxyType({}),
+        nodes_by_virtual=MappingProxyType({}),
+    )
+    localizer = {
+        "frame_size": 168,
+        "mismatch_count": 1,
+        "deltas": (4,),
+        "mismatches": (
+            {
+                "opcode": "stfs",
+                "expected_offset": 0x34,
+                "current_offset": 0x30,
+                "delta": 4,
+            },
+        ),
+    }
+    checkdiff = CheckdiffEvidence(
+        result=AdapterResult(),
+        rows_by_offset=MappingProxyType({}),
+        stack_slot_localizer=MappingProxyType(localizer),
+        target_assembly=("+000: 94 21 ff 58 \tstwu r1,-168(r1)",),
+        current_assembly=("+000: 94 21 ff 58 \tstwu r1,-168(r1)",),
+        expected_assembly_digest="a" * 64,
+    )
+
+    evidence = adapt_frame(bundle, checkdiff, backend)
+
+    record_ids = {record.record_id for record in (*evidence.result.nodes, *evidence.result.edges)}
+    assert any(node.kind == "frame-bridge-candidate" for node in evidence.result.nodes)
+    assert any(node.kind == "frame-stack-access" for node in evidence.result.nodes)
+    assert any(edge.kind == "bridge-candidate-materializes-stack-object" for edge in evidence.result.edges)
+    stack = next(
+        node
+        for node in evidence.result.nodes
+        if node.kind == "stack-object" and node.attributes.get("ownership_candidates")
+    )
+    candidate = stack.attributes["ownership_candidates"][0]
+    assert candidate["input_record_ids"]
+    assert set(candidate["input_record_ids"]) <= record_ids
+
+
 def test_source_collects_target_and_one_direct_inline_level(tmp_path: Path) -> None:
     source = """\
 static inline void emit(void* jobj, int anim)
@@ -262,6 +359,72 @@ void fn_test(void* jobj)
     assert len(call_nodes) == 1
     assert call_nodes[0].attributes["scope_path"][0] == "emit"
     assert call_nodes[0].confidence is Confidence.DERIVED_UNIQUE
+
+
+def test_source_extracts_assignment_and_call_types(tmp_path: Path) -> None:
+    source = """\
+int sink(float value);
+void fn_test(float input)
+{
+    float local;
+    local = input;
+    sink(local);
+}
+"""
+    evidence = adapt_source(_bundle(tmp_path, source=source))
+    assignments = [
+        node
+        for node in evidence.result.nodes
+        if node.kind == "source-expression" and node.attributes["operator"] == "="
+    ]
+    calls = [
+        node
+        for node in evidence.result.nodes
+        if node.kind == "source-expression" and "sink" in node.attributes["called_functions"]
+    ]
+    assert any(node.attributes["type_text"] == "float" for node in assignments)
+    assert any(node.attributes["type_text"] == "int" for node in calls)
+
+
+def test_source_preserves_nested_cast_type_evidence(tmp_path: Path) -> None:
+    source = """\
+void fn_test(int input)
+{
+    sink((float) (short) input);
+}
+"""
+    evidence = adapt_source(_bundle(tmp_path, source=source))
+    casts = [
+        node.attributes["type_text"]
+        for node in evidence.result.nodes
+        if node.kind == "source-expression" and node.attributes["node_type"] == "cast_expression"
+    ]
+    assert casts == ["float", "short"]
+
+
+def test_source_preserves_pointer_and_qualifier_type_evidence(tmp_path: Path) -> None:
+    source = """\
+const void* identity(const void* value);
+void fn_test(const void* input)
+{
+    const void* local;
+    local = input;
+    identity(local);
+}
+"""
+    evidence = adapt_source(_bundle(tmp_path, source=source))
+    assignment = next(
+        node
+        for node in evidence.result.nodes
+        if node.kind == "source-expression" and node.attributes["operator"] == "="
+    )
+    call = next(
+        node
+        for node in evidence.result.nodes
+        if node.kind == "source-expression" and "identity" in node.attributes["called_functions"]
+    )
+    assert assignment.attributes["type_text"] == "const void *"
+    assert call.attributes["type_text"] == "const void *"
 
 
 def test_duplicate_source_signatures_remain_heuristic_and_present(tmp_path: Path) -> None:
@@ -506,6 +669,63 @@ def test_source_enode_join_missing_tree_scope_and_type_is_heuristic(
     assert edge.confidence is Confidence.HEURISTIC
 
 
+def test_source_enode_join_missing_consumer_and_identifiers_is_heuristic(
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle(tmp_path)
+    tree = ("number_literal", "1")
+    source_node = _node(
+        bundle,
+        "source-expression",
+        "source-empty-roles",
+        {
+            "node_type": "assignment_expression",
+            "operator": "=",
+            "operator_tree": tree,
+            "identifiers": (),
+            "called_functions": (),
+            "constants": ("1",),
+            "scope_path": ("fn_test",),
+            "type_text": "int",
+            "order": 0,
+        },
+        confidence=Confidence.DERIVED_UNIQUE,
+    )
+    inspector_node = _node(
+        bundle,
+        "enode",
+        "inspector-empty-roles",
+        {
+            "opcode": "EASS",
+            "expression": "1",
+            "operator_tree": tree,
+            "scope_path": ("fn_test",),
+            "type_text": "int",
+            "order": 0,
+        },
+    )
+    frame = type("Frame", (), {})()
+    frame.result = AdapterResult()
+    frame.expected_stack_roles = MappingProxyType({})
+    frame.current_stack_nodes = MappingProxyType({})
+    source = type("Source", (), {})()
+    source.result = AdapterResult(nodes=(source_node,))
+    source.expressions_by_signature = MappingProxyType({})
+    source.inline_scopes_by_callee = MappingProxyType({})
+
+    graph = build_frontier_graph(
+        bundle,
+        InMemoryEvidenceStore(),
+        _checkdiff(),
+        _backend(),
+        AdapterResult(nodes=(inspector_node,)),
+        frame,
+        source,
+    )
+    edge = graph.store.find_edges(bundle.compile_id, edge_kind="expression-represents-enode")[0]
+    assert edge.confidence is Confidence.HEURISTIC
+
+
 def test_name_only_stack_join_remains_heuristic(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
     inspector_object = _node(
@@ -651,7 +871,12 @@ def test_stack_join_does_not_promote_heuristic_source_hint(tmp_path: Path) -> No
     assert edge.confidence is Confidence.HEURISTIC
 
 
-def test_stack_join_cites_complete_unique_ownership_support(tmp_path: Path) -> None:
+def _supported_stack_graph(
+    tmp_path: Path,
+    *,
+    operands: str = "r3,24(r1)",
+    ownership_candidate_count: int = 1,
+):
     bundle = _bundle(tmp_path)
     inspector_object = _node(
         bundle,
@@ -680,7 +905,7 @@ def test_stack_join_cites_complete_unique_ownership_support(tmp_path: Path) -> N
         bundle,
         "pcode-occurrence",
         "fighter-stack-access",
-        {"opcode": "stw", "operands": "r3,24(r1)", "instruction_index": 4},
+        {"opcode": "stw", "operands": operands, "instruction_index": 4},
     )
     support_ids = (
         source_expression.record_id,
@@ -695,7 +920,7 @@ def test_stack_join_cites_complete_unique_ownership_support(tmp_path: Path) -> N
             "symbol": "fighter",
             "start": 24,
             "end": 28,
-            "ownership_candidates": (
+            "ownership_candidates": tuple(
                 {
                     "current_offset": 24,
                     "nearest_source_expression": {
@@ -703,7 +928,8 @@ def test_stack_join_cites_complete_unique_ownership_support(tmp_path: Path) -> N
                         "confidence": "derived-unique",
                     },
                     "input_record_ids": support_ids,
-                },
+                }
+                for _index in range(ownership_candidate_count)
             ),
         },
         confidence=Confidence.DERIVED_UNIQUE,
@@ -726,14 +952,31 @@ def test_stack_join_cites_complete_unique_ownership_support(tmp_path: Path) -> N
         frame,
         source,
     )
+    return graph, inspector_object, stack, support_ids
 
-    edge = graph.store.find_edges(bundle.compile_id, edge_kind="materializes-as-stack-object")[0]
+
+def test_stack_join_cites_complete_unique_ownership_support(tmp_path: Path) -> None:
+    graph, inspector_object, stack, support_ids = _supported_stack_graph(tmp_path)
+
+    edge = graph.store.find_edges(graph.bundle.compile_id, edge_kind="materializes-as-stack-object")[0]
     assert edge.confidence is Confidence.DERIVED_UNIQUE
     assert set(edge.provenance.input_record_ids) == {
         inspector_object.record_id,
         stack.record_id,
         *support_ids,
     }
+
+
+def test_stack_join_rejects_non_r1_displacement_access(tmp_path: Path) -> None:
+    graph, _object, _stack, _support = _supported_stack_graph(tmp_path, operands="r3,24(r31)")
+    edge = graph.store.find_edges(graph.bundle.compile_id, edge_kind="materializes-as-stack-object")[0]
+    assert edge.confidence is Confidence.HEURISTIC
+
+
+def test_stack_join_requires_one_qualifying_ownership_candidate(tmp_path: Path) -> None:
+    graph, _object, _stack, _support = _supported_stack_graph(tmp_path, ownership_candidate_count=2)
+    edge = graph.store.find_edges(graph.bundle.compile_id, edge_kind="materializes-as-stack-object")[0]
+    assert edge.confidence is Confidence.HEURISTIC
 
 
 def test_missing_backend_segment_does_not_create_join(tmp_path: Path) -> None:
@@ -852,6 +1095,53 @@ def test_atomic_ingestion_leaves_store_unchanged_on_bad_edge(tmp_path: Path) -> 
             _checkdiff(),
             _backend(),
             AdapterResult(),
+            frame,
+            source,
+        )
+
+    assert store.find_nodes(bundle.compile_id) == ()
+
+
+def test_graph_derivation_failure_leaves_store_unchanged(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    malformed = _node(
+        bundle,
+        "source-expression",
+        "malformed-order",
+        {
+            "node_type": "call_expression",
+            "operator": "call",
+            "called_functions": ("sink",),
+            "identifiers": ("sink", "value"),
+            "constants": (),
+            "scope_path": ("fn_test",),
+            "type_text": "void",
+            "order": "not-an-integer",
+        },
+    )
+    source = type("Source", (), {})()
+    source.result = AdapterResult(nodes=(malformed,))
+    source.expressions_by_signature = MappingProxyType({})
+    source.inline_scopes_by_callee = MappingProxyType({})
+    frame = type("Frame", (), {})()
+    frame.result = AdapterResult()
+    frame.expected_stack_roles = MappingProxyType({})
+    frame.current_stack_nodes = MappingProxyType({})
+    inspector = _node(
+        bundle,
+        "enode",
+        "sink-enode",
+        {"opcode": "ECALL", "expression": "sink(value)", "order": 0},
+    )
+    store = InMemoryEvidenceStore()
+
+    with pytest.raises(ValueError, match="invalid literal"):
+        build_frontier_graph(
+            bundle,
+            store,
+            _checkdiff(),
+            _backend(),
+            AdapterResult(nodes=(inspector,)),
             frame,
             source,
         )

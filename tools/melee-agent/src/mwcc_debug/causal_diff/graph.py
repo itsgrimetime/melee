@@ -18,6 +18,7 @@ _PARSER_VERSION = "within-compile-ownership-joins.v1"
 _CALL = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 _IDENTIFIER = re.compile(r"\b[A-Za-z_]\w*\b")
 _INTEGER = re.compile(r"(?<![A-Za-z_])(?:0x[0-9A-Fa-f]+|\d+)(?![A-Za-z_])")
+_DISPLACEMENT_ADDRESS = re.compile(r"(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))\s*\(\s*(?P<base>r\d+)\s*\)")
 _KEYWORDS = frozenset({"const", "else", "false", "if", "return", "sizeof", "struct", "true", "void"})
 _STACK_OPS = frozenset({"lbz", "lha", "lhz", "lwz", "stb", "sth", "stw", "lfd", "lfs", "stfd", "stfs"})
 
@@ -205,7 +206,11 @@ def _compatible_inspector_backend(inspector: _Signature, backend: _Signature) ->
 
 def _complete_source_inspector_signature(source: _Signature, inspector: _Signature) -> bool:
     return (
-        source.operator_tree is not None
+        bool(source.consumer)
+        and source.consumer == inspector.consumer
+        and bool(source.identifiers)
+        and source.identifiers == inspector.identifiers
+        and source.operator_tree is not None
         and inspector.operator_tree is not None
         and source.operator_tree == inspector.operator_tree
         and bool(source.scope_path)
@@ -403,6 +408,7 @@ def _stack_ownership_support(
     candidates = stack.attributes.get("ownership_candidates")
     if not isinstance(candidates, (tuple, list)):
         return ()
+    qualifying_support: list[tuple[EvidenceNode | EvidenceEdge, ...]] = []
     for candidate in candidates:
         if not isinstance(candidate, Mapping):
             continue
@@ -448,18 +454,25 @@ def _stack_ownership_support(
             and _consumer(str(record.attributes.get("expression") or "")) == consumer
             and name in _text_identifiers(str(record.attributes.get("expression") or ""), consumer)
         )
-        access_records = tuple(
-            record
-            for record in support
-            if isinstance(record, EvidenceNode)
-            and record.kind in {"candidate-instruction", "pcode-occurrence"}
-            and str(record.attributes.get("opcode") or "").casefold() in _STACK_OPS
-            and current_offset
-            in {int(value, 0) for value in _INTEGER.findall(str(record.attributes.get("operands") or ""))}
-        )
+        access_records: list[EvidenceNode] = []
+        for record in support:
+            if not isinstance(record, EvidenceNode) or record.kind not in {
+                "candidate-instruction",
+                "pcode-occurrence",
+                "frame-stack-access",
+            }:
+                continue
+            if str(record.attributes.get("opcode") or "").casefold() not in _STACK_OPS:
+                continue
+            addresses = tuple(
+                (int(match.group("offset"), 0), match.group("base").casefold())
+                for match in _DISPLACEMENT_ADDRESS.finditer(str(record.attributes.get("operands") or ""))
+            )
+            if addresses == ((current_offset, "r1"),):
+                access_records.append(record)
         if len(source_records) == len(inspector_records) == len(access_records) == 1:
-            return support
-    return ()
+            qualifying_support.append(support)
+    return qualifying_support[0] if len(qualifying_support) == 1 else ()
 
 
 def _stack_joins(
@@ -555,10 +568,11 @@ def build_frontier_graph(
         source.result,
     )
     _validate_compile_scope(bundle, adapter_results)
-    add_adapter_results_atomically(store, adapter_results)
     join_result = derive_within_compile_joins(bundle, checkdiff, backend, inspector, frame, source)
-    store.add_nodes(join_result.nodes)
-    store.add_edges(join_result.edges)
+    complete_results = (*adapter_results, join_result)
+    staging = InMemoryEvidenceStore()
+    add_adapter_results_atomically(staging, complete_results)
+    add_adapter_results_atomically(store, complete_results)
     return FrontierGraph(
         bundle=bundle,
         store=store,
