@@ -5,9 +5,98 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Iterable, Mapping
+from typing import Iterable, Literal, Mapping
+
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from .canonical import stable_id
+
+CORE_BACKEND_CAPABILITIES = frozenset(
+    {
+        "pcode-occurrences",
+        "virtual-use-def",
+        "virtual-to-allocator-node",
+        "allocator-decisions",
+        "interference-edges",
+    }
+)
+
+
+def _validate_digest(value: str) -> str:
+    if len(value) != 64 or any(character not in "0123456789abcdefABCDEF" for character in value):
+        raise ValueError("digest must contain exactly 64 hexadecimal characters")
+    return value
+
+
+class ArtifactRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: str
+    sha256: str
+
+    _validate_sha256 = field_validator("sha256")(_validate_digest)
+
+
+class BackendArtifactRef(ArtifactRef):
+    format: Literal["mwcc-debug-pcdump", "backend-trace.v1"]
+    capabilities: tuple[str, ...]
+
+    @field_validator("capabilities")
+    @classmethod
+    def _validate_capabilities(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        unknown = set(value) - CORE_BACKEND_CAPABILITIES
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise ValueError(f"unknown backend capability: {names}")
+        return value
+
+
+class CompileManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    compiler: str
+    target_build: Literal["GALE01"]
+    flags_digest: str
+    environment_digest: str
+    source_digest: str
+    expected_assembly_digest: str
+
+    _validate_digests = field_validator(
+        "id",
+        "flags_digest",
+        "environment_digest",
+        "source_digest",
+        "expected_assembly_digest",
+    )(_validate_digest)
+
+
+class ArtifactsManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: ArtifactRef
+    checkdiff: ArtifactRef
+    backend: tuple[BackendArtifactRef, ...]
+    inspector: ArtifactRef
+    frame_report: ArtifactRef | None = None
+
+    @field_validator("backend")
+    @classmethod
+    def _require_backend(cls, value: tuple[BackendArtifactRef, ...]) -> tuple[BackendArtifactRef, ...]:
+        if not value:
+            raise ValueError("at least one backend artifact is required")
+        return value
+
+
+class FrontierBundleManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["causal-frontier-bundle.v1"]
+    label: str
+    function: str
+    compile: CompileManifest
+    artifacts: ArtifactsManifest
+    producer_versions: Mapping[str, str]
 
 
 class Confidence(StrEnum):
