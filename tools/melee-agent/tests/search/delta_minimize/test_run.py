@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from src.search.delta_minimize import run as run_module
 from src.search.delta_minimize.contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
 from src.search.delta_minimize.delta import DeltaAtom, DeltaManifest
 from src.search.delta_minimize.evaluator import EvaluationBackends, RawCandidateEvidence
@@ -13,6 +15,7 @@ from src.search.delta_minimize.objectives import AxisReference, ObjectiveManifes
 from src.search.delta_minimize.run import (
     DeltaMinimizeBackends,
     DeltaMinimizeConfig,
+    default_delta_minimize_backends,
     run_delta_minimize,
 )
 
@@ -85,13 +88,15 @@ class _CountingFixture:
         self.infer_calls = 0
         self.score_calls = 0
         self.inspect_calls = 0
+        self.parent_generation = 1
+        self.expected_object_hash = "expected-object"
         self.captured_sources: dict[int, bytes] = {}
 
     def parent_provenance(self, _config):
         return {
             "cflags_hash": "cflags",
             "compiler_fingerprint": "compiler",
-            "expected_object_hash": "expected-object",
+            "expected_object_hash": self.expected_object_hash,
             "parser_schema_hash": "parsers",
             "inspector_version": "inspector-v1",
         }
@@ -101,7 +106,10 @@ class _CountingFixture:
         if self.parent_infrastructure:
             raise DeltaMinimizeError("parent-score-infrastructure")
         pcdump = self.tmp_path / f"{candidate.candidate_id}.pcdump"
-        pcdump.write_text(f"pcdump {candidate.candidate_id}\n", encoding="utf-8")
+        pcdump.write_text(
+            f"pcdump {candidate.candidate_id} generation {self.parent_generation}\n",
+            encoding="utf-8",
+        )
         return RawCandidateEvidence(
             candidate_id=candidate.candidate_id,
             mask=candidate.mask,
@@ -253,6 +261,92 @@ def test_resume_revalidates_stale_parent_artifacts(tmp_path: Path) -> None:
     assert second.to_dict() == first.to_dict()
     assert fixture.parent_calls == 3
     assert fixture.score_calls == 4
+
+
+def test_production_objective_adapter_supplies_real_register_diff_deriver(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.cli.debug import _derive_force_phys_from_register_diff_lines
+
+    expected = _objective()
+    seen: dict[str, object] = {}
+
+    def infer(left, right, **kwargs):
+        seen.update(kwargs)
+        assert left is left_parent
+        assert right is right_parent
+        return expected
+
+    left_parent = object()
+    right_parent = object()
+    monkeypatch.setattr(run_module, "infer_objective_manifest", infer)
+
+    actual = default_delta_minimize_backends().infer_objective(
+        left_parent,
+        right_parent,
+        _config(tmp_path),
+    )
+
+    assert actual is expected
+    assert seen["target_path"] is None
+    assert seen["derive_force_target"] is _derive_force_phys_from_register_diff_lines
+
+
+def test_changed_expected_object_invalidates_objective_cache(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+
+    fixture.expected_object_hash = "new-expected-object"
+    run_delta_minimize(config, backends=fixture.backends())
+
+    assert fixture.parent_calls == 4
+    assert fixture.parent_objective_calls == 4
+    assert fixture.infer_calls == 2
+
+
+def test_refreshed_parent_profile_invalidates_objective_cache(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+
+    (tmp_path / "parent-left.pcdump").write_text("stale profile\n", encoding="utf-8")
+    fixture.parent_generation = 2
+    run_delta_minimize(config, backends=fixture.backends())
+
+    assert fixture.parent_calls == 3
+    assert fixture.parent_objective_calls == 4
+    assert fixture.infer_calls == 2
+
+
+def test_objective_cache_persists_context_with_valid_digest(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+
+    payload = json.loads((config.out_dir / "objective-inputs.json").read_text(encoding="utf-8"))
+    context = payload["context"]
+    canonical = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
+
+    assert payload["schema_version"] == "delta-minimize-objective-inputs.v1"
+    assert payload["context_digest"] == hashlib.sha256(canonical).hexdigest()
+    assert context["parents"]["left"]["pcdump_hash"]
+    assert context["expected_object_hash"] == "expected-object"
+    assert context["parser_schema_hash"] == "parsers"
+
+
+def test_malformed_objective_cache_context_fails_closed(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    cache_path = config.out_dir / "objective-inputs.json"
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["context_digest"] = "0" * 64
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-cache-context$"):
+        run_delta_minimize(config, backends=fixture.backends())
 
 
 def test_one_incomplete_viable_mask_blocks_the_whole_frontier(tmp_path: Path) -> None:

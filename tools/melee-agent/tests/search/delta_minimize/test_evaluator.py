@@ -375,6 +375,7 @@ iter ig_idx reg degree nIntfr flags
         "compiler",
         "object",
         "inspector-v1;mode=objobjects",
+        "parsers",
     )
     assert ParentEvidenceBundle.from_dict(json.loads(json.dumps(parents.to_dict()))) == parents
 
@@ -479,6 +480,7 @@ def test_stack_axis_scores_absolute_expected_truth_not_wholesale_donor(tmp_path:
         "compiler",
         "object",
         "inspector-v1",
+        "parsers",
     )
     objective = ObjectiveManifest(
         schema_version="delta-minimize-objectives.v1",

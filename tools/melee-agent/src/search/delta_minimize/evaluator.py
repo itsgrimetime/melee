@@ -150,6 +150,7 @@ class ParentEvidenceBundle:
     compiler_fingerprint: str
     expected_object_hash: str
     inspector_version: str
+    parser_schema_hash: str
 
     def __post_init__(self) -> None:
         if (
@@ -161,6 +162,7 @@ class ParentEvidenceBundle:
                     self.cflags_hash,
                     self.compiler_fingerprint,
                     self.expected_object_hash,
+                    self.parser_schema_hash,
                     self.inspector_version,
                 )
             )
@@ -174,6 +176,7 @@ class ParentEvidenceBundle:
             "cflags_hash": self.cflags_hash,
             "compiler_fingerprint": self.compiler_fingerprint,
             "expected_object_hash": self.expected_object_hash,
+            "parser_schema_hash": self.parser_schema_hash,
             "inspector_version": self.inspector_version,
         }
 
@@ -185,6 +188,7 @@ class ParentEvidenceBundle:
             "cflags_hash",
             "compiler_fingerprint",
             "expected_object_hash",
+            "parser_schema_hash",
             "inspector_version",
         }
         if not isinstance(data, Mapping) or set(data) != fields:
@@ -196,6 +200,7 @@ class ParentEvidenceBundle:
                 cflags_hash=data["cflags_hash"],
                 compiler_fingerprint=data["compiler_fingerprint"],
                 expected_object_hash=data["expected_object_hash"],
+                parser_schema_hash=data["parser_schema_hash"],
                 inspector_version=data["inspector_version"],
             )
         except (KeyError, TypeError) as error:

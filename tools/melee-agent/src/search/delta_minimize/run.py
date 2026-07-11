@@ -57,6 +57,7 @@ from .store import DeltaRunStore
 
 PARSER_SCHEMA_HASH = "opcode.v1+color.v1+objobjects.v1+stack-homes.v1"
 RESULT_SCHEMA = "delta-minimize-result.v1"
+OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v1"
 
 
 @dataclass(frozen=True)
@@ -345,9 +346,27 @@ def _capture_parents(
         cflags_hash=provenance["cflags_hash"],
         compiler_fingerprint=provenance["compiler_fingerprint"],
         expected_object_hash=provenance["expected_object_hash"],
+        parser_schema_hash=provenance["parser_schema_hash"],
         inspector_version=provenance["inspector_version"],
     )
     return bundle, stats
+
+
+def _parent_objective_context(raw: RawCandidateEvidence) -> dict[str, Any]:
+    if raw.pcdump_path is None or raw.pcdump_hash is None:
+        raise DeltaMinimizeError("invalid-parent-evidence")
+    payload = raw.to_dict()
+    return {
+        "candidate_id": raw.candidate_id,
+        "source_path": str(Path(raw.source_path).absolute()),
+        "source_hash": raw.source_hash,
+        "pcdump_path": str(Path(raw.pcdump_path).absolute()),
+        "pcdump_hash": raw.pcdump_hash,
+        "checkdiff_digest": (None if raw.checkdiff_evidence is None else _hash_json(raw.checkdiff_evidence)),
+        "inspect_digest": None if raw.inspect_text is None else _hash_text(raw.inspect_text),
+        "inspection_mode": raw.inspection_mode,
+        "evidence_digest": _hash_json(payload),
+    }
 
 
 def _objective_context(config: DeltaMinimizeConfig, parents: ParentEvidenceBundle) -> dict[str, Any]:
@@ -359,13 +378,59 @@ def _objective_context(config: DeltaMinimizeConfig, parents: ParentEvidenceBundl
             raise DeltaMinimizeError("invalid-color-target-path") from error
     return {
         "function": config.function,
-        "left_hash": parents.left.source_hash,
-        "right_hash": parents.right.source_hash,
-        "target_path": None if config.target_path is None else str(config.target_path.absolute()),
-        "target_hash": target_hash,
+        "parents": {
+            "left": _parent_objective_context(parents.left),
+            "right": _parent_objective_context(parents.right),
+        },
+        "cflags_from": str(config.cflags_from.absolute()),
+        "cflags_hash": parents.cflags_hash,
+        "compiler_fingerprint": parents.compiler_fingerprint,
+        "expected_object_hash": parents.expected_object_hash,
+        "parser_schema_hash": parents.parser_schema_hash,
+        "inspector_version": parents.inspector_version,
+        "inspector_mode": "objobjects" if config.include_objobjects else "no-objobjects",
+        "target": {
+            "path": None if config.target_path is None else str(config.target_path.absolute()),
+            "content_hash": target_hash,
+        },
         "donor_overrides": dict(sorted(config.donor_overrides.items())),
-        "include_objobjects": config.include_objobjects,
     }
+
+
+def _objective_context_envelope(context: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = _json_value(context)
+    return {
+        "schema_version": OBJECTIVE_INPUTS_SCHEMA,
+        "context": normalized,
+        "context_digest": _hash_json(normalized),
+    }
+
+
+def _load_objective_context(path: Path) -> Mapping[str, Any] | None:
+    try:
+        payload = _load_json(path)
+    except DeltaMinimizeError as error:
+        raise DeltaMinimizeError("corrupt-objective-cache-context") from error
+    if payload is None:
+        return None
+    try:
+        if set(payload) != {"schema_version", "context", "context_digest"}:
+            raise ValueError
+        if payload["schema_version"] != OBJECTIVE_INPUTS_SCHEMA:
+            raise ValueError
+        context = payload["context"]
+        digest = payload["context_digest"]
+        if (
+            not isinstance(context, Mapping)
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or _hash_json(context) != digest
+        ):
+            raise ValueError
+        return _json_value(context)
+    except (KeyError, TypeError, ValueError) as error:
+        raise DeltaMinimizeError("corrupt-objective-cache-context") from error
 
 
 def _load_or_infer_objective(
@@ -375,8 +440,10 @@ def _load_or_infer_objective(
     active: DeltaMinimizeBackends,
 ) -> ObjectiveManifest:
     context = _objective_context(config, parents)
-    old_context = _load_json(store.root / "objective-inputs.json")
+    old_context = _load_objective_context(store.root / "objective-inputs.json")
     old_manifest = _load_json(store.root / "objective-manifest.json")
+    if (old_context is None) != (old_manifest is None):
+        raise DeltaMinimizeError("corrupt-objective-cache-context")
     if old_context == context and old_manifest is not None:
         objective = _objective_from_dict(old_manifest)
     else:
@@ -386,7 +453,7 @@ def _load_or_infer_objective(
         if not isinstance(objective, ObjectiveManifest) or objective.function != config.function:
             raise DeltaMinimizeError("invalid-objective-manifest")
         store.write_objective_manifest(objective.to_dict())
-        store.write_json("objective-inputs.json", context)
+        store.write_json("objective-inputs.json", _objective_context_envelope(context))
     return objective
 
 
@@ -579,7 +646,7 @@ def run_delta_minimize(
             "compiler_fingerprint": parents.compiler_fingerprint,
             "expected_object_hash": parents.expected_object_hash,
             "objective_manifest_hash": objective_hash,
-            "parser_schema_hash": PARSER_SCHEMA_HASH,
+            "parser_schema_hash": parents.parser_schema_hash,
             "inspector_version": parents.inspector_version,
         }
     )
@@ -619,7 +686,7 @@ def run_delta_minimize(
                     "compiler_fingerprint": parents.compiler_fingerprint,
                     "expected_object_hash": parents.expected_object_hash,
                     "inspector_version": parents.inspector_version,
-                    "parser_schema_hash": PARSER_SCHEMA_HASH,
+                    "parser_schema_hash": parents.parser_schema_hash,
                 },
                 pareto=None,
                 blockers=blockers,
@@ -654,7 +721,7 @@ def run_delta_minimize(
                 "compiler_fingerprint": parents.compiler_fingerprint,
                 "expected_object_hash": parents.expected_object_hash,
                 "inspector_version": parents.inspector_version,
-                "parser_schema_hash": PARSER_SCHEMA_HASH,
+                "parser_schema_hash": parents.parser_schema_hash,
             },
             pareto=None,
             blockers=blockers,
@@ -674,7 +741,7 @@ def run_delta_minimize(
                 "compiler_fingerprint": parents.compiler_fingerprint,
                 "expected_object_hash": parents.expected_object_hash,
                 "inspector_version": parents.inspector_version,
-                "parser_schema_hash": PARSER_SCHEMA_HASH,
+                "parser_schema_hash": parents.parser_schema_hash,
             },
             pareto=pareto,
             legal_count=len(candidates),
@@ -937,9 +1004,12 @@ def _default_parent_objective(
 
 
 def _default_infer_objective(left: Any, right: Any, config: DeltaMinimizeConfig) -> ObjectiveManifest:
+    from ...cli.debug import _derive_force_phys_from_register_diff_lines
+
     return infer_objective_manifest(
         left,
         right,
         target_path=config.target_path,
         donor_overrides=config.donor_overrides,
+        derive_force_target=_derive_force_phys_from_register_diff_lines,
     )
