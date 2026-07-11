@@ -103,8 +103,14 @@ def _stage_score_source_candidate(
         / "score_source_staging"
     )
     staging_root.mkdir(parents=True, exist_ok=True)
+    resolved_staging_root = staging_root.resolve()
+    if not resolved_staging_root.is_relative_to(resolved_repo_root):
+        raise ValueError(
+            "score-source staging root resolves outside repository: "
+            f"{resolved_staging_root}"
+        )
     with tempfile.TemporaryDirectory(
-        dir=staging_root,
+        dir=resolved_staging_root,
         prefix="candidate-",
     ) as temp_dir:
         safe_name = _unique_safe_name(resolved_candidate.stem, set())
@@ -181,6 +187,13 @@ def score_retained_source_rows(
                     check=False,
                 )
         except KeyboardInterrupt:
+            replay_cmd = build_score_source_command(
+                candidate_path,
+                config,
+                function=row_score_function,
+                full_unit_source=row_full_unit,
+            )
+            score_command = " ".join(shlex.quote(part) for part in replay_cmd)
             out.append(_finalize_score_row(
                 _with_score_source_scope_defaults(
                     {
@@ -191,7 +204,8 @@ def score_retained_source_rows(
                         "error": "score-source-interrupted",
                         "score_error_kind": "infrastructure",
                         "score_returncode": 130,
-                        "score_command": score_command_executed,
+                        "score_command": score_command,
+                        "score_command_executed": score_command_executed,
                         "full_unit_source": row_full_unit,
                         "score_stderr": (
                             "Interrupted while scoring source candidate "
@@ -212,6 +226,13 @@ def score_retained_source_rows(
             ))
             break
         except subprocess.TimeoutExpired as exc:
+            replay_cmd = build_score_source_command(
+                candidate_path,
+                config,
+                function=row_score_function,
+                full_unit_source=row_full_unit,
+            )
+            score_command = " ".join(shlex.quote(part) for part in replay_cmd)
             out.append(_finalize_score_row(
                 _with_score_source_scope_defaults(
                     {
@@ -222,7 +243,8 @@ def score_retained_source_rows(
                         "error": "score-source-timeout",
                         "score_error_kind": "infrastructure",
                         "score_returncode": 124,
-                        "score_command": score_command_executed,
+                        "score_command": score_command,
+                        "score_command_executed": score_command_executed,
                         "full_unit_source": row_full_unit,
                         "score_stderr": _timeout_stream_text(exc.stderr)
                         or f"Timed out while scoring source candidate {candidate_id}",
