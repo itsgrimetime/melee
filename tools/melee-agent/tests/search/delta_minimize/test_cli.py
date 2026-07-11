@@ -96,7 +96,16 @@ def _result(*, status: str = "frontier", provisional: bool = False) -> DeltaMini
         candidates=(
             {
                 "candidate_id": "mask-01",
+                "applied_atoms": ["a"],
                 "source_path": "out/sources/abc.c",
+                "distance_from_left": 1,
+                "distance_from_right": 1,
+                "profile": {"blockers": []},
+            },
+            {
+                "candidate_id": "mask-10",
+                "applied_atoms": ["b"],
+                "source_path": "out/sources/def.c",
                 "distance_from_left": 1,
                 "distance_from_right": 1,
                 "profile": {"blockers": []},
@@ -244,11 +253,111 @@ def test_delta_minimize_cli_rejects_symlink_target(monkeypatch, tmp_path: Path) 
     real.write_text("target\n", encoding="utf-8")
     target = tmp_path / "target.yaml"
     target.symlink_to(real)
+    linked_parent = tmp_path / "linked-target-parent"
+    linked_parent.symlink_to(tmp_path, target_is_directory=True)
+    broken = tmp_path / "broken-target.yaml"
+    broken.symlink_to(tmp_path / "missing-target.yaml")
     monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
     monkeypatch.setattr(
         search_cli,
         "_resolve_structure_source_file",
         lambda function, source_file, *, melee_root: unit,
+    )
+
+    for unsafe_target in (target, linked_parent / real.name, broken):
+        result = runner.invoke(
+            search_app,
+            [
+                "delta-minimize",
+                "-f",
+                "draw",
+                "--left",
+                str(left),
+                "--right",
+                str(right),
+                "--target",
+                str(unsafe_target),
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "target" in result.output.lower()
+
+
+def test_delta_minimize_cli_rejects_symlinked_source_roots(tmp_path: Path) -> None:
+    left, right, _unit = _invoke_paths(tmp_path)
+    linked_left = tmp_path / "linked-left.c"
+    linked_left.symlink_to(left)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(tmp_path, target_is_directory=True)
+    broken_source = tmp_path / "broken-left.c"
+    broken_source.symlink_to(tmp_path / "missing-left.c")
+
+    for source in (linked_left, linked_parent / right.name, broken_source):
+        result = runner.invoke(
+            search_app,
+            [
+                "delta-minimize",
+                "-f",
+                "draw",
+                "--left",
+                str(source),
+                "--right",
+                str(right),
+            ],
+        )
+        assert result.exit_code == 2, result.output
+        assert "unsafe" in result.output.lower()
+
+
+def test_delta_minimize_cli_rejects_symlinked_output_components(monkeypatch, tmp_path: Path) -> None:
+    left, right, unit = _invoke_paths(tmp_path)
+    real_output = tmp_path / "real-output"
+    real_output.mkdir()
+    linked_output = tmp_path / "linked-output"
+    linked_output.symlink_to(real_output, target_is_directory=True)
+    broken_output = tmp_path / "broken-output"
+    broken_output.symlink_to(tmp_path / "missing-output", target_is_directory=True)
+    monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        search_cli,
+        "_resolve_structure_source_file",
+        lambda function, source_file, *, melee_root: unit,
+    )
+
+    for output in (linked_output, linked_output / "nested", broken_output):
+        result = runner.invoke(
+            search_app,
+            [
+                "delta-minimize",
+                "-f",
+                "draw",
+                "--left",
+                str(left),
+                "--right",
+                str(right),
+                "--out-dir",
+                str(output),
+            ],
+        )
+        assert result.exit_code == 2, result.output
+        assert "unsafe" in result.output.lower()
+
+
+def test_delta_minimize_cli_accepts_safe_relative_paths(monkeypatch, tmp_path: Path) -> None:
+    left, right, unit = _invoke_paths(tmp_path)
+    captured = {}
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        search_cli,
+        "_resolve_structure_source_file",
+        lambda function, source_file, *, melee_root: unit,
+    )
+    monkeypatch.setattr(
+        search_cli,
+        "run_delta_minimize",
+        lambda config: (captured.__setitem__("config", config), _result())[1],
     )
 
     result = runner.invoke(
@@ -258,16 +367,18 @@ def test_delta_minimize_cli_rejects_symlink_target(monkeypatch, tmp_path: Path) 
             "-f",
             "draw",
             "--left",
-            str(left),
+            left.name,
             "--right",
-            str(right),
-            "--target",
-            str(target),
+            right.name,
+            "--out-dir",
+            "results",
         ],
     )
 
-    assert result.exit_code == 2
-    assert "target" in result.output.lower()
+    assert result.exit_code == 0, result.output
+    assert captured["config"].left == left
+    assert captured["config"].right == right
+    assert captured["config"].out_dir == tmp_path / "results"
 
 
 def test_delta_minimize_cli_reports_domain_errors_as_usage(monkeypatch, tmp_path: Path) -> None:
@@ -362,6 +473,28 @@ def test_text_renderer_shows_complete_frontier_and_provenance() -> None:
     assert "minimal-from-right=mask-10" in text
     assert "representative=mask-01" in text
     assert "best next: mask-01" in text
+    assert "apply a: helper parameter and call order" in text
+    assert "revert a: helper parameter and call order" in text
+    assert "tied candidate mask-10" in text
+
+
+def test_text_renderer_summarizes_joint_zero_edits() -> None:
+    result = _result()
+    assert result.pareto is not None
+    result = replace(
+        result,
+        pareto=replace(
+            result.pareto,
+            joint_solutions=("mask-01",),
+            joint_zero_all_candidate_ids=("mask-01", "mask-10"),
+        ),
+    )
+
+    text = render_delta_minimize_text(result)
+
+    assert "joint-zero minimized candidate mask-01" in text
+    assert "joint-zero tied candidate mask-10" in text
+    assert "apply b: wrapper expression" in text
 
 
 def test_text_renderer_marks_provisional_and_proxy_zero_meaning() -> None:
@@ -372,10 +505,49 @@ def test_text_renderer_marks_provisional_and_proxy_zero_meaning() -> None:
 
 
 def test_text_renderer_lists_all_blockers() -> None:
-    result = replace(_result(status="incomplete"), blockers=("inspector-timeout", "missing-color-evidence"))
+    result = replace(
+        _result(status="incomplete"),
+        inputs={
+            "left": "/tmp/internal/left.c",
+            "right": "/tmp/internal/right.c",
+            "out_dir": "/tmp/internal/resume",
+        },
+        blockers=("inspector-timeout", "ambiguous-color-donor"),
+    )
 
     text = render_delta_minimize_text(result)
 
     assert "blockers:" in text
     assert "- inspector-timeout" in text
-    assert "- missing-color-evidence" in text
+    assert "- ambiguous-color-donor" in text
+    assert "next action: restore inspector infrastructure, then resume this run" in text
+    assert "required override: --donor color=left|right" in text
+    assert (
+        "melee-agent debug search delta-minimize --function draw "
+        "--left /tmp/internal/left.c --right /tmp/internal/right.c "
+        "--out-dir /tmp/internal/resume"
+    ) in text
+
+
+def test_text_renderer_shell_quotes_only_recorded_resume_values() -> None:
+    result = replace(
+        _result(status="incomplete"),
+        inputs={
+            "left": "/tmp/left source.c",
+            "right": "/tmp/right;touch injected.c",
+            "out_dir": "/tmp/resume output",
+            "target_path": "/tmp/existing target.yaml",
+            "donor_overrides": {"color": "right"},
+            "include_objobjects": False,
+        },
+        blockers=("candidate-score-infrastructure",),
+    )
+
+    text = render_delta_minimize_text(result)
+
+    assert "--left '/tmp/left source.c'" in text
+    assert "--right '/tmp/right;touch injected.c'" in text
+    assert "--out-dir '/tmp/resume output'" in text
+    assert "--max-candidates 64" in text
+    assert "--target '/tmp/existing target.yaml'" in text
+    assert "--donor color=right --no-objobjects" in text

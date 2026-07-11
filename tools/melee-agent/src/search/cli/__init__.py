@@ -88,6 +88,25 @@ def _path_has_symlink_component(path: Path) -> bool:
     return False
 
 
+def _delta_source_candidates(path: Path, *, melee_root: Path) -> tuple[Path, ...]:
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        return (expanded,)
+    candidates = (Path.cwd() / expanded, melee_root / expanded)
+    return tuple(dict.fromkeys(candidates))
+
+
+def _resolve_delta_source_file(path: Path, *, melee_root: Path) -> Path:
+    """Resolve one delta parent only after fail-closed symlink validation."""
+
+    for candidate in _delta_source_candidates(path, melee_root=melee_root):
+        if _path_has_symlink_component(candidate):
+            raise typer.BadParameter(f"source file not found or unsafe: {path}")
+        if candidate.is_file():
+            return candidate.resolve()
+    raise typer.BadParameter(f"source file not found: {path}")
+
+
 def _resolve_delta_target_file(path: Path | None) -> Path | None:
     if path is None:
         return None
@@ -95,6 +114,16 @@ def _resolve_delta_target_file(path: Path | None) -> Path | None:
     candidate = expanded if expanded.is_absolute() else Path.cwd() / expanded
     if _path_has_symlink_component(candidate) or not candidate.is_file():
         raise typer.BadParameter(f"target file not found or unsafe: {path}")
+    return candidate.resolve()
+
+
+def _resolve_delta_output_dir(path: Path, *, melee_root: Path) -> Path:
+    """Resolve an output directory only after checking every path component."""
+
+    expanded = path.expanduser()
+    candidate = expanded if expanded.is_absolute() else melee_root / expanded
+    if _path_has_symlink_component(candidate):
+        raise typer.BadParameter(f"output directory is unsafe: {path}")
     return candidate.resolve()
 
 
@@ -4575,24 +4604,19 @@ def delta_minimize_cmd(
         raise typer.BadParameter(str(error), param_hint="--donor") from error
 
     melee_root = _compute_melee_root()
-    resolved_left = _resolve_source_file(left, melee_root=melee_root)
-    resolved_right = _resolve_source_file(right, melee_root=melee_root)
-    assert resolved_left is not None and resolved_right is not None
+    resolved_left = _resolve_delta_source_file(left, melee_root=melee_root)
+    resolved_right = _resolve_delta_source_file(right, melee_root=melee_root)
     cflags_from = _resolve_structure_source_file(
         function,
         None,
         melee_root=melee_root,
     )
-    expanded_out = out_dir.expanduser()
-    if not expanded_out.is_absolute():
-        expanded_out = melee_root / expanded_out
-
     try:
         config = DeltaMinimizeConfig(
             function=function,
             left=resolved_left,
             right=resolved_right,
-            out_dir=expanded_out.resolve(),
+            out_dir=_resolve_delta_output_dir(out_dir, melee_root=melee_root),
             max_candidates=max_candidates,
             target_path=_resolve_delta_target_file(target),
             donor_overrides=donor_overrides,

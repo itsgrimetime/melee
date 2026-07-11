@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Iterable, Mapping
 
 from .run import DeltaMinimizeResult
@@ -95,6 +96,214 @@ def _candidate_artifact_lines(result: DeltaMinimizeResult) -> list[str]:
     return [f"best next: {result.best_next}"]
 
 
+def _candidate_index(result: DeltaMinimizeResult) -> dict[str, Mapping[str, object]]:
+    index: dict[str, Mapping[str, object]] = {}
+    for row in result.candidates:
+        candidate_id = row.get("candidate_id")
+        if isinstance(candidate_id, str) and candidate_id not in index:
+            index[candidate_id] = row
+    return index
+
+
+def _atom_summaries(result: DeltaMinimizeResult) -> tuple[tuple[str, str], ...]:
+    rows = result.delta_manifest.get("atoms")
+    atoms: list[tuple[str, str]] = []
+    if not isinstance(rows, (list, tuple)):
+        return ()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        atom_id = row.get("atom_id")
+        summary = row.get("summary")
+        if isinstance(atom_id, str) and atom_id:
+            atoms.append((atom_id, str(summary) if summary else atom_id))
+    return tuple(atoms)
+
+
+def _candidate_edit_lines(
+    candidate_id: str,
+    *,
+    candidate_index: Mapping[str, Mapping[str, object]],
+    atoms: tuple[tuple[str, str], ...],
+    direction: str,
+    prefix: str,
+) -> list[str]:
+    row = candidate_index.get(candidate_id)
+    if row is None:
+        return [f"{prefix}{candidate_id}: candidate evidence unavailable"]
+    raw_applied = row.get("applied_atoms")
+    applied = (
+        {atom_id for atom_id in raw_applied if isinstance(atom_id, str)}
+        if isinstance(raw_applied, (list, tuple))
+        else set()
+    )
+    if direction == "right":
+        verb = "revert"
+        edits = [(atom_id, summary) for atom_id, summary in atoms if atom_id not in applied]
+    else:
+        verb = "apply"
+        edits = [(atom_id, summary) for atom_id, summary in atoms if atom_id in applied]
+    lines = [f"{prefix}{candidate_id}:"]
+    detail_prefix = " " * (len(prefix) - len(prefix.lstrip()) + 2)
+    lines.append(f"{detail_prefix}applied atoms: {_join(sorted(applied))}")
+    if not edits:
+        lines.append(f"{detail_prefix}no edits from {direction}")
+    else:
+        lines.extend(f"{detail_prefix}{verb} {atom_id}: {summary}" for atom_id, summary in edits)
+    return lines
+
+
+def _frontier_edit_lines(result: DeltaMinimizeResult) -> list[str]:
+    if result.pareto is None:
+        return []
+    index = _candidate_index(result)
+    atoms = _atom_summaries(result)
+    lines: list[str] = []
+    for group_index, group in enumerate(result.pareto.groups, start=1):
+        lines.append(f"frontier group {group_index} minimized edits:")
+        for candidate_id in group.minimal_from_left:
+            lines.extend(
+                _candidate_edit_lines(
+                    candidate_id,
+                    candidate_index=index,
+                    atoms=atoms,
+                    direction="left",
+                    prefix="  minimal-from-left candidate ",
+                )
+            )
+        for candidate_id in group.minimal_from_right:
+            lines.extend(
+                _candidate_edit_lines(
+                    candidate_id,
+                    candidate_index=index,
+                    atoms=atoms,
+                    direction="right",
+                    prefix="  minimal-from-right candidate ",
+                )
+            )
+        lines.extend(
+            _candidate_edit_lines(
+                group.representative,
+                candidate_index=index,
+                atoms=atoms,
+                direction="left",
+                prefix="  representative candidate ",
+            )
+        )
+        for candidate_id in group.candidate_ids:
+            if candidate_id == group.representative:
+                continue
+            lines.extend(
+                _candidate_edit_lines(
+                    candidate_id,
+                    candidate_index=index,
+                    atoms=atoms,
+                    direction="left",
+                    prefix="  tied candidate ",
+                )
+            )
+    minimized = set(result.pareto.joint_solutions)
+    for candidate_id in result.pareto.joint_solutions:
+        lines.extend(
+            _candidate_edit_lines(
+                candidate_id,
+                candidate_index=index,
+                atoms=atoms,
+                direction="left",
+                prefix="joint-zero minimized candidate ",
+            )
+        )
+    for candidate_id in result.pareto.joint_zero_all_candidate_ids:
+        if candidate_id in minimized:
+            continue
+        lines.extend(
+            _candidate_edit_lines(
+                candidate_id,
+                candidate_index=index,
+                atoms=atoms,
+                direction="left",
+                prefix="joint-zero tied candidate ",
+            )
+        )
+    return lines
+
+
+def _resume_command(result: DeltaMinimizeResult) -> str | None:
+    left = result.inputs.get("left")
+    right = result.inputs.get("right")
+    out_dir = result.inputs.get("out_dir")
+    if not all(isinstance(value, str) and value for value in (left, right, out_dir)):
+        return None
+    argv = [
+        "melee-agent",
+        "debug",
+        "search",
+        "delta-minimize",
+        "--function",
+        result.function,
+        "--left",
+        left,
+        "--right",
+        right,
+        "--out-dir",
+        out_dir,
+    ]
+    if isinstance(result.candidate_budget, int) and result.candidate_budget > 0:
+        argv.extend(("--max-candidates", str(result.candidate_budget)))
+    target = result.inputs.get("target_path")
+    if isinstance(target, str) and target:
+        argv.extend(("--target", target))
+    overrides = result.inputs.get("donor_overrides")
+    if isinstance(overrides, Mapping):
+        for axis in sorted(overrides):
+            donor = overrides[axis]
+            if axis in _DONOR_AXES and donor in _DONOR_VALUES:
+                argv.extend(("--donor", f"{axis}={donor}"))
+    if result.inputs.get("include_objobjects") is False:
+        argv.append("--no-objobjects")
+    return shlex.join(argv)
+
+
+def _recovery_lines(result: DeltaMinimizeResult) -> list[str]:
+    blockers = set(result.blockers)
+    lines: list[str] = []
+    if "ambiguous-color-target" in blockers:
+        lines.append("required override: --target PATH_TO_EXISTING_DELTA_MINIMIZE_COLOR_TARGET_V1")
+    donor_axes = (
+        ("ambiguous-color-donor", "color"),
+        ("ambiguous-objobject-donor", "objobjects"),
+        ("ambiguous-stack-home-donor", "stack-homes"),
+    )
+    for blocker, axis in donor_axes:
+        if blocker in blockers:
+            lines.append(f"required override: --donor {axis}=left|right")
+    if any("inspector" in blocker or "inspect" in blocker for blocker in blockers):
+        lines.append("next action: restore inspector infrastructure, then resume this run")
+    if any(
+        token in blocker
+        for blocker in blockers
+        for token in (
+            "score-infrastructure",
+            "checkdiff",
+            "pcdump",
+            "opcode-evidence",
+            "color-evidence",
+            "objobject-evidence",
+            "stack-evidence",
+            "stack-home-evidence",
+        )
+    ):
+        lines.append("next action: restore compiler evidence generation, then resume this run")
+    if not lines:
+        lines.append("next action: resolve the listed evidence blocker, then resume this run")
+    command = _resume_command(result)
+    if command is not None:
+        lines.append(f"resume command: {command}")
+    else:
+        lines.append("resume command unavailable: result does not contain a validated out-dir")
+    return list(dict.fromkeys(lines))
+
+
 def render_delta_minimize_text(result: DeltaMinimizeResult) -> str:
     """Render the complete result without collapsing Pareto ties or provenance."""
 
@@ -147,11 +356,14 @@ def render_delta_minimize_text(result: DeltaMinimizeResult) -> str:
         lines.append(f"exact matches: {_join(result.pareto.exact_match_candidate_ids)}")
         lines.append(f"joint-zero minimized: {_join(result.pareto.joint_solutions)}")
         lines.append(f"joint-zero all candidates: {_join(result.pareto.joint_zero_all_candidate_ids)}")
+        lines.extend(_frontier_edit_lines(result))
 
     lines.extend(_candidate_artifact_lines(result))
     if result.blockers:
         lines.append("blockers:")
         lines.extend(f"- {blocker}" for blocker in result.blockers)
+        lines.extend(_recovery_lines(result))
     elif result.status == "incomplete":
         lines.extend(("blockers:", "- unspecified incomplete infrastructure"))
+        lines.extend(_recovery_lines(result))
     return "\n".join(lines)
