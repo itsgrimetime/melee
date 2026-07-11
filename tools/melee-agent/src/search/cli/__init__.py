@@ -124,16 +124,34 @@ def _resolve_delta_output_dir(path: Path, *, melee_root: Path) -> Path:
     candidate = expanded if expanded.is_absolute() else melee_root / expanded
     if _path_has_symlink_component(candidate):
         raise typer.BadParameter(f"output directory is unsafe: {path}")
+    absolute = candidate.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        if current.exists() and not current.is_dir():
+            raise typer.BadParameter(
+                f"output directory component is not a directory: {current}"
+            )
     return candidate.resolve()
 
 
 def _delta_error_message(error: DeltaMinimizeError) -> str:
-    if not error.details:
-        return error.reason
-    details = ", ".join(
-        f"{key}={value}" for key, value in sorted(error.details.items())
-    )
-    return f"{error.reason}: {details}"
+    message = error.reason
+    if error.details:
+        details = ", ".join(
+            f"{key}={value}" for key, value in sorted(error.details.items())
+        )
+        message = f"{message}: {details}"
+    hints = {
+        "ambiguous-color-target": "provide --target PATH",
+        "ambiguous-color-donor": "provide --donor color=left|right",
+        "ambiguous-objobject-donor": "provide --donor objobjects=left|right",
+        "ambiguous-stack-home-donor": "provide --donor stack-homes=left|right",
+        "candidate-budget-exceeded": "increase --max-candidates to the reported requirement",
+        "atom-limit-exceeded": "reduce the source delta to at most 20 atoms",
+    }
+    hint = hints.get(error.reason)
+    return f"{message}; {hint}" if hint else message
 
 
 def _resolve_optional_plan_source_file(

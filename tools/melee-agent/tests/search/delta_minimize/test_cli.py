@@ -344,6 +344,36 @@ def test_delta_minimize_cli_rejects_symlinked_output_components(monkeypatch, tmp
         assert "unsafe" in result.output.lower()
 
 
+def test_delta_minimize_cli_rejects_file_output_components(monkeypatch, tmp_path: Path) -> None:
+    left, right, unit = _invoke_paths(tmp_path)
+    output_file = tmp_path / "output-file"
+    output_file.write_text("not a directory\n", encoding="utf-8")
+    monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        search_cli,
+        "_resolve_structure_source_file",
+        lambda function, source_file, *, melee_root: unit,
+    )
+
+    for output in (output_file, output_file / "nested"):
+        result = runner.invoke(
+            search_app,
+            [
+                "delta-minimize",
+                "-f",
+                "draw",
+                "--left",
+                str(left),
+                "--right",
+                str(right),
+                "--out-dir",
+                str(output),
+            ],
+        )
+        assert result.exit_code == 2, result.output
+        assert "not a directory" in result.output.lower()
+
+
 def test_delta_minimize_cli_accepts_safe_relative_paths(monkeypatch, tmp_path: Path) -> None:
     left, right, unit = _invoke_paths(tmp_path)
     captured = {}
@@ -406,6 +436,39 @@ def test_delta_minimize_cli_reports_domain_errors_as_usage(monkeypatch, tmp_path
     assert "candidate-budget-exceeded" in result.output
     assert "budget=64" in result.output
     assert "required=65" in result.output
+    assert "increase" in result.output
+    assert "max-candidates" in result.output
+
+
+def test_delta_minimize_cli_reports_actionable_objective_ambiguity(monkeypatch, tmp_path: Path) -> None:
+    left, right, unit = _invoke_paths(tmp_path)
+    monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        search_cli,
+        "_resolve_structure_source_file",
+        lambda function, source_file, *, melee_root: unit,
+    )
+    cases = (
+        ("ambiguous-color-target", ("--target", "PATH")),
+        ("ambiguous-color-donor", ("--donor", "color=left|right")),
+        ("ambiguous-objobject-donor", ("--donor", "objobjects", "left|right")),
+        ("ambiguous-stack-home-donor", ("--donor", "stack-homes", "left|right")),
+    )
+    for reason, hints in cases:
+        monkeypatch.setattr(
+            search_cli,
+            "run_delta_minimize",
+            lambda _config, reason=reason: (_ for _ in ()).throw(DeltaMinimizeError(reason)),
+        )
+        result = runner.invoke(
+            search_app,
+            ["delta-minimize", "-f", "draw", "--left", str(left), "--right", str(right)],
+        )
+        assert result.exit_code == 2
+        assert reason in result.output
+        for hint in hints:
+            assert hint in result.output
+        assert result.stdout == ""
 
 
 def test_delta_minimize_incomplete_renders_then_exits_four(monkeypatch, tmp_path: Path) -> None:
