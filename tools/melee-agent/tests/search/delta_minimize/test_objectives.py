@@ -582,6 +582,117 @@ def test_explicit_target_reparses_declared_baseline_contents(
         )
 
 
+def test_explicit_target_uses_source_from_matching_right_parent(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    dump_text = (FIXTURES / "mnVibration_matched_pcdump.txt").read_text(encoding="utf-8")
+    left_dump = tmp_path / "left.pcdump"
+    right_dump = tmp_path / "right.pcdump"
+    left_dump.write_text(dump_text, encoding="utf-8")
+    right_dump.write_text(dump_text, encoding="utf-8")
+    left_compile = Compile.from_text(dump_text, FUNCTION, "/* left source */")
+    right_compile = Compile.from_text(dump_text, FUNCTION, "/* right source */")
+    left = _parent("left", left_compile, left_dump, desired_phys)
+    right = _parent("right", right_compile, right_dump, desired_phys)
+    target = _write_target(tmp_path, right_dump, desired_phys)
+    seen_sources: list[str] = []
+
+    def load_baseline(path: Path, function: str, source: str) -> Compile:
+        seen_sources.append(source)
+        return Compile.from_text(path.read_text(encoding="utf-8"), function, source)
+
+    infer_objective_manifest(
+        left,
+        right,
+        target_path=target,
+        donor_overrides={"objobjects": "left"},
+        compile_loader=load_baseline,
+    )
+
+    assert seen_sources == [right_compile.source]
+
+
+def test_explicit_target_rejects_unknown_baseline_source_binding(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    left, right, target = _explicit_inputs(tmp_path, baseline_compile, desired_phys)
+    external_dump = tmp_path / "external.pcdump"
+    external_dump.write_text(left.pcdump_path.read_text(encoding="utf-8"), encoding="utf-8")
+    target.write_text(
+        target.read_text(encoding="utf-8").replace("baseline.pcdump", "external.pcdump"),
+        encoding="utf-8",
+    )
+    loader_called = False
+
+    def unexpected_loader(path: Path, function: str, source: str) -> Compile:
+        nonlocal loader_called
+        loader_called = True
+        del path, function, source
+        raise AssertionError("unknown baselines must fail before parsing with guessed source")
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        infer_objective_manifest(
+            left,
+            right,
+            target_path=target,
+            donor_overrides={},
+            compile_loader=unexpected_loader,
+        )
+    assert loader_called is False
+
+
+def test_raw_color_profile_uses_roles_beyond_partial_force_target(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    left, right, target = _explicit_inputs(tmp_path, baseline_compile, desired_phys)
+    left = replace(left, color_profile=None)
+    right = replace(right, color_profile=None)
+    seen_role_maps: list[dict[int, int]] = []
+
+    def build_profile(
+        pcdump: str,
+        function: str,
+        class_id: int,
+        role_map: dict[int, int],
+        required_roles: frozenset[int],
+    ) -> ColorGraphProfile:
+        del pcdump, function, class_id
+        seen_role_maps.append(dict(role_map))
+        stable_roles = tuple(sorted(set(role_map.values())))
+        assignments = tuple((role, desired_phys.get(role, 0)) for role in stable_roles)
+        return ColorGraphProfile(
+            assignments=assignments,
+            simplify_order=stable_roles,
+            select_order=stable_roles,
+            interference_edges=frozenset(),
+            coalesce_pairs=frozenset(),
+            spills=frozenset(),
+            complete=required_roles <= set(stable_roles),
+        )
+
+    monkeypatch.setattr(
+        "src.search.delta_minimize.objectives.build_colorgraph_profile",
+        build_profile,
+    )
+
+    infer_objective_manifest(
+        left,
+        right,
+        target_path=target,
+        donor_overrides={"objobjects": "left"},
+    )
+
+    assert len(seen_role_maps) == 2
+    assert all(set(role_map.values()) > set(desired_phys) for role_map in seen_role_maps)
+
+
 def test_equal_assignment_distance_with_different_graphs_requires_color_donor(
     tmp_path: Path,
     baseline_compile: Compile,
@@ -682,6 +793,58 @@ def test_tied_unresolved_stack_proxy_fails_closed(
             target_path=target,
             donor_overrides={"objobjects": "left"},
         )
+
+
+def test_all_absolute_stack_homes_record_strictly_closer_parent(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    left, right, target = _explicit_inputs(
+        tmp_path,
+        baseline_compile,
+        desired_phys,
+        left_stack_distance=(0, 0, 0, 0),
+        right_stack_distance=(1, 8, 0, 0),
+    )
+
+    manifest = infer_objective_manifest(
+        left,
+        right,
+        target_path=target,
+        donor_overrides={"objobjects": "left"},
+    )
+
+    assert manifest.stack_home_donor == "left"
+    assert manifest.references["stack-homes"].reference_kind == "absolute"
+    assert manifest.references["stack-homes"].reference_artifact == "expected.o:frame"
+
+
+def test_all_absolute_stack_home_override_selects_requested_parent(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    left, right, target = _explicit_inputs(
+        tmp_path,
+        baseline_compile,
+        desired_phys,
+        left_stack_distance=(0, 0, 0, 0),
+        right_stack_distance=(1, 8, 0, 0),
+    )
+
+    manifest = infer_objective_manifest(
+        left,
+        right,
+        target_path=target,
+        donor_overrides={"objobjects": "left", "stack-homes": "right"},
+    )
+
+    assert manifest.stack_home_donor == "right"
+    stack_reference = manifest.references["stack-homes"]
+    assert stack_reference.reference_kind == "absolute"
+    assert stack_reference.reference_artifact == "expected.o:frame"
+    assert stack_reference.override is True
 
 
 @pytest.mark.parametrize(

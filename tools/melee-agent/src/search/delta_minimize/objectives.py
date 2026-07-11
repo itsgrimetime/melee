@@ -517,7 +517,14 @@ def _compile_for_explicit_target(
     compile_loader: CompileLoader,
 ) -> role_descriptor.Compile:
     try:
-        baseline = compile_loader(target.baseline_dump, target.function, left.compile.source)
+        baseline_path = target.baseline_dump.resolve()
+        matching_parents = [parent for parent in (left, right) if parent.pcdump_path.resolve() == baseline_path]
+        if not matching_parents:
+            raise ValueError("baseline source cannot be bound to either parent")
+        sources = {parent.compile.source for parent in matching_parents}
+        if len(sources) != 1:
+            raise ValueError("baseline source binding is ambiguous")
+        baseline = compile_loader(target.baseline_dump, target.function, matching_parents[0].compile.source)
         if not isinstance(baseline, role_descriptor.Compile) or baseline.name != target.function:
             raise ValueError("baseline compile does not contain target function")
         return baseline
@@ -744,7 +751,7 @@ def _derive_target_spec(
 
 def _profile_for_parent(
     parent: ParentObjectiveEvidence,
-    reanchored: role_reanchor.ReanchorResult,
+    role_map: Mapping[int, int],
     desired_phys: Mapping[int, int],
 ) -> ColorGraphProfile:
     profile = parent.color_profile
@@ -754,7 +761,7 @@ def _profile_for_parent(
                 parent.pcdump_path.read_text(encoding="utf-8"),
                 parent.function,
                 parent.class_id,
-                reanchored.matched,
+                role_map,
                 required_roles=frozenset(desired_phys),
             )
         except (OSError, UnicodeError, ValueError) as error:
@@ -768,6 +775,39 @@ def _profile_for_parent(
     ):
         raise DeltaMinimizeError("ambiguous-color-donor")
     return profile
+
+
+def _complete_profile_role_map(
+    reference_compile: role_descriptor.Compile,
+    parent_compile: role_descriptor.Compile,
+    class_id: int,
+) -> Mapping[int, int]:
+    """Reanchor every structurally stable allocator role into one parent.
+
+    The force-physical target normally covers only a small subset of virtuals,
+    while secondary graph lanes contain every allocator decision.  Use the
+    baseline compile as the canonical role namespace so raw profiles remain
+    comparable across parents.  The color-profile parser will fail closed if
+    genuinely ambiguous roles leave evidence unmapped.
+    """
+    descriptors = role_descriptor.build_descriptors(reference_compile, class_id)
+    if not descriptors:
+        raise DeltaMinimizeError("ambiguous-color-donor")
+    profile_target = _target_spec(
+        reference_compile,
+        {ig_idx: 0 for ig_idx in descriptors},
+        class_id,
+        {"inference": "complete-color-profile-role-map"},
+        False,
+    )
+    try:
+        return role_reanchor.reanchor(
+            profile_target,
+            parent_compile,
+            class_id=class_id,
+        ).matched
+    except Exception as error:
+        raise DeltaMinimizeError("ambiguous-color-donor") from error
 
 
 def _assignment_distance(profile: ColorGraphProfile, desired_phys: Mapping[int, int]) -> int:
@@ -813,16 +853,14 @@ def _select_stack_donor(
     right_unresolved = tuple(sorted(set(right.stack_unresolved)))
     if left_unresolved != right_unresolved:
         raise DeltaMinimizeError("ambiguous-stack-home-donor")
-    if not left_unresolved:
-        if override is not None:
-            raise DeltaMinimizeError("invalid-donor-override")
-        return None, (), "all-stack-homes-have-absolute-references"
     if override is not None:
         return override, left_unresolved, "explicit-stack-home-donor-override"
     if left.stack_absolute_distance < right.stack_absolute_distance:
         return "left", left_unresolved, "strictly-lower-stack-home-distance"
     if right.stack_absolute_distance < left.stack_absolute_distance:
         return "right", left_unresolved, "strictly-lower-stack-home-distance"
+    if not left_unresolved:
+        return None, (), "equal-absolute-stack-home-distance"
     raise DeltaMinimizeError("ambiguous-stack-home-donor")
 
 
@@ -854,6 +892,7 @@ def infer_objective_manifest(
 
     if target_path is None:
         loaded, target_spec = _derive_target_spec(left, right, derive_force_target)
+        profile_reference_compile = left.compile
         color_target_artifact = "derived-parent-register-diff"
         target_reason = "cross-parent-round-trip-derived-target"
     else:
@@ -866,6 +905,7 @@ def infer_objective_manifest(
             right,
             compile_loader or _default_compile_loader,
         )
+        profile_reference_compile = baseline_compile
         target_spec = _target_spec(
             baseline_compile,
             loaded.force_phys,
@@ -885,20 +925,30 @@ def infer_objective_manifest(
         color_target_artifact = str(target_path.resolve())
         target_reason = "explicit-versioned-color-target"
 
-    left_reanchor = _require_complete_reanchor(
+    _require_complete_reanchor(
         target_spec,
         left.compile,
         loaded.class_id,
         loaded.force_phys,
     )
-    right_reanchor = _require_complete_reanchor(
+    _require_complete_reanchor(
         target_spec,
         right.compile,
         loaded.class_id,
         loaded.force_phys,
     )
-    left_color = _profile_for_parent(left, left_reanchor, loaded.force_phys)
-    right_color = _profile_for_parent(right, right_reanchor, loaded.force_phys)
+    left_profile_roles = _complete_profile_role_map(
+        profile_reference_compile,
+        left.compile,
+        loaded.class_id,
+    )
+    right_profile_roles = _complete_profile_role_map(
+        profile_reference_compile,
+        right.compile,
+        loaded.class_id,
+    )
+    left_color = _profile_for_parent(left, left_profile_roles, loaded.force_phys)
+    right_color = _profile_for_parent(right, right_profile_roles, loaded.force_phys)
 
     color_donor, color_reason = _select_color_donor(
         left_color,
@@ -941,7 +991,7 @@ def infer_objective_manifest(
         )
     stack_artifact = _artifact_with_donor(
         left.stack_absolute_artifact,
-        parents[stack_donor].stack_profile_artifact if stack_donor is not None else None,
+        (parents[stack_donor].stack_profile_artifact if stack_unresolved and stack_donor is not None else None),
     )
     references = MappingProxyType(
         {
