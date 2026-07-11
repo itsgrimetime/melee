@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import stat
 import textwrap
@@ -138,6 +139,34 @@ def _stub_wibo_and_compiler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(cli_debug, "_find_compiler_dir", lambda: compiler_dir)
 
     return wibo, debug_compiler
+
+
+@pytest.mark.parametrize("remote_portable", [False, True])
+def test_generated_compile_wrapper_cflags_can_be_reextracted(
+    tmp_path: Path, remote_portable: bool
+) -> None:
+    """A generated wrapper must be valid input to a later ``--force`` run."""
+    wibo = tmp_path / "runtime dir" / "wibo"
+    wibo.parent.mkdir(parents=True)
+    wibo.write_text("#!/bin/sh\nexit 0\n")
+    wibo.chmod(0o755)
+    compiler = tmp_path / "compiler dir" / "mwcceppc_debug.exe"
+    compiler.parent.mkdir(parents=True)
+    compiler.write_bytes(b"MZ")
+    expected = ["-O4,p", "-pragma", "cats off", "-inline", "auto"]
+    cflags = shlex.join(expected)
+
+    wrapper = cli_debug._build_simplify_order_compile_sh(
+        wibo_path=wibo,
+        debug_compiler=compiler,
+        project_root=tmp_path / "project root",
+        cflags=cflags,
+        remote_portable=remote_portable,
+    )
+
+    extracted = cli_debug._extract_cflags_from_compile_sh(wrapper)
+    assert extracted is not None
+    assert shlex.split(extracted) == expected
 
 
 # ---------------------------------------------------------------------------

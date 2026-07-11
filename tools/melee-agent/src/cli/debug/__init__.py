@@ -7268,10 +7268,35 @@ def _extract_cflags_from_compile_sh(text: str) -> Optional[str]:
     re-emit them inside the new wrapper. If the compile.sh doesn't
     match any of these shapes, returns None.
     """
+    compiler_token = re.compile(r"mwcceppc(?:_debug)?\.exe(?:\}|$)")
+    for line in text.splitlines():
+        try:
+            tokens = shlex.split(line, posix=True)
+        except ValueError:
+            continue
+        compiler_index = next(
+            (
+                index
+                for index, token in enumerate(tokens)
+                if compiler_token.search(token)
+            ),
+            None,
+        )
+        if compiler_index is None:
+            continue
+        flag_tokens: list[str] = []
+        for token in tokens[compiler_index + 1 :]:
+            if token == "-c" or token in {"$INPUT", "${INPUT}"}:
+                break
+            flag_tokens.append(token)
+        if flag_tokens:
+            return shlex.join(flag_tokens)
+
+    # Retain the legacy regex as a fallback for unusual generated shell that
+    # shlex cannot tokenize, while preferring token parsing for quoted compiler
+    # paths and ``${MWCC_DEBUG_COMPILER:-...}`` parameter expansions.
     m = _CFLAGS_LINE_RE.search(text)
-    if not m:
-        return None
-    return m.group(1).strip()
+    return m.group(1).strip() if m else None
 
 
 def _find_wibo() -> Optional[Path]:
