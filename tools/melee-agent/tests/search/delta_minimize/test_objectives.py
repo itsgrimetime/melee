@@ -100,8 +100,12 @@ def _obj_profile(name: str) -> ObjObjectProfile:
     return ObjObjectProfile((identity,), True)
 
 
-def _stack_profile(identity: str = "symbol:x") -> StackHomeProfile:
-    return StackHomeProfile(32, (StackHome(identity, 8, 0, "absolute"),), True)
+def _stack_profile(
+    identity: str = "symbol:x",
+    *,
+    reference_kind: str = "absolute",
+) -> StackHomeProfile:
+    return StackHomeProfile(32, (StackHome(identity, 8, 0, reference_kind),), True)
 
 
 def _parent(
@@ -114,6 +118,7 @@ def _parent(
     opcode_distance: tuple[int, int] = (1, 0),
     stack_distance: tuple[int, int, int, int] = (0, 0, 0, 0),
     stack_unresolved: tuple[str, ...] = (),
+    stack_profile: StackHomeProfile | None = None,
 ) -> ParentObjectiveEvidence:
     return ParentObjectiveEvidence(
         side=side,
@@ -126,7 +131,7 @@ def _parent(
         opcode_distance=opcode_distance,
         color_profile=color_profile or _color_profile(desired),
         objobject_profile=_obj_profile(side),
-        stack_home_profile=_stack_profile(),
+        stack_home_profile=stack_profile or _stack_profile(),
         stack_absolute_distance=stack_distance,
         stack_unresolved=stack_unresolved,
         expected_assembly_artifact="expected.o:draw",
@@ -177,6 +182,7 @@ def _explicit_inputs(
     left_stack_distance: tuple[int, int, int, int] = (0, 0, 0, 0),
     right_stack_distance: tuple[int, int, int, int] = (0, 0, 0, 0),
     unresolved: tuple[str, ...] = (),
+    stack_profile: StackHomeProfile | None = None,
 ) -> tuple[ParentObjectiveEvidence, ParentObjectiveEvidence, Path]:
     dump = tmp_path / "baseline.pcdump"
     dump.write_text(
@@ -192,6 +198,7 @@ def _explicit_inputs(
         color_profile=left_color,
         stack_distance=left_stack_distance,
         stack_unresolved=unresolved,
+        stack_profile=stack_profile,
     )
     right = _parent(
         "right",
@@ -201,6 +208,7 @@ def _explicit_inputs(
         color_profile=right_color,
         stack_distance=right_stack_distance,
         stack_unresolved=unresolved,
+        stack_profile=stack_profile,
     )
     return left, right, target
 
@@ -852,6 +860,10 @@ def test_unresolved_stack_proxy_requires_strictly_better_donor(
         left_stack_distance=(1, 4, 0, 0),
         right_stack_distance=(2, 8, 0, 0),
         unresolved=("compiler-temp:row-child",),
+        stack_profile=_stack_profile(
+            "compiler-temp:row-child",
+            reference_kind="proxy",
+        ),
     )
     manifest = infer_objective_manifest(
         left,
@@ -879,10 +891,49 @@ def test_tied_unresolved_stack_proxy_fails_closed(
         left_stack_distance=(1, 4, 0, 0),
         right_stack_distance=(1, 4, 0, 0),
         unresolved=("compiler-temp:row-child",),
+        stack_profile=_stack_profile(
+            "compiler-temp:row-child",
+            reference_kind="proxy",
+        ),
     )
     with pytest.raises(DeltaMinimizeError, match="ambiguous-stack-home-donor"):
         infer_objective_manifest(
             left,
+            right,
+            target_path=target,
+            donor_overrides={"objobjects": "left"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile", "unresolved"),
+    [
+        (_stack_profile("compiler-temp:x", reference_kind="proxy"), ()),
+        (
+            _stack_profile("compiler-temp:x", reference_kind="proxy"),
+            ("compiler-temp:y",),
+        ),
+        (_stack_profile(), ("symbol:x",)),
+    ],
+    ids=("proxy-omitted", "proxy-mismatched", "absolute-mislabeled-proxy"),
+)
+def test_stack_unresolved_must_exactly_match_proxy_home_identities(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+    profile: StackHomeProfile,
+    unresolved: tuple[str, ...],
+) -> None:
+    left, right, target = _explicit_inputs(tmp_path, baseline_compile, desired_phys)
+    malformed = replace(
+        left,
+        stack_home_profile=profile,
+        stack_unresolved=unresolved,
+    )
+
+    with pytest.raises(DeltaMinimizeError, match="invalid-parent-stack-evidence"):
+        infer_objective_manifest(
+            malformed,
             right,
             target_path=target,
             donor_overrides={"objobjects": "left"},

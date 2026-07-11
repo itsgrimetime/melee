@@ -457,6 +457,11 @@ def _validate_parent(parent: ParentObjectiveEvidence, expected_side: str) -> Non
     _validate_distance(parent.stack_absolute_distance, 4, "invalid-parent-stack-distance")
     if any(not isinstance(item, str) or not item for item in parent.stack_unresolved):
         raise DeltaMinimizeError("invalid-parent-stack-evidence")
+    proxy_identities = tuple(
+        sorted(home.identity for home in parent.stack_home_profile.homes if home.reference_kind == "proxy")
+    )
+    if tuple(sorted(parent.stack_unresolved)) != proxy_identities:
+        raise DeltaMinimizeError("invalid-parent-stack-evidence")
     if not parent.objobject_profile.complete:
         raise DeltaMinimizeError("incomplete-objobject-evidence")
     if not parent.stack_home_profile.complete:
