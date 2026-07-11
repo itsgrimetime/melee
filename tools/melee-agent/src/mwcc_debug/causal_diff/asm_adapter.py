@@ -238,8 +238,6 @@ def adapt_checkdiff(bundle: ValidatedBundle) -> CheckdiffEvidence:
             },
         )
         nodes.extend((retail, candidate))
-        starts = [span[0] for span in (expected_spans.get(offset), current_spans.get(offset)) if span]
-        ends = [span[1] for span in (expected_spans.get(offset), current_spans.get(offset)) if span]
         edge = EvidenceEdge.create(
             compile_id=bundle.compile_id,
             function=bundle.manifest.function,
@@ -251,8 +249,8 @@ def adapt_checkdiff(bundle: ValidatedBundle) -> CheckdiffEvidence:
             adapter_confidence=Confidence.OBSERVED,
             provenance=_provenance(
                 bundle,
-                raw_start=min(starts) if starts else None,
-                raw_end=max(ends) if ends else None,
+                raw_start=None,
+                raw_end=None,
                 derivation_rule="paired-checkdiff-row-by-retail-byte-offset",
                 input_record_ids=(candidate.record_id, retail.record_id),
             ),

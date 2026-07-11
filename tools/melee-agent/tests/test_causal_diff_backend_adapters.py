@@ -107,6 +107,14 @@ def validated_bundle(tmp_path: Path) -> Callable[[str], ValidatedBundle]:
                     count=1,
                 )
                 assert replacements == 1
+            elif kind == "direct-prefix-near-miss":
+                backend_text, replacements = re.subn(
+                    r"(?m)^    addi    (r\d+,r\d+,[^\n]+)$",
+                    r"    addi_fake \1",
+                    backend_text,
+                    count=1,
+                )
+                assert replacements == 1
             backend_format = "mwcc-debug-pcdump"
             capabilities = sorted(CORE_BACKEND_CAPABILITIES)
             checkdiff = _checkdiff_payload()
@@ -121,6 +129,10 @@ def validated_bundle(tmp_path: Path) -> Callable[[str], ValidatedBundle]:
             elif kind == "malformed-edge-trace":
                 backend_payload = json.loads(backend_text)
                 backend_payload["functions"][0]["regalloc"]["classes"][0]["edges"][0].pop("a")
+                backend_text = json.dumps(backend_payload)
+            elif kind == "trace-missing-edge-confidence":
+                backend_payload = json.loads(backend_text)
+                backend_payload["functions"][0]["regalloc"]["classes"][0]["edges"][0].pop("confidence")
                 backend_text = json.dumps(backend_payload)
             backend_format = "backend-trace.v1"
             capabilities = ["allocator-decisions", "interference-edges"]
@@ -280,17 +292,35 @@ def test_pcode_operand_roles_handle_update_and_read_modify_write() -> None:
     fcmpu = Instruction("fcmpu", "cr0,f36,f37", [], [("f", 36), ("f", 37)])
     unknown = Instruction("unknown", "r36,r37", [], [("r", 36), ("r", 37)])
 
-    assert _operand_roles(stwu) == ((frozenset({"use"}), frozenset({"use", "def"})), Confidence.OBSERVED)
-    assert _operand_roles(stwux) == (
+    assert _operand_roles(stwu, "mwcc-debug-pcdump.v1") == (
+        (frozenset({"use"}), frozenset({"use", "def"})),
+        Confidence.OBSERVED,
+    )
+    assert _operand_roles(stwux, "mwcc-debug-pcdump.v1") == (
         (frozenset({"use"}), frozenset({"use", "def"}), frozenset({"use"})),
         Confidence.OBSERVED,
     )
-    assert _operand_roles(rlwimi) == ((frozenset({"use", "def"}), frozenset({"use"})), Confidence.OBSERVED)
-    assert _operand_roles(fcmpu) == ((frozenset({"use"}), frozenset({"use"})), Confidence.OBSERVED)
-    assert _operand_roles(unknown)[1] is Confidence.HEURISTIC
+    assert _operand_roles(rlwimi, "mwcc-debug-pcdump.v1") == (
+        (frozenset({"use", "def"}), frozenset({"use"})),
+        Confidence.OBSERVED,
+    )
+    assert _operand_roles(fcmpu, "mwcc-debug-pcdump.v1") == (
+        (frozenset({"use"}), frozenset({"use"})),
+        Confidence.OBSERVED,
+    )
+    assert _operand_roles(unknown, "mwcc-debug-pcdump.v1")[1] is Confidence.HEURISTIC
     assert _confidence("observed") is Confidence.OBSERVED
     assert _confidence("high") is Confidence.HEURISTIC
     assert _confidence("exact") is Confidence.HEURISTIC
+
+
+def test_pcode_operand_role_contract_rejects_prefix_near_misses_and_unknown_versions() -> None:
+    near_miss = Instruction("addi_fake", "r32,r33,1", [], [("r", 32), ("r", 33)])
+    supported = Instruction("addi", "r32,r33,1", [], [("r", 32), ("r", 33)])
+
+    assert _operand_roles(supported, "mwcc-debug-pcdump.v1")[1] is Confidence.OBSERVED
+    assert _operand_roles(near_miss, "mwcc-debug-pcdump.v1")[1] is Confidence.HEURISTIC
+    assert _operand_roles(supported, "mwcc-debug-pcdump.v2")[1] is Confidence.HEURISTIC
 
 
 def test_unknown_pcode_role_does_not_verify_use_def_capability(
@@ -310,6 +340,11 @@ def test_unknown_pcode_role_does_not_verify_use_def_capability(
         node.confidence is Confidence.HEURISTIC for node in evidence.result.nodes if node.record_id in virtual_ids
     )
 
+    near_miss = adapt_backends(validated_bundle("direct-prefix-near-miss"))
+    assert "virtual-use-def" not in near_miss.verified_capabilities
+    occurrence = next(node for node in near_miss.result.nodes if node.attributes.get("opcode") == "addi_fake")
+    assert occurrence.confidence is Confidence.HEURISTIC
+
 
 def test_allocator_only_trace_fails_core_capability_gate(
     validated_bundle: Callable[[str], ValidatedBundle],
@@ -318,6 +353,28 @@ def test_allocator_only_trace_fails_core_capability_gate(
     evidence = adapt_backends(bundle)
     with pytest.raises(BundleInputError, match="pcode-occurrences"):
         validate_capability_union(bundle, evidence.verified_capabilities)
+
+
+def test_backend_trace_preserves_coalesce_and_omits_unknown_use_def_counts(
+    validated_bundle: Callable[[str], ValidatedBundle],
+) -> None:
+    evidence = adapt_backends(validated_bundle("allocator-only"))
+    virtual = next(
+        node for node in evidence.result.nodes if node.kind == "virtual-register" and node.attributes["virtual"] == 40
+    )
+    assert "definitions" not in virtual.attributes
+    assert "uses" not in virtual.attributes
+    coalesce = next(edge for edge in evidence.result.edges if edge.kind == "coalesces-with")
+    assert coalesce.producer_confidence is Confidence.OBSERVED
+    assert coalesce.attributes["producer_provenance"] == "coalesce_alias"
+
+
+def test_backend_trace_missing_interference_confidence_is_heuristic(
+    validated_bundle: Callable[[str], ValidatedBundle],
+) -> None:
+    evidence = adapt_backends(validated_bundle("trace-missing-edge-confidence"))
+    interference = next(edge for edge in evidence.result.edges if edge.kind == "interferes-with")
+    assert interference.producer_confidence is Confidence.HEURISTIC
 
 
 def test_backend_adapter_rejects_unknown_version_and_overlapping_artifacts(
@@ -355,3 +412,22 @@ def test_backend_adapter_wraps_invalid_source_encoding(
     bundle.artifact_paths["source"].write_bytes(b"\xff")
     with pytest.raises(BundleInputError, match="invalid source artifact"):
         adapt_backends(bundle)
+
+
+def test_backend_adapter_wraps_missing_backend_artifact_read(
+    validated_bundle: Callable[[str], ValidatedBundle],
+) -> None:
+    bundle = validated_bundle("direct")
+    bundle.artifact_paths["backend[0]"].unlink()
+    with pytest.raises(BundleInputError, match="cannot read backend artifact 0"):
+        adapt_backends(bundle)
+
+
+def test_alignment_edge_uses_input_provenance_without_synthetic_raw_span(
+    validated_bundle: Callable[[str], ValidatedBundle],
+) -> None:
+    evidence = adapt_checkdiff(validated_bundle("direct"))
+    alignment = next(edge for edge in evidence.result.edges if edge.kind == "aligns-to-retail")
+    assert alignment.provenance.raw_start is None
+    assert alignment.provenance.raw_end is None
+    assert len(alignment.provenance.input_record_ids) == 2

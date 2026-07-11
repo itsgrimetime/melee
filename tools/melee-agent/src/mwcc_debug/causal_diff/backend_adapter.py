@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -43,6 +44,31 @@ def _reg_kind(class_id: int) -> str:
 
 def _normalized_reg_kind(value: str) -> str:
     return {"gpr": "r", "fpr": "f"}.get(value, value)
+
+
+def _backend_trace_interference_confidences(
+    text: str,
+    function: str,
+) -> Mapping[tuple[int, int], Confidence]:
+    payload = json.loads(text)
+    functions = payload.get("functions", ()) if isinstance(payload, Mapping) else ()
+    selected = next(
+        (item for item in functions if isinstance(item, Mapping) and item.get("name") == function),
+        None,
+    )
+    if not isinstance(selected, Mapping):
+        return MappingProxyType({})
+    regalloc = selected.get("regalloc")
+    classes = regalloc.get("classes", ()) if isinstance(regalloc, Mapping) else ()
+    confidences: dict[tuple[int, int], Confidence] = {}
+    for class_payload in classes:
+        if not isinstance(class_payload, Mapping):
+            continue
+        class_id = int(class_payload["class_id"])
+        for index, edge in enumerate(class_payload.get("edges", ())):
+            confidence = edge.get("confidence") if isinstance(edge, Mapping) else None
+            confidences[(class_id, index)] = _confidence(str(confidence) if confidence is not None else None)
+    return MappingProxyType(confidences)
 
 
 def _provenance(
@@ -134,63 +160,39 @@ def _edge(
     )
 
 
+_USE = frozenset({"use"})
+_DEF = frozenset({"def"})
+_USE_DEF = frozenset({"use", "def"})
+_PCDUMP_OPERAND_ROLE_CONTRACTS: Mapping[str, Mapping[str, tuple[frozenset[str], ...]]] = {
+    "mwcc-debug-pcdump.v1": {
+        "add": (_DEF, _USE, _USE),
+        "addi": (_DEF, _USE),
+        "cmpi": (_USE,),
+        "cmpli": (_USE,),
+        "fcmpu": (_USE, _USE),
+        "lhz": (_DEF, _USE),
+        "li": (_DEF,),
+        "lwz": (_DEF, _USE),
+        "mr": (_DEF, _USE),
+        "rldimi": (_USE_DEF, _USE),
+        "rlwimi": (_USE_DEF, _USE),
+        "rlwinm": (_DEF, _USE),
+        "stwu": (_USE, _USE_DEF),
+        "stwux": (_USE, _USE_DEF, _USE),
+    }
+}
+
+
 def _operand_roles(
     instruction: Instruction,
+    producer_version: str,
 ) -> tuple[tuple[frozenset[str], ...], Confidence]:
-    opcode = instruction.opcode.lower()
     if not instruction.regs:
         return (), Confidence.OBSERVED
-    roles = [frozenset({"use"}) for _ in instruction.regs]
-    if opcode in {"rlwimi", "rldimi"}:
-        roles[0] = frozenset({"use", "def"})
-        return tuple(roles), Confidence.OBSERVED
-    if opcode.startswith(("st", "psq_st")):
-        if opcode.endswith(("u", "ux")) and len(roles) > 1:
-            roles[1] = frozenset({"use", "def"})
-        return tuple(roles), Confidence.OBSERVED
-    if opcode.startswith(("cmp", "fcmp", "ps_cmp", "cr", "mt", "b")) or opcode in {
-        "sync",
-        "isync",
-        "eieio",
-        "dcbz",
-        "dcbst",
-        "dcbi",
-    }:
-        return tuple(roles), Confidence.OBSERVED
-    exact_destination_prefixes = (
-        "add",
-        "sub",
-        "mul",
-        "div",
-        "and",
-        "or",
-        "xor",
-        "neg",
-        "not",
-        "cnt",
-        "ext",
-        "sl",
-        "sr",
-        "rot",
-        "rlw",
-        "rld",
-        "li",
-        "la",
-        "mr",
-        "mf",
-        "lw",
-        "lh",
-        "lb",
-        "lf",
-        "psq_l",
-        "f",
-    )
-    if opcode.startswith(exact_destination_prefixes):
-        roles[0] = frozenset({"def"})
-        if opcode.endswith(("u", "ux")) and opcode.startswith(("lw", "lh", "lb", "lf", "psq_l")):
-            roles[1] = frozenset({"use", "def"})
-        return tuple(roles), Confidence.OBSERVED
-    return tuple(roles), Confidence.HEURISTIC
+    schema = _PCDUMP_OPERAND_ROLE_CONTRACTS.get(producer_version, {}).get(instruction.opcode.lower())
+    if schema is None or len(schema) != len(instruction.regs):
+        return tuple(_USE for _item in instruction.regs), Confidence.HEURISTIC
+    return schema, Confidence.OBSERVED
 
 
 def _emit_pcode(
@@ -212,7 +214,7 @@ def _emit_pcode(
     for pass_index, pass_ in enumerate(function.passes):
         for block in pass_.blocks:
             for instruction_index, instruction in enumerate(block.instructions):
-                operand_roles, role_confidence = _operand_roles(instruction)
+                operand_roles, role_confidence = _operand_roles(instruction, parser)
                 if role_confidence is not Confidence.OBSERVED and any(
                     number >= 32 for _kind, number in instruction.regs
                 ):
@@ -324,6 +326,7 @@ def _emit_allocator_facts(
     edges: list[EvidenceEdge],
     nodes_by_class_ig: dict[tuple[int, int], EvidenceNode],
     nodes_by_virtual: dict[tuple[str, int], EvidenceNode],
+    trace_interference_confidences: Mapping[tuple[int, int], Confidence] | None,
 ) -> None:
     decisions: dict[tuple[int, int], EvidenceNode] = {}
     for allocator_class in facts.classes:
@@ -366,8 +369,6 @@ def _emit_allocator_facts(
                     attributes={
                         "class": virtual_key[0],
                         "virtual": virtual_key[1],
-                        "definitions": 0,
-                        "uses": 0,
                         "live_range": tuple(item.live.intervals),
                         "mapping_status": "backend-node",
                     },
@@ -455,7 +456,11 @@ def _emit_allocator_facts(
                     source=left,
                     target=right,
                     occurrence_ordinal=index,
-                    producer_confidence=_confidence(interference.confidence),
+                    producer_confidence=(
+                        _confidence(interference.confidence)
+                        if trace_interference_confidences is None
+                        else trace_interference_confidences.get((allocator_class.class_id, index), Confidence.HEURISTIC)
+                    ),
                     adapter_confidence=Confidence.OBSERVED,
                     derivation_rule="normalize-producer-interference-edge",
                     artifact_size=artifact_size,
@@ -463,7 +468,38 @@ def _emit_allocator_facts(
                 )
             )
 
-        for index, (alias, root) in enumerate(allocator_class.coalesce_mappings):
+        coalesce_records: list[tuple[int, int, Confidence, object]] = []
+        raw_mappings = allocator_class.coalesce.get("mappings", ())
+        if isinstance(raw_mappings, (list, tuple)):
+            for mapping in raw_mappings:
+                if not isinstance(mapping, Mapping):
+                    continue
+                confidence = (
+                    Confidence.OBSERVED
+                    if raw_pcdump is not None
+                    else _confidence(str(mapping["confidence"]) if mapping.get("confidence") is not None else None)
+                )
+                coalesce_records.append(
+                    (
+                        int(mapping["alias"]),
+                        int(mapping["root"]),
+                        confidence,
+                        mapping.get("provenance"),
+                    )
+                )
+        seen_coalesce = {(alias, root) for alias, root, _confidence_value, _provenance_value in coalesce_records}
+        for alias, root in allocator_class.coalesce_mappings:
+            if (alias, root) not in seen_coalesce:
+                coalesce_records.append(
+                    (
+                        alias,
+                        root,
+                        Confidence.OBSERVED if raw_pcdump is not None else Confidence.HEURISTIC,
+                        None,
+                    )
+                )
+
+        for index, (alias, root, confidence, producer_provenance) in enumerate(coalesce_records):
             alias_node = nodes_by_class_ig.get((allocator_class.class_id, alias))
             root_node = nodes_by_class_ig.get((allocator_class.class_id, root))
             if alias_node is None or root_node is None:
@@ -477,11 +513,14 @@ def _emit_allocator_facts(
                     source=alias_node,
                     target=root_node,
                     occurrence_ordinal=index,
-                    producer_confidence=Confidence.HEURISTIC,
+                    producer_confidence=confidence,
                     adapter_confidence=Confidence.OBSERVED,
                     derivation_rule="normalize-producer-coalesce-mapping",
                     artifact_size=artifact_size,
-                    attributes={"class_id": allocator_class.class_id},
+                    attributes={
+                        "class_id": allocator_class.class_id,
+                        "producer_provenance": producer_provenance,
+                    },
                 )
             )
 
@@ -524,7 +563,10 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
     for index, backend in enumerate(bundle.manifest.artifacts.backend):
         artifact_name = f"backend[{index}]"
         path = bundle.artifact_paths[artifact_name]
-        raw_bytes = path.read_bytes()
+        try:
+            raw_bytes = path.read_bytes()
+        except OSError as error:
+            raise BundleInputError(f"cannot read backend artifact {index}: {error}") from error
         artifact_size = len(raw_bytes)
         local_nodes: list[EvidenceNode] = []
         local_edges: list[EvidenceEdge] = []
@@ -564,6 +606,7 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
                 )
                 pcode_roles_exact = pcode_roles_exact and local_roles_exact
                 raw_pcdump: str | None = text
+                trace_interference_confidences = None
             elif backend.format == "backend-trace.v1":
                 parser = "backend-trace.v1"
                 version = bundle.manifest.producer_versions.get("backend_trace")
@@ -571,6 +614,7 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
                     raise BundleInputError(f"unsupported backend-trace producer version: {version!r}")
                 facts = facts_from_backend_trace(Path(path), function=bundle.manifest.function)
                 raw_pcdump = None
+                trace_interference_confidences = _backend_trace_interference_confidences(text, bundle.manifest.function)
             else:  # pragma: no cover - Pydantic validates the closed format set.
                 raise BundleInputError(f"unsupported backend format: {backend.format}")
 
@@ -585,6 +629,7 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
                 edges=local_edges,
                 nodes_by_class_ig=local_by_class_ig,
                 nodes_by_virtual=local_by_virtual,
+                trace_interference_confidences=trace_interference_confidences,
             )
         except BundleInputError:
             raise
