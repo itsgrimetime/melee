@@ -134,6 +134,12 @@ def build_colorgraph_profile(
     ambiguous_roles = {role for role, igs in role_to_igs.items() if len(igs) != 1}
 
     incomplete = simplify_section is None or coalesce_section is None
+    if simplify_section is not None and coalesce_section is not None:
+        incomplete = incomplete or (
+            simplify_section.n_class_regs <= 0
+            or coalesce_section.n_virtuals <= 0
+            or simplify_section.n_class_regs != coalesce_section.n_virtuals
+        )
     incomplete = incomplete or (
         decision_section.result != 1
         or decision_section.n_nodes < 0
@@ -289,8 +295,8 @@ def build_colorgraph_profile(
             if alias_role is not None and root_role is not None:
                 coalesce_pairs.add((alias_role, root_role))
 
-    observed_positive_roles = {role for role in (*assignment_rows, *select_roles, *simplify_roles) if role > 0}
-    expected_roles = required | observed_positive_roles
+    observed_roles = {role for role in (*assignment_rows, *select_roles, *simplify_roles) if role >= 0}
+    expected_roles = required | observed_roles
     assignment_counts = {role: len(regs) for role, regs in assignment_rows.items()}
     simplify_counts = Counter(simplify_roles)
     select_counts = Counter(select_roles)
@@ -332,17 +338,33 @@ def _kendall_inversions(candidate: tuple[int, ...], donor: tuple[int, ...]) -> i
     )
 
 
+def _validate_profile_integrity(profile: ColorGraphProfile) -> None:
+    """Require complete, one-to-one assignment/simplify/select role lanes."""
+    if not profile.complete:
+        raise ValueError("incomplete color graph profile cannot be compared")
+
+    assignment_counts = Counter(role for role, _physical in profile.assignments)
+    simplify_counts = Counter(profile.simplify_order)
+    select_counts = Counter(profile.select_order)
+    if (
+        set(assignment_counts) != set(simplify_counts)
+        or set(assignment_counts) != set(select_counts)
+        or any(count != 1 for count in assignment_counts.values())
+        or any(count != 1 for count in simplify_counts.values())
+        or any(count != 1 for count in select_counts.values())
+    ):
+        raise ValueError("incomplete color graph profile cannot be compared")
+
+
 def colorgraph_distance(
     candidate: ColorGraphProfile,
     donor: ColorGraphProfile,
     desired_phys: Mapping[int, int],
 ) -> ColorDistance:
     """Compare a candidate to absolute assignments and donor graph evidence."""
-    if not candidate.complete or not donor.complete:
-        raise ValueError("incomplete color graph profile cannot be compared")
-
     required = set(desired_phys)
     for profile in (candidate, donor):
+        _validate_profile_integrity(profile)
         assignment_counts = Counter(role for role, _physical in profile.assignments)
         simplify_counts = Counter(profile.simplify_order)
         select_counts = Counter(profile.select_order)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
@@ -161,6 +161,48 @@ def test_unmapped_evidence_and_duplicate_roles_are_incomplete() -> None:
     assert duplicate.missing_roles == (1, 2)
 
 
+def test_stable_role_zero_is_complete_when_all_lanes_align() -> None:
+    profile = build_colorgraph_profile(SINGLE_ROLE_PCDUMP, "f", 0, {58: 0})
+
+    assert profile == ColorGraphProfile(
+        assignments=((0, 22),),
+        simplify_order=(0,),
+        select_order=(0,),
+        interference_edges=frozenset(),
+        coalesce_pairs=frozenset(),
+        spills=frozenset(),
+        complete=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "pcdump",
+    [
+        pytest.param(
+            SINGLE_ROLE_PCDUMP.replace(
+                "0 58 r22 0 0 0x00",
+                "0 -1 r-1 0 0 0x00",
+            ),
+            id="assignment-and-select-missing",
+        ),
+        pytest.param(
+            SINGLE_ROLE_PCDUMP.replace(
+                "0 58 0 0 0x00",
+                "0 -1 0 0 0x00",
+            ),
+            id="simplify-missing",
+        ),
+    ],
+)
+def test_stable_role_zero_lane_mismatch_is_deterministically_incomplete(
+    pcdump: str,
+) -> None:
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 0})
+
+    assert profile.complete is False
+    assert profile.missing_roles == (0,)
+
+
 def test_distance_uses_shared_order_projection_and_symmetric_set_deltas() -> None:
     donor = ColorGraphProfile(
         assignments=((1, 9), (2, 8)),
@@ -191,6 +233,49 @@ def test_distance_uses_shared_order_projection_and_symmetric_set_deltas() -> Non
         coalesce_delta=2,
         spill_delta=1,
     )
+
+
+def _manual_complete_profile() -> ColorGraphProfile:
+    return ColorGraphProfile(
+        assignments=((1, 22), (9, 4)),
+        simplify_order=(1, 9),
+        select_order=(1, 9),
+        interference_edges=frozenset(),
+        coalesce_pairs=frozenset(),
+        spills=frozenset(),
+        complete=True,
+    )
+
+
+@pytest.mark.parametrize("profile_side", ["candidate", "donor"])
+@pytest.mark.parametrize("lane", ["assignments", "simplify_order", "select_order"])
+@pytest.mark.parametrize("defect", ["missing", "duplicate"])
+def test_distance_rejects_non_target_lane_integrity_defects(
+    profile_side: str,
+    lane: str,
+    defect: str,
+) -> None:
+    candidate = _manual_complete_profile()
+    donor = _manual_complete_profile()
+    intact_lane = getattr(candidate, lane)
+    invalid_lane = intact_lane[:-1] if defect == "missing" else (*intact_lane, intact_lane[-1])
+    if profile_side == "candidate":
+        candidate = replace(candidate, **{lane: invalid_lane})
+    else:
+        donor = replace(donor, **{lane: invalid_lane})
+
+    with pytest.raises(ValueError, match="incomplete color graph profile"):
+        colorgraph_distance(candidate, donor, desired_phys={1: 22})
+
+
+def test_distance_accepts_aligned_non_target_lane_roles() -> None:
+    distance = colorgraph_distance(
+        _manual_complete_profile(),
+        _manual_complete_profile(),
+        desired_phys={1: 22},
+    )
+
+    assert distance == ColorDistance(0, 0, 0, 0, 0, 0)
 
 
 def test_final_matching_sections_supply_retry_state() -> None:
@@ -235,6 +320,67 @@ def test_final_matching_coalesce_section_supplies_retry_state() -> None:
 
     assert profile.complete is True
     assert profile.coalesce_pairs == frozenset({(2, 1)})
+
+
+def test_independently_selected_retry_universe_mismatch_is_incomplete() -> None:
+    retry_dump = (
+        CANDIDATE_PCDUMP
+        + """
+
+[COALESCE] enter class=0 n_virtuals=81
+[COALESCE] natural mappings (virt -> root):
+  58 -> 75
+[COALESCE] exit class=0 n_virtuals=81 distinct_roots=80 forced=0
+"""
+    )
+
+    profile = build_colorgraph_profile(retry_dump, "f", 0, {58: 1, 75: 2})
+
+    assert profile.complete is False
+
+
+def test_matching_selected_retry_universe_is_complete() -> None:
+    retry_dump = (
+        CANDIDATE_PCDUMP
+        + """
+
+[COALESCE] enter class=0 n_virtuals=81
+[COALESCE] natural mappings (virt -> root):
+  58 -> 75
+[COALESCE] exit class=0 n_virtuals=81 distinct_roots=80 forced=0
+
+SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=81)
+iter ig_idx degree arraySize flags notes
+0 58 1 1 0x00
+1 75 1 1 0x08 SPILLED
+"""
+    )
+
+    profile = build_colorgraph_profile(retry_dump, "f", 0, {58: 1, 75: 2})
+
+    assert profile.complete is True
+
+
+def test_zero_selected_retry_universe_is_incomplete() -> None:
+    pcdump = """\
+Starting function f
+[COALESCE] enter class=0 n_virtuals=0
+[COALESCE] natural mappings (virt -> root):
+  (none - no virtuals coalesced)
+[COALESCE] exit class=0 n_virtuals=0 distinct_roots=0 forced=0
+
+SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=0)
+iter ig_idx degree arraySize flags notes
+0 -1 0 0 0x00
+
+COLORGRAPH DECISIONS (class=0, result=1, n_nodes=1)
+iter ig_idx reg degree nIntfr flags
+0 -1 r-1 0 0 0x00
+"""
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {})
+
+    assert profile.complete is False
 
 
 def test_exact_duplicate_coalesce_rows_dedupe_without_ambiguity() -> None:
