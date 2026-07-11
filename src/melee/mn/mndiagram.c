@@ -1133,6 +1133,7 @@ static inline int mnDiagram_GetVisibleFighterCursorFrom2(u8* sorted, int start,
                                                          int rank)
 {
     int result;
+    int result_alias;
     int remaining;
     int idx;
     u8* p;
@@ -1160,7 +1161,7 @@ static inline int mnDiagram_GetVisibleFighterCursorFrom2(u8* sorted, int start,
         }
         remaining--;
     }
-    return result;
+    return result_alias = result;
 }
 
 /// @brief Persists the current name/fighter cursor positions and mode into
@@ -2687,6 +2688,7 @@ static inline HSD_JObj* mnDiagram_CreateFighterHeader(
 
 void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
+    int fighter_id;
     HSD_JObj* header;
     Diagram* data = GET_DIAGRAM(arg0);
     Diagram* data_alias = data;
@@ -2700,15 +2702,13 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     for (i = 0; i < 7; i++) {
         sorted = (u8*) assets;
         if (mnDiagram_CountUnlockedFightersInline() > i) {
-            int fighter_id;
-            HSD_JObj* right;
-            fighter_id =
-                mnDiagram_GetVisibleFighterCursorFrom(sorted, arg2, i);
-            header = mnDiagram_CreateFighterHeader(fighter_id, assets);
-            spacing = HSD_JObjGetTranslationX(
-                          parent = data->jobjs[8]) -
-                      HSD_JObjGetTranslationX(
-                          right = data->jobjs[7]);
+            header = mnDiagram_CreateFighterHeader(
+                (fighter_id = mnDiagram_GetVisibleFighterCursorFrom(
+                     sorted, arg2, i),
+                 fighter_id),
+                assets);
+            spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
+                      HSD_JObjGetTranslationX(data->jobjs[7]);
             HSD_JObjSetTranslateX(header, spacing * i);
             parent = data->jobjs[7];
             HSD_JObjAddChild(parent, header);
