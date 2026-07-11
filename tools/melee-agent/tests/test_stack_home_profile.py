@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import textwrap
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -12,6 +13,7 @@ from src.mwcc_debug.stack_home_profile import (
     build_stack_home_profile,
     stack_home_distance,
 )
+from src.mwcc_debug.stack_slot_bridge import explain_stack_slot_localizer
 
 
 def _assignment(symbol: str, offset: int, order: int, opcode: str = "stw") -> dict:
@@ -118,7 +120,7 @@ def test_compiler_temp_offset_is_scored_with_stable_first_def_identity() -> None
 
 
 def test_explicit_first_def_and_unique_source_owner_are_supported() -> None:
-    candidate = _temp_candidate(20, "value + 1")
+    candidate = _temp_candidate(20, "fadds f50,f40,f41")
     candidate["first_def"] = {"opcode": "fadds", "operands": "f50,f40,f41"}
 
     profile = build_stack_home_profile(_frame(64), _bridge(candidate))
@@ -127,13 +129,49 @@ def test_explicit_first_def_and_unique_source_owner_are_supported() -> None:
     assert profile.homes[0].reference_kind == "proxy"
 
 
+def test_anonymous_frame_assignment_uses_matching_bridge_owner() -> None:
+    profile = build_stack_home_profile(
+        _frame(64, _assignment("@810", 0x30, 0, "stfs")),
+        _bridge(_temp_candidate(0x30, "fadds f50,f40,f41")),
+    )
+
+    assert profile.complete is True
+    assert len(profile.homes) == 1
+    assert profile.homes[0].identity.startswith("compiler-temp:")
+    assert "@810" not in profile.homes[0].identity
+
+
+def test_anonymous_frame_assignment_without_bridge_owner_is_unresolved() -> None:
+    profile = build_stack_home_profile(
+        _frame(64, _assignment("@810", 0x30, 0, "stfs")),
+        _bridge(),
+    )
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+def test_anonymous_frame_assignment_with_multiple_matching_owners_is_ambiguous() -> None:
+    left = _temp_candidate(0x30, "fadds f50,f40,f41")
+    right = _temp_candidate(0x30, "fmuls f70,f60,f61", source_line=13)
+    right["evidence"] = ["BEFORE REGISTER COLORING B0:4 stfs f70,48(r1)"]
+
+    profile = build_stack_home_profile(
+        _frame(64, _assignment("@810", 0x30, 0, "stfs")),
+        _bridge(left, right),
+    )
+
+    assert profile.blockers == ("ambiguous-compiler-temp-home",)
+    assert all(not home.identity.startswith("symbol:@") for home in profile.homes)
+
+
 def test_registers_offsets_and_temp_ids_are_removed_from_identity() -> None:
     left = _temp_candidate(48, "lwz r31,48(r1)")
     left["nearest_source_expression"]["name"] = "owner_48(r1)_r1_f1_@810"
     left["first_def"] = {"opcode": "lwz", "operands": "r50,48(r1)"}
-    right = _temp_candidate(52, "lwz r50,52(r31)")
+    right = _temp_candidate(52, "lwz r31,52(r31)")
     right["nearest_source_expression"]["name"] = "owner_52(r1)_r50_f31_@910"
-    right["first_def"] = {"opcode": "lwz", "operands": "r31,52(r1)"}
+    right["first_def"] = {"opcode": "lwz", "operands": "r31,52(r31)"}
 
     left_profile = build_stack_home_profile(_frame(80), _bridge(left))
     right_profile = build_stack_home_profile(_frame(80), _bridge(right))
@@ -201,25 +239,91 @@ def test_heuristic_owner_is_rejected_even_with_explicit_first_def() -> None:
 
 
 @pytest.mark.parametrize("missing_key", ["source_file", "source_line", "source_col"])
-def test_owner_missing_stable_source_coordinates_is_rejected(missing_key: str) -> None:
+def test_pcode_owner_coordinates_and_source_file_are_optional(missing_key: str) -> None:
     candidate = _temp_candidate(24, "fadds f50,f40,f41")
     candidate["nearest_source_expression"].pop(missing_key)
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.complete is True
+
+
+def test_duplicate_pcode_owner_signature_is_ambiguous_despite_distinct_coordinates() -> None:
+    left = _temp_candidate(24, "fadds f50,f40,f41")
+    right = _temp_candidate(28, "fadds f70,f60,f61", source_line=99)
+    right["evidence"] = ["BEFORE REGISTER COLORING B0:4 stfs f70,28(r1)"]
+
+    profile = build_stack_home_profile(_frame(64), _bridge(left, right))
+
+    assert profile.blockers == ("ambiguous-compiler-temp-home",)
+
+
+@pytest.mark.parametrize("expression", ["", "fadds"])
+def test_empty_or_malformed_pcode_expression_is_rejected(expression: str) -> None:
+    candidate = _temp_candidate(24, expression)
+    candidate["first_def"] = {"opcode": "fadds", "operands": "f50,f40,f41"}
 
     profile = build_stack_home_profile(_frame(64), _bridge(candidate))
 
     assert profile.blockers == ("unresolved-compiler-temp-home",)
 
 
-def test_duplicate_source_owner_coordinates_are_ambiguous() -> None:
-    left = _temp_candidate(24, "fadds f50,f40,f41")
-    left["first_def"] = {"opcode": "fadds", "operands": "f50,f40,f41"}
-    right = _temp_candidate(28, "fmuls f70,f60,f61")
-    right["first_def"] = {"opcode": "fmuls", "operands": "f70,f60,f61"}
-    right["evidence"] = ["BEFORE REGISTER COLORING B0:4 stfs f70,28(r1)"]
+def test_explicit_first_def_contradicting_pcode_owner_is_rejected() -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["first_def"] = {"opcode": "fmuls", "operands": "f50,f40,f41"}
 
-    profile = build_stack_home_profile(_frame(64), _bridge(left, right))
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
 
-    assert profile.blockers == ("ambiguous-compiler-temp-home",)
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+def test_real_bridge_pcode_first_def_output_builds_anonymous_home() -> None:
+    pcdump = textwrap.dedent("""\
+        Starting function f
+        BEFORE REGISTER COLORING
+        f
+        B0: Succ={} Pred={} Labels={}
+            fadds   f50,f40,f41
+            stfs    f50,48(r1)
+        FINAL CODE AFTER INSTRUCTION SCHEDULING
+        f
+        B0: Succ={} Pred={} Labels={}
+            stfs    f1,48(r1)
+    """)
+    bridge = explain_stack_slot_localizer(
+        pcdump,
+        "f",
+        {
+            "frame_size": 64,
+            "mismatch_count": 1,
+            "deltas": [4],
+            "mismatches": [
+                {
+                    "opcode": "stfs",
+                    "expected_offset": 52,
+                    "current_offset": 48,
+                    "delta": 4,
+                }
+            ],
+        },
+    )
+
+    owner = bridge["candidates"][0]["nearest_source_expression"]
+    assert owner == {
+        "expression": "fadds f50,f40,f41",
+        "confidence": "pcode-first-def",
+        "source_file": None,
+        "source_line": None,
+        "source_col": None,
+    }
+    profile = build_stack_home_profile(
+        _frame(64, _assignment("@810", 48, 0, "stfs")),
+        bridge,
+    )
+    assert profile.complete is True
+    assert profile.homes[0].identity.startswith("compiler-temp:")
+    assert "f50" not in profile.homes[0].identity
+    assert "@810" not in profile.homes[0].identity
 
 
 @pytest.mark.parametrize(

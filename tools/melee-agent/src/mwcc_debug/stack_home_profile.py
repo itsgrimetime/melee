@@ -11,14 +11,15 @@ _REGISTER_RE = re.compile(
     r"(?<![A-Za-z0-9])(?P<kind>[fr])(?P<number>\d+)(?!\d)",
     re.IGNORECASE,
 )
-_STACK_OFFSET_RE = re.compile(
-    r"[-+]?(?:0x[0-9a-f]+|\d+)\s*\(\s*r1\s*\)",
+_ADDRESS_OFFSET_RE = re.compile(
+    r"[-+]?(?:0x[0-9a-f]+|\d+)\s*\(\s*r\d+\s*\)",
     re.IGNORECASE,
 )
 _UNSTABLE_TEMP_RE = re.compile(r"@\d+")
 _EVIDENCE_SITE_RE = re.compile(r"\bB(?P<block>\d+):(?P<instr>\d+)\b")
 _SPACE_RE = re.compile(r"\s+")
 _PUNCTUATION_SPACE_RE = re.compile(r"\s*([,()[\]])\s*")
+_OPCODE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.]*")
 
 _BLOCKER_ORDER = {
     "missing-frame-size": 0,
@@ -82,7 +83,7 @@ def _normalize_text(value: object) -> str:
 
 def _normalize_identity_text(value: object) -> str:
     normalized = _normalize_text(value)
-    normalized = _STACK_OFFSET_RE.sub("<stack>", normalized)
+    normalized = _ADDRESS_OFFSET_RE.sub("<offset>", normalized)
     normalized = _UNSTABLE_TEMP_RE.sub("<temp>", normalized)
 
     def stable_register(match: re.Match[str]) -> str:
@@ -94,9 +95,11 @@ def _normalize_identity_text(value: object) -> str:
 
 
 def _normalize_first_def(opcode: object, operands: object) -> tuple[str, str] | None:
+    if not isinstance(opcode, str) or not isinstance(operands, str):
+        return None
     normalized_opcode = _normalize_text(opcode).lower()
     normalized_operands = _normalize_identity_text(operands)
-    if not normalized_opcode:
+    if not _OPCODE_RE.fullmatch(normalized_opcode) or not normalized_operands:
         return None
 
     parts = normalized_operands.split(",", maxsplit=1)
@@ -106,69 +109,68 @@ def _normalize_first_def(opcode: object, operands: object) -> tuple[str, str] | 
     return normalized_opcode, normalized_operands
 
 
+def _pcode_expression_first_def(expression: object) -> tuple[str, str] | None:
+    if not isinstance(expression, str):
+        return None
+    parts = expression.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        return None
+    return _normalize_first_def(parts[0], parts[1])
+
+
 def _first_def_from_candidate(
     candidate: Mapping[str, Any],
     owner: Mapping[str, Any],
 ) -> tuple[str, str] | None:
+    if _normalize_text(owner.get("confidence")).lower() != "pcode-first-def":
+        return None
+    owner_first_def = _pcode_expression_first_def(owner.get("expression"))
+    if owner_first_def is None:
+        return None
+
     first_def = candidate.get("first_def")
     if not isinstance(first_def, Mapping):
         first_def = owner.get("first_def")
     if isinstance(first_def, Mapping):
-        return _normalize_first_def(first_def.get("opcode"), first_def.get("operands"))
-
-    if str(owner.get("confidence") or "").lower() != "pcode-first-def":
-        return None
-    expression = _normalize_text(owner.get("expression"))
-    if not expression:
-        return None
-    opcode, separator, operands = expression.partition(" ")
-    if not separator:
-        return None
-    return _normalize_first_def(opcode, operands)
+        explicit_first_def = _normalize_first_def(first_def.get("opcode"), first_def.get("operands"))
+        if explicit_first_def != owner_first_def:
+            return None
+    return owner_first_def
 
 
 def _source_owner_signature(owner: Mapping[str, Any]) -> dict[str, object] | None:
     confidence = _normalize_text(owner.get("confidence")).lower()
-    source_file = owner.get("source_file")
-    source_line = owner.get("source_line")
-    source_col = owner.get("source_col")
-    if (
-        confidence != "pcode-first-def"
-        or not isinstance(source_file, str)
-        or not source_file.strip()
-        or not _is_int(source_line)
-        or int(source_line) <= 0
-        or not _is_int(source_col)
-        or int(source_col) <= 0
-    ):
+    first_def = _pcode_expression_first_def(owner.get("expression"))
+    if confidence != "pcode-first-def" or first_def is None:
         return None
 
-    expression = _normalize_identity_text(owner.get("expression"))
-    name = _normalize_identity_text(owner.get("name"))
-    if not expression and not name:
-        return None
-
-    return {
+    signature: dict[str, object] = {
         "confidence": confidence,
-        "expression": expression,
-        "name": name,
-        "source_file": source_file.strip(),
-        "source_line": int(source_line),
-        "source_col": int(source_col),
+        "expression": f"{first_def[0]} {first_def[1]}",
     }
+    source_file = owner.get("source_file")
+    if source_file is not None:
+        if not isinstance(source_file, str) or not source_file.strip():
+            return None
+        signature["source_file"] = source_file.strip()
+    name = owner.get("name")
+    if name is not None:
+        if not isinstance(name, str) or not name.strip():
+            return None
+        normalized_name = _normalize_identity_text(name)
+        if not normalized_name:
+            return None
+        signature["name"] = normalized_name
+    return signature
 
 
-def _source_owner_key(owner_signature: Mapping[str, object]) -> tuple[str, int, int]:
-    return (
-        str(owner_signature["source_file"]),
-        int(owner_signature["source_line"]),
-        int(owner_signature["source_col"]),
-    )
+def _source_owner_key(owner_signature: Mapping[str, object]) -> str:
+    return json.dumps(owner_signature, sort_keys=True, separators=(",", ":"))
 
 
 def _compiler_identity(
     candidate: Mapping[str, Any],
-) -> tuple[str | None, tuple[str, int, int] | None, str | None]:
+) -> tuple[str | None, str | None, str | None]:
     opcode = _normalize_text(candidate.get("opcode")).lower()
     owner = candidate.get("source_owner")
     if not isinstance(owner, Mapping):
@@ -182,8 +184,6 @@ def _compiler_identity(
         return None, None, "unresolved-compiler-temp-home"
 
     first_def_opcode, first_def_operands = first_def
-    if owner_signature.get("confidence") == "pcode-first-def":
-        owner_signature["expression"] = f"{first_def_opcode} {first_def_operands}"
     payload = {
         "access_opcode": opcode,
         "first_def": {
@@ -222,12 +222,16 @@ def _assignment_sequence_key(assignment: Mapping[str, Any], order: int) -> tuple
 def _named_homes(
     current: Mapping[str, Any],
     blockers: set[str],
-) -> tuple[list[_PendingHome], list[Mapping[str, Any]]]:
+) -> tuple[
+    list[_PendingHome],
+    list[Mapping[str, Any]],
+    list[Mapping[str, Any]],
+]:
     raw_assignments = current.get("stack_home_assignments")
     status = current.get("stack_home_assignment_status")
     if not isinstance(raw_assignments, list) or not isinstance(status, str):
         blockers.add("incomplete-frame-report")
-        return [], []
+        return [], [], []
     if status not in {
         "resolved-symbolic-homes",
         "unavailable-no-resolved-symbolic-homes",
@@ -237,7 +241,8 @@ def _named_homes(
         blockers.add("incomplete-frame-report")
 
     homes: list[_PendingHome] = []
-    assignments: list[Mapping[str, Any]] = []
+    named_assignments: list[Mapping[str, Any]] = []
+    anonymous_assignments: list[Mapping[str, Any]] = []
     assignment_orders: list[int] = []
     for raw in raw_assignments:
         if not isinstance(raw, Mapping):
@@ -246,11 +251,24 @@ def _named_homes(
         symbol = raw.get("symbol")
         offset = raw.get("offset")
         order = raw.get("assignment_order")
-        if not isinstance(symbol, str) or not symbol or not _is_int(offset) or not _is_int(order) or int(order) < 0:
+        opcodes = raw.get("opcodes")
+        if (
+            not isinstance(symbol, str)
+            or not symbol
+            or not _is_int(offset)
+            or not _is_int(order)
+            or int(order) < 0
+            or not isinstance(opcodes, list)
+            or not opcodes
+            or not all(isinstance(item, str) and _normalize_text(item) for item in opcodes)
+        ):
             blockers.add("incomplete-stack-home-assignment")
             continue
-        assignments.append(raw)
         assignment_orders.append(int(order))
+        if symbol.startswith("@"):
+            anonymous_assignments.append(raw)
+            continue
+        named_assignments.append(raw)
         homes.append(
             _PendingHome(
                 identity=f"symbol:{symbol}",
@@ -262,7 +280,7 @@ def _named_homes(
         )
     if sorted(assignment_orders) != list(range(len(raw_assignments))):
         blockers.add("incomplete-stack-home-assignment")
-    return homes, assignments
+    return homes, named_assignments, anonymous_assignments
 
 
 def _candidate_matches_named_home(
@@ -278,9 +296,48 @@ def _candidate_matches_named_home(
     )
 
 
+def _candidate_matches_assignment(
+    candidate: Mapping[str, Any],
+    assignment: Mapping[str, Any],
+) -> bool:
+    opcode = _normalize_text(candidate.get("opcode")).lower()
+    return candidate.get("current_offset") == assignment.get("offset") and opcode in {
+        _normalize_text(item).lower() for item in assignment.get("opcodes", []) if isinstance(item, str)
+    }
+
+
+def _pending_compiler_home(
+    candidate: Mapping[str, Any],
+    *,
+    sequence_key: tuple[int, ...],
+    assignment: Mapping[str, Any] | None = None,
+) -> tuple[_PendingHome | None, str | None, str | None]:
+    identity, owner_key, blocker = _compiler_identity(candidate)
+    if blocker is not None or identity is None or owner_key is None:
+        return None, None, blocker or "unresolved-compiler-temp-home"
+    mismatch = candidate["mismatch"]
+    absolute = (
+        (assignment is not None and _is_int(assignment.get("expected_offset")))
+        or _is_int(candidate.get("expected_offset"))
+        or _is_int(mismatch.get("expected_offset"))
+    )
+    return (
+        _PendingHome(
+            identity=identity,
+            offset=int(candidate["current_offset"]),
+            reference_kind="absolute" if absolute else "proxy",
+            sequence_key=sequence_key,
+            origin="compiler-temp",
+        ),
+        owner_key,
+        None,
+    )
+
+
 def _compiler_homes(
     report: Mapping[str, Any] | None,
-    assignments: list[Mapping[str, Any]],
+    named_assignments: list[Mapping[str, Any]],
+    anonymous_assignments: list[Mapping[str, Any]],
     frame_size: int | None,
     frame_function: str | None,
     blockers: set[str],
@@ -311,8 +368,7 @@ def _compiler_homes(
     if report_frame_size is not None and report_frame_size != frame_size:
         blockers.add("frame-size-mismatch")
 
-    homes: list[_PendingHome] = []
-    owner_keys: set[tuple[str, int, int]] = set()
+    valid_candidates: list[tuple[int, Mapping[str, Any], tuple[int, ...]]] = []
     for index, raw in enumerate(candidates):
         if not isinstance(raw, Mapping):
             blockers.add("incomplete-stack-slot-evidence")
@@ -327,34 +383,63 @@ def _compiler_homes(
         if mismatch.get("opcode") != raw.get("opcode") or mismatch.get("current_offset") != offset:
             blockers.add("incomplete-stack-slot-evidence")
             continue
+        valid_candidates.append((index, raw, sequence_key))
 
-        named_matches = _candidate_matches_named_home(raw, assignments)
+    homes: list[_PendingHome] = []
+    owner_keys: set[str] = set()
+    consumed: set[int] = set()
+
+    for index, raw, _sequence_key in valid_candidates:
+        named_matches = _candidate_matches_named_home(raw, named_assignments)
         if named_matches == 1:
+            consumed.add(index)
             continue
         if named_matches > 1:
             blockers.add("ambiguous-compiler-temp-home")
+            consumed.add(index)
             continue
 
-        identity, owner_key, blocker = _compiler_identity(raw)
-        if blocker is not None or identity is None or owner_key is None:
+    for assignment in anonymous_assignments:
+        matches = [item for item in valid_candidates if _candidate_matches_assignment(item[1], assignment)]
+        if not matches:
+            blockers.add("unresolved-compiler-temp-home")
+            continue
+        if len(matches) > 1 or matches[0][0] in consumed:
+            blockers.add("ambiguous-compiler-temp-home")
+            consumed.update(item[0] for item in matches)
+            continue
+        index, raw, _candidate_key = matches[0]
+        consumed.add(index)
+        home, owner_key, blocker = _pending_compiler_home(
+            raw,
+            sequence_key=_assignment_sequence_key(
+                assignment,
+                int(assignment["assignment_order"]),
+            ),
+            assignment=assignment,
+        )
+        if blocker is not None or home is None or owner_key is None:
             blockers.add(blocker or "unresolved-compiler-temp-home")
             continue
         if owner_key in owner_keys:
             blockers.add("ambiguous-compiler-temp-home")
         owner_keys.add(owner_key)
-        homes.append(
-            _PendingHome(
-                identity=identity,
-                offset=int(offset),
-                reference_kind=(
-                    "absolute"
-                    if _is_int(raw.get("expected_offset")) or _is_int(mismatch.get("expected_offset"))
-                    else "proxy"
-                ),
-                sequence_key=sequence_key,
-                origin="compiler-temp",
-            )
+        homes.append(home)
+
+    for index, raw, sequence_key in valid_candidates:
+        if index in consumed:
+            continue
+        home, owner_key, blocker = _pending_compiler_home(
+            raw,
+            sequence_key=sequence_key,
         )
+        if blocker is not None or home is None or owner_key is None:
+            blockers.add(blocker or "unresolved-compiler-temp-home")
+            continue
+        if owner_key in owner_keys:
+            blockers.add("ambiguous-compiler-temp-home")
+        owner_keys.add(owner_key)
+        homes.append(home)
     return homes
 
 
@@ -381,11 +466,12 @@ def build_stack_home_profile(
     else:
         frame_size = int(frame_size)
 
-    pending, assignments = _named_homes(current, blockers)
+    pending, named_assignments, anonymous_assignments = _named_homes(current, blockers)
     pending.extend(
         _compiler_homes(
             stack_slot_report,
-            assignments,
+            named_assignments,
+            anonymous_assignments,
             frame_size,
             frame_function,
             blockers,
