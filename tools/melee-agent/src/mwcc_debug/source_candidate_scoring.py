@@ -314,11 +314,13 @@ def build_score_source_command(
 def source_row_to_candidate_score(row: Mapping[str, Any]):
     from .source_shape import CandidateScore
 
+    candidate_pcdump_error = _candidate_pcdump_error(row)
     return CandidateScore(
         candidate_id=str(row.get("candidate_id") or ""),
         compile_ok=(
             row.get("score_error_kind") != "infrastructure"
             and row.get("score_returncode") in (None, 0)
+            and not candidate_pcdump_error
         ),
         checkdiff_pct=_float_or_none(
             row.get("checkdiff_pct")
@@ -494,6 +496,17 @@ def _candidate_error_terminal_safe(row: Mapping[str, Any]) -> bool:
     if not row.get("pcdump_path"):
         return False
     return "not in compiled pcdump" in error
+
+
+def _candidate_pcdump_error(row: Mapping[str, Any]) -> bool:
+    """Return true when the candidate compiled no usable target pcdump."""
+
+    error = str(row.get("error") or "").lower()
+    return (
+        _pcdump_missing(row)
+        or error == "pcdump missing"
+        or "not in compiled pcdump" in error
+    )
 
 
 def _candidate_compile_error(row: Mapping[str, Any]) -> bool:

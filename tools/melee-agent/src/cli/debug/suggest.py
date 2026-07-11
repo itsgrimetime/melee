@@ -2641,6 +2641,47 @@ def suggest_inlines_cmd(
     if pcdump is not None:
         pcdump_text = pcdump.read_text()
 
+    def _run_trace_pcdump(src_rel: str) -> str:
+        with tempfile.TemporaryDirectory() as td:
+            out_path = Path(td) / "pcdump.txt"
+            env = os.environ.copy()
+            pkg_root = str(melee_root / "tools" / "melee-agent")
+            existing = env.get("PYTHONPATH")
+            env["PYTHONPATH"] = (
+                pkg_root if not existing
+                else f"{pkg_root}{os.pathsep}{existing}"
+            )
+            cmd = [
+                sys.executable,
+                "-m",
+                "src.cli",
+                "debug",
+                "dump",
+                "local",
+                src_rel,
+                "--output",
+                str(out_path),
+                "--no-cache-sync",
+                "--function",
+                function,
+            ]
+            proc = subprocess.run(
+                cmd,
+                cwd=melee_root,
+                capture_output=True,
+                text=True,
+                timeout=trace_timeout,
+                env=env,
+            )
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout).strip()
+                raise RuntimeError(
+                    detail or f"debug dump local exited {proc.returncode}"
+                )
+            if not out_path.exists():
+                raise RuntimeError("debug dump local produced no pcdump output")
+            return out_path.read_text()
+
     report = run(
         source=source,
         function=function,
@@ -2650,7 +2691,7 @@ def suggest_inlines_cmd(
         max_span_statements=max_span_statements,
         verify=False,
     )
-    if verify and (target is not None or score_output_dir is not None):
+    if verify and (target is not None or score_output_dir is not None or trace_copies):
         from ...mwcc_debug.candidate_verify import (
             CheckdiffResult,
             parse_checkdiff_json,
@@ -2728,6 +2769,169 @@ def suggest_inlines_cmd(
             full_unit_source=True,
         )
         score_rows = score_source_candidates(candidates, config)
+        trace_sets_by_candidate_id = {}
+        if trace_copies:
+            from ...mwcc_debug.copy_trace import list_new_copy_lifetimes
+            from ...mwcc_debug.source_shape import (
+                CandidateCopyTrace,
+                CandidateCopyTraceSet,
+                summarize_candidate_copy_traces,
+            )
+
+            def _copy_trace_error(note: str) -> CandidateCopyTraceSet:
+                trace = CandidateCopyTrace(
+                    from_virtual=None,
+                    to_virtual=None,
+                    status="trace-error",
+                    likely_cause="trace-error",
+                    note=note,
+                )
+                return CandidateCopyTraceSet(
+                    traces=(trace,),
+                    total_count=1,
+                )
+
+            def _candidate_copy_trace_from_report(copy_report) -> CandidateCopyTrace:
+                return CandidateCopyTrace(
+                    from_virtual=copy_report.from_virtual,
+                    to_virtual=copy_report.to_virtual,
+                    status=copy_report.status,
+                    likely_cause=copy_report.likely_cause,
+                    first_copy_pass=(
+                        None if copy_report.first_copy is None
+                        else copy_report.first_copy.pass_name
+                    ),
+                    last_copy_pass=(
+                        None if copy_report.last_copy is None
+                        else copy_report.last_copy.pass_name
+                    ),
+                    first_copy_block=(
+                        None if copy_report.first_copy is None
+                        else copy_report.first_copy.block_idx
+                    ),
+                    last_copy_block=(
+                        None if copy_report.last_copy is None
+                        else copy_report.last_copy.block_idx
+                    ),
+                    first_absent_pass=copy_report.first_absent_pass,
+                    transform_category=copy_report.transform_category,
+                    note=copy_report.note,
+                )
+
+            def _candidate_target_function(candidate) -> str:
+                if candidate.anchor.scope_path:
+                    return candidate.anchor.scope_path[0]
+                return candidate.metadata.get("helper_function", function)
+
+            def _candidate_priority_virtuals(
+                candidate,
+                *,
+                candidate_pcdump: str,
+                candidate_source: str,
+            ) -> tuple[int, ...]:
+                from ...mwcc_debug.symbol_bridge import (
+                    find_all_virtuals_for_var,
+                    list_bindings_with_basis,
+                )
+
+                virtuals: list[int] = list(candidate.anchor.virtuals)
+                target_function = _candidate_target_function(candidate)
+                fns = parse_pcdump(candidate_pcdump, function=target_function)
+                fn = fns[0] if fns else None
+                pre_pass = None if fn is None else fn.last_precolor_pass()
+                if pre_pass is None:
+                    return tuple(dict.fromkeys(virtuals))
+
+                bindings, _basis = list_bindings_with_basis(
+                    candidate_source,
+                    target_function,
+                    pre_pass,
+                )
+                for name in candidate.reads:
+                    if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) is None:
+                        continue
+                    for binding in find_all_virtuals_for_var(bindings, name):
+                        if binding.virtual >= 32:
+                            virtuals.append(binding.virtual)
+                return tuple(dict.fromkeys(virtuals))
+
+            candidate_by_id = {
+                candidate.candidate_id: candidate
+                for candidate in report.candidates
+            }
+            baseline_trace_pcdump = pcdump_text or None
+            trace_setup_error = None
+            if baseline_trace_pcdump is None:
+                try:
+                    baseline_trace_pcdump = _run_trace_pcdump(source_rel)
+                except Exception as exc:
+                    trace_setup_error = f"{type(exc).__name__}: {exc}"
+                    typer.echo(
+                        f"[suggest-inlines] baseline pcdump unavailable for "
+                        f"copy tracing: {trace_setup_error}",
+                        err=True,
+                    )
+            for row in score_rows:
+                candidate_id = str(row.get("candidate_id") or "")
+                if trace_setup_error is not None:
+                    trace_sets_by_candidate_id[candidate_id] = _copy_trace_error(
+                        trace_setup_error
+                    )
+                    continue
+                pcdump_value = row.get("pcdump_path")
+                if not pcdump_value:
+                    trace_sets_by_candidate_id[candidate_id] = _copy_trace_error(
+                        "candidate pcdump unavailable from score-source"
+                    )
+                    continue
+                pcdump_path = Path(str(pcdump_value))
+                if not pcdump_path.is_file():
+                    trace_sets_by_candidate_id[candidate_id] = _copy_trace_error(
+                        f"candidate pcdump not found: {pcdump_path}"
+                    )
+                    continue
+                try:
+                    candidate_pcdump = pcdump_path.read_text(
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+                    traces = [
+                        _candidate_copy_trace_from_report(copy_report)
+                        for copy_report in list_new_copy_lifetimes(
+                            baseline_trace_pcdump,
+                            candidate_pcdump,
+                            function,
+                            reg_class="gpr",
+                        )
+                    ]
+                    candidate = candidate_by_id.get(candidate_id)
+                    candidate_source = ""
+                    source_value = row.get("source_retained") or row.get("source_file")
+                    if source_value:
+                        source_path_for_trace = Path(str(source_value))
+                        if source_path_for_trace.is_file():
+                            candidate_source = source_path_for_trace.read_text(
+                                encoding="utf-8",
+                                errors="replace",
+                            )
+                    priority_virtuals = (
+                        () if candidate is None
+                        else _candidate_priority_virtuals(
+                            candidate,
+                            candidate_pcdump=candidate_pcdump,
+                            candidate_source=candidate_source,
+                        )
+                    )
+                    trace_sets_by_candidate_id[candidate_id] = (
+                        summarize_candidate_copy_traces(
+                            traces,
+                            priority_virtuals=priority_virtuals,
+                        )
+                    )
+                except Exception as exc:
+                    trace_sets_by_candidate_id[candidate_id] = _copy_trace_error(
+                        f"{type(exc).__name__}: {exc}"
+                    )
         if target_path is None:
             def _checkdiff_runner(fn_name: str) -> CheckdiffResult:
                 cmd = [
@@ -2780,9 +2984,20 @@ def suggest_inlines_cmd(
         report.score_mode = "score-source"
         report.score_output_dir = str(output_dir)
         report.score_rows = score_rows
-        report.scores = rank_scores([
-            source_row_to_candidate_score(row) for row in score_rows
-        ])
+        scores = []
+        for row in score_rows:
+            score = source_row_to_candidate_score(row)
+            trace_set = trace_sets_by_candidate_id.get(score.candidate_id)
+            if trace_set is not None:
+                score = dataclasses.replace(
+                    score,
+                    copy_traces=trace_set.raw_traces or trace_set.traces,
+                    copy_trace_highlights=trace_set.traces,
+                    copy_trace_total_count=trace_set.total_count,
+                    copy_trace_omitted_count=trace_set.omitted_count,
+                )
+            scores.append(score)
+        report.scores = rank_scores(scores)
         terminal = build_inline_local_write_terminal_summary(report)
         if terminal is not None:
             report.status = "terminal"
@@ -2806,47 +3021,6 @@ def suggest_inlines_cmd(
             rank_scores,
             summarize_candidate_copy_traces,
         )
-
-        def _run_trace_pcdump(src_rel: str) -> str:
-            with tempfile.TemporaryDirectory() as td:
-                out_path = Path(td) / "pcdump.txt"
-                env = os.environ.copy()
-                pkg_root = str(melee_root / "tools" / "melee-agent")
-                existing = env.get("PYTHONPATH")
-                env["PYTHONPATH"] = (
-                    pkg_root if not existing
-                    else f"{pkg_root}{os.pathsep}{existing}"
-                )
-                cmd = [
-                    sys.executable,
-                    "-m",
-                    "src.cli",
-                    "debug",
-                    "dump",
-                    "local",
-                    src_rel,
-                    "--output",
-                    str(out_path),
-                    "--no-cache-sync",
-                    "--function",
-                    function,
-                ]
-                proc = subprocess.run(
-                    cmd,
-                    cwd=melee_root,
-                    capture_output=True,
-                    text=True,
-                    timeout=trace_timeout,
-                    env=env,
-                )
-                if proc.returncode != 0:
-                    detail = (proc.stderr or proc.stdout).strip()
-                    raise RuntimeError(
-                        detail or f"debug dump local exited {proc.returncode}"
-                    )
-                if not out_path.exists():
-                    raise RuntimeError("debug dump local produced no pcdump output")
-                return out_path.read_text()
 
         def _candidate_copy_trace_from_report(copy_report) -> CandidateCopyTrace:
             return CandidateCopyTrace(
