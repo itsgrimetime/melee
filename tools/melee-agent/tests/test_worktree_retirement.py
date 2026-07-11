@@ -528,7 +528,24 @@ def _quiet_snapshot() -> worktrees.ProcessSnapshot:
 def test_inspection_uses_checkout_activity_not_old_head(tmp_path: Path) -> None:
     repo, linked = _inspection_fixture(tmp_path)
     old = time.time() - 7 * 24 * 3600
-    _git(repo, "commit", "--amend", "--no-edit", f"--date=@{int(old)}")
+    environment = os.environ.copy()
+    environment["GIT_COMMITTER_DATE"] = f"@{int(old)}"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            os.fspath(linked),
+            "commit",
+            "--amend",
+            "--no-edit",
+            f"--date=@{int(old)}",
+        ],
+        check=True,
+        capture_output=True,
+        env=environment,
+    )
+    head_time = int(_git(linked, "show", "-s", "--format=%ct").stdout)
+    assert head_time == int(old)
 
     report = worktrees.inspect_worktrees(
         repo,
@@ -566,6 +583,41 @@ def test_inspection_reports_git_dirtiness(tmp_path: Path, change: str) -> None:
     assert "dirty-worktree" in item.skip_reasons
 
 
+def test_inspection_reports_dirty_submodule(tmp_path: Path) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    submodule_source = tmp_path / "submodule-source"
+    submodule_source.mkdir()
+    _git(submodule_source, "init", "-q")
+    _git(submodule_source, "config", "user.email", "tests@example.invalid")
+    _git(submodule_source, "config", "user.name", "Worktree Tests")
+    (submodule_source / "tracked.txt").write_text("clean\n", encoding="utf-8")
+    _git(submodule_source, "add", "tracked.txt")
+    _git(submodule_source, "commit", "-qm", "fixture")
+    _git(
+        linked,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        os.fspath(submodule_source),
+        "vendor/submodule",
+    )
+    _git(linked, "commit", "-qam", "add submodule")
+    (linked / "vendor/submodule/tracked.txt").write_text("dirty\n", encoding="utf-8")
+
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=0,
+        process_snapshot=_quiet_snapshot(),
+    )
+    item = next(record for record in report.records if record.path == linked)
+
+    assert item.dirty is True
+    assert "dirty-worktree" in item.skip_reasons
+
+
 def test_ignored_rebuildable_file_does_not_make_git_dirty(tmp_path: Path) -> None:
     repo, linked = _inspection_fixture(tmp_path)
     output = linked / "build" / "obj" / "file.o"
@@ -582,6 +634,54 @@ def test_ignored_rebuildable_file_does_not_make_git_dirty(tmp_path: Path) -> Non
 
     assert item.dirty is False
     assert "contains-unapproved-ignored" not in item.skip_reasons
+
+
+def _age_worktree_activity(linked: Path, timestamp: float) -> Path:
+    for root, directories, files in os.walk(linked, topdown=False):
+        for name in (*files, *directories):
+            os.utime(Path(root) / name, (timestamp, timestamp), follow_symlinks=False)
+    os.utime(linked, (timestamp, timestamp))
+    gitdir_text = (linked / ".git").read_text(encoding="utf-8").strip()
+    assert gitdir_text.startswith("gitdir: ")
+    admin = Path(gitdir_text.removeprefix("gitdir: "))
+    if not admin.is_absolute():
+        admin = linked / admin
+    for relative in (Path("HEAD"), Path("logs/HEAD"), Path("index")):
+        os.utime(admin / relative, (timestamp, timestamp))
+    return admin
+
+
+@pytest.mark.parametrize("activity", ["source", "build", "admin"])
+def test_independent_fresh_activity_resets_idle_age(
+    tmp_path: Path, activity: str
+) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    build_output = linked / "build/obj/file.o"
+    build_output.parent.mkdir(parents=True)
+    build_output.write_bytes(b"object")
+    now = time.time()
+    old = now - 7 * 24 * 3600
+    fresh = now - 60
+    admin = _age_worktree_activity(linked, old)
+    target = {
+        "source": linked / "tracked.txt",
+        "build": build_output,
+        "admin": admin / "index",
+    }[activity]
+    os.utime(target, (fresh, fresh))
+
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=24,
+        now=now,
+        process_snapshot=_quiet_snapshot(),
+    )
+    item = next(record for record in report.records if record.path == linked)
+
+    assert item.last_activity is not None
+    assert item.last_activity == pytest.approx(fresh)
+    assert "below-min-idle" in item.skip_reasons
 
 
 @pytest.mark.parametrize("relative", [Path(".env"), Path("build/crash.dump")])
@@ -636,6 +736,17 @@ def test_tree_walk_fails_closed_on_scan_error(
     assert worktrees._walk_tree(root) == (0, 0.0, ("scan-failed",))
 
 
+def test_tree_walk_closes_duplicated_scan_descriptors(tmp_path: Path) -> None:
+    root = tmp_path / "tree"
+    (root / "nested").mkdir(parents=True)
+    before = len(os.listdir("/dev/fd"))
+
+    for _ in range(25):
+        assert worktrees._walk_tree(root)[2] == ()
+
+    assert len(os.listdir("/dev/fd")) == before
+
+
 def test_inspection_rejects_future_activity_timestamp(tmp_path: Path) -> None:
     repo, linked = _inspection_fixture(tmp_path)
     future = time.time() + 3600
@@ -660,6 +771,7 @@ def test_inspection_rejects_future_activity_timestamp(tmp_path: Path) -> None:
         (b"\0", "ignored-inventory-invalid"),
         (b"/absolute\0", "ignored-inventory-invalid"),
         (b"build/../secret\0", "ignored-inventory-invalid"),
+        (b"build/./file.o\0", "ignored-inventory-invalid"),
         (b"build/x\0build/x\0", "ignored-inventory-invalid"),
     ],
 )
@@ -688,6 +800,20 @@ def test_ignored_inventory_preserves_newline_path(tmp_path: Path) -> None:
 
     assert errors == ()
     assert entries[0].relative == relative
+
+
+def test_ignored_inventory_rejects_raw_dot_component_before_path_normalization(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    path = root / "build" / "file.o"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"data")
+
+    assert worktrees._parse_ignored_inventory(root, b"build/./file.o\0") == (
+        (),
+        ("ignored-inventory-invalid",),
+    )
 
 
 @pytest.mark.parametrize(
@@ -845,6 +971,72 @@ def test_dol_validation_requires_identity_checked_candidate_symlink(
     assert worktrees._inspect_dol(worktree) == (None, False)
 
 
+def test_dol_validation_rejects_symlinked_parent_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = importlib.import_module("worktree_doctor")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    external_orig = tmp_path / "external-orig"
+    dol = external_orig / "GALE01/sys/main.dol"
+    dol.parent.mkdir(parents=True)
+    candidate = tmp_path / "approved.dol"
+    candidate.write_bytes(b"dol")
+    monkeypatch.setattr(package, "DOL_CANDIDATES", [candidate])
+    dol.symlink_to(os.path.relpath(candidate, start=dol.parent))
+    (worktree / "orig").symlink_to(external_orig, target_is_directory=True)
+
+    assert worktrees._inspect_dol(worktree) == (None, False)
+
+
+def test_dol_validation_does_not_lexically_collapse_target_symlink_before_dotdot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = importlib.import_module("worktree_doctor")
+    worktree = tmp_path / "worktree"
+    dol = worktree / "orig/GALE01/sys/main.dol"
+    dol.parent.mkdir(parents=True)
+    candidate = tmp_path / "approved.dol"
+    candidate.write_bytes(b"approved")
+    redirected = tmp_path / "external/nested"
+    redirected.mkdir(parents=True)
+    (tmp_path / "redirect").symlink_to(redirected, target_is_directory=True)
+    monkeypatch.setattr(package, "DOL_CANDIDATES", [candidate])
+    dol.symlink_to("../../../../redirect/../approved.dol")
+
+    assert worktrees._inspect_dol(worktree) == (None, False)
+
+
+def test_dol_validation_rejects_candidate_path_replaced_during_descriptor_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = importlib.import_module("worktree_doctor")
+    worktree = tmp_path / "worktree"
+    dol = worktree / "orig/GALE01/sys/main.dol"
+    dol.parent.mkdir(parents=True)
+    candidate = tmp_path / "approved.dol"
+    candidate.write_bytes(b"approved")
+    displaced = tmp_path / "displaced.dol"
+    monkeypatch.setattr(package, "DOL_CANDIDATES", [candidate])
+    dol.symlink_to(os.path.relpath(candidate, start=dol.parent))
+    real_open = worktrees.os.open
+    replaced = False
+
+    def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal replaced
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if os.fspath(path) == candidate.name and not replaced:
+            replaced = True
+            candidate.replace(displaced)
+            candidate.write_bytes(b"replacement")
+        return descriptor
+
+    monkeypatch.setattr(worktrees.os, "open", racing_open)
+
+    assert worktrees._inspect_dol(worktree) == (None, False)
+    assert replaced is True
+
+
 def test_malformed_manifest_like_ignored_file_remains_unapproved(
     tmp_path: Path,
 ) -> None:
@@ -908,6 +1100,44 @@ def test_collect_process_snapshot_uses_bounded_lsof_and_ps() -> None:
     assert snapshot.errors == ()
     assert snapshot.paths == ((77, Path("/tmp/work").resolve(strict=False)),)
     assert snapshot.commands == ((78, "python /tmp/work/job.py"),)
+
+
+def test_bounded_command_does_not_wait_forever_for_stubborn_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    class StubbornProcess:
+        stdout = child.stdout
+        stderr = child.stderr
+        wait_timeouts: list[float | None] = []
+        killed = False
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, timeout=None):
+            self.wait_timeouts.append(timeout)
+            if timeout is None:
+                raise AssertionError("unbounded wait")
+            raise subprocess.TimeoutExpired(("stubborn",), timeout)
+
+    process = StubbornProcess()
+    monkeypatch.setattr(worktrees, "_PROCESS_TIMEOUT", 0.01)
+    try:
+        assert worktrees._bounded_command(
+            ("stubborn",), popen_factory=lambda *_args, **_kwargs: process
+        ) == (b"", b"", "process-query-failed")
+        assert process.killed is True
+        assert process.wait_timeouts
+        assert all(timeout is not None for timeout in process.wait_timeouts)
+    finally:
+        child.kill()
+        child.wait(timeout=1)
 
 
 @pytest.mark.parametrize(

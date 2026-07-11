@@ -480,14 +480,19 @@ def _parse_ignored_inventory(
         return (), ("ignored-inventory-invalid",)
     try:
         for raw in raw_entries:
-            relative = Path(os.fsdecode(raw))
-            if (
-                relative.is_absolute()
-                or not relative.parts
-                or any(part in {"", ".", ".."} for part in relative.parts)
-            ):
+            if os.path.isabs(raw) or os.path.splitdrive(raw)[0]:
                 return (), ("ignored-inventory-invalid",)
-            normalized = Path(*relative.parts)
+            raw_components = raw.split(os.fsencode(os.sep))
+            if os.altsep is not None:
+                alternate = os.fsencode(os.altsep)
+                raw_components = [
+                    component
+                    for group in raw_components
+                    for component in group.split(alternate)
+                ]
+            if any(component in {b"", b".", b".."} for component in raw_components):
+                return (), ("ignored-inventory-invalid",)
+            normalized = Path(os.fsdecode(raw))
             if normalized in seen:
                 return (), ("ignored-inventory-invalid",)
             seen.add(normalized)
@@ -587,38 +592,180 @@ def _is_under(relative: Path, root: Path) -> bool:
     return relative == root or relative.is_relative_to(root)
 
 
+def _open_absolute_nofollow(path: Path, *, directory: bool) -> int | None:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory_flag is None:
+        return None
+    normalized = Path(os.path.abspath(os.fspath(path)))
+    if not normalized.is_absolute() or not normalized.parts:
+        return None
+    try:
+        current_fd = os.open(
+            normalized.anchor,
+            os.O_RDONLY | directory_flag | nofollow | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError:
+        return None
+    try:
+        components = normalized.parts[1:]
+        for index, component in enumerate(components):
+            is_final = index == len(components) - 1
+            flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+            if not is_final or directory:
+                flags |= directory_flag
+            child_fd = os.open(component, flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = child_fd
+        opened = os.fstat(current_fd)
+        expected_kind = stat.S_ISDIR if directory else stat.S_ISREG
+        if not expected_kind(opened.st_mode):
+            os.close(current_fd)
+            return None
+        return current_fd
+    except OSError:
+        os.close(current_fd)
+        return None
+
+
+def _open_relative_directory_nofollow(parent_fd: int, parts: Sequence[str]) -> int | None:
+    current_fd = os.dup(parent_fd)
+    try:
+        for component in parts:
+            child_fd = os.open(
+                component,
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | os.O_NOFOLLOW
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd
+    except OSError:
+        os.close(current_fd)
+        return None
+
+
+def _open_link_target_nofollow(parent_fd: int, link_text: str) -> int | None:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if (
+        nofollow is None
+        or directory_flag is None
+        or not link_text
+        or link_text.endswith(os.sep)
+    ):
+        return None
+    try:
+        if os.path.isabs(link_text):
+            current_fd = os.open(
+                os.path.abspath(os.sep),
+                os.O_RDONLY
+                | directory_flag
+                | nofollow
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+        else:
+            current_fd = os.dup(parent_fd)
+    except OSError:
+        return None
+    try:
+        components = [
+            component
+            for component in link_text.split(os.sep)
+            if component not in {"", "."}
+        ]
+        if not components:
+            os.close(current_fd)
+            return None
+        for index, component in enumerate(components):
+            is_final = index == len(components) - 1
+            flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+            if not is_final:
+                flags |= directory_flag
+            child_fd = os.open(component, flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = child_fd
+        opened = os.fstat(current_fd)
+        if not stat.S_ISREG(opened.st_mode):
+            os.close(current_fd)
+            return None
+        return current_fd
+    except OSError:
+        os.close(current_fd)
+        return None
+
+
 def _inspect_dol(worktree: Path) -> tuple[tuple[int, int, int, int, str] | None, bool]:
     relative = Path("orig/GALE01/sys/main.dol")
-    link = worktree / relative
+    worktree_fd = _open_absolute_nofollow(worktree, directory=True)
+    if worktree_fd is None:
+        return None, False
+    parent_fd = _open_relative_directory_nofollow(worktree_fd, relative.parts[:-1])
+    os.close(worktree_fd)
+    if parent_fd is None:
+        return None, False
     try:
-        link_stat = link.lstat()
-        link_text = os.readlink(link)
-        target_stat = link.stat()
-        resolved = link.resolve(strict=True)
-    except OSError:
-        return None, False
-    if not stat.S_ISLNK(link_stat.st_mode):
-        return None, False
-    from . import DOL_CANDIDATES
-
-    for candidate in DOL_CANDIDATES:
         try:
-            candidate_resolved = candidate.resolve(strict=True)
-            candidate_stat = candidate_resolved.stat()
+            link_stat = os.stat(
+                relative.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if not stat.S_ISLNK(link_stat.st_mode):
+                return None, False
+            link_text = os.readlink(relative.name, dir_fd=parent_fd)
+            link_after = os.stat(
+                relative.name, dir_fd=parent_fd, follow_symlinks=False
+            )
         except OSError:
-            continue
-        if resolved == candidate_resolved and (
-            target_stat.st_dev,
-            target_stat.st_ino,
-        ) == (candidate_stat.st_dev, candidate_stat.st_ino):
-            return (
-                link_stat.st_dev,
-                link_stat.st_ino,
-                target_stat.st_dev,
-                target_stat.st_ino,
-                link_text,
-            ), True
-    return None, False
+            return None, False
+        if (
+            link_stat.st_dev,
+            link_stat.st_ino,
+            link_stat.st_size,
+            link_stat.st_mtime_ns,
+        ) != (
+            link_after.st_dev,
+            link_after.st_ino,
+            link_after.st_size,
+            link_after.st_mtime_ns,
+        ):
+            return None, False
+
+        target_fd = _open_link_target_nofollow(parent_fd, link_text)
+        if target_fd is None:
+            return None, False
+        try:
+            target_stat = os.fstat(target_fd)
+            from . import DOL_CANDIDATES
+
+            for candidate in DOL_CANDIDATES:
+                if not candidate.is_absolute():
+                    continue
+                candidate_fd = _open_absolute_nofollow(candidate, directory=False)
+                if candidate_fd is None:
+                    continue
+                try:
+                    candidate_stat = os.fstat(candidate_fd)
+                finally:
+                    os.close(candidate_fd)
+                if (target_stat.st_dev, target_stat.st_ino) == (
+                    candidate_stat.st_dev,
+                    candidate_stat.st_ino,
+                ):
+                    return (
+                        link_stat.st_dev,
+                        link_stat.st_ino,
+                        target_stat.st_dev,
+                        target_stat.st_ino,
+                        link_text,
+                    ), True
+        finally:
+            os.close(target_fd)
+        return None, False
+    finally:
+        os.close(parent_fd)
 
 
 def _classify_ignored(
@@ -666,31 +813,41 @@ def _walk_tree(path: Path) -> tuple[int, float, tuple[str, ...]]:
         directory_stat = os.fstat(directory_fd)
         total += directory_stat.st_blocks * 512
         newest = max(newest, directory_stat.st_mtime)
-        with os.scandir(os.dup(directory_fd)) as iterator:
-            children = sorted(iterator, key=lambda item: item.name)
-        for child in children:
-            child_stat = child.stat(follow_symlinks=False)
-            newest = max(newest, child_stat.st_mtime)
-            if stat.S_ISDIR(child_stat.st_mode) and not stat.S_ISLNK(child_stat.st_mode):
-                child_fd = os.open(
-                    child.name,
-                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
-                    dir_fd=directory_fd,
-                )
-                try:
-                    opened = os.fstat(child_fd)
-                    if (opened.st_dev, opened.st_ino) != (
-                        child_stat.st_dev,
-                        child_stat.st_ino,
-                    ):
-                        raise OSError("directory replaced during scan")
-                    walk(child_fd)
-                finally:
-                    os.close(child_fd)
-            elif stat.S_ISREG(child_stat.st_mode) or stat.S_ISLNK(child_stat.st_mode):
-                total += child_stat.st_blocks * 512
-            else:
-                raise OSError("unsupported filesystem entry")
+        scan_fd = os.dup(directory_fd)
+        try:
+            with os.scandir(scan_fd) as iterator:
+                children = sorted(iterator, key=lambda item: item.name)
+            for child in children:
+                child_stat = child.stat(follow_symlinks=False)
+                newest = max(newest, child_stat.st_mtime)
+                if stat.S_ISDIR(child_stat.st_mode) and not stat.S_ISLNK(
+                    child_stat.st_mode
+                ):
+                    child_fd = os.open(
+                        child.name,
+                        os.O_RDONLY
+                        | os.O_DIRECTORY
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        opened = os.fstat(child_fd)
+                        if (opened.st_dev, opened.st_ino) != (
+                            child_stat.st_dev,
+                            child_stat.st_ino,
+                        ):
+                            raise OSError("directory replaced during scan")
+                        walk(child_fd)
+                    finally:
+                        os.close(child_fd)
+                elif stat.S_ISREG(child_stat.st_mode) or stat.S_ISLNK(
+                    child_stat.st_mode
+                ):
+                    total += child_stat.st_blocks * 512
+                else:
+                    raise OSError("unsupported filesystem entry")
+        finally:
+            os.close(scan_fd)
 
     try:
         root_stat = path.lstat()
@@ -756,6 +913,19 @@ def _parse_ps(data: bytes, *, self_pid: int) -> tuple[tuple[int, str], ...]:
     return tuple(result)
 
 
+def _kill_and_reap_bounded(
+    process: subprocess.Popen[bytes], *, deadline: float
+) -> None:
+    try:
+        process.kill()
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def _bounded_command(
     args: Sequence[str],
     *,
@@ -768,9 +938,12 @@ def _bounded_command(
         )
     except OSError:
         return b"", b"", "process-query-failed"
+    deadline = time.monotonic() + _PROCESS_TIMEOUT
     if process.stdout is None or process.stderr is None:
-        process.kill()
-        process.wait()
+        _kill_and_reap_bounded(process, deadline=deadline)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
         return b"", b"", "process-query-failed"
 
     selector = selectors.DefaultSelector()
@@ -781,17 +954,14 @@ def _bounded_command(
         for stream in outputs:
             os.set_blocking(stream.fileno(), False)
             selector.register(stream, selectors.EVENT_READ)
-        deadline = time.monotonic() + _PROCESS_TIMEOUT
         while selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                process.kill()
-                process.wait()
+                _kill_and_reap_bounded(process, deadline=deadline)
                 return b"", b"", "process-query-failed"
             events = selector.select(remaining)
             if not events:
-                process.kill()
-                process.wait()
+                _kill_and_reap_bounded(process, deadline=deadline)
                 return b"", b"", "process-query-failed"
             for key, _ in events:
                 stream = key.fileobj
@@ -802,19 +972,16 @@ def _bounded_command(
                 output = outputs[stream]
                 output.extend(chunk)
                 if len(output) > limits[stream]:
-                    process.kill()
-                    process.wait()
+                    _kill_and_reap_bounded(process, deadline=deadline)
                     return b"", b"", "process-query-overflow"
                 if stream is process.stdout and record_limit is not None:
                     record_count += chunk.count(b"\n") + chunk.count(b"\0")
                     if record_count > record_limit:
-                        process.kill()
-                        process.wait()
+                        _kill_and_reap_bounded(process, deadline=deadline)
                         return b"", b"", "process-query-overflow"
         returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except (OSError, subprocess.TimeoutExpired):
-        process.kill()
-        process.wait()
+        _kill_and_reap_bounded(process, deadline=deadline)
         return b"", b"", "process-query-failed"
     finally:
         selector.close()
