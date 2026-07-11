@@ -6,6 +6,7 @@ https://decomp.me using stored production credentials.
 """
 
 import asyncio
+import re
 from pathlib import Path
 
 import httpx
@@ -77,10 +78,69 @@ def _seed_source_from_repo(name: str, file_path: str, melee_root: Path) -> str:
 
     src_path = melee_root / "src" / file_path
     if src_path.exists():
-        extracted = _extract_function_from_code(src_path.read_text(encoding="utf-8"), name)
+        source = src_path.read_text(encoding="utf-8")
+        extracted = _extract_function_from_code(source, name)
         if extracted:
-            return extracted
+            return _include_adjacent_pragma_scope(source, extracted)
     return "// TODO: Decompile this function\n"
+
+
+def _include_adjacent_pragma_scope(source: str, function: str) -> str:
+    """Include immediately adjacent pragmas that scope ``function``.
+
+    Production decomp.me appends the seed source after its context, so pragmas
+    surrounding the context placeholder do not affect the uploaded function.
+    Keep only the adjacent pragma block and its closing pop/reset; crossing a
+    comment or source-code line risks borrowing a pragma from another target.
+    """
+    function_start = source.find(function)
+    if function_start < 0:
+        return function
+    function_end = function_start + len(function)
+
+    pragma = re.compile(r"^[ \t]*#[ \t]*pragma\b(.*)$")
+
+    leading_lines = source[:function_start].splitlines(keepends=True)
+    opening_start: int | None = None
+    for index in range(len(leading_lines) - 1, -1, -1):
+        line = leading_lines[index]
+        if not line.strip():
+            continue
+        match = pragma.match(line.rstrip("\r\n"))
+        if match is None:
+            break
+        directive = match.group(1).strip()
+        if directive == "pop" or directive.split()[-1:] == ["reset"]:
+            break
+        opening_start = index
+
+    if opening_start is None:
+        return function
+
+    leading = "".join(leading_lines[opening_start:])
+
+    trailing_lines = source[function_end:].splitlines(keepends=True)
+    trailing_end = 0
+    saw_closing_pragma = False
+    for index, line in enumerate(trailing_lines):
+        if not line.strip():
+            trailing_end = index + 1
+            continue
+        match = pragma.match(line.rstrip("\r\n"))
+        if match is None:
+            break
+        directive = match.group(1).strip()
+        if directive != "pop" and directive.split()[-1:] != ["reset"]:
+            break
+        saw_closing_pragma = True
+        trailing_end = index + 1
+
+    trailing = (
+        "".join(trailing_lines[:trailing_end]).rstrip("\r\n")
+        if saw_closing_pragma
+        else ""
+    )
+    return leading + function + trailing
 
 
 def _existing_production_slug(function_name: str) -> str | None:

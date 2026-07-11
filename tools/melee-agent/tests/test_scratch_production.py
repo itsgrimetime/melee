@@ -51,9 +51,75 @@ def test_seed_source_extracts_from_repo(tmp_path):
         "#include <x.h>\n\nvoid mnFoo(int a) {\n    return;\n}\n\nvoid other(void) {}\n"
     )
     out = _seed_source_from_repo("mnFoo", "melee/mn/mnfoo.c", tmp_path)
-    assert "mnFoo" in out
-    assert out.strip().startswith("void mnFoo")
-    assert "other" not in out
+    assert out == "void mnFoo(int a) {\n    return;\n}"
+
+
+def test_seed_source_preserves_function_scoped_pragma_block(tmp_path):
+    src = tmp_path / "src" / "melee" / "mn"
+    src.mkdir(parents=True)
+    (src / "mndiagram.c").write_text(
+        "void before(void) {}\n\n"
+        "#pragma push\n"
+        "#pragma inline_depth(2)\n"
+        "\n"
+        "void mnDiagram_DrawFighterHeaders(void)\n"
+        "{\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+        "#pragma pop\n\n"
+        "void after(void) {}\n"
+    )
+
+    out = _seed_source_from_repo(
+        "mnDiagram_DrawFighterHeaders", "melee/mn/mndiagram.c", tmp_path
+    )
+
+    assert out == (
+        "#pragma push\n"
+        "#pragma inline_depth(2)\n"
+        "\n"
+        "void mnDiagram_DrawFighterHeaders(void)\n"
+        "{\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+        "#pragma pop"
+    )
+
+
+def test_seed_source_preserves_immediate_pragma_reset(tmp_path):
+    src = tmp_path / "src" / "melee" / "cm"
+    src.mkdir(parents=True)
+    (src / "camera.c").write_text(
+        "#pragma dont_inline on\n"
+        "void Camera_Draw(void) {}\n"
+        "#pragma dont_inline reset\n"
+    )
+
+    out = _seed_source_from_repo("Camera_Draw", "melee/cm/camera.c", tmp_path)
+
+    assert out == (
+        "#pragma dont_inline on\n"
+        "void Camera_Draw(void) {}\n"
+        "#pragma dont_inline reset"
+    )
+
+
+def test_seed_source_does_not_cross_code_to_collect_unrelated_pragmas(tmp_path):
+    src = tmp_path / "src" / "melee" / "mn"
+    src.mkdir(parents=True)
+    (src / "mnfoo.c").write_text(
+        "#pragma inline_depth(8)\n"
+        "static int unrelated_value;\n\n"
+        "void mnFoo(void) {}\n"
+        "#pragma inline_depth(1)\n"
+        "void other(void) {}\n"
+    )
+
+    out = _seed_source_from_repo("mnFoo", "melee/mn/mnfoo.c", tmp_path)
+
+    assert out == "void mnFoo(void) {}"
 
 
 def test_seed_source_stub_when_missing(tmp_path):
