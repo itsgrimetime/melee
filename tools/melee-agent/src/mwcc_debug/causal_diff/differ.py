@@ -205,16 +205,42 @@ def diff_frontiers(
 
     left_edges = _edges(left_graph)
     right_edges = _edges(right_graph)
+    material_left_ids = set(left_by_id)
+    material_right_ids = set(right_by_id)
+    unaligned_left_material = material_left_ids - set(aligned)
+    unaligned_right_material = material_right_ids - aligned_right
     right_edge_index: dict[tuple[str, str, str], list[EvidenceEdge]] = {}
     for edge in right_edges:
         right_edge_index.setdefault((edge.kind, edge.source_id, edge.target_id), []).append(edge)
     matched_right_edges: set[str] = set()
-    material_left_ids = set(left_by_id)
-    material_right_ids = set(right_by_id)
     for left in left_edges:
         mapped_source = aligned.get(left.source_id)
         mapped_target = aligned.get(left.target_id)
         if mapped_source is None or mapped_target is None:
+            missing_endpoints = tuple(
+                endpoint
+                for endpoint in (left.source_id, left.target_id)
+                if endpoint in unaligned_left_material
+            )
+            if missing_endpoints:
+                deltas.append(
+                    _delta(
+                        analysis_id=analysis_id,
+                        relation_kind="edge-removed",
+                        left_compile_id=_compile_id(left_graph),
+                        left=left,
+                        right_compile_id=_compile_id(right_graph),
+                        right=None,
+                        attributes={
+                            "kind": left.kind,
+                            "source_record_id": left.source_id,
+                            "target_record_id": left.target_id,
+                            "counterpart_missing_endpoints": missing_endpoints,
+                        },
+                        ordinal=ordinal,
+                    )
+                )
+                ordinal += 1
             continue
         candidates = right_edge_index.get((left.kind, mapped_source, mapped_target), [])
         if len(candidates) != 1:
@@ -255,9 +281,18 @@ def diff_frontiers(
     for right in right_edges:
         if right.record_id in matched_right_edges:
             continue
-        if right.source_id not in material_right_ids or right.target_id not in material_right_ids:
-            continue
-        if right.source_id not in aligned_right or right.target_id not in aligned_right:
+        missing_endpoints = tuple(
+            endpoint
+            for endpoint in (right.source_id, right.target_id)
+            if endpoint in unaligned_right_material
+        )
+        aligned_material_edge = (
+            right.source_id in material_right_ids
+            and right.target_id in material_right_ids
+            and right.source_id in aligned_right
+            and right.target_id in aligned_right
+        )
+        if not missing_endpoints and not aligned_material_edge:
             continue
         deltas.append(
             _delta(
@@ -267,7 +302,12 @@ def diff_frontiers(
                 left=None,
                 right_compile_id=_compile_id(right_graph),
                 right=right,
-                attributes={"kind": right.kind},
+                attributes={
+                    "kind": right.kind,
+                    "source_record_id": right.source_id,
+                    "target_record_id": right.target_id,
+                    "counterpart_missing_endpoints": missing_endpoints,
+                },
                 ordinal=ordinal,
             )
         )

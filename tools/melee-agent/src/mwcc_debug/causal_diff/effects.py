@@ -210,6 +210,25 @@ def _stack_exact(node: EvidenceNode | None, expected: tuple[int, int]) -> bool:
     return _stack_offset(node) == start and node.attributes.get("size") == end - start
 
 
+def _current_stack_candidates(graph: FrontierGraph, role_key: str) -> tuple[EvidenceNode, ...]:
+    candidates: dict[str, EvidenceNode] = {}
+    mapped_id = graph.frame.current_stack_nodes.get(role_key)
+    if mapped_id is not None and (mapped := graph.store.get_node(mapped_id)) is not None:
+        candidates[mapped.record_id] = mapped
+    for node in graph.store.find_nodes(str(graph.bundle.compile_id), "stack-object"):
+        if node.attributes.get("side") != "current":
+            continue
+        source_symbols = node.attributes.get("source_symbols", ())
+        role_names = {
+            str(node.role_key or ""),
+            str(node.attributes.get("symbol") or ""),
+            *(str(item) for item in source_symbols if isinstance(source_symbols, (list, tuple))),
+        }
+        if role_key in role_names:
+            candidates[node.record_id] = node
+    return tuple(candidates[record_id] for record_id in sorted(candidates))
+
+
 def _stack_effects(
     alignment: AnchorAlignment,
     graphs: tuple[FrontierGraph, FrontierGraph],
@@ -249,10 +268,28 @@ def _stack_effects(
             )
             continue
         expected = next(iter(expected_values))
-        first_id = first_graph.frame.current_stack_nodes.get(role_key)
-        second_id = second_graph.frame.current_stack_nodes.get(role_key)
-        first_node = None if first_id is None else first_graph.store.get_node(first_id)
-        second_node = None if second_id is None else second_graph.store.get_node(second_id)
+        first_candidates = _current_stack_candidates(first_graph, role_key)
+        second_candidates = _current_stack_candidates(second_graph, role_key)
+        if len(first_candidates) > 1 or len(second_candidates) > 1:
+            candidate_ids = tuple(
+                sorted(
+                    node.record_id
+                    for candidates in (first_candidates, second_candidates)
+                    if len(candidates) > 1
+                    for node in candidates
+                )
+            )
+            abstentions.append(
+                EffectAbstention(
+                    role_key,
+                    AbstentionReason.AMBIGUOUS_STACK_OBJECT,
+                    missing_record_ids=candidate_ids,
+                    follow_up_commands=("melee-agent debug inspect stack-homes --help",),
+                )
+            )
+            continue
+        first_node = first_candidates[0] if first_candidates else None
+        second_node = second_candidates[0] if second_candidates else None
         first_reachable = first_node is not None and first_node.record_id in reachable[first_label][0]
         second_reachable = second_node is not None and second_node.record_id in reachable[second_label][0]
         if not first_reachable and not second_reachable:

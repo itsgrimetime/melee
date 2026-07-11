@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
@@ -67,6 +68,7 @@ def _edge(
     target: EvidenceNode,
     *,
     attributes: dict[str, object] | None = None,
+    confidence: Confidence = Confidence.DERIVED_UNIQUE,
 ) -> EvidenceEdge:
     return EvidenceEdge.create(
         compile_id=compile_id,
@@ -76,7 +78,7 @@ def _edge(
         target_id=target.record_id,
         occurrence_ordinal=0,
         producer_confidence=Confidence.OBSERVED,
-        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        adapter_confidence=confidence,
         provenance=_provenance(source.record_id, target.record_id),
         input_confidences=(source.confidence, target.confidence),
         attributes={} if attributes is None else attributes,
@@ -106,23 +108,45 @@ def _descriptor_compile(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _graph(label: str, *, missing_use: bool = False, reused_register: bool = False) -> FrontierGraph:
+def _graph(
+    label: str,
+    *,
+    missing_use: bool = False,
+    reused_register: bool = False,
+    opcode: str = "addi",
+    heuristic_role: str | None = None,
+    fixed_address_base: bool = False,
+    absent_stack: bool = False,
+) -> FrontierGraph:
     compile_id = hashlib.sha256(label.encode()).hexdigest()
     def_ig, use_ig = ((40, 41) if label == "direct" else (66, 67))
     current_regs = (("r", 22), ("r", 21)) if label == "direct" else (("r", 20), ("r", 19))
+    expected_regs = (("r", 22), ("r", 0 if fixed_address_base else 21))
+    if fixed_address_base:
+        current_regs = (current_regs[0], ("r", 0))
+
+    def operands(regs: tuple[tuple[str, int], ...], *, virtual: bool = False) -> str:
+        first = def_ig if virtual else regs[0][1]
+        second = use_ig if virtual else regs[1][1]
+        if opcode == "stwu":
+            return f"r{first},-32(r{second})"
+        if opcode in {"lwz", "lhz"}:
+            return f"r{first},0(r{second})"
+        return f"r{first},r{second},0"
+
     expected = CheckdiffInstruction(
         offset=0x234,
-        opcode="addi",
-        operands="r22,r21,0",
-        regs=(("r", 22), ("r", 21)),
-        raw="+234: addi r22,r21,0",
+        opcode=opcode,
+        operands=operands(expected_regs),
+        regs=expected_regs,
+        raw=f"+234: {opcode} {operands(expected_regs)}",
     )
     current = CheckdiffInstruction(
         offset=0x234,
-        opcode="addi",
-        operands=f"r{current_regs[0][1]},r{current_regs[1][1]},0",
+        opcode=opcode,
+        operands=operands(current_regs),
         regs=current_regs,
-        raw=f"+234: addi r{current_regs[0][1]},r{current_regs[1][1]},0",
+        raw=f"+234: {opcode} {operands(current_regs)}",
     )
     row = CheckdiffRow(offset=0x234, expected=expected, current=current)
 
@@ -132,10 +156,10 @@ def _graph(label: str, *, missing_use: bool = False, reused_register: bool = Fal
         "retail",
         {
             "offset": 0x234,
-            "opcode": "addi",
+            "opcode": opcode,
             "operands": expected.operands,
             "regs": expected.regs,
-            "neighborhood_signature": ("addi r#,r#,0",),
+            "neighborhood_signature": (f"{opcode} r#,r#,0",),
         },
         role_key="retail-offset:234",
     )
@@ -146,10 +170,10 @@ def _graph(label: str, *, missing_use: bool = False, reused_register: bool = Fal
         {
             "offset": 0x234,
             "aligned_retail_offset": 0x234,
-            "opcode": "addi",
+            "opcode": opcode,
             "operands": current.operands,
             "regs": current.regs,
-            "retail_neighborhood_signature": ("addi r#,r#,0",),
+            "retail_neighborhood_signature": (f"{opcode} r#,r#,0",),
         },
         role_key="retail-offset:234",
     )
@@ -162,8 +186,8 @@ def _graph(label: str, *, missing_use: bool = False, reused_register: bool = Fal
             "pass_index": 0,
             "block": 0,
             "instruction_index": 7,
-            "opcode": "addi",
-            "operands": f"r{def_ig},r{use_ig},0",
+            "opcode": opcode,
+            "operands": operands(current_regs, virtual=True),
             "regs": (("r", def_ig), ("r", use_ig)),
             "operand_roles": (("def",), ("use",)),
         },
@@ -211,16 +235,43 @@ def _graph(label: str, *, missing_use: bool = False, reused_register: bool = Fal
         },
         role_key="row",
     )
-    nodes = [retail, candidate, occurrence, virtual_def, virtual_use, allocator_def, allocator_use, stack]
+    backend_nodes = [occurrence, virtual_def, virtual_use, allocator_def, allocator_use]
+    nodes = [retail, candidate, *backend_nodes]
+    if not absent_stack:
+        nodes.append(stack)
     edges = [
         _edge(compile_id, "aligns-to-retail", candidate, retail, attributes={"retail_offset": 0x234}),
-        _edge(compile_id, "defines-virtual", occurrence, virtual_def, attributes={"operand_position": 0}),
         _edge(compile_id, "maps-to-allocator-node", virtual_def, allocator_def),
         _edge(compile_id, "maps-to-allocator-node", virtual_use, allocator_use),
-        _edge(compile_id, "materializes-as-stack-object", allocator_def, stack),
     ]
-    if not missing_use:
-        edges.append(_edge(compile_id, "uses-virtual", occurrence, virtual_use, attributes={"operand_position": 1}))
+    if not absent_stack:
+        edges.append(_edge(compile_id, "materializes-as-stack-object", allocator_def, stack))
+    semantic_roles = (
+        (("use",), ("def", "use"))
+        if opcode == "stwu"
+        else (("def",), ("use",))
+        if opcode in {"addi", "lwz", "lhz"}
+        else (("use",), ("use",))
+    )
+    virtual_nodes = (virtual_def, virtual_use)
+    for raw_position, roles in enumerate(semantic_roles):
+        for semantic_role in roles:
+            if missing_use and semantic_role == "use" and raw_position == 1:
+                continue
+            edges.append(
+            _edge(
+                compile_id,
+                "defines-virtual" if semantic_role == "def" else "uses-virtual",
+                occurrence,
+                virtual_nodes[raw_position],
+                attributes={"operand_position": raw_position},
+                confidence=(
+                    Confidence.HEURISTIC
+                    if heuristic_role == semantic_role
+                    else Confidence.DERIVED_UNIQUE
+                ),
+            )
+            )
 
     descriptors = {
         def_ig: _descriptor(def_ig, "addi r#,r#,0", (("stw", 1),)),
@@ -240,6 +291,7 @@ def _graph(label: str, *, missing_use: bool = False, reused_register: bool = Fal
             },
         )
         nodes.append(reused)
+        backend_nodes.append(reused)
         descriptors[58] = _descriptor(58, "addi r#,r#,4", (("cmpi", 1),))
         nodes_by_class_ig[(0, 58)] = reused.record_id
 
@@ -255,7 +307,7 @@ def _graph(label: str, *, missing_use: bool = False, reused_register: bool = Fal
         expected_assembly_digest="b" * 64,
     )
     backend = BackendEvidence(
-        result=AdapterResult(nodes=tuple(nodes[2:-1]), edges=tuple(edges[1:])),
+        result=AdapterResult(nodes=tuple(backend_nodes), edges=tuple(edges[1:])),
         pcdump_text="",
         role_compile={0: descriptors},
         nodes_by_class_ig=MappingProxyType(nodes_by_class_ig),
@@ -264,9 +316,9 @@ def _graph(label: str, *, missing_use: bool = False, reused_register: bool = Fal
         ),
     )
     frame = FrameEvidence(
-        result=AdapterResult(nodes=(stack,)),
+        result=AdapterResult(nodes=(() if absent_stack else (stack,))),
         expected_stack_roles=MappingProxyType({"row": (32, 36)}),
-        current_stack_nodes=MappingProxyType({"row": stack.record_id}),
+        current_stack_nodes=MappingProxyType({} if absent_stack else {"row": stack.record_id}),
     )
     bundle = SimpleNamespace(
         label=label,
@@ -289,10 +341,26 @@ def _graph(label: str, *, missing_use: bool = False, reused_register: bool = Fal
     )
 
 
-def graphs(*labels: str, missing_use: str | None = None, reused_register: bool = False) -> tuple[FrontierGraph, ...]:
+def graphs(
+    *labels: str,
+    missing_use: str | None = None,
+    reused_register: bool = False,
+    opcode: str = "addi",
+    heuristic_role: str | None = None,
+    fixed_address_base: bool = False,
+    absent_stack: str | None = None,
+) -> tuple[FrontierGraph, ...]:
     labels = labels or ("direct", "paired")
     return tuple(
-        _graph(label, missing_use=label == missing_use, reused_register=reused_register)
+        _graph(
+            label,
+            missing_use=label == missing_use,
+            reused_register=reused_register,
+            opcode=opcode,
+            heuristic_role=heuristic_role,
+            fixed_address_base=fixed_address_base,
+            absent_stack=label == absent_stack,
+        )
         for label in labels
     )
 
@@ -332,6 +400,74 @@ def test_unresolved_operand_does_not_drop_resolved_operand() -> None:
 def test_assertion_rejects_operand_not_present_on_retail_anchor() -> None:
     with pytest.raises(ValueError, match="operand"):
         align_anchor(graphs(), 0x234, ("direct:def:9=0:40",))
+
+
+def test_unsupported_opcode_semantics_abstain_before_role_correspondence() -> None:
+    alignment = align_anchor(graphs(opcode="mystery"), 0x234, ())
+    assert alignment.comparisons == ()
+    assert {item.reason.value for item in alignment.abstentions} == {"unsupported-opcode-semantics"}
+
+
+def test_heuristic_local_chain_is_cited_and_never_laundered_to_derived_unique() -> None:
+    alignment = align_anchor(graphs(heuristic_role="def"), 0x234, ())
+    comparison = alignment.by_operand["def:0"].comparison
+    assert comparison.confidence is Confidence.HEURISTIC
+    assert len(comparison.provenance.input_record_ids) == 12
+    assert alignment.by_operand["use:0"].comparison.confidence is Confidence.DERIVED_UNIQUE
+
+
+def test_update_form_orders_definition_before_uses() -> None:
+    alignment = align_anchor(graphs(opcode="stwu"), 0x234, ())
+    assert [(role.key, role.expected_phys) for role in alignment.operand_roles] == [
+        ("def:0", 21),
+        ("use:0", 22),
+        ("use:1", 21),
+    ]
+
+
+def test_fixed_zero_address_base_is_not_an_allocator_operand() -> None:
+    alignment = align_anchor(graphs(opcode="lwz", fixed_address_base=True), 0x234, ())
+    assert [(role.key, role.expected_phys) for role in alignment.operand_roles] == [("def:0", 22)]
+
+
+def test_r0_in_ordinary_register_field_remains_allocatable() -> None:
+    alignment = align_anchor(graphs(opcode="mr", fixed_address_base=True), 0x234, ())
+    assert [(role.key, role.expected_phys) for role in alignment.operand_roles] == [
+        ("def:0", 22),
+        ("use:0", 0),
+    ]
+
+
+def test_multiple_current_stack_candidates_abstain_instead_of_looking_absent() -> None:
+    pair = list(graphs())
+    direct = pair[0]
+    duplicate = _node(
+        direct.bundle.compile_id,
+        "stack-object",
+        "row-stack-duplicate",
+        {"side": "current", "start": 40, "end": 44, "size": 4},
+        role_key="row",
+    )
+    direct.store.add_nodes((duplicate,))
+    pair[0] = replace(
+        direct,
+        frame=replace(direct.frame, current_stack_nodes=MappingProxyType({})),
+    )
+    result = derive_effects(align_anchor(pair, 0x234, ()), pair)
+    assert result.stack_effects == ()
+    assert result.pairs == ()
+    abstention = next(item for item in result.abstentions if item.operand_key == "row")
+    assert abstention.reason.value == "ambiguous-stack-object"
+    assert len(abstention.missing_record_ids) == 2
+
+
+def test_verified_zero_stack_candidates_uses_absent_object_mismatch() -> None:
+    pair = graphs(absent_stack="direct")
+    result = derive_effects(align_anchor(pair, 0x234, ()), pair)
+    assert [(effect.role_key, effect.direction) for effect in result.stack_effects] == [
+        ("row", "first-mismatch-second-exact")
+    ]
+    assert result.pairs
 
 
 def test_reachable_stack_effect_creates_only_crossed_exact_mismatch_pair() -> None:
@@ -374,3 +510,47 @@ def test_graph_delta_aligns_expected_and_current_stack_nodes_separately() -> Non
         if record.relation_kind == "node-changed" and record.attributes.get("kind") == "stack-object"
     ]
     assert len(stack_changes) == 1
+
+
+def test_added_material_node_emits_incident_edge_added_delta() -> None:
+    pair = graphs()
+    right = pair[1]
+    added = _node(
+        right.bundle.compile_id,
+        "allocator-node",
+        "added-ig",
+        {"class_id": 0, "ig_id": 99, "assigned_reg": 18},
+    )
+    right_root = right.store.get_node(right.backend.nodes_by_class_ig[(0, 66)])
+    assert right_root is not None
+    incident = _edge(right.bundle.compile_id, "interferes-with", added, right_root)
+    right.store.add_nodes((added,))
+    right.store.add_edges((incident,))
+    alignment = align_anchor(pair, 0x234, ())
+    deltas = diff_frontiers(pair, build_role_comparisons(alignment, pair))
+    assert any(
+        record.relation_kind == "edge-added" and record.right_record_id == incident.record_id
+        for record in deltas
+    )
+
+
+def test_removed_material_node_emits_incident_edge_removed_delta() -> None:
+    pair = graphs()
+    left = pair[0]
+    removed = _node(
+        left.bundle.compile_id,
+        "allocator-node",
+        "removed-ig",
+        {"class_id": 0, "ig_id": 98, "assigned_reg": 17},
+    )
+    left_root = left.store.get_node(left.backend.nodes_by_class_ig[(0, 40)])
+    assert left_root is not None
+    incident = _edge(left.bundle.compile_id, "interferes-with", removed, left_root)
+    left.store.add_nodes((removed,))
+    left.store.add_edges((incident,))
+    alignment = align_anchor(pair, 0x234, ())
+    deltas = diff_frontiers(pair, build_role_comparisons(alignment, pair))
+    assert any(
+        record.relation_kind == "edge-removed" and record.left_record_id == incident.record_id
+        for record in deltas
+    )

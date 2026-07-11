@@ -13,7 +13,7 @@ from ..parser import Instruction
 from .backend_adapter import _operand_roles
 from .canonical import stable_id
 from .graph import FrontierGraph
-from .models import ComparisonRecord, Confidence, EvidenceNode, Provenance
+from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance, min_confidence
 
 _REGISTER = re.compile(r"\b([rf])\d+\b")
 _ASSERTION = re.compile(r"^(?P<label>[A-Za-z0-9_-]+):(?P<operand>(?:def|use):\d+)=(?P<spec>.+)$")
@@ -21,6 +21,15 @@ _CLASS_IG = re.compile(r"^(?P<class>0|1|gpr|fpr|r|f):(?P<ig>\d+)$", re.IGNORECAS
 _VIRTUAL = re.compile(r"^(?P<kind>[rf])(?P<number>\d+)$", re.IGNORECASE)
 _PARSER_VERSION = "causal-anchor-alignment.v1"
 _FIXED_GPRS = frozenset({1, 2})
+_ZERO_BASE_OPERANDS: Mapping[str, frozenset[int]] = MappingProxyType(
+    {
+        "addi": frozenset({1}),
+        "lhz": frozenset({1}),
+        "lwz": frozenset({1}),
+        "stwu": frozenset({1}),
+        "stwux": frozenset({1}),
+    }
+)
 
 
 class AbstentionReason(StrEnum):
@@ -31,6 +40,8 @@ class AbstentionReason(StrEnum):
     UNSTABLE_ROLE_IDENTITY = "unstable-role-identity"
     MISSING_EXPECTED_LAYOUT = "missing-expected-layout"
     CONTRADICTORY_EXPECTED_LAYOUT = "contradictory-expected-layout"
+    UNSUPPORTED_OPCODE_SEMANTICS = "unsupported-opcode-semantics"
+    AMBIGUOUS_STACK_OBJECT = "ambiguous-stack-object"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,9 +87,36 @@ class AnchorAlignment:
 
 
 @dataclass(frozen=True, slots=True)
-class _LocalRole:
+class _OperandSemantics:
+    roles: tuple[OperandRole, ...]
+    confidence: Confidence
+
+
+@dataclass(frozen=True, slots=True)
+class _LocalRoleResolution:
     node: EvidenceNode
+    candidate: EvidenceNode | None
+    pcode: EvidenceNode | None
+    use_def_edge: EvidenceEdge | None
+    virtual: EvidenceNode | None
+    allocator_map_edge: EvidenceEdge | None
+    confidence: Confidence
     asserted: bool = False
+
+    @property
+    def evidence_chain(self) -> tuple[EvidenceNode | EvidenceEdge, ...]:
+        return tuple(
+            record
+            for record in (
+                self.candidate,
+                self.pcode,
+                self.use_def_edge,
+                self.virtual,
+                self.allocator_map_edge,
+                self.node,
+            )
+            if record is not None
+        )
 
 
 def _label(graph: FrontierGraph) -> str:
@@ -93,6 +131,16 @@ def _normalized_instruction(opcode: object, operands: object) -> str:
     normalized_operands = _REGISTER.sub(lambda match: f"{match.group(1).lower()}#", str(operands).lower())
     normalized_operands = re.sub(r"\s+", "", normalized_operands)
     return f"{str(opcode).lower()} {normalized_operands}".rstrip()
+
+
+def _allocatable_operand(
+    opcode: str, raw_position: int, register_kind: str, physical: int
+) -> bool:
+    if register_kind != "r":
+        return True
+    if physical in _FIXED_GPRS:
+        return False
+    return not (physical == 0 and raw_position in _ZERO_BASE_OPERANDS.get(opcode.lower(), ()))
 
 
 def _parse_assertions(
@@ -127,40 +175,42 @@ def _analysis_id(
     )
 
 
-def _operand_roles_for_graph(graph: FrontierGraph, retail_offset: int) -> tuple[OperandRole, ...]:
+def _operand_roles_for_graph(graph: FrontierGraph, retail_offset: int) -> _OperandSemantics:
     row = graph.checkdiff.rows_by_offset.get(retail_offset)
     if row is None:
-        return ()
+        return _OperandSemantics((), Confidence.HEURISTIC)
     instruction = Instruction(
         opcode=row.expected.opcode,
         operands=row.expected.operands,
         annotations=[],
         regs=list(row.expected.regs),
     )
-    roles_by_operand, _confidence = _operand_roles(instruction, "mwcc-debug-pcdump.v1")
-    positions = {"def": 0, "use": 0}
-    roles: list[OperandRole] = []
+    roles_by_operand, confidence = _operand_roles(instruction, "mwcc-debug-pcdump.v1")
+    semantic_entries: list[tuple[str, int, str, int]] = []
     for raw_position, ((register_kind, expected_phys), semantics) in enumerate(
         zip(row.expected.regs, roles_by_operand)
     ):
-        del raw_position
-        if register_kind == "r" and expected_phys in _FIXED_GPRS:
+        if not _allocatable_operand(row.expected.opcode, raw_position, register_kind, expected_phys):
             continue
         for kind in ("def", "use"):
-            if kind not in semantics:
-                continue
-            position = positions[kind]
-            positions[kind] += 1
-            roles.append(
-                OperandRole(
-                    key=f"{kind}:{position}",
-                    kind=kind,
-                    position=position,
-                    register_kind=register_kind,
-                    expected_phys=expected_phys,
-                )
+            if kind in semantics:
+                semantic_entries.append((kind, raw_position, register_kind, expected_phys))
+    semantic_entries.sort(key=lambda item: (0 if item[0] == "def" else 1, item[1]))
+    positions = {"def": 0, "use": 0}
+    roles: list[OperandRole] = []
+    for kind, _raw_position, register_kind, expected_phys in semantic_entries:
+        position = positions[kind]
+        positions[kind] += 1
+        roles.append(
+            OperandRole(
+                key=f"{kind}:{position}",
+                kind=kind,
+                position=position,
+                register_kind=register_kind,
+                expected_phys=expected_phys,
             )
-    return tuple(roles)
+        )
+    return _OperandSemantics(tuple(roles), confidence)
 
 
 def _raw_operand_position(graph: FrontierGraph, retail_offset: int, role: OperandRole) -> int | None:
@@ -178,7 +228,7 @@ def _raw_operand_position(graph: FrontierGraph, retail_offset: int, role: Operan
     for raw_position, ((register_kind, expected_phys), semantics) in enumerate(
         zip(row.expected.regs, roles_by_operand)
     ):
-        if register_kind == "r" and expected_phys in _FIXED_GPRS:
+        if not _allocatable_operand(row.expected.opcode, raw_position, register_kind, expected_phys):
             continue
         if role.kind not in semantics:
             continue
@@ -215,23 +265,25 @@ def _candidate_is_uniquely_aligned(graph: FrontierGraph, retail_offset: int) -> 
     return candidate if len(alignments) == 1 else None
 
 
-def _allocator_from_virtual(graph: FrontierGraph, virtual_id: str) -> tuple[EvidenceNode, ...]:
+def _allocator_from_virtual(
+    graph: FrontierGraph, virtual_id: str
+) -> tuple[tuple[EvidenceEdge, EvidenceNode], ...]:
     compile_id = _compile_id(graph)
-    allocator_ids = {
-        edge.target_id
+    mappings = {
+        edge.target_id: edge
         for edge in graph.store.find_edges(compile_id, "maps-to-allocator-node", endpoint=virtual_id)
         if edge.source_id == virtual_id
     }
     return tuple(
-        node
-        for record_id in sorted(allocator_ids)
+        (mappings[record_id], node)
+        for record_id in sorted(mappings)
         if (node := graph.store.get_node(record_id)) is not None and node.kind == "allocator-node"
     )
 
 
 def _automatic_local_role(
     graph: FrontierGraph, retail_offset: int, role: OperandRole
-) -> tuple[_LocalRole | None, AbstentionReason]:
+) -> tuple[_LocalRoleResolution | None, AbstentionReason]:
     candidate = _candidate_is_uniquely_aligned(graph, retail_offset)
     if candidate is None:
         return None, AbstentionReason.AMBIGUOUS_INSTRUCTION
@@ -240,7 +292,7 @@ def _automatic_local_role(
         return None, AbstentionReason.MISSING_BACKEND_ROLE
     signature = _normalized_instruction(candidate.attributes.get("opcode"), candidate.attributes.get("operands"))
     edge_kind = "defines-virtual" if role.kind == "def" else "uses-virtual"
-    allocator_nodes: dict[str, EvidenceNode] = {}
+    resolutions: dict[str, list[_LocalRoleResolution]] = {}
     for occurrence in graph.store.find_nodes(_compile_id(graph), "pcode-occurrence"):
         if _normalized_instruction(occurrence.attributes.get("opcode"), occurrence.attributes.get("operands")) != signature:
             continue
@@ -250,18 +302,41 @@ def _automatic_local_role(
             if edge.source_id == occurrence.record_id and edge.attributes.get("operand_position") == raw_position
         )
         for edge in edges:
-            for allocator in _allocator_from_virtual(graph, edge.target_id):
+            virtual = graph.store.get_node(edge.target_id)
+            if virtual is None or virtual.kind != "virtual-register":
+                continue
+            for map_edge, allocator in _allocator_from_virtual(graph, edge.target_id):
                 class_id = 1 if role.register_kind == "f" else 0
                 if allocator.attributes.get("class_id") == class_id:
-                    allocator_nodes[allocator.record_id] = allocator
-    if len(allocator_nodes) == 1:
-        return _LocalRole(next(iter(allocator_nodes.values()))), AbstentionReason.MISSING_BACKEND_ROLE
-    if allocator_nodes:
+                    chain = (candidate, occurrence, edge, virtual, map_edge, allocator)
+                    resolutions.setdefault(allocator.record_id, []).append(
+                        _LocalRoleResolution(
+                            node=allocator,
+                            candidate=candidate,
+                            pcode=occurrence,
+                            use_def_edge=edge,
+                            virtual=virtual,
+                            allocator_map_edge=map_edge,
+                            confidence=min_confidence(*(record.confidence for record in chain)),
+                        )
+                    )
+    if len(resolutions) == 1:
+        choices = next(iter(resolutions.values()))
+        selected = max(
+            choices,
+            key=lambda item: (
+                int(item.pcode.attributes.get("pass_index", -1)) if item.pcode is not None else -1,
+                int(item.pcode.attributes.get("instruction_index", -1)) if item.pcode is not None else -1,
+                item.pcode.record_id if item.pcode is not None else "",
+            ),
+        )
+        return selected, AbstentionReason.MISSING_BACKEND_ROLE
+    if resolutions:
         return None, AbstentionReason.AMBIGUOUS_BACKEND_ROLE
     return None, AbstentionReason.MISSING_BACKEND_ROLE
 
 
-def _asserted_local_role(graph: FrontierGraph, spec: str) -> _LocalRole:
+def _asserted_local_role(graph: FrontierGraph, spec: str) -> _LocalRoleResolution:
     class_match = _CLASS_IG.fullmatch(spec)
     if class_match is not None:
         class_text = class_match.group("class").lower()
@@ -276,11 +351,31 @@ def _asserted_local_role(graph: FrontierGraph, spec: str) -> _LocalRole:
         candidates = () if virtual_id is None else _allocator_from_virtual(graph, virtual_id)
         if len(candidates) != 1:
             raise ValueError(f"frontier-node virtual assertion is not unique: {spec!r}")
-        return _LocalRole(candidates[0], asserted=True)
+        map_edge, node = candidates[0]
+        virtual = None if virtual_id is None else graph.store.get_node(virtual_id)
+        return _LocalRoleResolution(
+            node=node,
+            candidate=None,
+            pcode=None,
+            use_def_edge=None,
+            virtual=virtual,
+            allocator_map_edge=map_edge,
+            confidence=Confidence.HEURISTIC,
+            asserted=True,
+        )
     node = None if record_id is None else graph.store.get_node(record_id)
     if node is None or node.kind != "allocator-node":
         raise ValueError(f"frontier-node assertion does not resolve to an allocator node: {spec!r}")
-    return _LocalRole(node, asserted=True)
+    return _LocalRoleResolution(
+        node=node,
+        candidate=None,
+        pcode=None,
+        use_def_edge=None,
+        virtual=None,
+        allocator_map_edge=None,
+        confidence=Confidence.HEURISTIC,
+        asserted=True,
+    )
 
 
 def _abstention(operand_key: str, reason: AbstentionReason) -> EffectAbstention:
@@ -305,9 +400,9 @@ def _role_comparison(
     analysis_id: str,
     role: OperandRole,
     left_graph: FrontierGraph,
-    left: _LocalRole,
+    left: _LocalRoleResolution,
     right_graph: FrontierGraph,
-    right: _LocalRole,
+    right: _LocalRoleResolution,
     ordinal: int,
 ) -> ComparisonRecord:
     asserted_labels = tuple(
@@ -315,8 +410,12 @@ def _role_comparison(
         for label, local in ((_label(left_graph), left), (_label(right_graph), right))
         if local.asserted
     )
-    confidence = Confidence.HEURISTIC if asserted_labels else Confidence.DERIVED_UNIQUE
-    inputs = (left.node, right.node)
+    confidence = (
+        Confidence.HEURISTIC
+        if asserted_labels
+        else min_confidence(left.confidence, right.confidence)
+    )
+    inputs = (*left.evidence_chain, *right.evidence_chain)
     return ComparisonRecord.create(
         analysis_id=analysis_id,
         relation_kind="role-corresponds-to",
@@ -398,8 +497,10 @@ def align_anchor(
     left_graph, right_graph = ordered
     analysis_id = _analysis_id((left_graph, right_graph), retail_offset, normalized_assertions)
 
-    left_roles = _operand_roles_for_graph(left_graph, retail_offset)
-    right_roles = _operand_roles_for_graph(right_graph, retail_offset)
+    left_semantics = _operand_roles_for_graph(left_graph, retail_offset)
+    right_semantics = _operand_roles_for_graph(right_graph, retail_offset)
+    left_roles = left_semantics.roles
+    right_roles = right_semantics.roles
     if not left_roles or not right_roles or left_roles != right_roles:
         return AnchorAlignment(
             analysis_id=analysis_id,
@@ -408,6 +509,18 @@ def align_anchor(
             by_operand={},
             comparisons=(),
             abstentions=(_abstention("anchor", AbstentionReason.MISSING_RETAIL_ROW),),
+        )
+    if Confidence.HEURISTIC in {left_semantics.confidence, right_semantics.confidence}:
+        return AnchorAlignment(
+            analysis_id=analysis_id,
+            retail_offset=retail_offset,
+            operand_roles=left_roles,
+            by_operand={},
+            comparisons=(),
+            abstentions=tuple(
+                _abstention(role.key, AbstentionReason.UNSUPPORTED_OPCODE_SEMANTICS)
+                for role in left_roles
+            ),
         )
     operand_keys = {role.key for role in left_roles}
     unknown_assertions = sorted(
@@ -425,7 +538,7 @@ def align_anchor(
     comparisons: list[ComparisonRecord] = []
     abstentions: list[EffectAbstention] = []
     for ordinal, role in enumerate(left_roles):
-        locals_by_label: dict[str, _LocalRole | None] = {}
+        locals_by_label: dict[str, _LocalRoleResolution | None] = {}
         reasons: list[AbstentionReason] = []
         for graph in ordered:
             automatic, reason = _automatic_local_role(graph, retail_offset, role)
