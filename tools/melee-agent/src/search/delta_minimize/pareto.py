@@ -33,7 +33,11 @@ def reduce_pareto(
 ) -> ParetoSummary:
     """Reduce complete candidate evidence to the exact raw Pareto frontier."""
 
-    incomplete = [profile.candidate_id for profile in profiles if profile.viable and not profile.complete]
+    incomplete = [
+        profile.candidate_id
+        for profile in profiles
+        if profile.viable and (not profile.complete or profile.axes is None)
+    ]
     if incomplete:
         raise DeltaMinimizeError(
             "incomplete-candidate-evidence",

@@ -58,6 +58,14 @@ def test_viable_incomplete_profile_blocks_exact_reduction():
     assert error.value.details == {"candidate_ids": ["incomplete"]}
 
 
+def test_viable_complete_profile_without_axes_blocks_exact_reduction():
+    complete = profile("complete", 0, AxisDistances.zero())
+    missing_axes = profile("missing-axes", 1, None, complete=True)
+    with pytest.raises(DeltaMinimizeError, match="incomplete-candidate-evidence") as error:
+        reduce_pareto([complete, missing_axes], atom_count=1)
+    assert error.value.details == {"candidate_ids": ["missing-axes"]}
+
+
 def test_exact_match_status_precedes_proxy_joint_zero():
     nonzero = AxisDistances((0, 0), (0, 0, 0, 0, 0, 0), (1, 0), (0, 0, 0, 0))
     result = reduce_pareto(
