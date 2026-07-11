@@ -1,10 +1,35 @@
+import hashlib
 import sys
 from pathlib import Path
+
+import rfc8785
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
 from tools.mwcc_retro import backend_identity  # noqa: E402
+from tools.mwcc_retro.backend_capture_identity import (  # noqa: E402
+    finalize_capture_identity,
+)
+
+
+def test_capture_identity_is_finalized_after_candidate_hash(tmp_path: Path) -> None:
+    candidate_object = tmp_path / "candidate.o"
+    candidate_object.write_bytes(b"candidate-bytes")
+
+    identity = finalize_capture_identity(
+        nonce="1" * 32,
+        compiler_executable_sha256="2" * 64,
+        source_sha256="3" * 64,
+        mwcc_command_sha256="4" * 64,
+        environment_digest="5" * 64,
+        function="fn",
+        candidate_object=candidate_object,
+    )
+
+    assert identity["candidate_object_sha256"] == hashlib.sha256(b"candidate-bytes").hexdigest()
+    payload = {key: value for key, value in identity.items() if key != "capture_run_id"}
+    assert identity["capture_run_id"] == hashlib.sha256(rfc8785.dumps(payload)).hexdigest()
 
 
 def test_output_dir_includes_path_safe_unit_and_function_hash():

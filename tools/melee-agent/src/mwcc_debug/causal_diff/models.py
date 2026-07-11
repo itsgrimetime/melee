@@ -21,6 +21,15 @@ CORE_BACKEND_CAPABILITIES = frozenset(
         "interference-edges",
     }
 )
+OBJECT_BINDING_BACKEND_CAPABILITIES = frozenset(
+    {
+        "compiler-object-bindings",
+        "object-to-virtual",
+        "object-to-frame",
+        "pcode-to-code-range",
+        "object-to-source",
+    }
+)
 
 
 def _validate_digest(value: str) -> str:
@@ -49,6 +58,63 @@ class BackendArtifactRef(ArtifactRef):
         if unknown:
             names = ", ".join(sorted(unknown))
             raise ValueError(f"unknown backend capability: {names}")
+        return value
+
+
+class BackendArtifactRefV2(ArtifactRef):
+    format: Literal["backend-trace.v2"]
+    capabilities: tuple[str, ...]
+    capture_identity_sha256: str
+    compiler_executable_sha256: str
+    mwcc_command_sha256: str
+    environment_digest: str
+    candidate_object_sha256: str
+
+    _validate_identity_digests = field_validator(
+        "capture_identity_sha256",
+        "compiler_executable_sha256",
+        "mwcc_command_sha256",
+        "environment_digest",
+        "candidate_object_sha256",
+    )(_validate_digest)
+
+    @field_validator("capabilities")
+    @classmethod
+    def _validate_capabilities(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        supported = CORE_BACKEND_CAPABILITIES | OBJECT_BINDING_BACKEND_CAPABILITIES
+        unknown = set(value) - supported
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise ValueError(f"unknown backend capability: {names}")
+        return value
+
+
+class CaptureIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    nonce: str
+    compiler_executable_sha256: str
+    source_sha256: str
+    mwcc_command_sha256: str
+    environment_digest: str
+    candidate_object_sha256: str
+    function: str
+    capture_run_id: str
+
+    _validate_digests = field_validator(
+        "compiler_executable_sha256",
+        "source_sha256",
+        "mwcc_command_sha256",
+        "environment_digest",
+        "candidate_object_sha256",
+        "capture_run_id",
+    )(_validate_digest)
+
+    @field_validator("nonce")
+    @classmethod
+    def _validate_nonce(cls, value: str) -> str:
+        if len(value) != 32 or any(character not in "0123456789abcdef" for character in value):
+            raise ValueError("nonce must contain exactly 32 hexadecimal characters in canonical lowercase")
         return value
 
 
@@ -89,6 +155,9 @@ class ArtifactsManifest(BaseModel):
         return value
 
 
+ArtifactsManifestV1 = ArtifactsManifest
+
+
 class FrontierBundleManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -105,6 +174,50 @@ class FrontierBundleManifest(BaseModel):
         if re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
             raise ValueError("label must match [A-Za-z0-9_-]+")
         return value
+
+
+FrontierBundleManifestV1 = FrontierBundleManifest
+
+
+class ArtifactsManifestV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: ArtifactRef
+    checkdiff: ArtifactRef
+    backend: tuple[BackendArtifactRef | BackendArtifactRefV2, ...]
+    inspector: ArtifactRef
+    frame_report: ArtifactRef | None = None
+    candidate_object: ArtifactRef
+
+    @field_validator("backend")
+    @classmethod
+    def _require_backend(
+        cls, value: tuple[BackendArtifactRef | BackendArtifactRefV2, ...]
+    ) -> tuple[BackendArtifactRef | BackendArtifactRefV2, ...]:
+        if not value:
+            raise ValueError("at least one backend artifact is required")
+        return value
+
+
+class FrontierBundleManifestV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["causal-frontier-bundle.v2"]
+    label: str
+    function: str
+    compile: CompileManifest
+    artifacts: ArtifactsManifestV2
+    producer_versions: Mapping[str, str]
+
+    @field_validator("label")
+    @classmethod
+    def _validate_label(cls, value: str) -> str:
+        if re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
+            raise ValueError("label must match [A-Za-z0-9_-]+")
+        return value
+
+
+BundleManifest = FrontierBundleManifestV1 | FrontierBundleManifestV2
 
 
 class Confidence(StrEnum):

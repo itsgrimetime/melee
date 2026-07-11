@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,6 +16,7 @@ from src.mwcc_debug.causal_diff.bundles import (
     validate_capability_union,
 )
 from src.mwcc_debug.causal_diff.canonical import canonical_bytes
+from src.mwcc_debug.causal_diff.models import FrontierBundleManifestV2
 
 
 def _sha256(data: bytes) -> str:
@@ -152,6 +153,305 @@ def _recompute_payload_compile_id(payload: dict[str, Any]) -> None:
         environment_digest=compile_payload["environment_digest"],
         source_digest=compile_payload["source_digest"],
     )
+
+
+@dataclass(frozen=True)
+class BundleV2Fixture:
+    manifest: Path
+    backend: Path
+    candidate_object: Path
+
+
+def _capture_identity(
+    *,
+    source_sha256: str,
+    environment_digest: str,
+    candidate_object_sha256: str,
+    function: str = "fn",
+) -> dict[str, str]:
+    payload = {
+        "nonce": "1" * 32,
+        "compiler_executable_sha256": "2" * 64,
+        "source_sha256": source_sha256,
+        "mwcc_command_sha256": "4" * 64,
+        "environment_digest": environment_digest,
+        "candidate_object_sha256": candidate_object_sha256,
+        "function": function,
+    }
+    return {**payload, "capture_run_id": _sha256(canonical_bytes(payload))}
+
+
+def _write_v2_bundle(directory: Path) -> BundleV2Fixture:
+    directory.mkdir(parents=True)
+    source = directory / "candidate.c"
+    checkdiff = directory / "checkdiff.json"
+    backend = directory / "backend.json"
+    inspector = directory / "inspector.txt"
+    candidate_object = directory / "candidate.o"
+    source.write_bytes(b"source")
+    checkdiff.write_bytes(b"{}\n")
+    inspector.write_bytes(b"inspector\n")
+    candidate_object.write_bytes(b"candidate-bytes")
+
+    source_sha256 = _sha256(source.read_bytes())
+    environment_digest = _sha256(b"environment")
+    candidate_object_sha256 = _sha256(candidate_object.read_bytes())
+    identity = _capture_identity(
+        source_sha256=source_sha256,
+        environment_digest=environment_digest,
+        candidate_object_sha256=candidate_object_sha256,
+    )
+    trace = {
+        "schema_version": "mwcc-retro-backend-trace.v2",
+        "functions": [
+            {
+                "name": "fn",
+                "object_bindings": {
+                    "capture_identity": identity,
+                    "capture_run_id": identity["capture_run_id"],
+                },
+            }
+        ],
+    }
+    backend.write_text(json.dumps(trace), encoding="utf-8")
+
+    artifact_data = {
+        "source": source,
+        "checkdiff": checkdiff,
+        "backend": backend,
+        "inspector": inspector,
+        "candidate_object": candidate_object,
+    }
+    artifact_digests = {name: _sha256(path.read_bytes()) for name, path in artifact_data.items()}
+    flags_digest = _sha256(b"flags")
+    manifest = {
+        "schema_version": "causal-frontier-bundle.v2",
+        "label": "paired",
+        "function": "fn",
+        "compile": {
+            "id": _compile_id(
+                function="fn",
+                compiler="mwcc_233_163n",
+                target_build="GALE01",
+                flags_digest=flags_digest,
+                environment_digest=environment_digest,
+                source_digest=source_sha256,
+            ),
+            "compiler": "mwcc_233_163n",
+            "target_build": "GALE01",
+            "flags_digest": flags_digest,
+            "environment_digest": environment_digest,
+            "source_digest": source_sha256,
+            "expected_assembly_digest": _sha256(b"expected"),
+        },
+        "artifacts": {
+            "source": {"path": source.name, "sha256": artifact_digests["source"]},
+            "checkdiff": {
+                "path": checkdiff.name,
+                "sha256": artifact_digests["checkdiff"],
+            },
+            "backend": [
+                {
+                    "path": backend.name,
+                    "sha256": artifact_digests["backend"],
+                    "format": "backend-trace.v2",
+                    "capabilities": [
+                        *sorted(CORE_BACKEND_CAPABILITIES),
+                        "compiler-object-bindings",
+                    ],
+                    "capture_identity_sha256": _sha256(canonical_bytes(identity)),
+                    "compiler_executable_sha256": identity["compiler_executable_sha256"],
+                    "mwcc_command_sha256": identity["mwcc_command_sha256"],
+                    "environment_digest": identity["environment_digest"],
+                    "candidate_object_sha256": identity["candidate_object_sha256"],
+                }
+            ],
+            "inspector": {
+                "path": inspector.name,
+                "sha256": artifact_digests["inspector"],
+            },
+            "candidate_object": {
+                "path": candidate_object.name,
+                "sha256": artifact_digests["candidate_object"],
+            },
+        },
+        "producer_versions": {"mwcc_retro": "mwcc-retro-backend-trace.v2"},
+    }
+    manifest_path = directory / "bundle.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return BundleV2Fixture(manifest_path, backend, candidate_object)
+
+
+@pytest.fixture
+def bundle_v2(tmp_path: Path) -> BundleV2Fixture:
+    return _write_v2_bundle(tmp_path / "paired")
+
+
+def _rewrite_v2_backend(fixture: BundleV2Fixture, mutate: Callable[[dict[str, Any]], None]) -> None:
+    trace = json.loads(fixture.backend.read_text(encoding="utf-8"))
+    mutate(trace)
+    fixture.backend.write_text(json.dumps(trace), encoding="utf-8")
+    _rewrite_manifest(
+        fixture.manifest,
+        lambda payload: payload["artifacts"]["backend"][0].__setitem__("sha256", _sha256(fixture.backend.read_bytes())),
+    )
+
+
+def _rewrite_v2_identity(fixture: BundleV2Fixture, mutate: Callable[[dict[str, str]], None]) -> None:
+    trace = json.loads(fixture.backend.read_text(encoding="utf-8"))
+    bindings = trace["functions"][0]["object_bindings"]
+    identity = bindings["capture_identity"]
+    mutate(identity)
+    payload = {key: value for key, value in identity.items() if key != "capture_run_id"}
+    identity["capture_run_id"] = _sha256(canonical_bytes(payload))
+    bindings["capture_run_id"] = identity["capture_run_id"]
+    fixture.backend.write_text(json.dumps(trace), encoding="utf-8")
+
+    def update_manifest(manifest: dict[str, Any]) -> None:
+        reference = manifest["artifacts"]["backend"][0]
+        reference["sha256"] = _sha256(fixture.backend.read_bytes())
+        reference["capture_identity_sha256"] = _sha256(canonical_bytes(identity))
+        for key in (
+            "compiler_executable_sha256",
+            "mwcc_command_sha256",
+            "environment_digest",
+            "candidate_object_sha256",
+        ):
+            reference[key] = identity[key]
+
+    _rewrite_manifest(fixture.manifest, update_manifest)
+
+
+def test_bundle_v2_validates_identity_and_exposes_paths(
+    bundle_v2: BundleV2Fixture,
+) -> None:
+    bundle = load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+    assert isinstance(bundle.manifest, FrontierBundleManifestV2)
+    assert bundle.candidate_object_path == bundle_v2.candidate_object.resolve()
+    assert bundle.backend_paths("backend-trace.v2") == (bundle_v2.backend.resolve(),)
+    assert bundle.backend_paths("backend-trace.v1") == ()
+
+
+def test_bundle_v2_rejects_candidate_object_digest_mismatch(
+    bundle_v2: BundleV2Fixture,
+) -> None:
+    bundle_v2.candidate_object.write_bytes(b"changed")
+
+    with pytest.raises(BundleInputError, match="candidate object digest mismatch"):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("source_sha256", "6" * 64, "capture source digest mismatch"),
+        ("environment_digest", "7" * 64, "capture environment digest mismatch"),
+        ("function", "other", "capture function mismatch"),
+    ],
+)
+def test_bundle_v2_rejects_capture_identity_compile_mismatch(
+    bundle_v2: BundleV2Fixture, field: str, value: str, match: str
+) -> None:
+    _rewrite_v2_identity(bundle_v2, lambda identity: identity.__setitem__(field, value))
+
+    with pytest.raises(BundleInputError, match=match):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
+@pytest.mark.parametrize(
+    "pin",
+    [
+        "capture_identity_sha256",
+        "compiler_executable_sha256",
+        "mwcc_command_sha256",
+        "environment_digest",
+        "candidate_object_sha256",
+    ],
+)
+def test_bundle_v2_rejects_backend_identity_pin_mismatch(bundle_v2: BundleV2Fixture, pin: str) -> None:
+    _rewrite_manifest(
+        bundle_v2.manifest,
+        lambda payload: payload["artifacts"]["backend"][0].__setitem__(pin, "9" * 64),
+    )
+
+    with pytest.raises(BundleInputError, match=pin.replace("_", " ")):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
+def test_bundle_v2_rejects_recomputed_capture_run_id_mismatch(
+    bundle_v2: BundleV2Fixture,
+) -> None:
+    def mutate(trace: dict[str, Any]) -> None:
+        trace["functions"][0]["object_bindings"]["capture_identity"]["capture_run_id"] = "8" * 64
+
+    _rewrite_v2_backend(bundle_v2, mutate)
+
+    with pytest.raises(BundleInputError, match="capture run ID mismatch"):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
+def test_bundle_v2_rejects_object_bindings_capture_run_id_mismatch(
+    bundle_v2: BundleV2Fixture,
+) -> None:
+    _rewrite_v2_backend(
+        bundle_v2,
+        lambda trace: trace["functions"][0]["object_bindings"].__setitem__("capture_run_id", "8" * 64),
+    )
+
+    with pytest.raises(BundleInputError, match="object bindings capture run ID mismatch"):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
+def test_bundle_v2_capture_identity_is_closed(bundle_v2: BundleV2Fixture) -> None:
+    _rewrite_v2_backend(
+        bundle_v2,
+        lambda trace: trace["functions"][0]["object_bindings"]["capture_identity"].__setitem__("unexpected", True),
+    )
+
+    with pytest.raises(BundleInputError, match="unexpected"):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
+def test_bundle_v2_rejects_non_utf8_backend_as_bundle_input_error(
+    bundle_v2: BundleV2Fixture,
+) -> None:
+    bundle_v2.backend.write_bytes(b"\xff")
+    _rewrite_manifest(
+        bundle_v2.manifest,
+        lambda payload: payload["artifacts"]["backend"][0].__setitem__(
+            "sha256", _sha256(bundle_v2.backend.read_bytes())
+        ),
+    )
+
+    with pytest.raises(BundleInputError, match=r"invalid backend\[0\] trace"):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
+def test_bundle_v2_manifest_is_closed(bundle_v2: BundleV2Fixture) -> None:
+    _rewrite_manifest(bundle_v2.manifest, lambda payload: payload.__setitem__("unexpected", True))
+
+    with pytest.raises(BundleInputError, match="unexpected"):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
+def test_bundle_v1_rejects_backend_trace_v2(tmp_path: Path) -> None:
+    manifest = write_valid_bundle(tmp_path / "paired", label="paired", source="paired", function="fn")
+    _rewrite_manifest(
+        manifest,
+        lambda payload: payload["artifacts"]["backend"][0].__setitem__("format", "backend-trace.v2"),
+    )
+
+    with pytest.raises(BundleInputError, match="backend-trace.v2"):
+        load_bundle(manifest, cli_label="paired", function="fn")
+
+
+def test_bundle_v1_accessors_remain_compatible(tmp_path: Path) -> None:
+    manifest = write_valid_bundle(tmp_path / "paired", label="paired", source="paired", function="fn")
+    bundle = load_bundle(manifest, cli_label="paired", function="fn")
+
+    assert bundle.candidate_object_path is None
+    assert bundle.backend_paths("mwcc-debug-pcdump") == ((manifest.parent / "backend.pcdump.txt").resolve(),)
 
 
 def test_load_bundle_validates_artifacts_and_exposes_text(tmp_path: Path) -> None:
