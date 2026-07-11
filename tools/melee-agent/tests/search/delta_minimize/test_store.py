@@ -372,7 +372,7 @@ def test_symlinked_root_is_rejected(tmp_path: Path) -> None:
         DeltaRunStore(linked)
 
 
-def test_color_target_is_versioned_immutable_and_normalizes_force_keys(tmp_path: Path) -> None:
+def test_color_target_is_content_addressed_and_normalizes_force_keys(tmp_path: Path) -> None:
     store = DeltaRunStore(tmp_path)
     target = {
         "schema_version": "delta-minimize-color-target.v1",
@@ -384,12 +384,19 @@ def test_color_target_is_versioned_immutable_and_normalizes_force_keys(tmp_path:
     }
 
     path = store.write_color_target(target)
-    assert path == tmp_path / "objective" / "color-target.json"
+    assert path.parent == tmp_path / "objective" / "color-targets"
+    assert len(path.stem) == 64
     assert json.loads(path.read_text())["force_phys"] == {"3": 29, "4": 30}
     assert store.write_color_target(dict(target)) == path
 
-    with pytest.raises(DeltaMinimizeError, match="immutable-color-target-conflict"):
-        store.write_color_target({**target, "class_id": 1})
+    next_path = store.write_color_target({**target, "class_id": 1})
+    assert next_path != path
+    assert path.is_file()
+    current = json.loads((tmp_path / "objective" / "color-target-current.json").read_text())
+    assert current == {
+        "artifact": str(next_path.relative_to(tmp_path)),
+        "sha256": next_path.stem,
+    }
 
 
 def test_phase_and_result_paths_use_atomic_store_writes(tmp_path: Path) -> None:

@@ -50,12 +50,12 @@ def _config(tmp_path: Path, **changes: object) -> DeltaMinimizeConfig:
     return DeltaMinimizeConfig(**values)
 
 
-def _objective() -> ObjectiveManifest:
+def _objective(*, desired_physical: int = 3) -> ObjectiveManifest:
     references = {
         "opcode": AxisReference("absolute", "opcode-artifact", None, "fixture", False),
         "color": AxisReference("mixed", "color-artifact", "left", "fixture", False),
         "objobjects": AxisReference("proxy", "objobjects-artifact", "left", "fixture", False),
-        "stack-homes": AxisReference("mixed", "stack-homes-artifact", "right", "fixture", False),
+        "stack-homes": AxisReference("absolute", "stack-homes-artifact", "right", "fixture", False),
     }
     return ObjectiveManifest(
         schema_version="delta-minimize-objectives.v1",
@@ -66,18 +66,18 @@ def _objective() -> ObjectiveManifest:
             "target_kind": "force_proof_proxy",
             "target_coverage": 1.0,
             "causal_closure": False,
-            "provenance": {"fixture": True},
+            "provenance": {"inference": "parent-register-diff", "parent": "left"},
             "roles": [
                 {
                     "original_ig": 1,
-                    "desired_phys": 3,
+                    "desired_phys": desired_physical,
                     "class_id": 0,
                     "descriptor": None,
                     "role_order_rank": 0,
                 }
             ],
         },
-        desired_phys={1: 3},
+        desired_phys={1: desired_physical},
         color_donor="left",
         objobject_donor="left",
         stack_home_donor="right",
@@ -107,7 +107,9 @@ class _CountingFixture:
         self.inspect_calls = 0
         self.parent_generation = 1
         self.expected_object_hash = "expected-object"
+        self.objective_physical = 3
         self.captured_sources: dict[int, bytes] = {}
+        self.target_paths: list[Path] = []
 
     def parent_provenance(self, _config):
         return {
@@ -148,10 +150,12 @@ class _CountingFixture:
 
     def infer_objective(self, _left, _right, _config):
         self.infer_calls += 1
-        return _objective()
+        return _objective(desired_physical=self.objective_physical)
 
-    def score_rows(self, rows, _config):
+    def score_rows(self, rows, score_config):
         self.score_calls += 1
+        assert score_config.target is not None
+        self.target_paths.append(score_config.target)
         row = rows[0]
         candidate_id = row["candidate_id"]
         mask = int(candidate_id.split("-")[1], 2)
@@ -337,6 +341,37 @@ def test_refreshed_parent_profile_invalidates_objective_cache(tmp_path: Path) ->
     assert fixture.infer_calls == 2
 
 
+def test_changed_valid_objective_starts_a_new_target_epoch(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+    first_target = fixture.target_paths[-1]
+
+    fixture.expected_object_hash = "new-expected-object"
+    fixture.objective_physical = 4
+    second = run_delta_minimize(config, backends=fixture.backends())
+    second_target = fixture.target_paths[-1]
+
+    assert first.objective_manifest["desired_phys"] == {"1": 3}
+    assert second.objective_manifest["desired_phys"] == {"1": 4}
+    assert first_target != second_target
+    assert json.loads(first_target.read_text(encoding="utf-8"))["roles"][0]["desired_phys"] == 3
+    assert json.loads(second_target.read_text(encoding="utf-8"))["roles"][0]["desired_phys"] == 4
+    assert fixture.score_calls == 8
+    assert len(set(fixture.target_paths[:4])) == 1
+    assert len(set(fixture.target_paths[4:])) == 1
+
+    current = json.loads((config.out_dir / "objective" / "color-target-current.json").read_text())
+    assert current == {
+        "artifact": str(second_target.relative_to(config.out_dir)),
+        "sha256": second_target.stem,
+    }
+
+    unchanged = run_delta_minimize(config, backends=fixture.backends())
+    assert unchanged.to_dict() == second.to_dict()
+    assert fixture.score_calls == 8
+
+
 def test_objective_cache_persists_context_with_valid_digest(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
     config = _config(tmp_path)
@@ -379,6 +414,15 @@ def test_malformed_objective_cache_context_fails_closed(tmp_path: Path) -> None:
         "donor-value",
         "donor-type",
         "class-type",
+        "class-domain",
+        "desired-phys-range",
+        "descriptor-ig-bool",
+        "descriptor-assigned-range",
+        "reference-artifact-type",
+        "reference-reason-type",
+        "reference-override-type",
+        "reference-unresolved-type",
+        "target-provenance-type",
         "target-payload",
     ),
 )
@@ -406,6 +450,35 @@ def test_invalid_integrity_bound_objective_manifest_fails_closed(
         manifest["color_donor"] = 1
     elif mutation == "class-type":
         manifest["class_id"] = True
+    elif mutation == "class-domain":
+        manifest["class_id"] = 2
+        manifest["target_spec"]["roles"][0]["class_id"] = 2
+    elif mutation == "desired-phys-range":
+        manifest["desired_phys"]["1"] = 32
+        manifest["target_spec"]["roles"][0]["desired_phys"] = 32
+    elif mutation in {"descriptor-ig-bool", "descriptor-assigned-range"}:
+        manifest["target_spec"]["roles"][0]["descriptor"] = {
+            "ig_idx": True if mutation == "descriptor-ig-bool" else 1,
+            "first_def_sig": "li r#,0",
+            "use_site_multiset": [["add", 1]],
+            "is_param": False,
+            "var_name": "value",
+            "var_confidence": "high",
+            "assigned_reg": 32 if mutation == "descriptor-assigned-range" else 3,
+            "live_range": [0, 1],
+            "use_count": 1,
+            "spilled": False,
+        }
+    elif mutation == "reference-artifact-type":
+        manifest["references"]["opcode"]["reference_artifact"] = 1
+    elif mutation == "reference-reason-type":
+        manifest["references"]["opcode"]["inference_reason"] = 1
+    elif mutation == "reference-override-type":
+        manifest["references"]["color"]["override"] = 1
+    elif mutation == "reference-unresolved-type":
+        manifest["references"]["stack-homes"]["unresolved"] = [1]
+    elif mutation == "target-provenance-type":
+        manifest["target_spec"]["provenance"] = {"inference": 1, "parent": "left"}
     elif mutation == "target-payload":
         manifest["target_spec"]["roles"][0]["desired_phys"] = -1
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")

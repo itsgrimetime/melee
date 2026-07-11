@@ -48,6 +48,7 @@ from .evaluator import (
     profile_candidate,
 )
 from .objectives import (
+    COLOR_TARGET_SCHEMA,
     OBJECTIVE_MANIFEST_SCHEMA,
     AxisReference,
     ObjectiveManifest,
@@ -62,6 +63,17 @@ PARSER_SCHEMA_HASH = "opcode.v1+color.v1+objobjects.v1+stack-homes.v1"
 RESULT_SCHEMA = "delta-minimize-result.v1"
 OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v2"
 _OBJECTIVE_AXES = frozenset({"opcode", "color", "objobjects", "stack-homes"})
+_REGISTER_CLASSES = frozenset({0, 1})
+_REFERENCE_FIELDS = frozenset(
+    {
+        "reference_kind",
+        "reference_artifact",
+        "donor",
+        "inference_reason",
+        "override",
+        "unresolved",
+    }
+)
 _OBJECTIVE_FIELDS = frozenset(
     {
         "schema_version",
@@ -267,7 +279,7 @@ def _freeze_json(value: Any) -> Any:
     raise ValueError
 
 
-def _validate_target_descriptor(payload: object) -> None:
+def _validate_target_descriptor(payload: object, *, original_ig: int) -> None:
     if payload is None:
         return
     if not isinstance(payload, Mapping) or set(payload) != {
@@ -285,14 +297,15 @@ def _validate_target_descriptor(payload: object) -> None:
         raise ValueError
     if (
         not _is_nonnegative_int(payload["ig_idx"])
+        or payload["ig_idx"] != original_ig
         or not isinstance(payload["first_def_sig"], str)
         or not isinstance(payload["is_param"], bool)
         or payload["var_name"] is not None
-        and not isinstance(payload["var_name"], str)
+        and (not isinstance(payload["var_name"], str) or not payload["var_name"])
         or payload["var_confidence"] is not None
-        and not isinstance(payload["var_confidence"], str)
+        and (not isinstance(payload["var_confidence"], str) or not payload["var_confidence"])
         or payload["assigned_reg"] is not None
-        and not _is_nonnegative_int(payload["assigned_reg"])
+        and (not _is_nonnegative_int(payload["assigned_reg"]) or payload["assigned_reg"] > 31)
         or not _is_nonnegative_int(payload["use_count"])
         or not isinstance(payload["spilled"], bool)
     ):
@@ -302,6 +315,7 @@ def _validate_target_descriptor(payload: object) -> None:
         not isinstance(live_range, (list, tuple))
         or len(live_range) != 2
         or any(not isinstance(item, int) or isinstance(item, bool) for item in live_range)
+        or not (tuple(live_range) == (-1, -1) or 0 <= live_range[0] <= live_range[1])
     ):
         raise ValueError
     uses = payload["use_site_multiset"]
@@ -316,6 +330,24 @@ def _validate_target_descriptor(payload: object) -> None:
             or not _is_nonnegative_int(item[1])
         ):
             raise ValueError
+
+
+def _validate_target_provenance(payload: object) -> None:
+    if not isinstance(payload, Mapping):
+        raise ValueError
+    if set(payload) == {"inference", "parent"}:
+        if payload["inference"] != "parent-register-diff" or payload["parent"] not in {"left", "right"}:
+            raise ValueError
+        return
+    if set(payload) == {"schema_version", "baseline_dump"}:
+        if (
+            payload["schema_version"] != COLOR_TARGET_SCHEMA
+            or not isinstance(payload["baseline_dump"], str)
+            or not payload["baseline_dump"]
+        ):
+            raise ValueError
+        return
+    raise ValueError
 
 
 def _validate_target_spec(
@@ -337,17 +369,19 @@ def _validate_target_spec(
     coverage = payload["target_coverage"]
     if (
         payload["function"] != function
-        or payload["target_kind"] not in {"force_proof_proxy", "matched_natural"}
-        or not isinstance(coverage, (int, float))
-        or isinstance(coverage, bool)
+        or payload["target_kind"] != "force_proof_proxy"
+        or not isinstance(coverage, float)
         or not math.isfinite(coverage)
         or not 0 <= coverage <= 1
         or not isinstance(payload["causal_closure"], bool)
         or not isinstance(payload["provenance"], Mapping)
         or not isinstance(payload["roles"], (list, tuple))
+        or not payload["roles"]
     ):
         raise ValueError
+    _validate_target_provenance(payload["provenance"])
     role_phys: dict[int, int] = {}
+    ranked_roles: set[int] = set()
     for role in payload["roles"]:
         if not isinstance(role, Mapping) or set(role) != {
             "original_ig",
@@ -363,15 +397,20 @@ def _validate_target_spec(
         if (
             not _is_nonnegative_int(original)
             or not _is_nonnegative_int(physical)
+            or physical > 31
             or role["class_id"] != class_id
             or isinstance(role["class_id"], bool)
             or rank is not None
             and not _is_nonnegative_int(rank)
             or original in role_phys
+            or rank is not None
+            and rank in ranked_roles
         ):
             raise ValueError
-        _validate_target_descriptor(role["descriptor"])
+        _validate_target_descriptor(role["descriptor"], original_ig=original)
         role_phys[original] = physical
+        if rank is not None:
+            ranked_roles.add(rank)
     if role_phys != dict(desired_phys):
         raise ValueError
     return _freeze_json(payload)
@@ -384,8 +423,11 @@ def _objective_from_dict(payload: Mapping[str, Any], *, function: str) -> Object
         if (
             payload["schema_version"] != OBJECTIVE_MANIFEST_SCHEMA
             or payload["function"] != function
-            or not _is_nonnegative_int(payload["class_id"])
+            or payload["class_id"] not in _REGISTER_CLASSES
+            or isinstance(payload["class_id"], bool)
             or not isinstance(payload["desired_phys"], Mapping)
+            or not payload["desired_phys"]
+            or not isinstance(payload["references"], Mapping)
             or set(payload["references"]) != _OBJECTIVE_AXES
         ):
             raise ValueError
@@ -396,6 +438,7 @@ def _objective_from_dict(payload: Mapping[str, Any], *, function: str) -> Object
                 or not role.isdecimal()
                 or str(int(role)) != role
                 or not _is_nonnegative_int(physical)
+                or physical > 31
                 or int(role) in desired
             ):
                 raise ValueError
@@ -409,8 +452,23 @@ def _objective_from_dict(payload: Mapping[str, Any], *, function: str) -> Object
             or stack_donor not in {None, "left", "right"}
         ):
             raise ValueError
-        references = {
-            axis: AxisReference(
+        references: dict[str, AxisReference] = {}
+        for axis, row in payload["references"].items():
+            if (
+                not isinstance(row, Mapping)
+                or set(row) != _REFERENCE_FIELDS
+                or not isinstance(row["reference_kind"], str)
+                or not isinstance(row["reference_artifact"], str)
+                or not row["reference_artifact"]
+                or row["donor"] not in {None, "left", "right"}
+                or not isinstance(row["inference_reason"], str)
+                or not row["inference_reason"]
+                or not isinstance(row["override"], bool)
+                or not isinstance(row["unresolved"], (list, tuple))
+                or any(not isinstance(item, str) or not item for item in row["unresolved"])
+            ):
+                raise ValueError
+            references[axis] = AxisReference(
                 reference_kind=row["reference_kind"],
                 reference_artifact=row["reference_artifact"],
                 donor=row["donor"],
@@ -418,17 +476,26 @@ def _objective_from_dict(payload: Mapping[str, Any], *, function: str) -> Object
                 override=row["override"],
                 unresolved=tuple(row["unresolved"]),
             )
-            for axis, row in payload["references"].items()
-        }
         if (
             references["opcode"].reference_kind != "absolute"
+            or references["opcode"].unresolved
             or references["color"].reference_kind != "mixed"
+            or references["color"].unresolved
             or references["objobjects"].reference_kind != "proxy"
+            or references["objobjects"].unresolved
             or references["stack-homes"].reference_kind not in {"absolute", "mixed"}
             or references["color"].donor != color_donor
             or references["objobjects"].donor != objobject_donor
             or references["stack-homes"].donor != stack_donor
             or references["opcode"].override
+            or color_donor is None
+            and references["color"].override
+            or stack_donor is None
+            and references["stack-homes"].override
+            or references["stack-homes"].reference_kind == "absolute"
+            and references["stack-homes"].unresolved
+            or references["stack-homes"].reference_kind == "mixed"
+            and (not references["stack-homes"].unresolved or references["stack-homes"].donor is None)
         ):
             raise ValueError
         target_spec = _validate_target_spec(

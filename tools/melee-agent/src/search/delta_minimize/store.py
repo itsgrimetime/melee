@@ -570,17 +570,28 @@ class DeltaRunStore:
 
     def write_color_target(self, target_spec: Mapping[str, Any]) -> Path:
         normalized = _json_value(target_spec)
-        path = self._safe_path("objective", "color-target.json")
+        digest = hashlib.sha256(_canonical_json_bytes(normalized)).hexdigest()
+        path = self._safe_path("objective", "color-targets", f"{digest}.json")
         with _exclusive_file_lock(path):
-            if path.exists():
+            existing_blob = _read_regular_bytes(path, corruption="corrupt-color-target-artifact")
+            if existing_blob is not None:
                 try:
-                    existing = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, UnicodeError, json.JSONDecodeError) as error:
-                    raise DeltaMinimizeError("immutable-color-target-conflict") from error
-                if existing != normalized:
-                    raise DeltaMinimizeError("immutable-color-target-conflict")
-                return path
-            write_json_atomic(path, normalized)
+                    existing = json.loads(existing_blob)
+                except (UnicodeError, json.JSONDecodeError) as error:
+                    raise DeltaMinimizeError("corrupt-color-target-artifact") from error
+                if existing != normalized or hashlib.sha256(_canonical_json_bytes(existing)).hexdigest() != digest:
+                    raise DeltaMinimizeError("corrupt-color-target-artifact")
+            else:
+                write_json_atomic(path, normalized)
+        current = self._safe_path("objective", "color-target-current.json")
+        with _exclusive_file_lock(current):
+            write_json_atomic(
+                current,
+                {
+                    "artifact": str(path.relative_to(self.root)),
+                    "sha256": digest,
+                },
+            )
         return path
 
     def write_objective_manifest(self, payload: Mapping[str, Any]) -> Path:
