@@ -14,6 +14,7 @@
 - An explicit external `--score-output-dir` remains the durable location for generated candidate C sources.
 - Temporary verification copies must live under `<repo>/build/diagnostics/score_source_staging/` and must be removed after each scoring attempt.
 - Returned `source_file`, `source_retained`, and `c_file` fields must identify the durable candidate, not a deleted staging copy.
+- When score-source returns a durable repo-local `artifact_source`, `score_command` must be rebuilt with that replayable path; `score_command_executed` may retain the exact transient command for audit.
 - Existing repo-local candidates must be passed to score-source unchanged.
 - Existing timeout, interruption, pcdump retention, blocker, and terminal-safety behavior must remain unchanged.
 
@@ -24,7 +25,7 @@
 **Files:**
 - Modify: `tools/melee-agent/src/mwcc_debug/source_candidate_scoring.py`
 - Modify: `tools/melee-agent/tests/test_candidate_verify.py`
-- Verify: `tools/melee-agent/tests/test_suggest_inlines_cli.py`
+- Modify: `tools/melee-agent/tests/test_suggest_inlines_cli.py`
 
 **Interfaces:**
 - Consumes: `score_retained_source_rows(rows, config, runner=...)` and `build_score_source_command(candidate_path, config, ...)`.
@@ -32,7 +33,9 @@
 
 - [ ] **Step 1: Write a failing external-output regression**
 
-Add a test to `test_candidate_verify.py` with `repo_root=tmp_path / "melee"` and `output_dir=tmp_path / "external"`. Its fake runner must assert that the command's score-source C path resolves under `repo_root`, contains the external candidate text, and is not the durable external path. After scoring, assert the temporary path no longer exists, the external candidate remains, and `source_file`, `source_retained`, and `c_file` all equal the external candidate path. Also retain the existing test coverage proving repo-local paths are passed unchanged.
+Add a test to `test_candidate_verify.py` with `repo_root=tmp_path / "melee"` and `output_dir=tmp_path / "external"`. Its fake runner must assert that the command's score-source C path resolves under `repo_root`, contains the external candidate text, and is not the durable external path; return JSON containing a stable repo-local `artifact_source`. After scoring, assert the temporary path no longer exists, the external candidate remains, `source_file`, `source_retained`, and `c_file` all equal the external candidate path, `score_command_executed` names the deleted transient copy, and `score_command` names the durable artifact source. Also retain the existing test coverage proving repo-local paths are passed unchanged.
+
+Strengthen `test_suggest_inlines_score_output_dir_uses_targetless_retained_source` in `test_suggest_inlines_cli.py` so it does not replace `score_source_candidates`. Mock only the score-source subprocess boundary, assert that the explicit external `score_output_dir` remains in the report while the invoked score-source candidate is repo-local, and assert the report row returns the external durable source path.
 
 - [ ] **Step 2: Run the regression and verify RED**
 
@@ -44,11 +47,11 @@ Expected: FAIL because the score-source command currently receives the external 
 
 Add a private context manager in `source_candidate_scoring.py` that resolves `candidate_path` and `config.repo_root`. If the candidate is inside the repository, yield it unchanged. Otherwise create `<repo>/build/diagnostics/score_source_staging/`, open a uniquely named temporary directory there, copy the candidate bytes to a sanitized `.c` filename, yield that path, and rely on the temporary-directory context for cleanup.
 
-Wrap command construction and runner invocation in that context. Preserve the actual command used in `score_command`, but after merging score-source JSON explicitly set `source_file`, `source_retained`, and `c_file` back to the original durable path. Do not alter timeout/interruption rows, which already use the original candidate path.
+Wrap command construction and runner invocation in that context. Store the exact invoked command in `score_command_executed`. After merging score-source JSON, explicitly set `source_file`, `source_retained`, and `c_file` back to the original durable path. If the payload provides `artifact_source`, rebuild `score_command` with that durable repo-local source; otherwise retain the executed command for diagnostic compatibility. Do not alter timeout/interruption rows, which already use the original candidate path.
 
 - [ ] **Step 4: Run focused GREEN verification**
 
-Run: `PYTHONPATH=tools/melee-agent pytest -q --no-cov tools/melee-agent/tests/test_candidate_verify.py -k 'external or retain_and_score'`
+Run: `PYTHONPATH=tools/melee-agent pytest -q --no-cov tools/melee-agent/tests/test_candidate_verify.py tools/melee-agent/tests/test_suggest_inlines_cli.py -k 'external or retain_and_score or score_output_dir'`
 
 Expected: PASS with the external candidate staged/cleaned and the repo-local candidate path unchanged.
 
@@ -68,6 +71,6 @@ Expected: both suites pass, compileall exits 0, and `git diff --check` is silent
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tools/melee-agent/src/mwcc_debug/source_candidate_scoring.py tools/melee-agent/tests/test_candidate_verify.py
+git add tools/melee-agent/src/mwcc_debug/source_candidate_scoring.py tools/melee-agent/tests/test_candidate_verify.py tools/melee-agent/tests/test_suggest_inlines_cli.py
 git commit -m "fix: stage external score-source candidates"
 ```
