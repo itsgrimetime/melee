@@ -497,6 +497,141 @@ int draw(int x) { return helper(x, 0); }
     assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
 
 
+def test_prototype_suffix_insertion_at_owned_end_stays_independent():
+    left = """\
+int helper(int a);
+int helper(int a) { return a; }
+int draw(int x) { return helper(x); }
+"""
+    right = """\
+int helper(int a, int b), marker = 1;
+int helper(int a, int b) { return a; }
+int draw(int x) { return helper(x, 0); }
+"""
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert len(manifest.atoms) == 2
+    assert masks == (0b00, 0b01, 0b10, 0b11)
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 0b11) == right
+    combinations = set()
+    for mask in masks:
+        candidate = materialize_mask(left, manifest, mask)
+        helper = build_binding_index(candidate).functions["helper"]
+        combinations.add(("marker = 1" in candidate, len(helper.parameter_names)))
+        assert (helper.parameter_names, helper.direct_calls[0].argument_texts) in {
+            (("a",), ("x",)),
+            (("a", "b"), ("x", "0")),
+        }
+    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
+
+
+@pytest.mark.parametrize(
+    ("left_prototype", "right_prototype"),
+    [
+        (
+            "int keep = 0, marker = 1, helper(int a);",
+            "int keep = 0, helper(int a);",
+        ),
+        ("int helper(int a), marker = 1;", "int helper(int a);"),
+    ],
+    ids=("before-owned-declarator", "after-owned-declarator"),
+)
+def test_prototype_sibling_removal_stays_independent(left_prototype, right_prototype):
+    left = f"{left_prototype}\nint helper(int a) {{ return a; }}\nint draw(int x) {{ return helper(x); }}\n"
+    right = f"{right_prototype}\nint helper(int a, int b) {{ return a; }}\nint draw(int x) {{ return helper(x, 0); }}\n"
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert len(manifest.atoms) == 2
+    assert masks == (0b00, 0b01, 0b10, 0b11)
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 0b11) == right
+    combinations = {
+        (
+            "marker = 1" in candidate,
+            len(build_binding_index(candidate).functions["helper"].parameter_names),
+        )
+        for mask in masks
+        for candidate in (materialize_mask(left, manifest, mask),)
+    }
+    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
+
+
+def test_owned_start_and_name_interior_insertions_stay_coupled():
+    pointer_left = """\
+int helper(int a);
+int helper(int a) { return 0; }
+int draw(int x) { return helper(x) != 0; }
+"""
+    pointer_right = """\
+int *helper(int a);
+int *helper(int a) { return 0; }
+int draw(int x) { return helper(x) != 0; }
+"""
+    rename_left = """\
+int heper(int a);
+int heper(int a) { return a; }
+int draw(int x) { return heper(x); }
+"""
+    rename_right = """\
+int helper(int a);
+int helper(int a) { return a; }
+int draw(int x) { return helper(x); }
+"""
+
+    pointer_manifest = delta.extract_delta_manifest(pointer_left, pointer_right, function="draw")
+    rename_manifest = delta.extract_delta_manifest(rename_left, rename_right, function="draw")
+
+    pointer_declaration = build_binding_index(pointer_left).functions["helper"].declaration_signatures[0]
+    rename_binding = build_binding_index(rename_left).functions["heper"]
+    rename_name_spans = (
+        rename_binding.definition_name_span,
+        *rename_binding.declaration_name_spans,
+        *(call.callee_name_span for call in rename_binding.direct_calls),
+    )
+    assert len(pointer_manifest.atoms) == 1
+    assert "helper signature change" in pointer_manifest.atoms[0].summary
+    assert any(
+        patch.left_start == patch.left_end == pointer_declaration.declarator_span[0]
+        for patch in pointer_manifest.atoms[0].patches
+    )
+    assert len(rename_manifest.atoms) == 1
+    assert "heper to helper rename" in rename_manifest.atoms[0].summary
+    assert {patch.left_start for patch in rename_manifest.atoms[0].patches} == {
+        start + 2 for start, _ in rename_name_spans
+    }
+    assert all(start < start + 2 < end for start, end in rename_name_spans)
+    for manifest, source, endpoint in (
+        (pointer_manifest, pointer_left, pointer_right),
+        (rename_manifest, rename_left, rename_right),
+    ):
+        assert enumerate_legal_masks(manifest, max_candidates=2) == (0, 1)
+        assert materialize_mask(source, manifest, 0) == source
+        assert materialize_mask(source, manifest, 1) == endpoint
+
+
+def test_parameter_and_call_insertions_before_closing_delimiters_stay_coupled():
+    manifest = delta.extract_delta_manifest(ARITY_CHANGE_LEFT, ARITY_CHANGE_RIGHT, function="draw")
+    helper = build_binding_index(ARITY_CHANGE_LEFT).functions["helper"]
+    coupled = next(atom for atom in manifest.atoms if "helper signature change" in atom.summary)
+    owned_spans = (
+        helper.parameter_span,
+        *helper.declaration_parameter_spans,
+        *(call.argument_span for call in helper.direct_calls),
+    )
+
+    assert {patch.left_start for patch in coupled.patches} == {end - 1 for _, end in owned_spans}
+    assert {patch.anchor_kind for patch in coupled.patches} >= {
+        "parameter_list",
+        "argument_list",
+    }
+    assert enumerate_legal_masks(manifest, max_candidates=4) == (0b00, 0b01, 0b10, 0b11)
+
+
 def test_function_returning_function_pointer_uses_declared_function_parameters():
     index = build_binding_index(FUNCTION_RETURNING_POINTER_LEFT)
 

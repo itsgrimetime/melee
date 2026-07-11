@@ -427,8 +427,22 @@ def _has_signature_patch(atoms, left: FunctionBinding, right: FunctionBinding) -
     left_spans = _signature_spans(left)
     right_spans = _signature_spans(right)
     return any(
-        any(_spans_touch((patch.left_start, patch.left_end), span) for span in left_spans)
-        or any(_spans_touch((patch.right_start, patch.right_end), span) for span in right_spans)
+        any(
+            _owned_span_intersects_change(
+                (patch.left_start, patch.left_end),
+                span,
+                zero_width_is_insertion=True,
+            )
+            for span in left_spans
+        )
+        or any(
+            _owned_span_intersects_change(
+                (patch.right_start, patch.right_end),
+                span,
+                zero_width_is_insertion=False,
+            )
+            for span in right_spans
+        )
         for atom in atoms
         for patch in atom.patches
     )
@@ -443,11 +457,35 @@ def _signature_change_is_parameter_only(atoms, left: FunctionBinding, right: Fun
         for patch in atom.patches:
             left_change = (patch.left_start, patch.left_end)
             right_change = (patch.right_start, patch.right_end)
-            touches_signature = any(_spans_touch(left_change, span) for span in left_signatures) or any(
-                _spans_touch(right_change, span) for span in right_signatures
+            touches_signature = any(
+                _owned_span_intersects_change(
+                    left_change,
+                    span,
+                    zero_width_is_insertion=True,
+                )
+                for span in left_signatures
+            ) or any(
+                _owned_span_intersects_change(
+                    right_change,
+                    span,
+                    zero_width_is_insertion=False,
+                )
+                for span in right_signatures
             )
-            touches_parameters = any(_spans_touch(left_change, span) for span in left_parameters) or any(
-                _spans_touch(right_change, span) for span in right_parameters
+            touches_parameters = any(
+                _owned_span_intersects_change(
+                    left_change,
+                    span,
+                    zero_width_is_insertion=True,
+                )
+                for span in left_parameters
+            ) or any(
+                _owned_span_intersects_change(
+                    right_change,
+                    span,
+                    zero_width_is_insertion=False,
+                )
+                for span in right_parameters
             )
             if touches_signature and not touches_parameters:
                 return False
@@ -616,8 +654,14 @@ def _atoms_for_span(
     selected: list[str] = []
     for atom in atoms:
         for index, patch in enumerate(atom.patches):
-            if _spans_touch((patch.left_start, patch.left_end), left_span) or _spans_touch(
-                (patch.right_start, patch.right_end), right_span
+            if _owned_span_intersects_change(
+                (patch.left_start, patch.left_end),
+                left_span,
+                zero_width_is_insertion=True,
+            ) or _owned_span_intersects_change(
+                (patch.right_start, patch.right_end),
+                right_span,
+                zero_width_is_insertion=False,
             ):
                 selected.append(atom.atom_id)
                 if reclassified is not None and anchor_kind is not None:
@@ -988,6 +1032,19 @@ def _spans_touch(first: tuple[int, int], second: tuple[int, int]) -> bool:
     if second[0] == second[1]:
         return first[0] <= second[0] <= first[1]
     return first[0] < second[1] and second[0] < first[1]
+
+
+def _owned_span_intersects_change(
+    change: tuple[int, int],
+    owned_span: tuple[int, int],
+    *,
+    zero_width_is_insertion: bool,
+) -> bool:
+    """Test a directional delta against a half-open semantic ownership span."""
+
+    if change[0] == change[1]:
+        return zero_width_is_insertion and owned_span[0] <= change[0] < owned_span[1]
+    return change[0] < owned_span[1] and owned_span[0] < change[1]
 
 
 def _spans_overlap(first: tuple[int, int], second: tuple[int, int]) -> bool:
