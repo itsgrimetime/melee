@@ -50,12 +50,49 @@ def _config(tmp_path: Path, **changes: object) -> DeltaMinimizeConfig:
     return DeltaMinimizeConfig(**values)
 
 
-def _objective(*, desired_physical: int = 3) -> ObjectiveManifest:
+def _objective(
+    *,
+    desired_physical: int = 3,
+    donor_overrides: dict[str, str] | None = None,
+) -> ObjectiveManifest:
+    overrides = donor_overrides or {}
+    color_donor = overrides.get("color", "left")
+    objobject_donor = overrides.get("objobjects", color_donor)
+    stack_donor = overrides.get("stack-homes", "right")
     references = {
-        "opcode": AxisReference("absolute", "opcode-artifact", None, "fixture", False),
-        "color": AxisReference("mixed", "color-artifact", "left", "fixture", False),
-        "objobjects": AxisReference("proxy", "objobjects-artifact", "left", "fixture", False),
-        "stack-homes": AxisReference("absolute", "stack-homes-artifact", "right", "fixture", False),
+        "opcode": AxisReference(
+            "absolute",
+            "opcode-artifact",
+            None,
+            "expected-assembly-absolute;equal-parent-distance",
+            False,
+        ),
+        "color": AxisReference(
+            "mixed",
+            "color-artifact",
+            color_donor,
+            "cross-parent-round-trip-derived-target;"
+            + ("explicit-color-donor-override" if "color" in overrides else "lower-desired-assignment-distance"),
+            "color" in overrides,
+        ),
+        "objobjects": AxisReference(
+            "proxy",
+            "objobjects-artifact",
+            objobject_donor,
+            ("explicit-objobject-donor-override" if "objobjects" in overrides else "inherits-selected-color-donor"),
+            "objobjects" in overrides,
+        ),
+        "stack-homes": AxisReference(
+            "absolute",
+            "stack-homes-artifact",
+            stack_donor,
+            (
+                "explicit-stack-home-donor-override"
+                if "stack-homes" in overrides
+                else "strictly-lower-stack-home-distance"
+            ),
+            "stack-homes" in overrides,
+        ),
     }
     return ObjectiveManifest(
         schema_version="delta-minimize-objectives.v1",
@@ -78,9 +115,9 @@ def _objective(*, desired_physical: int = 3) -> ObjectiveManifest:
             ],
         },
         desired_phys={1: desired_physical},
-        color_donor="left",
-        objobject_donor="left",
-        stack_home_donor="right",
+        color_donor=color_donor,
+        objobject_donor=objobject_donor,
+        stack_home_donor=stack_donor,
         references=references,
     )
 
@@ -148,9 +185,12 @@ class _CountingFixture:
         self.parent_objective_calls += 1
         return (side, raw.source_hash)
 
-    def infer_objective(self, _left, _right, _config):
+    def infer_objective(self, _left, _right, config):
         self.infer_calls += 1
-        return _objective(desired_physical=self.objective_physical)
+        return _objective(
+            desired_physical=self.objective_physical,
+            donor_overrides=dict(config.donor_overrides),
+        )
 
     def score_rows(self, rows, score_config):
         self.score_calls += 1
@@ -491,6 +531,113 @@ def test_invalid_integrity_bound_objective_manifest_fails_closed(
 
     with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
         run_delta_minimize(config, backends=fixture.backends())
+
+
+@pytest.mark.parametrize(
+    ("overrides", "mutation"),
+    (
+        ({}, "default-objobject-donor-diverges"),
+        ({}, "spurious-color-override"),
+        ({"color": "left"}, "missing-color-override"),
+        ({"color": "right"}, "color-context-donor-mismatch"),
+        ({"objobjects": "right"}, "missing-objobject-override"),
+        ({"objobjects": "right"}, "objobject-context-donor-mismatch"),
+        ({"stack-homes": "right"}, "missing-stack-override"),
+        ({"stack-homes": "left"}, "stack-context-donor-mismatch"),
+        ({}, "color-inference-reason-mismatch"),
+        ({}, "objobject-inference-reason-mismatch"),
+        ({}, "stack-inference-reason-mismatch"),
+    ),
+)
+def test_cached_objective_donor_semantics_are_bound_to_context(
+    tmp_path: Path,
+    overrides: dict[str, str],
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path, donor_overrides=overrides)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "objective-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "default-objobject-donor-diverges":
+        manifest["objobject_donor"] = "right"
+        manifest["references"]["objobjects"]["donor"] = "right"
+    elif mutation == "spurious-color-override":
+        manifest["references"]["color"]["override"] = True
+        manifest["references"]["color"]["inference_reason"] = (
+            "cross-parent-round-trip-derived-target;explicit-color-donor-override"
+        )
+    elif mutation == "missing-color-override":
+        manifest["references"]["color"]["override"] = False
+        manifest["references"]["color"]["inference_reason"] = (
+            "cross-parent-round-trip-derived-target;lower-desired-assignment-distance"
+        )
+    elif mutation == "color-context-donor-mismatch":
+        manifest["color_donor"] = "left"
+        manifest["references"]["color"]["donor"] = "left"
+    elif mutation == "missing-objobject-override":
+        manifest["references"]["objobjects"]["override"] = False
+        manifest["references"]["objobjects"]["inference_reason"] = "inherits-selected-color-donor"
+    elif mutation == "objobject-context-donor-mismatch":
+        manifest["objobject_donor"] = "left"
+        manifest["references"]["objobjects"]["donor"] = "left"
+    elif mutation == "missing-stack-override":
+        manifest["references"]["stack-homes"]["override"] = False
+        manifest["references"]["stack-homes"]["inference_reason"] = "strictly-lower-stack-home-distance"
+    elif mutation == "stack-context-donor-mismatch":
+        manifest["stack_home_donor"] = "right"
+        manifest["references"]["stack-homes"]["donor"] = "right"
+    elif mutation == "color-inference-reason-mismatch":
+        manifest["references"]["color"]["inference_reason"] = (
+            "cross-parent-round-trip-derived-target;explicit-color-donor-override"
+        )
+    elif mutation == "objobject-inference-reason-mismatch":
+        manifest["references"]["objobjects"]["inference_reason"] = "explicit-objobject-donor-override"
+    elif mutation == "stack-inference-reason-mismatch":
+        manifest["references"]["stack-homes"]["inference_reason"] = "explicit-stack-home-donor-override"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    inputs_path = config.out_dir / "objective-inputs.json"
+    inputs = json.loads(inputs_path.read_text(encoding="utf-8"))
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    inputs["objective_manifest_digest"] = hashlib.sha256(canonical).hexdigest()
+    inputs_path.write_text(json.dumps(inputs), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_valid_cached_objective_with_all_donor_overrides_is_reused(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(
+        tmp_path,
+        donor_overrides={"color": "right", "objobjects": "left", "stack-homes": "left"},
+    )
+
+    first = run_delta_minimize(config, backends=fixture.backends())
+    second = run_delta_minimize(config, backends=fixture.backends())
+
+    assert second.to_dict() == first.to_dict()
+    assert fixture.parent_objective_calls == 2
+    assert fixture.infer_calls == 1
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"opcode": "left"},
+        {"color": "middle"},
+        {"stack_homes": "left"},
+        {"color": True},
+    ),
+)
+def test_run_config_rejects_unsupported_donor_overrides(
+    tmp_path: Path,
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(DeltaMinimizeError, match="^invalid-delta-minimize-config$"):
+        _config(tmp_path, donor_overrides=overrides)
 
 
 @pytest.mark.parametrize("mutation", ("manifest-payload", "manifest-digest"))

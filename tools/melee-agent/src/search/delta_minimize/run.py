@@ -63,6 +63,7 @@ PARSER_SCHEMA_HASH = "opcode.v1+color.v1+objobjects.v1+stack-homes.v1"
 RESULT_SCHEMA = "delta-minimize-result.v1"
 OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v2"
 _OBJECTIVE_AXES = frozenset({"opcode", "color", "objobjects", "stack-homes"})
+_DONOR_OVERRIDE_AXES = frozenset({"color", "objobjects", "stack-homes"})
 _REGISTER_CLASSES = frozenset({0, 1})
 _REFERENCE_FIELDS = frozenset(
     {
@@ -89,6 +90,17 @@ _OBJECTIVE_FIELDS = frozenset(
 )
 
 
+def _canonical_donor_overrides(payload: object) -> dict[str, str]:
+    if not isinstance(payload, Mapping) or set(payload) - _DONOR_OVERRIDE_AXES:
+        raise ValueError
+    overrides: dict[str, str] = {}
+    for axis, donor in payload.items():
+        if not isinstance(axis, str) or not isinstance(donor, str) or donor not in {"left", "right"}:
+            raise ValueError
+        overrides[axis] = donor
+    return dict(sorted(overrides.items()))
+
+
 @dataclass(frozen=True)
 class DeltaMinimizeConfig:
     function: str
@@ -112,10 +124,14 @@ class DeltaMinimizeConfig:
             or not isinstance(self.max_candidates, int)
             or isinstance(self.max_candidates, bool)
             or self.max_candidates < 1
-            or not isinstance(self.donor_overrides, Mapping)
             or not isinstance(self.include_objobjects, bool)
         ):
             raise DeltaMinimizeError("invalid-delta-minimize-config")
+        try:
+            overrides = _canonical_donor_overrides(self.donor_overrides)
+        except ValueError as error:
+            raise DeltaMinimizeError("invalid-delta-minimize-config") from error
+        object.__setattr__(self, "donor_overrides", MappingProxyType(overrides))
 
 
 @dataclass(frozen=True)
@@ -522,6 +538,84 @@ def _objective_from_dict(payload: Mapping[str, Any], *, function: str) -> Object
         raise DeltaMinimizeError("corrupt-objective-manifest") from error
 
 
+def _validate_objective_donor_context(
+    objective: ObjectiveManifest,
+    donor_overrides: Mapping[str, str],
+) -> None:
+    """Bind cached donor semantics to the objective-input context.
+
+    The manifest digest proves integrity, but only this check proves that its
+    donor selections, override flags, and inference explanations could have
+    been emitted for the bound command inputs.
+    """
+    try:
+        overrides = _canonical_donor_overrides(donor_overrides)
+        references = objective.references
+        opcode = references["opcode"]
+        color = references["color"]
+        objobjects = references["objobjects"]
+        stack = references["stack-homes"]
+
+        opcode_reasons = {
+            None: "expected-assembly-absolute;equal-parent-distance",
+            "left": "expected-assembly-absolute;left-parent-closer",
+            "right": "expected-assembly-absolute;right-parent-closer",
+        }
+        if opcode.override or opcode.inference_reason != opcode_reasons[opcode.donor]:
+            raise ValueError
+
+        provenance = objective.target_spec["provenance"]
+        target_reason = (
+            "cross-parent-round-trip-derived-target" if "inference" in provenance else "explicit-versioned-color-target"
+        )
+        color_override = overrides.get("color")
+        if color_override is not None:
+            color_reason = "explicit-color-donor-override"
+            if objective.color_donor != color_override:
+                raise ValueError
+        elif objective.color_donor is None:
+            color_reason = "equal-assignment-distance-identical-secondary-profiles"
+        else:
+            color_reason = "lower-desired-assignment-distance"
+        if (
+            color.override != (color_override is not None)
+            or color.inference_reason != f"{target_reason};{color_reason}"
+        ):
+            raise ValueError
+
+        objobject_override = overrides.get("objobjects")
+        if objobject_override is not None:
+            expected_objobject_donor = objobject_override
+            objobject_reason = "explicit-objobject-donor-override"
+        else:
+            if objective.color_donor is None:
+                raise ValueError
+            expected_objobject_donor = objective.color_donor
+            objobject_reason = "inherits-selected-color-donor"
+        if (
+            objective.objobject_donor != expected_objobject_donor
+            or objobjects.override != (objobject_override is not None)
+            or objobjects.inference_reason != objobject_reason
+        ):
+            raise ValueError
+
+        stack_override = overrides.get("stack-homes")
+        if stack_override is not None:
+            stack_reason = "explicit-stack-home-donor-override"
+            if objective.stack_home_donor != stack_override:
+                raise ValueError
+        elif objective.stack_home_donor is None:
+            if stack.reference_kind != "absolute":
+                raise ValueError
+            stack_reason = "equal-absolute-stack-home-distance"
+        else:
+            stack_reason = "strictly-lower-stack-home-distance"
+        if stack.override != (stack_override is not None) or stack.inference_reason != stack_reason:
+            raise ValueError
+    except (KeyError, TypeError, ValueError) as error:
+        raise DeltaMinimizeError("corrupt-objective-manifest") from error
+
+
 def _load_json(path: Path) -> Mapping[str, Any] | None:
     if not path.exists():
         return None
@@ -729,6 +823,7 @@ def _load_or_infer_objective(
         raise DeltaMinimizeError("corrupt-objective-cache-context")
     if old_context == context and old_manifest is not None:
         objective = _objective_from_dict(old_manifest, function=config.function)
+        _validate_objective_donor_context(objective, config.donor_overrides)
     else:
         left = active.parent_objective(parents.left, "left", config)
         right = active.parent_objective(parents.right, "right", config)
@@ -737,6 +832,7 @@ def _load_or_infer_objective(
             raise DeltaMinimizeError("invalid-objective-manifest")
         try:
             objective = _objective_from_dict(objective.to_dict(), function=config.function)
+            _validate_objective_donor_context(objective, config.donor_overrides)
         except DeltaMinimizeError as error:
             raise DeltaMinimizeError("invalid-objective-manifest") from error
         objective_payload = objective.to_dict()
