@@ -7,7 +7,11 @@ from types import MappingProxyType, SimpleNamespace
 import pytest
 
 from src.mwcc_debug import role_descriptor
-from src.mwcc_debug.causal_diff.alignment import align_anchor, build_role_comparisons
+from src.mwcc_debug.causal_diff.alignment import (
+    _normalized_instruction,
+    align_anchor,
+    build_role_comparisons,
+)
 from src.mwcc_debug.causal_diff.asm_adapter import (
     CheckdiffEvidence,
     CheckdiffInstruction,
@@ -38,6 +42,11 @@ def _provenance(*input_record_ids: str) -> Provenance:
         derivation_rule="unit-test-evidence",
         input_record_ids=tuple(input_record_ids),
     )
+
+
+def test_normalized_instruction_treats_addi_zero_as_register_copy() -> None:
+    assert _normalized_instruction("addi", "r22,r21,0") == _normalized_instruction("mr", "r64,r53")
+    assert _normalized_instruction("addi", "r#,r#,0") == "mr r#,r#"
 
 
 def _node(
@@ -119,7 +128,7 @@ def _graph(
     absent_stack: bool = False,
 ) -> FrontierGraph:
     compile_id = hashlib.sha256(label.encode()).hexdigest()
-    def_ig, use_ig = ((40, 41) if label == "direct" else (66, 67))
+    def_ig, use_ig = (40, 41) if label == "direct" else (66, 67)
     current_regs = (("r", 22), ("r", 21)) if label == "direct" else (("r", 20), ("r", 19))
     expected_regs = (("r", 22), ("r", 0 if fixed_address_base else 21))
     if fixed_address_base:
@@ -259,18 +268,14 @@ def _graph(
             if missing_use and semantic_role == "use" and raw_position == 1:
                 continue
             edges.append(
-            _edge(
-                compile_id,
-                "defines-virtual" if semantic_role == "def" else "uses-virtual",
-                occurrence,
-                virtual_nodes[raw_position],
-                attributes={"operand_position": raw_position},
-                confidence=(
-                    Confidence.HEURISTIC
-                    if heuristic_role == semantic_role
-                    else Confidence.DERIVED_UNIQUE
-                ),
-            )
+                _edge(
+                    compile_id,
+                    "defines-virtual" if semantic_role == "def" else "uses-virtual",
+                    occurrence,
+                    virtual_nodes[raw_position],
+                    attributes={"operand_position": raw_position},
+                    confidence=(Confidence.HEURISTIC if heuristic_role == semantic_role else Confidence.DERIVED_UNIQUE),
+                )
             )
 
     descriptors = {
@@ -311,9 +316,7 @@ def _graph(
         pcdump_text="",
         role_compile={0: descriptors},
         nodes_by_class_ig=MappingProxyType(nodes_by_class_ig),
-        nodes_by_virtual=MappingProxyType(
-            {("r", def_ig): virtual_def.record_id, ("r", use_ig): virtual_use.record_id}
-        ),
+        nodes_by_virtual=MappingProxyType({("r", def_ig): virtual_def.record_id, ("r", use_ig): virtual_use.record_id}),
     )
     frame = FrameEvidence(
         result=AdapterResult(nodes=(() if absent_stack else (stack,))),
@@ -529,8 +532,7 @@ def test_added_material_node_emits_incident_edge_added_delta() -> None:
     alignment = align_anchor(pair, 0x234, ())
     deltas = diff_frontiers(pair, build_role_comparisons(alignment, pair))
     assert any(
-        record.relation_kind == "edge-added" and record.right_record_id == incident.record_id
-        for record in deltas
+        record.relation_kind == "edge-added" and record.right_record_id == incident.record_id for record in deltas
     )
 
 
@@ -551,6 +553,5 @@ def test_removed_material_node_emits_incident_edge_removed_delta() -> None:
     alignment = align_anchor(pair, 0x234, ())
     deltas = diff_frontiers(pair, build_role_comparisons(alignment, pair))
     assert any(
-        record.relation_kind == "edge-removed" and record.left_record_id == incident.record_id
-        for record in deltas
+        record.relation_kind == "edge-removed" and record.left_record_id == incident.record_id for record in deltas
     )

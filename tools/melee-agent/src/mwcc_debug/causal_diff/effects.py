@@ -90,7 +90,7 @@ def _label(graph: FrontierGraph) -> str:
 
 
 def _assigned_phys(node: EvidenceNode) -> int | None:
-    for key in ("assigned_reg", "physical_register", "selected_reg", "color"):
+    for key in ("assigned_phys", "assigned_reg", "physical_register", "selected_reg", "color"):
         value = node.attributes.get(key)
         if isinstance(value, int) and not isinstance(value, bool):
             return value
@@ -129,9 +129,7 @@ def _allocator_effects(alignment: AnchorAlignment) -> tuple[AllocatorEffect, ...
         tied.setdefault((pair.left.record_id, pair.right.record_id), []).append(key)
 
     effects: list[AllocatorEffect] = []
-    for _identity, keys in sorted(
-        tied.items(), key=lambda item: tuple(_operand_sort_key(key) for key in item[1])
-    ):
+    for _identity, keys in sorted(tied.items(), key=lambda item: tuple(_operand_sort_key(key) for key in item[1])):
         ordered_keys = sorted(keys, key=_operand_sort_key)
         roles = tuple(roles_by_key[key] for key in ordered_keys)
         expected_values = {role.expected_phys for role in roles}
@@ -239,16 +237,10 @@ def _stack_effects(
     for effect in allocator_effects:
         roots_by_label[effect.first_label].add(effect.role_correspondence.left.record_id)
         roots_by_label[effect.second_label].add(effect.role_correspondence.right.record_id)
-    reachable = {
-        label: _reachable_records(graphs_by_label[label], roots)
-        for label, roots in roots_by_label.items()
-    }
+    reachable = {label: _reachable_records(graphs_by_label[label], roots) for label, roots in roots_by_label.items()}
     first_label, second_label = sorted(graphs_by_label)
     first_graph, second_graph = graphs_by_label[first_label], graphs_by_label[second_label]
-    roles = sorted(
-        set(first_graph.frame.expected_stack_roles)
-        | set(second_graph.frame.expected_stack_roles)
-    )
+    roles = sorted(set(first_graph.frame.expected_stack_roles) | set(second_graph.frame.expected_stack_roles))
     effects: list[StackEffect] = []
     abstentions: list[EffectAbstention] = []
     for role_key in roles:
@@ -258,14 +250,10 @@ def _stack_effects(
             if (interval := graph.frame.expected_stack_roles.get(role_key)) is not None
         }
         if not expected_values:
-            abstentions.append(
-                EffectAbstention(role_key, AbstentionReason.MISSING_EXPECTED_LAYOUT)
-            )
+            abstentions.append(EffectAbstention(role_key, AbstentionReason.MISSING_EXPECTED_LAYOUT))
             continue
         if len(expected_values) != 1:
-            abstentions.append(
-                EffectAbstention(role_key, AbstentionReason.CONTRADICTORY_EXPECTED_LAYOUT)
-            )
+            abstentions.append(EffectAbstention(role_key, AbstentionReason.CONTRADICTORY_EXPECTED_LAYOUT))
             continue
         expected = next(iter(expected_values))
         first_candidates = _current_stack_candidates(first_graph, role_key)
@@ -292,10 +280,17 @@ def _stack_effects(
         second_node = second_candidates[0] if second_candidates else None
         first_reachable = first_node is not None and first_node.record_id in reachable[first_label][0]
         second_reachable = second_node is not None and second_node.record_id in reachable[second_label][0]
-        if not first_reachable and not second_reachable:
+        uniquely_mapped_pair = (
+            first_node is not None
+            and second_node is not None
+            and first_graph.frame.current_stack_nodes.get(role_key) == first_node.record_id
+            and second_graph.frame.current_stack_nodes.get(role_key) == second_node.record_id
+        )
+        if not first_reachable and not second_reachable and not uniquely_mapped_pair:
             continue
-        first_node = first_node if first_reachable else None
-        second_node = second_node if second_reachable else None
+        if not uniquely_mapped_pair:
+            first_node = first_node if first_reachable else None
+            second_node = second_node if second_reachable else None
         if _stack_shape(first_node) == _stack_shape(second_node):
             continue
         first_exact = _stack_exact(first_node, expected)
@@ -331,9 +326,7 @@ def _stack_effects(
     return tuple(sorted(effects, key=lambda effect: (effect.role_key, effect.effect_id))), tuple(abstentions)
 
 
-def _quality_by_label(
-    first_label: str, second_label: str, direction: EffectDirection
-) -> dict[str, str]:
+def _quality_by_label(first_label: str, second_label: str, direction: EffectDirection) -> dict[str, str]:
     if direction == "both-exact":
         return {first_label: "exact", second_label: "exact"}
     if direction == "first-exact-second-mismatch":
@@ -350,9 +343,7 @@ def _effect_pairs(
 ) -> tuple[EffectPair, ...]:
     pairs: list[EffectPair] = []
     for allocator in allocator_effects:
-        allocator_quality = _quality_by_label(
-            allocator.first_label, allocator.second_label, allocator.direction
-        )
+        allocator_quality = _quality_by_label(allocator.first_label, allocator.second_label, allocator.direction)
         for stack in stack_effects:
             stack_quality = _quality_by_label(stack.first_label, stack.second_label, stack.direction)
             eligible = [
@@ -382,9 +373,7 @@ def _effect_pairs(
     return tuple(sorted(pairs, key=lambda pair: (pair.allocator.effect_id, pair.stack.effect_id, pair.pair_id)))
 
 
-def derive_effects(
-    alignment: AnchorAlignment, graphs: Iterable[FrontierGraph]
-) -> DerivedEffects:
+def derive_effects(alignment: AnchorAlignment, graphs: Iterable[FrontierGraph]) -> DerivedEffects:
     """Derive effects with label-sorted direction independent of CLI order."""
 
     graph_pair = tuple(graphs)

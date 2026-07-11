@@ -314,6 +314,36 @@ def test_pcode_operand_roles_handle_update_and_read_modify_write() -> None:
     assert _confidence("exact") is Confidence.HEURISTIC
 
 
+@pytest.mark.parametrize(
+    ("opcode", "operands", "regs", "expected"),
+    [
+        ("cmp", "cr0,r32,r33", [("r", 32), ("r", 33)], ({"use"}, {"use"})),
+        ("fmuls", "f32,f33,f34", [("f", 32), ("f", 33), ("f", 34)], ({"def"}, {"use"}, {"use"})),
+        ("fsubs", "f32,f33,f34", [("f", 32), ("f", 33), ("f", 34)], ({"def"}, {"use"}, {"use"})),
+        ("lbz", "r32,0(r33)", [("r", 32), ("r", 33)], ({"def"}, {"use"})),
+        ("lbzx", "r32,(r33,r34)", [("r", 32), ("r", 33), ("r", 34)], ({"def"}, {"use"}, {"use"})),
+        ("lfd", "f32,0(r33)", [("f", 32), ("r", 33)], ({"def"}, {"use"})),
+        ("lfs", "f32,0(r33)", [("f", 32), ("r", 33)], ({"def"}, {"use"})),
+        ("lis", "r32,17200", [("r", 32)], ({"def"},)),
+        ("stfs", "f32,0(r33)", [("f", 32), ("r", 33)], ({"use"}, {"use"})),
+        ("stw", "r32,0(r33)", [("r", 32), ("r", 33)], ({"use"}, {"use"})),
+        ("xoris", "r32,r33,0x8000", [("r", 32), ("r", 33)], ({"def"}, {"use"})),
+    ],
+)
+def test_pcode_operand_roles_cover_common_ppc_forms(
+    opcode: str,
+    operands: str,
+    regs: list[tuple[str, int]],
+    expected: tuple[set[str], ...],
+) -> None:
+    roles, confidence = _operand_roles(
+        Instruction(opcode, operands, [], regs),
+        "mwcc-debug-pcdump.v1",
+    )
+    assert roles == tuple(frozenset(role) for role in expected)
+    assert confidence is Confidence.OBSERVED
+
+
 def test_pcode_operand_role_contract_rejects_prefix_near_misses_and_unknown_versions() -> None:
     near_miss = Instruction("addi_fake", "r32,r33,1", [], [("r", 32), ("r", 33)])
     supported = Instruction("addi", "r32,r33,1", [], [("r", 32), ("r", 33)])

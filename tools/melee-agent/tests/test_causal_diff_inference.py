@@ -491,8 +491,6 @@ def test_inference_rejects_evidence_depth_outside_one_to_eight(depth: int) -> No
     (
         _case(missing_owner_side="left"),
         _case(missing_owner_side="right"),
-        _case(owner_relation="node-added"),
-        _case(owner_relation="node-removed"),
     ),
 )
 def test_shared_owner_requires_changed_endpoints_and_complete_bilateral_paths(
@@ -502,6 +500,24 @@ def test_shared_owner_requires_changed_endpoints_and_complete_bilateral_paths(
 
     assert verdict.status is VerdictStatus.ABSTAIN
     assert "gate-3-shared-owner" in verdict.failed_gates
+
+
+@pytest.mark.parametrize("owner_relation", ("node-added", "node-removed"))
+def test_missing_bilateral_source_object_binding_abstains_at_gate_nine(
+    owner_relation: str,
+) -> None:
+    case = _case(owner_relation=owner_relation)
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+    report = build_report(_graphs(case), case.effects, case.comparisons)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+    assert verdict.allocator_delta["expected_phys"] == 22
+    assert verdict.stack_delta["expected_offset"] == 16
+    assert "Collect the named missing proof evidence" in verdict.recommendation
+    assert report.analysis_status is AnalysisStatus.ABSTAINED
+    assert report.missing_evidence == ("source-object-binding-missing",)
 
 
 def test_proof_paths_include_owner_and_role_comparison_records() -> None:
@@ -546,13 +562,13 @@ def test_complete_heuristic_evidence_caps_at_candidate(case: InferenceCase, fail
     assert failed_gate in verdict.failed_gates
 
 
-def test_complete_heuristic_owner_comparison_caps_at_candidate() -> None:
+def test_heuristic_owner_comparison_cannot_supply_source_object_binding() -> None:
     case = _case(owner_confidence=Confidence.HEURISTIC)
 
     verdict = infer_pair(case.pair, case.query, case.comparisons)
 
-    assert verdict.status is VerdictStatus.CANDIDATE_CAUSE
-    assert "gate-3-shared-owner" in verdict.failed_gates
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
 
 
 def test_unrelated_edge_delta_cannot_satisfy_stack_delta_gate() -> None:

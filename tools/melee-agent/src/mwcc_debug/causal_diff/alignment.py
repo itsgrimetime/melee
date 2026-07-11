@@ -16,6 +16,10 @@ from .graph import FrontierGraph
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance, min_confidence
 
 _REGISTER = re.compile(r"\b([rf])\d+\b")
+_ADDI_ZERO_COPY = re.compile(
+    r"^\s*r(?:\d+|#)\s*,\s*r(?P<source>\d+|#)\s*,\s*(?:0|0x0)\s*$",
+    re.IGNORECASE,
+)
 _ASSERTION = re.compile(r"^(?P<label>[A-Za-z0-9_-]+):(?P<operand>(?:def|use):\d+)=(?P<spec>.+)$")
 _CLASS_IG = re.compile(r"^(?P<class>0|1|gpr|fpr|r|f):(?P<ig>\d+)$", re.IGNORECASE)
 _VIRTUAL = re.compile(r"^(?P<kind>[rf])(?P<number>\d+)$", re.IGNORECASE)
@@ -128,14 +132,47 @@ def _compile_id(graph: FrontierGraph) -> str:
 
 
 def _normalized_instruction(opcode: object, operands: object) -> str:
-    normalized_operands = _REGISTER.sub(lambda match: f"{match.group(1).lower()}#", str(operands).lower())
+    normalized_opcode = str(opcode).lower()
+    raw_operands = str(operands).lower()
+    copy_match = _ADDI_ZERO_COPY.fullmatch(raw_operands)
+    if normalized_opcode == "addi" and copy_match is not None and copy_match.group("source") != "0":
+        normalized_opcode = "mr"
+        raw_operands = raw_operands.rsplit(",", 1)[0]
+    normalized_operands = _REGISTER.sub(lambda match: f"{match.group(1).lower()}#", raw_operands)
     normalized_operands = re.sub(r"\s+", "", normalized_operands)
-    return f"{str(opcode).lower()} {normalized_operands}".rstrip()
+    return f"{normalized_opcode} {normalized_operands}".rstrip()
 
 
-def _allocatable_operand(
-    opcode: str, raw_position: int, register_kind: str, physical: int
-) -> bool:
+def _normalized_instruction_text(value: object) -> str:
+    opcode, separator, operands = str(value).strip().partition(" ")
+    return _normalized_instruction(opcode, operands if separator else "")
+
+
+def _pcode_neighborhoods(graph: FrontierGraph) -> Mapping[str, tuple[str, ...]]:
+    groups: dict[int, list[EvidenceNode]] = {}
+    for node in graph.store.find_nodes(_compile_id(graph), "pcode-occurrence"):
+        pass_index = node.attributes.get("pass_index")
+        if isinstance(pass_index, int):
+            groups.setdefault(pass_index, []).append(node)
+    neighborhoods: dict[str, tuple[str, ...]] = {}
+    for nodes in groups.values():
+        ordered = sorted(
+            nodes,
+            key=lambda node: (
+                int(node.attributes.get("block", -1)),
+                int(node.attributes.get("instruction_index", -1)),
+                node.record_id,
+            ),
+        )
+        signatures = [
+            _normalized_instruction(node.attributes.get("opcode"), node.attributes.get("operands")) for node in ordered
+        ]
+        for index, node in enumerate(ordered):
+            neighborhoods[node.record_id] = tuple(signatures[max(0, index - 1) : index + 2])
+    return MappingProxyType(neighborhoods)
+
+
+def _allocatable_operand(opcode: str, raw_position: int, register_kind: str, physical: int) -> bool:
     if register_kind != "r":
         return True
     if physical in _FIXED_GPRS:
@@ -164,9 +201,7 @@ def _parse_assertions(
     return tuple(sorted(rendered)), MappingProxyType(normalized)
 
 
-def _analysis_id(
-    graphs: tuple[FrontierGraph, FrontierGraph], retail_offset: int, assertions: tuple[str, ...]
-) -> str:
+def _analysis_id(graphs: tuple[FrontierGraph, FrontierGraph], retail_offset: int, assertions: tuple[str, ...]) -> str:
     frontiers = tuple(sorted((_label(graph), _compile_id(graph)) for graph in graphs))
     return stable_id(
         "causal-analysis",
@@ -265,9 +300,7 @@ def _candidate_is_uniquely_aligned(graph: FrontierGraph, retail_offset: int) -> 
     return candidate if len(alignments) == 1 else None
 
 
-def _allocator_from_virtual(
-    graph: FrontierGraph, virtual_id: str
-) -> tuple[tuple[EvidenceEdge, EvidenceNode], ...]:
+def _allocator_from_virtual(graph: FrontierGraph, virtual_id: str) -> tuple[tuple[EvidenceEdge, EvidenceNode], ...]:
     compile_id = _compile_id(graph)
     mappings = {
         edge.target_id: edge
@@ -291,10 +324,19 @@ def _automatic_local_role(
     if raw_position is None:
         return None, AbstentionReason.MISSING_BACKEND_ROLE
     signature = _normalized_instruction(candidate.attributes.get("opcode"), candidate.attributes.get("operands"))
+    expected_neighborhood = tuple(
+        _normalized_instruction_text(item) for item in candidate.attributes.get("retail_neighborhood_signature", ())
+    )
+    pcode_neighborhoods = _pcode_neighborhoods(graph)
     edge_kind = "defines-virtual" if role.kind == "def" else "uses-virtual"
     resolutions: dict[str, list[_LocalRoleResolution]] = {}
     for occurrence in graph.store.find_nodes(_compile_id(graph), "pcode-occurrence"):
-        if _normalized_instruction(occurrence.attributes.get("opcode"), occurrence.attributes.get("operands")) != signature:
+        if (
+            _normalized_instruction(occurrence.attributes.get("opcode"), occurrence.attributes.get("operands"))
+            != signature
+        ):
+            continue
+        if len(expected_neighborhood) > 1 and pcode_neighborhoods.get(occurrence.record_id) != expected_neighborhood:
             continue
         edges = tuple(
             edge
@@ -406,15 +448,9 @@ def _role_comparison(
     ordinal: int,
 ) -> ComparisonRecord:
     asserted_labels = tuple(
-        label
-        for label, local in ((_label(left_graph), left), (_label(right_graph), right))
-        if local.asserted
+        label for label, local in ((_label(left_graph), left), (_label(right_graph), right)) if local.asserted
     )
-    confidence = (
-        Confidence.HEURISTIC
-        if asserted_labels
-        else min_confidence(left.confidence, right.confidence)
-    )
+    confidence = Confidence.HEURISTIC if asserted_labels else min_confidence(left.confidence, right.confidence)
     inputs = (*left.evidence_chain, *right.evidence_chain)
     return ComparisonRecord.create(
         analysis_id=analysis_id,
@@ -471,9 +507,7 @@ def _round_trip_matches(
     right_descs = role_descriptor.build_descriptors(right_graph.backend.role_compile, right_class)
     forward = role_matcher.match_roles(left_descs, right_descs)
     inverse = role_matcher.match_roles(right_descs, left_descs)
-    _force_phys, _diagnostics, matched = role_reanchor._confirm_round_trip(
-        forward, inverse, {left_ig: expected_phys}
-    )
+    _force_phys, _diagnostics, matched = role_reanchor._confirm_round_trip(forward, inverse, {left_ig: expected_phys})
     return matched.get(right_ig) == left_ig
 
 
@@ -518,20 +552,16 @@ def align_anchor(
             by_operand={},
             comparisons=(),
             abstentions=tuple(
-                _abstention(role.key, AbstentionReason.UNSUPPORTED_OPCODE_SEMANTICS)
-                for role in left_roles
+                _abstention(role.key, AbstentionReason.UNSUPPORTED_OPCODE_SEMANTICS) for role in left_roles
             ),
         )
     operand_keys = {role.key for role in left_roles}
     unknown_assertions = sorted(
-        f"{label}:{operand}"
-        for label, operand in assertions_by_key
-        if operand not in operand_keys
+        f"{label}:{operand}" for label, operand in assertions_by_key if operand not in operand_keys
     )
     if unknown_assertions:
         raise ValueError(
-            "frontier-node assertion names operand not present on retail anchor: "
-            + ", ".join(unknown_assertions)
+            "frontier-node assertion names operand not present on retail anchor: " + ", ".join(unknown_assertions)
         )
 
     by_operand: dict[str, RolePair] = {}
@@ -595,9 +625,7 @@ def align_anchor(
     )
 
 
-def build_role_comparisons(
-    alignment: AnchorAlignment, graphs: Iterable[FrontierGraph]
-) -> tuple[ComparisonRecord, ...]:
+def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[FrontierGraph]) -> tuple[ComparisonRecord, ...]:
     """Return the alignment's comparison-scoped correspondences after scope validation."""
 
     graph_pair = tuple(graphs)

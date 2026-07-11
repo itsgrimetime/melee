@@ -54,6 +54,8 @@ _GATE_5 = "gate-5-stack-delta"
 _GATE_6 = "gate-6-unique-owner-chain"
 _GATE_7 = "gate-7-proof-capable-path"
 _GATE_8 = "gate-8-evidence-integrity"
+_GATE_9 = "gate-9-source-object-binding"
+_SOURCE_OBJECT_BINDING_MISSING = "source-object-binding-missing"
 
 _OPERATIONAL_SCOPE = (
     "Operational compiler-evidence scope: verdicts are limited to the compared "
@@ -387,6 +389,35 @@ def _bilateral_node_deltas(
         and comparison.right_record_id is not None
         and frozenset({comparison.left_record_id, comparison.right_record_id}) == record_ids
     )
+
+
+def _bilateral_source_object_records(
+    comparisons: tuple[ComparisonRecord, ...],
+    query: EvidenceQuery,
+    compile_ids: frozenset[str],
+) -> tuple[ComparisonRecord, ...]:
+    records: list[ComparisonRecord] = []
+    for comparison in comparisons:
+        if (
+            comparison.relation_kind != "node-changed"
+            or comparison.left_record_id is None
+            or comparison.right_record_id is None
+            or comparison.confidence not in _PROOF_CONFIDENCES
+        ):
+            continue
+        left = query.get_node(comparison.left_record_id)
+        right = query.get_node(comparison.right_record_id)
+        if (
+            left is not None
+            and right is not None
+            and left.kind in _OWNER_KINDS
+            and right.kind in _OWNER_KINDS
+            and {left.compile_id, right.compile_id} == compile_ids
+            and left.confidence in _PROOF_CONFIDENCES
+            and right.confidence in _PROOF_CONFIDENCES
+        ):
+            records.append(comparison)
+    return tuple(records)
 
 
 def _stack_nodes_by_compile(pair: EffectPair, query: EvidenceQuery) -> Mapping[str, EvidenceNode]:
@@ -762,6 +793,20 @@ def infer_pair(
             rejected_alternatives=rejected,
             failed_gates=failed_required,
         )
+    bilateral_source_object_records = _bilateral_source_object_records(
+        records,
+        query,
+        compile_ids,
+    )
+    if role_proof_capable and allocator_delta_proven and stack_delta_proven and not bilateral_source_object_records:
+        return _verdict(
+            pair,
+            status=VerdictStatus.ABSTAIN,
+            cause=None,
+            proof_paths=(),
+            rejected_alternatives=rejected,
+            failed_gates=(_GATE_9,),
+        )
     if owner_enumeration.incomplete:
         return _verdict(
             pair,
@@ -957,6 +1002,11 @@ def build_report(
                     *abstention.missing_record_ids,
                 )
             }
+            | (
+                {_SOURCE_OBJECT_BINDING_MISSING}
+                if any(_GATE_9 in verdict.failed_gates for verdict in verdicts)
+                else set()
+            )
         )
     )
     warnings = tuple(sorted({warning for graph in graph_pair for warning in graph.warnings}))

@@ -273,6 +273,48 @@ def _role_names(obj: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
+def _inferred_interval_roles(
+    side_objects: Mapping[str, tuple[Mapping[str, object], ...]],
+) -> tuple[Mapping[int, str], Mapping[int, str]]:
+    expected = side_objects["expected"]
+    current = side_objects["current"]
+    current_roles: dict[int, str] = {}
+    expected_roles: dict[int, str] = {}
+    role_counts: dict[str, int] = {}
+    for current_index, obj in enumerate(current):
+        offsets = obj.get("expected_source_offsets")
+        if not isinstance(offsets, Mapping):
+            continue
+        expected_offsets = {
+            value for value in offsets.values() if isinstance(value, int) and not isinstance(value, bool)
+        }
+        size = obj.get("size")
+        kind = obj.get("kind")
+        opcodes = tuple(sorted(str(item) for item in obj.get("opcodes", ())))
+        if len(expected_offsets) != 1 or not isinstance(size, int) or not isinstance(kind, str):
+            continue
+        expected_offset = next(iter(expected_offsets))
+        matches = [
+            index
+            for index, candidate in enumerate(expected)
+            if candidate.get("start") == expected_offset
+            and candidate.get("size") == size
+            and candidate.get("kind") == kind
+            and tuple(sorted(str(item) for item in candidate.get("opcodes", ()))) == opcodes
+        ]
+        if len(matches) != 1:
+            continue
+        role = f"stack-interval:{expected_offset}:{size}:{kind}:{','.join(opcodes)}"
+        role_counts[role] = role_counts.get(role, 0) + 1
+        current_roles[current_index] = role
+        expected_roles[matches[0]] = role
+    unique = {role for role, count in role_counts.items() if count == 1}
+    return (
+        MappingProxyType({index: role for index, role in current_roles.items() if role in unique}),
+        MappingProxyType({index: role for index, role in expected_roles.items() if role in unique}),
+    )
+
+
 def _bridge_candidates(report: Mapping[str, object], obj: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     bridge = report.get("stack_slot_bridge")
     if not isinstance(bridge, Mapping):
@@ -465,6 +507,7 @@ def frame_evidence_from_report(
         "expected": _trace_objects(report.get("expected")),
         "current": _trace_objects(report.get("current")),
     }
+    current_interval_roles, expected_interval_roles = _inferred_interval_roles(side_objects)
     for side, objects in side_objects.items():
         for index, obj in enumerate(objects):
             producer_confidence = _object_confidence(obj)
@@ -496,7 +539,10 @@ def frame_evidence_from_report(
                     obj.get("end"),
                     obj.get("symbol"),
                 ),
-                role_key=(_role_names(obj)[0] if len(_role_names(obj)) == 1 else None),
+                role_key=(
+                    current_interval_roles.get(index) if side == "current" else expected_interval_roles.get(index)
+                )
+                or (_role_names(obj)[0] if len(_role_names(obj)) == 1 else None),
                 producer_confidence=producer_confidence,
                 adapter_confidence=Confidence.OBSERVED,
                 provenance=Provenance(
@@ -567,11 +613,11 @@ def frame_evidence_from_report(
 
     expected_roles: dict[str, tuple[int, int]] = {}
     expected_counts: dict[str, int] = {}
-    for obj in side_objects["expected"]:
+    for index, obj in enumerate(side_objects["expected"]):
         start, end = obj.get("start"), obj.get("end")
         if not isinstance(start, int) or not isinstance(end, int):
             continue
-        for role in _role_names(obj):
+        for role in (*_role_names(obj), *(filter(None, (expected_interval_roles.get(index),)))):
             expected_counts[role] = expected_counts.get(role, 0) + 1
             expected_roles[role] = (start, end)
     expected_roles = {role: interval for role, interval in expected_roles.items() if expected_counts[role] == 1}
@@ -580,7 +626,7 @@ def frame_evidence_from_report(
     for node in nodes:
         if node.attributes.get("side") != "current":
             continue
-        for role in _role_names(node.attributes):
+        for role in (*_role_names(node.attributes), *(filter(None, (node.role_key,)))):
             current_candidates.setdefault(role, []).append(node.record_id)
     current_nodes = {role: record_ids[0] for role, record_ids in current_candidates.items() if len(record_ids) == 1}
     return FrameEvidence(

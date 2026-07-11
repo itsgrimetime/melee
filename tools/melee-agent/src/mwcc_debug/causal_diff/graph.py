@@ -319,8 +319,13 @@ def _expression_joins(
 
 def _final_pcode_nodes(backend: BackendEvidence) -> tuple[EvidenceNode, ...]:
     nodes = tuple(node for node in backend.result.nodes if node.kind == "pcode-occurrence")
+    virtual_pcode_ids = {
+        edge.source_id for edge in backend.result.edges if edge.kind in {"defines-virtual", "uses-virtual"}
+    }
     pass_indexes = [
-        int(node.attributes["pass_index"]) for node in nodes if isinstance(node.attributes.get("pass_index"), int)
+        int(node.attributes["pass_index"])
+        for node in nodes
+        if node.record_id in virtual_pcode_ids and isinstance(node.attributes.get("pass_index"), int)
     ]
     if not pass_indexes:
         return nodes
