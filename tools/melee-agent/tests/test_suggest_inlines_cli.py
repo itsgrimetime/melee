@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import pathlib
 import subprocess
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -414,6 +415,251 @@ def test_suggest_inlines_score_output_dir_uses_targetless_retained_source(
         "source_hunks"
     ]
     assert "source-level rewrite" in proof["next_unsupported_source_model"]
+
+
+def test_suggest_inlines_trace_copies_uses_score_source_retained_pcdump(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    source_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("void fn_test(void) { Original(); }\n", encoding="utf-8")
+    baseline_pcdump = tmp_path / "baseline.pcdump.txt"
+    baseline_pcdump.write_text("Starting function fn_test\n", encoding="utf-8")
+    candidate_pcdump = tmp_path / "candidate.pcdump.txt"
+    candidate_pcdump.write_text("Starting function fn_test\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_run(**kwargs):
+        return SourceShapeReport(
+            function=kwargs["function"],
+            patches=[
+                CandidatePatch(
+                    candidate_id="scalar-return-helper-0006",
+                    patched_source="void fn_test(void) { Candidate(); }\n",
+                    summary="extract scalar return helper",
+                    touched_ranges=((1, 1),),
+                    metadata={"source_hunks": [{"hunk_id": "h006"}]},
+                )
+            ],
+        )
+
+    def fake_score_source(candidates, config):
+        captured["candidates"] = candidates
+        captured["config"] = config
+        retained_source = config.output_dir / "scalar-return-helper-0006.c"
+        retained_source.parent.mkdir(parents=True, exist_ok=True)
+        retained_source.write_text(candidates[0].source_text, encoding="utf-8")
+        return [
+            {
+                "candidate_id": candidates[0].candidate_id,
+                "source_retained": str(retained_source),
+                "source_file": str(retained_source),
+                "pcdump_path": str(candidate_pcdump),
+                "checkdiff_match_percent": 96.0,
+                "match_percent": 96.0,
+                "score_returncode": 0,
+            }
+        ]
+
+    def fake_list_new_copy_lifetimes(baseline, candidate, function, *, reg_class):
+        captured["trace_args"] = {
+            "baseline": baseline,
+            "candidate": candidate,
+            "function": function,
+            "reg_class": reg_class,
+        }
+        return [
+            SimpleNamespace(
+                from_virtual=50,
+                to_virtual=110,
+                status="copy-found",
+                likely_cause="removed-before-coloring",
+                first_copy=None,
+                last_copy=None,
+                first_absent_pass="BEFORE REGISTER COLORING",
+                transform_category="copy-propagation-or-dead-copy",
+                note=None,
+            )
+        ]
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[:2] == ["python", "tools/checkdiff.py"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps({"fuzzy_match_percent": 95.0}),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected subprocess command: {cmd}")
+
+    import src.cli.debug.suggest as suggest_cli
+    import src.mwcc_debug.copy_trace as copy_trace_mod
+    import src.mwcc_debug.source_candidate_scoring as scoring_mod
+    import src.mwcc_debug.suggest_inlines as suggest_mod
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(suggest_mod, "run", fake_run)
+    monkeypatch.setattr(scoring_mod, "score_source_candidates", fake_score_source)
+    monkeypatch.setattr(
+        copy_trace_mod,
+        "list_new_copy_lifetimes",
+        fake_list_new_copy_lifetimes,
+    )
+    monkeypatch.setattr(suggest_cli.subprocess, "run", fake_subprocess_run)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "suggest",
+            "inlines",
+            "-f",
+            "fn_test",
+            "--pcdump",
+            str(baseline_pcdump),
+            "--verify",
+            "--trace-copies",
+            "--emit-hunks",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    config = captured["config"]
+    assert config.target is None
+    assert config.full_unit_source is True
+    assert captured["trace_args"] == {
+        "baseline": "Starting function fn_test\n",
+        "candidate": "Starting function fn_test\n",
+        "function": "fn_test",
+        "reg_class": "gpr",
+    }
+    payload = json.loads(result.output)
+    assert payload["score_mode"] == "score-source"
+    assert payload["score_rows"][0]["pcdump_path"] == str(candidate_pcdump)
+    score = payload["scores"][0]
+    assert score["candidate_id"] == "scalar-return-helper-0006"
+    assert score["compile_ok"] is True
+    assert score["checkdiff_delta"] == 1.0
+    assert score["copy_trace_total_count"] == 1
+    assert score["copy_traces"][0]["from_virtual"] == 50
+    assert score["copy_traces"][0]["to_virtual"] == 110
+
+
+def test_suggest_inlines_trace_copies_score_source_auto_generates_baseline_pcdump(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    source_path = melee_root / "src" / "melee" / "mn" / "sample.c"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("void fn_test(void) { Original(); }\n", encoding="utf-8")
+    candidate_pcdump = tmp_path / "candidate.pcdump.txt"
+    candidate_pcdump.write_text("Starting function fn_test\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_run(**kwargs):
+        return SourceShapeReport(
+            function=kwargs["function"],
+            patches=[
+                CandidatePatch(
+                    candidate_id="void-helper-0001",
+                    patched_source="void fn_test(void) { Candidate(); }\n",
+                    summary="extract helper",
+                    touched_ranges=((1, 1),),
+                )
+            ],
+        )
+
+    def fake_score_source(candidates, config):
+        retained_source = config.output_dir / "void-helper-0001.c"
+        retained_source.parent.mkdir(parents=True, exist_ok=True)
+        retained_source.write_text(candidates[0].source_text, encoding="utf-8")
+        return [
+            {
+                "candidate_id": "void-helper-0001",
+                "source_retained": str(retained_source),
+                "source_file": str(retained_source),
+                "pcdump_path": str(candidate_pcdump),
+                "score_returncode": 0,
+            }
+        ]
+
+    def fake_list_new_copy_lifetimes(baseline, candidate, function, *, reg_class):
+        captured["trace_args"] = {
+            "baseline": baseline,
+            "candidate": candidate,
+            "function": function,
+            "reg_class": reg_class,
+        }
+        return []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[1:5] == ["-m", "src.cli", "debug", "dump"]:
+            output = pathlib.Path(cmd[cmd.index("--output") + 1])
+            output.write_text("Starting function fn_test\n", encoding="utf-8")
+            captured["dump_cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[:2] == ["python", "tools/checkdiff.py"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps({"fuzzy_match_percent": 95.0}),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected subprocess command: {cmd}")
+
+    import src.cli.debug.suggest as suggest_cli
+    import src.mwcc_debug.copy_trace as copy_trace_mod
+    import src.mwcc_debug.source_candidate_scoring as scoring_mod
+    import src.mwcc_debug.suggest_inlines as suggest_mod
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(suggest_mod, "run", fake_run)
+    monkeypatch.setattr(scoring_mod, "score_source_candidates", fake_score_source)
+    monkeypatch.setattr(
+        copy_trace_mod,
+        "list_new_copy_lifetimes",
+        fake_list_new_copy_lifetimes,
+    )
+    monkeypatch.setattr(suggest_cli.subprocess, "run", fake_subprocess_run)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "suggest",
+            "inlines",
+            "-f",
+            "fn_test",
+            "--verify",
+            "--trace-copies",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["dump_cmd"][1:5] == ["-m", "src.cli", "debug", "dump"]
+    assert captured["trace_args"] == {
+        "baseline": "Starting function fn_test\n",
+        "candidate": "Starting function fn_test\n",
+        "function": "fn_test",
+        "reg_class": "gpr",
+    }
+    payload = json.loads(result.output)
+    assert payload["score_mode"] == "score-source"
 
 
 def test_suggest_inlines_rejects_apply_best_with_target_verify() -> None:

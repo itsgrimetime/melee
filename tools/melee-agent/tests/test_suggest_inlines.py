@@ -1148,6 +1148,22 @@ def test_verify_real_tree_patches_marks_null_checkdiff_scores_unscored(tmp_path)
     assert "candidate checkdiff did not return a match percent" in text
 
 
+def test_score_source_missing_function_pcdump_is_not_compile_ok() -> None:
+    from src.mwcc_debug.source_candidate_scoring import source_row_to_candidate_score
+
+    score = source_row_to_candidate_score({
+        "candidate_id": "scalar-return-helper-0006",
+        "error": "function 'fn_test' not in compiled pcdump",
+        "score_error_kind": "candidate",
+        "score_returncode": 0,
+        "pcdump_path": "build/diagnostics/suggest_inlines/fn_test/candidate.pcdump.txt",
+    })
+
+    assert score.compile_ok is False
+    assert score.status == "score_error"
+    assert score.error == "function 'fn_test' not in compiled pcdump"
+
+
 def test_render_text_scores_include_baseline_candidate_and_delta() -> None:
     from src.mwcc_debug import source_shape
     from src.mwcc_debug.source_shape import CandidateScore, SourceShapeReport

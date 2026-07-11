@@ -116,6 +116,50 @@ def test_backend_command_rejects_success_without_trace(monkeypatch, tmp_path):
     assert not (tmp_path / "backend-trace.v1.json").exists()
 
 
+def test_backend_command_rejects_success_without_required_outputs(
+    monkeypatch,
+    tmp_path,
+):
+    import src.cli.debug.retro as retro
+
+    fixture = (
+        Path(__file__).resolve().parents[3]
+        / "tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json"
+    )
+    trace = json.loads(fixture.read_text())
+
+    def fake_run_backend_trace(**kwargs):
+        return retro.BackendOutcome(exit_code=0, trace=trace, fidelity=None)
+
+    def fake_write_backend_outputs(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(retro, "_run_backend_trace", fake_run_backend_trace)
+    monkeypatch.setattr(retro, "_write_backend_outputs", fake_write_backend_outputs)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
+
+    r = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "backend",
+            "src/melee/test/unit.c",
+            "-f",
+            "test_fn",
+            "-O",
+            str(tmp_path),
+        ],
+    )
+
+    assert r.exit_code == 2
+    assert (
+        "backend trace command reported success but did not produce "
+        "required output(s): backend-trace.v1.json, regalloc-summary.txt, "
+        "backend-summary.txt"
+    ) in r.output
+
+
 def test_backend_command_reports_runtime_errors(monkeypatch, tmp_path):
     import src.cli.debug.retro as retro
 

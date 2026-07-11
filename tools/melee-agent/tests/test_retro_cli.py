@@ -212,6 +212,49 @@ def test_retro_dump_125n_backend_routes_to_full_trace(
     assert not (tmp_path / "backend-source-attribution.json").exists()
 
 
+def test_retro_dump_backend_rejects_success_without_required_outputs(
+    monkeypatch,
+    tmp_path,
+):
+    import src.cli.debug.retro as retro
+    trace = json.loads(
+        (
+            Path(__file__).resolve().parents[3]
+            / "tools/melee-agent/tests/fixtures/retro/backend_trace_v1_minimal.json"
+        ).read_text()
+    )
+
+    def fake_backend_trace(**_kw):
+        return retro.BackendOutcome(exit_code=0, trace=trace, fidelity=None)
+
+    def fake_write_backend_outputs(*_args, **_kwargs):
+        return None
+
+    def fail_launch(**_kw):
+        raise AssertionError("1.2.5n backend-only dump should use full tracer")
+
+    monkeypatch.setattr(retro, "_launch_dump", fail_launch)
+    monkeypatch.setattr(retro, "_run_backend_trace", fake_backend_trace)
+    monkeypatch.setattr(retro, "_write_backend_outputs", fake_write_backend_outputs)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
+
+    result = runner.invoke(app, [
+        "debug", "retro", "dump",
+        "src/melee/mn/mnvibration.c",
+        "-f", "mnVibration_80248644",
+        "--compiler", "1.2.5n",
+        "--phases", "backend",
+        "-O", str(tmp_path),
+    ])
+
+    assert result.exit_code == 2
+    assert (
+        "backend trace command reported success but did not produce "
+        "required output(s): backend-trace.v1.json, regalloc-summary.txt, "
+        "backend-summary.txt"
+    ) in result.output
+
+
 def test_retro_backend_source_attribution_records_missing_pcdump(
     monkeypatch,
     tmp_path,
