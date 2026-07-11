@@ -110,6 +110,18 @@ def build_binding_index(source: str) -> BindingIndex:
                 macro_names.add(name)
                 blockers.append(BindingBlocker(name, "macro-definition", _span(node, to_char)))
 
+    for declaration in _walk_type(root, "declaration"):
+        for declarator in declaration.named_children:
+            name_node = _function_pointer_object_identifier(declarator)
+            if name_node is not None:
+                blockers.append(
+                    BindingBlocker(
+                        node_text(source_bytes, name_node),
+                        "function-pointer-object-declaration",
+                        _span(declaration, to_char),
+                    )
+                )
+
     unique_nodes: dict[str, tuple[object, object, object]] = {}
     for name, definitions in sorted(function_nodes.items()):
         if len(definitions) != 1:
@@ -136,8 +148,13 @@ def build_binding_index(source: str) -> BindingIndex:
             continue
 
         owner = _ancestor(call, "function_definition")
-        if owner is not None and callee in _function_local_names(owner, source_bytes):
+        local_declarations = _function_local_declarations(owner, source_bytes, to_char) if owner is not None else {}
+        if callee in local_declarations:
             blockers.append(BindingBlocker(callee, "shadowed-call", call_span))
+            if callee in unique_nodes:
+                blockers.extend(
+                    BindingBlocker(callee, "shadowing-declaration", span) for span in local_declarations[callee]
+                )
             continue
         if callee not in unique_nodes:
             blockers.append(BindingBlocker(callee, "unresolved-external-call", call_span))
@@ -181,7 +198,7 @@ def build_binding_index(source: str) -> BindingIndex:
             for node, _, _ in declaration_nodes[name]
         )
 
-    blockers.sort(key=lambda item: (item.span, item.symbol, item.reason))
+    blockers = sorted(set(blockers), key=lambda item: (item.span, item.symbol, item.reason))
     return BindingIndex(functions=functions, blockers=tuple(blockers))
 
 
@@ -539,15 +556,19 @@ def _parameter_names(parameter_list, source_bytes: bytes) -> tuple[str, ...] | N
     return tuple(names)
 
 
-def _function_local_names(definition, source_bytes: bytes) -> set[str]:
-    names: set[str] = set()
+def _function_local_declarations(
+    definition,
+    source_bytes: bytes,
+    to_char: list[int],
+) -> dict[str, tuple[tuple[int, int], ...]]:
+    spans_by_name: dict[str, list[tuple[int, int]]] = defaultdict(list)
     declarator = definition.child_by_field_name("declarator")
     parameters = _find_parameter_list(declarator)
     if parameters is not None:
         for parameter in parameters.named_children:
             identifier = _declarator_identifier(parameter.child_by_field_name("declarator"))
             if identifier is not None:
-                names.add(node_text(source_bytes, identifier))
+                spans_by_name[node_text(source_bytes, identifier)].append(_span(parameter, to_char))
     body = definition.child_by_field_name("body")
     if body is not None:
         for declaration in _walk_type(body, "declaration"):
@@ -561,8 +582,8 @@ def _function_local_names(definition, source_bytes: bytes) -> set[str]:
                 }:
                     identifier = _declarator_identifier(child)
                     if identifier is not None:
-                        names.add(node_text(source_bytes, identifier))
-    return names
+                        spans_by_name[node_text(source_bytes, identifier)].append(_span(declaration, to_char))
+    return {name: tuple(dict.fromkeys(spans)) for name, spans in spans_by_name.items()}
 
 
 def _declarator_identifier(node):
@@ -583,9 +604,23 @@ def _function_declaration_parts(node):
         if current.type == "function_declarator":
             parameters = current.child_by_field_name("parameters")
             name = _declared_function_identifier(current.child_by_field_name("declarator"))
-            if name is None or parameters is None:
-                return None
-            return name, parameters
+            if name is not None and parameters is not None:
+                return name, parameters
+        inner = current.child_by_field_name("declarator")
+        if inner is None and current.type == "parenthesized_declarator":
+            inner = next(iter(current.named_children), None)
+        current = inner
+    return None
+
+
+def _function_pointer_object_identifier(node):
+    if _function_declaration_parts(node) is not None:
+        return None
+    current = node
+    while current is not None:
+        if current.type == "function_declarator":
+            declarator = current.child_by_field_name("declarator")
+            return _declarator_identifier(declarator)
         current = current.child_by_field_name("declarator")
     return None
 

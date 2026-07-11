@@ -97,6 +97,30 @@ int other(int a, int b) { return a + b; }
 int draw(int x, int y) { int (*helper)(int, int) = other; return helper(y, x); }
 """
 
+DECLARATION_SHADOW_LEFT = """\
+int helper(int a, int b) { return a - b; }
+int draw(int x, int y) { int local = 1; return helper(x, y) + local; }
+"""
+DECLARATION_SHADOW_RIGHT = """\
+int helper(int a, int b) { return a - b; }
+int draw(int x, int y) { int helper = 1; return helper(x, y) + helper; }
+"""
+
+FUNCTION_POINTER_OBJECT_LEFT = """\
+int sub(int a, int b) { return a - b; }
+int other(int a, int b) { return a + b; }
+static int (*factory(void))(int, int);
+static int (*helper)(int, int) = sub;
+int draw(int x, int y) { return helper(x, y); }
+"""
+FUNCTION_POINTER_OBJECT_RIGHT = """\
+int sub(int a, int b) { return a - b; }
+int other(int a, int b) { return a + b; }
+static int (*factory(void))(int, int);
+static int (*helper)(int, int) = other;
+int draw(int x, int y) { return helper(x, y); }
+"""
+
 CONDITIONAL_LEFT = """\
 int helper(int a, int b) { return a - b; }
 int draw(int x, int y) {
@@ -169,14 +193,39 @@ def test_pointer_return_declaration_definition_and_calls_stay_coupled_for_every_
 
 
 def test_function_pointer_object_is_not_indexed_as_a_function_declaration():
-    source = """\
-static int (*helper)(int a, int b);
-int draw(int x, int y) { return helper(x, y); }
-"""
-
-    index = build_binding_index(source)
+    index = build_binding_index(FUNCTION_POINTER_OBJECT_LEFT)
 
     assert "helper" not in index.functions
+    assert not any(
+        blocker.symbol == "factory" and blocker.reason == "function-pointer-object-declaration"
+        for blocker in index.blockers
+    )
+
+
+def test_changed_function_pointer_object_with_unchanged_call_fails_closed():
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding") as exc:
+        delta.extract_delta_manifest(
+            FUNCTION_POINTER_OBJECT_LEFT,
+            FUNCTION_POINTER_OBJECT_RIGHT,
+            function="draw",
+        )
+    blocker = next(
+        item for item in exc.value.details["blockers"] if item["reason"] == "function-pointer-object-declaration"
+    )
+    changed_offset = FUNCTION_POINTER_OBJECT_LEFT.index("sub;", FUNCTION_POINTER_OBJECT_LEFT.index("(*helper)"))
+    assert blocker["span"][0] <= changed_offset < blocker["span"][1]
+
+
+def test_changed_local_declaration_shadowing_unchanged_call_fails_closed():
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding") as exc:
+        delta.extract_delta_manifest(
+            DECLARATION_SHADOW_LEFT,
+            DECLARATION_SHADOW_RIGHT,
+            function="draw",
+        )
+    blocker = next(item for item in exc.value.details["blockers"] if item["reason"] == "shadowing-declaration")
+    changed_offset = DECLARATION_SHADOW_RIGHT.index("helper = 1")
+    assert blocker["span"][0] <= changed_offset < blocker["span"][1]
 
 
 def test_unique_rename_couples_declaration_definition_and_call():
