@@ -27,14 +27,15 @@ def _provenance(
     )
 
 
-def _object_class(data_type: str, name: str) -> str:
+def _object_class(data_type: str, name: str) -> tuple[str, Confidence]:
     if data_type == "DLOCAL":
-        return "synthetic-local" if name.startswith("@") else "named-local"
+        object_class = "synthetic-local" if name.startswith("@") else "named-local"
+        return object_class, Confidence.DERIVED_UNIQUE
     if data_type == "DFUNC":
-        return "function"
+        return "function", Confidence.DERIVED_UNIQUE
     if data_type == "DDATA":
-        return "data"
-    return "ambiguous"
+        return "data", Confidence.DERIVED_UNIQUE
+    return "ambiguous", Confidence.HEURISTIC
 
 
 def _observed_node(
@@ -183,12 +184,41 @@ def adapt_inspector(bundle: ValidatedBundle) -> AdapterResult:
                 "type_text": objobject.type_text,
                 "first_appearance_order": objobject.first_appearance_order,
                 "address_order": objobject.address_order,
-                "synthetic_name": objobject.name.startswith("@"),
-                "object_class": _object_class(objobject.data_type, objobject.name),
             },
         )
         nodes.append(node)
         object_nodes[objobject.address] = node
+
+    for objobject in parsed.objobjects.values():
+        raw_node = object_nodes[objobject.address]
+        object_class, adapter_confidence = _object_class(objobject.data_type, objobject.name)
+        classification = EvidenceNode.create(
+            compile_id=bundle.compile_id,
+            function=bundle.manifest.function,
+            kind="objobject-classification",
+            local_key=objobject.address,
+            role_key=None,
+            producer_confidence=Confidence.OBSERVED,
+            adapter_confidence=adapter_confidence,
+            provenance=_provenance(
+                bundle,
+                raw_start=objobject.raw_start,
+                raw_end=objobject.raw_end,
+                derivation_rule=(
+                    "classify-objobject-from-explicit-datatype"
+                    if adapter_confidence is Confidence.DERIVED_UNIQUE
+                    else "classify-objobject-without-explicit-datatype"
+                ),
+                input_record_ids=(raw_node.record_id,),
+            ),
+            input_confidences=(raw_node.confidence,),
+            attributes={
+                "object_address": objobject.address,
+                "object_class": object_class,
+                "synthetic_name": objobject.name.startswith("@"),
+            },
+        )
+        nodes.append(classification)
 
     edges: list[EvidenceEdge] = []
     child_edges: dict[tuple[str, str], EvidenceEdge] = {}

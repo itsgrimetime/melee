@@ -7,6 +7,7 @@ from types import MappingProxyType
 from src.mwcc_debug.causal_diff.bundles import ValidatedBundle
 from src.mwcc_debug.causal_diff.inspect_adapter import adapt_inspector
 from src.mwcc_debug.causal_diff.models import Confidence, FrontierBundleManifest
+from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 from src.mwcc_debug.inspect_parser import parse_inspect_function
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "causal_diff" / "inspect"
@@ -102,6 +103,34 @@ def test_unknown_inspector_line_is_warning_not_edge() -> None:
     assert all(node.opcode != "ENEWFORM" for node in fn.enodes)
 
 
+def test_unknown_structural_branch_suppresses_known_descendants(tmp_path: Path) -> None:
+    text = """\
+FUNCTION: fn_test
+STATEMENTS (IR):
+--------------------------------------------------------------------------------
+:42        root
+  [EASS] root
+    New producer branch:
+      [EOBJREF] leaked
+        -> ObjObject @ 0x00ABCDEF: leaked (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+"""
+
+    fn = parse_inspect_function(text, "fn_test")
+
+    assert fn is not None
+    assert fn.warnings == ("line 6: unsupported inspector syntax: New producer branch:",)
+    assert {node.opcode for node in fn.enodes} == {"EASS", "EINTCONST"}
+    assert "0x00ABCDEF" not in fn.objobjects
+    assert all(not node.referenced_object_addresses for node in fn.enodes)
+
+    inspector = tmp_path / "unknown-branch.txt"
+    inspector.write_text(text)
+    result = adapt_inspector(_bundle(inspector, function="fn_test"))
+    assert all(node.attributes.get("opcode") != "EOBJREF" for node in result.nodes)
+    assert all(edge.kind != "enode-references-object" for edge in result.edges)
+
+
 def test_known_conditional_tree_syntax_is_parsed_without_warnings() -> None:
     text = """\
 FUNCTION: fn_test
@@ -155,6 +184,36 @@ def test_adapter_preserves_explicit_and_derived_confidence() -> None:
     assert "referenced_object_addresses" not in nodes_by_id[ancestor_edge.source_id].attributes
     assert structural_edges
     assert all(edge.confidence is Confidence.OBSERVED for edge in structural_edges)
+
+
+def test_objobject_classification_is_separate_and_confidence_capped() -> None:
+    bundle = _bundle(FIXTURE, function="mnDiagram_DrawFighterHeaders")
+    result = adapt_inspector(bundle)
+    raw_objects = {node.attributes["address"]: node for node in result.nodes if node.kind == "objobject"}
+    classifications = {
+        node.attributes["object_address"]: node for node in result.nodes if node.kind == "objobject-classification"
+    }
+
+    fighter = classifications["0x00FEC850"]
+    assert fighter.attributes["object_class"] == "named-local"
+    assert fighter.producer_confidence is Confidence.OBSERVED
+    assert fighter.adapter_confidence is Confidence.DERIVED_UNIQUE
+    assert fighter.confidence is Confidence.DERIVED_UNIQUE
+    assert fighter.provenance.artifact_sha256 == bundle.manifest.artifacts.inspector.sha256
+    assert fighter.provenance.input_record_ids == (raw_objects["0x00FEC850"].record_id,)
+
+    table_only = classifications["0x00FEC8E0"]
+    assert table_only.attributes["object_class"] == "ambiguous"
+    assert table_only.producer_confidence is Confidence.OBSERVED
+    assert table_only.adapter_confidence is Confidence.HEURISTIC
+    assert table_only.confidence is Confidence.HEURISTIC
+    assert table_only.provenance.input_record_ids == (raw_objects["0x00FEC8E0"].record_id,)
+    assert all("object_class" not in node.attributes for node in raw_objects.values())
+    assert all("synthetic_name" not in node.attributes for node in raw_objects.values())
+
+    store = InMemoryEvidenceStore()
+    store.add_nodes(result.nodes)
+    store.add_edges(result.edges)
 
 
 def test_adapter_does_not_turn_unknown_syntax_into_evidence() -> None:

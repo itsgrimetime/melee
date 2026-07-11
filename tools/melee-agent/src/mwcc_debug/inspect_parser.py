@@ -322,6 +322,9 @@ def parse_inspect_function(text: str, function: str) -> InspectFunction | None:
         if not in_statements:
             continue
 
+        if not stripped or set(stripped) == {"-"}:
+            continue
+
         statement_match = _STATEMENT_RE.match(line.content)
         if statement_match is not None:
             stack.clear()
@@ -337,13 +340,17 @@ def parse_inspect_function(text: str, function: str) -> InspectFunction | None:
             statements.append(current_statement)
             continue
 
+        leading_text = line.content[: len(line.content) - len(line.content.lstrip())]
+        line_indent = len(leading_text.expandtabs(8))
+        if unsupported_indent is not None:
+            if line_indent > unsupported_indent:
+                continue
+            unsupported_indent = None
+
         enode_match = _ENODE_RE.match(line.content)
         if enode_match is not None:
             indent_text = enode_match.group("indent")
             indent = len(indent_text.expandtabs(8))
-            if unsupported_indent is not None and indent > unsupported_indent:
-                continue
-            unsupported_indent = None
             while stack and stack[-1][0] >= indent:
                 stack.pop()
 
@@ -376,8 +383,6 @@ def parse_inspect_function(text: str, function: str) -> InspectFunction | None:
 
         objobject_match = _OBJOBJECT_RE.match(line.content)
         if objobject_match is not None:
-            if unsupported_indent is not None:
-                continue
             address = objobject_match.group("address")
             leading = len(line.content) - len(line.content.lstrip())
             syntax_start = line.raw_start + len(line.content[:leading].encode("utf-8"))
@@ -407,11 +412,12 @@ def parse_inspect_function(text: str, function: str) -> InspectFunction | None:
                 current_statement.raw_end = line.raw_end
             continue
 
-        if not stripped or set(stripped) == {"-"} or _AUXILIARY_TREE_RE.match(stripped):
+        if _AUXILIARY_TREE_RE.match(stripped):
             continue
         if stripped.startswith("Type:"):
             continue
         warnings.append(f"line {line.number}: unsupported inspector syntax: {stripped}")
+        unsupported_indent = line_indent
 
     for node in reversed(enodes):
         if node.parent_id is None:
