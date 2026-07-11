@@ -12,8 +12,6 @@ _INSTRUCTION_RE = re.compile(
 )
 _SELF_RELATIVE_TARGET_RE = re.compile(r"<[^>]+\+0x(?P<offset>[0-9A-Fa-f]+)>")
 _NUMERIC_TARGET_RE = re.compile(r"(?:^|,\s*)(?:0x)?(?P<offset>[0-9A-Fa-f]+)\s*$")
-_INDIRECT_CALLS = {"bctrl", "blrl", "bcctrl", "bclrl"}
-_DIRECT_CALLS = {"bl", "bla"}
 _TERMINALS = {"blr", "bctr", "rfi"}
 
 
@@ -30,18 +28,38 @@ class _Instruction:
     operands: str
 
 
+def _without_prediction_hint(opcode: str) -> str:
+    if opcode.endswith(("+", "-")):
+        return opcode[:-1]
+    return opcode
+
+
+def _is_branch_and_link(opcode: str) -> bool:
+    if not opcode.startswith("b"):
+        return False
+
+    # Register-target forms encode LK as a final "l" after the target name.
+    if opcode.endswith(("ctrl", "lrl")):
+        return True
+    if opcode.endswith(("ctr", "lr")):
+        return False
+
+    # Direct forms encode LK before the optional absolute-address suffix.
+    return opcode.endswith(("l", "la"))
+
+
 def _branch_kind(opcode: str) -> str | None:
-    if opcode in _DIRECT_CALLS or opcode in _INDIRECT_CALLS:
+    unhinted = _without_prediction_hint(opcode)
+    if _is_branch_and_link(unhinted):
         return None
-    if opcode in _TERMINALS:
+    if unhinted in _TERMINALS:
         return "terminal"
-    if opcode in {"b", "ba"}:
+    if unhinted in {"b", "ba"}:
         return "unconditional-direct"
 
-    unhinted = opcode.removesuffix("+").removesuffix("-")
     if unhinted.startswith("b") and unhinted.endswith(("lr", "ctr")):
         return "conditional-indirect"
-    if opcode.startswith("b"):
+    if unhinted.startswith("b"):
         return "conditional-direct"
     return None
 

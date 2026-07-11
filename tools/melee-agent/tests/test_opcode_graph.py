@@ -133,3 +133,104 @@ def test_parser_orders_nodes_by_offset_independently_of_input_order() -> None:
     ]
 
     assert parse_opcode_graph(list(reversed(ordered))) == parse_opcode_graph(ordered)
+
+
+@pytest.mark.parametrize(
+    "opcode, operands",
+    [
+        ("bl", "<fn+0x10>"),
+        ("bla", "<fn+0x10>"),
+        ("beql", "<fn+0x10>"),
+        ("bnela", "<fn+0x10>"),
+        ("bdnzl", "<fn+0x10>"),
+        ("bcl", "12, 2, <fn+0x10>"),
+        ("bcla", "12, 2, <fn+0x10>"),
+        ("bctrl", ""),
+        ("blrl", ""),
+        ("bcctrl", "12, 2"),
+        ("bclrl", "12, 2"),
+        ("beqctrl", ""),
+        ("beqlrl", ""),
+        ("beql+", "<fn+0x10>"),
+        ("bdnzl-", "<fn+0x10>"),
+        ("beqctrl+", ""),
+        ("beqlrl-", ""),
+    ],
+)
+def test_parser_keeps_branch_and_link_calls_in_the_containing_block(
+    opcode: str,
+    operands: str,
+) -> None:
+    call = f"+004: 40 82 00 0c  {opcode} {operands}".rstrip()
+
+    graph = parse_opcode_graph(
+        [
+            "+000: 2c 03 00 00  cmpwi r3, 0",
+            call,
+            "+008: 38 63 00 01  addi r3, r3, 1",
+            "+00c: 4e 80 00 20  blr",
+            "+010: 38 60 00 00  li r3, 0",
+            "+014: 4e 80 00 20  blr",
+        ]
+    )
+
+    assert graph == OpcodeGraph(
+        nodes=(("cmpwi", opcode, "addi", "blr"), ("li", "blr")),
+        edges=frozenset(),
+    )
+
+
+@pytest.mark.parametrize(
+    "opcode, operands, control_kind",
+    [
+        ("beq", "<fn+0x10>", "direct"),
+        ("bdnz", "<fn+0x10>", "direct"),
+        ("bc", "12, 2, <fn+0x10>", "direct"),
+        ("bca", "12, 2, <fn+0x10>", "direct"),
+        ("beqlr", "", "indirect"),
+        ("beqctr", "", "indirect"),
+        ("bclr", "12, 2", "indirect"),
+        ("bcctr", "12, 2", "indirect"),
+        ("blr", "", "terminal"),
+        ("bctr", "", "terminal"),
+    ],
+)
+def test_parser_keeps_nearby_non_link_controls_as_branches_or_terminals(
+    opcode: str,
+    operands: str,
+    control_kind: str,
+) -> None:
+    control = f"+004: 40 82 00 0c  {opcode} {operands}".rstrip()
+    expected_edges = {
+        "direct": frozenset({(0, 1), (0, 2)}),
+        "indirect": frozenset({(0, 1)}),
+        "terminal": frozenset(),
+    }
+    expected = OpcodeGraph(
+        nodes=(("cmpwi", opcode), ("addi", "blr"), ("li", "blr")),
+        edges=expected_edges[control_kind],
+    )
+
+    assert (
+        parse_opcode_graph(
+            [
+                "+000: 2c 03 00 00  cmpwi r3, 0",
+                control,
+                "+008: 38 63 00 01  addi r3, r3, 1",
+                "+00c: 4e 80 00 20  blr",
+                "+010: 38 60 00 00  li r3, 0",
+                "+014: 4e 80 00 20  blr",
+            ]
+        )
+        == expected
+    )
+
+
+def test_parser_selects_duplicate_offsets_deterministically_across_permutations() -> None:
+    duplicate_a = "+000: 38 60 00 01  li r3, 1"
+    duplicate_b = "+000: 38 63 00 01  addi r3, r3, 1"
+    tail = "+004: 4e 80 00 20  blr"
+    expected = OpcodeGraph(nodes=(("addi", "blr"),), edges=frozenset())
+
+    assert parse_opcode_graph([duplicate_a, duplicate_b, tail]) == expected
+    assert parse_opcode_graph([duplicate_b, duplicate_a, tail]) == expected
