@@ -299,6 +299,110 @@ def test_run_evaluates_every_legal_mask_and_resumes(tmp_path: Path) -> None:
     assert second.cache_stats == {"parent_entries": 2, "candidate_entries": 4}
 
 
+def test_resume_rejects_valid_shape_delta_dependency_cache_mutation(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "delta-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["atoms"][1]["requires"] = [manifest["atoms"][0]["atom_id"]]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+    assert first.candidate_counts == {"legal": 4, "viable": 4, "complete": 4}
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("atom", "replacement", "anchor", "blockers"),
+)
+def test_resume_rejects_context_matching_delta_manifest_semantic_mutation(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "delta-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "atom":
+        manifest["atoms"][0]["atom_id"] += "-tampered"
+    elif mutation == "replacement":
+        manifest["atoms"][0]["patches"][0]["right_text"] += " "
+    elif mutation == "anchor":
+        manifest["atoms"][0]["patches"][0]["anchor_symbol"] += ":tampered"
+    elif mutation == "blockers":
+        manifest["blockers"] = []
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
+@pytest.mark.parametrize("mutation", ("schema", "function", "left-hash", "right-hash"))
+def test_resume_rejects_or_atomically_replaces_delta_manifest_identity_mutation(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "delta-manifest.json"
+    canonical = json.loads(manifest_path.read_text(encoding="utf-8"))
+    mutated = json.loads(json.dumps(canonical))
+    if mutation == "schema":
+        mutated["schema_version"] = "delta-manifest.v0"
+    elif mutation == "function":
+        mutated["function"] = "other"
+    elif mutation == "left-hash":
+        mutated["left_hash"] = "0" * 64
+    elif mutation == "right-hash":
+        mutated["right_hash"] = "0" * 64
+    manifest_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+    if mutation == "schema":
+        with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-manifest$"):
+            run_delta_minimize(config, backends=fixture.backends())
+    else:
+        second = run_delta_minimize(config, backends=fixture.backends())
+        assert second.to_dict() == first.to_dict()
+        assert json.loads(manifest_path.read_text(encoding="utf-8")) == canonical
+
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
+def test_unchanged_delta_manifest_rederives_locally_without_external_resume_work(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+    extract_calls = 0
+
+    def extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        nonlocal extract_calls
+        extract_calls += 1
+        return base.extract_manifest(left, right, function=function)
+
+    backends = replace(base, extract_manifest=extract)
+    first = run_delta_minimize(config, backends=backends)
+    second = run_delta_minimize(config, backends=backends)
+
+    assert second.to_dict() == first.to_dict()
+    assert extract_calls == 2
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
 def test_run_materializes_only_parent_deltas_and_reproduces_both_endpoints(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
 

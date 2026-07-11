@@ -88,6 +88,20 @@ _OBJECTIVE_FIELDS = frozenset(
         "references",
     }
 )
+_DELTA_MANIFEST_FIELDS = frozenset({"schema_version", "function", "left_hash", "right_hash", "atoms"})
+_DELTA_ATOM_FIELDS = frozenset({"atom_id", "kind", "patches", "requires", "affected_functions", "summary"})
+_DELTA_PATCH_FIELDS = frozenset(
+    {
+        "left_start",
+        "left_end",
+        "left_text",
+        "right_start",
+        "right_end",
+        "right_text",
+        "anchor_kind",
+        "anchor_symbol",
+    }
+)
 
 
 def _canonical_donor_overrides(payload: object) -> dict[str, str]:
@@ -248,6 +262,51 @@ def _manifest_to_dict(manifest: DeltaManifest) -> dict[str, Any]:
 
 def _manifest_from_dict(payload: Mapping[str, Any]) -> DeltaManifest:
     try:
+        if set(payload) != _DELTA_MANIFEST_FIELDS:
+            raise ValueError
+        if (
+            payload["schema_version"] != "delta-manifest.v1"
+            or not isinstance(payload["function"], str)
+            or not payload["function"]
+            or not _is_digest(payload["left_hash"])
+            or not _is_digest(payload["right_hash"])
+            or not isinstance(payload["atoms"], list)
+        ):
+            raise ValueError
+        for row in payload["atoms"]:
+            if (
+                not isinstance(row, Mapping)
+                or set(row) != _DELTA_ATOM_FIELDS
+                or not isinstance(row["atom_id"], str)
+                or not row["atom_id"]
+                or not isinstance(row["kind"], str)
+                or not row["kind"]
+                or not isinstance(row["patches"], list)
+                or not isinstance(row["requires"], list)
+                or not all(isinstance(item, str) and item for item in row["requires"])
+                or not isinstance(row["affected_functions"], list)
+                or not all(isinstance(item, str) and item for item in row["affected_functions"])
+                or not isinstance(row["summary"], str)
+            ):
+                raise ValueError
+            for patch in row["patches"]:
+                if not isinstance(patch, Mapping) or set(patch) != _DELTA_PATCH_FIELDS:
+                    raise ValueError
+                if (
+                    not _is_nonnegative_int(patch["left_start"])
+                    or not _is_nonnegative_int(patch["left_end"])
+                    or patch["left_start"] > patch["left_end"]
+                    or not _is_nonnegative_int(patch["right_start"])
+                    or not _is_nonnegative_int(patch["right_end"])
+                    or patch["right_start"] > patch["right_end"]
+                    or not isinstance(patch["left_text"], str)
+                    or not isinstance(patch["right_text"], str)
+                    or not isinstance(patch["anchor_kind"], str)
+                    or not patch["anchor_kind"]
+                    or not isinstance(patch["anchor_symbol"], str)
+                    or not patch["anchor_symbol"]
+                ):
+                    raise ValueError
         atoms = tuple(
             DeltaAtom(
                 atom_id=row["atom_id"],
@@ -268,8 +327,6 @@ def _manifest_from_dict(payload: Mapping[str, Any]) -> DeltaManifest:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise DeltaMinimizeError("corrupt-delta-manifest") from error
-    if manifest.schema_version != "delta-manifest.v1":
-        raise DeltaMinimizeError("corrupt-delta-manifest")
     return manifest
 
 
@@ -873,20 +930,30 @@ def _load_or_extract_manifest(
     left_source: str,
     right_source: str,
 ) -> DeltaManifest:
-    old = _load_json(store.root / "delta-manifest.json")
-    if old is not None:
-        manifest = _manifest_from_dict(old)
-        if (
-            manifest.function == config.function
-            and manifest.left_hash == _hash_text(left_source)
-            and manifest.right_hash == _hash_text(right_source)
-        ):
-            return manifest
     manifest = active.extract_manifest(left_source, right_source, function=config.function)
     if not isinstance(manifest, DeltaManifest):
         raise DeltaMinimizeError("invalid-delta-manifest")
-    store.write_delta_manifest(_manifest_to_dict(manifest))
-    return manifest
+    try:
+        canonical = _manifest_from_dict(_manifest_to_dict(manifest))
+    except DeltaMinimizeError as error:
+        raise DeltaMinimizeError("invalid-delta-manifest") from error
+    left_hash = _hash_text(left_source)
+    right_hash = _hash_text(right_source)
+    if canonical.function != config.function or canonical.left_hash != left_hash or canonical.right_hash != right_hash:
+        raise DeltaMinimizeError("invalid-delta-manifest")
+
+    old = _load_json(store.root / "delta-manifest.json")
+    if old is None:
+        store.write_delta_manifest(_manifest_to_dict(canonical))
+        return canonical
+
+    cached = _manifest_from_dict(old)
+    if cached.function != config.function or cached.left_hash != left_hash or cached.right_hash != right_hash:
+        store.write_delta_manifest(_manifest_to_dict(canonical))
+        return canonical
+    if _manifest_to_dict(cached) != _manifest_to_dict(canonical):
+        raise DeltaMinimizeError("corrupt-delta-manifest")
+    return canonical
 
 
 def _changed_bytes(first: str, second: str) -> int:
