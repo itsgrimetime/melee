@@ -296,3 +296,112 @@ def test_explain_virtuals_single_gpr_class_still_resolves(monkeypatch) -> None:
     assert entry.class_id == 0
     assert entry.use_count == 3
     assert entry.live_range == (0, 2)
+
+
+def test_explain_virtuals_reports_source_owner_objobject_and_no_owner_temps() -> None:
+    pcdump = """\
+Starting function fn_owner
+BEFORE REGISTER COLORING
+fn_owner
+B0: Succ={} Pred={} Labels={}
+    mr r32,r3
+    li r33,0
+    addi r70,r33,1
+    lwz r71,0x20(r1)
+AFTER REGISTER COLORING
+fn_owner
+B0: Succ={} Pred={} Labels={}
+    mr r3,r3
+    li r4,0
+    addi r5,r4,1
+    lwz r6,0x20(r1)
+COLORGRAPH DECISIONS (class=0, result=1, n_nodes=4)
+  iter ig_idx phys degree nIntfr flags
+    0 32 r3 0 0 0x00
+    1 33 r4 0 0 0x00
+    2 70 r5 0 0 0x00
+    3 71 r6 0 0 0x00
+"""
+    source = """\
+void fn_owner(int arg0)
+{
+    int owned;
+    owned = arg0 + 1;
+    sink(owned);
+}
+"""
+    inspect_text = """\
+================================================================================
+FUNCTION: fn_owner
+
+STATEMENTS (IR):
+--------------------------------------------------------------------------------
+:0         owned = arg0 + 1
+  [EOBJREF] owned
+    -> ObjObject @ 0x007AF200: owned (DataType: DLOCAL, Type: int)
+
+LOCAL VARIABLES (sorted by ObjObject address):
+--------------------------------------------------------------------------------
+  [0] 0x007AF1C8  arg0
+  [1] 0x007AF200  owned
+================================================================================
+"""
+
+    report = explain_virtuals(
+        pcdump,
+        "fn_owner",
+        virtuals=[33, 70, 71],
+        source_text=source,
+        source_file="src/melee/mn/sample.c",
+        inspect_text=inspect_text,
+    )
+
+    by_virtual = {entry.virtual: entry for entry in report.virtuals}
+
+    owned = by_virtual[33].source
+    assert owned is not None
+    assert owned.name == "owned"
+    assert owned.owner_status == "source-owned"
+    assert owned.owner_scope_path == ("fn_owner",)
+    assert owned.objobject_id == "0x007AF200"
+    assert owned.objobject_name == "owned"
+
+    temp = by_virtual[70].source
+    assert temp is not None
+    assert temp.kind == "implicit-temp"
+    assert temp.owner_status == "compiler-generated/no-owner"
+    assert temp.objobject_id is None
+    assert temp.owner_scope_path == ()
+
+    stack_home = by_virtual[71].source
+    assert stack_home is not None
+    assert stack_home.kind == "load/store-address"
+    assert stack_home.owner_status == "compiler-generated/no-owner"
+    assert stack_home.stack_home_offset == 0x20
+
+
+def test_explain_virtuals_classifies_colorgraph_only_ig_as_no_owner() -> None:
+    pcdump = """\
+Starting function fn_owner
+BEFORE REGISTER COLORING
+fn_owner
+B0: Succ={} Pred={} Labels={}
+    mr r32,r3
+AFTER REGISTER COLORING
+fn_owner
+B0: Succ={} Pred={} Labels={}
+    mr r3,r3
+COLORGRAPH DECISIONS (class=0, result=1, n_nodes=2)
+  iter ig_idx phys degree nIntfr flags
+    0 32 r3 0 0 0x00
+    1 90 r4 0 0 0x00
+"""
+
+    report = explain_virtuals(pcdump, "fn_owner", virtuals=[90])
+
+    entry = report.virtuals[0]
+    assert entry.status == "colorgraph"
+    assert entry.source is not None
+    assert entry.source.kind == "unattributed"
+    assert entry.source.confidence == "no-pcode-owner"
+    assert entry.source.owner_status == "compiler-generated/no-owner"
