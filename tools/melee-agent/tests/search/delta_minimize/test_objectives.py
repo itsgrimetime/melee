@@ -220,6 +220,100 @@ def test_color_target_v1_validates_function_and_baseline(
     assert target.coalesce_preservation is True
 
 
+def test_color_target_accepts_canonical_json_force_phys_keys(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline.pcdump"
+    baseline.write_text("dump", encoding="utf-8")
+    path = tmp_path / "target.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "delta-minimize-color-target.v1",
+                "function": FUNCTION,
+                "class_id": 0,
+                "baseline_dump": baseline.name,
+                "force_phys": {"0": 3, "66": 22},
+                "coalesce_preservation": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    target = load_color_target(path, function=FUNCTION)
+
+    assert dict(target.force_phys) == {0: 3, 66: 22}
+
+
+@pytest.mark.parametrize(
+    "ig_key",
+    ["", "-1", "+1", " 1", "1 ", "01", "00", "1.0", "1e2", "0x10", "true"],
+)
+def test_color_target_rejects_noncanonical_string_ig_keys(
+    tmp_path: Path,
+    ig_key: str,
+) -> None:
+    baseline = tmp_path / "baseline.pcdump"
+    baseline.write_text("dump", encoding="utf-8")
+    path = tmp_path / "target.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "delta-minimize-color-target.v1",
+                "function": FUNCTION,
+                "class_id": 0,
+                "baseline_dump": baseline.name,
+                "force_phys": {ig_key: 22},
+                "coalesce_preservation": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DeltaMinimizeError, match="invalid-color-target-force-phys"):
+        load_color_target(path, function=FUNCTION)
+
+
+def test_color_target_rejects_ig_collision_after_key_normalization(tmp_path: Path) -> None:
+    (tmp_path / "baseline.pcdump").write_text("dump", encoding="utf-8")
+    path = tmp_path / "target.yaml"
+    path.write_text(
+        "schema_version: delta-minimize-color-target.v1\n"
+        f"function: {FUNCTION}\nclass_id: 0\nbaseline_dump: baseline.pcdump\n"
+        'force_phys: {66: 22, "66": 21}\ncoalesce_preservation: true\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DeltaMinimizeError, match="invalid-color-target-force-phys"):
+        load_color_target(path, function=FUNCTION)
+
+
+@pytest.mark.parametrize("physical", [True, False, -1, 32, "22", 22.0, None])
+def test_color_target_rejects_invalid_json_physical_values(
+    tmp_path: Path,
+    physical: object,
+) -> None:
+    baseline = tmp_path / "baseline.pcdump"
+    baseline.write_text("dump", encoding="utf-8")
+    path = tmp_path / "target.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "delta-minimize-color-target.v1",
+                "function": FUNCTION,
+                "class_id": 0,
+                "baseline_dump": baseline.name,
+                "force_phys": {"66": physical},
+                "coalesce_preservation": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DeltaMinimizeError, match="invalid-color-target-force-phys"):
+        load_color_target(path, function=FUNCTION)
+
+
 @pytest.mark.parametrize(
     ("yaml_text", "reason"),
     [

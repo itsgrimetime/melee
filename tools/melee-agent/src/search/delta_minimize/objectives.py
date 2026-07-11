@@ -252,8 +252,17 @@ def _validate_force_phys(raw: object) -> Mapping[int, int]:
     if not isinstance(raw, Mapping) or not raw:
         raise DeltaMinimizeError("invalid-color-target-force-phys")
     force_phys: dict[int, int] = {}
-    for ig_idx, physical in raw.items():
-        if not _is_int(ig_idx) or ig_idx < 0 or not _is_int(physical) or not 0 <= physical <= 31:
+    for raw_ig_idx, physical in raw.items():
+        if _is_int(raw_ig_idx) and raw_ig_idx >= 0:
+            ig_idx = raw_ig_idx
+        elif isinstance(raw_ig_idx, str) and (
+            raw_ig_idx == "0"
+            or (raw_ig_idx and "1" <= raw_ig_idx[0] <= "9" and all("0" <= char <= "9" for char in raw_ig_idx[1:]))
+        ):
+            ig_idx = int(raw_ig_idx)
+        else:
+            raise DeltaMinimizeError("invalid-color-target-force-phys")
+        if ig_idx in force_phys or not _is_int(physical) or not 0 <= physical <= 31:
             raise DeltaMinimizeError("invalid-color-target-force-phys")
         force_phys[ig_idx] = physical
     return _immutable_sorted_int_mapping(force_phys)
