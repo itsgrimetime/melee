@@ -115,6 +115,7 @@ from .assets import (  # noqa: E402, F401
     AssetResult,
     default_cache_root,
     hydrate_shared_assets,
+    inspect_hydrated_assets,
     seed_shared_assets,
 )
 

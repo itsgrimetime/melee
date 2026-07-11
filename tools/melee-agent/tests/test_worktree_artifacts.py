@@ -1122,6 +1122,100 @@ def test_hydrate_preserves_a_mismatched_consumer_symlink(tmp_path: Path) -> None
     assert consumer.read_bytes() == b"other"
 
 
+def test_inspect_hydrated_assets_binds_links_and_cache_targets(tmp_path: Path) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    assert assets.hydrate_shared_assets(target, cache).status == "hydrated"
+
+    snapshot, errors = assets.inspect_hydrated_assets(target, cache)
+
+    assert errors == ()
+    assert snapshot is not None
+    assert snapshot.cache_identity == (cache.stat().st_dev, cache.stat().st_ino)
+    assert snapshot.manifest_identity == (
+        (cache / "manifest.json").stat().st_dev,
+        (cache / "manifest.json").stat().st_ino,
+    )
+    assert tuple(link.relative for link in snapshot.links) == tuple(
+        sorted(
+            (
+                Path("build/compilers/GC/1.2.5n/mwcceppc.exe"),
+                Path("build/tools/wibo"),
+                Path("tools/table-typer/table-typer"),
+            ),
+            key=lambda path: path.as_posix(),
+        )
+    )
+    for link in snapshot.links:
+        entry = (target / link.relative).lstat()
+        opened = (target / link.relative).stat()
+        assert (link.link_device, link.link_inode) == (entry.st_dev, entry.st_ino)
+        assert (link.target_device, link.target_inode) == (opened.st_dev, opened.st_ino)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["real-file", "extra-leaf", "extra-directory", "wrong-link"]
+)
+def test_inspect_hydrated_assets_rejects_invalid_consumer_tree(
+    tmp_path: Path, mutation: str
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    assert assets.hydrate_shared_assets(target, cache).status == "hydrated"
+    consumer = target / "build" / "tools" / "wibo"
+    if mutation == "real-file":
+        consumer.unlink()
+        consumer.write_bytes(b"local")
+    elif mutation == "extra-leaf":
+        (consumer.parent / "extra").write_bytes(b"extra")
+    elif mutation == "extra-directory":
+        (consumer.parent / "extra").mkdir()
+    else:
+        consumer.unlink()
+        consumer.symlink_to(tmp_path / "elsewhere")
+
+    snapshot, errors = assets.inspect_hydrated_assets(target, cache)
+
+    assert snapshot is None
+    assert errors == ("asset-validation-failed",)
+
+
+def test_inspect_hydrated_assets_detects_coherent_cache_replacement(
+    tmp_path: Path,
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    assert assets.hydrate_shared_assets(target, cache).status == "hydrated"
+    before, errors = assets.inspect_hydrated_assets(target, cache)
+    assert before is not None and errors == ()
+
+    old_cache = tmp_path / "old-cache"
+    cache.chmod(0o755)
+    cache.rename(old_cache)
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    for link in before.links:
+        consumer = target / link.relative
+        consumer.unlink()
+        consumer.symlink_to(
+            os.path.relpath(cache / "files" / link.relative, start=consumer.parent)
+        )
+
+    after, errors = assets.inspect_hydrated_assets(target, cache)
+
+    assert errors == ()
+    assert after is not None
+    assert after != before
+
+
 def test_hydrate_rejects_cache_root_replacement_before_target_mutation(
     tmp_path: Path, monkeypatch
 ) -> None:

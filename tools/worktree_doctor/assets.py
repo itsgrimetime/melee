@@ -41,6 +41,24 @@ class AssetResult:
 
 
 @dataclass(frozen=True)
+class HydratedAssetLink:
+    relative: Path
+    link_device: int
+    link_inode: int
+    link_text: str
+    target_device: int
+    target_inode: int
+
+
+@dataclass(frozen=True)
+class HydratedAssetSnapshot:
+    cache_root: Path
+    cache_identity: tuple[int, int]
+    manifest_identity: tuple[int, int]
+    links: tuple[HydratedAssetLink, ...]
+
+
+@dataclass(frozen=True)
 class _AssetFile:
     relative: Path
     size_bytes: int
@@ -287,6 +305,119 @@ def hydrate_shared_assets(
         cache_root=cache_root,
         linked=tuple(linked),
         skipped=tuple(skipped),
+    )
+
+
+def inspect_hydrated_assets(
+    target: Path, cache_root: Path
+) -> tuple[HydratedAssetSnapshot | None, tuple[str, ...]]:
+    """Validate a hydrated consumer tree and bind every link and target inode."""
+
+    target = _absolute_path(target)
+    cache_root = _absolute_path(cache_root)
+    state, cache = _validated_cache(cache_root)
+    if state != "valid" or cache is None:
+        return None, ("asset-validation-failed",)
+
+    expected = {item.relative: item for item in cache.files}
+    expected_directories = {
+        parent
+        for relative in expected
+        for parent in relative.parents
+        if parent != Path(".")
+    }
+    actual: set[Path] = set()
+    for container in ASSET_PATHS[:-1]:
+        container_path = target / container
+        try:
+            container_stat = container_path.lstat()
+        except FileNotFoundError:
+            if any(path.is_relative_to(container) for path in expected):
+                return None, ("asset-validation-failed",)
+            continue
+        except OSError:
+            return None, ("asset-validation-failed",)
+        if stat.S_ISLNK(container_stat.st_mode) or not stat.S_ISDIR(container_stat.st_mode):
+            return None, ("asset-validation-failed",)
+        try:
+            for root, directories, files in os.walk(
+                container_path,
+                followlinks=False,
+                onerror=lambda error: (_ for _ in ()).throw(error),
+            ):
+                root_path = Path(root)
+                for name in directories:
+                    child = root_path / name
+                    if child.is_symlink():
+                        return None, ("asset-validation-failed",)
+                    if child.relative_to(target) not in expected_directories:
+                        return None, ("asset-validation-failed",)
+                for name in files:
+                    actual.add((root_path / name).relative_to(target))
+        except OSError:
+            return None, ("asset-validation-failed",)
+
+    standalone = target / ASSET_PATHS[-1]
+    try:
+        parent = target
+        for component in ASSET_PATHS[-1].parts[:-1]:
+            parent /= component
+            parent_stat = parent.lstat()
+            if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(
+                parent_stat.st_mode
+            ):
+                return None, ("asset-validation-failed",)
+        standalone.lstat()
+    except FileNotFoundError:
+        if ASSET_PATHS[-1] in expected:
+            return None, ("asset-validation-failed",)
+    except OSError:
+        return None, ("asset-validation-failed",)
+    else:
+        actual.add(ASSET_PATHS[-1])
+
+    if actual != set(expected):
+        return None, ("asset-validation-failed",)
+
+    links: list[HydratedAssetLink] = []
+    for relative in sorted(expected, key=lambda item: item.as_posix()):
+        consumer = target / relative
+        expected_text = os.path.relpath(
+            cache_root / "files" / relative, start=consumer.parent
+        )
+        try:
+            link_stat = consumer.lstat()
+            link_text = os.readlink(consumer)
+            target_stat = consumer.stat()
+        except OSError:
+            return None, ("asset-validation-failed",)
+        expected_target = cache.identity.files[relative]
+        if (
+            not stat.S_ISLNK(link_stat.st_mode)
+            or link_text != expected_text
+            or (target_stat.st_dev, target_stat.st_ino) != expected_target
+        ):
+            return None, ("asset-validation-failed",)
+        links.append(
+            HydratedAssetLink(
+                relative=relative,
+                link_device=link_stat.st_dev,
+                link_inode=link_stat.st_ino,
+                link_text=link_text,
+                target_device=target_stat.st_dev,
+                target_inode=target_stat.st_ino,
+            )
+        )
+
+    identity = cache.identity
+    return (
+        HydratedAssetSnapshot(
+            cache_root=cache_root,
+            cache_identity=(identity.root_device, identity.root_inode),
+            manifest_identity=(identity.manifest_device, identity.manifest_inode),
+            links=tuple(links),
+        ),
+        (),
     )
 
 

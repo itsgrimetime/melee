@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import os
 import re
+import selectors
+import stat
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
+
+from . import assets
+from .retained_evidence import RetainedEvidenceSnapshot, discover_retained_evidence
 
 
 @dataclass(frozen=True)
@@ -24,11 +30,131 @@ class WorktreeParseError(ValueError):
     """Raised when registered-worktree discovery cannot be trusted."""
 
 
+@dataclass(frozen=True)
+class IgnoredEntry:
+    relative: Path
+    kind: str
+    device: int
+    inode: int
+    size: int
+    mtime: float
+
+    @classmethod
+    def from_path(cls, worktree: Path, relative: Path) -> "IgnoredEntry":
+        entry_stat = (worktree / relative).lstat()
+        if stat.S_ISREG(entry_stat.st_mode):
+            kind = "file"
+        elif stat.S_ISDIR(entry_stat.st_mode):
+            kind = "directory"
+        elif stat.S_ISLNK(entry_stat.st_mode):
+            kind = "symlink"
+        else:
+            kind = "unsupported"
+        return cls(
+            relative=relative,
+            kind=kind,
+            device=entry_stat.st_dev,
+            inode=entry_stat.st_ino,
+            size=entry_stat.st_size,
+            mtime=entry_stat.st_mtime,
+        )
+
+
+@dataclass(frozen=True)
+class ProcessSnapshot:
+    paths: tuple[tuple[int, Path], ...]
+    commands: tuple[tuple[int, str], ...]
+    errors: tuple[str, ...]
+
+    def active_pids(self, canonical: Path, reported: Path) -> tuple[int, ...]:
+        canonical_text = os.fspath(canonical)
+        reported_text = os.fspath(reported)
+        active = {
+            pid
+            for pid, path in self.paths
+            if path == canonical or path.is_relative_to(canonical)
+        }
+        active.update(
+            pid
+            for pid, command in self.commands
+            if canonical_text in command or reported_text in command
+        )
+        return tuple(sorted(active))
+
+
+@dataclass(frozen=True)
+class WorktreeRecord:
+    path: Path
+    canonical_path: Path
+    path_device: int | None
+    path_inode: int | None
+    head: str
+    branch: str | None
+    detached: bool
+    locked_reason: str | None
+    prunable_reason: str | None
+    branch_head: str | None
+    estimated_disk_bytes: int
+    last_activity: float | None
+    dirty: bool | None
+    ignored_entries: tuple[IgnoredEntry, ...]
+    unapproved_ignored_paths: tuple[Path, ...]
+    retained_evidence: RetainedEvidenceSnapshot
+    asset_snapshot: assets.HydratedAssetSnapshot | None
+    dol_identity: tuple[int, int, int, int, str] | None
+    active_pids: tuple[int, ...]
+    merged_into_master: bool | None
+    eligible: bool
+    skip_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WorktreeReport:
+    repo_root: Path
+    common_git_dir: Path
+    current_worktree: Path
+    min_idle_hours: float
+    records: tuple[WorktreeRecord, ...]
+    global_errors: tuple[str, ...]
+
+
 _OBJECT_HEX_LENGTHS = {b"sha1": 40, b"sha256": 64}
 _HEX_OID = re.compile(rb"[0-9a-fA-F]+\Z")
 _BRANCH_PREFIX = b"refs/heads/"
 _INVALID_REF_BYTES = frozenset(b" ~^:?*[\\")
 _AGENT_BRANCH_PREFIXES = ("codex/", "claude/", "wall/")
+_IGNORED_MAX_BYTES = 32 * 1024 * 1024
+_IGNORED_MAX_ENTRIES = 500_000
+_PROCESS_STDOUT_MAX = 8 * 1024 * 1024
+_PROCESS_STDERR_MAX = 1024 * 1024
+_PROCESS_RECORD_MAX = 200_000
+_PROCESS_TIMEOUT = 15.0
+_SENSITIVE_COMPONENTS = frozenset({"log", "logs", "dump", "dumps"})
+_DENIED_COMPONENTS = frozenset(
+    {
+        ".env",
+        ".venv",
+        "venv",
+        ".claude",
+        ".codex",
+        "candidate",
+        "candidates",
+        "run",
+        "runs",
+    }
+)
+_CACHE_COMPONENTS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", "htmlcov"})
+_ROOT_GENERATED = frozenset(
+    {
+        "build.ninja",
+        ".ninja_deps",
+        ".ninja_log",
+        "compile_commands.json",
+        "objdiff.json",
+        "ctx.c",
+        "ctx_includes.h",
+    }
+)
 
 
 def _git_failure(command: str, stderr: bytes) -> WorktreeParseError:
@@ -317,3 +443,663 @@ def policy_skip_reasons(
     if record.prunable_reason is not None:
         reasons.append("prunable-worktree")
     return tuple(reasons)
+
+
+def common_git_dir(repo_root: Path) -> Path:
+    result = subprocess.run(
+        ["git", "-C", os.fspath(repo_root), "rev-parse", "--git-common-dir"],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise WorktreeParseError("git common directory query failed")
+    value = Path(os.fsdecode(result.stdout.rstrip(b"\r\n")))
+    if not value.is_absolute():
+        value = repo_root / value
+    return value.resolve(strict=False)
+
+
+def _parse_ignored_inventory(
+    worktree: Path, data: bytes
+) -> tuple[tuple[IgnoredEntry, ...], tuple[str, ...]]:
+    if len(data) > _IGNORED_MAX_BYTES or (data and not data.endswith(b"\0")):
+        return (), ("ignored-inventory-invalid",)
+    if not data:
+        return (), ()
+    raw_entries = data[:-1].split(b"\0")
+    if len(raw_entries) > _IGNORED_MAX_ENTRIES or any(not item for item in raw_entries):
+        return (), ("ignored-inventory-invalid",)
+
+    seen: set[Path] = set()
+    entries: list[IgnoredEntry] = []
+    try:
+        root_fd = os.open(
+            worktree,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError:
+        return (), ("ignored-inventory-invalid",)
+    try:
+        for raw in raw_entries:
+            relative = Path(os.fsdecode(raw))
+            if (
+                relative.is_absolute()
+                or not relative.parts
+                or any(part in {"", ".", ".."} for part in relative.parts)
+            ):
+                return (), ("ignored-inventory-invalid",)
+            normalized = Path(*relative.parts)
+            if normalized in seen:
+                return (), ("ignored-inventory-invalid",)
+            seen.add(normalized)
+            try:
+                entry = _ignored_entry_at(root_fd, normalized)
+            except OSError:
+                return (), ("ignored-inventory-invalid",)
+            if entry.kind == "unsupported":
+                return (), ("ignored-inventory-invalid",)
+            entries.append(entry)
+    finally:
+        os.close(root_fd)
+    return (
+        tuple(sorted(entries, key=lambda item: item.relative.as_posix())),
+        (),
+    )
+
+
+def _ignored_entry_at(root_fd: int, relative: Path) -> IgnoredEntry:
+    current_fd = os.dup(root_fd)
+    try:
+        for component in relative.parts[:-1]:
+            child_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = child_fd
+        entry_stat = os.stat(
+            relative.name, dir_fd=current_fd, follow_symlinks=False
+        )
+    finally:
+        os.close(current_fd)
+    if stat.S_ISREG(entry_stat.st_mode):
+        kind = "file"
+    elif stat.S_ISDIR(entry_stat.st_mode):
+        kind = "directory"
+    elif stat.S_ISLNK(entry_stat.st_mode):
+        kind = "symlink"
+    else:
+        kind = "unsupported"
+    return IgnoredEntry(
+        relative,
+        kind,
+        entry_stat.st_dev,
+        entry_stat.st_ino,
+        entry_stat.st_size,
+        entry_stat.st_mtime,
+    )
+
+
+def _ignored_entries_match(worktree: Path, entries: Sequence[IgnoredEntry]) -> bool:
+    try:
+        root_fd = os.open(
+            worktree,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError:
+        return False
+    try:
+        for expected in entries:
+            try:
+                current = _ignored_entry_at(root_fd, expected.relative)
+            except OSError:
+                return False
+            if current != expected:
+                return False
+        return True
+    finally:
+        os.close(root_fd)
+
+
+def _sensitive(relative: Path) -> bool:
+    if relative == Path(".ninja_log"):
+        return False
+    return any(part in _SENSITIVE_COMPONENTS for part in relative.parts) or any(
+        part.endswith((".log", ".dump")) for part in relative.parts
+    )
+
+
+def _is_disposable_ignored(relative: Path, kind: str) -> bool:
+    if _sensitive(relative) or any(
+        part in _DENIED_COMPONENTS for part in relative.parts
+    ):
+        return False
+    if relative.as_posix() in _ROOT_GENERATED and len(relative.parts) == 1:
+        return kind == "file"
+    if relative == Path("tools/melee-agent/.coverage"):
+        return kind == "file"
+    if any(part in _CACHE_COMPONENTS for part in relative.parts):
+        return True
+    return bool(relative.parts and relative.parts[0] in {"build", ".cache"})
+
+
+def _is_under(relative: Path, root: Path) -> bool:
+    return relative == root or relative.is_relative_to(root)
+
+
+def _inspect_dol(worktree: Path) -> tuple[tuple[int, int, int, int, str] | None, bool]:
+    relative = Path("orig/GALE01/sys/main.dol")
+    link = worktree / relative
+    try:
+        link_stat = link.lstat()
+        link_text = os.readlink(link)
+        target_stat = link.stat()
+        resolved = link.resolve(strict=True)
+    except OSError:
+        return None, False
+    if not stat.S_ISLNK(link_stat.st_mode):
+        return None, False
+    from . import DOL_CANDIDATES
+
+    for candidate in DOL_CANDIDATES:
+        try:
+            candidate_resolved = candidate.resolve(strict=True)
+            candidate_stat = candidate_resolved.stat()
+        except OSError:
+            continue
+        if resolved == candidate_resolved and (
+            target_stat.st_dev,
+            target_stat.st_ino,
+        ) == (candidate_stat.st_dev, candidate_stat.st_ino):
+            return (
+                link_stat.st_dev,
+                link_stat.st_ino,
+                target_stat.st_dev,
+                target_stat.st_ino,
+                link_text,
+            ), True
+    return None, False
+
+
+def _classify_ignored(
+    entries: Sequence[IgnoredEntry],
+    retained: RetainedEvidenceSnapshot,
+    asset_snapshot: assets.HydratedAssetSnapshot | None,
+    dol_identity: tuple[int, int, int, int, str] | None,
+) -> tuple[tuple[Path, ...], bool]:
+    retained_roots = (
+        Path("build/diagnostics"),
+        Path("build/diagnostics/runs"),
+        Path("build/runs"),
+        *(manifest[0].parent.parent for manifest in retained.manifests),
+    )
+    asset_paths = set()
+    if asset_snapshot is not None:
+        asset_paths.update(link.relative for link in asset_snapshot.links)
+        asset_paths.update(assets.ASSET_PATHS[:-1])
+    unapproved: list[Path] = []
+    has_retained = False
+    owned_manifests = {item[0] for item in retained.manifests}
+    for entry in entries:
+        relative = entry.relative
+        if relative.name == "manifest.json" and relative not in owned_manifests:
+            unapproved.append(relative)
+            continue
+        if any(_is_under(relative, root) for root in retained_roots):
+            has_retained = True
+            continue
+        if relative in asset_paths:
+            continue
+        if relative == Path("orig/GALE01/sys/main.dol") and dol_identity is not None:
+            continue
+        if not _is_disposable_ignored(relative, entry.kind):
+            unapproved.append(relative)
+    return tuple(unapproved), has_retained
+
+
+def _walk_tree(path: Path) -> tuple[int, float, tuple[str, ...]]:
+    total = 0
+    newest = 0.0
+
+    def walk(directory_fd: int) -> None:
+        nonlocal total, newest
+        directory_stat = os.fstat(directory_fd)
+        total += directory_stat.st_blocks * 512
+        newest = max(newest, directory_stat.st_mtime)
+        with os.scandir(os.dup(directory_fd)) as iterator:
+            children = sorted(iterator, key=lambda item: item.name)
+        for child in children:
+            child_stat = child.stat(follow_symlinks=False)
+            newest = max(newest, child_stat.st_mtime)
+            if stat.S_ISDIR(child_stat.st_mode) and not stat.S_ISLNK(child_stat.st_mode):
+                child_fd = os.open(
+                    child.name,
+                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory_fd,
+                )
+                try:
+                    opened = os.fstat(child_fd)
+                    if (opened.st_dev, opened.st_ino) != (
+                        child_stat.st_dev,
+                        child_stat.st_ino,
+                    ):
+                        raise OSError("directory replaced during scan")
+                    walk(child_fd)
+                finally:
+                    os.close(child_fd)
+            elif stat.S_ISREG(child_stat.st_mode) or stat.S_ISLNK(child_stat.st_mode):
+                total += child_stat.st_blocks * 512
+            else:
+                raise OSError("unsupported filesystem entry")
+
+    try:
+        root_stat = path.lstat()
+        if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+            return 0, 0.0, ("invalid-worktree-path",)
+        fd = os.open(
+            path,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened = os.fstat(fd)
+            if (opened.st_dev, opened.st_ino) != (root_stat.st_dev, root_stat.st_ino):
+                return 0, 0.0, ("scan-failed",)
+            walk(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        return 0, 0.0, ("scan-failed",)
+    return total, newest, ()
+
+
+def _parse_lsof(data: bytes, *, self_pid: int) -> tuple[tuple[int, Path], ...]:
+    fields = data.replace(b"\0", b"\n").splitlines()
+    result: list[tuple[int, Path]] = []
+    pid: int | None = None
+    for field in fields:
+        if not field:
+            continue
+        tag, value = field[:1], field[1:]
+        if tag == b"p":
+            try:
+                pid = int(value)
+            except ValueError as error:
+                raise ValueError("malformed lsof PID") from error
+            if pid <= 0:
+                raise ValueError("malformed lsof PID")
+        elif tag == b"n":
+            if pid is None:
+                raise ValueError("lsof name before PID")
+            if pid != self_pid and value.startswith(b"/"):
+                result.append((pid, Path(os.fsdecode(value)).resolve(strict=False)))
+        elif tag != b"f":
+            raise ValueError("unknown lsof field")
+    return tuple(sorted(set(result), key=lambda item: (item[0], os.fspath(item[1]))))
+
+
+def _parse_ps(data: bytes, *, self_pid: int) -> tuple[tuple[int, str], ...]:
+    result: list[tuple[int, str]] = []
+    for line in data.splitlines():
+        if not line.strip():
+            continue
+        fields = line.lstrip().split(maxsplit=1)
+        if len(fields) != 2:
+            raise ValueError("malformed ps record")
+        try:
+            pid = int(fields[0])
+        except ValueError as error:
+            raise ValueError("malformed ps PID") from error
+        if pid <= 0:
+            raise ValueError("malformed ps PID")
+        if pid != self_pid:
+            result.append((pid, os.fsdecode(fields[1])))
+    return tuple(result)
+
+
+def _bounded_command(
+    args: Sequence[str],
+    *,
+    popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
+    record_limit: int | None = None,
+) -> tuple[bytes, bytes, str | None]:
+    try:
+        process = popen_factory(
+            list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+    except OSError:
+        return b"", b"", "process-query-failed"
+    if process.stdout is None or process.stderr is None:
+        process.kill()
+        process.wait()
+        return b"", b"", "process-query-failed"
+
+    selector = selectors.DefaultSelector()
+    outputs = {process.stdout: bytearray(), process.stderr: bytearray()}
+    limits = {process.stdout: _PROCESS_STDOUT_MAX, process.stderr: _PROCESS_STDERR_MAX}
+    record_count = 0
+    try:
+        for stream in outputs:
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ)
+        deadline = time.monotonic() + _PROCESS_TIMEOUT
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.wait()
+                return b"", b"", "process-query-failed"
+            events = selector.select(remaining)
+            if not events:
+                process.kill()
+                process.wait()
+                return b"", b"", "process-query-failed"
+            for key, _ in events:
+                stream = key.fileobj
+                chunk = os.read(stream.fileno(), 65536)
+                if not chunk:
+                    selector.unregister(stream)
+                    continue
+                output = outputs[stream]
+                output.extend(chunk)
+                if len(output) > limits[stream]:
+                    process.kill()
+                    process.wait()
+                    return b"", b"", "process-query-overflow"
+                if stream is process.stdout and record_limit is not None:
+                    record_count += chunk.count(b"\n") + chunk.count(b"\0")
+                    if record_count > record_limit:
+                        process.kill()
+                        process.wait()
+                        return b"", b"", "process-query-overflow"
+        returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except (OSError, subprocess.TimeoutExpired):
+        process.kill()
+        process.wait()
+        return b"", b"", "process-query-failed"
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    if returncode != 0:
+        return b"", b"", "process-query-failed"
+    return bytes(outputs[process.stdout]), bytes(outputs[process.stderr]), None
+
+
+def collect_process_snapshot(
+    *,
+    popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
+) -> ProcessSnapshot:
+    self_pid = os.getpid()
+    lsof, _, error = _bounded_command(
+        ("lsof", "-nP", "-F", "pfn"),
+        popen_factory=popen_factory,
+        record_limit=_PROCESS_RECORD_MAX,
+    )
+    if error is not None:
+        return ProcessSnapshot((), (), (error,))
+    ps, _, error = _bounded_command(
+        ("ps", "-axo", "pid=,command="),
+        popen_factory=popen_factory,
+        record_limit=_PROCESS_RECORD_MAX,
+    )
+    if error is not None:
+        return ProcessSnapshot((), (), (error,))
+    lsof_records = len(lsof.replace(b"\0", b"\n").splitlines())
+    ps_records = len(ps.splitlines())
+    if lsof_records > _PROCESS_RECORD_MAX or ps_records > _PROCESS_RECORD_MAX:
+        return ProcessSnapshot((), (), ("process-query-overflow",))
+    try:
+        return ProcessSnapshot(
+            _parse_lsof(lsof, self_pid=self_pid),
+            _parse_ps(ps, self_pid=self_pid),
+            (),
+        )
+    except ValueError:
+        return ProcessSnapshot((), (), ("process-query-failed",))
+
+
+def _git_bytes(path: Path, args: Sequence[str]) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(
+            ["git", "-C", os.fspath(path), *args], capture_output=True
+        )
+    except OSError:
+        return subprocess.CompletedProcess(args, 127, b"", b"")
+
+
+def _admin_activity(worktree: Path) -> tuple[float, tuple[str, ...]]:
+    marker = worktree / ".git"
+    try:
+        marker_stat = marker.lstat()
+        newest = marker_stat.st_mtime
+        if stat.S_ISDIR(marker_stat.st_mode):
+            admin = marker
+        elif stat.S_ISREG(marker_stat.st_mode):
+            raw = marker.read_bytes()
+            if not raw.startswith(b"gitdir: "):
+                return 0.0, ("scan-failed",)
+            admin = Path(os.fsdecode(raw[len(b"gitdir: ") :].strip()))
+            if not admin.is_absolute():
+                admin = worktree / admin
+        else:
+            return 0.0, ("scan-failed",)
+        for relative in (Path("HEAD"), Path("logs/HEAD"), Path("index")):
+            current = admin / relative
+            try:
+                newest = max(newest, current.lstat().st_mtime)
+            except FileNotFoundError:
+                return 0.0, ("scan-failed",)
+            except OSError:
+                return 0.0, ("scan-failed",)
+        return newest, ()
+    except OSError:
+        return 0.0, ("scan-failed",)
+
+
+def _inspect_one(
+    item: RegisteredWorktree,
+    *,
+    repo_root: Path,
+    main_worktree: Path,
+    current_worktree: Path,
+    agent_roots: Sequence[Path],
+    snapshot: ProcessSnapshot,
+    min_idle_hours: float,
+    now: float,
+) -> WorktreeRecord:
+    reasons = list(
+        policy_skip_reasons(
+            item,
+            main_worktree=main_worktree,
+            current_worktree=current_worktree,
+            agent_roots=agent_roots,
+        )
+    )
+    canonical = item.path.resolve(strict=False)
+    path_device: int | None = None
+    path_inode: int | None = None
+    try:
+        path_stat = item.path.lstat()
+        if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISDIR(path_stat.st_mode):
+            reasons.append("invalid-worktree-path")
+        else:
+            path_device, path_inode = path_stat.st_dev, path_stat.st_ino
+    except FileNotFoundError:
+        reasons.append("missing-directory")
+    except OSError:
+        reasons.append("invalid-worktree-path")
+
+    branch_head: str | None = None
+    if item.branch is not None:
+        result = _git_bytes(repo_root, ("rev-parse", "--verify", f"refs/heads/{item.branch}"))
+        if result.returncode != 0:
+            reasons.append("branch-missing")
+        else:
+            branch_head = os.fsdecode(result.stdout.strip())
+            if branch_head != item.head:
+                reasons.append("branch-head-mismatch")
+
+    admin_activity, admin_errors = _admin_activity(item.path)
+    for reason in admin_errors:
+        if reason not in reasons:
+            reasons.append(reason)
+
+    status = _git_bytes(
+        item.path,
+        (
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ),
+    )
+    dirty: bool | None = None
+    if status.returncode != 0:
+        reasons.append("status-query-failed")
+    else:
+        dirty = bool(status.stdout)
+        if dirty:
+            reasons.append("dirty-worktree")
+
+    ignored_result = _git_bytes(
+        item.path, ("ls-files", "--others", "-i", "--exclude-standard", "-z", "--")
+    )
+    ignored_entries: tuple[IgnoredEntry, ...] = ()
+    retained = RetainedEvidenceSnapshot((), ())
+    asset_snapshot: assets.HydratedAssetSnapshot | None = None
+    dol_identity = None
+    unapproved: tuple[Path, ...] = ()
+    if ignored_result.returncode != 0:
+        reasons.append("ignored-inventory-invalid")
+    else:
+        ignored_entries, inventory_errors = _parse_ignored_inventory(
+            item.path, ignored_result.stdout
+        )
+        reasons.extend(inventory_errors)
+        if not inventory_errors:
+            retained, retained_errors = discover_retained_evidence(
+                item.path, ignored_entries
+            )
+            reasons.extend(retained_errors)
+            asset_related = any(
+                any(_is_under(entry.relative, root) for root in assets.ASSET_PATHS)
+                for entry in ignored_entries
+            )
+            if asset_related:
+                asset_snapshot, asset_errors = assets.inspect_hydrated_assets(
+                    item.path, assets.default_cache_root()
+                )
+                reasons.extend(asset_errors)
+            if any(
+                entry.relative == Path("orig/GALE01/sys/main.dol")
+                for entry in ignored_entries
+            ):
+                dol_identity, dol_valid = _inspect_dol(item.path)
+                if not dol_valid:
+                    reasons.append("asset-validation-failed")
+            unapproved, has_retained = _classify_ignored(
+                ignored_entries, retained, asset_snapshot, dol_identity
+            )
+            if has_retained:
+                reasons.append("retained-evidence-present")
+            if unapproved:
+                reasons.append("contains-unapproved-ignored")
+
+    estimated_bytes, tree_activity, walk_errors = _walk_tree(item.path)
+    reasons.extend(reason for reason in walk_errors if reason not in reasons)
+    if ignored_entries and not _ignored_entries_match(item.path, ignored_entries):
+        if "ignored-inventory-invalid" not in reasons:
+            reasons.append("ignored-inventory-invalid")
+    last_activity = max(admin_activity, tree_activity) if not walk_errors else None
+    if last_activity is not None:
+        if last_activity > now + 1.0:
+            reasons.append("clock-skew")
+        elif now - last_activity < min_idle_hours * 3600:
+            reasons.append("below-min-idle")
+
+    active_pids = snapshot.active_pids(canonical, item.path)
+    if active_pids:
+        reasons.append("active-process")
+    reasons.extend(reason for reason in snapshot.errors if reason not in reasons)
+
+    merged: bool | None = None
+    if item.branch is not None:
+        merge = _git_bytes(repo_root, ("merge-base", "--is-ancestor", item.head, "master"))
+        if merge.returncode in {0, 1}:
+            merged = merge.returncode == 0
+
+    ordered_reasons = tuple(dict.fromkeys(reasons))
+    return WorktreeRecord(
+        path=item.path,
+        canonical_path=canonical,
+        path_device=path_device,
+        path_inode=path_inode,
+        head=item.head,
+        branch=item.branch,
+        detached=item.detached,
+        locked_reason=item.locked_reason,
+        prunable_reason=item.prunable_reason,
+        branch_head=branch_head,
+        estimated_disk_bytes=estimated_bytes,
+        last_activity=last_activity,
+        dirty=dirty,
+        ignored_entries=ignored_entries,
+        unapproved_ignored_paths=unapproved,
+        retained_evidence=retained,
+        asset_snapshot=asset_snapshot,
+        dol_identity=dol_identity,
+        active_pids=active_pids,
+        merged_into_master=merged,
+        eligible=not ordered_reasons,
+        skip_reasons=ordered_reasons,
+    )
+
+
+def inspect_worktrees(
+    repo_root: Path,
+    *,
+    current_worktree: Path,
+    min_idle_hours: float,
+    now: float | None = None,
+    process_snapshot: ProcessSnapshot | None = None,
+) -> WorktreeReport:
+    if min_idle_hours < 0 or not __import__("math").isfinite(min_idle_hours):
+        raise ValueError("min_idle_hours must be finite and non-negative")
+    repo_root = repo_root.resolve(strict=False)
+    registered = discover_registered_worktrees(repo_root)
+    snapshot = process_snapshot or collect_process_snapshot()
+    current_time = time.time() if now is None else now
+    main_worktree = registered[0].path.resolve(strict=False)
+    agent_roots = (
+        Path.home() / ".codex" / "worktrees",
+        Path.home() / ".claude" / "worktrees",
+        main_worktree / ".claude" / "worktrees",
+    )
+    records = tuple(
+        sorted(
+            (
+                _inspect_one(
+                    item,
+                    repo_root=repo_root,
+                    main_worktree=main_worktree,
+                    current_worktree=current_worktree,
+                    agent_roots=agent_roots,
+                    snapshot=snapshot,
+                    min_idle_hours=min_idle_hours,
+                    now=current_time,
+                )
+                for item in registered
+            ),
+            key=lambda record: os.fspath(record.canonical_path),
+        )
+    )
+    return WorktreeReport(
+        repo_root=repo_root,
+        common_git_dir=common_git_dir(repo_root),
+        current_worktree=current_worktree.resolve(strict=False),
+        min_idle_hours=min_idle_hours,
+        records=records,
+        global_errors=snapshot.errors,
+    )

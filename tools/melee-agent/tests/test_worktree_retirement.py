@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,13 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 worktrees = importlib.import_module("worktree_doctor.worktrees")
+retained_evidence = importlib.import_module("worktree_doctor.retained_evidence")
+
+MELEE_AGENT_ROOT = TOOLS_ROOT / "melee-agent"
+if str(MELEE_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(MELEE_AGENT_ROOT))
+
+mwcc_artifacts = importlib.import_module("src.mwcc_debug.artifacts")
 
 
 def record(
@@ -483,3 +492,469 @@ def test_policy_uses_canonical_paths_for_roots_and_primary_checks(
     )
 
     assert reasons == ("current-worktree",)
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", "-C", os.fspath(root), *args],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _inspection_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "tests@example.invalid")
+    _git(repo, "config", "user.name", "Worktree Tests")
+    (repo / ".gitignore").write_text(
+        "build/\n.cache/\norig/\n__pycache__/\n.ninja_log\n.env\n",
+        encoding="utf-8",
+    )
+    (repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore", "tracked.txt")
+    _git(repo, "commit", "-qm", "fixture")
+    linked = repo / ".claude" / "worktrees" / "job"
+    linked.parent.mkdir(parents=True)
+    _git(repo, "worktree", "add", "-qb", "codex/job", os.fspath(linked))
+    return repo, linked
+
+
+def _quiet_snapshot() -> worktrees.ProcessSnapshot:
+    return worktrees.ProcessSnapshot(paths=(), commands=(), errors=())
+
+
+def test_inspection_uses_checkout_activity_not_old_head(tmp_path: Path) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    old = time.time() - 7 * 24 * 3600
+    _git(repo, "commit", "--amend", "--no-edit", f"--date=@{int(old)}")
+
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=24,
+        now=time.time(),
+        process_snapshot=_quiet_snapshot(),
+    )
+    item = next(record for record in report.records if record.path == linked)
+
+    assert item.last_activity > old + 24 * 3600
+    assert "below-min-idle" in item.skip_reasons
+
+
+@pytest.mark.parametrize("change", ["staged", "unstaged", "untracked"])
+def test_inspection_reports_git_dirtiness(tmp_path: Path, change: str) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    if change == "staged":
+        (linked / "added.txt").write_text("new\n", encoding="utf-8")
+        _git(linked, "add", "added.txt")
+    elif change == "unstaged":
+        (linked / "tracked.txt").write_text("changed\n", encoding="utf-8")
+    else:
+        (linked / "untracked.txt").write_text("new\n", encoding="utf-8")
+
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=0,
+        process_snapshot=_quiet_snapshot(),
+    )
+    item = next(record for record in report.records if record.path == linked)
+
+    assert item.dirty is True
+    assert "dirty-worktree" in item.skip_reasons
+
+
+def test_ignored_rebuildable_file_does_not_make_git_dirty(tmp_path: Path) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    output = linked / "build" / "obj" / "file.o"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"object")
+
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=0,
+        process_snapshot=_quiet_snapshot(),
+    )
+    item = next(record for record in report.records if record.path == linked)
+
+    assert item.dirty is False
+    assert "contains-unapproved-ignored" not in item.skip_reasons
+
+
+@pytest.mark.parametrize("relative", [Path(".env"), Path("build/crash.dump")])
+def test_inspection_blocks_unapproved_ignored_content(
+    tmp_path: Path, relative: Path
+) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    path = linked / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"sensitive")
+
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=0,
+        process_snapshot=_quiet_snapshot(),
+    )
+    item = next(record for record in report.records if record.path == linked)
+
+    assert "contains-unapproved-ignored" in item.skip_reasons
+
+
+def test_tree_walk_sums_allocated_blocks_without_following_symlinks(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "tree"
+    root.mkdir()
+    local = root / "local"
+    local.write_bytes(b"local")
+    external = tmp_path / "external"
+    external.write_bytes(b"x" * 1024 * 1024)
+    link = root / "link"
+    link.symlink_to(external)
+
+    estimated, _activity, errors = worktrees._walk_tree(root)
+
+    assert errors == ()
+    assert estimated == sum(
+        path.lstat().st_blocks * 512 for path in (root, local, link)
+    )
+
+
+def test_tree_walk_fails_closed_on_scan_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "tree"
+    root.mkdir()
+    monkeypatch.setattr(
+        worktrees.os, "scandir", lambda _fd: (_ for _ in ()).throw(OSError("denied"))
+    )
+
+    assert worktrees._walk_tree(root) == (0, 0.0, ("scan-failed",))
+
+
+def test_inspection_rejects_future_activity_timestamp(tmp_path: Path) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    future = time.time() + 3600
+    os.utime(linked / "tracked.txt", (future, future))
+
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=0,
+        now=time.time(),
+        process_snapshot=_quiet_snapshot(),
+    )
+    item = next(record for record in report.records if record.path == linked)
+
+    assert "clock-skew" in item.skip_reasons
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        (b"build/file.o", "ignored-inventory-invalid"),
+        (b"\0", "ignored-inventory-invalid"),
+        (b"/absolute\0", "ignored-inventory-invalid"),
+        (b"build/../secret\0", "ignored-inventory-invalid"),
+        (b"build/x\0build/x\0", "ignored-inventory-invalid"),
+    ],
+)
+def test_ignored_inventory_rejects_malformed_nul_payload(
+    tmp_path: Path, payload: bytes, reason: str
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+
+    entries, errors = worktrees._parse_ignored_inventory(root, payload)
+
+    assert entries == ()
+    assert errors == (reason,)
+
+
+def test_ignored_inventory_preserves_newline_path(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    relative = Path("build/line\nbreak")
+    path = root / relative
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"data")
+
+    entries, errors = worktrees._parse_ignored_inventory(
+        root, os.fsencode(relative) + b"\0"
+    )
+
+    assert errors == ()
+    assert entries[0].relative == relative
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit_value", "payload"),
+    [
+        ("_IGNORED_MAX_BYTES", 1, b"x\0"),
+        ("_IGNORED_MAX_ENTRIES", 0, b"x\0"),
+    ],
+)
+def test_ignored_inventory_enforces_bounds_before_opening_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+    limit_value: int,
+    payload: bytes,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(worktrees, limit_name, limit_value)
+
+    assert worktrees._parse_ignored_inventory(root, payload) == (
+        (),
+        ("ignored-inventory-invalid",),
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative", "approved"),
+    [
+        ("build/obj/file.o", True),
+        (".cache/tool/file", True),
+        ("package/__pycache__/x.pyc", True),
+        (".pytest_cache/x", True),
+        (".mypy_cache/x", True),
+        ("htmlcov/index.html", True),
+        ("build.ninja", True),
+        (".ninja_deps", True),
+        (".ninja_log", True),
+        ("compile_commands.json", True),
+        ("objdiff.json", True),
+        ("ctx.c", True),
+        ("ctx_includes.h", True),
+        ("tools/melee-agent/.coverage", True),
+        (".env", False),
+        ("build/crash.dump", False),
+        ("build/logs/output.txt", False),
+        ("build/.venv/bin/python", False),
+        ("build/.claude/session.json", False),
+        ("build/candidates/output.bin", False),
+    ],
+)
+def test_disposable_ignored_allowlist_and_denial_precedence(
+    relative: str, approved: bool
+) -> None:
+    assert worktrees._is_disposable_ignored(Path(relative), "file") is approved
+
+
+def test_generated_root_name_must_be_a_regular_file() -> None:
+    assert worktrees._is_disposable_ignored(Path("build.ninja"), "directory") is False
+    assert (
+        worktrees._is_disposable_ignored(
+            Path("tools/melee-agent/.coverage"), "symlink"
+        )
+        is False
+    )
+
+
+def test_retained_evidence_discovers_default_and_custom_manifest_roots(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    default_run = mwcc_artifacts.create_run(root, command=("default",))
+    default_run.finalize("completed")
+    custom_run = mwcc_artifacts.create_run(
+        root,
+        command=("custom",),
+        artifact_root=Path("build/custom-evidence"),
+    )
+    custom_run.finalize("completed")
+    ignored = tuple(
+        worktrees.IgnoredEntry.from_path(root, path.relative_to(root))
+        for path in (default_run.manifest_path, custom_run.manifest_path)
+    )
+
+    snapshot, errors = retained_evidence.discover_retained_evidence(root, ignored)
+
+    assert errors == ()
+    assert snapshot.roots == tuple(sorted((default_run.root, custom_run.root)))
+    assert {item[0] for item in snapshot.manifests} == {
+        default_run.manifest_path.relative_to(root),
+        custom_run.manifest_path.relative_to(root),
+    }
+
+
+@pytest.mark.parametrize(
+    "artifact_root", [None, Path("build/custom-evidence")], ids=["default", "custom"]
+)
+def test_inspection_blocks_retained_run_until_artifact_pruner_applies(
+    tmp_path: Path, artifact_root: Path | None
+) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    run = mwcc_artifacts.create_run(
+        linked, command=("fixture",), artifact_root=artifact_root
+    )
+    run.finalize("completed")
+
+    before = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=0,
+        process_snapshot=_quiet_snapshot(),
+    )
+    before_item = next(item for item in before.records if item.path == linked)
+    assert "retained-evidence-present" in before_item.skip_reasons
+
+    plan = mwcc_artifacts.prune_runs(
+        linked,
+        artifact_root=artifact_root,
+        max_age_days=0,
+        max_total_bytes=0,
+        apply=True,
+    )
+    assert plan.removed_run_dirs == (run.run_dir,)
+
+    after = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=0,
+        process_snapshot=_quiet_snapshot(),
+    )
+    after_item = next(item for item in after.records if item.path == linked)
+    assert "retained-evidence-present" not in after_item.skip_reasons
+    assert after_item.eligible is True
+
+
+def test_dol_validation_requires_identity_checked_candidate_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = importlib.import_module("worktree_doctor")
+    worktree = tmp_path / "worktree"
+    dol = worktree / "orig/GALE01/sys/main.dol"
+    dol.parent.mkdir(parents=True)
+    candidate = tmp_path / "approved.dol"
+    candidate.write_bytes(b"dol")
+    monkeypatch.setattr(package, "DOL_CANDIDATES", [candidate])
+    dol.symlink_to(os.path.relpath(candidate, start=dol.parent))
+
+    identity, valid = worktrees._inspect_dol(worktree)
+
+    assert valid is True
+    assert identity is not None
+    dol.unlink()
+    dol.write_bytes(b"dol")
+    assert worktrees._inspect_dol(worktree) == (None, False)
+
+
+def test_malformed_manifest_like_ignored_file_remains_unapproved(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    manifest = root / "build" / "custom" / "bad" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"artifact_format": "wrong"}), encoding="utf-8")
+    entry = worktrees.IgnoredEntry.from_path(root, manifest.relative_to(root))
+
+    snapshot, errors = retained_evidence.discover_retained_evidence(root, (entry,))
+
+    assert snapshot.roots == ()
+    assert errors == ()
+    assert worktrees._classify_ignored((entry,), snapshot, None, None) == (
+        (manifest.relative_to(root),),
+        False,
+    )
+
+
+def test_process_snapshot_matches_absolute_lsof_paths_and_ps_argv(tmp_path: Path) -> None:
+    worktree = tmp_path / "agent"
+    snapshot = worktrees.ProcessSnapshot(
+        paths=((11, worktree / "open.txt"),),
+        commands=((12, f"python {worktree}/job.py"),),
+        errors=(),
+    )
+
+    assert snapshot.active_pids(worktree, worktree) == (11, 12)
+
+
+def test_process_parsers_ignore_nonabsolute_lsof_names_and_self_pid(tmp_path: Path) -> None:
+    paths = worktrees._parse_lsof(
+        b"p10\0fcwd\0n/tmp/work\0p11\0f3\0nTCP *:80\0",
+        self_pid=11,
+    )
+    commands = worktrees._parse_ps(
+        b"10 python /tmp/work/job.py\n11 doctor\n", self_pid=11
+    )
+
+    assert paths == ((10, Path("/tmp/work").resolve(strict=False)),)
+    assert commands == ((10, "python /tmp/work/job.py"),)
+
+
+def _scripted_popen(scripts: list[str]):
+    def factory(_args, **kwargs):
+        return subprocess.Popen([sys.executable, "-c", scripts.pop(0)], **kwargs)
+
+    return factory
+
+
+def test_collect_process_snapshot_uses_bounded_lsof_and_ps() -> None:
+    snapshot = worktrees.collect_process_snapshot(
+        popen_factory=_scripted_popen(
+            [
+                "import sys; sys.stdout.write('p77\\nfcwd\\nn/tmp/work\\n')",
+                "import sys; sys.stdout.write('78 python /tmp/work/job.py\\n')",
+            ]
+        )
+    )
+
+    assert snapshot.errors == ()
+    assert snapshot.paths == ((77, Path("/tmp/work").resolve(strict=False)),)
+    assert snapshot.commands == ((78, "python /tmp/work/job.py"),)
+
+
+@pytest.mark.parametrize(
+    ("scripts", "patches", "expected"),
+    [
+        (["raise SystemExit(2)"], {}, "process-query-failed"),
+        (
+            ["import sys; sys.stdout.write('x' * 17)"],
+            {"_PROCESS_STDOUT_MAX": 16},
+            "process-query-overflow",
+        ),
+        (
+            ["import sys; sys.stderr.write('x' * 17)"],
+            {"_PROCESS_STDERR_MAX": 16},
+            "process-query-overflow",
+        ),
+        (
+            ["import time; time.sleep(1)"],
+            {"_PROCESS_TIMEOUT": 0.01},
+            "process-query-failed",
+        ),
+        (
+            ["import sys; sys.stdout.write('p1\\nf1\\nn/tmp\\n')", ""],
+            {"_PROCESS_RECORD_MAX": 2},
+            "process-query-overflow",
+        ),
+        (
+            ["import sys; sys.stdout.write('n/tmp/no-pid\\n')", ""],
+            {},
+            "process-query-failed",
+        ),
+    ],
+    ids=["nonzero", "stdout", "stderr", "timeout", "records", "malformed"],
+)
+def test_collect_process_snapshot_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    scripts: list[str],
+    patches: dict[str, float | int],
+    expected: str,
+) -> None:
+    for name, value in patches.items():
+        monkeypatch.setattr(worktrees, name, value)
+
+    snapshot = worktrees.collect_process_snapshot(
+        popen_factory=_scripted_popen(list(scripts))
+    )
+
+    assert snapshot.paths == ()
+    assert snapshot.commands == ()
+    assert snapshot.errors == (expected,)
