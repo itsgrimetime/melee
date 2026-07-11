@@ -247,18 +247,22 @@ def test_candidate_access_opcode_rejects_non_mnemonic_tokens_without_leaking(
 
 
 @pytest.mark.parametrize(
-    ("opcode", "normalized"),
+    "opcode",
     [
-        ("STFS.", "stfs."),
-        ("BNE+", "bne+"),
-        ("BDNZ-", "bdnz-"),
-        ("PSQ_ST", "psq_st"),
+        "lbz",
+        "lha",
+        "lhz",
+        "lwz",
+        "stb",
+        "sth",
+        "stw",
+        "lfd",
+        "lfs",
+        "stfd",
+        "STFS",
     ],
 )
-def test_candidate_access_opcode_accepts_ppc_mnemonic_spelling_and_normalizes_lowercase(
-    opcode: str,
-    normalized: str,
-) -> None:
+def test_candidate_access_opcode_accepts_only_bridge_supported_stack_ops(opcode: str) -> None:
     profile = build_stack_home_profile(
         _frame(64),
         _bridge(_temp_candidate(20, "fadds f50,f40,f41", opcode=opcode)),
@@ -266,8 +270,72 @@ def test_candidate_access_opcode_accepts_ppc_mnemonic_spelling_and_normalizes_lo
 
     assert profile.complete is True
     payload = profile.homes[0].identity.removeprefix("compiler-temp:")
-    assert f'"access_opcode":"{normalized}"' in payload
-    assert opcode not in payload
+    assert f'"access_opcode":"{opcode.lower()}"' in payload
+
+
+@pytest.mark.parametrize(
+    "opcode",
+    [
+        "stfs..",
+        "st.fs",
+        "stfs_",
+        "stfs.+",
+        "stfs+",
+        "stfs-",
+        "bne+",
+        "bdnz-",
+        "psq_st",
+    ],
+)
+def test_candidate_access_opcode_rejects_unsupported_or_malformed_mnemonics(
+    opcode: str,
+) -> None:
+    profile = build_stack_home_profile(
+        _frame(64),
+        _bridge(_temp_candidate(20, "fadds f50,f40,f41", opcode=opcode)),
+    )
+
+    assert profile.homes == ()
+    assert profile.blockers == ("incomplete-stack-slot-evidence",)
+
+
+@pytest.mark.parametrize(
+    ("opcode", "normalized"),
+    [
+        ("FADDS.", "fadds."),
+        ("BNE+", "bne+"),
+        ("bdnz-", "bdnz-"),
+        ("PSQ_L", "psq_l"),
+        ("psq_lu", "psq_lu"),
+        ("PSQ_ST", "psq_st"),
+        ("psq_stu", "psq_stu"),
+    ],
+)
+def test_first_def_accepts_record_hint_and_known_underscore_mnemonics(
+    opcode: str,
+    normalized: str,
+) -> None:
+    profile = build_stack_home_profile(
+        _frame(64),
+        _bridge(_temp_candidate(20, f"{opcode} f50,f40,f41")),
+    )
+
+    assert profile.complete is True
+    assert f'"opcode":"{normalized}"' in profile.homes[0].identity
+
+
+@pytest.mark.parametrize(
+    "opcode",
+    ["stfs..", "st.fs", "stfs_", "stfs.+", "bne+.", "bdnz-+", "psq_x"],
+)
+def test_first_def_rejects_malformed_mnemonic_suffixes(opcode: str) -> None:
+    profile = build_stack_home_profile(
+        _frame(64),
+        _bridge(_temp_candidate(20, f"{opcode} f50,f40,f41")),
+    )
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
 
 
 def test_named_home_absorbs_duplicate_bridge_access_instead_of_becoming_temp() -> None:
@@ -319,14 +387,109 @@ def test_pcode_owner_coordinates_and_source_file_are_optional(missing_key: str) 
     assert profile.complete is True
 
 
-def test_duplicate_pcode_owner_signature_is_ambiguous_despite_distinct_coordinates() -> None:
+@pytest.mark.parametrize(
+    ("coordinate", "invalid"),
+    [
+        ("source_line", "12"),
+        ("source_line", [12]),
+        ("source_line", True),
+        ("source_line", 0),
+        ("source_line", -1),
+        ("source_col", "9"),
+        ("source_col", [9]),
+        ("source_col", False),
+        ("source_col", 0),
+        ("source_col", -1),
+    ],
+)
+def test_present_owner_coordinates_require_positive_non_bool_integers(
+    coordinate: str,
+    invalid: object,
+) -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["nearest_source_expression"][coordinate] = invalid
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+@pytest.mark.parametrize("coordinate", ["source_line", "source_col"])
+def test_simultaneous_owner_representations_reject_coordinate_conflicts(
+    coordinate: str,
+) -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["source_owner"] = {
+        **candidate["nearest_source_expression"],
+        coordinate: candidate["nearest_source_expression"][coordinate] + 1,
+    }
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+@pytest.mark.parametrize("coordinate", ["source_line", "source_col"])
+def test_simultaneous_owner_representations_allow_one_missing_coordinate(
+    coordinate: str,
+) -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["source_owner"] = dict(candidate["nearest_source_expression"])
+    candidate["nearest_source_expression"].pop(coordinate)
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.complete is True
+
+
+def test_duplicate_pcode_owner_signature_is_ambiguous_at_same_coordinates() -> None:
     left = _temp_candidate(24, "fadds f50,f40,f41")
-    right = _temp_candidate(28, "fadds f70,f60,f61", source_line=99)
+    right = _temp_candidate(28, "fadds f70,f60,f61")
     right["evidence"] = ["BEFORE REGISTER COLORING B0:4 stfs f70,28(r1)"]
 
     profile = build_stack_home_profile(_frame(64), _bridge(left, right))
 
     assert profile.blockers == ("ambiguous-compiler-temp-home",)
+
+
+def test_compiler_virtual_tokens_are_normalized_across_owner_and_first_def() -> None:
+    left = _temp_candidate(24, "fadds f50,IG:810,v810")
+    left["first_def"] = {"opcode": "fadds", "operands": "f50,IG:810,v810"}
+    left["nearest_source_expression"]["name"] = "owner IG:810 v810"
+    right = _temp_candidate(28, "fadds f70,IG:910,v910")
+    right["first_def"] = {"opcode": "fadds", "operands": "f70,IG:910,v910"}
+    right["nearest_source_expression"]["name"] = "owner IG:910 v910"
+
+    left_profile = build_stack_home_profile(_frame(64), _bridge(left))
+    right_profile = build_stack_home_profile(_frame(64), _bridge(right))
+
+    assert left_profile.homes[0].identity == right_profile.homes[0].identity
+    identity = left_profile.homes[0].identity
+    assert re.search(r"(?<![A-Za-z0-9_])IG:\d+(?![A-Za-z0-9_])", identity) is None
+    assert re.search(r"(?<![A-Za-z0-9_])v\d+(?![A-Za-z0-9_])", identity) is None
+
+
+def test_compiler_virtual_normalization_respects_identifier_boundaries() -> None:
+    left = _temp_candidate(24, "fadds f50,f40,f41")
+    left["nearest_source_expression"]["name"] = "ownerIG:810 v810owner IG:810x xv810"
+    right = _temp_candidate(28, "fadds f70,f60,f61")
+    right["nearest_source_expression"]["name"] = "ownerIG:910 v910owner IG:910x xv910"
+
+    left_profile = build_stack_home_profile(_frame(64), _bridge(left))
+    right_profile = build_stack_home_profile(_frame(64), _bridge(right))
+
+    assert left_profile.homes[0].identity != right_profile.homes[0].identity
+    assert "ownerIG:810" in left_profile.homes[0].identity
+    assert "v810owner" in left_profile.homes[0].identity
+    assert (
+        re.search(
+            r"(?<![A-Za-z0-9_])(?:IG:\d+|v\d+)(?![A-Za-z0-9_])",
+            left_profile.homes[0].identity,
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("expression", ["", "fadds"])

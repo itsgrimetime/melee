@@ -7,6 +7,8 @@ import re
 from dataclasses import astuple, dataclass
 from typing import Any, Mapping
 
+from .stack_slot_bridge import STACK_ACCESS_OPCODES
+
 _REGISTER_RE = re.compile(
     r"(?<![A-Za-z0-9])(?P<kind>[fr])(?P<number>\d+)(?!\d)",
     re.IGNORECASE,
@@ -16,10 +18,14 @@ _ADDRESS_OFFSET_RE = re.compile(
     re.IGNORECASE,
 )
 _UNSTABLE_TEMP_RE = re.compile(r"@\d+")
+_COMPILER_VIRTUAL_RE = re.compile(r"(?<![A-Za-z0-9_])(?P<kind>IG:|v)\d+(?![A-Za-z0-9_])")
 _EVIDENCE_SITE_RE = re.compile(r"\bB(?P<block>\d+):(?P<instr>\d+)\b")
 _SPACE_RE = re.compile(r"\s+")
 _PUNCTUATION_SPACE_RE = re.compile(r"\s*([,()[\]])\s*")
-_OPCODE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.]*(?:[+-])?")
+_FIRST_DEF_OPCODE_RE = re.compile(
+    r"(?:[A-Za-z][A-Za-z0-9]*|psq_l|psq_lu|psq_st|psq_stu)(?:[.+-])?",
+    re.IGNORECASE,
+)
 _MISSING = object()
 
 _BLOCKER_ORDER = {
@@ -87,6 +93,11 @@ def _normalize_identity_text(value: object) -> str:
     normalized = _ADDRESS_OFFSET_RE.sub("<offset>", normalized)
     normalized = _UNSTABLE_TEMP_RE.sub("<temp>", normalized)
 
+    def stable_virtual(match: re.Match[str]) -> str:
+        return "<ig>" if match.group("kind") == "IG:" else "<virtual>"
+
+    normalized = _COMPILER_VIRTUAL_RE.sub(stable_virtual, normalized)
+
     def stable_register(match: re.Match[str]) -> str:
         return f"<{match.group('kind').lower()}reg>"
 
@@ -95,14 +106,25 @@ def _normalize_identity_text(value: object) -> str:
     return _SPACE_RE.sub(" ", normalized).strip()
 
 
-def _normalize_opcode(value: object) -> str | None:
-    if not isinstance(value, str) or _OPCODE_RE.fullmatch(value) is None or _REGISTER_RE.fullmatch(value) is not None:
+def _normalize_access_opcode(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.lower()
+    return normalized if normalized in STACK_ACCESS_OPCODES else None
+
+
+def _normalize_first_def_opcode(value: object) -> str | None:
+    if (
+        not isinstance(value, str)
+        or _FIRST_DEF_OPCODE_RE.fullmatch(value) is None
+        or _REGISTER_RE.fullmatch(value) is not None
+    ):
         return None
     return value.lower()
 
 
 def _normalize_first_def(opcode: object, operands: object) -> tuple[str, str] | None:
-    normalized_opcode = _normalize_opcode(opcode)
+    normalized_opcode = _normalize_first_def_opcode(opcode)
     if normalized_opcode is None or not isinstance(operands, str):
         return None
     normalized_operands = _normalize_identity_text(operands)
@@ -182,6 +204,13 @@ def _source_owner_signature(owner: Mapping[str, Any]) -> dict[str, object] | Non
         if not normalized_name:
             return None
         signature["name"] = normalized_name
+    for coordinate in ("source_line", "source_col"):
+        value = owner.get(coordinate)
+        if value is None:
+            continue
+        if not _is_int(value) or value <= 0:
+            return None
+        signature[coordinate] = value
     return signature
 
 
@@ -221,7 +250,7 @@ def _source_owner_from_candidate(candidate: Mapping[str, Any]) -> Mapping[str, A
 def _compiler_identity(
     candidate: Mapping[str, Any],
 ) -> tuple[str | None, str | None, str | None]:
-    opcode = _normalize_opcode(candidate.get("opcode"))
+    opcode = _normalize_access_opcode(candidate.get("opcode"))
     owner = _source_owner_from_candidate(candidate)
     if opcode is None or owner is None:
         return None, None, "unresolved-compiler-temp-home"
@@ -421,7 +450,7 @@ def _compiler_homes(
         if not isinstance(raw, Mapping):
             blockers.add("incomplete-stack-slot-evidence")
             continue
-        opcode = _normalize_opcode(raw.get("opcode"))
+        opcode = _normalize_access_opcode(raw.get("opcode"))
         offset = raw.get("current_offset")
         mismatch = raw.get("mismatch")
         sequence_key = _candidate_sequence_key(raw, index)
