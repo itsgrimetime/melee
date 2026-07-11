@@ -760,15 +760,11 @@ def _check_git_ownership(
         _add_reason(reasons, "git-error")
         return
 
-    tracked_paths: set[str] = set()
-    for record in tracked_result.stdout.split("\0"):
-        if not record:
-            continue
-        _, separator, path = record.partition("\t")
-        if separator:
-            tracked_paths.add(path)
-
     root_path = artifact_dir.as_posix()
+    tracked_paths = _parse_ls_files_stage(tracked_result.stdout, root_path)
+    if tracked_paths is None:
+        _add_reason(reasons, "git-error")
+        return
     if root_path in tracked_paths:
         _add_reason(reasons, "root-git-tracked")
         return
@@ -798,11 +794,72 @@ def _check_git_ownership(
         _add_reason(reasons, "root-not-git-ignored")
         return
 
-    ignored_paths = {path for path in ignored_result.stdout.split("\0") if path}
+    ignored_records = _parse_nul_records(ignored_result.stdout)
+    requested_inputs = set(ignore_inputs)
+    malformed_ignore_output = (
+        ignored_records is None
+        or any(path not in requested_inputs for path in ignored_records)
+        or (ignored_result.returncode == 0 and not ignored_records)
+        or (ignored_result.returncode == 1 and bool(ignored_records))
+    )
+    if malformed_ignore_output:
+        _add_reason(reasons, "git-error")
+        if untracked_paths:
+            _add_reason(reasons, "contains-nonignored")
+        _add_reason(reasons, "root-not-git-ignored")
+        return
+
+    assert ignored_records is not None
+    ignored_paths = set(ignored_records)
     if any(path not in ignored_paths for path in untracked_paths):
         _add_reason(reasons, "contains-nonignored")
     if root_ignore_path not in ignored_paths:
         _add_reason(reasons, "root-not-git-ignored")
+
+
+def _parse_ls_files_stage(stdout: str, artifact_root: str) -> set[str] | None:
+    records = _parse_nul_records(stdout)
+    if records is None:
+        return None
+
+    paths: set[str] = set()
+    descendant_prefix = f"{artifact_root}/"
+    valid_modes = {"040000", "100644", "100755", "120000", "160000"}
+    for record in records:
+        metadata, separator, path = record.partition("\t")
+        fields = metadata.split(" ")
+        if (
+            not separator
+            or len(fields) != 3
+            or fields[0] not in valid_modes
+            or len(fields[1]) not in (40, 64)
+            or any(character not in "0123456789abcdefABCDEF" for character in fields[1])
+            or fields[2] not in {"0", "1", "2", "3"}
+            or not _path_is_at_or_below(path, artifact_root, descendant_prefix)
+        ):
+            return None
+        paths.add(path)
+    return paths
+
+
+def _path_is_at_or_below(path: str, artifact_root: str, descendant_prefix: str) -> bool:
+    if path == artifact_root:
+        return True
+    if not path.startswith(descendant_prefix):
+        return False
+    relative_parts = path.removeprefix(descendant_prefix).split("/")
+    return all(part not in {"", ".", ".."} for part in relative_parts)
+
+
+def _parse_nul_records(stdout: str) -> tuple[str, ...] | None:
+    if not stdout:
+        return ()
+    if not stdout.endswith("\0"):
+        return None
+    records = tuple(stdout[:-1].split("\0"))
+    if any(not record for record in records):
+        return None
+    return records
 
 
 def _walk_regular_files(root_fd: int) -> _TreeFacts:
@@ -964,8 +1021,10 @@ def _scan_directories(scan_root: Path) -> Iterator[_ScannedDirectory]:
         while pending:
             directory = pending.pop()
             try:
-                if _has_git_marker(directory.fd):
-                    yield directory
+                marker_kind = _git_marker_kind(directory.fd)
+                if marker_kind is not None:
+                    if marker_kind == "valid":
+                        yield directory
                     continue
                 try:
                     with os.scandir(directory.fd) as entries:
@@ -999,12 +1058,17 @@ def _scan_directories(scan_root: Path) -> Iterator[_ScannedDirectory]:
             os.close(directory.fd)
 
 
-def _has_git_marker(directory_fd: int) -> bool:
+def _git_marker_kind(directory_fd: int) -> str | None:
+    """Classify marker entries so suspect roots are pruned, never traversed."""
     try:
         marker = os.stat(".git", dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
     except OSError:
-        return False
-    return stat.S_ISDIR(marker.st_mode) or stat.S_ISREG(marker.st_mode)
+        return "suspect"
+    if stat.S_ISDIR(marker.st_mode) or stat.S_ISREG(marker.st_mode):
+        return "valid"
+    return "suspect"
 
 
 def _open_directory_path(path: Path) -> tuple[_DirectoryHandle | None, str | None]:

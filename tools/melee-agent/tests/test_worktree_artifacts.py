@@ -236,6 +236,43 @@ def test_scan_root_only_validates_git_markers_and_prunes_repo_contents(
     assert nested_repo.resolve() not in discovered
 
 
+@pytest.mark.parametrize("marker_kind", ["symlink", "fifo"])
+def test_scan_root_prunes_suspect_git_markers(
+    tmp_path: Path, monkeypatch, marker_kind: str
+) -> None:
+    nonrepo = tmp_path / "nonrepo"
+    nonrepo.mkdir()
+    scan_root = tmp_path / "scan-root"
+    suspect = scan_root / "suspect"
+    suspect.mkdir(parents=True)
+    marker = suspect / ".git"
+    if marker_kind == "symlink":
+        marker_target = tmp_path / "marker-target"
+        marker_target.mkdir()
+        marker.symlink_to(marker_target, target_is_directory=True)
+    else:
+        os.mkfifo(marker)
+
+    nested_repo = suspect / "large" / "tree" / "nested-repo"
+    nested_repo.mkdir(parents=True)
+    _run_git(nested_repo, "init")
+    for index in range(32):
+        (suspect / "large" / "tree" / f"directory-{index}" / "child").mkdir(parents=True)
+
+    real_run_git = artifacts._run_git
+    validated: list[Path] = []
+
+    def record_git(cwd, args, **kwargs):
+        if args == ["rev-parse", "--show-toplevel"]:
+            validated.append(Path(cwd))
+        return real_run_git(cwd, args, **kwargs)
+
+    monkeypatch.setattr(artifacts, "_run_git", record_git)
+
+    assert artifacts.discover_worktrees(nonrepo, scan_roots=[scan_root]) == ()
+    assert validated == []
+
+
 def test_git_ownership_batches_large_candidate_queries(tmp_path: Path, monkeypatch) -> None:
     _, linked = _make_repo_and_linked_worktree(tmp_path)
     for index in range(63):
@@ -273,6 +310,66 @@ def test_git_ownership_batches_large_candidate_queries(tmp_path: Path, monkeypat
     assert ignore_paths[0] == "build/"
     assert ignore_paths[-1] == ""
     assert set(ignore_paths[1:-1]) == {f"build/object-{index}.o" for index in range(63)}
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "not-stage-metadata\tbuild/object.o\0",
+        f"100644 {'a' * 40} 0\tbuild/object.o",
+        f"100644 {'a' * 40} 0\toutside/object.o\0",
+        f"100644 {'a' * 40} 0\tbuild/../outside.o\0",
+    ],
+)
+def test_git_ownership_rejects_malformed_ls_files_output(
+    monkeypatch, stdout: str
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_git(cwd, args, **kwargs):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(["git", *args], 0, stdout, "")
+
+    monkeypatch.setattr(artifacts, "_run_git", fake_run_git)
+    reasons: list[str] = []
+
+    artifacts._check_git_ownership(
+        Path("/repo"), Path("build"), (Path("object.o"),), reasons
+    )
+
+    assert reasons == ["git-error"]
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout"),
+    [
+        (0, "build/"),
+        (0, "outside/object.o\0"),
+        (0, ""),
+        (1, "build/\0"),
+    ],
+)
+def test_git_ownership_rejects_malformed_check_ignore_output(
+    monkeypatch, returncode: int, stdout: str
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_git(cwd, args, **kwargs):
+        calls.append(list(args))
+        if args[0] == "ls-files":
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        return subprocess.CompletedProcess(["git", *args], returncode, stdout, "")
+
+    monkeypatch.setattr(artifacts, "_run_git", fake_run_git)
+    reasons: list[str] = []
+
+    artifacts._check_git_ownership(
+        Path("/repo"), Path("build"), (Path("object.o"),), reasons
+    )
+
+    assert reasons == ["git-error", "contains-nonignored", "root-not-git-ignored"]
+    assert len(calls) == 2
 
 
 def test_current_worktree_is_reported_but_never_eligible_for_cleanup(tmp_path: Path) -> None:
