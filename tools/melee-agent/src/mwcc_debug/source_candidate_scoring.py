@@ -5,9 +5,12 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+import tempfile
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -82,6 +85,34 @@ def score_source_candidates(
     return score_retained_source_rows(rows, config, runner=runner)
 
 
+@contextmanager
+def _stage_score_source_candidate(
+    candidate_path: Path,
+    repo_root: Path,
+) -> Iterator[Path]:
+    resolved_candidate = candidate_path.resolve()
+    resolved_repo_root = repo_root.resolve()
+    if resolved_candidate.is_relative_to(resolved_repo_root):
+        yield candidate_path
+        return
+
+    staging_root = (
+        resolved_repo_root
+        / "build"
+        / "diagnostics"
+        / "score_source_staging"
+    )
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        dir=staging_root,
+        prefix="candidate-",
+    ) as temp_dir:
+        safe_name = _unique_safe_name(resolved_candidate.stem, set())
+        staged_path = Path(temp_dir) / f"{safe_name}.c"
+        shutil.copyfile(resolved_candidate, staged_path)
+        yield staged_path
+
+
 def score_retained_source_rows(
     rows: Sequence[Mapping[str, Any]],
     config: ScoreSourceConfig,
@@ -122,27 +153,33 @@ def score_retained_source_rows(
             ))
             continue
 
-        cmd = build_score_source_command(
-            candidate_path,
-            config,
-            function=row_score_function,
-            full_unit_source=row_full_unit,
-        )
-        score_command = " ".join(shlex.quote(part) for part in cmd)
         try:
-            proc = score_runner(
-                cmd,
-                cwd=config.repo_root,
-                env=env,
-                text=True,
-                capture_output=True,
-                timeout=(
-                    config.timeout + 10
-                    if config.timeout and config.timeout > 0
-                    else None
-                ),
-                check=False,
-            )
+            with _stage_score_source_candidate(
+                candidate_path,
+                config.repo_root,
+            ) as score_candidate_path:
+                cmd = build_score_source_command(
+                    score_candidate_path,
+                    config,
+                    function=row_score_function,
+                    full_unit_source=row_full_unit,
+                )
+                score_command_executed = " ".join(
+                    shlex.quote(part) for part in cmd
+                )
+                proc = score_runner(
+                    cmd,
+                    cwd=config.repo_root,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    timeout=(
+                        config.timeout + 10
+                        if config.timeout and config.timeout > 0
+                        else None
+                    ),
+                    check=False,
+                )
         except KeyboardInterrupt:
             out.append(_finalize_score_row(
                 _with_score_source_scope_defaults(
@@ -154,7 +191,7 @@ def score_retained_source_rows(
                         "error": "score-source-interrupted",
                         "score_error_kind": "infrastructure",
                         "score_returncode": 130,
-                        "score_command": score_command,
+                        "score_command": score_command_executed,
                         "full_unit_source": row_full_unit,
                         "score_stderr": (
                             "Interrupted while scoring source candidate "
@@ -185,7 +222,7 @@ def score_retained_source_rows(
                         "error": "score-source-timeout",
                         "score_error_kind": "infrastructure",
                         "score_returncode": 124,
-                        "score_command": score_command,
+                        "score_command": score_command_executed,
                         "full_unit_source": row_full_unit,
                         "score_stderr": _timeout_stream_text(exc.stderr)
                         or f"Timed out while scoring source candidate {candidate_id}",
@@ -211,10 +248,25 @@ def score_retained_source_rows(
         merged = dict(row)
         merged.update(payload)
         merged.setdefault("candidate_id", candidate_id)
-        merged.setdefault("source_file", str(candidate_path))
-        merged.setdefault("source_retained", str(candidate_path))
+        durable_source = str(candidate_path)
+        merged["source_file"] = durable_source
+        merged["source_retained"] = durable_source
+        merged["c_file"] = durable_source
         merged["full_unit_source"] = row_full_unit
-        merged["score_command"] = score_command
+        merged["score_command_executed"] = score_command_executed
+        artifact_source = payload.get("artifact_source")
+        if artifact_source:
+            replay_cmd = build_score_source_command(
+                Path(str(artifact_source)),
+                config,
+                function=row_score_function,
+                full_unit_source=row_full_unit,
+            )
+            merged["score_command"] = " ".join(
+                shlex.quote(part) for part in replay_cmd
+            )
+        else:
+            merged["score_command"] = score_command_executed
         merged["score_returncode"] = proc.returncode
         merged = _with_score_source_scope_defaults(
             merged,

@@ -307,6 +307,84 @@ def test_score_source_patch_candidates_write_retained_sources_and_merge_payload(
     assert row["source_hunks"] == [{"hunk_id": "h001"}]
 
 
+def test_score_source_candidates_stage_external_retained_source(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "melee"
+    output_dir = tmp_path / "external"
+    candidate_text = "void fn_test(void) { ExternalCandidate(); }\n"
+    captured: dict[str, Path] = {}
+
+    def fake_run(cmd, *, cwd, env, **kwargs):
+        staged_source = Path(cmd[cmd.index("score-source") + 1]).resolve()
+        durable_source = (output_dir / "external-candidate.c").resolve()
+        artifact_source = (
+            repo_root
+            / "build"
+            / "diagnostics"
+            / "score_source"
+            / "run-0001"
+            / "evidence"
+            / "source"
+            / "candidate.c"
+        ).resolve()
+        staged_source.relative_to(repo_root.resolve())
+        assert staged_source != durable_source
+        assert staged_source.read_text(encoding="utf-8") == candidate_text
+        artifact_source.parent.mkdir(parents=True)
+        artifact_source.write_text(candidate_text, encoding="utf-8")
+        captured["staged_source"] = staged_source
+        captured["artifact_source"] = artifact_source
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps({
+                "score": 0,
+                "artifact_source": str(artifact_source),
+                "source_file": str(staged_source),
+                "source_retained": str(staged_source),
+                "c_file": str(staged_source),
+                "structural_guard": {"accepted": True},
+            }),
+            stderr="",
+        )
+
+    config = ScoreSourceConfig(
+        repo_root=repo_root,
+        function="fn_test",
+        target=None,
+        cflags_from=Path("src/melee/test.c"),
+        expression_source=Path("src/melee/test.c"),
+        expression_baseline=None,
+        expression_reg_class="gpr",
+        output_dir=output_dir,
+        timeout=5.0,
+    )
+
+    rows = score_source_candidates(
+        [
+            SourceCandidate(
+                candidate_id="external-candidate",
+                source_text=candidate_text,
+            )
+        ],
+        config,
+        runner=fake_run,
+    )
+
+    durable_source = (output_dir / "external-candidate.c").resolve()
+    staged_source = captured["staged_source"]
+    artifact_source = captured["artifact_source"]
+    assert not staged_source.exists()
+    assert durable_source.read_text(encoding="utf-8") == candidate_text
+    assert rows[0]["source_file"] == str(durable_source)
+    assert rows[0]["source_retained"] == str(durable_source)
+    assert rows[0]["c_file"] == str(durable_source)
+    assert str(staged_source) in rows[0]["score_command_executed"]
+    assert str(artifact_source) in rows[0]["score_command"]
+    assert str(staged_source) not in rows[0]["score_command"]
+
+
 def test_score_source_patch_candidate_error_row_is_preserved(
     tmp_path: Path,
 ) -> None:
@@ -412,6 +490,8 @@ def test_score_source_candidates_can_retain_and_score_without_target(
     )
 
     row = rows[0]
+    retained_source = Path(captured["cmd"][captured["cmd"].index("score-source") + 1])
+    assert retained_source == Path(row["source_retained"])
     assert Path(row["source_retained"]).is_file()
     assert row["pcdump_path"].endswith(".pcdump.txt")
     assert row["checkdiff_match_percent"] == 95.75
