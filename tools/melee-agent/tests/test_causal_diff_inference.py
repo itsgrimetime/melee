@@ -80,6 +80,7 @@ def _edge(
     *,
     confidence: Confidence = Confidence.DERIVED_UNIQUE,
     parser: str = "causal-inference-test.v1",
+    attributes: dict[str, object] | None = None,
 ) -> EvidenceEdge:
     return EvidenceEdge.create(
         compile_id=compile_id,
@@ -95,7 +96,7 @@ def _edge(
             parser=parser,
         ),
         input_confidences=(source.confidence, target.confidence),
-        attributes={},
+        attributes={} if attributes is None else attributes,
     )
 
 
@@ -151,6 +152,8 @@ def _case(
     source_binding: str = "valid",
     unrelated_changed_source: bool = False,
     pcdump_path: bool = False,
+    source_binding_attributes: dict[str, object] | None = None,
+    source_attributes: dict[str, object] | None = None,
 ) -> InferenceCase:
     store = InMemoryEvidenceStore()
     left_allocator = _node(LEFT_COMPILE, "allocator-node", "allocator-left")
@@ -173,8 +176,18 @@ def _case(
         "owner-right",
         attributes=owner_attributes,
     )
-    left_source = _node(LEFT_COMPILE, "source-expression", "source-left")
-    right_source = _node(RIGHT_COMPILE, "source-expression", "source-right")
+    left_source = _node(
+        LEFT_COMPILE,
+        "source-expression",
+        "source-left",
+        attributes=source_attributes,
+    )
+    right_source = _node(
+        RIGHT_COMPILE,
+        "source-expression",
+        "source-right",
+        attributes=source_attributes,
+    )
     nodes = [
         left_allocator,
         left_stack,
@@ -246,6 +259,7 @@ def _case(
                 left_owner,
                 left_source,
                 confidence=(Confidence.HEURISTIC if source_binding == "heuristic" else Confidence.DERIVED_UNIQUE),
+                attributes=source_binding_attributes,
             )
         )
     if source_binding in {"valid", "heuristic"}:
@@ -256,6 +270,7 @@ def _case(
                 right_owner,
                 right_source,
                 confidence=(Confidence.HEURISTIC if source_binding == "heuristic" else Confidence.DERIVED_UNIQUE),
+                attributes=source_binding_attributes,
             )
         )
     if source_binding == "wrong-object":
@@ -641,6 +656,43 @@ def test_valid_bilateral_exact_object_bindings_enable_causes() -> None:
 
     assert verdict.status is VerdictStatus.CAUSES
     assert binding_ids <= proof_members
+
+
+@pytest.mark.parametrize(
+    "binding_attributes",
+    (
+        {"contradiction": True},
+        {"truncated": True},
+    ),
+)
+def test_invalid_binding_edge_fails_evidence_integrity(
+    binding_attributes: dict[str, object],
+) -> None:
+    case = _case(source_binding_attributes=binding_attributes)
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-8-evidence-integrity",)
+
+
+def test_contradictory_binding_source_fails_evidence_integrity() -> None:
+    case = _case(source_attributes={"ownership_contradiction": True})
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-8-evidence-integrity",)
+
+
+@pytest.mark.parametrize("validity_key", ("digest_valid", "environment_valid"))
+def test_invalid_binding_metadata_fails_evidence_integrity(validity_key: str) -> None:
+    case = _case(source_attributes={validity_key: False})
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-8-evidence-integrity",)
 
 
 def test_proof_paths_include_owner_and_role_comparison_records() -> None:

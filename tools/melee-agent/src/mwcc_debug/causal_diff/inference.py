@@ -751,6 +751,11 @@ def infer_pair(
     owner_enumeration = _owner_alternatives(pair, query, records, evidence_depth)
     alternatives = owner_enumeration.alternatives
     rejected = owner_enumeration.rejected
+    source_bindings = (
+        _bilateral_source_object_records(alternatives, query)
+        if alternatives
+        else _SourceBindingEnumeration((), (), complete=False)
+    )
     comparison_endpoints = (
         _record_for_id(query, record_id)
         for comparison in records
@@ -761,7 +766,9 @@ def infer_pair(
         *records,
         *(record for record in identity_records if record),
         *(record for record in comparison_endpoints if record is not None),
+        *source_bindings.records,
     ]
+    cited_records.extend(source for path in source_bindings.paths if (source := query.get_node(path[-1])) is not None)
     for alternative in alternatives:
         cited_records.extend(
             record
@@ -825,11 +832,6 @@ def infer_pair(
             rejected_alternatives=rejected,
             failed_gates=failed_required,
         )
-    source_bindings = (
-        _bilateral_source_object_records(alternatives, query)
-        if alternatives
-        else _SourceBindingEnumeration((), (), complete=False)
-    )
     if alternatives and not source_bindings.complete:
         return _verdict(
             pair,
