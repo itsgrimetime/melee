@@ -7,12 +7,15 @@ import re
 from dataclasses import astuple, dataclass
 from typing import Any, Mapping
 
-_REGISTER_RE = re.compile(r"\b(?P<kind>[fr])(?P<number>\d+)\b", re.IGNORECASE)
-_STACK_OFFSET_RE = re.compile(
-    r"(?<![\w@])[-+]?(?:0x[0-9a-f]+|\d+)\s*\(\s*r1\s*\)",
+_REGISTER_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?P<kind>[fr])(?P<number>\d+)(?!\d)",
     re.IGNORECASE,
 )
-_UNSTABLE_TEMP_RE = re.compile(r"(?<!\w)@\d+(?!\w)")
+_STACK_OFFSET_RE = re.compile(
+    r"[-+]?(?:0x[0-9a-f]+|\d+)\s*\(\s*r1\s*\)",
+    re.IGNORECASE,
+)
+_UNSTABLE_TEMP_RE = re.compile(r"@\d+")
 _EVIDENCE_SITE_RE = re.compile(r"\bB(?P<block>\d+):(?P<instr>\d+)\b")
 _SPACE_RE = re.compile(r"\s+")
 _PUNCTUATION_SPACE_RE = re.compile(r"\s*([,()[\]])\s*")
@@ -77,29 +80,29 @@ def _normalize_text(value: object) -> str:
     return _SPACE_RE.sub(" ", str(value or "").strip())
 
 
+def _normalize_identity_text(value: object) -> str:
+    normalized = _normalize_text(value)
+    normalized = _STACK_OFFSET_RE.sub("<stack>", normalized)
+    normalized = _UNSTABLE_TEMP_RE.sub("<temp>", normalized)
+
+    def stable_register(match: re.Match[str]) -> str:
+        return f"<{match.group('kind').lower()}reg>"
+
+    normalized = _REGISTER_RE.sub(stable_register, normalized)
+    normalized = _PUNCTUATION_SPACE_RE.sub(r"\1", normalized)
+    return _SPACE_RE.sub(" ", normalized).strip()
+
+
 def _normalize_first_def(opcode: object, operands: object) -> tuple[str, str] | None:
     normalized_opcode = _normalize_text(opcode).lower()
-    normalized_operands = _normalize_text(operands)
+    normalized_operands = _normalize_identity_text(operands)
     if not normalized_opcode:
         return None
 
-    normalized_operands = _STACK_OFFSET_RE.sub("<stack>(r1)", normalized_operands)
-    normalized_operands = _UNSTABLE_TEMP_RE.sub("<temp>", normalized_operands)
     parts = normalized_operands.split(",", maxsplit=1)
-    if parts and re.fullmatch(r"[fr]\d+", parts[0].strip(), re.IGNORECASE):
+    if parts and re.fullmatch(r"<[fr]reg>", parts[0].strip(), re.IGNORECASE):
         parts[0] = "<dst>"
         normalized_operands = ",".join(parts)
-
-    def stable_register(match: re.Match[str]) -> str:
-        kind = match.group("kind").lower()
-        number = int(match.group("number"))
-        if kind == "r" and number == 1:
-            return "r1"
-        return f"<{kind}reg>"
-
-    normalized_operands = _REGISTER_RE.sub(stable_register, normalized_operands)
-    normalized_operands = _PUNCTUATION_SPACE_RE.sub(r"\1", normalized_operands)
-    normalized_operands = _SPACE_RE.sub(" ", normalized_operands).strip()
     return normalized_opcode, normalized_operands
 
 
@@ -125,39 +128,58 @@ def _first_def_from_candidate(
 
 
 def _source_owner_signature(owner: Mapping[str, Any]) -> dict[str, object] | None:
-    expression = _normalize_text(owner.get("expression"))
-    expression = _STACK_OFFSET_RE.sub("<stack>(r1)", expression)
-    expression = _UNSTABLE_TEMP_RE.sub("<temp>", expression)
-    name = _normalize_text(owner.get("name"))
+    confidence = _normalize_text(owner.get("confidence")).lower()
+    source_file = owner.get("source_file")
+    source_line = owner.get("source_line")
+    source_col = owner.get("source_col")
+    if (
+        confidence != "pcode-first-def"
+        or not isinstance(source_file, str)
+        or not source_file.strip()
+        or not _is_int(source_line)
+        or int(source_line) <= 0
+        or not _is_int(source_col)
+        or int(source_col) <= 0
+    ):
+        return None
+
+    expression = _normalize_identity_text(owner.get("expression"))
+    name = _normalize_identity_text(owner.get("name"))
     if not expression and not name:
         return None
 
-    signature: dict[str, object] = {
-        "confidence": _normalize_text(owner.get("confidence")).lower(),
+    return {
+        "confidence": confidence,
         "expression": expression,
         "name": name,
+        "source_file": source_file.strip(),
+        "source_line": int(source_line),
+        "source_col": int(source_col),
     }
-    for key in ("source_file", "source_line", "source_col"):
-        value = owner.get(key)
-        if value is not None:
-            signature[key] = value
-    return signature
+
+
+def _source_owner_key(owner_signature: Mapping[str, object]) -> tuple[str, int, int]:
+    return (
+        str(owner_signature["source_file"]),
+        int(owner_signature["source_line"]),
+        int(owner_signature["source_col"]),
+    )
 
 
 def _compiler_identity(
     candidate: Mapping[str, Any],
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, tuple[str, int, int] | None, str | None]:
     opcode = _normalize_text(candidate.get("opcode")).lower()
     owner = candidate.get("source_owner")
     if not isinstance(owner, Mapping):
         owner = candidate.get("nearest_source_expression")
     if not opcode or not isinstance(owner, Mapping):
-        return None, "unresolved-compiler-temp-home"
+        return None, None, "unresolved-compiler-temp-home"
 
     first_def = _first_def_from_candidate(candidate, owner)
     owner_signature = _source_owner_signature(owner)
     if first_def is None or owner_signature is None:
-        return None, "unresolved-compiler-temp-home"
+        return None, None, "unresolved-compiler-temp-home"
 
     first_def_opcode, first_def_operands = first_def
     if owner_signature.get("confidence") == "pcode-first-def":
@@ -172,6 +194,7 @@ def _compiler_identity(
     }
     return (
         "compiler-temp:" + json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        _source_owner_key(owner_signature),
         None,
     )
 
@@ -259,9 +282,11 @@ def _compiler_homes(
     report: Mapping[str, Any] | None,
     assignments: list[Mapping[str, Any]],
     frame_size: int | None,
+    frame_function: str | None,
     blockers: set[str],
 ) -> list[_PendingHome]:
     if report is None:
+        blockers.add("incomplete-stack-slot-evidence")
         return []
     if not isinstance(report, Mapping):
         blockers.add("incomplete-stack-slot-evidence")
@@ -269,12 +294,16 @@ def _compiler_homes(
     candidates = report.get("candidates")
     candidate_count = report.get("candidate_count")
     status = report.get("status")
+    report_function = report.get("function")
     if (
         not isinstance(candidates, list)
         or not _is_int(candidate_count)
         or int(candidate_count) != len(candidates)
         or status not in {"ok", "no-candidates"}
         or (status == "ok") != bool(candidates)
+        or not isinstance(report_function, str)
+        or not report_function
+        or report_function != frame_function
     ):
         blockers.add("incomplete-stack-slot-evidence")
         return []
@@ -283,6 +312,7 @@ def _compiler_homes(
         blockers.add("frame-size-mismatch")
 
     homes: list[_PendingHome] = []
+    owner_keys: set[tuple[str, int, int]] = set()
     for index, raw in enumerate(candidates):
         if not isinstance(raw, Mapping):
             blockers.add("incomplete-stack-slot-evidence")
@@ -305,10 +335,13 @@ def _compiler_homes(
             blockers.add("ambiguous-compiler-temp-home")
             continue
 
-        identity, blocker = _compiler_identity(raw)
-        if blocker is not None or identity is None:
+        identity, owner_key, blocker = _compiler_identity(raw)
+        if blocker is not None or identity is None or owner_key is None:
             blockers.add(blocker or "unresolved-compiler-temp-home")
             continue
+        if owner_key in owner_keys:
+            blockers.add("ambiguous-compiler-temp-home")
+        owner_keys.add(owner_key)
         homes.append(
             _PendingHome(
                 identity=identity,
@@ -335,6 +368,10 @@ def build_stack_home_profile(
     if not isinstance(frame_report, Mapping) or not isinstance(frame_report.get("current"), Mapping):
         return StackHomeProfile(None, (), False, ("incomplete-frame-report",))
     current = frame_report["current"]
+    frame_function_value = frame_report.get("function")
+    frame_function = frame_function_value if isinstance(frame_function_value, str) and frame_function_value else None
+    if frame_function is None:
+        blockers.add("incomplete-frame-report")
     frame_size = current.get("frame_size")
     if frame_size is None:
         blockers.add("missing-frame-size")
@@ -350,6 +387,7 @@ def build_stack_home_profile(
             stack_slot_report,
             assignments,
             frame_size,
+            frame_function,
             blockers,
         )
     )

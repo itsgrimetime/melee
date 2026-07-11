@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -34,13 +35,14 @@ def _assignment(symbol: str, offset: int, order: int, opcode: str = "stw") -> di
 
 def _frame(frame_size: int | None, *assignments: dict) -> dict:
     return {
+        "function": "f",
         "current": {
             "frame_size": frame_size,
             "stack_home_assignment_status": (
                 "resolved-symbolic-homes" if assignments else "unavailable-no-resolved-symbolic-homes"
             ),
             "stack_home_assignments": list(assignments),
-        }
+        },
     }
 
 
@@ -86,7 +88,7 @@ def _bridge(*candidates: dict, status: str | None = None) -> dict:
 def test_symbolic_homes_use_stable_assignment_identity_and_signed_offsets() -> None:
     profile = build_stack_home_profile(
         _frame(64, _assignment("saved", -8, 0), _assignment("cursor", 24, 1)),
-        None,
+        _bridge(),
     )
 
     assert profile == StackHomeProfile(
@@ -117,7 +119,6 @@ def test_compiler_temp_offset_is_scored_with_stable_first_def_identity() -> None
 
 def test_explicit_first_def_and_unique_source_owner_are_supported() -> None:
     candidate = _temp_candidate(20, "value + 1")
-    candidate["nearest_source_expression"]["confidence"] = "source-expression"
     candidate["first_def"] = {"opcode": "fadds", "operands": "f50,f40,f41"}
 
     profile = build_stack_home_profile(_frame(64), _bridge(candidate))
@@ -126,19 +127,38 @@ def test_explicit_first_def_and_unique_source_owner_are_supported() -> None:
     assert profile.homes[0].reference_kind == "proxy"
 
 
-def test_raw_stack_offset_is_removed_from_explicit_source_owner_identity() -> None:
-    left = _temp_candidate(48, "owner from 48(r1)")
-    left["nearest_source_expression"]["confidence"] = "source-expression"
+def test_registers_offsets_and_temp_ids_are_removed_from_identity() -> None:
+    left = _temp_candidate(48, "lwz r31,48(r1)")
+    left["nearest_source_expression"]["name"] = "owner_48(r1)_r1_f1_@810"
     left["first_def"] = {"opcode": "lwz", "operands": "r50,48(r1)"}
-    right = _temp_candidate(52, "owner from 52(r1)")
-    right["nearest_source_expression"]["confidence"] = "source-expression"
-    right["first_def"] = {"opcode": "lwz", "operands": "r70,52(r1)"}
+    right = _temp_candidate(52, "lwz r50,52(r31)")
+    right["nearest_source_expression"]["name"] = "owner_52(r1)_r50_f31_@910"
+    right["first_def"] = {"opcode": "lwz", "operands": "r31,52(r1)"}
 
     left_profile = build_stack_home_profile(_frame(80), _bridge(left))
     right_profile = build_stack_home_profile(_frame(80), _bridge(right))
 
     assert left_profile.homes[0].identity == right_profile.homes[0].identity
-    assert "48(r1)" not in left_profile.homes[0].identity
+    identity = left_profile.homes[0].identity
+    assert re.search(r"[fr]\d+", identity, re.IGNORECASE) is None
+    assert "48" not in identity
+    assert "52" not in identity
+    assert "@810" not in identity
+    assert "@910" not in identity
+
+
+def test_pcode_expression_first_def_normalizes_fpr_ids() -> None:
+    left = build_stack_home_profile(
+        _frame(64),
+        _bridge(_temp_candidate(20, "fadds f1,f31,f50")),
+    )
+    right = build_stack_home_profile(
+        _frame(64),
+        _bridge(_temp_candidate(20, "fadds f50,f1,f31")),
+    )
+
+    assert left.homes[0].identity == right.homes[0].identity
+    assert re.search(r"[fr]\d+", left.homes[0].identity, re.IGNORECASE) is None
 
 
 def test_named_home_absorbs_duplicate_bridge_access_instead_of_becoming_temp() -> None:
@@ -170,29 +190,81 @@ def test_unresolved_or_ambiguous_compiler_temp_is_incomplete() -> None:
     assert ambiguous_profile.blockers == ("ambiguous-compiler-temp-home",)
 
 
+def test_heuristic_owner_is_rejected_even_with_explicit_first_def() -> None:
+    candidate = _temp_candidate(24, "sqrtf(dx * dx + dy * dy)")
+    candidate["nearest_source_expression"]["confidence"] = "source-call-heuristic"
+    candidate["first_def"] = {"opcode": "fadds", "operands": "f50,f40,f41"}
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+@pytest.mark.parametrize("missing_key", ["source_file", "source_line", "source_col"])
+def test_owner_missing_stable_source_coordinates_is_rejected(missing_key: str) -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["nearest_source_expression"].pop(missing_key)
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+def test_duplicate_source_owner_coordinates_are_ambiguous() -> None:
+    left = _temp_candidate(24, "fadds f50,f40,f41")
+    left["first_def"] = {"opcode": "fadds", "operands": "f50,f40,f41"}
+    right = _temp_candidate(28, "fmuls f70,f60,f61")
+    right["first_def"] = {"opcode": "fmuls", "operands": "f70,f60,f61"}
+    right["evidence"] = ["BEFORE REGISTER COLORING B0:4 stfs f70,28(r1)"]
+
+    profile = build_stack_home_profile(_frame(64), _bridge(left, right))
+
+    assert profile.blockers == ("ambiguous-compiler-temp-home",)
+
+
 @pytest.mark.parametrize(
-    ("frame_report", "slot_report", "blocker"),
+    ("frame_report", "slot_report", "blockers"),
     [
-        (_frame(None), None, "missing-frame-size"),
-        ({"current": {"frame_size": 64}}, None, "incomplete-frame-report"),
-        (_frame(64), {"status": "ok", "candidate_count": 1, "candidates": []}, "incomplete-stack-slot-evidence"),
+        (_frame(None), _bridge(), ("missing-frame-size",)),
+        (
+            {"function": "f", "current": {"frame_size": 64}},
+            _bridge(),
+            ("incomplete-frame-report",),
+        ),
+        (_frame(64), None, ("incomplete-stack-slot-evidence",)),
+        (_frame(64), {}, ("incomplete-stack-slot-evidence",)),
+        (
+            _frame(64),
+            {"status": "ok", "function": "f", "candidate_count": 1, "candidates": []},
+            ("incomplete-stack-slot-evidence",),
+        ),
+        (
+            _frame(64),
+            {"status": "no-candidates", "candidate_count": 0, "candidates": []},
+            ("incomplete-stack-slot-evidence",),
+        ),
+        (
+            _frame(64),
+            {"status": "no-candidates", "function": "other", "candidate_count": 0, "candidates": []},
+            ("incomplete-stack-slot-evidence",),
+        ),
     ],
 )
 def test_missing_or_structurally_incomplete_evidence_fails_closed(
     frame_report: dict,
     slot_report: dict | None,
-    blocker: str,
+    blockers: tuple[str, ...],
 ) -> None:
     profile = build_stack_home_profile(frame_report, slot_report)
 
     assert profile.complete is False
-    assert profile.blockers == (blocker,)
+    assert profile.blockers == blockers
 
 
 def test_duplicate_symbolic_identity_and_ambiguous_named_temp_collision_fail_closed() -> None:
     duplicate = build_stack_home_profile(
         _frame(64, _assignment("tmp", 20, 0), _assignment("tmp", 24, 1)),
-        None,
+        _bridge(),
     )
     collision = build_stack_home_profile(
         _frame(
@@ -215,7 +287,7 @@ def test_distance_counts_membership_moves_joined_order_and_frame_delta() -> None
             _assignment("beta", 12, 1),
             _assignment("removed", 20, 2),
         ),
-        None,
+        _bridge(),
     )
     candidate = build_stack_home_profile(
         _frame(
@@ -224,7 +296,7 @@ def test_distance_counts_membership_moves_joined_order_and_frame_delta() -> None
             _assignment("alpha", 8, 1),
             _assignment("added", 28, 2),
         ),
-        None,
+        _bridge(),
     )
 
     assert stack_home_distance(candidate, reference) == StackHomeDistance(
@@ -238,13 +310,13 @@ def test_distance_counts_membership_moves_joined_order_and_frame_delta() -> None
 def test_distance_rejects_incomplete_profiles() -> None:
     with pytest.raises(ValueError, match="^incomplete-stack-home-evidence$"):
         stack_home_distance(
-            build_stack_home_profile(_frame(None), None),
-            build_stack_home_profile(_frame(64), None),
+            build_stack_home_profile(_frame(None), _bridge()),
+            build_stack_home_profile(_frame(64), _bridge()),
         )
 
 
 def test_public_profile_types_are_immutable() -> None:
-    profile = build_stack_home_profile(_frame(64, _assignment("tmp", 24, 0)), None)
+    profile = build_stack_home_profile(_frame(64, _assignment("tmp", 24, 0)), _bridge())
     distance = stack_home_distance(profile, profile)
 
     with pytest.raises(FrozenInstanceError):
