@@ -28,7 +28,7 @@ KEY = EvidenceKey(
     expected_object_hash="expected",
     objective_manifest_hash="objectives",
     parser_schema_hash="parsers-v1",
-    inspector_version="inspector-v1:enabled",
+    inspector_version="inspector-v1:enabled;mode=objobjects",
 )
 PARENT_KEY = ParentEvidenceKey(
     source_hash="source",
@@ -85,7 +85,7 @@ def test_parent_key_omits_only_objective_manifest_hash(tmp_path: Path) -> None:
 def test_full_candidate_key_requires_bound_provenance(tmp_path: Path) -> None:
     store = DeltaRunStore(tmp_path)
     candidate = SimpleNamespace(source_hash="source")
-    config = SimpleNamespace(function="draw")
+    config = SimpleNamespace(function="draw", include_objobjects=True)
 
     with pytest.raises(DeltaMinimizeError, match="unbound-evidence-provenance"):
         store.evidence_key(candidate, config)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from dataclasses import replace
@@ -27,8 +28,15 @@ FUNCTION = "mnVibration_80248644"
 
 def _candidate(tmp_path: Path, *, candidate_id: str = "candidate") -> MaterializedCandidate:
     source = tmp_path / f"{candidate_id}.c"
-    source.write_text("int candidate(void) { return 0; }\n", encoding="utf-8")
-    return MaterializedCandidate(candidate_id, 3, "source-hash", source, ("a", "b"))
+    source_text = "int candidate(void) { return 0; }\n"
+    source.write_text(source_text, encoding="utf-8")
+    return MaterializedCandidate(
+        candidate_id,
+        3,
+        hashlib.sha256(source_text.encode()).hexdigest(),
+        source,
+        ("a", "b"),
+    )
 
 
 def _config(tmp_path: Path, *, include_objobjects: bool = True) -> CandidateEvaluationConfig:
@@ -106,6 +114,43 @@ def test_capture_candidate_caches_fresh_evidence_and_reuses_it(tmp_path: Path) -
     assert json.loads(json.dumps(first.to_dict())) == first.to_dict()
 
 
+def test_capture_candidate_rebuilds_when_cached_pcdump_was_deleted(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path)
+    pcdump = tmp_path / "candidate.pcdump"
+    calls = {"score": 0, "inspect": 0}
+
+    def score_rows(_rows, _config):
+        calls["score"] += 1
+        pcdump.write_text(f"pcdump-{calls['score']}", encoding="utf-8")
+        return [_score_row(candidate, pcdump)]
+
+    def inspect_source(*_args, **_kwargs):
+        calls["inspect"] += 1
+        return f"FUNCTION: {FUNCTION}\nFrontend: OBJOBJECTS\n"
+
+    store = _store(tmp_path)
+    backends = EvaluationBackends(score_rows, inspect_source)
+    capture_candidate(candidate, _config(tmp_path), backends=backends, store=store)
+    pcdump.unlink()
+
+    rebuilt = capture_candidate(candidate, _config(tmp_path), backends=backends, store=store)
+
+    assert Path(rebuilt.pcdump_path or "").read_text(encoding="utf-8") == "pcdump-2"
+    assert calls == {"score": 2, "inspect": 2}
+
+
+def test_evidence_key_includes_inspector_invocation_mode(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path)
+    store = _store(tmp_path)
+
+    with_objobjects = store.evidence_key(candidate, _config(tmp_path, include_objobjects=True))
+    without_objobjects = store.evidence_key(candidate, _config(tmp_path, include_objobjects=False))
+
+    assert with_objobjects.digest() != without_objobjects.digest()
+    assert "mode=objobjects" in with_objobjects.inspector_version
+    assert "mode=no-objobjects" in without_objobjects.inspector_version
+
+
 def test_compile_rejection_is_nonviable_not_incomplete(tmp_path: Path) -> None:
     candidate = _candidate(tmp_path)
     row = {
@@ -128,6 +173,29 @@ def test_compile_rejection_is_nonviable_not_incomplete(tmp_path: Path) -> None:
     assert evidence.viable is False
     assert profile.complete is True
     assert profile.axes is None
+
+
+@pytest.mark.parametrize("stderr", ["", "candidate failed"])
+def test_candidate_failure_without_compile_diagnostics_fails_closed(
+    tmp_path: Path,
+    stderr: str,
+) -> None:
+    candidate = _candidate(tmp_path)
+    row = {
+        "candidate_id": candidate.candidate_id,
+        "error": "pcdump missing",
+        "score_error_kind": "candidate",
+        "score_returncode": 0,
+        "score_stderr": stderr,
+    }
+
+    with pytest.raises(DeltaMinimizeError, match="candidate-score-infrastructure"):
+        capture_candidate(
+            candidate,
+            _config(tmp_path),
+            backends=EvaluationBackends(lambda _rows, _config: [row], lambda *_args: pytest.fail()),
+            store=_store(tmp_path),
+        )
 
 
 @pytest.mark.parametrize("missing", ["pcdump_path", "checkdiff_evidence", "inspect_text"])
@@ -239,6 +307,7 @@ iter ig_idx reg degree nIntfr flags
             "assignment_order": 0,
             "symbol": "home",
             "offset": offset,
+            "expected_offset": 8,
             "size": 4,
             "kind": "local-or-temporary",
             "access_count": 1,
@@ -265,6 +334,7 @@ iter ig_idx reg degree nIntfr flags
                     "stack_home_assignment_status": "resolved-symbolic-homes",
                     "stack_home_assignments": [assignment],
                 },
+                "expected": {"frame_size": 32},
             },
             "stack_slot_report": {
                 "status": "no-candidates",
@@ -316,6 +386,127 @@ iter ig_idx reg degree nIntfr flags
     assert profile.axes.color == (0, 0, 0, 0, 0, 0)
     assert profile.axes.objobjects == (0, 1)
     assert profile.axes.stack_homes == (1, 4, 0, 0)
+
+
+def test_stack_axis_scores_absolute_expected_truth_not_wholesale_donor(tmp_path: Path) -> None:
+    pcdump = tmp_path / "same.pcdump"
+    pcdump.write_text(
+        f"Starting function {FUNCTION}\n"
+        "[COALESCE] enter class=0 n_virtuals=1\n"
+        "[COALESCE] natural mappings (virt -> root):\n"
+        "  (none - no virtuals coalesced)\n"
+        "[COALESCE] exit class=0 n_virtuals=1 distinct_roots=1 forced=0\n\n"
+        "SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=1)\n"
+        "iter ig_idx degree arraySize flags notes\n0 0 0 0 0x00\n\n"
+        "COLORGRAPH DECISIONS (class=0, result=1, n_nodes=1)\n"
+        "iter ig_idx reg degree nIntfr flags\n0 0 r3 0 0 0x00\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "candidate.c"
+    source.write_text("", encoding="utf-8")
+
+    def checkdiff(current_offset: int, expected_offset: int, current_frame: int) -> dict[str, object]:
+        assignment = {
+            "assignment_order": 0,
+            "symbol": "home",
+            "offset": current_offset,
+            "expected_offset": expected_offset,
+            "size": 4,
+            "kind": "local-or-temporary",
+            "access_count": 1,
+            "opcodes": ["stw"],
+            "first_access": {
+                "opcode": "stw",
+                "operands": "r3,home(r1)",
+                "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                "block_idx": 0,
+                "instr_idx": 1,
+            },
+        }
+        return {
+            "function": FUNCTION,
+            "match": False,
+            "target_asm": ["+000: 38 60 00 00 li r3,0"],
+            "current_asm": ["+000: 38 60 00 00 li r3,0"],
+            "classification": {"primary": "instruction-identical"},
+            "color_role_map": {0: 0},
+            "frame_report": {
+                "function": FUNCTION,
+                "current": {
+                    "frame_size": current_frame,
+                    "stack_home_assignment_status": "resolved-symbolic-homes",
+                    "stack_home_assignments": [assignment],
+                },
+                "expected": {"frame_size": 32},
+            },
+            "stack_slot_report": {
+                "status": "no-candidates",
+                "function": FUNCTION,
+                "candidate_count": 0,
+                "candidates": [],
+            },
+        }
+
+    inspect_text = f"FUNCTION: {FUNCTION}\nFrontend: OBJOBJECTS\n"
+    donor = RawCandidateEvidence(
+        "left",
+        0,
+        str(source),
+        "left",
+        "compiled",
+        True,
+        str(pcdump),
+        checkdiff(8, 12, 40),
+        inspect_text,
+        "",
+    )
+    candidate = RawCandidateEvidence(
+        "candidate",
+        1,
+        str(source),
+        "candidate",
+        "compiled",
+        True,
+        str(pcdump),
+        checkdiff(12, 12, 32),
+        inspect_text,
+        "",
+    )
+    parents = ParentEvidenceBundle(
+        donor,
+        replace(donor, candidate_id="right", source_hash="right"),
+        "cflags",
+        "compiler",
+        "object",
+        "inspector-v1",
+    )
+    objective = ObjectiveManifest(
+        schema_version="delta-minimize-objectives.v1",
+        function=FUNCTION,
+        class_id=0,
+        target_spec={},
+        desired_phys={0: 3},
+        color_donor="left",
+        objobject_donor="left",
+        stack_home_donor="left",
+        references={
+            **dict(_objective_stub().references),
+            "stack-homes": AxisReference(
+                "absolute",
+                "checkdiff",
+                "left",
+                "lower absolute distance",
+                False,
+                (),
+            ),
+        },
+    )
+
+    profile = profile_candidate(candidate, objective, parents=parents)
+
+    assert profile.complete is True
+    assert profile.axes is not None
+    assert profile.axes.stack_homes == (0, 0, 0, 0)
 
 
 def _raw_stub() -> RawCandidateEvidence:

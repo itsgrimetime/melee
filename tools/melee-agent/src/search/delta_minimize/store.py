@@ -32,6 +32,7 @@ _PROVENANCE_FIELDS = frozenset(
     }
 )
 _PARENT_PROVENANCE_FIELDS = _PROVENANCE_FIELDS - {"objective_manifest_hash"}
+_INSPECTOR_MODE_SUFFIX = re.compile(r";mode=(?:objobjects|no-objobjects)\Z")
 
 
 def _json_value(value: Any) -> Any:
@@ -283,6 +284,23 @@ def _validate_key_values(values: Mapping[str, Any]) -> None:
         raise ValueError("evidence key fields must be non-empty strings")
 
 
+def inspector_version_for_mode(inspector_version: str, include_objobjects: bool) -> str:
+    """Bind the evaluator's inspector invocation mode into cache provenance.
+
+    The convention deliberately keeps the version in the existing provenance
+    lane so older callers do not need a second, independently mutable mode
+    field.  A pre-existing mode suffix is replaced rather than accumulated.
+    """
+
+    if not isinstance(inspector_version, str) or not inspector_version:
+        raise DeltaMinimizeError("invalid-evidence-provenance")
+    if not isinstance(include_objobjects, bool):
+        raise DeltaMinimizeError("invalid-evidence-key-input")
+    base = _INSPECTOR_MODE_SUFFIX.sub("", inspector_version)
+    mode = "objobjects" if include_objobjects else "no-objobjects"
+    return f"{base};mode={mode}"
+
+
 class DeltaRunStore:
     """Own all durable state below one delta-minimize output directory."""
 
@@ -377,6 +395,7 @@ class DeltaRunStore:
         try:
             source_hash = candidate.source_hash
             function = config.function
+            include_objobjects = config.include_objobjects
         except AttributeError as error:
             raise DeltaMinimizeError("invalid-evidence-key-input") from error
         return EvidenceKey(
@@ -387,7 +406,7 @@ class DeltaRunStore:
             expected_object_hash=self.provenance["expected_object_hash"],
             objective_manifest_hash=self.provenance["objective_manifest_hash"],
             parser_schema_hash=self.provenance["parser_schema_hash"],
-            inspector_version=self.provenance["inspector_version"],
+            inspector_version=inspector_version_for_mode(self.provenance["inspector_version"], include_objobjects),
         )
 
     def parent_evidence_key(
@@ -405,7 +424,12 @@ class DeltaRunStore:
             return ParentEvidenceKey(
                 source_hash=candidate.source_hash,
                 function=config.function,
-                **values,
+                **{
+                    **values,
+                    "inspector_version": inspector_version_for_mode(
+                        values["inspector_version"], config.include_objobjects
+                    ),
+                },
             )
         except (AttributeError, TypeError) as error:
             raise DeltaMinimizeError("invalid-evidence-key-input") from error
@@ -471,6 +495,22 @@ class DeltaRunStore:
         except DeltaMinimizeError:
             return None
         return self._load_evidence(path, "candidate", key.to_dict(), key.digest())
+
+    def invalidate_evidence(self, key: EvidenceKey) -> None:
+        """Remove a cache envelope whose retained artifacts are no longer valid."""
+
+        path = self.evidence_path(key)
+        with _exclusive_file_lock(path):
+            safe = _require_safe_path(path)
+            directory_fd = _open_safe_directory(safe.parent)
+            try:
+                try:
+                    os.unlink(safe.name, dir_fd=directory_fd)
+                except FileNotFoundError:
+                    return
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
 
     def load_parent_evidence(self, key: ParentEvidenceKey) -> dict[str, Any] | None:
         try:

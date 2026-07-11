@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -16,7 +18,7 @@ from ...mwcc_debug.diff_capture import DiffInput, read_inspect_input_if_availabl
 from ...mwcc_debug.objobject_profile import objobject_order_distance, parse_objobject_profile
 from ...mwcc_debug.opcode_graph import opcode_graph_distance, parse_opcode_graph
 from ...mwcc_debug.source_candidate_scoring import ScoreSourceConfig, score_retained_source_rows
-from ...mwcc_debug.stack_home_profile import build_stack_home_profile, stack_home_distance
+from ...mwcc_debug.stack_home_profile import build_stack_home_profile
 from .contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
 from .objectives import ObjectiveManifest
 
@@ -59,6 +61,7 @@ class RawCandidateEvidence:
     compiler_stderr: str
     blockers: tuple[str, ...] = ()
     inspection_mode: str = "objobjects"
+    pcdump_hash: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -80,6 +83,14 @@ class RawCandidateEvidence:
             or not isinstance(self.blockers, tuple)
             or any(not isinstance(item, str) or not item for item in self.blockers)
             or self.inspection_mode not in {"objobjects", "no-objobjects"}
+            or (
+                self.pcdump_hash is not None
+                and (
+                    not isinstance(self.pcdump_hash, str)
+                    or len(self.pcdump_hash) != 64
+                    or any(character not in "0123456789abcdef" for character in self.pcdump_hash)
+                )
+            )
         ):
             raise DeltaMinimizeError("invalid-raw-candidate-evidence")
         if self.checkdiff_evidence is not None:
@@ -100,6 +111,7 @@ class RawCandidateEvidence:
             "compiler_stderr": self.compiler_stderr,
             "blockers": list(self.blockers),
             "inspection_mode": self.inspection_mode,
+            "pcdump_hash": self.pcdump_hash,
         }
 
     @classmethod
@@ -117,6 +129,7 @@ class RawCandidateEvidence:
             "compiler_stderr",
             "blockers",
             "inspection_mode",
+            "pcdump_hash",
         }
         if not isinstance(data, Mapping) or set(data) != fields:
             raise DeltaMinimizeError("invalid-raw-candidate-evidence")
@@ -279,8 +292,52 @@ def _candidate_blockers(row: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(out))
 
 
+def _compile_diagnostics(row: Mapping[str, Any]) -> str:
+    return "\n".join(
+        str(row.get(key) or "") for key in ("stdout_tail", "stderr_tail", "score_stdout", "score_stderr")
+    ).strip()
+
+
 def _compile_rejected(row: Mapping[str, Any]) -> bool:
-    return row.get("score_error_kind") == "candidate" and not row.get("pcdump_path")
+    if row.get("score_error_kind") != "candidate" or row.get("pcdump_path"):
+        return False
+    diagnostics = _compile_diagnostics(row).lower()
+    return "mwcceppc_debug.exe compiler" in diagnostics and "error:" in diagnostics
+
+
+def _file_hash(path: Path) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("missing artifact")
+    current = Path(path.anchor)
+    for part in path.absolute().parts[1:]:
+        current /= part
+        if current.is_symlink():
+            raise ValueError("unsafe artifact")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _validate_cached_artifacts(
+    evidence: RawCandidateEvidence,
+    candidate_source: Path,
+    source_hash: str,
+    *,
+    include_objobjects: bool,
+) -> bool:
+    try:
+        if _file_hash(candidate_source) != source_hash:
+            return False
+        if evidence.viable:
+            if evidence.pcdump_path is None or evidence.pcdump_hash is None:
+                return False
+            if _file_hash(Path(evidence.pcdump_path)) != evidence.pcdump_hash:
+                return False
+            if include_objobjects and not evidence.inspect_text:
+                return False
+        elif not evidence.compiler_stderr.strip():
+            return False
+    except (OSError, UnicodeError, ValueError):
+        return False
+    return True
 
 
 def _invoke_inspector(
@@ -325,6 +382,11 @@ def capture_candidate(
         raise DeltaMinimizeError("invalid-candidate-evidence-input") from error
     if not isinstance(source_path, Path) or not source_path.is_file():
         raise DeltaMinimizeError("invalid-candidate-source")
+    try:
+        if _file_hash(source_path) != source_hash:
+            raise DeltaMinimizeError("invalid-candidate-source-hash")
+    except (OSError, ValueError) as error:
+        raise DeltaMinimizeError("invalid-candidate-source") from error
 
     key = store.evidence_key(candidate, config)
     cached = store.load_evidence(key)
@@ -338,7 +400,14 @@ def capture_candidate(
             or evidence.inspection_mode != ("objobjects" if config.include_objobjects else "no-objobjects")
         ):
             raise DeltaMinimizeError("corrupt-cached-evidence")
-        return evidence
+        if _validate_cached_artifacts(
+            evidence,
+            source_path,
+            source_hash,
+            include_objobjects=config.include_objobjects,
+        ):
+            return evidence
+        store.invalidate_evidence(key)
     if store.evidence_path(key).exists():
         raise DeltaMinimizeError("corrupt-cached-evidence")
 
@@ -372,6 +441,20 @@ def capture_candidate(
     checkdiff = row.get("checkdiff_evidence")
     if checkdiff is not None and not isinstance(checkdiff, Mapping):
         raise DeltaMinimizeError("malformed-score-source-result")
+    if row.get("score_error_kind") == "candidate" and not rejected:
+        raise DeltaMinimizeError(
+            "candidate-score-infrastructure",
+            {"candidate_id": candidate_id, "error": row.get("error")},
+        )
+    pcdump_hash: str | None = None
+    if not rejected:
+        try:
+            pcdump_hash = _file_hash(Path(pcdump or ""))
+        except (OSError, ValueError) as error:
+            raise DeltaMinimizeError(
+                "candidate-score-infrastructure",
+                {"candidate_id": candidate_id, "error": "missing-or-unsafe-pcdump"},
+            ) from error
     evidence = RawCandidateEvidence(
         candidate_id=candidate_id,
         mask=mask,
@@ -382,9 +465,10 @@ def capture_candidate(
         pcdump_path=pcdump,
         checkdiff_evidence=checkdiff,
         inspect_text=None,
-        compiler_stderr=str(row.get("score_stderr") or ""),
+        compiler_stderr=_compile_diagnostics(row),
         blockers=_candidate_blockers(row),
         inspection_mode="objobjects" if config.include_objobjects else "no-objobjects",
+        pcdump_hash=pcdump_hash,
     )
     if evidence.viable and config.include_objobjects:
         try:
@@ -494,7 +578,11 @@ def _compile(raw: RawCandidateEvidence, function: str) -> role_descriptor.Compil
 def _donor_raw(parents: ParentEvidenceBundle | None, side: str | None) -> RawCandidateEvidence | None:
     if parents is None:
         return None
-    return parents.right if side == "right" else parents.left
+    if side == "right":
+        return parents.right
+    if side == "left":
+        return parents.left
+    return None
 
 
 def _color_axis(
@@ -502,7 +590,10 @@ def _color_axis(
     objective: ObjectiveManifest,
     parents: ParentEvidenceBundle,
 ) -> tuple[int, int, int, int, int, int]:
-    donor_raw = _donor_raw(parents, objective.color_donor)
+    # A ``none`` color donor is valid only when objective inference proved the
+    # parent secondary profiles identical.  Either side is then an equivalent
+    # concrete artifact for the comparison.
+    donor_raw = parents.left if objective.color_donor is None else _donor_raw(parents, objective.color_donor)
     if donor_raw is None:
         raise ValueError("missing donor")
     candidate_payload = evidence.checkdiff_evidence or {}
@@ -635,14 +726,103 @@ def _stack_axis(
 ) -> tuple[int, int, int, int]:
     if evidence.checkdiff_evidence is None:
         raise ValueError("missing checkdiff")
-    reference_raw = _donor_raw(parents, objective.stack_home_donor)
-    if reference_raw is None or reference_raw.checkdiff_evidence is None:
-        raise ValueError("missing stack reference")
     candidate_inputs = _frame_and_stack(evidence.checkdiff_evidence, objective.function)
-    reference_inputs = _frame_and_stack(reference_raw.checkdiff_evidence, objective.function)
     candidate = build_stack_home_profile(*candidate_inputs)
-    reference = build_stack_home_profile(*reference_inputs)
-    return tuple(stack_home_distance(candidate, reference).as_tuple())  # type: ignore[return-value]
+    if not candidate.complete:
+        raise ValueError("incomplete candidate stack profile")
+
+    expected_frame, expected_stack = deepcopy(candidate_inputs)
+    raw_expected = expected_frame.get("expected")
+    expected_frame_size = raw_expected.get("frame_size") if isinstance(raw_expected, Mapping) else None
+    if not _is_int(expected_frame_size) or expected_frame_size < 0:
+        classification = evidence.checkdiff_evidence.get("classification")
+        sizes = classification.get("stack_frame_sizes") if isinstance(classification, Mapping) else None
+        expected_frame_size = sizes.get("expected_frame_size") if isinstance(sizes, Mapping) else None
+    if not _is_int(expected_frame_size) or expected_frame_size < 0:
+        raise ValueError("missing expected frame size")
+    expected_frame["current"]["frame_size"] = expected_frame_size
+    assignments = expected_frame["current"].get("stack_home_assignments")
+    if isinstance(assignments, list):
+        for assignment in assignments:
+            if isinstance(assignment, dict) and _is_int(assignment.get("expected_offset")):
+                assignment["offset"] = assignment["expected_offset"]
+    if isinstance(expected_stack, dict):
+        candidates = expected_stack.get("candidates")
+        if isinstance(candidates, list):
+            for raw in candidates:
+                if not isinstance(raw, dict):
+                    continue
+                mismatch = raw.get("mismatch")
+                expected_offset = raw.get("expected_offset")
+                if not _is_int(expected_offset) and isinstance(mismatch, Mapping):
+                    expected_offset = mismatch.get("expected_offset")
+                if _is_int(expected_offset):
+                    raw["current_offset"] = expected_offset
+                    if isinstance(mismatch, dict):
+                        mismatch["current_offset"] = expected_offset
+    absolute_reference = build_stack_home_profile(expected_frame, expected_stack)
+    if not absolute_reference.complete:
+        raise ValueError("incomplete absolute stack reference")
+
+    stack_reference = objective.references.get("stack-homes")
+    if stack_reference is None:
+        raise ValueError("missing stack objective reference")
+    unresolved = set(stack_reference.unresolved)
+    donor = _donor_raw(parents, objective.stack_home_donor)
+    donor_profile = None
+    if unresolved:
+        if donor is None or donor.checkdiff_evidence is None:
+            raise ValueError("missing stack proxy donor")
+        donor_profile = build_stack_home_profile(*_frame_and_stack(donor.checkdiff_evidence, objective.function))
+        if not donor_profile.complete:
+            raise ValueError("incomplete stack proxy donor")
+
+    candidate_homes = {home.identity: home for home in candidate.homes}
+    absolute_homes = {home.identity: home for home in absolute_reference.homes}
+    donor_homes = {} if donor_profile is None else {home.identity: home for home in donor_profile.homes}
+    absolute_ids = {identity for identity, home in candidate_homes.items() if home.reference_kind == "absolute"}
+    proxy_ids = set(candidate_homes) - absolute_ids
+    if proxy_ids - unresolved:
+        raise ValueError("proxy stack home missing objective provenance")
+    if unresolved - set(donor_homes):
+        raise ValueError("unresolved stack home missing from donor")
+    if absolute_ids - set(absolute_homes):
+        raise ValueError("absolute stack home missing expected reference")
+
+    absolute_moved = sum(
+        candidate_homes[identity].offset != absolute_homes[identity].offset for identity in absolute_ids
+    )
+    absolute_delta = sum(
+        abs(candidate_homes[identity].offset - absolute_homes[identity].offset) for identity in absolute_ids
+    )
+    proxy_common = proxy_ids & unresolved
+    proxy_moved = sum(candidate_homes[identity].offset != donor_homes[identity].offset for identity in proxy_common)
+    proxy_membership = len(proxy_ids ^ unresolved)
+    candidate_order = [
+        home.identity for home in sorted(candidate.homes, key=lambda item: item.order) if home.identity in proxy_common
+    ]
+    donor_order = (
+        [
+            home.identity
+            for home in sorted(donor_profile.homes, key=lambda item: item.order)  # type: ignore[union-attr]
+            if home.identity in proxy_common
+        ]
+        if donor_profile is not None
+        else []
+    )
+    donor_positions = {identity: index for index, identity in enumerate(donor_order)}
+    positions = [donor_positions[identity] for identity in candidate_order]
+    inversions = sum(
+        positions[left] > positions[right]
+        for left in range(len(positions))
+        for right in range(left + 1, len(positions))
+    )
+    return (
+        absolute_moved + proxy_moved + proxy_membership,
+        absolute_delta,
+        inversions,
+        abs(int(candidate.frame_size) - int(expected_frame_size)),
+    )
 
 
 def _objobject_axis(
