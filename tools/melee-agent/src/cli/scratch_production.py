@@ -90,8 +90,9 @@ def _include_adjacent_pragma_scope(source: str, function: str) -> str:
 
     Production decomp.me appends the seed source after its context, so pragmas
     surrounding the context placeholder do not affect the uploaded function.
-    Keep only the adjacent pragma block and its closing pop/reset; crossing a
-    comment or source-code line risks borrowing a pragma from another target.
+    Keep only the adjacent pragma block and its closing pop/reset. Comments and
+    blank lines are trivia, but crossing a source-code line risks borrowing a
+    pragma from another target.
     """
     function_start = source.find(function)
     if function_start < 0:
@@ -101,10 +102,12 @@ def _include_adjacent_pragma_scope(source: str, function: str) -> str:
     pragma = re.compile(r"^[ \t]*#[ \t]*pragma\b(.*)$")
 
     leading_lines = source[:function_start].splitlines(keepends=True)
+    leading_comment_only = _comment_only_lines(leading_lines)
     opening_start: int | None = None
+    push_count = 0
     for index in range(len(leading_lines) - 1, -1, -1):
         line = leading_lines[index]
-        if not line.strip():
+        if not line.strip() or leading_comment_only[index]:
             continue
         match = pragma.match(line.rstrip("\r\n"))
         if match is None:
@@ -112,6 +115,8 @@ def _include_adjacent_pragma_scope(source: str, function: str) -> str:
         directive = match.group(1).strip()
         if directive == "pop" or directive.split()[-1:] == ["reset"]:
             break
+        if directive == "push":
+            push_count += 1
         opening_start = index
 
     if opening_start is None:
@@ -120,10 +125,12 @@ def _include_adjacent_pragma_scope(source: str, function: str) -> str:
     leading = "".join(leading_lines[opening_start:])
 
     trailing_lines = source[function_end:].splitlines(keepends=True)
+    trailing_comment_only = _comment_only_lines(trailing_lines)
     trailing_end = 0
     saw_closing_pragma = False
+    pop_count = 0
     for index, line in enumerate(trailing_lines):
-        if not line.strip():
+        if not line.strip() or trailing_comment_only[index]:
             trailing_end = index + 1
             continue
         match = pragma.match(line.rstrip("\r\n"))
@@ -132,8 +139,13 @@ def _include_adjacent_pragma_scope(source: str, function: str) -> str:
         directive = match.group(1).strip()
         if directive != "pop" and directive.split()[-1:] != ["reset"]:
             break
+        if directive == "pop":
+            pop_count += 1
         saw_closing_pragma = True
         trailing_end = index + 1
+
+    if push_count > pop_count:
+        return function
 
     trailing = (
         "".join(trailing_lines[:trailing_end]).rstrip("\r\n")
@@ -141,6 +153,36 @@ def _include_adjacent_pragma_scope(source: str, function: str) -> str:
         else ""
     )
     return leading + function + trailing
+
+
+def _comment_only_lines(lines: list[str]) -> list[bool]:
+    """Mark lines containing only whitespace and C comments."""
+    result: list[bool] = []
+    in_block_comment = False
+    for line in lines:
+        text = line.rstrip("\r\n")
+        index = 0
+        comment_only = True
+        while index < len(text):
+            if in_block_comment:
+                close = text.find("*/", index)
+                if close < 0:
+                    index = len(text)
+                else:
+                    in_block_comment = False
+                    index = close + 2
+            elif text[index].isspace():
+                index += 1
+            elif text.startswith("//", index):
+                index = len(text)
+            elif text.startswith("/*", index):
+                in_block_comment = True
+                index += 2
+            else:
+                comment_only = False
+                break
+        result.append(comment_only)
+    return result
 
 
 def _existing_production_slug(function_name: str) -> str | None:

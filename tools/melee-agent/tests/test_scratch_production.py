@@ -106,6 +106,32 @@ def test_seed_source_preserves_immediate_pragma_reset(tmp_path):
     )
 
 
+def test_seed_source_preserves_pragma_scope_across_doc_comment(tmp_path):
+    src = tmp_path / "src" / "melee" / "ft"
+    src.mkdir(parents=True)
+    (src / "ftfoo.c").write_text(
+        "#pragma push\n"
+        "#pragma dont_inline on\n"
+        "/**\n"
+        " * Describe the target.\n"
+        " */\n"
+        "void ftFoo(void) {}\n"
+        "#pragma pop\n"
+    )
+
+    out = _seed_source_from_repo("ftFoo", "melee/ft/ftfoo.c", tmp_path)
+
+    assert out == (
+        "#pragma push\n"
+        "#pragma dont_inline on\n"
+        "/**\n"
+        " * Describe the target.\n"
+        " */\n"
+        "void ftFoo(void) {}\n"
+        "#pragma pop"
+    )
+
+
 def test_seed_source_does_not_cross_code_to_collect_unrelated_pragmas(tmp_path):
     src = tmp_path / "src" / "melee" / "mn"
     src.mkdir(parents=True)
@@ -115,6 +141,22 @@ def test_seed_source_does_not_cross_code_to_collect_unrelated_pragmas(tmp_path):
         "void mnFoo(void) {}\n"
         "#pragma inline_depth(1)\n"
         "void other(void) {}\n"
+    )
+
+    out = _seed_source_from_repo("mnFoo", "melee/mn/mnfoo.c", tmp_path)
+
+    assert out == "void mnFoo(void) {}"
+
+
+def test_seed_source_drops_unbalanced_push_scope_spanning_other_code(tmp_path):
+    src = tmp_path / "src" / "melee" / "mn"
+    src.mkdir(parents=True)
+    (src / "mnfoo.c").write_text(
+        "#pragma push\n"
+        "#pragma inline_depth(2)\n"
+        "void mnFoo(void) {}\n"
+        "void other(void) {}\n"
+        "#pragma pop\n"
     )
 
     out = _seed_source_from_repo("mnFoo", "melee/mn/mnfoo.c", tmp_path)
