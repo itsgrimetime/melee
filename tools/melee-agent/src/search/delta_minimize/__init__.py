@@ -8,6 +8,7 @@ from .contracts import (
     ParetoSummary,
 )
 from .pareto import dominates, reduce_pareto
+from .render import parse_donor_overrides, render_delta_minimize_text
 from .run import (
     DeltaMinimizeBackends,
     DeltaMinimizeConfig,
@@ -25,6 +26,8 @@ __all__ = [
     "ParetoGroup",
     "ParetoSummary",
     "dominates",
+    "parse_donor_overrides",
     "reduce_pareto",
+    "render_delta_minimize_text",
     "run_delta_minimize",
 ]

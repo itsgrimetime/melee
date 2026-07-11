@@ -2,13 +2,21 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from ._helpers import *  # noqa: F403
-from ._helpers import _CFLAGS
 from src.mwcc_debug.retained_frontier_triage import (
     RetainedFrontierTriageError,
     render_retained_frontier_text,
     triage_retained_frontiers,
 )
+from src.search.delta_minimize import (
+    DeltaMinimizeConfig,
+    DeltaMinimizeError,
+    parse_donor_overrides,
+    render_delta_minimize_text,
+    run_delta_minimize,
+)
+
+from ._helpers import *  # noqa: F403
+from ._helpers import _CFLAGS
 
 
 class _SearchRunDirectedPipeline:
@@ -68,6 +76,35 @@ def _resolve_source_file(path: Path | None, *, melee_root: Path) -> Path | None:
         if candidate.is_file():
             return candidate.resolve()
     raise typer.BadParameter(f"source file not found: {path}")
+
+
+def _path_has_symlink_component(path: Path) -> bool:
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            return True
+    return False
+
+
+def _resolve_delta_target_file(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    expanded = path.expanduser()
+    candidate = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    if _path_has_symlink_component(candidate) or not candidate.is_file():
+        raise typer.BadParameter(f"target file not found or unsafe: {path}")
+    return candidate.resolve()
+
+
+def _delta_error_message(error: DeltaMinimizeError) -> str:
+    if not error.details:
+        return error.reason
+    details = ", ".join(
+        f"{key}={value}" for key, value in sorted(error.details.items())
+    )
+    return f"{error.reason}: {details}"
 
 
 def _resolve_optional_plan_source_file(
@@ -4466,6 +4503,113 @@ def _assignment_clusters(meta: dict | None) -> list[str]:
     if not clusters and igs:
         clusters.append("unclassified proof-assignment movement")
     return clusters
+
+
+@search_app.command("delta-minimize")
+def delta_minimize_cmd(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function",
+            "-f",
+            help="Target function to recombine and minimize.",
+        ),
+    ],
+    left: Annotated[
+        Path,
+        typer.Option("--left", help="Left full translation-unit source file."),
+    ],
+    right: Annotated[
+        Path,
+        typer.Option("--right", help="Right full translation-unit source file."),
+    ],
+    out_dir: Annotated[
+        Path,
+        typer.Option(
+            "--out-dir",
+            help="Resumable artifact and result directory.",
+        ),
+    ] = Path("build/delta-minimize"),
+    max_candidates: Annotated[
+        int,
+        typer.Option(
+            "--max-candidates",
+            min=1,
+            help="Fail if the exact legal lattice exceeds this budget.",
+        ),
+    ] = 64,
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target",
+            help="Optional delta-minimize-color-target.v1 YAML file.",
+        ),
+    ] = None,
+    donor: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--donor",
+            help=(
+                "Override color, objobjects, or stack-homes donor with "
+                "AXIS=left|right; repeatable."
+            ),
+        ),
+    ] = None,
+    objobjects: Annotated[
+        bool,
+        typer.Option(
+            "--objobjects/--no-objobjects",
+            help="Collect ObjObject evidence for an exact four-axis result.",
+        ),
+    ] = True,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic result JSON."),
+    ] = False,
+) -> None:
+    """Exhaustively minimize the closed source-delta lattice between two parents."""
+
+    try:
+        donor_overrides = parse_donor_overrides(donor or ())
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--donor") from error
+
+    melee_root = _compute_melee_root()
+    resolved_left = _resolve_source_file(left, melee_root=melee_root)
+    resolved_right = _resolve_source_file(right, melee_root=melee_root)
+    assert resolved_left is not None and resolved_right is not None
+    cflags_from = _resolve_structure_source_file(
+        function,
+        None,
+        melee_root=melee_root,
+    )
+    expanded_out = out_dir.expanduser()
+    if not expanded_out.is_absolute():
+        expanded_out = melee_root / expanded_out
+
+    try:
+        config = DeltaMinimizeConfig(
+            function=function,
+            left=resolved_left,
+            right=resolved_right,
+            out_dir=expanded_out.resolve(),
+            max_candidates=max_candidates,
+            target_path=_resolve_delta_target_file(target),
+            donor_overrides=donor_overrides,
+            include_objobjects=objobjects,
+            melee_root=melee_root,
+            cflags_from=cflags_from,
+        )
+        result = run_delta_minimize(config)
+    except DeltaMinimizeError as error:
+        raise typer.BadParameter(_delta_error_message(error)) from error
+
+    if json_out:
+        typer.echo(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        typer.echo(render_delta_minimize_text(result))
+    if result.status == "incomplete":
+        raise typer.Exit(code=4)
 
 
 @search_app.command("structure")

@@ -1,0 +1,52 @@
+
+ Usage: melee-agent debug search delta-minimize [OPTIONS]
+
+ Exhaustively minimize the closed source-delta lattice between two parents.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function       -f                     TEXT             Target function  │
+│                                                             to recombine and │
+│                                                             minimize.        │
+│                                                             [required]       │
+│ *  --left                                  PATH             Left full        │
+│                                                             translation-unit │
+│                                                             source file.     │
+│                                                             [required]       │
+│ *  --right                                 PATH             Right full       │
+│                                                             translation-unit │
+│                                                             source file.     │
+│                                                             [required]       │
+│    --out-dir                               PATH             Resumable        │
+│                                                             artifact and     │
+│                                                             result           │
+│                                                             directory.       │
+│                                                             [default:        │
+│                                                             build/delta-min… │
+│    --max-candidat…                         INTEGER RANGE    Fail if the      │
+│                                            [x>=1]           exact legal      │
+│                                                             lattice exceeds  │
+│                                                             this budget.     │
+│                                                             [default: 64]    │
+│    --target                                PATH             Optional         │
+│                                                             delta-minimize-… │
+│                                                             YAML file.       │
+│    --donor                                 TEXT             Override color,  │
+│                                                             objobjects, or   │
+│                                                             stack-homes      │
+│                                                             donor with       │
+│                                                             AXIS=left|right; │
+│                                                             repeatable.      │
+│    --objobjects         --no-objobjects                     Collect          │
+│                                                             ObjObject        │
+│                                                             evidence for an  │
+│                                                             exact four-axis  │
+│                                                             result.          │
+│                                                             [default:        │
+│                                                             objobjects]      │
+│    --json                                                   Emit             │
+│                                                             deterministic    │
+│                                                             result JSON.     │
+│    --help                                                   Show this        │
+│                                                             message and      │
+│                                                             exit.            │
+╰──────────────────────────────────────────────────────────────────────────────╯
