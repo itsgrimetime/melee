@@ -331,6 +331,66 @@ ObjObject @ 0x20: Kind: DLOCAL; Name: copy; Type: int; Scope: f; Expression: cop
     assert profile.occurrence_evidence == ("left", "right")
 
 
+def test_all_labeled_fields_on_one_continuation_line_are_parsed() -> None:
+    text = """
+FUNCTION: f
+OBJOBJECTS
+ObjObject @ 0x10
+  Kind: DLOCAL; Name: value; Type: int; Scope: f; Expression: value
+""".strip()
+
+    profile = parse_objobject_profile(text, "f")
+
+    assert profile.complete is True
+    assert profile.identities == (ObjObjectIdentity("DLOCAL", "value", "int", "f", "value"),)
+
+
+def test_single_and_multi_field_continuation_lines_can_be_mixed() -> None:
+    text = """
+FUNCTION: f
+OBJOBJECTS
+ObjObject @ 0x10
+  Kind: DLOCAL
+  Name: value; Type: int; Scope: f; Expression: value
+""".strip()
+
+    profile = parse_objobject_profile(text, "f")
+
+    assert profile.complete is True
+    assert profile.identities[0].source_name == "value"
+
+
+def test_continuation_line_keeps_inline_occurrence_evidence() -> None:
+    text = """
+FUNCTION: f
+OBJOBJECTS
+ObjObject @ 0x10
+  Kind: DLOCAL; Name: copy; Type: int; Scope: f; Expression: copy; Occurrence: left
+""".strip()
+
+    profile = parse_objobject_profile(text, "f")
+
+    assert profile.complete is True
+    assert profile.occurrence_evidence == ("left",)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        "Kind: DLOCAL; Name: value; Name: shadow; Type: int; Scope: f; Expression: value",
+        "Kind: DLOCAL; Mystery: hidden; Name: value; Type: int; Scope: f; Expression: value",
+    ],
+)
+def test_duplicate_or_unknown_inline_labels_fail_closed(fields: str) -> None:
+    profile = parse_objobject_profile(
+        _inspect(f"ObjObject @ 0x10\n  {fields}"),
+        "f",
+    )
+
+    assert profile.complete is False
+    assert profile.blocker == "incomplete-objobject-entry"
+
+
 def test_pipe_separated_inline_record_preserves_expression_operator() -> None:
     text = """
 FUNCTION: f
@@ -369,6 +429,52 @@ ObjObject @ 0x10: unknown prefix | Kind: DLOCAL | Name: value | Type: int | Scop
 
     assert profile.complete is False
     assert profile.blocker == "incomplete-objobject-entry"
+
+
+@pytest.mark.parametrize(
+    ("candidate_expression", "donor_expression", "normalized"),
+    [
+        ("!r3", "! r8", "! <temp>"),
+        ("~temp_r3", "~ temp_r8", "~ <temp>"),
+    ],
+)
+def test_unary_operator_spacing_normalizes_after_unstable_ids(
+    candidate_expression: str,
+    donor_expression: str,
+    normalized: str,
+) -> None:
+    candidate = parse_objobject_profile(
+        _inspect(_record("0x10", "value", candidate_expression)),
+        "f",
+    )
+    donor = parse_objobject_profile(
+        _inspect(_record("0x20", "value", donor_expression)),
+        "f",
+    )
+
+    assert candidate.identities[0].expression == normalized
+    assert donor.identities[0].expression == normalized
+
+
+@pytest.mark.parametrize(
+    ("expression", "normalized"),
+    [
+        ("r3!=r4", "<temp> != <temp>"),
+        ("r3&&r4||r5", "<temp> && <temp> || <temp>"),
+        ("r3<<r4>>r5", "<temp> << <temp> >> <temp>"),
+        ("call(!r3, array[~r4])", "call(! <temp>,array[~ <temp>])"),
+    ],
+)
+def test_adjacent_multi_character_operators_and_punctuation_are_preserved(
+    expression: str,
+    normalized: str,
+) -> None:
+    profile = parse_objobject_profile(
+        _inspect(_record("0x10", "value", expression)),
+        "f",
+    )
+
+    assert profile.identities[0].expression == normalized
 
 
 def _identity(name: str = "copy") -> ObjObjectIdentity:

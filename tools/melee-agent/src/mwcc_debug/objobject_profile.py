@@ -27,6 +27,7 @@ _INLINE_FIELD_BOUNDARY_RE = re.compile(
     rf"\s*[;|]\s*(?=(?:{_FIELD_LABEL})\s*[:=])",
     re.IGNORECASE,
 )
+_INLINE_LABEL_LIKE_BOUNDARY_RE = re.compile(r"\s*[;|]\s*[A-Za-z][A-Za-z0-9_ ]*\s*[:=]")
 _EXPLICIT_ADDRESS = r"(?:0[xX][0-9A-Fa-f]+|[0-9A-Fa-f]+[hH])"
 _EXPLICIT_ADDRESS_RE = re.compile(rf"(?<![A-Za-z0-9_]){_EXPLICIT_ADDRESS}(?![A-Za-z0-9_])")
 _TEMP_ID_RE = re.compile(
@@ -35,7 +36,7 @@ _TEMP_ID_RE = re.compile(
 )
 _SPACE_RE = re.compile(r"\s+")
 _STRUCTURAL_SPACE_RE = re.compile(r"\s*([()[\]{},;:])\s*")
-_OPERATOR_SPACE_RE = re.compile(r"\s*([+*/%&|^=<>?-]+)\s*")
+_OPERATOR_SPACE_RE = re.compile(r"\s*([+*/%&|^=<>?!~-]+)\s*")
 _TYPE_POINTER_SPACE_RE = re.compile(r"\s*\*")
 
 
@@ -103,8 +104,29 @@ def _parse_inline_fields(line: str) -> dict[str, str] | None:
         match = _LABELED_FIELD_RE.match(part)
         if match is None:
             return None
-        fields[_canonical_label(match.group("label"))] = match.group("value")
+        value = match.group("value")
+        if _INLINE_LABEL_LIKE_BOUNDARY_RE.search(value):
+            return None
+        label = _canonical_label(match.group("label"))
+        if label in fields:
+            return None
+        fields[label] = value
     return fields
+
+
+def _merge_fields(record: _ObjectRecord, fields: dict[str, str]) -> bool:
+    for label in fields:
+        if label == "occurrence":
+            if record.occurrence is not None:
+                return False
+        elif label in record.fields:
+            return False
+    for label, value in fields.items():
+        if label == "occurrence":
+            record.occurrence = value
+        else:
+            record.fields[label] = value
+    return True
 
 
 def _parse_records(snapshot_text: str, function: str) -> tuple[list[_ObjectRecord], bool]:
@@ -146,31 +168,24 @@ def _parse_records(snapshot_text: str, function: str) -> tuple[list[_ObjectRecor
             remainder = line[start_match.end() :].strip().lstrip(":").strip()
             if remainder:
                 inline_fields = _parse_inline_fields(remainder)
-                if inline_fields is None:
+                if inline_fields is None or not _merge_fields(current, inline_fields):
                     saw_unparsed_content = True
-                else:
-                    current.occurrence = inline_fields.pop("occurrence", None)
-                    current.fields.update(inline_fields)
+            continue
+
+        if current is not None and _INLINE_FIELD_BOUNDARY_RE.search(stripped):
+            inline_fields = _parse_inline_fields(stripped)
+            if inline_fields is None or not _merge_fields(current, inline_fields):
+                saw_unparsed_content = True
             continue
 
         label_match = _LABELED_FIELD_RE.match(line)
         if current is not None and label_match is not None:
             label = _canonical_label(label_match.group("label"))
             value = label_match.group("value")
-            if label == "occurrence":
-                current.occurrence = value
-            else:
-                current.fields[label] = value
+            if _INLINE_LABEL_LIKE_BOUNDARY_RE.search(value) or not _merge_fields(current, {label: value}):
+                saw_unparsed_content = True
             continue
 
-        if current is not None:
-            inline_fields = _parse_inline_fields(stripped)
-            if inline_fields is not None:
-                occurrence = inline_fields.pop("occurrence", None)
-                current.fields.update(inline_fields)
-                if occurrence is not None:
-                    current.occurrence = occurrence
-                continue
         saw_unparsed_content = True
 
     flush()
