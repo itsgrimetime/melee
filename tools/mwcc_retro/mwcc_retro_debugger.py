@@ -108,7 +108,20 @@ def _port_lock():
     lock_path = Path(os.environ.get("TMPDIR", "/tmp")) / "mwcc_retro_9001.lock"
     f = open(lock_path, "w")
     try:
-        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(
+                f"[retro] waiting for gdb port {GDB_PORT} lock: {lock_path}",
+                file=sys.stderr,
+                flush=True,
+            )
+            fcntl.flock(f, fcntl.LOCK_EX)
+            print(
+                f"[retro] acquired gdb port {GDB_PORT} lock: {lock_path}",
+                file=sys.stderr,
+                flush=True,
+            )
         yield
     finally:
         fcntl.flock(f, fcntl.LOCK_UN)
@@ -460,8 +473,6 @@ def main():
     a = ap.parse_args()
 
     os.makedirs(a.out, exist_ok=True)
-    if os.path.exists(_TRACE_TMP):
-        os.remove(_TRACE_TMP)  # stale from a prior run
 
     # retrowin32 takes the mwcc command as a positional greedy cmdline after
     # --gdb-stub; the gdb port is hardcoded to 9001 (no --gdb-port flag).
@@ -477,6 +488,8 @@ def main():
     # Hold the lock across the whole emu+gdb session: the fixed port 9001 means
     # only one retro session can run at a time.
     with _port_lock():
+        if os.path.exists(_TRACE_TMP):
+            os.remove(_TRACE_TMP)  # stale from a prior run
         emu_proc = subprocess.Popen(emu)
         try:
             # Give retrowin32 a beat to start listening. Do NOT pre-connect to
@@ -492,10 +505,11 @@ def main():
                     emu_proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     emu_proc.kill()
-    # Copy the short-path trace the gdb side wrote into the requested out_dir.
-    if os.path.exists(_TRACE_TMP):
-        import shutil
-        shutil.copy(_TRACE_TMP, os.path.join(a.out, "iro-trace.txt"))
+        # Copy the short-path trace the gdb side wrote into the requested
+        # out_dir before another serialized launcher can replace it.
+        if os.path.exists(_TRACE_TMP):
+            import shutil
+            shutil.copy(_TRACE_TMP, os.path.join(a.out, "iro-trace.txt"))
 
 
 if __name__ == "__main__":

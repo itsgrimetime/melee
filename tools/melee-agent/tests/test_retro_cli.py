@@ -1,6 +1,8 @@
 import json
 import os
 import subprocess
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -97,6 +99,14 @@ def test_launch_dump_uses_process_group_timeout_runner(monkeypatch, tmp_path):
     seen = {}
 
     def fake_run(cmd, *, cwd, timeout, env=None):
+        launch_log = (out_dir / "launch.log").read_text()
+        assert "STATUS: running" in launch_log
+        assert "RETRO_SOURCE: src/melee/mn/mnvibration.c" in launch_log
+        assert "RETRO_FUNCTION: mnVibration_80248644" in launch_log
+        assert f"RETRO_OUTPUT_DIR: {out_dir}" in launch_log
+        assert "TIMEOUT_SECONDS: 17" in launch_log
+        command_text = retro.shlex.join([str(part) for part in cmd])
+        assert f"COMMAND: {command_text}" in launch_log
         seen["cmd"] = cmd
         seen["cwd"] = cwd
         seen["timeout"] = timeout
@@ -130,9 +140,122 @@ def test_launch_dump_uses_process_group_timeout_runner(monkeypatch, tmp_path):
     )
     assert str(retrowin32_bin) in seen["cmd"]
     assert seen["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(retro._PACKAGE_REPO)
-    assert (out_dir / "launch.log").read_text().startswith(
-        "[retro] running intervention hook"
+    launch_log = (out_dir / "launch.log").read_text()
+    assert "STATUS: exited" in launch_log
+    assert "EXIT: 0" in launch_log
+    assert "[retro] running intervention hook" in launch_log
+
+
+def test_port_lock_reports_contention_and_keeps_blocking_acquisition(
+    monkeypatch,
+    capsys,
+):
+    import fcntl
+
+    from tools.mwcc_retro import mwcc_retro_debugger as debugger
+
+    calls = []
+
+    def fake_flock(_file, operation):
+        calls.append(operation)
+        if operation == fcntl.LOCK_EX | fcntl.LOCK_NB:
+            raise BlockingIOError
+
+    monkeypatch.setattr(fcntl, "flock", fake_flock)
+
+    with debugger._port_lock():
+        calls.append("yield")
+
+    assert calls == [
+        fcntl.LOCK_EX | fcntl.LOCK_NB,
+        fcntl.LOCK_EX,
+        "yield",
+        fcntl.LOCK_UN,
+    ]
+    stderr = capsys.readouterr().err
+    assert "[retro] waiting for gdb port 9001 lock:" in stderr
+    assert "[retro] acquired gdb port 9001 lock:" in stderr
+
+
+def test_main_holds_port_lock_across_complete_trace_lifecycle(monkeypatch, tmp_path):
+    import shutil
+
+    from tools.mwcc_retro import mwcc_retro_debugger as debugger
+
+    events = []
+    trace_tmp = tmp_path / "mwcc_retro_iro.txt"
+    trace_tmp.write_text("stale trace\n")
+    out_dir = tmp_path / "out"
+
+    @contextmanager
+    def fake_port_lock():
+        events.append("lock enter")
+        try:
+            yield
+        finally:
+            events.append("lock exit")
+
+    real_remove = os.remove
+
+    def fake_remove(path):
+        events.append("stale trace removal")
+        real_remove(path)
+
+    class FakeEmulator:
+        def poll(self):
+            return 0
+
+    def fake_popen(_cmd):
+        events.append("emulator")
+        return FakeEmulator()
+
+    def fake_run(_cmd, *, check, env):
+        assert check is True
+        assert env["RETRO_PORT"] == "9001"
+        events.append("gdb")
+        trace_tmp.write_text("fresh trace\n")
+
+    real_copy = shutil.copy
+
+    def fake_copy(src, dst):
+        events.append("trace copy")
+        return real_copy(src, dst)
+
+    monkeypatch.setattr(debugger, "_TRACE_TMP", str(trace_tmp))
+    monkeypatch.setattr(debugger, "_port_lock", fake_port_lock)
+    monkeypatch.setattr(debugger.os, "remove", fake_remove)
+    monkeypatch.setattr(debugger.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(debugger.subprocess, "run", fake_run)
+    monkeypatch.setattr(debugger.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(shutil, "copy", fake_copy)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mwcc_retro_debugger.py",
+            "-e",
+            "retrowin32",
+            "-a",
+            "mwcceppc.exe input.c",
+            "--table",
+            "table.json",
+            "--out",
+            str(out_dir),
+            "target_fn",
+        ],
     )
+
+    debugger.main()
+
+    assert events == [
+        "lock enter",
+        "stale trace removal",
+        "emulator",
+        "gdb",
+        "trace copy",
+        "lock exit",
+    ]
+    assert (out_dir / "iro-trace.txt").read_text() == "fresh trace\n"
 
 
 def test_retro_dump_uses_package_table_with_explicit_melee_root(monkeypatch, tmp_path):
