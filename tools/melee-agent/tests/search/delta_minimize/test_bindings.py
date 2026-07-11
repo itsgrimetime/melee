@@ -467,6 +467,37 @@ def test_array_bound_call_precedes_local_declarator_scope():
     assert materialize_mask(ARRAY_BOUND_SCOPE_LEFT, manifest, 1) == ARRAY_BOUND_SCOPE_RIGHT
 
 
+def test_parenthesized_local_declarator_shadows_later_call():
+    source = """\
+int helper(int a, int b) { return a - b; }
+int draw(int x, int y) {
+    int (helper);
+    return helper(x, y);
+}
+"""
+
+    index = build_binding_index(source)
+
+    assert not index.functions["helper"].direct_calls
+    assert any(blocker.symbol == "helper" and blocker.reason == "shadowed-call" for blocker in index.blockers)
+
+
+def test_parameter_array_bound_precedes_parameter_scope_but_body_call_is_shadowed():
+    source = """\
+int helper(int a, int b) { return a - b; }
+int draw(int helper[helper(1, 2)]) {
+    return helper(3, 4);
+}
+"""
+
+    index = build_binding_index(source)
+
+    assert [call.argument_texts for call in index.functions["helper"].direct_calls] == [
+        ("1", "2"),
+    ]
+    assert any(blocker.symbol == "helper" and blocker.reason == "shadowed-call" for blocker in index.blockers)
+
+
 @pytest.mark.parametrize(
     "right",
     [CALL_COUNT_CHANGE_RIGHT, DECLARATION_COUNT_CHANGE_RIGHT],
@@ -591,6 +622,27 @@ int draw(int x, int y) { return (helper != 0) + helper(y, x); }
     assert "helper parameter reorder" in manifest.atoms[0].summary
     assert materialize_mask(left, manifest, 0) == left
     assert materialize_mask(left, manifest, 1) == right
+
+
+def test_unchanged_non_call_reference_blocks_renamed_function_binding():
+    left = """\
+int helper(int value) { return value + 1; }
+int (*fp)(int) = helper;
+int draw(int value) { return helper(value); }
+"""
+    right = """\
+int assist(int value) { return value + 1; }
+int (*fp)(int) = helper;
+int draw(int value) { return assist(value); }
+"""
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding") as exc:
+        delta.extract_delta_manifest(left, right, function="draw")
+
+    assert any(
+        blocker["symbol"] == "helper" and blocker["reason"] == "non-call-function-reference"
+        for blocker in exc.value.details["blockers"]
+    )
 
 
 def test_unique_rename_couples_declaration_definition_and_call():

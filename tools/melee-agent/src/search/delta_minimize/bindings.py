@@ -256,13 +256,16 @@ def validate_supported_bindings(
     index: BindingIndex,
     changed_names: set[str],
     changed_spans: Sequence[tuple[int, int]] | None = None,
+    renamed_names: set[str] | None = None,
 ) -> None:
+    renamed_names = renamed_names or set()
     blockers = [
         blocker
         for blocker in index.blockers
         if blocker.symbol in changed_names
         and (
             blocker.reason != "non-call-function-reference"
+            or blocker.symbol in renamed_names
             or changed_spans is None
             or any(_spans_touch(change, blocker.span) for change in changed_spans)
         )
@@ -284,10 +287,22 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
     right_changed_spans = _changed_spans(atoms, side="right")
     left_changed = _changed_binding_names(left_index, left_changed_spans)
     right_changed = _changed_binding_names(right_index, right_changed_spans)
-    validate_supported_bindings(left_index, left_changed, left_changed_spans)
-    validate_supported_bindings(right_index, right_changed, right_changed_spans)
-
     pairs = _pair_functions(left_index, right_index)
+    left_renamed = {left.name for left, _, renamed in pairs if renamed}
+    right_renamed = {right.name for _, right, renamed in pairs if renamed}
+    validate_supported_bindings(
+        left_index,
+        left_changed,
+        left_changed_spans,
+        left_renamed,
+    )
+    validate_supported_bindings(
+        right_index,
+        right_changed,
+        right_changed_spans,
+        right_renamed,
+    )
+
     semantic_labels: dict[str, list[str]] = defaultdict(list)
     reclassified: dict[tuple[str, int], str] = {}
     for left_function, right_function, renamed in pairs:
@@ -724,8 +739,13 @@ def _visible_local_declarations(
     if parts is not None:
         _, parameters = parts
         for parameter in parameters.named_children:
-            identifier = _declarator_identifier(parameter.child_by_field_name("declarator"))
-            if identifier is not None:
+            complete_declarator = parameter.child_by_field_name("declarator")
+            identifier = _declarator_identifier(complete_declarator)
+            if (
+                identifier is not None
+                and complete_declarator is not None
+                and complete_declarator.end_byte <= reference.start_byte
+            ):
                 spans_by_name[node_text(source_bytes, identifier)].append(_span(parameter, to_char))
     body = definition.child_by_field_name("body")
     if body is not None:
@@ -740,22 +760,13 @@ def _visible_local_declarations(
 
 
 def _local_declaration_entries(declaration):
-    declarator_types = {
-        "identifier",
-        "init_declarator",
-        "pointer_declarator",
-        "array_declarator",
-        "function_declarator",
-    }
-    for child in declaration.named_children:
-        if child.type in declarator_types:
-            identifier = _declarator_identifier(child)
-            if identifier is not None:
-                complete_declarator = (
-                    child.child_by_field_name("declarator") if child.type == "init_declarator" else child
-                )
-                if complete_declarator is not None:
-                    yield identifier, complete_declarator.end_byte
+    for index, child in enumerate(declaration.children):
+        if not child.is_named or declaration.field_name_for_child(index) != "declarator":
+            continue
+        complete_declarator = child.child_by_field_name("declarator") if child.type == "init_declarator" else child
+        identifier = _declarator_identifier(complete_declarator)
+        if identifier is not None and complete_declarator is not None:
+            yield identifier, complete_declarator.end_byte
 
 
 def _declaration_name_byte_spans(root) -> set[tuple[int, int]]:
