@@ -7279,23 +7279,16 @@ def _find_wibo() -> Optional[Path]:
 
     1. $MWCC_DEBUG_WIBO env var
     2. <melee_root>/tools/mwcc_debug/bin/wibo (vendored — built by build_wibo.sh)
-    3. <melee_root>/../melee-harness/bin/wibo (adjacent harness checkout)
-    4. ~/code/melee-harness/bin/wibo
+    3. <installed_checkout>/tools/mwcc_debug/bin/wibo (editable install)
+    4. Adjacent melee-harness checkout for either root
+    5. ~/code/melee-harness/bin/wibo
     """
-    from ...mwcc_debug.fix_perm_compile import is_executable_file
+    from ...mwcc_debug.fix_perm_compile import resolve_wibo_path
 
-    import os as _os
-    env = _os.environ.get("MWCC_DEBUG_WIBO")
-    candidates = [
-        *([Path(env).expanduser()] if env else []),
-        DEFAULT_MELEE_ROOT / "tools" / "mwcc_debug" / "bin" / "wibo",
-        DEFAULT_MELEE_ROOT.parent / "melee-harness" / "bin" / "wibo",
-        Path("~/code/melee-harness/bin/wibo").expanduser(),
-    ]
-    for c in candidates:
-        if is_executable_file(c):
-            return c.resolve()
-    return None
+    return resolve_wibo_path(
+        melee_root=DEFAULT_MELEE_ROOT,
+        module_file=Path(__file__),
+    )
 
 
 def _find_compiler_dir() -> Path:

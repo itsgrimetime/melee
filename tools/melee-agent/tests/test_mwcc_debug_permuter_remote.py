@@ -2407,6 +2407,41 @@ wine build/compilers/GC/1.2.5n/mwcceppc.exe -Cpp_exceptions off "$INPUT" -o "$OU
     assert any(call[0] == "rsync" for call in calls)
 
 
+def test_rewrite_compile_sh_for_remote_handles_quoted_paths_with_spaces(
+    tmp_path: Path,
+) -> None:
+    host_root = "/Users/mike/Source Trees/melee"
+    host_wibo = "/Users/mike/Runtime Builds/custom wibo"
+    text = f'''#!/usr/bin/env bash
+WIBO=""
+if [[ -n "${{MWCC_DEBUG_WIBO:-}}" && -f "$MWCC_DEBUG_WIBO" && -x "$MWCC_DEBUG_WIBO" ]]; then
+  WIBO="$MWCC_DEBUG_WIBO"
+elif [[ -n "${{MELEE_ROOT:-}}" && -f "$MELEE_ROOT/tools/mwcc_debug/bin/wibo" && -x "$MELEE_ROOT/tools/mwcc_debug/bin/wibo" ]]; then
+  WIBO="$MELEE_ROOT/tools/mwcc_debug/bin/wibo"
+elif [[ -f "tools/mwcc_debug/bin/wibo" && -x "tools/mwcc_debug/bin/wibo" ]]; then
+  WIBO="tools/mwcc_debug/bin/wibo"
+elif [[ -f "{host_wibo}" && -x "{host_wibo}" ]]; then
+  WIBO="{host_wibo}"
+else
+  exit 2
+fi
+cd "{host_root}"
+"$WIBO" "{host_root}/build/compilers/GC/1.2.5n/mwcceppc_debug.exe" -proc gekko "$INPUT" -o "$OUTPUT"
+'''
+
+    rewritten = pr._rewrite_compile_sh_for_remote(text)
+
+    assert host_root not in rewritten
+    assert host_wibo not in rewritten
+    assert 'cd "${MELEE_ROOT:?MELEE_ROOT must be set}"' in rewritten
+    assert '"$WIBO" "${MWCC_DEBUG_COMPILER:-' in rewritten
+    assert 'mwcceppc_debug.exe}" -proc gekko' in rewritten
+    script = tmp_path / "compile.sh"
+    script.write_text(rewritten)
+    syntax = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+    assert syntax.returncode == 0, syntax.stderr
+
+
 def test_submit_job_preflights_remote_objdump_before_rsync(tmp_path: Path) -> None:
     local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
     local_perm.mkdir(parents=True)

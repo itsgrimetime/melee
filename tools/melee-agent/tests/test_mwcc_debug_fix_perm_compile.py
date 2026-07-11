@@ -7,7 +7,11 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+import src.cli.debug as cli_debug
+import src.mwcc_debug.fix_perm_compile as fix_module
+from src.cli import app
 from src.mwcc_debug.fix_perm_compile import (
     FixResult,
     _inject_null_define,
@@ -16,6 +20,8 @@ from src.mwcc_debug.fix_perm_compile import (
     fix_compile_sh,
     fix_perm_dir,
 )
+
+runner = CliRunner()
 
 # A literal compile.sh as written by decomp-permuter's import.py.
 BUGGY_COMPILE_SH = textwrap.dedent('''\
@@ -49,6 +55,124 @@ def _make_executable_wibo(path: Path) -> Path:
     path.write_text("#!/bin/sh\nexit 0\n")
     path.chmod(0o755)
     return path
+
+
+def test_find_wibo_includes_installed_checkout_outside_active_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installed_root = tmp_path / "installed checkout" / "melee"
+    installed_module = (
+        installed_root
+        / "tools/melee-agent/src/cli/debug/__init__.py"
+    )
+    installed_wibo = _make_executable_wibo(
+        installed_root / "tools/mwcc_debug/bin/wibo"
+    )
+    active_root = tmp_path / "active-worktree"
+    active_root.mkdir()
+    isolated_cwd = tmp_path / "isolated-cwd"
+    isolated_cwd.mkdir()
+    monkeypatch.chdir(isolated_cwd)
+    monkeypatch.setattr(cli_debug, "DEFAULT_MELEE_ROOT", active_root)
+    monkeypatch.setattr(cli_debug, "__file__", str(installed_module))
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    monkeypatch.delenv("MWCC_DEBUG_WIBO", raising=False)
+
+    assert cli_debug._find_wibo() == installed_wibo.resolve()
+
+
+def test_find_wibo_does_not_ignore_invalid_explicit_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalid = tmp_path / "missing-explicit-wibo"
+    installed_root = tmp_path / "installed" / "melee"
+    installed_module = installed_root / "tools/melee-agent/src/cli/debug/__init__.py"
+    _make_executable_wibo(installed_root / "tools/mwcc_debug/bin/wibo")
+    monkeypatch.setattr(cli_debug, "DEFAULT_MELEE_ROOT", tmp_path / "active")
+    monkeypatch.setattr(cli_debug, "__file__", str(installed_module))
+    monkeypatch.setenv("MWCC_DEBUG_WIBO", str(invalid))
+
+    selected = cli_debug._find_wibo()
+
+    assert selected == invalid.resolve()
+    with pytest.raises(ValueError, match="not an executable file"):
+        fix_module.validate_wibo_path(selected)
+
+
+def test_fix_compile_sh_resolves_runtime_when_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wibo = _make_executable_wibo(tmp_path / "installed" / "wibo")
+    compile_sh = tmp_path / "compile.sh"
+    compile_sh.write_text(BUGGY_COMPILE_SH)
+    monkeypatch.setattr(fix_module, "resolve_wibo_path", lambda: wibo)
+
+    result = fix_compile_sh(compile_sh)
+
+    assert result.action == "fixed"
+    assert str(wibo) in compile_sh.read_text()
+
+
+@pytest.mark.parametrize(
+    ("contents", "expected"),
+    [
+        (f"#!/bin/sh\n{fix_module._FIX_MARKER}\n", "already-fixed"),
+        ("#!/bin/sh\necho unchanged\n", "not-applicable"),
+    ],
+)
+def test_fix_compile_sh_nonfix_actions_do_not_resolve_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    contents: str,
+    expected: str,
+) -> None:
+    compile_sh = tmp_path / "compile.sh"
+    compile_sh.write_text(contents)
+    monkeypatch.setattr(
+        fix_module,
+        "resolve_wibo_path",
+        lambda: (_ for _ in ()).throw(AssertionError("runtime resolved")),
+    )
+
+    assert fix_compile_sh(compile_sh).action == expected
+
+
+def test_fix_compile_cli_inspects_before_missing_runtime_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    already_fixed = tmp_path / "already-fixed.sh"
+    already_fixed.write_text(f"#!/bin/sh\n{fix_module._FIX_MARKER}\n")
+    monkeypatch.setattr(fix_module, "resolve_wibo_path", lambda: None)
+
+    result = runner.invoke(
+        app,
+        ["debug", "permute", "fix-compile", str(already_fixed), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert '"action": "already-fixed"' in result.output
+
+
+def test_fix_compile_cli_fresh_file_requires_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compile_sh = tmp_path / "compile.sh"
+    compile_sh.write_text(BUGGY_COMPILE_SH)
+    monkeypatch.setattr(fix_module, "resolve_wibo_path", lambda: None)
+
+    result = runner.invoke(
+        app,
+        ["debug", "permute", "fix-compile", str(compile_sh), "--json"],
+    )
+
+    assert result.exit_code == 2
+    assert "wibo is not an executable file" in result.output
+    assert compile_sh.read_text() == BUGGY_COMPILE_SH
 
 
 def test_fix_compile_sh_prefers_custom_wibo_candidates_in_order(
@@ -175,24 +299,34 @@ def test_fix_compile_sh_skips_unrelated_file(tmp_path: Path) -> None:
     assert "echo hi" in compile_sh.read_text()
 
 
-def test_fix_compile_sh_handles_missing_file(tmp_path: Path) -> None:
+def test_fix_compile_sh_handles_missing_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Missing file → skipped action, no exception."""
     nonexistent = tmp_path / "nope.sh"
+    monkeypatch.setattr(
+        fix_module,
+        "resolve_wibo_path",
+        lambda: (_ for _ in ()).throw(AssertionError("runtime resolved")),
+    )
     result = fix_compile_sh(nonexistent)
     assert result.action == "skipped"
 
 
-def test_fix_perm_dir_finds_compile_sh(tmp_path: Path) -> None:
+def test_fix_perm_dir_finds_compile_sh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Pointing at a nonmatchings/<fn>/ dir finds compile.sh and fixes it."""
     perm_dir = tmp_path / "nonmatchings" / "fn_xyz"
     perm_dir.mkdir(parents=True)
     compile_sh = perm_dir / "compile.sh"
     compile_sh.write_text(BUGGY_COMPILE_SH)
+    wibo = _make_executable_wibo(tmp_path / "wibo")
+    monkeypatch.setattr(fix_module, "resolve_wibo_path", lambda: wibo)
 
-    result = fix_perm_dir(
-        perm_dir,
-        wibo_path=_make_executable_wibo(tmp_path / "wibo"),
-    )
+    result = fix_perm_dir(perm_dir)
     assert result.action == "fixed"
     assert "nonmatchings/.permuter_stage_$$.c" in compile_sh.read_text()
 

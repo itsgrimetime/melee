@@ -62,6 +62,54 @@ def validate_wibo_path(path: Path | None) -> Path:
     return resolved
 
 
+def _melee_root_from_package_file(module_file: Path) -> Path | None:
+    """Return the Melee checkout containing an editable melee-agent module."""
+    resolved = module_file.expanduser().resolve()
+    for candidate in resolved.parents:
+        package_root = candidate / "tools" / "melee-agent"
+        try:
+            relative = resolved.relative_to(package_root)
+        except ValueError:
+            continue
+        if relative.parts and relative.parts[0] == "src":
+            return candidate
+    return None
+
+
+def resolve_wibo_path(
+    *,
+    melee_root: Path | None = None,
+    module_file: Path | None = None,
+) -> Path | None:
+    """Resolve the custom runtime across active and installed checkouts.
+
+    An explicit environment override is authoritative even when invalid.  Its
+    caller can then report the invalid path rather than silently selecting a
+    different binary.
+    """
+    explicit = os.environ.get("MWCC_DEBUG_WIBO")
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+
+    installed_root = _melee_root_from_package_file(module_file or Path(__file__))
+    roots: list[Path] = []
+    for root in (melee_root, installed_root):
+        if root is not None:
+            resolved = root.expanduser().resolve()
+            if resolved not in roots:
+                roots.append(resolved)
+
+    candidates = [
+        *(root / "tools" / "mwcc_debug" / "bin" / "wibo" for root in roots),
+        *(root.parent / "melee-harness" / "bin" / "wibo" for root in roots),
+        Path("~/code/melee-harness/bin/wibo").expanduser(),
+    ]
+    for candidate in candidates:
+        if is_executable_file(candidate):
+            return candidate.resolve()
+    return None
+
+
 def _shell_double_quote(value: str) -> str:
     """Quote a literal for a shell double-quoted string."""
     escaped = (
@@ -376,7 +424,9 @@ def fix_compile_sh(
             reason="no INPUT=\"$(realpath \"$1\")\" line found",
         )
 
-    resolved_wibo = validate_wibo_path(wibo_path)
+    resolved_wibo = validate_wibo_path(
+        wibo_path if wibo_path is not None else resolve_wibo_path()
+    )
     new_lines = _build_fixed_lines(
         lines,
         project_root or Path("."),

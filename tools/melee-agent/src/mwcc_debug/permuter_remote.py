@@ -1561,7 +1561,74 @@ def _validate_remote_ready_perm_dir(local_perm_dir: Path) -> None:
         )
 
 
-_MWCC_EXE_RE = re.compile(r"mwcceppc(?:_debug)?\.exe(?P<rest>.*)$")
+_MWCC_EXE_TOKEN_RE = re.compile(r"(?:^|/)mwcceppc(?:_debug)?\.exe$")
+
+
+def _shell_word_spans(line: str) -> list[tuple[int, int, str]]:
+    """Return shell words with source spans while respecting basic quoting."""
+    spans: list[tuple[int, int, str]] = []
+    index = 0
+    while index < len(line):
+        while index < len(line) and line[index].isspace():
+            index += 1
+        if index >= len(line):
+            break
+        start = index
+        quote: str | None = None
+        while index < len(line):
+            char = line[index]
+            if char == "\\" and quote != "'":
+                index = min(index + 2, len(line))
+                continue
+            if char in {"'", '"'}:
+                if quote is None:
+                    quote = char
+                elif quote == char:
+                    quote = None
+                index += 1
+                continue
+            if char.isspace() and quote is None:
+                break
+            index += 1
+        raw = line[start:index]
+        try:
+            parsed = shlex.split(raw, posix=True)
+        except ValueError:
+            return []
+        if len(parsed) != 1:
+            return []
+        spans.append((start, index, parsed[0]))
+    return spans
+
+
+def _host_wibo_fallback_condition(line: str) -> bool:
+    """Return whether *line* is the generated absolute baked-wibo branch."""
+    try:
+        words = shlex.split(line.strip(), posix=True)
+    except ValueError:
+        return False
+    return (
+        len(words) >= 7
+        and words[:3] == ["elif", "[[", "-f"]
+        and Path(words[3]).is_absolute()
+        and words[4:6] == ["&&", "-x"]
+        and words[6] == words[3]
+    )
+
+
+def _remote_compile_command(line: str, *, wibo: str) -> str | None:
+    """Replace a local compiler prefix while preserving the original suffix."""
+    for _start, end, word in _shell_word_spans(line):
+        if "MWCC_DEBUG_COMPILER" in word:
+            return None
+        if _MWCC_EXE_TOKEN_RE.search(word):
+            indent = line[: len(line) - len(line.lstrip())]
+            compiler = (
+                '"${MWCC_DEBUG_COMPILER:-$MELEE_ROOT/build/compilers/GC/'
+                '1.2.5n/mwcceppc_debug.exe}"'
+            )
+            return f"{indent}{wibo} {compiler}{line[end:]}"
+    return None
 
 
 def _rewrite_compile_sh_for_remote(text: str) -> str:
@@ -1576,36 +1643,32 @@ def _rewrite_compile_sh_for_remote(text: str) -> str:
         # A setup wrapper may carry the generator host's absolute custom-wibo
         # fallback.  The remote MELEE_ROOT/current-checkout candidates precede
         # it, so omit only that host-local branch from the staged copy.
-        if line.startswith('elif [[ -f "/'):
+        if _host_wibo_fallback_condition(line):
             skip_baked_assignment = True
             continue
         stripped = line.strip()
+        try:
+            shell_words = shlex.split(stripped, posix=True)
+        except ValueError:
+            shell_words = []
         if (
-            stripped.startswith("cd ")
-            and not stripped.startswith('cd "$MELEE_ROOT"')
-            and not stripped.startswith('cd "${MELEE_ROOT')
-            and ("/Users/" in stripped or stripped.startswith("cd /"))
+            len(shell_words) >= 2
+            and shell_words[0] == "cd"
+            and Path(shell_words[1]).is_absolute()
         ):
-            out.append('cd "${MELEE_ROOT:?MELEE_ROOT must be set}"')
+            indent = line[: len(line) - len(line.lstrip())]
+            out.append(indent + 'cd "${MELEE_ROOT:?MELEE_ROOT must be set}"')
             continue
 
         if "mwcceppc" in line and ".exe" in line:
-            match = _MWCC_EXE_RE.search(line)
-            if match is not None:
-                indent = line[: len(line) - len(line.lstrip())]
-                rest = match.group("rest")
-                wibo = (
-                    '"$WIBO"'
-                    if has_wibo_preflight
-                    else '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}"'
-                )
-                out.append(
-                    indent
-                    + wibo
-                    + " "
-                    + '"${MWCC_DEBUG_COMPILER:-$MELEE_ROOT/build/compilers/GC/1.2.5n/mwcceppc_debug.exe}"'
-                    + rest
-                )
+            wibo = (
+                '"$WIBO"'
+                if has_wibo_preflight
+                else '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}"'
+            )
+            rewritten = _remote_compile_command(line, wibo=wibo)
+            if rewritten is not None:
+                out.append(rewritten)
                 continue
 
         out.append(line)

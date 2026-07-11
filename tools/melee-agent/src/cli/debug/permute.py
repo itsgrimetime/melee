@@ -4266,11 +4266,9 @@ def fix_perm_compile(
     `~/code/decomp-permuter/nonmatchings/fn_xyz`) or the compile.sh
     directly.
     """
-    from src.cli.debug import _find_wibo  # noqa: PLC0415
     from ...mwcc_debug.fix_perm_compile import (
         fix_compile_sh,
         fix_perm_dir,
-        validate_wibo_path,
     )
 
     if not target.exists():
@@ -4278,15 +4276,13 @@ def fix_perm_compile(
         raise typer.Exit(2)
 
     try:
-        wibo_path = validate_wibo_path(_find_wibo())
+        if target.is_dir():
+            result = fix_perm_dir(target)
+        else:
+            result = fix_compile_sh(target)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2)
-
-    if target.is_dir():
-        result = fix_perm_dir(target, wibo_path=wibo_path)
-    else:
-        result = fix_compile_sh(target, wibo_path=wibo_path)
 
     if json_out:
         print(json.dumps({
