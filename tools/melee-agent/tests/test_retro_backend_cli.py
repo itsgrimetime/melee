@@ -88,6 +88,34 @@ def test_backend_command_writes_trace_outputs(monkeypatch, tmp_path):
     assert (tmp_path / "backend-summary.txt").exists()
 
 
+def test_backend_command_rejects_success_without_trace(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+
+    def fake_run_backend_trace(**kwargs):
+        kwargs["out_dir"].mkdir(parents=True, exist_ok=True)
+        return retro.BackendOutcome(exit_code=0, trace=None, fidelity=None)
+
+    monkeypatch.setattr(retro, "_run_backend_trace", fake_run_backend_trace)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
+
+    r = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "backend",
+            "src/melee/test/unit.c",
+            "-f",
+            "test_fn",
+            "-O",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 2
+    assert "backend trace runner returned success without a trace" in r.output
+    assert not (tmp_path / "backend-trace.v1.json").exists()
+
+
 def test_backend_command_reports_runtime_errors(monkeypatch, tmp_path):
     import src.cli.debug.retro as retro
 

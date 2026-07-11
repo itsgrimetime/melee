@@ -2267,6 +2267,8 @@ def backend_cmd(
             verify_debug=verify_debug,
             melee_root=active_root,
         )
+        if outcome.exit_code == 0 and outcome.trace is None:
+            raise RuntimeError("backend trace runner returned success without a trace")
         if outcome.trace is not None:
             _write_backend_outputs(out_dir, outcome.trace, outcome.fidelity)
     except RuntimeError as exc:
