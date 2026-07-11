@@ -115,14 +115,29 @@ def build_binding_index(source: str) -> BindingIndex:
                 blockers.append(BindingBlocker(name, "macro-definition", _span(node, to_char)))
 
     for declaration in _walk_type(root, "declaration"):
-        for declarator in declaration.named_children:
+        declarators = tuple(_declaration_declarators(declaration))
+        if not declarators:
+            continue
+        shared_prefix_span = (
+            to_char[declaration.start_byte],
+            to_char[declarators[0].start_byte],
+        )
+        for declarator in declarators:
             name_node = _function_pointer_object_identifier(declarator)
             if name_node is not None:
-                blockers.append(
-                    BindingBlocker(
-                        node_text(source_bytes, name_node),
-                        "function-pointer-object-declaration",
-                        _span(declaration, to_char),
+                symbol = node_text(source_bytes, name_node)
+                blockers.extend(
+                    (
+                        BindingBlocker(
+                            symbol,
+                            "function-pointer-object-declaration",
+                            shared_prefix_span,
+                        ),
+                        BindingBlocker(
+                            symbol,
+                            "function-pointer-object-declaration",
+                            _span(declarator, to_char),
+                        ),
                     )
                 )
 
@@ -760,13 +775,17 @@ def _visible_local_declarations(
 
 
 def _local_declaration_entries(declaration):
-    for index, child in enumerate(declaration.children):
-        if not child.is_named or declaration.field_name_for_child(index) != "declarator":
-            continue
+    for child in _declaration_declarators(declaration):
         complete_declarator = child.child_by_field_name("declarator") if child.type == "init_declarator" else child
         identifier = _declarator_identifier(complete_declarator)
         if identifier is not None and complete_declarator is not None:
             yield identifier, complete_declarator.end_byte
+
+
+def _declaration_declarators(declaration):
+    for index, child in enumerate(declaration.children):
+        if child.is_named and declaration.field_name_for_child(index) == "declarator":
+            yield child
 
 
 def _declaration_name_byte_spans(root) -> set[tuple[int, int]]:
@@ -784,6 +803,8 @@ def _declaration_name_byte_spans(root) -> set[tuple[int, int]]:
 
 def _non_call_reference_node(identifier):
     parent = identifier.parent
+    while parent is not None and parent.type == "parenthesized_expression":
+        parent = parent.parent
     if parent is not None and parent.type in {
         "assignment_expression",
         "binary_expression",

@@ -544,11 +544,116 @@ def test_changed_function_pointer_object_with_unchanged_call_fails_closed():
             FUNCTION_POINTER_OBJECT_RIGHT,
             function="draw",
         )
-    blocker = next(
+    blockers = [
         item for item in exc.value.details["blockers"] if item["reason"] == "function-pointer-object-declaration"
-    )
+    ]
     changed_offset = FUNCTION_POINTER_OBJECT_LEFT.index("sub;", FUNCTION_POINTER_OBJECT_LEFT.index("(*helper)"))
-    assert blocker["span"][0] <= changed_offset < blocker["span"][1]
+    assert any(blocker["span"][0] <= changed_offset < blocker["span"][1] for blocker in blockers)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "int sub(int value) { return value; }\nstatic int (*helper)(int) = sub, unrelated = 1;\n",
+        "int sub(int value) { return value; }\nstatic int unrelated = 1, (*helper)(int) = sub;\n",
+    ],
+    ids=("first-declarator", "later-declarator"),
+)
+def test_function_pointer_object_blockers_partition_shared_prefix_and_declarator(source):
+    index = build_binding_index(source)
+
+    blocker_texts = [
+        source[blocker.span[0] : blocker.span[1]]
+        for blocker in index.blockers
+        if blocker.symbol == "helper" and blocker.reason == "function-pointer-object-declaration"
+    ]
+
+    assert blocker_texts == ["static int ", "(*helper)(int) = sub"]
+
+
+@pytest.mark.parametrize(
+    ("left_declaration", "right_declaration"),
+    [
+        (
+            "static int (*helper)(int) = sub, unrelated = 1;",
+            "static int (*helper)(int) = sub, unrelated = 2;",
+        ),
+        (
+            "static int unrelated = 1, (*helper)(int) = sub;",
+            "static int unrelated = 2, (*helper)(int) = sub;",
+        ),
+    ],
+    ids=("first-declarator", "later-declarator"),
+)
+def test_function_pointer_object_allows_sibling_declarator_change(left_declaration, right_declaration):
+    prefix = "int sub(int value) { return value; }\n"
+    left = prefix + left_declaration + "\nint draw(void) { return unrelated; }\n"
+    right = prefix + right_declaration + "\nint draw(void) { return unrelated; }\n"
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+
+    assert len(manifest.atoms) == 1
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 1) == right
+
+
+@pytest.mark.parametrize(
+    ("left_declaration", "right_declaration"),
+    [
+        (
+            "static int (*helper)(int) = sub, unrelated = 1;",
+            "static int (*helper)(int) = other, unrelated = 1;",
+        ),
+        (
+            "static int unrelated = 1, (*helper)(int) = sub;",
+            "static int unrelated = 1, (*helper)(int) = other;",
+        ),
+        (
+            "static int (*helper)(int) = sub, unrelated = 1;",
+            "static int (*helper)(long) = sub, unrelated = 1;",
+        ),
+        (
+            "static int unrelated = 1, (*helper)(int) = sub;",
+            "static int unrelated = 1, (*helper)(long) = sub;",
+        ),
+        (
+            "static int (*helper)(int) = sub, unrelated = 1;",
+            "extern int (*helper)(int) = sub, unrelated = 1;",
+        ),
+        (
+            "static int unrelated = 1, (*helper)(int) = sub;",
+            "extern int unrelated = 1, (*helper)(int) = sub;",
+        ),
+        (
+            "static int (*helper)(int) = sub, unrelated = 1;",
+            "static long (*helper)(int) = sub, unrelated = 1;",
+        ),
+        (
+            "static int unrelated = 1, (*helper)(int) = sub;",
+            "static long unrelated = 1, (*helper)(int) = sub;",
+        ),
+    ],
+    ids=(
+        "first-initializer",
+        "later-initializer",
+        "first-declarator",
+        "later-declarator",
+        "first-shared-storage",
+        "later-shared-storage",
+        "first-shared-type",
+        "later-shared-type",
+    ),
+)
+def test_function_pointer_object_blocks_own_declarator_and_shared_prefix_changes(
+    left_declaration,
+    right_declaration,
+):
+    prefix = "int sub(int value) { return value; }\nint other(int value) { return value + 1; }\n"
+    left = prefix + left_declaration + "\nint draw(int value) { return helper(value); }\n"
+    right = prefix + right_declaration + "\nint draw(int value) { return helper(value); }\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
+        delta.extract_delta_manifest(left, right, function="draw")
 
 
 def test_changed_local_declaration_shadowing_unchanged_call_fails_closed():
@@ -593,6 +698,29 @@ def test_changed_non_call_reference_expression_fails_closed():
 
     with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
         delta.extract_delta_manifest(left, right, function="draw")
+
+
+def test_changed_nested_parenthesized_non_call_reference_expression_fails_closed():
+    left = NON_CALL_REFERENCE_PREFIX + "int draw(void) { return (((helper)) != 0) + 1; }\n"
+    right = NON_CALL_REFERENCE_PREFIX + "int draw(void) { return (((helper)) == 0) + 1; }\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding") as exc:
+        delta.extract_delta_manifest(left, right, function="draw")
+
+    blocker = next(item for item in exc.value.details["blockers"] if item["reason"] == "non-call-function-reference")
+    changed_offset = left.index("!=", left.index("int draw"))
+    assert blocker["span"][0] <= changed_offset < blocker["span"][1]
+
+
+def test_nested_parenthesized_non_call_reference_allows_sibling_expression_change():
+    left = NON_CALL_REFERENCE_PREFIX + "int draw(void) { return (((helper)) != 0) + 1; }\n"
+    right = NON_CALL_REFERENCE_PREFIX + "int draw(void) { return (((helper)) != 0) + 2; }\n"
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+
+    assert len(manifest.atoms) == 1
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 1) == right
 
 
 def test_unchanged_non_call_tu_local_function_reference_is_change_local():
