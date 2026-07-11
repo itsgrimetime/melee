@@ -119,6 +119,7 @@ def _node(
     attributes: dict[str, object],
     *,
     confidence: Confidence = Confidence.OBSERVED,
+    parser: str = "unit-test.v1",
 ) -> EvidenceNode:
     return EvidenceNode.create(
         compile_id=bundle.compile_id,
@@ -130,7 +131,7 @@ def _node(
         adapter_confidence=Confidence.OBSERVED,
         provenance=Provenance(
             artifact_sha256="c" * 64,
-            parser="unit-test.v1",
+            parser=parser,
             raw_start=0,
             raw_end=1,
             derivation_rule="unit-test",
@@ -699,8 +700,29 @@ void fn_test(int a, int b, int c)
     assert all(node.confidence is Confidence.DERIVED_UNIQUE for node in calls)
 
 
-def test_unique_inspector_to_backend_join_is_proof_capable(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("backend_parser", "verified_capabilities", "expected_confidence"),
+    (
+        (
+            "mwcc-retro-backend-trace.v2",
+            frozenset({"pcode-to-code-range", "object-to-virtual"}),
+            Confidence.DERIVED_UNIQUE,
+        ),
+        (
+            "mwcc-debug-pcdump.v1",
+            frozenset({"pcode-occurrences", "virtual-use-def"}),
+            Confidence.HEURISTIC,
+        ),
+    ),
+)
+def test_inspector_to_backend_join_requires_verified_retail_same_run_pcode(
+    tmp_path: Path,
+    backend_parser: str,
+    verified_capabilities: frozenset[str],
+    expected_confidence: Confidence,
+) -> None:
     bundle = _bundle(tmp_path)
+    capture_run_id = "e" * 64 if backend_parser == "mwcc-retro-backend-trace.v2" else None
     source_node = _node(
         bundle,
         "source-expression",
@@ -737,13 +759,16 @@ def test_unique_inspector_to_backend_join_is_proof_capable(tmp_path: Path) -> No
             "operands": "HSD_JObjReqAnimAll",
             "instruction_index": 0,
             "type_text": "void",
+            "capture_run_id": capture_run_id,
         },
+        parser=backend_parser,
     )
     virtual_node = _node(
         bundle,
         "virtual-register",
         "backend-argument",
-        {"class": "r", "virtual": 40},
+        {"class": "r", "virtual": 40, "capture_run_id": capture_run_id},
+        parser=backend_parser,
     )
     use_edge = EvidenceEdge.create(
         compile_id=bundle.compile_id,
@@ -756,14 +781,14 @@ def test_unique_inspector_to_backend_join_is_proof_capable(tmp_path: Path) -> No
         adapter_confidence=Confidence.OBSERVED,
         provenance=Provenance(
             artifact_sha256="c" * 64,
-            parser="unit-test.v1",
+            parser=backend_parser,
             raw_start=0,
             raw_end=1,
             derivation_rule="unit-test-use",
             input_record_ids=(backend_node.record_id, virtual_node.record_id),
         ),
         input_confidences=(backend_node.confidence, virtual_node.confidence),
-        attributes={"operand_position": 0},
+        attributes={"operand_position": 0, "capture_run_id": capture_run_id},
     )
     source = type("Source", (), {})()
     source.result = AdapterResult(nodes=(source_node,))
@@ -782,6 +807,7 @@ def test_unique_inspector_to_backend_join_is_proof_capable(tmp_path: Path) -> No
             result=AdapterResult(
                 nodes=(backend_node, virtual_node),
                 edges=(use_edge,),
+                verified_capabilities=verified_capabilities,
             ),
             pcdump_text="",
             role_compile=None,
@@ -795,7 +821,7 @@ def test_unique_inspector_to_backend_join_is_proof_capable(tmp_path: Path) -> No
 
     edges = graph.store.find_edges(bundle.compile_id, edge_kind="lowers-to")
     fighter_edge = next(edge for edge in edges if edge.attributes["consumer"] == "HSD_JObjReqAnimAll")
-    assert fighter_edge.confidence is Confidence.DERIVED_UNIQUE
+    assert fighter_edge.confidence is expected_confidence
     assert fighter_edge.provenance.input_record_ids
     assert set(fighter_edge.provenance.input_record_ids) == {
         inspector_node.record_id,

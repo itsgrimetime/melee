@@ -218,6 +218,7 @@ def _emit_pcode(
     edges: list[EvidenceEdge],
     nodes_by_virtual: dict[tuple[str, int], EvidenceNode],
 ) -> bool:
+    diagnostic_only = parser == "mwcc-debug-pcdump.v1"
     occurrences: list[tuple[EvidenceNode, Instruction, tuple[frozenset[str], ...], Confidence]] = []
     virtual_counts: dict[tuple[str, int], dict[str, int]] = {}
     virtual_confidences: dict[tuple[str, int], Confidence] = {}
@@ -238,7 +239,7 @@ def _emit_pcode(
                     local_key=(pass_index, block.index, instruction_index),
                     role_key=None,
                     producer_confidence=Confidence.OBSERVED,
-                    adapter_confidence=role_confidence,
+                    adapter_confidence=(Confidence.HEURISTIC if diagnostic_only else role_confidence),
                     derivation_rule="observed-versioned-pcdump-instruction",
                     artifact_size=artifact_size,
                     attributes={
@@ -258,7 +259,7 @@ def _emit_pcode(
                     if number < 32:
                         continue
                     counts = virtual_counts.setdefault((kind, number), {"definitions": 0, "uses": 0})
-                    if role_confidence is Confidence.HEURISTIC:
+                    if diagnostic_only or role_confidence is Confidence.HEURISTIC:
                         virtual_confidences[(kind, number)] = Confidence.HEURISTIC
                     else:
                         virtual_confidences.setdefault((kind, number), Confidence.OBSERVED)
@@ -316,7 +317,7 @@ def _emit_pcode(
                         target=virtual_node,
                         occurrence_ordinal=ordinal,
                         producer_confidence=Confidence.OBSERVED,
-                        adapter_confidence=role_confidence,
+                        adapter_confidence=(Confidence.HEURISTIC if diagnostic_only else role_confidence),
                         derivation_rule="versioned-pcode-operand-role",
                         artifact_size=artifact_size,
                         attributes={"operand_position": position},
@@ -398,6 +399,7 @@ def _emit_allocator_facts(
                     )
                     if not mapping.found or mapping.ig_idx != item.ig_id:
                         continue
+                    bridge_confidence = Confidence.HEURISTIC
                 edges.append(
                     _edge(
                         bundle,

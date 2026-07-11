@@ -285,6 +285,30 @@ def test_backend_adapter_verifies_all_pcdump_capabilities(
     assert evidence.role_compile.name == FUNCTION
 
 
+def test_pcdump_role_chain_records_are_diagnostic(
+    validated_bundle: Callable[[str], ValidatedBundle],
+) -> None:
+    evidence = adapt_backends(validated_bundle("direct"))
+    pcode = next(
+        node for node in evidence.result.nodes if node.kind == "pcode-occurrence" and node.attributes.get("regs")
+    )
+    use_def = next(
+        edge
+        for edge in evidence.result.edges
+        if edge.source_id == pcode.record_id and edge.kind in {"uses-virtual", "defines-virtual"}
+    )
+    mapping = next(
+        edge
+        for edge in evidence.result.edges
+        if edge.kind == "maps-to-allocator-node" and edge.source_id == use_def.target_id
+    )
+
+    assert pcode.provenance.parser == "mwcc-debug-pcdump.v1"
+    assert pcode.confidence is Confidence.HEURISTIC
+    assert use_def.confidence is Confidence.HEURISTIC
+    assert mapping.confidence is Confidence.HEURISTIC
+
+
 def test_pcode_operand_roles_handle_update_and_read_modify_write() -> None:
     stwu = Instruction("stwu", "r32,-32(r33)", [], [("r", 32), ("r", 33)])
     stwux = Instruction("stwux", "r32,r33,r34", [], [("r", 32), ("r", 33), ("r", 34)])

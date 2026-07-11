@@ -626,7 +626,8 @@ def frame_evidence_from_report(
     for node in nodes:
         if node.attributes.get("side") != "current":
             continue
-        for role in (*_role_names(node.attributes), *(filter(None, (node.role_key,)))):
+        roles = tuple(dict.fromkeys((*_role_names(node.attributes), *(filter(None, (node.role_key,))))))
+        for role in roles:
             current_candidates.setdefault(role, []).append(node.record_id)
     current_nodes = {role: record_ids[0] for role, record_ids in current_candidates.items() if len(record_ids) == 1}
     return FrameEvidence(

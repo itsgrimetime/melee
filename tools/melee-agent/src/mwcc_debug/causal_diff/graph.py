@@ -21,6 +21,8 @@ _INTEGER = re.compile(r"(?<![A-Za-z_])(?:0x[0-9A-Fa-f]+|\d+)(?![A-Za-z_])")
 _DISPLACEMENT_ADDRESS = re.compile(r"(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))\s*\(\s*(?P<base>r\d+)\s*\)")
 _KEYWORDS = frozenset({"const", "else", "false", "if", "return", "sizeof", "struct", "true", "void"})
 _STACK_OPS = frozenset({"lbz", "lha", "lhz", "lwz", "stb", "sth", "stw", "lfd", "lfs", "stfd", "stfs"})
+_RETAIL_SAME_RUN_PCODE_CAPABILITIES = frozenset({"pcode-to-code-range", "object-to-virtual"})
+_RETAIL_SAME_RUN_PCODE_PARSER = "mwcc-retro-backend-trace.v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,11 +365,20 @@ def _backend_joins(
                 for endpoint in (edge.source_id, edge.target_id)
                 if endpoint != candidate.record_id and endpoint in backend_nodes_by_id
             )
+            same_run_records = (candidate, *chain_nodes, *chain_edges)
+            capture_run_ids = {str(record.attributes.get("capture_run_id") or "") for record in same_run_records}
+            retail_same_run = (
+                _RETAIL_SAME_RUN_PCODE_CAPABILITIES <= backend.result.verified_capabilities
+                and all(record.provenance.parser == _RETAIL_SAME_RUN_PCODE_PARSER for record in same_run_records)
+                and len(capture_run_ids) == 1
+                and "" not in capture_run_ids
+            )
             confidence = (
                 Confidence.DERIVED_UNIQUE
                 if len(candidates) == 1
                 and bool(chain_edges)
                 and _complete_inspector_backend_signature(signature, backend_signatures[candidate.record_id])
+                and retail_same_run
                 else Confidence.HEURISTIC
             )
             edges.append(
@@ -379,9 +390,9 @@ def _backend_joins(
                     occurrence_ordinal=ordinal,
                     confidence=confidence,
                     derivation_rule=(
-                        "unique-enode-pcode-operation-consumer-type-order"
+                        "verified-retail-same-run-enode-pcode-signature"
                         if confidence is Confidence.DERIVED_UNIQUE
-                        else "finite-ambiguous-enode-pcode-signature"
+                        else "diagnostic-enode-pcode-signature"
                     ),
                     attributes={
                         "consumer": signature.consumer,

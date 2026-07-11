@@ -79,6 +79,7 @@ def _edge(
     target: EvidenceNode,
     *,
     confidence: Confidence = Confidence.DERIVED_UNIQUE,
+    parser: str = "causal-inference-test.v1",
 ) -> EvidenceEdge:
     return EvidenceEdge.create(
         compile_id=compile_id,
@@ -89,7 +90,10 @@ def _edge(
         occurrence_ordinal=0,
         producer_confidence=confidence,
         adapter_confidence=confidence,
-        provenance=_provenance(source.record_id, target.record_id),
+        provenance=replace(
+            _provenance(source.record_id, target.record_id),
+            parser=parser,
+        ),
         input_confidences=(source.confidence, target.confidence),
         attributes={},
     )
@@ -144,6 +148,9 @@ def _case(
     stack_delta_confidence: Confidence = Confidence.DERIVED_UNIQUE,
     owner_confidence: Confidence = Confidence.DERIVED_UNIQUE,
     unrelated_stack_edge_delta: bool = False,
+    source_binding: str = "valid",
+    unrelated_changed_source: bool = False,
+    pcdump_path: bool = False,
 ) -> InferenceCase:
     store = InMemoryEvidenceStore()
     left_allocator = _node(LEFT_COMPILE, "allocator-node", "allocator-left")
@@ -156,24 +163,51 @@ def _case(
     }
     left_owner = _node(
         LEFT_COMPILE,
-        "source-expression",
+        "compiler-object",
         "owner-left",
         attributes=owner_attributes,
     )
     right_owner = _node(
         RIGHT_COMPILE,
-        "source-expression",
+        "compiler-object",
         "owner-right",
         attributes=owner_attributes,
     )
-    nodes = [left_allocator, left_stack, right_stack, left_owner, right_owner]
+    left_source = _node(LEFT_COMPILE, "source-expression", "source-left")
+    right_source = _node(RIGHT_COMPILE, "source-expression", "source-right")
+    nodes = [
+        left_allocator,
+        left_stack,
+        right_stack,
+        left_owner,
+        right_owner,
+        left_source,
+        right_source,
+    ]
     if not missing_anchor:
         nodes.append(right_allocator)
     store.add_nodes(nodes)
 
-    path_edges = [_edge(LEFT_COMPILE, "lowers-to", left_owner, left_allocator)]
+    backend_parser = "mwcc-debug-pcdump.v1" if pcdump_path else "causal-inference-test.v1"
+    path_edges = [
+        _edge(
+            LEFT_COMPILE,
+            "lowers-to",
+            left_owner,
+            left_allocator,
+            parser=backend_parser,
+        )
+    ]
     if not missing_anchor:
-        path_edges.append(_edge(RIGHT_COMPILE, "lowers-to", right_owner, right_allocator))
+        path_edges.append(
+            _edge(
+                RIGHT_COMPILE,
+                "lowers-to",
+                right_owner,
+                right_allocator,
+                parser=backend_parser,
+            )
+        )
     if not no_shared_path:
         path_edges.extend(
             [
@@ -204,6 +238,36 @@ def _case(
                 for edge in path_edges
                 if not (edge.source_id == left_owner.record_id and edge.target_id == left_stack.record_id)
             ]
+    if source_binding in {"valid", "left-only", "heuristic"}:
+        path_edges.append(
+            _edge(
+                LEFT_COMPILE,
+                "object-to-source",
+                left_owner,
+                left_source,
+                confidence=(Confidence.HEURISTIC if source_binding == "heuristic" else Confidence.DERIVED_UNIQUE),
+            )
+        )
+    if source_binding in {"valid", "heuristic"}:
+        path_edges.append(
+            _edge(
+                RIGHT_COMPILE,
+                "object-to-source",
+                right_owner,
+                right_source,
+                confidence=(Confidence.HEURISTIC if source_binding == "heuristic" else Confidence.DERIVED_UNIQUE),
+            )
+        )
+    if source_binding == "wrong-object":
+        wrong_left = _node(LEFT_COMPILE, "compiler-object", "wrong-owner-left")
+        wrong_right = _node(RIGHT_COMPILE, "compiler-object", "wrong-owner-right")
+        store.add_nodes((wrong_left, wrong_right))
+        path_edges.extend(
+            (
+                _edge(LEFT_COMPILE, "object-to-source", wrong_left, left_source),
+                _edge(RIGHT_COMPILE, "object-to-source", wrong_right, right_source),
+            )
+        )
     store.add_edges(path_edges)
 
     role_comparison = _comparison(
@@ -328,11 +392,15 @@ def _case(
         ),
         stack_comparison,
     ]
+    if unrelated_changed_source:
+        comparisons.append(_comparison("node-changed", left_source, right_source, ordinal=4))
 
     if two_owners:
-        left_second = _node(LEFT_COMPILE, "objobject", "second-owner-left")
-        right_second = _node(RIGHT_COMPILE, "objobject", "second-owner-right")
-        store.add_nodes((left_second, right_second))
+        left_second = _node(LEFT_COMPILE, "compiler-object", "second-owner-left")
+        right_second = _node(RIGHT_COMPILE, "compiler-object", "second-owner-right")
+        left_second_source = _node(LEFT_COMPILE, "source-expression", "second-source-left")
+        right_second_source = _node(RIGHT_COMPILE, "source-expression", "second-source-right")
+        store.add_nodes((left_second, right_second, left_second_source, right_second_source))
         store.add_edges(
             (
                 _edge(LEFT_COMPILE, "lowers-to", left_second, left_allocator),
@@ -348,6 +416,18 @@ def _case(
                     "materializes-as-stack-object",
                     right_second,
                     right_stack,
+                ),
+                _edge(
+                    LEFT_COMPILE,
+                    "object-to-source",
+                    left_second,
+                    left_second_source,
+                ),
+                _edge(
+                    RIGHT_COMPILE,
+                    "object-to-source",
+                    right_second,
+                    right_second_source,
                 ),
             )
         )
@@ -383,7 +463,7 @@ def proof_path_at_depth_five() -> InferenceCase:
         comparison
         for comparison in case.comparisons
         if comparison.relation_kind == "node-changed"
-        and case.query.get_node(comparison.left_record_id or "").kind == "source-expression"
+        and case.query.get_node(comparison.left_record_id or "").kind == "compiler-object"
     )
     owners = {
         LEFT_COMPILE: case.query.get_node(owner_comparison.left_record_id or ""),
@@ -503,21 +583,64 @@ def test_shared_owner_requires_changed_endpoints_and_complete_bilateral_paths(
 
 
 @pytest.mark.parametrize("owner_relation", ("node-added", "node-removed"))
-def test_missing_bilateral_source_object_binding_abstains_at_gate_nine(
+def test_one_sided_owner_deltas_fail_shared_owner_before_source_binding(
     owner_relation: str,
 ) -> None:
     case = _case(owner_relation=owner_relation)
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-3-shared-owner",)
+
+
+def test_unrelated_changed_source_nodes_cannot_satisfy_object_binding() -> None:
+    case = _case(source_binding="missing", unrelated_changed_source=True)
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+
+
+@pytest.mark.parametrize(
+    "source_binding",
+    ("left-only", "wrong-object", "heuristic"),
+)
+def test_incomplete_or_non_proof_object_bindings_abstain(
+    source_binding: str,
+) -> None:
+    case = _case(source_binding=source_binding)
 
     verdict = infer_pair(case.pair, case.query, case.comparisons)
     report = build_report(_graphs(case), case.effects, case.comparisons)
 
     assert verdict.status is VerdictStatus.ABSTAIN
     assert verdict.failed_gates == ("gate-9-source-object-binding",)
-    assert verdict.allocator_delta["expected_phys"] == 22
-    assert verdict.stack_delta["expected_offset"] == 16
-    assert "Collect the named missing proof evidence" in verdict.recommendation
-    assert report.analysis_status is AnalysisStatus.ABSTAINED
     assert report.missing_evidence == ("source-object-binding-missing",)
+
+
+def test_missing_object_binding_overrides_candidate_path() -> None:
+    case = _case(source_binding="missing", heuristic_path=True)
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+
+
+def test_valid_bilateral_exact_object_bindings_enable_causes() -> None:
+    case = _case(source_binding="valid")
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+    proof_members = {record_id for path in verdict.proof_paths for record_id in path}
+    binding_ids = {
+        edge.record_id
+        for compile_id in (LEFT_COMPILE, RIGHT_COMPILE)
+        for edge in case.query.find_edges(compile_id, "object-to-source")
+    }
+
+    assert verdict.status is VerdictStatus.CAUSES
+    assert binding_ids <= proof_members
 
 
 def test_proof_paths_include_owner_and_role_comparison_records() -> None:
@@ -527,12 +650,12 @@ def test_proof_paths_include_owner_and_role_comparison_records() -> None:
         comparison
         for comparison in case.comparisons
         if comparison.relation_kind == "node-changed"
-        and case.query.get_node(comparison.left_record_id or "").kind == "source-expression"
+        and case.query.get_node(comparison.left_record_id or "").kind == "compiler-object"
     )
     proof_members = {record_id for path in verdict.proof_paths for record_id in path}
 
     assert verdict.status is VerdictStatus.CAUSES
-    assert len(verdict.proof_paths) == 4
+    assert len(verdict.proof_paths) == 6
     assert owner_comparison.record_id in proof_members
     assert case.pair.allocator.role_correspondence.comparison.record_id in proof_members
 
@@ -562,13 +685,25 @@ def test_complete_heuristic_evidence_caps_at_candidate(case: InferenceCase, fail
     assert failed_gate in verdict.failed_gates
 
 
-def test_heuristic_owner_comparison_cannot_supply_source_object_binding() -> None:
+def test_heuristic_owner_comparison_remains_candidate_with_valid_bindings() -> None:
     case = _case(owner_confidence=Confidence.HEURISTIC)
 
     verdict = infer_pair(case.pair, case.query, case.comparisons)
 
-    assert verdict.status is VerdictStatus.ABSTAIN
-    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+    assert verdict.status is VerdictStatus.CANDIDATE_CAUSE
+    assert set(verdict.failed_gates) == {
+        "gate-3-shared-owner",
+        "gate-7-proof-capable-path",
+    }
+
+
+def test_patched_dll_pcode_path_cannot_enable_causes() -> None:
+    case = _case(pcdump_path=True)
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.CANDIDATE_CAUSE
+    assert verdict.failed_gates == ("gate-7-proof-capable-path",)
 
 
 def test_unrelated_edge_delta_cannot_satisfy_stack_delta_gate() -> None:

@@ -33,7 +33,7 @@ _PATH_EDGE_KINDS = frozenset(
         "bridge-has-source-expression",
     }
 )
-_OWNER_KINDS = frozenset({"source-expression", "objobject", "inline-scope"})
+_OWNER_KINDS = frozenset({"compiler-object", "source-expression", "objobject", "inline-scope"})
 _DELTA_RELATIONS = frozenset(
     {
         "node-added",
@@ -45,6 +45,7 @@ _DELTA_RELATIONS = frozenset(
     }
 )
 _PROOF_CONFIDENCES = frozenset({Confidence.OBSERVED, Confidence.DERIVED_UNIQUE})
+_DIAGNOSTIC_ONLY_PARSERS = frozenset({"mwcc-debug-pcdump.v1"})
 
 _GATE_1 = "gate-1-anchor-identity"
 _GATE_2 = "gate-2-backend-role-identity"
@@ -143,6 +144,13 @@ class _OwnerEnumeration:
 class _PathEnumeration:
     paths: tuple[tuple[str, ...], ...]
     truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceBindingEnumeration:
+    records: tuple[EvidenceEdge, ...]
+    paths: tuple[tuple[str, ...], ...]
+    complete: bool
 
 
 class _ScopedEvidenceQuery:
@@ -335,9 +343,13 @@ def _all_simple_paths(
     )
 
 
+def _record_is_proof_capable(record: EvidenceNode | EvidenceEdge | ComparisonRecord) -> bool:
+    return record.confidence in _PROOF_CONFIDENCES and record.provenance.parser not in _DIAGNOSTIC_ONLY_PARSERS
+
+
 def _path_is_proof_capable(query: EvidenceQuery, path: tuple[str, ...]) -> bool:
     records = tuple(_record_for_id(query, record_id) for record_id in path)
-    return all(record is not None and record.confidence in _PROOF_CONFIDENCES for record in records)
+    return all(record is not None and _record_is_proof_capable(record) for record in records)
 
 
 def _truthy_attribute(record: object, keys: frozenset[str]) -> bool:
@@ -392,32 +404,52 @@ def _bilateral_node_deltas(
 
 
 def _bilateral_source_object_records(
-    comparisons: tuple[ComparisonRecord, ...],
+    alternatives: tuple[_OwnerAlternative, ...],
     query: EvidenceQuery,
-    compile_ids: frozenset[str],
-) -> tuple[ComparisonRecord, ...]:
-    records: list[ComparisonRecord] = []
-    for comparison in comparisons:
-        if (
-            comparison.relation_kind != "node-changed"
-            or comparison.left_record_id is None
-            or comparison.right_record_id is None
-            or comparison.confidence not in _PROOF_CONFIDENCES
+) -> _SourceBindingEnumeration:
+    owners: dict[str, EvidenceNode] = {}
+    for alternative in alternatives:
+        comparison = alternative.comparison
+        endpoint_ids = (comparison.left_record_id, comparison.right_record_id)
+        endpoints = tuple(query.get_node(record_id) if record_id is not None else None for record_id in endpoint_ids)
+        if any(node is None or node.kind != "compiler-object" for node in endpoints):
+            return _SourceBindingEnumeration((), (), complete=False)
+        for node in endpoints:
+            assert node is not None
+            owners[node.record_id] = node
+
+    records: list[EvidenceEdge] = []
+    paths: list[tuple[str, ...]] = []
+    for owner in owners.values():
+        candidates: list[tuple[EvidenceEdge, EvidenceNode]] = []
+        for edge in query.find_edges(
+            owner.compile_id,
+            "object-to-source",
+            endpoint=owner.record_id,
         ):
-            continue
-        left = query.get_node(comparison.left_record_id)
-        right = query.get_node(comparison.right_record_id)
-        if (
-            left is not None
-            and right is not None
-            and left.kind in _OWNER_KINDS
-            and right.kind in _OWNER_KINDS
-            and {left.compile_id, right.compile_id} == compile_ids
-            and left.confidence in _PROOF_CONFIDENCES
-            and right.confidence in _PROOF_CONFIDENCES
-        ):
-            records.append(comparison)
-    return tuple(records)
+            if edge.source_id != owner.record_id:
+                continue
+            source = query.get_node(edge.target_id)
+            if (
+                source is None
+                or source.kind != "source-expression"
+                or not _record_is_proof_capable(edge)
+                or not _record_is_proof_capable(owner)
+                or not _record_is_proof_capable(source)
+                or not {owner.record_id, source.record_id}.issubset(edge.provenance.input_record_ids)
+            ):
+                continue
+            candidates.append((edge, source))
+        if len(candidates) != 1:
+            return _SourceBindingEnumeration((), (), complete=False)
+        edge, source = candidates[0]
+        records.append(edge)
+        paths.append((owner.record_id, edge.record_id, source.record_id))
+    return _SourceBindingEnumeration(
+        records=tuple(sorted(records, key=lambda edge: edge.record_id)),
+        paths=tuple(sorted(paths)),
+        complete=bool(owners),
+    )
 
 
 def _stack_nodes_by_compile(pair: EffectPair, query: EvidenceQuery) -> Mapping[str, EvidenceNode]:
@@ -506,7 +538,7 @@ def _owner_alternatives(
                     node=owner,
                     paths=all_paths,
                     proof_capable=(
-                        comparison.confidence in _PROOF_CONFIDENCES
+                        _record_is_proof_capable(comparison)
                         and all(_path_is_proof_capable(query, path) for path in all_paths)
                     ),
                 )
@@ -709,7 +741,7 @@ def infer_pair(
         or role_comparison.attributes.get("expert_assertion")
         or role_comparison.attributes.get("verdict_cap") == VerdictStatus.CANDIDATE_CAUSE.value
     )
-    role_proof_capable = role_comparison.confidence in _PROOF_CONFIDENCES
+    role_proof_capable = _record_is_proof_capable(role_comparison)
     role_registered = any(comparison.record_id == role_comparison.record_id for comparison in records)
     allocator_deltas = _bilateral_node_deltas(records, allocator_ids)
     stack_deltas = _bilateral_node_deltas(records, stack_ids)
@@ -793,12 +825,12 @@ def infer_pair(
             rejected_alternatives=rejected,
             failed_gates=failed_required,
         )
-    bilateral_source_object_records = _bilateral_source_object_records(
-        records,
-        query,
-        compile_ids,
+    source_bindings = (
+        _bilateral_source_object_records(alternatives, query)
+        if alternatives
+        else _SourceBindingEnumeration((), (), complete=False)
     )
-    if role_proof_capable and allocator_delta_proven and stack_delta_proven and not bilateral_source_object_records:
+    if alternatives and not source_bindings.complete:
         return _verdict(
             pair,
             status=VerdictStatus.ABSTAIN,
@@ -826,7 +858,28 @@ def infer_pair(
             failed_gates=(),
         )
 
-    proof_paths = _shortest_paths(alternatives, role_comparison.record_id)
+    proof_paths = tuple(
+        sorted(
+            {
+                *_shortest_paths(alternatives, role_comparison.record_id),
+                *(
+                    (
+                        alternative.comparison.record_id,
+                        role_comparison.record_id,
+                        *path,
+                    )
+                    for alternative in alternatives
+                    for path in source_bindings.paths
+                    if path[0]
+                    in {
+                        alternative.comparison.left_record_id,
+                        alternative.comparison.right_record_id,
+                    }
+                ),
+            },
+            key=lambda path: (len(path), path),
+        )
+    )
     all_proof_capable = all(alternative.proof_capable for alternative in alternatives)
     if (
         len(alternatives) == 1
