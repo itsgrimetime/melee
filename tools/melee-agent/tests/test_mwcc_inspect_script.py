@@ -267,6 +267,106 @@ def test_mwcc_inspect_remote_failure_preserves_diagnostics_and_no_empty_output(
     assert not out_file.exists() or out_file.stat().st_size > 0
 
 
+def test_mwcc_inspect_rejects_empty_remote_candidate_tempdir(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    workflow = repo / "tools" / "workflow"
+    workflow.mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "tools" / "workflow" / "mwcc-inspect.sh", workflow)
+
+    report = repo / "build" / "GALE01" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '{"units":[{"name":"main/melee/pl/plbonuslib",'
+        '"functions":[{"name":"fn_test"}]}]}',
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.c"
+    candidate.write_text("void fn_test(void) { int candidate = 1; }\n", encoding="utf-8")
+
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "add", "build/GALE01/report.json", "tools/workflow/mwcc-inspect.sh"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "ninja",
+        "#!/bin/sh\n"
+        "echo 'python wrapper mwcceppc.exe -c -o "
+        "build/GALE01/src/melee/pl/plbonuslib.o src/melee/pl/plbonuslib.c "
+        "&& transform_dep.py'\n",
+    )
+    _write_executable(
+        fake_bin / "ssh",
+        textwrap.dedent("""\
+            #!/usr/bin/env python3
+            from __future__ import annotations
+
+            import os
+            import select
+            import sys
+            from pathlib import Path
+
+            log_dir = Path(os.environ["FAKE_SSH_LOG"])
+            idx = len(list(log_dir.glob("*.stdin")))
+            chunks = []
+            while True:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+                if not ready:
+                    break
+                chunk = os.read(sys.stdin.fileno(), 65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            payload = b"".join(chunks).decode()
+            (log_dir / f"{idx:02d}.stdin").write_text(payload, encoding="utf-8")
+            if "mktemp -d" in payload:
+                sys.exit(0)
+            raise AssertionError("wrapper should abort before later remote calls")
+        """),
+    )
+
+    log_dir = tmp_path / "ssh-log"
+    log_dir.mkdir()
+    out_file = repo / "build" / "mwcc_inspect" / "candidates" / "candidate.txt"
+    env = os.environ.copy()
+    env.update({
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "FAKE_SSH_LOG": str(log_dir),
+        "MWCC_INSPECT_HOST": "fake-host",
+        "MWCC_INSPECT_REMOTE_BASH": "bash",
+        "MWCC_INSPECT_REMOTE_DIR": "/remote/melee",
+        "MWCC_INSPECT_CLI": "/remote/MwccInspectorCLI",
+    })
+
+    proc = subprocess.run(
+        [
+            str(workflow / "mwcc-inspect.sh"),
+            "--function",
+            "fn_test",
+            "--output",
+            str(out_file),
+            str(candidate),
+        ],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert proc.returncode != 0
+    assert "remote candidate tempdir was empty" in proc.stderr
+    assert not out_file.exists()
+    assert len(list(log_dir.glob("*.stdin"))) == 1
+
+
 @pytest.mark.parametrize(
     ("inspector_output", "expected_diagnostic"),
     [
