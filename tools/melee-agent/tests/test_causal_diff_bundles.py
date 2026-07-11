@@ -322,6 +322,20 @@ def _rewrite_v2_identity(fixture: BundleV2Fixture, mutate: Callable[[dict[str, s
     _rewrite_manifest(fixture.manifest, update_manifest)
 
 
+def _add_second_v2_backend(fixture: BundleV2Fixture) -> Path:
+    second_backend = fixture.backend.with_name("backend-second.json")
+    second_backend.write_bytes(fixture.backend.read_bytes())
+
+    def add_reference(manifest: dict[str, Any]) -> None:
+        reference = dict(manifest["artifacts"]["backend"][0])
+        reference["path"] = second_backend.name
+        reference["sha256"] = _sha256(second_backend.read_bytes())
+        manifest["artifacts"]["backend"].append(reference)
+
+    _rewrite_manifest(fixture.manifest, add_reference)
+    return second_backend
+
+
 def test_bundle_v2_validates_identity_and_exposes_paths(
     bundle_v2: BundleV2Fixture,
 ) -> None:
@@ -379,6 +393,31 @@ def test_bundle_v2_rejects_backend_identity_pin_mismatch(bundle_v2: BundleV2Fixt
         load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
 
 
+@pytest.mark.parametrize("corruption", ["identity", "pin"])
+def test_bundle_v2_validates_each_backend_and_rejects_second_corruption(
+    bundle_v2: BundleV2Fixture, corruption: str
+) -> None:
+    second_backend = _add_second_v2_backend(bundle_v2)
+
+    if corruption == "identity":
+        trace = json.loads(second_backend.read_text(encoding="utf-8"))
+        trace["functions"][0]["object_bindings"]["capture_identity"]["capture_run_id"] = "8" * 64
+        second_backend.write_text(json.dumps(trace), encoding="utf-8")
+
+        def corrupt_second(manifest: dict[str, Any]) -> None:
+            manifest["artifacts"]["backend"][1]["sha256"] = _sha256(second_backend.read_bytes())
+
+    else:
+
+        def corrupt_second(manifest: dict[str, Any]) -> None:
+            manifest["artifacts"]["backend"][1]["capture_identity_sha256"] = "9" * 64
+
+    _rewrite_manifest(bundle_v2.manifest, corrupt_second)
+
+    with pytest.raises(BundleInputError, match=r"backend\[1\]"):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
 def test_bundle_v2_rejects_recomputed_capture_run_id_mismatch(
     bundle_v2: BundleV2Fixture,
 ) -> None:
@@ -425,6 +464,23 @@ def test_bundle_v2_rejects_non_utf8_backend_as_bundle_input_error(
     )
 
     with pytest.raises(BundleInputError, match=r"invalid backend\[0\] trace"):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
+def test_bundle_v2_rejects_noncanonical_unicode_as_bundle_input_error(
+    bundle_v2: BundleV2Fixture,
+) -> None:
+    trace = json.loads(bundle_v2.backend.read_text(encoding="utf-8"))
+    trace["functions"][0]["object_bindings"]["capture_identity"]["function"] = "\ud800"
+    bundle_v2.backend.write_text(json.dumps(trace), encoding="utf-8")
+    _rewrite_manifest(
+        bundle_v2.manifest,
+        lambda payload: payload["artifacts"]["backend"][0].__setitem__(
+            "sha256", _sha256(bundle_v2.backend.read_bytes())
+        ),
+    )
+
+    with pytest.raises(BundleInputError, match="capture identity is not RFC 8785 canonicalizable"):
         load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
 
 

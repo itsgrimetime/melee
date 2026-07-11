@@ -89,6 +89,13 @@ def _compile_id(manifest: BundleManifest) -> str:
     return hashlib.sha256(canonical_bytes(identity)).hexdigest()
 
 
+def _capture_identity_sha256(value: object, *, label: str) -> str:
+    try:
+        return hashlib.sha256(canonical_bytes(value)).hexdigest()
+    except (OverflowError, RecursionError, TypeError, ValueError) as error:
+        raise BundleInputError(f"capture identity is not RFC 8785 canonicalizable for {label}: {error}") from error
+
+
 def _parse_manifest(manifest_path: Path) -> BundleManifest:
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -137,7 +144,7 @@ def _capture_identity_from_trace(path: Path, *, function: str, backend_index: in
 
     identity_payload = identity.model_dump()
     capture_run_id = identity_payload.pop("capture_run_id")
-    expected_capture_run_id = hashlib.sha256(canonical_bytes(identity_payload)).hexdigest()
+    expected_capture_run_id = _capture_identity_sha256(identity_payload, label=label)
     if capture_run_id != expected_capture_run_id:
         raise BundleInputError(
             f"capture run ID mismatch for {label}: expected {expected_capture_run_id}, got {capture_run_id}"
@@ -167,7 +174,7 @@ def _validate_v2_backend_identity(
         raise BundleInputError(f"candidate object digest mismatch for {label}")
 
     expected_pins = {
-        "capture_identity_sha256": hashlib.sha256(canonical_bytes(identity.model_dump())).hexdigest(),
+        "capture_identity_sha256": _capture_identity_sha256(identity.model_dump(), label=label),
         "compiler_executable_sha256": identity.compiler_executable_sha256,
         "mwcc_command_sha256": identity.mwcc_command_sha256,
         "environment_digest": identity.environment_digest,
