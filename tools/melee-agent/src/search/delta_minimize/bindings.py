@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
+from itertools import zip_longest
 from typing import Mapping, Sequence
 
 from src.common.tree_sitter_c import get_parser, node_text
@@ -25,6 +26,7 @@ class CallBinding:
 class DeclarationSignature:
     shared_prefix_span: tuple[int, int]
     declarator_span: tuple[int, int]
+    shared_prefix_owned_span: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class FunctionBinding:
     definition_name_span: tuple[int, int] | None = None
     declaration_name_spans: tuple[tuple[int, int], ...] = ()
     declaration_signatures: tuple[DeclarationSignature, ...] = ()
+    type_shapes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,7 @@ class BindingBlocker:
     symbol: str
     reason: str
     span: tuple[int, int]
+    owned_span: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +136,11 @@ def build_binding_index(source: str) -> BindingIndex:
             to_char[declaration.start_byte],
             to_char[declarators[0].start_byte],
         )
+        shared_prefix_owned_span = _declaration_shared_prefix_owned_span(
+            declaration,
+            declarators[0],
+            to_char,
+        )
         for declarator in declarators:
             name_node = _function_pointer_object_identifier(declarator)
             if name_node is not None:
@@ -142,6 +151,7 @@ def build_binding_index(source: str) -> BindingIndex:
                             symbol,
                             "function-pointer-object-declaration",
                             shared_prefix_span,
+                            shared_prefix_owned_span,
                         ),
                         BindingBlocker(
                             symbol,
@@ -239,7 +249,7 @@ def build_binding_index(source: str) -> BindingIndex:
         )
 
     functions: dict[str, FunctionBinding] = {}
-    for name, (definition, definition_name, parameters, _) in sorted(
+    for name, (definition, definition_name, parameters, definition_declarator) in sorted(
         unique_nodes.items(),
         key=lambda item: item[1][0].start_byte,
     ):
@@ -270,6 +280,27 @@ def build_binding_index(source: str) -> BindingIndex:
                 _declaration_signature(declaration, declaration_declarator, to_char)
                 for declaration, _, _, declaration_declarator in declaration_nodes.get(name, ())
             ),
+            type_shapes=(
+                _normalized_function_type_shape(
+                    definition,
+                    definition_declarator,
+                    definition_name,
+                    parameters,
+                    source_bytes,
+                ),
+                *(
+                    _normalized_function_type_shape(
+                        declaration,
+                        declaration_declarator,
+                        declaration_name,
+                        declaration_parameters,
+                        source_bytes,
+                    )
+                    for declaration, declaration_name, declaration_parameters, declaration_declarator in declaration_nodes.get(
+                        name, ()
+                    )
+                ),
+            ),
         )
 
     for name in declaration_nodes.keys() - functions.keys():
@@ -287,8 +318,10 @@ def validate_supported_bindings(
     changed_names: set[str],
     changed_spans: Sequence[tuple[int, int]] | None = None,
     renamed_names: set[str] | None = None,
+    type_unchanged_names: set[str] | None = None,
 ) -> None:
     renamed_names = renamed_names or set()
+    type_unchanged_names = type_unchanged_names or set()
     blockers = [
         blocker
         for blocker in index.blockers
@@ -296,14 +329,24 @@ def validate_supported_bindings(
         and (
             blocker.reason != "non-call-function-reference"
             or blocker.symbol in renamed_names
+            or blocker.symbol not in type_unchanged_names
             or changed_spans is None
-            or any(_spans_touch(change, blocker.span) for change in changed_spans)
+            or any(_spans_touch(change, blocker.owned_span or blocker.span) for change in changed_spans)
         )
     ]
     if blockers:
         raise DeltaMinimizeError(
             "unsupported-semantic-binding",
-            {"blockers": [asdict(blocker) for blocker in blockers]},
+            {
+                "blockers": [
+                    {
+                        "symbol": blocker.symbol,
+                        "reason": blocker.reason,
+                        "span": blocker.span,
+                    }
+                    for blocker in blockers
+                ]
+            },
         )
 
 
@@ -318,19 +361,31 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
     left_changed = _changed_binding_names(left_index, left_changed_spans)
     right_changed = _changed_binding_names(right_index, right_changed_spans)
     pairs = _pair_functions(left_index, right_index)
+    for left_function, right_function, _ in pairs:
+        if left_function.name in left_changed or right_function.name in right_changed:
+            left_changed.add(left_function.name)
+            right_changed.add(right_function.name)
     left_renamed = {left.name for left, _, renamed in pairs if renamed}
     right_renamed = {right.name for _, right, renamed in pairs if renamed}
+    left_type_unchanged = {
+        left.name for left, right, renamed in pairs if not renamed and _function_type_is_proven_unchanged(left, right)
+    }
+    right_type_unchanged = {
+        right.name for left, right, renamed in pairs if not renamed and _function_type_is_proven_unchanged(left, right)
+    }
     validate_supported_bindings(
         left_index,
         left_changed,
         left_changed_spans,
         left_renamed,
+        left_type_unchanged,
     )
     validate_supported_bindings(
         right_index,
         right_changed,
         right_changed_spans,
         right_renamed,
+        right_type_unchanged,
     )
 
     semantic_labels: dict[str, list[str]] = defaultdict(list)
@@ -423,25 +478,22 @@ def _parameter_permutation(left: FunctionBinding, right: FunctionBinding) -> tup
     return order
 
 
+def _function_type_is_proven_unchanged(left: FunctionBinding, right: FunctionBinding) -> bool:
+    return bool(left.type_shapes and right.type_shapes and left.type_shapes == right.type_shapes)
+
+
 def _has_signature_patch(atoms, left: FunctionBinding, right: FunctionBinding) -> bool:
     left_spans = _signature_spans(left)
     right_spans = _signature_spans(right)
     return any(
         any(
-            _owned_span_intersects_change(
+            _patch_pair_intersects_owned_spans(
                 (patch.left_start, patch.left_end),
-                span,
-                zero_width_is_insertion=True,
-            )
-            for span in left_spans
-        )
-        or any(
-            _owned_span_intersects_change(
                 (patch.right_start, patch.right_end),
-                span,
-                zero_width_is_insertion=False,
+                left_span,
+                right_span,
             )
-            for span in right_spans
+            for left_span, right_span in zip_longest(left_spans, right_spans)
         )
         for atom in atoms
         for patch in atom.patches
@@ -458,34 +510,22 @@ def _signature_change_is_parameter_only(atoms, left: FunctionBinding, right: Fun
             left_change = (patch.left_start, patch.left_end)
             right_change = (patch.right_start, patch.right_end)
             touches_signature = any(
-                _owned_span_intersects_change(
+                _patch_pair_intersects_owned_spans(
                     left_change,
-                    span,
-                    zero_width_is_insertion=True,
-                )
-                for span in left_signatures
-            ) or any(
-                _owned_span_intersects_change(
                     right_change,
-                    span,
-                    zero_width_is_insertion=False,
+                    left_span,
+                    right_span,
                 )
-                for span in right_signatures
+                for left_span, right_span in zip_longest(left_signatures, right_signatures)
             )
             touches_parameters = any(
-                _owned_span_intersects_change(
+                _patch_pair_intersects_owned_spans(
                     left_change,
-                    span,
-                    zero_width_is_insertion=True,
-                )
-                for span in left_parameters
-            ) or any(
-                _owned_span_intersects_change(
                     right_change,
-                    span,
-                    zero_width_is_insertion=False,
+                    left_span,
+                    right_span,
                 )
-                for span in right_parameters
+                for left_span, right_span in zip_longest(left_parameters, right_parameters)
             )
             if touches_signature and not touches_parameters:
                 return False
@@ -503,7 +543,11 @@ def _declaration_signature_parts(
 ) -> tuple[tuple[tuple[int, int], ...], ...]:
     if function.declaration_signatures:
         return tuple(
-            (signature.shared_prefix_span, signature.declarator_span) for signature in function.declaration_signatures
+            (
+                signature.shared_prefix_owned_span or signature.shared_prefix_span,
+                signature.declarator_span,
+            )
+            for signature in function.declaration_signatures
         )
     spans = function.declaration_signature_spans or function.declaration_parameter_spans
     return tuple((span,) for span in spans)
@@ -654,14 +698,11 @@ def _atoms_for_span(
     selected: list[str] = []
     for atom in atoms:
         for index, patch in enumerate(atom.patches):
-            if _owned_span_intersects_change(
+            if _patch_pair_intersects_owned_spans(
                 (patch.left_start, patch.left_end),
-                left_span,
-                zero_width_is_insertion=True,
-            ) or _owned_span_intersects_change(
                 (patch.right_start, patch.right_end),
+                left_span,
                 right_span,
-                zero_width_is_insertion=False,
             ):
                 selected.append(atom.atom_id)
                 if reclassified is not None and anchor_kind is not None:
@@ -678,16 +719,17 @@ def _changed_spans(atoms, *, side: str) -> tuple[tuple[int, int], ...]:
 
 
 def _changed_binding_names(index: BindingIndex, spans: Sequence[tuple[int, int]]) -> set[str]:
+    nonempty_spans = tuple(span for span in spans if span[0] != span[1])
     names: set[str] = set()
     for name, function in index.functions.items():
         binding_spans = [
             *_signature_spans(function),
             *(call.call_span for call in function.direct_calls),
         ]
-        if any(_spans_touch(change, binding) for change in spans for binding in binding_spans):
+        if any(_spans_touch(change, binding) for change in nonempty_spans for binding in binding_spans):
             names.add(name)
     for blocker in index.blockers:
-        if any(_spans_touch(change, blocker.span) for change in spans):
+        if any(_spans_touch(change, blocker.owned_span or blocker.span) for change in nonempty_spans):
             names.add(blocker.symbol)
     return names
 
@@ -822,6 +864,39 @@ def _parameter_texts(parameter_list, source_bytes: bytes) -> tuple[str, ...]:
     )
 
 
+def _normalized_function_type_shape(
+    container,
+    declarator,
+    name_node,
+    parameters,
+    source_bytes: bytes,
+) -> str:
+    first_declarator = next(_declaration_declarators(container))
+    replaced_spans = [(name_node.start_byte, name_node.end_byte)]
+    for parameter in parameters.named_children:
+        identifier = _declarator_identifier(parameter.child_by_field_name("declarator"))
+        if identifier is not None:
+            replaced_spans.append((identifier.start_byte, identifier.end_byte))
+
+    def normalized_part(start: int, end: int) -> bytes:
+        chunks: list[bytes] = []
+        cursor = start
+        for replacement_start, replacement_end in sorted(replaced_spans):
+            if replacement_start < start or replacement_end > end:
+                continue
+            chunks.append(source_bytes[cursor:replacement_start])
+            chunks.append(b"$")
+            cursor = replacement_end
+        chunks.append(source_bytes[cursor:end])
+        return b"".join(chunks)
+
+    spelling = normalized_part(container.start_byte, first_declarator.start_byte) + normalized_part(
+        declarator.start_byte,
+        declarator.end_byte,
+    )
+    return b"".join(spelling.split()).decode("utf-8")
+
+
 def _visible_local_declarations(
     reference,
     definition,
@@ -951,6 +1026,26 @@ def _declaration_signature(declaration, declarator, to_char: list[int]) -> Decla
             to_char[first_declarator.start_byte],
         ),
         declarator_span=_span(declarator, to_char),
+        shared_prefix_owned_span=_declaration_shared_prefix_owned_span(
+            declaration,
+            first_declarator,
+            to_char,
+        ),
+    )
+
+
+def _declaration_shared_prefix_owned_span(
+    declaration,
+    first_declarator,
+    to_char: list[int],
+) -> tuple[int, int]:
+    prefix_end_byte = max(
+        (child.end_byte for child in declaration.named_children if child.end_byte <= first_declarator.start_byte),
+        default=declaration.start_byte,
+    )
+    return (
+        to_char[declaration.start_byte],
+        to_char[prefix_end_byte],
     )
 
 
@@ -1028,23 +1123,34 @@ def _span(node, to_char: list[int]) -> tuple[int, int]:
 
 def _spans_touch(first: tuple[int, int], second: tuple[int, int]) -> bool:
     if first[0] == first[1]:
-        return second[0] <= first[0] <= second[1]
+        return second[0] <= first[0] < second[1]
     if second[0] == second[1]:
-        return first[0] <= second[0] <= first[1]
+        return first[0] <= second[0] < first[1]
     return first[0] < second[1] and second[0] < first[1]
 
 
-def _owned_span_intersects_change(
-    change: tuple[int, int],
-    owned_span: tuple[int, int],
-    *,
-    zero_width_is_insertion: bool,
+def _patch_pair_intersects_owned_spans(
+    left_change: tuple[int, int],
+    right_change: tuple[int, int],
+    left_owned_span: tuple[int, int] | None,
+    right_owned_span: tuple[int, int] | None,
 ) -> bool:
-    """Test a directional delta against a half-open semantic ownership span."""
+    """Test a paired directional delta against paired semantic ownership spans."""
 
-    if change[0] == change[1]:
-        return zero_width_is_insertion and owned_span[0] <= change[0] < owned_span[1]
-    return change[0] < owned_span[1] and owned_span[0] < change[1]
+    left_empty = left_change[0] == left_change[1]
+    right_empty = right_change[0] == right_change[1]
+    if left_empty and right_empty:
+        return False
+    if left_empty:
+        return right_owned_span is not None and _spans_touch(right_change, right_owned_span)
+    if right_empty:
+        return left_owned_span is not None and _spans_touch(left_change, left_owned_span)
+    return (
+        left_owned_span is not None
+        and _spans_touch(left_change, left_owned_span)
+        or right_owned_span is not None
+        and _spans_touch(right_change, right_owned_span)
+    )
 
 
 def _spans_overlap(first: tuple[int, int], second: tuple[int, int]) -> bool:

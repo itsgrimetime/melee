@@ -528,6 +528,34 @@ int draw(int x) { return helper(x, 0); }
     assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
 
 
+def test_prototype_preceding_sibling_insertion_stays_independent():
+    left = """\
+int helper(int a);
+int helper(int a) { return a; }
+int draw(int x) { return helper(x); }
+"""
+    right = """\
+int marker = 1, helper(int a, int b);
+int helper(int a, int b) { return a; }
+int draw(int x) { return helper(x, 0); }
+"""
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert len(manifest.atoms) == 2
+    assert masks == (0b00, 0b01, 0b10, 0b11)
+    combinations = {
+        (
+            "marker = 1" in candidate,
+            len(build_binding_index(candidate).functions["helper"].parameter_names),
+        )
+        for mask in masks
+        for candidate in (materialize_mask(left, manifest, mask),)
+    }
+    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
+
+
 @pytest.mark.parametrize(
     ("left_prototype", "right_prototype"),
     [
@@ -820,6 +848,35 @@ def test_function_pointer_object_allows_sibling_declarator_change(left_declarati
     ("left_declaration", "right_declaration"),
     [
         (
+            "static int (*helper)(int) = sub;",
+            "static int (*helper)(int) = sub, marker = 1;",
+        ),
+        (
+            "static int (*helper)(int) = sub;",
+            "static int marker = 1, (*helper)(int) = sub;",
+        ),
+    ],
+    ids=("suffix-sibling", "preceding-sibling"),
+)
+def test_function_pointer_object_allows_inserted_sibling_declarator(
+    left_declaration,
+    right_declaration,
+):
+    prefix = "int sub(int value) { return value; }\n"
+    left = prefix + left_declaration + "\nint draw(void) { return 1; }\n"
+    right = prefix + right_declaration + "\nint draw(void) { return 1; }\n"
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+
+    assert len(manifest.atoms) == 1
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 1) == right
+
+
+@pytest.mark.parametrize(
+    ("left_declaration", "right_declaration"),
+    [
+        (
             "static int (*helper)(int) = sub, unrelated = 1;",
             "static int (*helper)(int) = other, unrelated = 1;",
         ),
@@ -969,6 +1026,47 @@ int draw(int x, int y) { return (helper != 0) + helper(y, x); }
     assert "helper parameter reorder" in manifest.atoms[0].summary
     assert materialize_mask(left, manifest, 0) == left
     assert materialize_mask(left, manifest, 1) == right
+
+
+@pytest.mark.parametrize(
+    ("left_definition", "right_definition"),
+    [
+        (
+            "int helper(int value) { return value; }",
+            "int helper(int value, int extra) { return value + extra; }",
+        ),
+        (
+            "int helper(int value) { return value; }",
+            "int helper(long value) { return value; }",
+        ),
+        (
+            "int helper(int value) { return value; }",
+            "long helper(int value) { return value; }",
+        ),
+        (
+            "int helper(int value) { return value; }",
+            "int *helper(int value) { return 0; }",
+        ),
+    ],
+    ids=("arity", "parameter-type", "return-type", "return-declarator"),
+)
+def test_unchanged_non_call_reference_blocks_function_type_change(
+    left_definition,
+    right_definition,
+):
+    reference = "\nint (*fp)(int) = helper;\nint draw(void) { return fp(1); }\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding") as exc:
+        delta.extract_delta_manifest(
+            left_definition + reference,
+            right_definition + reference,
+            function="draw",
+        )
+
+    assert any(
+        blocker["symbol"] == "helper" and blocker["reason"] == "non-call-function-reference"
+        for blocker in exc.value.details["blockers"]
+    )
 
 
 def test_unchanged_non_call_reference_blocks_renamed_function_binding():
