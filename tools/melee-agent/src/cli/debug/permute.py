@@ -3178,6 +3178,9 @@ def _build_simplify_order_compile_sh(
     ``debug target score-simplify-order`` consumes — it reads
     ``<o>.pcdump.txt`` to compute the score, no recompile.
     """
+    from ...mwcc_debug.fix_perm_compile import render_wibo_resolution
+
+    wibo_lines = render_wibo_resolution(wibo_path)
     if full_unit_source is None:
         stage_lines = [
             "cp \"$INPUT_ABS\" \"$STAGE\"",
@@ -3232,16 +3235,13 @@ def _build_simplify_order_compile_sh(
 
     if remote_portable:
         cd_line = 'cd "${MELEE_ROOT:?MELEE_ROOT must be set}"'
-        compiler_prefix = (
-            '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}" '
+        compiler = (
             '"${MWCC_DEBUG_COMPILER:-$MELEE_ROOT/build/compilers/GC/1.2.5n/'
             'mwcceppc_debug.exe}"'
         )
     else:
         cd_line = f"cd {shlex.quote(str(project_root))}"
-        compiler_prefix = (
-            f"{shlex.quote(str(wibo_path))} {shlex.quote(str(debug_compiler))}"
-        )
+        compiler = shlex.quote(str(debug_compiler))
 
     return "\n".join([
         "#!/usr/bin/env bash",
@@ -3251,6 +3251,7 @@ def _build_simplify_order_compile_sh(
         "INPUT_ABS=\"$(realpath \"$1\")\"",
         "OUTPUT_ABS=\"$(realpath \"$3\")\"",
         cd_line,
+        *wibo_lines,
         f"STAGE=\"{stage_path}\"",
         "mkdir -p \"$(dirname \"$STAGE\")\"",
         *stage_lines,
@@ -3258,7 +3259,7 @@ def _build_simplify_order_compile_sh(
         "# Deposit the pcdump as a sibling of the .o so",
         "# `debug target score-simplify-order` finds it via the fast path.",
         "export MWCC_DEBUG_PCDUMP_PATH=\"${OUTPUT_ABS}.pcdump.txt\"",
-        f"{compiler_prefix} {cflags} -c \"$STAGE\" -o \"$OUTPUT_ABS\"",
+        f'"$WIBO" {compiler} {cflags} -c "$STAGE" -o "$OUTPUT_ABS"',
         "",
     ])
 
@@ -3621,13 +3622,12 @@ def setup_simplify_order_scorer(
     # Locate the debug compiler + wibo for the wrapper compile.sh
     # ----------------------------------------------------------------
 
-    wibo_path = _find_wibo()
-    if wibo_path is None or not wibo_path.exists():
-        typer.echo(
-            "wibo not found. Run `melee-agent debug dump setup` first "
-            "or set $MWCC_DEBUG_WIBO.",
-            err=True,
-        )
+    from ...mwcc_debug.fix_perm_compile import validate_wibo_path
+
+    try:
+        wibo_path = validate_wibo_path(_find_wibo())
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
         raise typer.Exit(2)
     debug_compiler = _find_compiler_dir() / "mwcceppc_debug.exe"
     if not debug_compiler.exists():
@@ -3991,6 +3991,7 @@ def gen_permuter_config(
     from src.cli.debug import DEFAULT_MELEE_ROOT  # noqa: PLC0415
     from src.cli.debug import (  # noqa: PLC0415
         _abort_function_not_in_dump,
+        _find_wibo,
         _permuter_import_hint,
         _resolve_pcdump_path,
         _resolve_permuter_function_dir,
@@ -4173,8 +4174,16 @@ def gen_permuter_config(
     # Side-effect: fix the compile.sh for macOS+wine if it has the
     # known import.py path-handling bug. Quiet if not applicable;
     # one-liner note if a fix was applied.
-    from ...mwcc_debug.fix_perm_compile import fix_perm_dir
-    compile_fix = fix_perm_dir(out.parent)
+    from ...mwcc_debug.fix_perm_compile import FixResult, fix_perm_dir
+    config_wibo = _find_wibo()
+    if config_wibo is None:
+        compile_fix = FixResult(
+            path=out.parent / "compile.sh",
+            action="skipped",
+            reason="custom wibo executable not found",
+        )
+    else:
+        compile_fix = fix_perm_dir(out.parent, wibo_path=config_wibo)
 
     if json_out:
         print(json.dumps({
@@ -4257,19 +4266,27 @@ def fix_perm_compile(
     `~/code/decomp-permuter/nonmatchings/fn_xyz`) or the compile.sh
     directly.
     """
+    from src.cli.debug import _find_wibo  # noqa: PLC0415
     from ...mwcc_debug.fix_perm_compile import (
         fix_compile_sh,
         fix_perm_dir,
+        validate_wibo_path,
     )
 
     if not target.exists():
         typer.echo(f"target not found: {target}", err=True)
         raise typer.Exit(2)
 
+    try:
+        wibo_path = validate_wibo_path(_find_wibo())
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2)
+
     if target.is_dir():
-        result = fix_perm_dir(target)
+        result = fix_perm_dir(target, wibo_path=wibo_path)
     else:
-        result = fix_compile_sh(target)
+        result = fix_compile_sh(target, wibo_path=wibo_path)
 
     if json_out:
         print(json.dumps({

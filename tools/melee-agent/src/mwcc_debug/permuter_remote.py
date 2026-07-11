@@ -1566,7 +1566,19 @@ _MWCC_EXE_RE = re.compile(r"mwcceppc(?:_debug)?\.exe(?P<rest>.*)$")
 
 def _rewrite_compile_sh_for_remote(text: str) -> str:
     out: list[str] = []
+    has_wibo_preflight = 'WIBO=""' in text
+    skip_baked_assignment = False
     for line in text.splitlines():
+        if skip_baked_assignment:
+            skip_baked_assignment = False
+            if line.strip().startswith('WIBO="/'):
+                continue
+        # A setup wrapper may carry the generator host's absolute custom-wibo
+        # fallback.  The remote MELEE_ROOT/current-checkout candidates precede
+        # it, so omit only that host-local branch from the staged copy.
+        if line.startswith('elif [[ -f "/'):
+            skip_baked_assignment = True
+            continue
         stripped = line.strip()
         if (
             stripped.startswith("cd ")
@@ -1582,9 +1594,15 @@ def _rewrite_compile_sh_for_remote(text: str) -> str:
             if match is not None:
                 indent = line[: len(line) - len(line.lstrip())]
                 rest = match.group("rest")
+                wibo = (
+                    '"$WIBO"'
+                    if has_wibo_preflight
+                    else '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}"'
+                )
                 out.append(
                     indent
-                    + '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}" '
+                    + wibo
+                    + " "
                     + '"${MWCC_DEBUG_COMPILER:-$MELEE_ROOT/build/compilers/GC/1.2.5n/mwcceppc_debug.exe}"'
                     + rest
                 )

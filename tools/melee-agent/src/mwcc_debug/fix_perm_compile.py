@@ -9,9 +9,8 @@ macOS Wine server failures that make short local permuter runs unusable.
 
 Fix: stage the candidate source as a relative path inside the project
 tree (which is `nonmatchings/.permuter_stage_<pid>.c`, git-ignored)
-and pass THAT to mwcc through `build/tools/wibo` (or `$MWCC_DEBUG_WIBO`
-if set). The PID-based name is parallel-safe across permuter's worker
-threads.
+and pass THAT to mwcc through the patched mwcc-debug wibo runtime. The
+PID-based name is parallel-safe across permuter's worker threads.
 
 This rewrite is idempotent — calling on an already-fixed script is a
 no-op and reports as such.
@@ -19,6 +18,7 @@ no-op and reports as such.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +45,65 @@ class FixResult:
     path: Path
     action: str  # "fixed" | "already-fixed" | "not-applicable" | "skipped"
     reason: str = ""
+
+
+def is_executable_file(path: Path) -> bool:
+    """Return whether *path* names an executable regular file."""
+    return path.is_file() and os.access(path, os.X_OK)
+
+
+def validate_wibo_path(path: Path | None) -> Path:
+    """Resolve and validate the custom wibo selected by the generator."""
+    if path is None:
+        raise ValueError("wibo is not an executable file: no path resolved")
+    resolved = path.expanduser().resolve()
+    if not is_executable_file(resolved):
+        raise ValueError(f"wibo is not an executable file: {resolved}")
+    return resolved
+
+
+def _shell_double_quote(value: str) -> str:
+    """Quote a literal for a shell double-quoted string."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("$", "\\$")
+        .replace("`", "\\`")
+    )
+    return f'"{escaped}"'
+
+
+def render_wibo_resolution(wibo_path: Path) -> list[str]:
+    """Render shared runtime selection and executable preflight lines."""
+    baked = _shell_double_quote(str(validate_wibo_path(wibo_path)))
+    return [
+        'WIBO=""',
+        (
+            'if [[ -n "${MWCC_DEBUG_WIBO:-}" '
+            '&& -f "$MWCC_DEBUG_WIBO" && -x "$MWCC_DEBUG_WIBO" ]]; then'
+        ),
+        '  WIBO="$MWCC_DEBUG_WIBO"',
+        (
+            'elif [[ -n "${MELEE_ROOT:-}" '
+            '&& -f "$MELEE_ROOT/tools/mwcc_debug/bin/wibo" '
+            '&& -x "$MELEE_ROOT/tools/mwcc_debug/bin/wibo" ]]; then'
+        ),
+        '  WIBO="$MELEE_ROOT/tools/mwcc_debug/bin/wibo"',
+        (
+            'elif [[ -f "tools/mwcc_debug/bin/wibo" '
+            '&& -x "tools/mwcc_debug/bin/wibo" ]]; then'
+        ),
+        '  WIBO="tools/mwcc_debug/bin/wibo"',
+        f'elif [[ -f {baked} && -x {baked} ]]; then',
+        f'  WIBO={baked}',
+        "else",
+        (
+            '  echo "error: patched wibo executable not found; set '
+            'MWCC_DEBUG_WIBO or build tools/mwcc_debug/bin/wibo" >&2'
+        ),
+        "  exit 2",
+        "fi",
+    ]
 
 
 def _read_lines(p: Path) -> list[str]:
@@ -202,6 +261,7 @@ def fix_base_c(base_c_path: Path) -> FixResult:
 def _build_fixed_lines(
     original_lines: list[str],
     project_root: Path,
+    wibo_path: Path,
 ) -> list[str]:
     """Rewrite the compile.sh lines to use the staging trick.
 
@@ -224,7 +284,7 @@ def _build_fixed_lines(
         trap 'rm -f "$STAGE"' EXIT
         INPUT="$STAGE"
         OUTPUT="$OUTPUT_ABS"
-        WIBO="${MWCC_DEBUG_WIBO:-build/tools/wibo}"
+        WIBO=<first executable custom runtime>
         "$WIBO" ... "$INPUT" -o "$OUTPUT"
 
     Net effect: the absolute path of the .o output is preserved (mwcc
@@ -260,7 +320,7 @@ def _build_fixed_lines(
             out.append("trap 'rm -f \"$STAGE\"' EXIT")
             out.append('INPUT="$STAGE"')
             out.append('OUTPUT="$OUTPUT_ABS"')
-            out.append('WIBO="${MWCC_DEBUG_WIBO:-build/tools/wibo}"')
+            out.extend(render_wibo_resolution(wibo_path))
             skip_input_output_lines = True
             continue
 
@@ -280,6 +340,8 @@ def _build_fixed_lines(
 def fix_compile_sh(
     compile_sh_path: Path,
     project_root: Path | None = None,
+    *,
+    wibo_path: Path | None = None,
 ) -> FixResult:
     """Rewrite a single compile.sh to use the staging trick.
 
@@ -314,7 +376,12 @@ def fix_compile_sh(
             reason="no INPUT=\"$(realpath \"$1\")\" line found",
         )
 
-    new_lines = _build_fixed_lines(lines, project_root or Path("."))
+    resolved_wibo = validate_wibo_path(wibo_path)
+    new_lines = _build_fixed_lines(
+        lines,
+        project_root or Path("."),
+        resolved_wibo,
+    )
     compile_sh_path.write_text("\n".join(new_lines) + "\n")
     # Preserve executable bit
     compile_sh_path.chmod(0o755)
@@ -332,6 +399,8 @@ def fix_compile_sh(
 def fix_perm_dir(
     perm_dir: Path,
     project_root: Path | None = None,
+    *,
+    wibo_path: Path | None = None,
 ) -> FixResult:
     """Find the compile.sh inside a `nonmatchings/<fn>/` dir and fix it.
 
@@ -344,7 +413,11 @@ def fix_perm_dir(
             action="skipped",
             reason=f"no compile.sh in {perm_dir}",
         )
-    compile_result = fix_compile_sh(compile_sh, project_root=project_root)
+    compile_result = fix_compile_sh(
+        compile_sh,
+        project_root=project_root,
+        wibo_path=wibo_path,
+    )
     base_result = fix_base_c(perm_dir / "base.c")
 
     results = [compile_result, base_result]
