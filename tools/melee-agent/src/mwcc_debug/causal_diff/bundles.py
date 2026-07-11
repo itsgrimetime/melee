@@ -93,18 +93,18 @@ def load_bundle(manifest_path: Path, *, cli_label: str, function: str) -> Valida
         if not artifact_path.is_file():
             raise BundleInputError(f"missing artifact {name}: {artifact_path}")
         actual_digest = _file_sha256(artifact_path)
-        if actual_digest.lower() != reference.sha256.lower():
+        if actual_digest != reference.sha256:
             raise BundleInputError(
                 f"artifact digest mismatch for {name}: expected {reference.sha256}, got {actual_digest}"
             )
         artifact_paths[name] = artifact_path
 
     source_digest = manifest.artifacts.source.sha256
-    if source_digest.lower() != manifest.compile.source_digest.lower():
+    if source_digest != manifest.compile.source_digest:
         raise BundleInputError("source digest mismatch between compile manifest and source artifact")
 
     expected_compile_id = _compile_id(manifest)
-    if expected_compile_id.lower() != manifest.compile.id.lower():
+    if expected_compile_id != manifest.compile.id:
         raise BundleInputError(f"compile ID mismatch: expected {expected_compile_id}, got {manifest.compile.id}")
 
     return ValidatedBundle(
@@ -121,7 +121,7 @@ def validate_bundle_pair(first: ValidatedBundle, second: ValidatedBundle) -> tup
 
     bundles = tuple(sorted((first, second), key=lambda bundle: bundle.label))
     left, right = bundles
-    if left.label == right.label or left.compile_id == right.compile_id:
+    if left.label == right.label or left.compile_id.casefold() == right.compile_id.casefold():
         raise BundleInputError("frontiers require distinct labels and compile IDs")
 
     compatibility_fields = (

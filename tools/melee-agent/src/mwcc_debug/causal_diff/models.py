@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
@@ -23,8 +24,8 @@ CORE_BACKEND_CAPABILITIES = frozenset(
 
 
 def _validate_digest(value: str) -> str:
-    if len(value) != 64 or any(character not in "0123456789abcdefABCDEF" for character in value):
-        raise ValueError("digest must contain exactly 64 hexadecimal characters")
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("digest must contain exactly 64 hexadecimal characters in canonical lowercase")
     return value
 
 
@@ -97,6 +98,13 @@ class FrontierBundleManifest(BaseModel):
     compile: CompileManifest
     artifacts: ArtifactsManifest
     producer_versions: Mapping[str, str]
+
+    @field_validator("label")
+    @classmethod
+    def _validate_label(cls, value: str) -> str:
+        if re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
+            raise ValueError("label must match [A-Za-z0-9_-]+")
+        return value
 
 
 class Confidence(StrEnum):

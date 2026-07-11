@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -139,6 +140,18 @@ def _rewrite_manifest(path: Path, mutate: Callable[[dict[str, Any]], None]) -> N
     payload = json.loads(path.read_text(encoding="utf-8"))
     mutate(payload)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _recompute_payload_compile_id(payload: dict[str, Any]) -> None:
+    compile_payload = payload["compile"]
+    compile_payload["id"] = _compile_id(
+        function=payload["function"],
+        compiler=compile_payload["compiler"],
+        target_build=compile_payload["target_build"],
+        flags_digest=compile_payload["flags_digest"],
+        environment_digest=compile_payload["environment_digest"],
+        source_digest=compile_payload["source_digest"],
+    )
 
 
 def test_load_bundle_validates_artifacts_and_exposes_text(tmp_path: Path) -> None:
@@ -290,6 +303,82 @@ def test_load_bundle_rejects_function_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(BundleInputError, match="function"):
         load_bundle(path, cli_label="paired", function="fn_other")
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "artifact_sha256",
+        "source_digest",
+        "flags_digest",
+        "environment_digest",
+        "expected_assembly_digest",
+        "id",
+    ],
+)
+def test_load_bundle_rejects_uppercase_digest_identity(tmp_path: Path, field: str) -> None:
+    path = write_valid_bundle(tmp_path / "paired", label="paired", source="paired")
+
+    def uppercase_digest(payload: dict[str, Any]) -> None:
+        if field == "artifact_sha256":
+            artifact = payload["artifacts"]["source"]
+            artifact["sha256"] = artifact["sha256"].upper()
+            return
+        compile_payload = payload["compile"]
+        compile_payload[field] = compile_payload[field].upper()
+        if field in {"source_digest", "flags_digest", "environment_digest"}:
+            _recompute_payload_compile_id(payload)
+
+    _rewrite_manifest(path, uppercase_digest)
+
+    with pytest.raises(BundleInputError, match="lowercase"):
+        load_bundle(path, cli_label="paired", function="fn_test")
+
+
+def test_compile_id_case_variant_cannot_bypass_distinct_pair_check(
+    tmp_path: Path,
+) -> None:
+    paired_path = write_valid_bundle(tmp_path / "paired", label="paired", source="same source")
+    direct_path = write_valid_bundle(tmp_path / "direct", label="direct", source="same source")
+    paired = load_bundle(paired_path, cli_label="paired", function="fn_test")
+    _rewrite_manifest(
+        direct_path,
+        lambda payload: payload["compile"].__setitem__("id", payload["compile"]["id"].upper()),
+    )
+
+    with pytest.raises(BundleInputError, match="lowercase"):
+        load_bundle(direct_path, cli_label="direct", function="fn_test")
+    assert paired.compile_id == paired.compile_id.lower()
+
+
+def test_pair_defensively_rejects_case_only_compile_id_difference(
+    tmp_path: Path,
+) -> None:
+    paired = load_bundle(
+        write_valid_bundle(tmp_path / "paired", label="paired", source="same source"),
+        cli_label="paired",
+        function="fn_test",
+    )
+    direct = load_bundle(
+        write_valid_bundle(tmp_path / "direct", label="direct", source="same source"),
+        cli_label="direct",
+        function="fn_test",
+    )
+    case_variant = replace(direct, compile_id=direct.compile_id.upper())
+
+    with pytest.raises(BundleInputError, match="distinct"):
+        validate_bundle_pair(paired, case_variant)
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["", "has space", "path/label", "path\\label", "frontiér"],
+)
+def test_load_bundle_rejects_invalid_label_grammar(tmp_path: Path, label: str) -> None:
+    path = write_valid_bundle(tmp_path / "bundle", label=label, source="paired")
+
+    with pytest.raises(BundleInputError, match=r"\[A-Za-z0-9_-\]\+"):
+        load_bundle(path, cli_label=label, function="fn_test")
 
 
 @pytest.mark.parametrize(
