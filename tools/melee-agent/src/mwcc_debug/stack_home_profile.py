@@ -19,7 +19,8 @@ _UNSTABLE_TEMP_RE = re.compile(r"@\d+")
 _EVIDENCE_SITE_RE = re.compile(r"\bB(?P<block>\d+):(?P<instr>\d+)\b")
 _SPACE_RE = re.compile(r"\s+")
 _PUNCTUATION_SPACE_RE = re.compile(r"\s*([,()[\]])\s*")
-_OPCODE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.]*")
+_OPCODE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.]*(?:[+-])?")
+_MISSING = object()
 
 _BLOCKER_ORDER = {
     "missing-frame-size": 0,
@@ -94,12 +95,18 @@ def _normalize_identity_text(value: object) -> str:
     return _SPACE_RE.sub(" ", normalized).strip()
 
 
-def _normalize_first_def(opcode: object, operands: object) -> tuple[str, str] | None:
-    if not isinstance(opcode, str) or not isinstance(operands, str):
+def _normalize_opcode(value: object) -> str | None:
+    if not isinstance(value, str) or _OPCODE_RE.fullmatch(value) is None or _REGISTER_RE.fullmatch(value) is not None:
         return None
-    normalized_opcode = _normalize_text(opcode).lower()
+    return value.lower()
+
+
+def _normalize_first_def(opcode: object, operands: object) -> tuple[str, str] | None:
+    normalized_opcode = _normalize_opcode(opcode)
+    if normalized_opcode is None or not isinstance(operands, str):
+        return None
     normalized_operands = _normalize_identity_text(operands)
-    if not _OPCODE_RE.fullmatch(normalized_opcode) or not normalized_operands:
+    if not normalized_operands:
         return None
 
     parts = normalized_operands.split(",", maxsplit=1)
@@ -128,10 +135,12 @@ def _first_def_from_candidate(
     if owner_first_def is None:
         return None
 
-    first_def = candidate.get("first_def")
-    if not isinstance(first_def, Mapping):
-        first_def = owner.get("first_def")
-    if isinstance(first_def, Mapping):
+    for container in (candidate, owner):
+        first_def = container.get("first_def", _MISSING)
+        if first_def is _MISSING:
+            continue
+        if not isinstance(first_def, Mapping):
+            return None
         explicit_first_def = _normalize_first_def(first_def.get("opcode"), first_def.get("operands"))
         if explicit_first_def != owner_first_def:
             return None
@@ -143,6 +152,18 @@ def _source_owner_signature(owner: Mapping[str, Any]) -> dict[str, object] | Non
     first_def = _pcode_expression_first_def(owner.get("expression"))
     if confidence != "pcode-first-def" or first_def is None:
         return None
+    explicit_first_def = owner.get("first_def", _MISSING)
+    if explicit_first_def is not _MISSING:
+        if not isinstance(explicit_first_def, Mapping):
+            return None
+        if (
+            _normalize_first_def(
+                explicit_first_def.get("opcode"),
+                explicit_first_def.get("operands"),
+            )
+            != first_def
+        ):
+            return None
 
     signature: dict[str, object] = {
         "confidence": confidence,
@@ -168,14 +189,41 @@ def _source_owner_key(owner_signature: Mapping[str, object]) -> str:
     return json.dumps(owner_signature, sort_keys=True, separators=(",", ":"))
 
 
+def _source_owners_compatible(
+    authoritative: Mapping[str, Any],
+    fallback: Mapping[str, Any],
+) -> bool:
+    authoritative_signature = _source_owner_signature(authoritative)
+    fallback_signature = _source_owner_signature(fallback)
+    if authoritative_signature is None or fallback_signature is None:
+        return False
+    return all(
+        authoritative_signature[key] == fallback_signature[key]
+        for key in authoritative_signature.keys() & fallback_signature.keys()
+    )
+
+
+def _source_owner_from_candidate(candidate: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    source_owner = candidate.get("source_owner", _MISSING)
+    nearest = candidate.get("nearest_source_expression", _MISSING)
+    if source_owner is not _MISSING:
+        if not isinstance(source_owner, Mapping):
+            return None
+        if nearest is not _MISSING:
+            if not isinstance(nearest, Mapping) or not _source_owners_compatible(source_owner, nearest):
+                return None
+        return source_owner
+    if not isinstance(nearest, Mapping):
+        return None
+    return nearest
+
+
 def _compiler_identity(
     candidate: Mapping[str, Any],
 ) -> tuple[str | None, str | None, str | None]:
-    opcode = _normalize_text(candidate.get("opcode")).lower()
-    owner = candidate.get("source_owner")
-    if not isinstance(owner, Mapping):
-        owner = candidate.get("nearest_source_expression")
-    if not opcode or not isinstance(owner, Mapping):
+    opcode = _normalize_opcode(candidate.get("opcode"))
+    owner = _source_owner_from_candidate(candidate)
+    if opcode is None or owner is None:
         return None, None, "unresolved-compiler-temp-home"
 
     first_def = _first_def_from_candidate(candidate, owner)
@@ -373,11 +421,11 @@ def _compiler_homes(
         if not isinstance(raw, Mapping):
             blockers.add("incomplete-stack-slot-evidence")
             continue
-        opcode = _normalize_text(raw.get("opcode")).lower()
+        opcode = _normalize_opcode(raw.get("opcode"))
         offset = raw.get("current_offset")
         mismatch = raw.get("mismatch")
         sequence_key = _candidate_sequence_key(raw, index)
-        if not opcode or not _is_int(offset) or not isinstance(mismatch, Mapping) or sequence_key is None:
+        if opcode is None or not _is_int(offset) or not isinstance(mismatch, Mapping) or sequence_key is None:
             blockers.add("incomplete-stack-slot-evidence")
             continue
         if mismatch.get("opcode") != raw.get("opcode") or mismatch.get("current_offset") != offset:

@@ -199,6 +199,77 @@ def test_pcode_expression_first_def_normalizes_fpr_ids() -> None:
     assert re.search(r"[fr]\d+", left.homes[0].identity, re.IGNORECASE) is None
 
 
+@pytest.mark.parametrize(
+    "opcode",
+    [
+        " stfs",
+        "stfs ",
+        "stfs\tf1,48(r1)",
+        "stfs f1,48(r1)",
+        "@810",
+        "r3",
+        "f1",
+        "48(r1)",
+        "",
+        None,
+        [],
+        7,
+    ],
+    ids=[
+        "leading-space",
+        "trailing-space",
+        "tab-and-operands",
+        "space-and-operands",
+        "temp",
+        "gpr",
+        "fpr",
+        "displacement",
+        "empty",
+        "none",
+        "list",
+        "integer",
+    ],
+)
+def test_candidate_access_opcode_rejects_non_mnemonic_tokens_without_leaking(
+    opcode: object,
+) -> None:
+    candidate = _temp_candidate(20, "fadds f50,f40,f41")
+    candidate["opcode"] = opcode
+    candidate["mismatch"]["opcode"] = opcode
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.homes == ()
+    assert profile.blockers == ("incomplete-stack-slot-evidence",)
+    identity_text = "".join(home.identity for home in profile.homes)
+    if isinstance(opcode, str) and opcode:
+        assert opcode not in identity_text
+
+
+@pytest.mark.parametrize(
+    ("opcode", "normalized"),
+    [
+        ("STFS.", "stfs."),
+        ("BNE+", "bne+"),
+        ("BDNZ-", "bdnz-"),
+        ("PSQ_ST", "psq_st"),
+    ],
+)
+def test_candidate_access_opcode_accepts_ppc_mnemonic_spelling_and_normalizes_lowercase(
+    opcode: str,
+    normalized: str,
+) -> None:
+    profile = build_stack_home_profile(
+        _frame(64),
+        _bridge(_temp_candidate(20, "fadds f50,f40,f41", opcode=opcode)),
+    )
+
+    assert profile.complete is True
+    payload = profile.homes[0].identity.removeprefix("compiler-temp:")
+    assert f'"access_opcode":"{normalized}"' in payload
+    assert opcode not in payload
+
+
 def test_named_home_absorbs_duplicate_bridge_access_instead_of_becoming_temp() -> None:
     profile = build_stack_home_profile(
         _frame(64, _assignment("tmp", 24, 0, "stfs")),
@@ -275,6 +346,92 @@ def test_explicit_first_def_contradicting_pcode_owner_is_rejected() -> None:
     profile = build_stack_home_profile(_frame(64), _bridge(candidate))
 
     assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+@pytest.mark.parametrize("invalid_owner", [None, [], "owner", {}])
+def test_present_invalid_source_owner_does_not_fall_back_to_nearest_expression(
+    invalid_owner: object,
+) -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["source_owner"] = invalid_owner
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+@pytest.mark.parametrize("invalid_owner", [None, [], "owner", {}])
+def test_present_invalid_nearest_expression_fails_closed(invalid_owner: object) -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["nearest_source_expression"] = invalid_owner
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+@pytest.mark.parametrize(
+    "invalid_first_def",
+    [None, [], "fadds f50,f40,f41", {"opcode": "fadds"}],
+)
+def test_present_invalid_candidate_first_def_does_not_fall_back_to_owner(
+    invalid_first_def: object,
+) -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["nearest_source_expression"]["first_def"] = {
+        "opcode": "fadds",
+        "operands": "f50,f40,f41",
+    }
+    candidate["first_def"] = invalid_first_def
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+@pytest.mark.parametrize(
+    "invalid_first_def",
+    [None, [], "fadds f50,f40,f41", {"opcode": "fadds"}],
+)
+def test_present_invalid_owner_first_def_does_not_fall_back_to_expression(
+    invalid_first_def: object,
+) -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["nearest_source_expression"]["first_def"] = invalid_first_def
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+def test_contradictory_simultaneous_source_owner_fields_fail_closed() -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["source_owner"] = {
+        **candidate["nearest_source_expression"],
+        "expression": "fmuls f50,f40,f41",
+    }
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+def test_absent_candidate_first_def_uses_valid_owner_first_def_fallback() -> None:
+    candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    candidate["nearest_source_expression"]["first_def"] = {
+        "opcode": "fadds",
+        "operands": "f50,f40,f41",
+    }
+
+    profile = build_stack_home_profile(_frame(64), _bridge(candidate))
+
+    assert profile.complete is True
+    assert len(profile.homes) == 1
 
 
 def test_real_bridge_pcode_first_def_output_builds_anonymous_home() -> None:
