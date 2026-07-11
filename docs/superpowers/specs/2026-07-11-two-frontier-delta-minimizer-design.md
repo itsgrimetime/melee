@@ -70,7 +70,8 @@ The brainstorming phase established these decisions:
 - The search is closed-world: candidates contain only observed left/right
   deltas.
 - Results use an exact Pareto frontier, not a weighted aggregate score.
-- ObjObject inspection runs for every locally valid candidate by default.
+- ObjObject inspection runs for every successfully compiled, viable candidate
+  by default.
 - The search is exhaustive within its declared budget. It never silently
   truncates the candidate set.
 - Source deltas use AST anchors with exact textual replacements rather than a
@@ -93,9 +94,29 @@ melee-agent debug search delta-minimize \
   [--json]
 ```
 
-`AXIS` accepts `opcode`, `color`, `objobjects`, or `stack-homes`. Overrides are
-recorded in objective provenance. `--no-objobjects` is an explicit provisional
-mode and cannot emit a four-axis joint solution.
+`AXIS` accepts `color`, `objobjects`, or `stack-homes`. Opcode scoring always
+uses the expected object, so an opcode donor override would have no behavioral
+meaning and is not supported. Overrides are recorded in objective provenance.
+`--no-objobjects` is an explicit provisional mode and cannot emit a four-axis
+joint solution.
+
+`--target` accepts `delta-minimize-color-target.v1`, a versioned validation of
+the force-physical target already consumed by `debug target score-source`:
+
+```text
+schema_version: delta-minimize-color-target.v1
+function: FUNCTION
+class_id: INTEGER
+baseline_dump: PATH
+force_phys: { IG_INDEX: PHYSICAL_REGISTER, ... }
+coalesce_preservation: BOOLEAN
+```
+
+The baseline dump supplies the role descriptors used to reanchor its IG-indexed
+mapping into each candidate. The command validates schema version, function,
+class, dump availability, IG uniqueness/resolution, physical-register values,
+and coalesce policy before profiling. It does not accept
+`role_descriptor.TargetSpec` JSON directly.
 
 The installed `melee-agent` entrypoint intentionally follows the shared tooling
 checkout. Branch-local development and verification therefore use
@@ -113,8 +134,10 @@ support. It matches top-level functions and declarations, then anchors changed
 text to the smallest supported semantic construct: function signature,
 parameter list, declaration, call expression, statement, or expression.
 
-It emits a `DeltaManifest` containing `DeltaAtom` records and constraints.
-Formatting-only changes do not become atoms.
+It emits a `DeltaManifest` containing `DeltaAtom` records and dependency
+constraints. Standalone formatting-only changes are aggregated into at most one
+`presentation-only` atom. This preserves exact endpoint reproduction without
+turning whitespace into an ordinary permutation search.
 
 ### 6.2 ObjectiveProfiler
 
@@ -138,10 +161,12 @@ reimplementing compiler workflows.
 
 ### 6.5 ParetoReducer
 
-`ParetoReducer` excludes incomplete profiles from the exact frontier, computes
-four-axis dominance, retains every distinct non-dominated vector, minimizes
-equivalent masks from both parents, and selects a deterministic `best_next`
-representative for human convenience.
+`ParetoReducer` computes four-axis dominance only after the evaluator proves
+completeness for every viable mask. Any viable incomplete profile blocks exact
+publication rather than being omitted. Once complete, the reducer retains every
+non-dominated mask, groups equivalent vectors, minimizes equivalent masks from
+both parents, and selects a deterministic `best_next` representative for human
+convenience.
 
 ## 7. Delta contracts
 
@@ -158,7 +183,6 @@ left_text / right_text
 left_fingerprint / right_fingerprint
 affected_functions
 requires[]
-incompatible_with[]
 semantic_summary
 ```
 
@@ -180,8 +204,11 @@ coupling includes:
   not source-equivalent to either parent.
 
 The extractor may use dependency edges when two edits remain independently
-meaningful but one requires the other. Overlapping replacements that cannot be
-normalized become incompatibilities.
+meaningful but one requires the other. Binary atoms are never mutually
+incompatible: the all-right mask must remain legal. Overlapping replacements
+must be merged into one composite atom; an overlap that cannot be merged stops
+extraction with `unmergeable-overlapping-delta`. Dependency cycles are collapsed
+into one composite atom before enumeration.
 
 When symbol or call-site coupling cannot be resolved uniquely, extraction
 stops with `ambiguous-delta-coupling`. The report includes candidate spans and
@@ -191,11 +218,28 @@ The tool assumes the two user-supplied parents are semantically acceptable. It
 does not prove their equivalence, but it must not introduce known
 signature/call binding errors while recombining them.
 
+### 7.3 Supported semantic-binding subset
+
+The MVP safely couples only bindings that can be resolved within one parsed
+translation unit: top-level function definitions/declarations and direct calls
+whose callee is an unshadowed identifier. It supports parameter reorders,
+renames, and corresponding direct call arguments in that subset.
+
+Changed bindings are unsupported when they depend on macro-generated calls or
+definitions, changed conditional-compilation branches, indirect/function-pointer
+calls, ambiguous shadowing, K&R declarations, or unresolved external call
+sites. The extractor detects these shapes conservatively and stops with
+`unsupported-semantic-binding`; it does not infer bindings from tree-sitter
+syntax alone. Unchanged macro use outside affected bindings remains allowed.
+
 ## 8. Enumeration and minimization
 
 The left source is the all-zero mask and the right source is the all-one mask.
-Dependencies and incompatibilities define the legal masks. A deterministic DFS
-enumerates and counts the complete legal set before compilation.
+Dependencies define the legal masks. Extraction must prove both endpoint masks
+legal and materialize them byte-for-byte equal to their respective input files.
+Failure is `endpoint-reproduction-failed`, a run-level extractor invariant.
+A deterministic DFS enumerates and counts the complete legal set before
+compilation.
 
 If the legal count exceeds `--max-candidates`, the run stops with
 `candidate-budget-exceeded`, reports the exact required count, and writes the
@@ -221,6 +265,18 @@ directions:
 Both directional representatives are retained when they differ. Source size
 is not a fifth Pareto objective; it only reduces candidates that already have
 the same four-axis vector.
+
+The raw frontier remains separate from these minimized views:
+
+- `pareto.candidate_ids` contains every complete, viable, non-dominated mask.
+- Each objective-vector group lists all masks producing that vector.
+- `minimal_from_left` and `minimal_from_right` are directional subsets of each
+  group.
+- The deterministic representative is metadata on the group, not a deletion
+  from the raw frontier.
+- `joint_solutions` is the union of left- and right-minimal candidates in every
+  joint-zero group; `joint_zero_all_candidate_ids` preserves the unminimized
+  membership.
 
 ## 9. Objective derivation
 
@@ -248,6 +304,13 @@ the assignment target is unambiguous, the parent with the lower assignment
 distance becomes the color donor for secondary graph/order comparison;
 `--donor color=...` may override only that secondary donor, not the absolute
 assignment target.
+
+Simplify order, select order, interference edges, coalesce mappings, and spill
+state have no binary-side absolute reference. Each compares against the selected
+color donor's pcdump profile after role reanchoring. If parent assignment
+distances tie, the secondary profiles may choose no donor only when they are
+identical. A tie with different secondary profiles stops with
+`ambiguous-color-donor` and requires `--donor color=left|right`.
 
 ### 9.3 ObjObject donor
 
@@ -329,8 +392,10 @@ comparison. The distance is:
 
 The tuple is ordered lexicographically within this axis. Desired physical
 assignments are therefore more important than incidental graph similarity.
-The existing COLORGRAPH, simplify, select, coalesce, and spill parsers provide
-the evidence.
+The assignment component compares to the absolute force-physical target. Every
+remaining component compares to the role-reanchored color-donor pcdump recorded
+in the objective manifest. The existing COLORGRAPH, simplify, select, coalesce,
+and spill parsers provide the evidence.
 
 ### 10.3 ObjObjectOrderDistance
 
@@ -347,7 +412,9 @@ The distance is:
 ```
 
 Repeated indistinguishable identities that cannot be paired deterministically
-produce incomplete evidence rather than arbitrary matching.
+produce incomplete evidence rather than arbitrary matching. Because the
+candidate remains viable, that incomplete evidence makes the whole exact run
+`incomplete` until resolved.
 
 ### 10.4 StackHomeDistance
 
@@ -373,22 +440,34 @@ Each axis tuple is compared lexicographically. Candidate A dominates candidate
 B when A is no worse on all four axis values and strictly better on at least
 one. The implementation does not combine axes with weights.
 
-A profile missing any required axis is excluded from the exact frontier. A
-completed `--no-objobjects` run publishes a separate provisional three-axis
-frontier with `exact_four_axis: false`.
+Exact publication requires every legal mask to end in exactly one of two
+states: compiler-rejected with concrete diagnostics, or viable and complete on
+every required axis. A viable profile missing any required metric could
+dominate the visible candidates, so it makes the entire run `incomplete`; it is
+never silently excluded. A completed `--no-objobjects` run publishes a separate
+provisional three-axis frontier with `exact_four_axis: false`.
+The same all-viable-candidates completeness requirement applies to the three
+requested axes in provisional mode.
 
 “Exact” means exact for the immutable objective manifest, including any proxy
 references explicitly recorded there. It does not claim access to unavailable
 retail front-end state.
 
 A four-axis joint solution requires every axis distance to equal its zero
-tuple. When no joint solution exists, the run still succeeds with
-`status: frontier` and retains the complete non-dominated set.
+tuple. Completed-status precedence is `matched`, then `joint-zero`, then
+`frontier`: any candidate passing the repository's exact object/checkdiff gate
+produces `matched` regardless of proxy-axis distance; otherwise an all-zero
+objective vector produces `joint-zero`; otherwise the exact non-dominated set
+produces `frontier`. Exact-match candidates are always retained separately even
+if a proxy objective would keep them off the Pareto frontier. If an opcode zero
+tuple disagrees with checkdiff structural truth, the evidence is contradictory
+and the run becomes `incomplete` rather than reporting any completed status.
 
 `best_next` is a presentation convenience, not a replacement for the frontier.
-It sorts frontier candidates by joint-zero axis count, then the four axis
-tuples in fixed `opcode`, `color`, `objobjects`, `stack-homes` order, then
-minimized parent distance, changed bytes, and stable candidate ID.
+It sorts exact-object matches first, then frontier candidates by joint-zero axis
+count, the four axis tuples in fixed `opcode`, `color`, `objobjects`,
+`stack-homes` order, minimized parent distance, changed bytes, and stable
+candidate ID.
 
 ## 12. Execution and caching
 
@@ -399,7 +478,7 @@ The command runs these resumable phases:
 3. Extract, couple, and validate deltas in `delta-manifest.json`.
 4. Count and enumerate every legal mask.
 5. Compile every candidate and collect checkdiff/pcdump evidence.
-6. Inspect every locally valid candidate for ObjObjects.
+6. Inspect every successfully compiled, viable candidate for ObjObjects.
 7. Compute and minimize the Pareto frontier.
 
 Candidate source and evidence are content-addressed. A cache key includes:
@@ -425,9 +504,7 @@ and resume the first incomplete phase.
 Candidate-local failures are evidence, not fatal run errors:
 
 - Syntax or compiler rejection.
-- An invalid materialized anchor.
-- Target function absent from candidate output.
-- Candidate-specific pcdump failure with compiler diagnostics.
+- Pcdump absence caused directly by that recorded compiler rejection.
 
 They remain in the ledger and are excluded from scoring.
 
@@ -436,6 +513,9 @@ Run-level failures stop exact publication:
 - Invalid inputs or missing expected object.
 - Ambiguous donor, target, or semantic coupling.
 - Candidate-budget or atom-space overflow.
+- Invalid materialized anchors or endpoint-reproduction failure.
+- A successfully compiled candidate whose target function is absent from the
+  pcdump or whose required metric cannot be produced.
 - Inspector unavailability or timeout.
 - Infrastructure pcdump/build failure.
 - Corrupt or contradictory cached evidence.
@@ -446,7 +526,10 @@ contains the next command or override needed to continue.
 
 Completed statuses are:
 
-- `matched`: at least one joint-zero candidate.
+- `matched`: at least one exact object/checkdiff match.
+- `joint-zero`: every declared objective is zero, but exact object equality was
+  not established. Proxy references remain prominently labeled but do not
+  prevent `matched` when the independent exact-object gate passes.
 - `frontier`: exact evaluation completed without a joint-zero candidate.
 - `provisional`: explicitly requested incomplete-axis evaluation completed.
 - `incomplete`: exact evaluation did not finish.
@@ -468,11 +551,15 @@ candidate_budget
 candidate_counts
 candidates[]
 pareto.candidate_ids[]
-pareto.objective_vectors[]
-pareto.minimal_from_left[]
-pareto.minimal_from_right[]
+pareto.groups[].objective_vector
+pareto.groups[].candidate_ids[]
+pareto.groups[].minimal_from_left[]
+pareto.groups[].minimal_from_right[]
+pareto.groups[].representative
 best_next
+exact_match_candidate_ids[]
 joint_solutions[]
+joint_zero_all_candidate_ids[]
 cache_stats
 blockers[]
 ```
@@ -489,17 +576,26 @@ action without hiding the JSON evidence.
 
 Cover:
 
-- AST anchoring and formatting-only suppression.
+- AST anchoring and aggregation of standalone formatting into one presentation
+  atom.
 - Signature/call coupling for same-typed reordered parameters.
-- Rename, declaration/use, dependency, incompatibility, and ambiguity cases.
+- Rename, declaration/use, dependency, overlap merge, and ambiguity cases.
+- Unsupported macro-generated, indirect, shadowed, and preprocessor-dependent
+  bindings fail closed.
 - Exact legal-mask counting and budget preflight.
-- Deterministic materialization and anchor-fingerprint rejection.
+- Deterministic materialization, byte-exact legal endpoints, and
+  anchor-fingerprint rejection as a run invariant.
 - Donor inference, ties, conflicts, overrides, and proxy provenance.
+- Versioned target-schema validation and role reanchoring from its baseline
+  dump.
 - Opcode CFG normalization and structural-zero cross-checking.
 - Role-anchored color tuple construction.
 - ObjObject normalization, repeated-identity ambiguity, and order distance.
 - Named, symbolic, spill, and compiler-temp stack-home distance.
 - Four-axis dominance, incomplete evidence, and deterministic `best_next`.
+- Any viable incomplete candidate prevents exact frontier publication.
+- Completed-status precedence for exact matches, joint-zero vectors, and
+  ordinary frontiers, including an exact match that differs from a proxy donor.
 - Bidirectional minimization of equivalent masks.
 - Cache-key stability, stale evidence, atomic resume, and corruption handling.
 
@@ -511,8 +607,10 @@ the other wins stack homes while preserving opcode shape. A deterministic fake
 compiler/inspector proves that:
 
 - Every legal mask is evaluated once.
+- The all-zero and all-one masks are legal and reproduce the input files
+  byte-for-byte.
 - Compile-invalid masks remain visible but never enter the frontier.
-- All valid masks receive all four metrics.
+- Every successfully compiled, viable mask receives all four metrics.
 - The exact Pareto frontier is reproducible.
 - Equivalent winners are minimized from both parents.
 - Interrupted evaluation resumes without repeating valid cached work.
@@ -526,7 +624,8 @@ budget overflow, provisional mode, and interrupted infrastructure.
 Run the command on the retained approximately 99.84% wrapper source and 99.66%
 direct source for `mnDiagram_DrawFighterHeaders`. Acceptance requires:
 
-- A complete four-axis profile for both parents and every valid hybrid.
+- A complete four-axis profile for both parents and every successfully
+  compiled, viable hybrid.
 - Exact enumeration within the declared budget.
 - Retained sources and evidence for every Pareto candidate.
 - Reproducible minimized masks from both parents.
