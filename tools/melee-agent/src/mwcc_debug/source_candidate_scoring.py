@@ -344,6 +344,7 @@ def source_row_to_candidate_score(row: Mapping[str, Any]):
             if row.get("structural_guard_error") is not None
             else None
         ),
+        checkdiff_evidence=_mapping_or_none(row.get("checkdiff_evidence")),
         source_file=_str_or_none(row.get("source_file")),
         source_retained=_str_or_none(row.get("source_retained")),
         pcdump_path=_str_or_none(row.get("pcdump_path")),

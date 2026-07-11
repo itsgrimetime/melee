@@ -2208,6 +2208,9 @@ def _apply_score_source_checkdiff_guard(
     payload["checkdiff_match_percent"] = match_percent
     payload["structural_guard"] = structural_guard
     payload["structural_guard_error"] = structural_guard_error or match_percent_error
+    checkdiff_payload = getattr(real_score, "checkdiff_payload", None)
+    if isinstance(checkdiff_payload, dict):
+        payload["checkdiff_evidence"] = checkdiff_payload
     guard = structural_guard if isinstance(structural_guard, dict) else {}
     normalized = guard.get("normalized_diff_lines")
     if (

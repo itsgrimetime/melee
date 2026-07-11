@@ -1,0 +1,773 @@
+"""Strict capture and four-axis profiling for delta-search candidates."""
+
+from __future__ import annotations
+
+import inspect
+import subprocess
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
+from ...mwcc_debug import role_descriptor, role_reanchor
+from ...mwcc_debug.colorgraph_profile import build_colorgraph_profile, colorgraph_distance
+from ...mwcc_debug.diff_capture import DiffInput, read_inspect_input_if_available
+from ...mwcc_debug.objobject_profile import objobject_order_distance, parse_objobject_profile
+from ...mwcc_debug.opcode_graph import opcode_graph_distance, parse_opcode_graph
+from ...mwcc_debug.source_candidate_scoring import ScoreSourceConfig, score_retained_source_rows
+from ...mwcc_debug.stack_home_profile import build_stack_home_profile, stack_home_distance
+from .contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
+from .objectives import ObjectiveManifest
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    raise DeltaMinimizeError("invalid-raw-candidate-evidence")
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True)
+class RawCandidateEvidence:
+    candidate_id: str
+    mask: int
+    source_path: str
+    source_hash: str
+    compile_status: str
+    viable: bool
+    pcdump_path: str | None
+    checkdiff_evidence: Mapping[str, Any] | None
+    inspect_text: str | None
+    compiler_stderr: str
+    blockers: tuple[str, ...] = ()
+    inspection_mode: str = "objobjects"
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.candidate_id, str)
+            or not self.candidate_id
+            or not _is_int(self.mask)
+            or self.mask < 0
+            or not isinstance(self.source_path, str)
+            or not self.source_path
+            or not isinstance(self.source_hash, str)
+            or not self.source_hash
+            or self.compile_status not in {"compiled", "rejected"}
+            or not isinstance(self.viable, bool)
+            or (self.compile_status == "rejected") != (not self.viable)
+            or (self.pcdump_path is not None and (not isinstance(self.pcdump_path, str) or not self.pcdump_path))
+            or (self.checkdiff_evidence is not None and not isinstance(self.checkdiff_evidence, Mapping))
+            or (self.inspect_text is not None and not isinstance(self.inspect_text, str))
+            or not isinstance(self.compiler_stderr, str)
+            or not isinstance(self.blockers, tuple)
+            or any(not isinstance(item, str) or not item for item in self.blockers)
+            or self.inspection_mode not in {"objobjects", "no-objobjects"}
+        ):
+            raise DeltaMinimizeError("invalid-raw-candidate-evidence")
+        if self.checkdiff_evidence is not None:
+            object.__setattr__(self, "checkdiff_evidence", _freeze(self.checkdiff_evidence))
+        object.__setattr__(self, "blockers", tuple(dict.fromkeys(self.blockers)))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidate_id": self.candidate_id,
+            "mask": self.mask,
+            "source_path": self.source_path,
+            "source_hash": self.source_hash,
+            "compile_status": self.compile_status,
+            "viable": self.viable,
+            "pcdump_path": self.pcdump_path,
+            "checkdiff_evidence": None if self.checkdiff_evidence is None else _thaw(self.checkdiff_evidence),
+            "inspect_text": self.inspect_text,
+            "compiler_stderr": self.compiler_stderr,
+            "blockers": list(self.blockers),
+            "inspection_mode": self.inspection_mode,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RawCandidateEvidence:
+        fields = {
+            "candidate_id",
+            "mask",
+            "source_path",
+            "source_hash",
+            "compile_status",
+            "viable",
+            "pcdump_path",
+            "checkdiff_evidence",
+            "inspect_text",
+            "compiler_stderr",
+            "blockers",
+            "inspection_mode",
+        }
+        if not isinstance(data, Mapping) or set(data) != fields:
+            raise DeltaMinimizeError("invalid-raw-candidate-evidence")
+        raw_blockers = data.get("blockers")
+        if not isinstance(raw_blockers, (list, tuple)) or isinstance(raw_blockers, (str, bytes)):
+            raise DeltaMinimizeError("invalid-raw-candidate-evidence")
+        try:
+            return cls(**{**dict(data), "blockers": tuple(raw_blockers)})
+        except (TypeError, ValueError) as error:
+            raise DeltaMinimizeError("invalid-raw-candidate-evidence") from error
+
+
+@dataclass(frozen=True)
+class ParentEvidenceBundle:
+    left: RawCandidateEvidence
+    right: RawCandidateEvidence
+    cflags_hash: str
+    compiler_fingerprint: str
+    expected_object_hash: str
+    inspector_version: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.left, RawCandidateEvidence)
+            or not isinstance(self.right, RawCandidateEvidence)
+            or any(
+                not isinstance(value, str) or not value
+                for value in (
+                    self.cflags_hash,
+                    self.compiler_fingerprint,
+                    self.expected_object_hash,
+                    self.inspector_version,
+                )
+            )
+        ):
+            raise DeltaMinimizeError("invalid-parent-evidence-bundle")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "left": self.left.to_dict(),
+            "right": self.right.to_dict(),
+            "cflags_hash": self.cflags_hash,
+            "compiler_fingerprint": self.compiler_fingerprint,
+            "expected_object_hash": self.expected_object_hash,
+            "inspector_version": self.inspector_version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ParentEvidenceBundle:
+        fields = {
+            "left",
+            "right",
+            "cflags_hash",
+            "compiler_fingerprint",
+            "expected_object_hash",
+            "inspector_version",
+        }
+        if not isinstance(data, Mapping) or set(data) != fields:
+            raise DeltaMinimizeError("invalid-parent-evidence-bundle")
+        try:
+            return cls(
+                left=RawCandidateEvidence.from_dict(data["left"]),
+                right=RawCandidateEvidence.from_dict(data["right"]),
+                cflags_hash=data["cflags_hash"],
+                compiler_fingerprint=data["compiler_fingerprint"],
+                expected_object_hash=data["expected_object_hash"],
+                inspector_version=data["inspector_version"],
+            )
+        except (KeyError, TypeError) as error:
+            raise DeltaMinimizeError("invalid-parent-evidence-bundle") from error
+
+
+@dataclass(frozen=True)
+class CandidateEvaluationConfig:
+    melee_root: Path
+    function: str
+    cflags_from: Path
+    target_path: Path
+    output_dir: Path
+    include_objobjects: bool
+    score_timeout: float = 120.0
+    inspect_timeout: int = 180
+
+    def __post_init__(self) -> None:
+        if (
+            any(
+                not isinstance(value, Path)
+                for value in (self.melee_root, self.cflags_from, self.target_path, self.output_dir)
+            )
+            or not isinstance(self.function, str)
+            or not self.function
+            or not isinstance(self.include_objobjects, bool)
+            or isinstance(self.score_timeout, bool)
+            or not isinstance(self.score_timeout, (int, float))
+            or self.score_timeout <= 0
+            or not _is_int(self.inspect_timeout)
+            or self.inspect_timeout <= 0
+        ):
+            raise DeltaMinimizeError("invalid-candidate-evaluation-config")
+
+
+@dataclass(frozen=True)
+class EvaluationBackends:
+    score_rows: Callable[..., list[dict[str, Any]]]
+    inspect_source: Callable[..., str]
+
+    def __post_init__(self) -> None:
+        if not callable(self.score_rows) or not callable(self.inspect_source):
+            raise TypeError("evaluation backends must be callable")
+
+
+def _score_source_config(config: CandidateEvaluationConfig) -> ScoreSourceConfig:
+    return ScoreSourceConfig(
+        repo_root=config.melee_root,
+        function=config.function,
+        target=config.target_path,
+        cflags_from=config.cflags_from,
+        expression_source=config.cflags_from,
+        expression_baseline=None,
+        expression_reg_class="gpr",
+        output_dir=config.output_dir,
+        timeout=config.score_timeout,
+        checkdiff_guard=True,
+        full_unit_source=True,
+    )
+
+
+def _default_inspect_source(
+    source: Path,
+    function: str,
+    output: Path,
+    *,
+    timeout: int,
+) -> str:
+    melee_root = Path(__file__).resolve().parents[5]
+    text = read_inspect_input_if_available(
+        DiffInput("delta-candidate", str(source), "source", source),
+        function=function,
+        melee_root=melee_root,
+        timeout=timeout,
+        output_path=output,
+    )
+    if text is None:
+        raise DeltaMinimizeError("inspector-failed", {"source": str(source)})
+    return text
+
+
+def default_evaluation_backends() -> EvaluationBackends:
+    return EvaluationBackends(score_retained_source_rows, _default_inspect_source)
+
+
+def _candidate_blockers(row: Mapping[str, Any]) -> tuple[str, ...]:
+    out: list[str] = []
+    raw = row.get("blockers")
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        for item in raw:
+            reason = item.get("reason") if isinstance(item, Mapping) else item
+            if isinstance(reason, str) and reason:
+                out.append(reason)
+    return tuple(dict.fromkeys(out))
+
+
+def _compile_rejected(row: Mapping[str, Any]) -> bool:
+    return row.get("score_error_kind") == "candidate" and not row.get("pcdump_path")
+
+
+def _invoke_inspector(
+    backend: Callable[..., str],
+    source: Path,
+    function: str,
+    output: Path,
+    timeout: int,
+) -> str:
+    try:
+        parameters = inspect.signature(backend).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "timeout" in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    ):
+        result = backend(source, function, output, timeout=timeout)
+    else:
+        result = backend(source, function, output)
+    if not isinstance(result, str) or not result:
+        raise DeltaMinimizeError("inspector-failed", {"source": str(source)})
+    return result
+
+
+def capture_candidate(
+    candidate: Any,
+    config: CandidateEvaluationConfig,
+    *,
+    backends: EvaluationBackends | None = None,
+    store: Any,
+) -> RawCandidateEvidence:
+    """Capture one candidate, reusing only provenance-identical complete evidence."""
+
+    if not isinstance(config, CandidateEvaluationConfig):
+        raise DeltaMinimizeError("invalid-candidate-evaluation-config")
+    try:
+        candidate_id = candidate.candidate_id
+        mask = candidate.mask
+        source_path = candidate.source_path
+        source_hash = candidate.source_hash
+    except AttributeError as error:
+        raise DeltaMinimizeError("invalid-candidate-evidence-input") from error
+    if not isinstance(source_path, Path) or not source_path.is_file():
+        raise DeltaMinimizeError("invalid-candidate-source")
+
+    key = store.evidence_key(candidate, config)
+    cached = store.load_evidence(key)
+    if cached is not None:
+        evidence = RawCandidateEvidence.from_dict(cached)
+        if (
+            evidence.candidate_id != candidate_id
+            or evidence.mask != mask
+            or evidence.source_path != str(source_path)
+            or evidence.source_hash != source_hash
+            or evidence.inspection_mode != ("objobjects" if config.include_objobjects else "no-objobjects")
+        ):
+            raise DeltaMinimizeError("corrupt-cached-evidence")
+        return evidence
+    if store.evidence_path(key).exists():
+        raise DeltaMinimizeError("corrupt-cached-evidence")
+
+    active = backends or default_evaluation_backends()
+    rows = active.score_rows(
+        [
+            {
+                "candidate_id": candidate_id,
+                "source_file": str(source_path),
+                "source_retained": str(source_path),
+                "full_unit_source": True,
+            }
+        ],
+        _score_source_config(config),
+    )
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], Mapping):
+        raise DeltaMinimizeError("malformed-score-source-result")
+    row = rows[0]
+    if row.get("candidate_id") not in {None, candidate_id}:
+        raise DeltaMinimizeError("malformed-score-source-result")
+    if row.get("score_error_kind") == "infrastructure":
+        raise DeltaMinimizeError(
+            "candidate-score-infrastructure",
+            {"candidate_id": candidate_id, "error": row.get("error")},
+        )
+
+    rejected = _compile_rejected(row)
+    pcdump = row.get("pcdump_path")
+    if pcdump is not None and (not isinstance(pcdump, str) or not pcdump):
+        raise DeltaMinimizeError("malformed-score-source-result")
+    checkdiff = row.get("checkdiff_evidence")
+    if checkdiff is not None and not isinstance(checkdiff, Mapping):
+        raise DeltaMinimizeError("malformed-score-source-result")
+    evidence = RawCandidateEvidence(
+        candidate_id=candidate_id,
+        mask=mask,
+        source_path=str(source_path),
+        source_hash=source_hash,
+        compile_status="rejected" if rejected else "compiled",
+        viable=not rejected,
+        pcdump_path=pcdump,
+        checkdiff_evidence=checkdiff,
+        inspect_text=None,
+        compiler_stderr=str(row.get("score_stderr") or ""),
+        blockers=_candidate_blockers(row),
+        inspection_mode="objobjects" if config.include_objobjects else "no-objobjects",
+    )
+    if evidence.viable and config.include_objobjects:
+        try:
+            inspect_text = _invoke_inspector(
+                active.inspect_source,
+                source_path,
+                config.function,
+                store.inspect_output_path(candidate_id),
+                config.inspect_timeout,
+            )
+        except (subprocess.TimeoutExpired, TimeoutError) as error:
+            raise DeltaMinimizeError("inspector-timeout", {"candidate_id": candidate_id}) from error
+        except DeltaMinimizeError:
+            raise
+        except Exception as error:
+            raise DeltaMinimizeError("inspector-failed", {"candidate_id": candidate_id}) from error
+        evidence = RawCandidateEvidence(
+            **{**evidence.to_dict(), "blockers": evidence.blockers, "inspect_text": inspect_text}
+        )
+
+    store.write_evidence(key, evidence.to_dict())
+    return evidence
+
+
+def _add(blockers: list[str], reason: str) -> None:
+    if reason not in blockers:
+        blockers.append(reason)
+
+
+def _asm_lines(payload: Mapping[str, Any], key: str) -> list[str] | None:
+    value = payload.get(key)
+    if (
+        not isinstance(value, (list, tuple))
+        or not value
+        or any(not isinstance(item, str) or not item for item in value)
+    ):
+        return None
+    return list(value)
+
+
+def _structural_status(payload: Mapping[str, Any]) -> str:
+    if payload.get("match") is True:
+        return "structural-match"
+    classification = payload.get("classification")
+    primary = classification.get("primary") if isinstance(classification, Mapping) else None
+    if primary in {"instruction-identical", "relocation-label-only", "normalized-structural-match"}:
+        return "structural-match"
+    return str(primary or "unknown")
+
+
+def _load_text(path_value: str | None) -> str:
+    if not isinstance(path_value, str) or not path_value:
+        raise ValueError("missing path")
+    path = Path(path_value)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("missing path")
+    return path.read_text(encoding="utf-8")
+
+
+def _target_spec(data: Mapping[str, Any]) -> role_descriptor.TargetSpec:
+    if not isinstance(data, Mapping):
+        raise ValueError("invalid target spec")
+    roles_raw = data.get("roles")
+    if not isinstance(roles_raw, (list, tuple)):
+        raise ValueError("invalid target spec")
+    roles: list[role_descriptor.TargetRoleSpec] = []
+    for raw in roles_raw:
+        if not isinstance(raw, Mapping):
+            raise ValueError("invalid target spec")
+        descriptor_raw = raw.get("descriptor")
+        descriptor = None
+        if isinstance(descriptor_raw, Mapping):
+            descriptor = role_descriptor.RoleDescriptor(
+                **{
+                    **dict(descriptor_raw),
+                    "use_site_multiset": tuple(tuple(item) for item in descriptor_raw.get("use_site_multiset", ())),
+                    "live_range": tuple(descriptor_raw.get("live_range", ())),
+                }
+            )
+        roles.append(
+            role_descriptor.TargetRoleSpec(
+                original_ig=raw["original_ig"],
+                desired_phys=raw["desired_phys"],
+                class_id=raw["class_id"],
+                descriptor=descriptor,
+                role_order_rank=raw.get("role_order_rank"),
+            )
+        )
+    return role_descriptor.TargetSpec(
+        function=data["function"],
+        target_kind=data["target_kind"],
+        target_coverage=data["target_coverage"],
+        causal_closure=data["causal_closure"],
+        provenance=_thaw(data["provenance"]),
+        roles=roles,
+    )
+
+
+def _compile(raw: RawCandidateEvidence, function: str) -> role_descriptor.Compile:
+    return role_descriptor.Compile.from_text(
+        _load_text(raw.pcdump_path),
+        function,
+        Path(raw.source_path).read_text(encoding="utf-8") if Path(raw.source_path).is_file() else "",
+    )
+
+
+def _donor_raw(parents: ParentEvidenceBundle | None, side: str | None) -> RawCandidateEvidence | None:
+    if parents is None:
+        return None
+    return parents.right if side == "right" else parents.left
+
+
+def _color_axis(
+    evidence: RawCandidateEvidence,
+    objective: ObjectiveManifest,
+    parents: ParentEvidenceBundle,
+) -> tuple[int, int, int, int, int, int]:
+    donor_raw = _donor_raw(parents, objective.color_donor)
+    if donor_raw is None:
+        raise ValueError("missing donor")
+    candidate_payload = evidence.checkdiff_evidence or {}
+    donor_payload = donor_raw.checkdiff_evidence or {}
+    candidate_explicit = _explicit_color_role_map(candidate_payload)
+    donor_explicit = _explicit_color_role_map(donor_payload)
+    desired = dict(objective.desired_phys)
+    if candidate_explicit is not None or donor_explicit is not None:
+        if candidate_explicit is None or donor_explicit is None:
+            raise ValueError("partial explicit color role evidence")
+        candidate_profile = build_colorgraph_profile(
+            _load_text(evidence.pcdump_path),
+            objective.function,
+            objective.class_id,
+            candidate_explicit,
+            required_roles=frozenset(desired),
+        )
+        donor_profile = build_colorgraph_profile(
+            _load_text(donor_raw.pcdump_path),
+            objective.function,
+            objective.class_id,
+            donor_explicit,
+            required_roles=frozenset(desired),
+        )
+        return tuple(colorgraph_distance(candidate_profile, donor_profile, desired).as_tuple())  # type: ignore[return-value]
+
+    candidate_compile = _compile(evidence, objective.function)
+    donor_compile = _compile(donor_raw, objective.function)
+    target = _target_spec(objective.target_spec)
+
+    candidate_target = role_reanchor.reanchor(target, candidate_compile, class_id=objective.class_id)
+    donor_target = role_reanchor.reanchor(target, donor_compile, class_id=objective.class_id)
+    if set(candidate_target.matched.values()) != set(desired) or set(donor_target.matched.values()) != set(desired):
+        raise ValueError("incomplete target reanchor")
+
+    donor_descriptors = role_descriptor.build_descriptors(donor_compile, objective.class_id)
+    if not donor_descriptors:
+        raise ValueError("missing donor roles")
+    graph_target = role_descriptor.build_target_spec(
+        donor_compile,
+        {ig_idx: 0 for ig_idx in donor_descriptors},
+        objective.class_id,
+        "force_proof_proxy",
+        {"inference": "delta-candidate-color-profile"},
+    )
+    candidate_graph = role_reanchor.reanchor(graph_target, candidate_compile, class_id=objective.class_id)
+    if _load_text(evidence.pcdump_path) == _load_text(donor_raw.pcdump_path):
+        # Byte-identical backend evidence has an exact IG identity relation;
+        # using it is stronger than asking the descriptor matcher to break
+        # ties between otherwise indistinguishable roles.
+        candidate_graph_roles = {ig_idx: ig_idx for ig_idx in donor_descriptors}
+    else:
+        if candidate_graph.diagnostics or set(candidate_graph.matched.values()) != set(donor_descriptors):
+            raise ValueError("incomplete graph reanchor")
+        candidate_graph_roles = candidate_graph.matched
+
+    donor_target_roles = {ig_idx: original for ig_idx, original in donor_target.matched.items()}
+    donor_role_map = {ig_idx: donor_target_roles.get(ig_idx, 1_000_000 + ig_idx) for ig_idx in donor_descriptors}
+    candidate_role_map = {
+        candidate_ig: donor_role_map[donor_ig] for candidate_ig, donor_ig in candidate_graph_roles.items()
+    }
+    candidate_role_map.update(candidate_target.matched)
+    candidate_profile = build_colorgraph_profile(
+        _load_text(evidence.pcdump_path),
+        objective.function,
+        objective.class_id,
+        candidate_role_map,
+        required_roles=frozenset(desired),
+    )
+    donor_profile = build_colorgraph_profile(
+        _load_text(donor_raw.pcdump_path),
+        objective.function,
+        objective.class_id,
+        donor_role_map,
+        required_roles=frozenset(desired),
+    )
+    return tuple(colorgraph_distance(candidate_profile, donor_profile, desired).as_tuple())  # type: ignore[return-value]
+
+
+def _explicit_color_role_map(payload: Mapping[str, Any]) -> dict[int, int] | None:
+    raw = payload.get("color_role_map")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping) or not raw:
+        raise ValueError("invalid explicit color role map")
+    result: dict[int, int] = {}
+    for raw_ig, raw_role in raw.items():
+        if isinstance(raw_ig, str) and raw_ig.isdecimal():
+            ig_idx = int(raw_ig)
+        elif _is_int(raw_ig):
+            ig_idx = raw_ig
+        else:
+            raise ValueError("invalid explicit color role map")
+        if ig_idx < 0 or not _is_int(raw_role) or raw_role < 0 or ig_idx in result:
+            raise ValueError("invalid explicit color role map")
+        result[ig_idx] = raw_role
+    if len(set(result.values())) != len(result):
+        raise ValueError("invalid explicit color role map")
+    return result
+
+
+def _frame_and_stack(payload: Mapping[str, Any], function: str) -> tuple[Mapping[str, Any], Mapping[str, Any] | None]:
+    frame = payload.get("frame_report")
+    stack = payload.get("stack_slot_report")
+    if isinstance(frame, Mapping):
+        return _thaw(frame), _thaw(stack) if isinstance(stack, Mapping) else None
+    classification = payload.get("classification")
+    classification = classification if isinstance(classification, Mapping) else {}
+    sizes = classification.get("stack_frame_sizes")
+    localizer = classification.get("stack_slot_localizer")
+    if not isinstance(sizes, Mapping):
+        raise ValueError("missing frame report")
+    current_size = sizes.get("current_frame_size")
+    frame = {
+        "function": function,
+        "current": {
+            "frame_size": current_size,
+            "stack_home_assignment_status": "unavailable-no-resolved-symbolic-homes",
+            "stack_home_assignments": [],
+        },
+    }
+    stack = localizer.get("pcdump_bridge") if isinstance(localizer, Mapping) else None
+    return frame, stack if isinstance(stack, Mapping) else None
+
+
+def _stack_axis(
+    evidence: RawCandidateEvidence,
+    objective: ObjectiveManifest,
+    parents: ParentEvidenceBundle,
+) -> tuple[int, int, int, int]:
+    if evidence.checkdiff_evidence is None:
+        raise ValueError("missing checkdiff")
+    reference_raw = _donor_raw(parents, objective.stack_home_donor)
+    if reference_raw is None or reference_raw.checkdiff_evidence is None:
+        raise ValueError("missing stack reference")
+    candidate_inputs = _frame_and_stack(evidence.checkdiff_evidence, objective.function)
+    reference_inputs = _frame_and_stack(reference_raw.checkdiff_evidence, objective.function)
+    candidate = build_stack_home_profile(*candidate_inputs)
+    reference = build_stack_home_profile(*reference_inputs)
+    return tuple(stack_home_distance(candidate, reference).as_tuple())  # type: ignore[return-value]
+
+
+def _objobject_axis(
+    evidence: RawCandidateEvidence,
+    objective: ObjectiveManifest,
+    parents: ParentEvidenceBundle,
+) -> tuple[int, int]:
+    donor = _donor_raw(parents, objective.objobject_donor)
+    if evidence.inspect_text is None or donor is None or donor.inspect_text is None:
+        raise ValueError("missing ObjObject evidence")
+    return objobject_order_distance(
+        parse_objobject_profile(evidence.inspect_text, objective.function),
+        parse_objobject_profile(donor.inspect_text, objective.function),
+    )
+
+
+def profile_candidate(
+    evidence: RawCandidateEvidence,
+    objective: ObjectiveManifest,
+    *,
+    parents: ParentEvidenceBundle | None = None,
+) -> CandidateProfile:
+    """Normalize one captured row into a complete or explicitly blocked profile."""
+
+    if not isinstance(evidence, RawCandidateEvidence) or not isinstance(objective, ObjectiveManifest):
+        raise DeltaMinimizeError("invalid-candidate-profile-input")
+    if not evidence.viable:
+        return CandidateProfile(
+            candidate_id=evidence.candidate_id,
+            mask=evidence.mask,
+            source_hash=evidence.source_hash,
+            source_path=evidence.source_path,
+            viable=False,
+            compile_status=evidence.compile_status,
+            axes=None,
+            complete=True,
+            blockers=evidence.blockers,
+        )
+
+    blockers = list(evidence.blockers)
+    if evidence.pcdump_path is None:
+        _add(blockers, "missing-pcdump-path")
+    if evidence.checkdiff_evidence is None:
+        _add(blockers, "missing-checkdiff-evidence")
+    if evidence.inspection_mode == "objobjects" and evidence.inspect_text is None:
+        _add(blockers, "missing-inspect-text")
+    if evidence.inspection_mode == "no-objobjects":
+        _add(blockers, "objobjects-disabled-provisional")
+
+    exact = bool(evidence.checkdiff_evidence is not None and evidence.checkdiff_evidence.get("match") is True)
+    axes: dict[str, tuple[int, ...]] = {}
+    if evidence.checkdiff_evidence is not None:
+        target_asm = _asm_lines(evidence.checkdiff_evidence, "target_asm")
+        current_asm = _asm_lines(evidence.checkdiff_evidence, "current_asm")
+        if target_asm is None or current_asm is None:
+            _add(blockers, "incomplete-opcode-evidence")
+        else:
+            try:
+                axes["opcode"] = opcode_graph_distance(
+                    parse_opcode_graph(target_asm),
+                    parse_opcode_graph(current_asm),
+                    structural_status=_structural_status(evidence.checkdiff_evidence),
+                )
+            except ValueError:
+                _add(blockers, "contradictory-opcode-evidence")
+
+    if evidence.pcdump_path is not None:
+        try:
+            _load_text(evidence.pcdump_path)
+        except (OSError, UnicodeError, ValueError):
+            _add(blockers, "unreadable-pcdump-path")
+        else:
+            if parents is None:
+                _add(blockers, "missing-parent-color-evidence")
+                _add(blockers, "missing-parent-stack-evidence")
+            else:
+                try:
+                    axes["color"] = _color_axis(evidence, objective, parents)
+                except (KeyError, OSError, TypeError, UnicodeError, ValueError):
+                    _add(blockers, "incomplete-color-evidence")
+                try:
+                    axes["stack_homes"] = _stack_axis(evidence, objective, parents)
+                except (KeyError, OSError, TypeError, UnicodeError, ValueError):
+                    _add(blockers, "incomplete-stack-home-evidence")
+
+    if evidence.inspection_mode == "no-objobjects":
+        axes["objobjects"] = (0, 0)
+    elif evidence.inspect_text is not None:
+        if parents is None:
+            _add(blockers, "missing-parent-objobject-evidence")
+        else:
+            try:
+                axes["objobjects"] = _objobject_axis(evidence, objective, parents)
+            except (TypeError, ValueError):
+                _add(blockers, "incomplete-objobject-evidence")
+
+    required = {"opcode", "color", "objobjects", "stack_homes"}
+    complete = required <= axes.keys()
+    if not complete:
+        return CandidateProfile(
+            candidate_id=evidence.candidate_id,
+            mask=evidence.mask,
+            source_hash=evidence.source_hash,
+            source_path=evidence.source_path,
+            viable=True,
+            compile_status=evidence.compile_status,
+            axes=None,
+            complete=False,
+            exact_object_match=exact,
+            blockers=tuple(blockers),
+        )
+    return CandidateProfile(
+        candidate_id=evidence.candidate_id,
+        mask=evidence.mask,
+        source_hash=evidence.source_hash,
+        source_path=evidence.source_path,
+        viable=True,
+        compile_status=evidence.compile_status,
+        axes=AxisDistances(
+            opcode=axes["opcode"],  # type: ignore[arg-type]
+            color=axes["color"],  # type: ignore[arg-type]
+            objobjects=axes["objobjects"],  # type: ignore[arg-type]
+            stack_homes=axes["stack_homes"],  # type: ignore[arg-type]
+        ),
+        complete=True,
+        exact_object_match=exact,
+        blockers=tuple(blockers),
+    )
