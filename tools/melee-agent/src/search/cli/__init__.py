@@ -117,6 +117,28 @@ def _resolve_delta_target_file(path: Path | None) -> Path | None:
     return candidate.resolve()
 
 
+def _resolve_delta_cflags_source(
+    function: str,
+    left: Path,
+    right: Path,
+    *,
+    melee_root: Path,
+) -> Path:
+    try:
+        return _resolve_structure_source_file(function, None, melee_root=melee_root)
+    except typer.BadParameter as original_error:
+        for parent in (right, left):
+            parts = parent.parts
+            try:
+                src_index = len(parts) - 1 - tuple(reversed(parts)).index("src")
+            except ValueError:
+                continue
+            candidate = melee_root.joinpath(*parts[src_index:])
+            if candidate.is_file() and not _path_has_symlink_component(candidate):
+                return candidate.resolve()
+        raise original_error
+
+
 def _resolve_delta_output_dir(path: Path, *, melee_root: Path) -> Path:
     """Resolve an output directory only after checking every path component."""
 
@@ -4624,9 +4646,10 @@ def delta_minimize_cmd(
     melee_root = _compute_melee_root()
     resolved_left = _resolve_delta_source_file(left, melee_root=melee_root)
     resolved_right = _resolve_delta_source_file(right, melee_root=melee_root)
-    cflags_from = _resolve_structure_source_file(
+    cflags_from = _resolve_delta_cflags_source(
         function,
-        None,
+        resolved_left,
+        resolved_right,
         melee_root=melee_root,
     )
     try:

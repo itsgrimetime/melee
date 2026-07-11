@@ -411,6 +411,49 @@ def test_delta_minimize_cli_accepts_safe_relative_paths(monkeypatch, tmp_path: P
     assert captured["config"].out_dir == tmp_path / "results"
 
 
+def test_delta_minimize_cli_falls_back_to_cross_worktree_unit_path(
+    monkeypatch, tmp_path: Path
+) -> None:
+    left, _right, _unit = _invoke_paths(tmp_path)
+    repo_unit = tmp_path / "src" / "melee" / "mn" / "mndiagram.c"
+    repo_unit.parent.mkdir(parents=True)
+    repo_unit.write_text("int f(void);\n", encoding="utf-8")
+    other_root = tmp_path / "other-worktree"
+    external_right = other_root / "src" / "melee" / "mn" / "mndiagram.c"
+    external_right.parent.mkdir(parents=True)
+    external_right.write_text("int f(void) { return 2; }\n", encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        search_cli,
+        "_resolve_structure_source_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            search_cli.typer.BadParameter("function absent from report")
+        ),
+    )
+    monkeypatch.setattr(
+        search_cli,
+        "run_delta_minimize",
+        lambda config: (captured.__setitem__("config", config), _result())[1],
+    )
+
+    result = runner.invoke(
+        search_app,
+        [
+            "delta-minimize",
+            "-f",
+            "f",
+            "--left",
+            str(left),
+            "--right",
+            str(external_right),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["config"].cflags_from == repo_unit.resolve()
+
+
 def test_delta_minimize_cli_reports_domain_errors_as_usage(monkeypatch, tmp_path: Path) -> None:
     left, right, unit = _invoke_paths(tmp_path)
     monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
