@@ -499,7 +499,14 @@ class DeltaRunStore:
     def invalidate_evidence(self, key: EvidenceKey) -> None:
         """Remove a cache envelope whose retained artifacts are no longer valid."""
 
-        path = self.evidence_path(key)
+        self._invalidate_evidence_path(self.evidence_path(key))
+
+    def invalidate_parent_evidence(self, key: ParentEvidenceKey) -> None:
+        """Remove parent evidence after its retained artifacts become stale."""
+
+        self._invalidate_evidence_path(self.parent_evidence_path(key))
+
+    def _invalidate_evidence_path(self, path: Path) -> None:
         with _exclusive_file_lock(path):
             safe = _require_safe_path(path)
             directory_fd = _open_safe_directory(safe.parent)
