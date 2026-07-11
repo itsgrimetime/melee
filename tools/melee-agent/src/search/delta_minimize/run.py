@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from itertools import zip_longest
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from ...layout.objects import unit_paths
@@ -46,6 +48,7 @@ from .evaluator import (
     profile_candidate,
 )
 from .objectives import (
+    OBJECTIVE_MANIFEST_SCHEMA,
     AxisReference,
     ObjectiveManifest,
     ParentObjectiveEvidence,
@@ -57,7 +60,21 @@ from .store import DeltaRunStore
 
 PARSER_SCHEMA_HASH = "opcode.v1+color.v1+objobjects.v1+stack-homes.v1"
 RESULT_SCHEMA = "delta-minimize-result.v1"
-OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v1"
+OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v2"
+_OBJECTIVE_AXES = frozenset({"opcode", "color", "objobjects", "stack-homes"})
+_OBJECTIVE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "function",
+        "class_id",
+        "target_spec",
+        "desired_phys",
+        "color_donor",
+        "objobject_donor",
+        "stack_home_donor",
+        "references",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -228,8 +245,170 @@ def _manifest_from_dict(payload: Mapping[str, Any]) -> DeltaManifest:
     return manifest
 
 
-def _objective_from_dict(payload: Mapping[str, Any]) -> ObjectiveManifest:
+def _is_nonnegative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_digest(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError
+        return MappingProxyType({key: _freeze_json(item) for key, item in sorted(value.items())})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json(item) for item in value)
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise ValueError
+
+
+def _validate_target_descriptor(payload: object) -> None:
+    if payload is None:
+        return
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "ig_idx",
+        "first_def_sig",
+        "use_site_multiset",
+        "is_param",
+        "var_name",
+        "var_confidence",
+        "assigned_reg",
+        "live_range",
+        "use_count",
+        "spilled",
+    }:
+        raise ValueError
+    if (
+        not _is_nonnegative_int(payload["ig_idx"])
+        or not isinstance(payload["first_def_sig"], str)
+        or not isinstance(payload["is_param"], bool)
+        or payload["var_name"] is not None
+        and not isinstance(payload["var_name"], str)
+        or payload["var_confidence"] is not None
+        and not isinstance(payload["var_confidence"], str)
+        or payload["assigned_reg"] is not None
+        and not _is_nonnegative_int(payload["assigned_reg"])
+        or not _is_nonnegative_int(payload["use_count"])
+        or not isinstance(payload["spilled"], bool)
+    ):
+        raise ValueError
+    live_range = payload["live_range"]
+    if (
+        not isinstance(live_range, (list, tuple))
+        or len(live_range) != 2
+        or any(not isinstance(item, int) or isinstance(item, bool) for item in live_range)
+    ):
+        raise ValueError
+    uses = payload["use_site_multiset"]
+    if not isinstance(uses, (list, tuple)):
+        raise ValueError
+    for item in uses:
+        if (
+            not isinstance(item, (list, tuple))
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or not item[0]
+            or not _is_nonnegative_int(item[1])
+        ):
+            raise ValueError
+
+
+def _validate_target_spec(
+    payload: object,
+    *,
+    function: str,
+    class_id: int,
+    desired_phys: Mapping[int, int],
+) -> Mapping[str, Any]:
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "function",
+        "target_kind",
+        "target_coverage",
+        "causal_closure",
+        "provenance",
+        "roles",
+    }:
+        raise ValueError
+    coverage = payload["target_coverage"]
+    if (
+        payload["function"] != function
+        or payload["target_kind"] not in {"force_proof_proxy", "matched_natural"}
+        or not isinstance(coverage, (int, float))
+        or isinstance(coverage, bool)
+        or not math.isfinite(coverage)
+        or not 0 <= coverage <= 1
+        or not isinstance(payload["causal_closure"], bool)
+        or not isinstance(payload["provenance"], Mapping)
+        or not isinstance(payload["roles"], (list, tuple))
+    ):
+        raise ValueError
+    role_phys: dict[int, int] = {}
+    for role in payload["roles"]:
+        if not isinstance(role, Mapping) or set(role) != {
+            "original_ig",
+            "desired_phys",
+            "class_id",
+            "descriptor",
+            "role_order_rank",
+        }:
+            raise ValueError
+        original = role["original_ig"]
+        physical = role["desired_phys"]
+        rank = role["role_order_rank"]
+        if (
+            not _is_nonnegative_int(original)
+            or not _is_nonnegative_int(physical)
+            or role["class_id"] != class_id
+            or isinstance(role["class_id"], bool)
+            or rank is not None
+            and not _is_nonnegative_int(rank)
+            or original in role_phys
+        ):
+            raise ValueError
+        _validate_target_descriptor(role["descriptor"])
+        role_phys[original] = physical
+    if role_phys != dict(desired_phys):
+        raise ValueError
+    return _freeze_json(payload)
+
+
+def _objective_from_dict(payload: Mapping[str, Any], *, function: str) -> ObjectiveManifest:
     try:
+        if set(payload) != _OBJECTIVE_FIELDS:
+            raise ValueError
+        if (
+            payload["schema_version"] != OBJECTIVE_MANIFEST_SCHEMA
+            or payload["function"] != function
+            or not _is_nonnegative_int(payload["class_id"])
+            or not isinstance(payload["desired_phys"], Mapping)
+            or set(payload["references"]) != _OBJECTIVE_AXES
+        ):
+            raise ValueError
+        desired: dict[int, int] = {}
+        for role, physical in payload["desired_phys"].items():
+            if (
+                not isinstance(role, str)
+                or not role.isdecimal()
+                or str(int(role)) != role
+                or not _is_nonnegative_int(physical)
+                or int(role) in desired
+            ):
+                raise ValueError
+            desired[int(role)] = physical
+        color_donor = payload["color_donor"]
+        objobject_donor = payload["objobject_donor"]
+        stack_donor = payload["stack_home_donor"]
+        if (
+            color_donor not in {None, "left", "right"}
+            or objobject_donor not in {"left", "right"}
+            or stack_donor not in {None, "left", "right"}
+        ):
+            raise ValueError
         references = {
             axis: AxisReference(
                 reference_kind=row["reference_kind"],
@@ -241,18 +420,37 @@ def _objective_from_dict(payload: Mapping[str, Any]) -> ObjectiveManifest:
             )
             for axis, row in payload["references"].items()
         }
-        desired = {int(role): physical for role, physical in payload["desired_phys"].items()}
-        return ObjectiveManifest(
+        if (
+            references["opcode"].reference_kind != "absolute"
+            or references["color"].reference_kind != "mixed"
+            or references["objobjects"].reference_kind != "proxy"
+            or references["stack-homes"].reference_kind not in {"absolute", "mixed"}
+            or references["color"].donor != color_donor
+            or references["objobjects"].donor != objobject_donor
+            or references["stack-homes"].donor != stack_donor
+            or references["opcode"].override
+        ):
+            raise ValueError
+        target_spec = _validate_target_spec(
+            payload["target_spec"],
+            function=function,
+            class_id=payload["class_id"],
+            desired_phys=desired,
+        )
+        objective = ObjectiveManifest(
             schema_version=payload["schema_version"],
             function=payload["function"],
             class_id=payload["class_id"],
-            target_spec=payload["target_spec"],
-            desired_phys=desired,
-            color_donor=payload["color_donor"],
-            objobject_donor=payload["objobject_donor"],
-            stack_home_donor=payload["stack_home_donor"],
-            references=references,
+            target_spec=target_spec,
+            desired_phys=MappingProxyType(dict(sorted(desired.items()))),
+            color_donor=color_donor,
+            objobject_donor=objobject_donor,
+            stack_home_donor=stack_donor,
+            references=MappingProxyType(dict(sorted(references.items()))),
         )
+        if objective.to_dict() != payload:
+            raise ValueError
+        return objective
     except (KeyError, TypeError, ValueError) as error:
         raise DeltaMinimizeError("corrupt-objective-manifest") from error
 
@@ -397,16 +595,24 @@ def _objective_context(config: DeltaMinimizeConfig, parents: ParentEvidenceBundl
     }
 
 
-def _objective_context_envelope(context: Mapping[str, Any]) -> dict[str, Any]:
+def _objective_context_envelope(
+    context: Mapping[str, Any],
+    objective_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
     normalized = _json_value(context)
     return {
         "schema_version": OBJECTIVE_INPUTS_SCHEMA,
         "context": normalized,
         "context_digest": _hash_json(normalized),
+        "objective_manifest_digest": _hash_json(objective_manifest),
     }
 
 
-def _load_objective_context(path: Path) -> Mapping[str, Any] | None:
+def _load_objective_context(
+    path: Path,
+    *,
+    objective_manifest: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
     try:
         payload = _load_json(path)
     except DeltaMinimizeError as error:
@@ -414,18 +620,25 @@ def _load_objective_context(path: Path) -> Mapping[str, Any] | None:
     if payload is None:
         return None
     try:
-        if set(payload) != {"schema_version", "context", "context_digest"}:
+        if set(payload) != {
+            "schema_version",
+            "context",
+            "context_digest",
+            "objective_manifest_digest",
+        }:
             raise ValueError
         if payload["schema_version"] != OBJECTIVE_INPUTS_SCHEMA:
             raise ValueError
         context = payload["context"]
         digest = payload["context_digest"]
+        objective_digest = payload["objective_manifest_digest"]
         if (
             not isinstance(context, Mapping)
-            or not isinstance(digest, str)
-            or len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)
+            or not _is_digest(digest)
             or _hash_json(context) != digest
+            or objective_manifest is None
+            or not _is_digest(objective_digest)
+            or _hash_json(objective_manifest) != objective_digest
         ):
             raise ValueError
         return _json_value(context)
@@ -440,20 +653,31 @@ def _load_or_infer_objective(
     active: DeltaMinimizeBackends,
 ) -> ObjectiveManifest:
     context = _objective_context(config, parents)
-    old_context = _load_objective_context(store.root / "objective-inputs.json")
     old_manifest = _load_json(store.root / "objective-manifest.json")
+    old_context = _load_objective_context(
+        store.root / "objective-inputs.json",
+        objective_manifest=old_manifest,
+    )
     if (old_context is None) != (old_manifest is None):
         raise DeltaMinimizeError("corrupt-objective-cache-context")
     if old_context == context and old_manifest is not None:
-        objective = _objective_from_dict(old_manifest)
+        objective = _objective_from_dict(old_manifest, function=config.function)
     else:
         left = active.parent_objective(parents.left, "left", config)
         right = active.parent_objective(parents.right, "right", config)
         objective = active.infer_objective(left, right, config)
         if not isinstance(objective, ObjectiveManifest) or objective.function != config.function:
             raise DeltaMinimizeError("invalid-objective-manifest")
-        store.write_objective_manifest(objective.to_dict())
-        store.write_json("objective-inputs.json", _objective_context_envelope(context))
+        try:
+            objective = _objective_from_dict(objective.to_dict(), function=config.function)
+        except DeltaMinimizeError as error:
+            raise DeltaMinimizeError("invalid-objective-manifest") from error
+        objective_payload = objective.to_dict()
+        store.write_objective_manifest(objective_payload)
+        store.write_json(
+            "objective-inputs.json",
+            _objective_context_envelope(context, objective_payload),
+        )
     return objective
 
 

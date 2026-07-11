@@ -52,14 +52,31 @@ def _config(tmp_path: Path, **changes: object) -> DeltaMinimizeConfig:
 
 def _objective() -> ObjectiveManifest:
     references = {
-        axis: AxisReference("absolute", f"{axis}-artifact", None, "fixture", False)
-        for axis in ("opcode", "color", "objobjects", "stack-homes")
+        "opcode": AxisReference("absolute", "opcode-artifact", None, "fixture", False),
+        "color": AxisReference("mixed", "color-artifact", "left", "fixture", False),
+        "objobjects": AxisReference("proxy", "objobjects-artifact", "left", "fixture", False),
+        "stack-homes": AxisReference("mixed", "stack-homes-artifact", "right", "fixture", False),
     }
     return ObjectiveManifest(
         schema_version="delta-minimize-objectives.v1",
         function="f",
         class_id=0,
-        target_spec={"fixture": True},
+        target_spec={
+            "function": "f",
+            "target_kind": "force_proof_proxy",
+            "target_coverage": 1.0,
+            "causal_closure": False,
+            "provenance": {"fixture": True},
+            "roles": [
+                {
+                    "original_ig": 1,
+                    "desired_phys": 3,
+                    "class_id": 0,
+                    "descriptor": None,
+                    "role_order_rank": 0,
+                }
+            ],
+        },
         desired_phys={1: 3},
         color_donor="left",
         objobject_donor="left",
@@ -329,8 +346,11 @@ def test_objective_cache_persists_context_with_valid_digest(tmp_path: Path) -> N
     context = payload["context"]
     canonical = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
 
-    assert payload["schema_version"] == "delta-minimize-objective-inputs.v1"
+    assert payload["schema_version"] == "delta-minimize-objective-inputs.v2"
     assert payload["context_digest"] == hashlib.sha256(canonical).hexdigest()
+    manifest = json.loads((config.out_dir / "objective-manifest.json").read_text(encoding="utf-8"))
+    manifest_blob = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    assert payload["objective_manifest_digest"] == hashlib.sha256(manifest_blob).hexdigest()
     assert context["parents"]["left"]["pcdump_hash"]
     assert context["expected_object_hash"] == "expected-object"
     assert context["parser_schema_hash"] == "parsers"
@@ -347,6 +367,88 @@ def test_malformed_objective_cache_context_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-cache-context$"):
         run_delta_minimize(config, backends=fixture.backends())
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "schema",
+        "function",
+        "axis-deletion",
+        "axis-extra",
+        "donor-value",
+        "donor-type",
+        "class-type",
+        "target-payload",
+    ),
+)
+def test_invalid_integrity_bound_objective_manifest_fails_closed(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "objective-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "schema":
+        manifest["schema_version"] = "delta-minimize-objectives.v0"
+    elif mutation == "function":
+        manifest["function"] = "other"
+    elif mutation == "axis-deletion":
+        del manifest["references"]["opcode"]
+    elif mutation == "axis-extra":
+        manifest["references"]["extra"] = dict(manifest["references"]["opcode"])
+    elif mutation == "donor-value":
+        manifest["objobject_donor"] = "both"
+    elif mutation == "donor-type":
+        manifest["color_donor"] = 1
+    elif mutation == "class-type":
+        manifest["class_id"] = True
+    elif mutation == "target-payload":
+        manifest["target_spec"]["roles"][0]["desired_phys"] = -1
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    inputs_path = config.out_dir / "objective-inputs.json"
+    inputs = json.loads(inputs_path.read_text(encoding="utf-8"))
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    inputs["objective_manifest_digest"] = hashlib.sha256(canonical).hexdigest()
+    inputs_path.write_text(json.dumps(inputs), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+@pytest.mark.parametrize("mutation", ("manifest-payload", "manifest-digest"))
+def test_objective_manifest_digest_mutation_fails_closed(tmp_path: Path, mutation: str) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    if mutation == "manifest-payload":
+        path = config.out_dir / "objective-manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["target_spec"]["provenance"]["tampered"] = True
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+    else:
+        path = config.out_dir / "objective-inputs.json"
+        inputs = json.loads(path.read_text(encoding="utf-8"))
+        inputs["objective_manifest_digest"] = "0" * 64
+        path.write_text(json.dumps(inputs), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-cache-context$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_validated_cached_objective_manifest_is_deeply_immutable() -> None:
+    objective = run_module._objective_from_dict(_objective().to_dict(), function="f")
+
+    with pytest.raises(TypeError):
+        objective.target_spec["provenance"]["mutated"] = True
+    with pytest.raises(TypeError):
+        objective.desired_phys[1] = 4
+    with pytest.raises(TypeError):
+        objective.references["opcode"] = objective.references["color"]
 
 
 def test_one_incomplete_viable_mask_blocks_the_whole_frontier(tmp_path: Path) -> None:
