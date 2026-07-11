@@ -54,13 +54,23 @@ def derive_frame_report(
         source_path=str(bundle.artifact_paths["source"]),
     )
     if checkdiff.stack_slot_localizer is not None:
-        report["stack_slot_bridge"] = explain_stack_slot_localizer(
+        bridge = explain_stack_slot_localizer(
             backend.pcdump_text,
             bundle.manifest.function,
             _mutable_mapping(checkdiff.stack_slot_localizer),
             source_text=source_text,
             source_file=str(bundle.artifact_paths["source"]),
         )
+        for candidate in bridge.get("candidates") or ():
+            expression = candidate.get("nearest_source_expression")
+            if not isinstance(expression, dict):
+                continue
+            producer_label = expression.get("confidence")
+            expression["producer_confidence_label"] = producer_label
+            expression["confidence"] = (
+                producer_label if _declared_confidence(producer_label) is not None else Confidence.HEURISTIC.value
+            )
+        report["stack_slot_bridge"] = bridge
     return report
 
 
@@ -86,17 +96,15 @@ def _declared_confidence(value: object) -> Confidence | None:
 
 
 def _object_confidence(obj: Mapping[str, object]) -> Confidence:
+    if obj.get("ambiguous") is True or obj.get("source_attribution") or obj.get("source_guess"):
+        return Confidence.HEURISTIC
     declared = _declared_confidence(obj.get("producer_confidence", obj.get("confidence")))
     if declared is not None:
         return declared
-    if obj.get("source_attribution") or obj.get("source_guess"):
-        return Confidence.HEURISTIC
     symbol = obj.get("symbol")
     source_symbols = obj.get("source_symbols")
     has_symbol = isinstance(symbol, str) and bool(symbol)
     has_symbol = has_symbol or (isinstance(source_symbols, (list, tuple)) and len(source_symbols) > 0)
-    if obj.get("ambiguous") is True:
-        return Confidence.HEURISTIC
     if obj.get("origin_tag") == "symbolic-stack-home" and has_symbol:
         return Confidence.DERIVED_UNIQUE
     if not has_symbol and obj.get("symbolic_assignment_order") is not None:
@@ -211,6 +219,11 @@ def _validate_stack_bridge(bridge: object, *, function: str) -> None:
                 raise BundleInputError(
                     f"frame report bridge candidate {index} has malformed source expression evidence"
                 )
+            if _declared_confidence(expression.get("confidence")) is None:
+                raise BundleInputError(f"frame report bridge candidate {index} has unsupported source confidence")
+        for field in ("producer_confidence", "confidence"):
+            if field in candidate and _declared_confidence(candidate[field]) is None:
+                raise BundleInputError(f"frame report bridge candidate {index}.{field} has unsupported confidence")
 
 
 def _artifact_digest(bundle: ValidatedBundle, name: str) -> str:

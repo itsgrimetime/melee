@@ -113,6 +113,15 @@ def _operator_tree(node: Any, source_bytes: bytes) -> tuple[object, ...]:
         return ("identifier", node_text(source_bytes, node).strip())
     if node.type in _CONSTANT_TYPES:
         return (node.type, node_text(source_bytes, node).strip())
+    if node.type == "cast_expression":
+        type_node = node.child_by_field_name("type")
+        value_node = node.child_by_field_name("value")
+        return (
+            "cast_expression",
+            "cast",
+            "" if type_node is None else node_text(source_bytes, type_node).strip(),
+            () if value_node is None else _operator_tree(value_node, source_bytes),
+        )
     children = tuple(
         _operator_tree(child, source_bytes)
         for child in node.children
@@ -182,7 +191,10 @@ def _declared_type(
         if function_return and current.type == "function_declarator":
             break
         if current.type == "pointer_declarator":
-            modifiers.append("*")
+            pointer_qualifiers = [
+                node_text(source_bytes, child).strip() for child in current.children if child.type == "type_qualifier"
+            ]
+            modifiers.append(" ".join(("*", *pointer_qualifiers)))
         elif current.type == "array_declarator":
             text = node_text(source_bytes, current)
             bracket = text.find("[")

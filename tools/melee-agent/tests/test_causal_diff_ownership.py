@@ -174,6 +174,47 @@ def test_frame_report_preserves_derived_confidence(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "heuristic_fields",
+    (
+        {"ambiguous": True},
+        {"source_guess": {"expression": "value"}},
+        {"source_attribution": {"confidence": "heuristic"}},
+    ),
+)
+def test_frame_heuristic_evidence_caps_declared_observed_confidence(
+    tmp_path: Path,
+    heuristic_fields: dict[str, object],
+) -> None:
+    obj = {
+        "layout_order": 0,
+        "start": 24,
+        "end": 28,
+        "size": 4,
+        "kind": "local-or-temporary",
+        "origin_tag": "symbolic-stack-home",
+        "source": "r1-access",
+        "symbol": "value",
+        "producer_confidence": "observed",
+        **heuristic_fields,
+    }
+    report = {
+        "function": "fn_test",
+        "current": {
+            "frame_allocation_trace": {
+                "status": "computed",
+                "objects": [obj],
+            }
+        },
+        "expected": None,
+    }
+
+    evidence = adapt_frame(_bundle(tmp_path, frame_report=report), _checkdiff(), _backend())
+    stack = next(node for node in evidence.result.nodes if node.kind == "stack-object")
+    assert stack.producer_confidence is Confidence.HEURISTIC
+    assert stack.confidence is Confidence.HEURISTIC
+
+
+@pytest.mark.parametrize(
     ("report", "version", "message"),
     (
         ({"current": {"frame_allocation_trace": {"objects": []}}}, "frame-reservations.v1", "function"),
@@ -230,6 +271,28 @@ def test_supplied_frame_report_is_versioned_and_function_bound(
                 "origin_tag": "symbolic-stack-home",
                 "symbol": "value",
                 "producer_confidence": "certain",
+            }
+        ),
+        lambda report: report.update(
+            {
+                "stack_slot_bridge": {
+                    "status": "ok",
+                    "function": "fn_test",
+                    "candidate_count": 1,
+                    "candidates": [
+                        {
+                            "current_offset": 24,
+                            "opcode": "stw",
+                            "site_kind": "precolor-stack-site",
+                            "mapping_status": "colorgraph",
+                            "evidence": ["PASS B0:1 stw r3,24(r1)"],
+                            "nearest_source_expression": {
+                                "expression": "sink(value)",
+                                "confidence": "certain",
+                            },
+                        }
+                    ],
+                }
             }
         ),
     ),
@@ -336,6 +399,132 @@ def test_derived_frame_adapts_real_stack_bridge_support_records(tmp_path: Path) 
     assert set(candidate["input_record_ids"]) <= record_ids
 
 
+def _production_bridge_graph(
+    tmp_path: Path,
+    *,
+    include_inspector_expression: bool = True,
+    duplicate_source_match: bool = False,
+):
+    source_text = BRIDGE_SOURCE.replace("fn_80000000", "fn_test")
+    pcdump = (
+        BRIDGE_PCDUMP.replace("fn_80000000", "fn_test")
+        .replace("stfs    f1,0x30(r1)", "stfs    f1,dist(r1)")
+        .replace("lfs     f2,0x30(r1)", "lfs     f2,dist(r1)")
+    )
+    bundle = _bundle(tmp_path, source=source_text)
+    backend = BackendEvidence(
+        result=AdapterResult(),
+        pcdump_text=pcdump,
+        role_compile=None,
+        nodes_by_class_ig=MappingProxyType({}),
+        nodes_by_virtual=MappingProxyType({}),
+    )
+    localizer = MappingProxyType(
+        {
+            "frame_size": 168,
+            "mismatch_count": 1,
+            "deltas": (4,),
+            "mismatches": (
+                {
+                    "opcode": "stfs",
+                    "expected_offset": 0x34,
+                    "current_offset": 0x30,
+                    "delta": 4,
+                },
+            ),
+        }
+    )
+    assembly = (
+        "+000: 94 21 ff 58 \tstwu r1,-168(r1)",
+        "+004: d0 21 00 30 \tstfs f1,48(r1)",
+        "+008: c0 41 00 30 \tlfs f2,48(r1)",
+    )
+    checkdiff = CheckdiffEvidence(
+        result=AdapterResult(),
+        rows_by_offset=MappingProxyType({}),
+        stack_slot_localizer=localizer,
+        target_assembly=assembly,
+        current_assembly=assembly,
+        expected_assembly_digest="a" * 64,
+    )
+    frame = adapt_frame(bundle, checkdiff, backend)
+    source = adapt_source(bundle)
+    source_match = next(
+        node
+        for node in source.result.nodes
+        if node.kind == "source-expression"
+        and "sqrtf" in node.attributes["called_functions"]
+        and "dist" in node.attributes["identifiers"]
+        and node.attributes["operator"] == "="
+    )
+    if duplicate_source_match:
+        duplicate = _node(
+            bundle,
+            "source-expression",
+            "duplicate-dist-source",
+            dict(source_match.attributes),
+            confidence=Confidence.HEURISTIC,
+        )
+        source = type("Source", (), {})()
+        source.result = AdapterResult(nodes=(*adapt_source(bundle).result.nodes, duplicate))
+        source.expressions_by_signature = MappingProxyType({})
+        source.inline_scopes_by_callee = MappingProxyType({})
+    objobject = _node(
+        bundle,
+        "objobject",
+        "dist-object",
+        {"name": "dist", "data_type": "DLOCAL", "type_text": "float"},
+    )
+    inspector_expression = _node(
+        bundle,
+        "enode",
+        "dist-source-expression",
+        {
+            "opcode": "EASS",
+            "expression": "dist = sqrtf(dx * dx + dy * dy)",
+            "type_text": "float",
+        },
+    )
+    inspector_nodes = (objobject, inspector_expression) if include_inspector_expression else (objobject,)
+    graph = build_frontier_graph(
+        bundle,
+        InMemoryEvidenceStore(),
+        checkdiff,
+        backend,
+        AdapterResult(nodes=inspector_nodes),
+        frame,
+        source,
+    )
+    return graph, source_match, inspector_expression
+
+
+def test_real_bridge_semantically_joins_unique_source_and_inspector(tmp_path: Path) -> None:
+    graph, source_match, inspector_expression = _production_bridge_graph(tmp_path)
+    edge = graph.store.find_edges(graph.bundle.compile_id, edge_kind="materializes-as-stack-object")[0]
+    assert edge.attributes["ownership_basis"] == "symbol-expression-consumer-stack-access"
+    assert edge.confidence is Confidence.HEURISTIC
+    assert {source_match.record_id, inspector_expression.record_id} <= set(edge.provenance.input_record_ids)
+
+
+@pytest.mark.parametrize(
+    ("include_inspector_expression", "duplicate_source_match"),
+    ((False, False), (True, True)),
+)
+def test_real_bridge_missing_or_ambiguous_semantic_match_stays_name_only(
+    tmp_path: Path,
+    include_inspector_expression: bool,
+    duplicate_source_match: bool,
+) -> None:
+    graph, _source, _inspector = _production_bridge_graph(
+        tmp_path,
+        include_inspector_expression=include_inspector_expression,
+        duplicate_source_match=duplicate_source_match,
+    )
+    edge = graph.store.find_edges(graph.bundle.compile_id, edge_kind="materializes-as-stack-object")[0]
+    assert edge.attributes["ownership_basis"] == "symbol-name-only"
+    assert edge.confidence is Confidence.HEURISTIC
+
+
 def test_source_collects_target_and_one_direct_inline_level(tmp_path: Path) -> None:
     source = """\
 static inline void emit(void* jobj, int anim)
@@ -402,6 +591,25 @@ void fn_test(int input)
     assert casts == ["float", "short"]
 
 
+def test_enclosing_operator_tree_includes_nested_cast_types(tmp_path: Path) -> None:
+    source = """\
+void fn_test(int input)
+{
+    sink((float) input);
+    sink((double) input);
+}
+"""
+    evidence = adapt_source(_bundle(tmp_path, source=source))
+    calls = [
+        node
+        for node in evidence.result.nodes
+        if node.kind == "source-expression" and "sink" in node.attributes["called_functions"]
+    ]
+    assert len(calls) == 2
+    assert calls[0].attributes["operator_tree"] != calls[1].attributes["operator_tree"]
+    assert all(node.confidence is Confidence.DERIVED_UNIQUE for node in calls)
+
+
 def test_source_preserves_pointer_and_qualifier_type_evidence(tmp_path: Path) -> None:
     source = """\
 const void* identity(const void* value);
@@ -425,6 +633,31 @@ void fn_test(const void* input)
     )
     assert assignment.attributes["type_text"] == "const void *"
     assert call.attributes["type_text"] == "const void *"
+
+
+def test_source_preserves_pointer_level_qualifiers(tmp_path: Path) -> None:
+    source = """\
+void fn_test(void* input, int* other, const int** nested)
+{
+    void * const p = input;
+    volatile int * restrict q = other;
+    const int ** volatile r = nested;
+    p = input;
+    q = other;
+    r = nested;
+}
+"""
+    evidence = adapt_source(_bundle(tmp_path, source=source))
+    assignments = [
+        node.attributes["type_text"]
+        for node in evidence.result.nodes
+        if node.kind == "source-expression" and node.attributes["operator"] == "="
+    ]
+    assert assignments == [
+        "void * const",
+        "volatile int * restrict",
+        "const int * * volatile",
+    ]
 
 
 def test_duplicate_source_signatures_remain_heuristic_and_present(tmp_path: Path) -> None:
@@ -888,7 +1121,11 @@ def _supported_stack_graph(
         bundle,
         "enode",
         "fighter-consumer",
-        {"opcode": "ECALL", "expression": "sink(fighter)"},
+        {
+            "opcode": "ECALL",
+            "expression": "sink(fighter)",
+            "type_text": "int",
+        },
     )
     source_expression = _node(
         bundle,
@@ -898,6 +1135,7 @@ def _supported_stack_graph(
             "called_functions": ("sink",),
             "identifiers": ("fighter", "sink"),
             "text": "sink(fighter)",
+            "type_text": "int",
         },
         confidence=Confidence.DERIVED_UNIQUE,
     )

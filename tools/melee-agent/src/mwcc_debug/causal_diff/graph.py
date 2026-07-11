@@ -400,6 +400,10 @@ def _stack_names(node: EvidenceNode) -> frozenset[str]:
     return frozenset(values)
 
 
+def _normalized_expression_text(text: str) -> str:
+    return re.sub(r"\s+", "", text).replace("[", "").replace("]", "")
+
+
 def _stack_ownership_support(
     stack: EvidenceNode,
     name: str,
@@ -422,11 +426,13 @@ def _stack_ownership_support(
             Confidence.OBSERVED.value,
             Confidence.DERIVED_UNIQUE,
             Confidence.DERIVED_UNIQUE.value,
+            Confidence.HEURISTIC,
+            Confidence.HEURISTIC.value,
         }:
             continue
         if not isinstance(input_record_ids, (tuple, list)) or not input_record_ids:
             continue
-        if not consumer or name not in _text_identifiers(expression_text, consumer):
+        if not consumer:
             continue
         current_offset = candidate.get("current_offset")
         if not isinstance(current_offset, int):
@@ -438,21 +444,26 @@ def _stack_ownership_support(
         )
         if len(support) != len(input_record_ids):
             continue
+        normalized_hint = _normalized_expression_text(expression_text)
         source_records = tuple(
             record
-            for record in support
+            for record in records_by_id.values()
             if isinstance(record, EvidenceNode)
             and record.kind == "source-expression"
             and consumer in record.attributes.get("called_functions", ())
             and name in record.attributes.get("identifiers", ())
+            and bool(record.attributes.get("type_text"))
+            and normalized_hint in _normalized_expression_text(str(record.attributes.get("text") or ""))
         )
         inspector_records = tuple(
             record
-            for record in support
+            for record in records_by_id.values()
             if isinstance(record, EvidenceNode)
             and record.kind == "enode"
             and _consumer(str(record.attributes.get("expression") or "")) == consumer
             and name in _text_identifiers(str(record.attributes.get("expression") or ""), consumer)
+            and bool(record.attributes.get("type_text"))
+            and normalized_hint in _normalized_expression_text(str(record.attributes.get("expression") or ""))
         )
         access_records: list[EvidenceNode] = []
         for record in support:
@@ -470,8 +481,19 @@ def _stack_ownership_support(
             )
             if addresses == ((current_offset, "r1"),):
                 access_records.append(record)
-        if len(source_records) == len(inspector_records) == len(access_records) == 1:
-            qualifying_support.append(support)
+        matching_types = len(source_records) == len(inspector_records) == 1 and source_records[0].attributes.get(
+            "type_text"
+        ) == inspector_records[0].attributes.get("type_text")
+        if matching_types and len(access_records) == 1:
+            indexed_support = {
+                record.record_id: record
+                for record in (
+                    *support,
+                    source_records[0],
+                    inspector_records[0],
+                )
+            }
+            qualifying_support.append(tuple(indexed_support.values()))
     return qualifying_support[0] if len(qualifying_support) == 1 else ()
 
 
