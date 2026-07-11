@@ -541,6 +541,8 @@ def _parse_checkdiff_asm_instruction(line: str) -> AsmInstruction | None:
     if not parts:
         return None
     opcode = parts[0].rstrip(".")
+    if opcode.startswith("R_PPC_"):
+        return None
     operands = parts[1] if len(parts) > 1 else ""
     regs = [
         (kind, int(number))

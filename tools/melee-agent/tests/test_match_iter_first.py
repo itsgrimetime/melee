@@ -781,6 +781,122 @@ def test_force_phys_from_diff_prefers_near_position_over_distant_current_reg() -
     assert vector["targets"][0]["current_reg_name"] == "r25"
 
 
+def test_force_phys_from_diff_ignores_relocation_rows_for_position_anchor() -> None:
+    target_asm = [
+        "<fn_reloc_anchor>:",
+        "+000: 3a a0 00 00 \tli      r21,0",
+        "+004: 48 00 00 01 \tbl      <helper_a>",
+        "+004: R_PPC_REL24\thelper_a",
+        "+008: 48 00 00 01 \tbl      <helper_b>",
+        "+008: R_PPC_REL24\thelper_b",
+        "+00c: 3a d6 00 01 \taddi    r22,r22,1",
+    ]
+    current_asm = [
+        "<fn_reloc_anchor>:",
+        "+000: 3a 60 00 00 \tli      r19,0",
+        "+004: 48 00 00 01 \tbl      <helper_a>",
+        "+004: R_PPC_REL24\thelper_a",
+        "+008: 48 00 00 01 \tbl      <helper_b>",
+        "+008: R_PPC_REL24\thelper_b",
+        "+00c: 3a 94 00 01 \taddi    r20,r20,1",
+    ]
+    pre_pass = Pass(
+        name="BEFORE REGISTER COLORING",
+        blocks=[
+            Block(
+                index=0,
+                succ=[],
+                pred=[],
+                labels=[],
+                instructions=[
+                    Instruction(
+                        opcode="li",
+                        operands="r67,0",
+                        annotations=[],
+                        regs=[("r", 67)],
+                    ),
+                    Instruction(
+                        opcode="bl",
+                        operands="helper_a",
+                        annotations=[],
+                        regs=[],
+                    ),
+                    Instruction(
+                        opcode="bl",
+                        operands="helper_b",
+                        annotations=[],
+                        regs=[],
+                    ),
+                    Instruction(
+                        opcode="addi",
+                        operands="r66,r66,1",
+                        annotations=[],
+                        regs=[("r", 66), ("r", 66)],
+                    ),
+                    Instruction(
+                        opcode="mr",
+                        operands="r55,r3",
+                        annotations=[],
+                        regs=[("r", 55), ("r", 3)],
+                    ),
+                    Instruction(
+                        opcode="addi",
+                        operands="r58,r58,1",
+                        annotations=[],
+                        regs=[("r", 58), ("r", 58)],
+                    ),
+                ],
+            ),
+        ],
+    )
+    events = FunctionEvents(
+        name="fn_reloc_anchor",
+        colorgraph_sections=[
+            ColorgraphSection(
+                class_id=0,
+                result=1,
+                n_nodes=3,
+                decisions=[
+                    ColorgraphDecision(
+                        iter_idx=0,
+                        ig_idx=67,
+                        assigned_reg=19,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                    ColorgraphDecision(
+                        iter_idx=1,
+                        ig_idx=66,
+                        assigned_reg=20,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                    ColorgraphDecision(
+                        iter_idx=2,
+                        ig_idx=58,
+                        assigned_reg=20,
+                        degree=0,
+                        n_interferers=0,
+                        flags=0,
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    vector = debug_cli._derive_force_phys_from_register_diff_lines(
+        target_asm,
+        current_asm,
+        pre_pass,
+        events,
+    )
+
+    assert vector["force_phys_csv"] == "0:67:21,0:66:22"
+    assert [target["ig_idx"] for target in vector["targets"]] == [67, 66]
+
+
 def test_force_phys_from_diff_aligns_stack_slots_with_frame_delta() -> None:
     target_asm = [
         "<fn_frame>:",
