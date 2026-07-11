@@ -772,6 +772,112 @@ def test_forced_override_is_applied_before_transitive_resolution() -> None:
 
 
 @pytest.mark.parametrize(
+    "role_map",
+    [
+        pytest.param({58: 1, 75: -1, 76: 3}, id="negative"),
+        pytest.param({58: 1, 76: 3}, id="unmapped"),
+        pytest.param({58: 1, 74: 2, 75: 2, 76: 3}, id="ambiguous"),
+    ],
+)
+def test_invalid_intermediate_coalesce_role_blocks_predecessor_pair(
+    role_map: dict[int, int],
+) -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  75 -> 76\n",
+        distinct_roots=78,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, role_map)
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_invalid_ultimate_coalesce_root_blocks_every_predecessor_pair() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  75 -> 76\n",
+        distinct_roots=78,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 75: 2})
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_invalid_branch_node_blocks_all_predecessor_aliases() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  70 -> 75\n  75 -> 76\n",
+        distinct_roots=77,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 70: 4, 75: -1, 76: 3},
+    )
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("rows", "distinct_roots", "role_map"),
+    [
+        pytest.param(
+            "  70 -> 58\n[FORCE_COALESCE] alias[58]: 58 -> 76\n",
+            78,
+            {58: -1, 70: 4, 76: 3},
+            id="alias",
+        ),
+        pytest.param(
+            "  58 -> 75\n[FORCE_COALESCE] alias[58]: 75 -> 76\n",
+            79,
+            {58: 1, 75: -1, 76: 3},
+            id="old-root",
+        ),
+        pytest.param(
+            "  58 -> 75\n  76 -> 77\n[FORCE_COALESCE] alias[58]: 75 -> 76\n",
+            78,
+            {58: 1, 75: 2, 76: -1, 77: 4},
+            id="new-root",
+        ),
+    ],
+)
+def test_invalid_forced_endpoint_blocks_redirected_component(
+    rows: str,
+    distinct_roots: int,
+    role_map: dict[int, int],
+) -> None:
+    pcdump = _with_single_role_coalesce(
+        rows,
+        distinct_roots=distinct_roots,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, role_map)
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_invalid_coalesce_component_retains_only_separate_valid_component() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  75 -> 76\n  70 -> 71\n",
+        distinct_roots=77,
+    )
+    role_map = {58: 1, 70: 4, 71: 5, 75: -1, 76: 3}
+
+    first = build_colorgraph_profile(pcdump, "f", 0, role_map)
+    second = build_colorgraph_profile(pcdump, "f", 0, role_map)
+
+    assert first == second
+    assert first.complete is False
+    assert first.coalesce_pairs == frozenset({(4, 5)})
+
+
+@pytest.mark.parametrize(
     ("rows", "distinct_roots"),
     [
         pytest.param("  58 -> 75\n  75 -> 58\n", 78, id="two-node"),

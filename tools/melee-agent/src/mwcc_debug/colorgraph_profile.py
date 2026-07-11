@@ -229,17 +229,30 @@ def build_colorgraph_profile(
     conflicting_coalesce_roles: set[int] = set()
     if coalesce_section is not None:
         roots_by_alias: dict[int, set[int]] = defaultdict(set)
-        blocked_aliases: set[int] = set()
+        invalid_coalesce_igs: set[int] = set()
+
+        def coalesce_role(ig_idx: int) -> int | None:
+            role = stable_role(ig_idx)
+            if role is None:
+                invalid_coalesce_igs.add(ig_idx)
+            return role
+
         for alias_ig, root_ig in coalesce_section.mappings:
-            stable_role(alias_ig)
-            stable_role(root_ig)
-            if not (0 <= alias_ig < coalesce_section.n_virtuals and 0 <= root_ig < coalesce_section.n_virtuals):
+            alias_role = coalesce_role(alias_ig)
+            root_role = coalesce_role(root_ig)
+            if alias_role is None or root_role is None:
                 incomplete = True
                 if 0 <= alias_ig < coalesce_section.n_virtuals:
-                    blocked_aliases.add(alias_ig)
+                    invalid_coalesce_igs.add(alias_ig)
+            if not (0 <= alias_ig < coalesce_section.n_virtuals and 0 <= root_ig < coalesce_section.n_virtuals):
+                incomplete = True
                 continue
             roots_by_alias[alias_ig].add(root_ig)
 
+        projection_blocked_igs = {
+            ig_idx for ig_idx in invalid_coalesce_igs if 0 <= ig_idx < coalesce_section.n_virtuals
+        }
+        blocked_aliases = set(projection_blocked_igs)
         conflicting_aliases = {alias_ig for alias_ig, roots in roots_by_alias.items() if len(roots) > 1}
         blocked_aliases.update(conflicting_aliases)
         incomplete = incomplete or bool(conflicting_aliases)
@@ -250,10 +263,21 @@ def build_colorgraph_profile(
 
         final_roots = {alias_ig: next(iter(roots)) for alias_ig, roots in roots_by_alias.items() if len(roots) == 1}
         for alias_ig, old_root_ig, new_root_ig in coalesce_section.forced_overrides:
-            stable_role(alias_ig)
-            stable_role(old_root_ig)
-            stable_role(new_root_ig)
-            if not all(0 <= ig_idx < coalesce_section.n_virtuals for ig_idx in (alias_ig, old_root_ig, new_root_ig)):
+            endpoint_igs = (alias_ig, old_root_ig, new_root_ig)
+            endpoint_roles = tuple(coalesce_role(ig_idx) for ig_idx in endpoint_igs)
+            if any(role is None for role in endpoint_roles):
+                incomplete = True
+                invalid_endpoints = {
+                    ig_idx
+                    for ig_idx, role in zip(endpoint_igs, endpoint_roles)
+                    if role is None and 0 <= ig_idx < coalesce_section.n_virtuals
+                }
+                blocked_aliases.update(invalid_endpoints)
+                projection_blocked_igs.update(invalid_endpoints)
+                if 0 <= alias_ig < coalesce_section.n_virtuals:
+                    blocked_aliases.add(alias_ig)
+                    projection_blocked_igs.add(alias_ig)
+            if not all(0 <= ig_idx < coalesce_section.n_virtuals for ig_idx in endpoint_igs):
                 incomplete = True
                 if 0 <= alias_ig < coalesce_section.n_virtuals:
                     blocked_aliases.add(alias_ig)
@@ -268,6 +292,11 @@ def build_colorgraph_profile(
                 continue
             final_roots[alias_ig] = new_root_ig
 
+        _, projection_unresolved_igs = _resolve_alias_roots(
+            final_roots,
+            coalesce_section.n_virtuals,
+            projection_blocked_igs,
+        )
         resolved_roots, unresolved_igs = _resolve_alias_roots(
             final_roots,
             coalesce_section.n_virtuals,
@@ -276,6 +305,8 @@ def build_colorgraph_profile(
         if unresolved_igs:
             incomplete = True
             for ig_idx in sorted(unresolved_igs):
+                if ig_idx in projection_unresolved_igs:
+                    continue
                 role = stable_role(ig_idx)
                 if role is not None:
                     conflicting_coalesce_roles.add(role)
