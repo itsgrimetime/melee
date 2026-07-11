@@ -466,6 +466,69 @@ def test_score_source_external_exception_keeps_durable_replay_command(
     assert str(durable_source) in row["score_command"]
 
 
+def test_score_source_context_entry_interruption_uses_durable_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "melee"
+    output_dir = tmp_path / "external"
+    captured: dict[str, Path] = {}
+
+    def interrupt_copy(source, destination):
+        captured["staged_source"] = Path(destination)
+        raise KeyboardInterrupt
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("score-source runner must not be called")
+
+    import src.mwcc_debug.source_candidate_scoring as scoring_mod
+
+    monkeypatch.setattr(scoring_mod.shutil, "copyfile", interrupt_copy)
+    config = ScoreSourceConfig(
+        repo_root=repo_root,
+        function="fn_test",
+        target=None,
+        cflags_from=Path("src/melee/test.c"),
+        expression_source=Path("src/melee/test.c"),
+        expression_baseline=None,
+        expression_reg_class="gpr",
+        output_dir=output_dir,
+        timeout=5.0,
+    )
+
+    rows = score_source_candidates(
+        [
+            SourceCandidate(
+                candidate_id="external-entry-interruption",
+                source_text="void fn_test(void) { ExternalCandidate(); }\n",
+            )
+        ],
+        config,
+        runner=fake_run,
+    )
+
+    durable_source = (
+        output_dir / "external-entry-interruption.c"
+    ).resolve()
+    staged_source = captured["staged_source"]
+    staging_root = (
+        repo_root / "build" / "diagnostics" / "score_source_staging"
+    )
+    assert not staged_source.exists()
+    assert list(staging_root.iterdir()) == []
+    assert durable_source.is_file()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["error"] == "score-source-interrupted"
+    assert row["score_returncode"] == 130
+    assert row["score_error_kind"] == "infrastructure"
+    assert row["source_file"] == str(durable_source)
+    assert row["source_retained"] == str(durable_source)
+    assert row["c_file"] == str(durable_source)
+    assert row["score_command_executed"] == row["score_command"]
+    assert str(durable_source) in row["score_command"]
+
+
 def test_score_source_staging_rejects_symlink_escape(tmp_path: Path) -> None:
     repo_root = tmp_path / "melee"
     candidate_path = tmp_path / "external" / "candidate.c"

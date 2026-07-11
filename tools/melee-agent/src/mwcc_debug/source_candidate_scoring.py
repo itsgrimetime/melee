@@ -159,6 +159,14 @@ def score_retained_source_rows(
             ))
             continue
 
+        durable_cmd = build_score_source_command(
+            candidate_path,
+            config,
+            function=row_score_function,
+            full_unit_source=row_full_unit,
+        )
+        score_command = " ".join(shlex.quote(part) for part in durable_cmd)
+        score_command_executed = score_command
         try:
             with _stage_score_source_candidate(
                 candidate_path,
@@ -187,13 +195,6 @@ def score_retained_source_rows(
                     check=False,
                 )
         except KeyboardInterrupt:
-            replay_cmd = build_score_source_command(
-                candidate_path,
-                config,
-                function=row_score_function,
-                full_unit_source=row_full_unit,
-            )
-            score_command = " ".join(shlex.quote(part) for part in replay_cmd)
             out.append(_finalize_score_row(
                 _with_score_source_scope_defaults(
                     {
@@ -226,13 +227,6 @@ def score_retained_source_rows(
             ))
             break
         except subprocess.TimeoutExpired as exc:
-            replay_cmd = build_score_source_command(
-                candidate_path,
-                config,
-                function=row_score_function,
-                full_unit_source=row_full_unit,
-            )
-            score_command = " ".join(shlex.quote(part) for part in replay_cmd)
             out.append(_finalize_score_row(
                 _with_score_source_scope_defaults(
                     {
