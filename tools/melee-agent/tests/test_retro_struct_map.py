@@ -18,6 +18,44 @@ def test_live_gc125n_table_satisfies_required_backend_map_gate():
     assert struct_map.validate_required_backend_map(table) == []
     assert struct_map.validate_backend_ig_snapshot_capability(table) == []
     assert struct_map.validate_backend_pcode_snapshot_capability(table) == []
+    assert struct_map.validate_instrumentation_proof_registry(table) == []
+    assert table["instrumentation_proof_schema"] == "mwcc-retro-lifetime-proof.v1"
+    assert table["instrumentation_proofs"] == []
+
+
+def test_gc125n_struct_map_loader_reads_installed_registry():
+    table = struct_map.load_gc125n_struct_map()
+
+    assert table == _load_gc125n_table()
+
+
+def test_instrumentation_registry_gate_rejects_malformed_or_promoted_guesses():
+    assert struct_map.validate_instrumentation_proof_registry({}) == [
+        "instrumentation_proof_schema must be mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs must be list",
+    ]
+    table = {
+        "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs": [
+            {
+                "compiler_executable_sha256": "a" * 64,
+                "proof_id": "proof.v1",
+                "proof_sha256": "b" * 64,
+                "promoted": False,
+            }
+        ],
+    }
+
+    assert struct_map.validate_instrumentation_proof_registry(table) == []
+
+    table["instrumentation_proofs"][0]["extra"] = True
+    assert "instrumentation proof registry row 0 has unexpected fields" in (
+        struct_map.validate_instrumentation_proof_registry(table)
+    )
+
+    table["instrumentation_proofs"][0]["compiler_executable_sha256"] = []
+    errors = struct_map.validate_instrumentation_proof_registry(table)
+    assert any("compiler_executable_sha256" in error for error in errors)
 
 
 def test_live_gc125n_table_satisfies_backend_reader_gate():

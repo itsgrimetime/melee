@@ -1,8 +1,21 @@
 """Confidence gates for retail GC/1.2.5n backend/regalloc maps."""
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
+
+INSTRUMENTATION_PROOF_SCHEMA = "mwcc-retro-lifetime-proof.v1"
+_INSTRUMENTATION_PROOF_ROW_FIELDS = frozenset(
+    {
+        "compiler_executable_sha256",
+        "proof_id",
+        "proof_sha256",
+        "promoted",
+    }
+)
+_LOWER_HEX = frozenset("0123456789abcdef")
 
 ACCEPTED_REQUIRED_CONFIDENCE = {
     "live-invariant",
@@ -101,6 +114,72 @@ REQUIRED_BACKEND_PCODE_SNAPSHOT_FAMILIES = (
     "block",
     "pcode_instruction",
 )
+
+
+def load_gc125n_struct_map() -> dict[str, Any]:
+    """Load the installed GC/1.2.5n struct map and proof registry."""
+    table_path = Path(__file__).with_name("tables") / "gc_125n.json"
+    return json.loads(table_path.read_text())
+
+
+def _is_lower_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in _LOWER_HEX for char in value)
+    )
+
+
+def validate_instrumentation_proof_registry(table: Mapping[str, object]) -> list[str]:
+    """Validate the independent proof trust registry without promoting entries."""
+    errors: list[str] = []
+    if table.get("instrumentation_proof_schema") != INSTRUMENTATION_PROOF_SCHEMA:
+        errors.append(
+            f"instrumentation_proof_schema must be {INSTRUMENTATION_PROOF_SCHEMA}"
+        )
+    rows = table.get("instrumentation_proofs")
+    if not isinstance(rows, list):
+        errors.append("instrumentation_proofs must be list")
+        return errors
+    seen: set[tuple[object, object, object]] = set()
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            errors.append(f"instrumentation proof registry row {index} must be object")
+            continue
+        if set(row) != _INSTRUMENTATION_PROOF_ROW_FIELDS:
+            errors.append(
+                f"instrumentation proof registry row {index} has unexpected fields"
+            )
+        compiler_digest = row.get("compiler_executable_sha256")
+        proof_id = row.get("proof_id")
+        digest = row.get("proof_sha256")
+        if not _is_lower_sha256(compiler_digest):
+            errors.append(
+                f"instrumentation proof registry row {index} compiler_executable_sha256 "
+                "must be 64 lowercase hex"
+            )
+        if not isinstance(proof_id, str) or not proof_id:
+            errors.append(
+                f"instrumentation proof registry row {index} proof_id must be non-empty string"
+            )
+        if not _is_lower_sha256(digest):
+            errors.append(
+                f"instrumentation proof registry row {index} proof_sha256 must be 64 lowercase hex"
+            )
+        if not isinstance(row.get("promoted"), bool):
+            errors.append(
+                f"instrumentation proof registry row {index} promoted must be boolean"
+            )
+        if (
+            isinstance(compiler_digest, str)
+            and isinstance(proof_id, str)
+            and isinstance(digest, str)
+        ):
+            key = (compiler_digest, proof_id, digest)
+            if key in seen:
+                errors.append("duplicate instrumentation proof registry tuple")
+            seen.add(key)
+    return errors
 
 
 def validate_required_backend_map(table: dict[str, Any]) -> list[str]:
