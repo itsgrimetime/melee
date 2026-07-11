@@ -129,7 +129,7 @@ def score_retained_source_rows(
         candidate_path = _row_candidate_path(row)
         row_full_unit = bool(row.get("full_unit_source", config.full_unit_source))
         row_score_function = str(row.get("score_function") or config.function)
-        if candidate_path is None:
+        if candidate_path is None or not candidate_path.exists():
             out.append(_finalize_score_row(
                 _with_score_source_scope_defaults(
                     {
@@ -147,7 +147,7 @@ def score_retained_source_rows(
                     },
                     input_row=row,
                     config=config,
-                    candidate_path=None,
+                    candidate_path=candidate_path,
                     score_function=row_score_function,
                 )
             ))

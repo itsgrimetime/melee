@@ -16,6 +16,7 @@ from src.mwcc_debug import source_shape
 from src.mwcc_debug.source_candidate_scoring import (
     ScoreSourceConfig,
     SourceCandidate,
+    score_retained_source_rows,
     score_source_candidates,
 )
 from src.mwcc_debug.source_shape import CandidatePatch
@@ -383,6 +384,60 @@ def test_score_source_candidates_stage_external_retained_source(
     assert str(staged_source) in rows[0]["score_command_executed"]
     assert str(artifact_source) in rows[0]["score_command"]
     assert str(staged_source) not in rows[0]["score_command"]
+
+
+def test_score_retained_source_rows_missing_external_candidate_returns_failure_row(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "melee"
+    missing_source = tmp_path / "external" / "missing-candidate.c"
+    staging_root = (
+        repo_root / "build" / "diagnostics" / "score_source_staging"
+    )
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("score-source runner must not be called")
+
+    config = ScoreSourceConfig(
+        repo_root=repo_root,
+        function="fn_test",
+        target=None,
+        cflags_from=Path("src/melee/test.c"),
+        expression_source=Path("src/melee/test.c"),
+        expression_baseline=None,
+        expression_reg_class="gpr",
+        output_dir=tmp_path / "external",
+        timeout=5.0,
+    )
+
+    rows = score_retained_source_rows(
+        [
+            {
+                "candidate_id": "missing-external-candidate",
+                "source_file": str(missing_source),
+                "full_unit_source": True,
+            }
+        ],
+        config,
+        runner=fake_run,
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["error"] == "candidate-path-missing"
+    assert row["score_error_kind"] == "infrastructure"
+    assert row["source_file"] == str(missing_source)
+    assert row["source_retained"] == str(missing_source)
+    assert row["c_file"] == str(missing_source)
+    assert row["status"] == "failed"
+    assert row["terminal_safe"] is False
+    assert row["blockers"] == [
+        {
+            "reason": "score-source-error:candidate-path-missing",
+            "candidate_id": "missing-external-candidate",
+        }
+    ]
+    assert not staging_root.exists()
 
 
 def test_score_source_patch_candidate_error_row_is_preserved(
