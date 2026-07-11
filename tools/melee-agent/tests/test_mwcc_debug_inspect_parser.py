@@ -1,4 +1,5 @@
 """Tests for parsing mwcc-inspect output into diff snapshots."""
+
 from __future__ import annotations
 
 from src.mwcc_debug.inspect_parser import parse_inspect_snapshots

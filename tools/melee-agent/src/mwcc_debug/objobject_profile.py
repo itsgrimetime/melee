@@ -15,12 +15,20 @@ _REAL_OBJECT_RE = re.compile(
     r"(?P<name>.*?)\s+\(DataType:\s*(?P<kind>[^,]+),\s*Type:\s*(?P<type>.*)\)\s*$",
     re.IGNORECASE,
 )
+_FIELD_LABEL = (
+    r"kind|data[_ ]?type|name|source[_ ]?name|type|type[_ ]?name|scope|"
+    r"expression|initializer|occurrence|occurrence[_ ]?id|source[_ ]?order|first[_ ]?appearance"
+)
 _LABELED_FIELD_RE = re.compile(
-    r"^\s*(?P<label>kind|data[_ ]?type|name|source[_ ]?name|type|type[_ ]?name|scope|"
-    r"expression|initializer|occurrence|occurrence[_ ]?id|source[_ ]?order|first[_ ]?appearance)\s*[:=]\s*(?P<value>.*?)\s*$",
+    rf"^\s*(?P<label>{_FIELD_LABEL})\s*[:=]\s*(?P<value>.*?)\s*$",
     re.IGNORECASE,
 )
-_HEX_ADDRESS_RE = re.compile(rf"(?<![A-Za-z0-9_]){_ADDRESS}(?![A-Za-z0-9_])")
+_INLINE_FIELD_BOUNDARY_RE = re.compile(
+    rf"\s*[;|]\s*(?=(?:{_FIELD_LABEL})\s*[:=])",
+    re.IGNORECASE,
+)
+_EXPLICIT_ADDRESS = r"(?:0[xX][0-9A-Fa-f]+|[0-9A-Fa-f]+[hH])"
+_EXPLICIT_ADDRESS_RE = re.compile(rf"(?<![A-Za-z0-9_]){_EXPLICIT_ADDRESS}(?![A-Za-z0-9_])")
 _TEMP_ID_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:@\d+|%?r\d+(?:_\d+)?|(?:temp|tmp|var)_?r?\d+(?:_\d+)?)(?![A-Za-z0-9_])",
     re.IGNORECASE,
@@ -54,10 +62,17 @@ class _ObjectRecord:
     occurrence: str | None = None
 
 
-def _normalize(value: str, *, unstable_ids: bool = False, type_syntax: bool = False) -> str:
+def _normalize(
+    value: str,
+    *,
+    unstable_ids: bool = False,
+    process_addresses: bool = False,
+    type_syntax: bool = False,
+) -> str:
     if unstable_ids:
         value = _OPERATOR_SPACE_RE.sub(r" \1 ", value)
-    value = _HEX_ADDRESS_RE.sub("<addr>", value)
+    if process_addresses:
+        value = _EXPLICIT_ADDRESS_RE.sub("<addr>", value)
     if unstable_ids:
         value = _TEMP_ID_RE.sub("<temp>", value)
     value = _SPACE_RE.sub(" ", value).strip()
@@ -82,12 +97,13 @@ def _canonical_label(label: str) -> str:
     return "scope"
 
 
-def _parse_inline_fields(line: str) -> dict[str, str]:
+def _parse_inline_fields(line: str) -> dict[str, str] | None:
     fields: dict[str, str] = {}
-    for part in re.split(r"\s*[;|]\s*", line):
+    for part in _INLINE_FIELD_BOUNDARY_RE.split(line):
         match = _LABELED_FIELD_RE.match(part)
-        if match is not None:
-            fields[_canonical_label(match.group("label"))] = match.group("value")
+        if match is None:
+            return None
+        fields[_canonical_label(match.group("label"))] = match.group("value")
     return fields
 
 
@@ -130,8 +146,11 @@ def _parse_records(snapshot_text: str, function: str) -> tuple[list[_ObjectRecor
             remainder = line[start_match.end() :].strip().lstrip(":").strip()
             if remainder:
                 inline_fields = _parse_inline_fields(remainder)
-                current.occurrence = inline_fields.pop("occurrence", None)
-                current.fields.update(inline_fields)
+                if inline_fields is None:
+                    saw_unparsed_content = True
+                else:
+                    current.occurrence = inline_fields.pop("occurrence", None)
+                    current.fields.update(inline_fields)
             continue
 
         label_match = _LABELED_FIELD_RE.match(line)
@@ -146,7 +165,7 @@ def _parse_records(snapshot_text: str, function: str) -> tuple[list[_ObjectRecor
 
         if current is not None:
             inline_fields = _parse_inline_fields(stripped)
-            if inline_fields:
+            if inline_fields is not None:
                 occurrence = inline_fields.pop("occurrence", None)
                 current.fields.update(inline_fields)
                 if occurrence is not None:
@@ -182,10 +201,22 @@ def parse_objobject_profile(inspect_text: str, function: str) -> ObjObjectProfil
                 source_name=_normalize(record.fields["source_name"]),
                 type_name=_normalize(record.fields["type_name"], type_syntax=True),
                 scope=_normalize(record.fields["scope"]),
-                expression=_normalize(record.fields["expression"], unstable_ids=True),
+                expression=_normalize(
+                    record.fields["expression"],
+                    unstable_ids=True,
+                    process_addresses=True,
+                ),
             )
         )
-        occurrences.append(_normalize(record.occurrence, unstable_ids=True) if record.occurrence is not None else None)
+        occurrences.append(
+            _normalize(
+                record.occurrence,
+                unstable_ids=True,
+                process_addresses=True,
+            )
+            if record.occurrence is not None
+            else None
+        )
 
     if saw_unparsed_content or (not records and len(snapshots[-1].text.splitlines()) > 1):
         return ObjObjectProfile(tuple(identities), False, "incomplete-objobject-entry")
@@ -243,16 +274,42 @@ def objobject_order_distance(candidate: ObjObjectProfile, donor: ObjObjectProfil
 
     if not candidate.complete or not donor.complete:
         raise ValueError("incomplete-objobject-evidence")
+    if len(candidate.occurrence_evidence) != len(candidate.identities) or len(donor.occurrence_evidence) != len(
+        donor.identities
+    ):
+        raise ValueError("incomplete-objobject-evidence")
 
     membership = _multiset_delta(candidate.identities, donor.identities)
-    combined_counts = Counter(candidate.identities) | Counter(donor.identities)
+    candidate_counts = Counter(candidate.identities)
+    donor_counts = Counter(donor.identities)
+    combined_counts = candidate_counts | donor_counts
     repeated = {identity for identity, count in combined_counts.items() if count > 1}
+    cross_profile_repeated = {
+        identity for identity in repeated if candidate_counts[identity] and donor_counts[identity]
+    }
+
+    for profile in (candidate, donor):
+        for identity in cross_profile_repeated:
+            evidence = [
+                occurrence
+                for item, occurrence in zip(
+                    profile.identities,
+                    profile.occurrence_evidence,
+                    strict=True,
+                )
+                if item == identity
+            ]
+            if any(item is None for item in evidence) or len(set(evidence)) != len(evidence):
+                raise ValueError("incomplete-objobject-evidence")
 
     def tokens(profile: ObjObjectProfile) -> set[tuple[ObjObjectIdentity, str | None]]:
-        evidence = profile.occurrence_evidence or (None,) * len(profile.identities)
         return {
             (identity, occurrence if identity in repeated else None)
-            for identity, occurrence in zip(profile.identities, evidence, strict=True)
+            for identity, occurrence in zip(
+                profile.identities,
+                profile.occurrence_evidence,
+                strict=True,
+            )
         }
 
     common_tokens = tokens(candidate) & tokens(donor)
