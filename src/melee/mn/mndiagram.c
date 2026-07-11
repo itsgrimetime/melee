@@ -2686,9 +2686,24 @@ static inline HSD_JObj* mnDiagram_CreateFighterHeader(
     return jobj;
 }
 
+static inline HSD_JObj* mnDiagram_CreateVisibleFighterHeader2(
+    u8* sorted, int start, int rank, mnDiagram_Assets* assets)
+{
+    return mnDiagram_CreateFighterHeader(
+        mnDiagram_GetVisibleFighterCursorFrom2(sorted, start, rank), assets);
+}
+
+static inline HSD_JObj* mnDiagram_CreateVisibleFighterHeader(
+    u8* sorted, int start, int rank, mnDiagram_Assets* assets)
+{
+    return mnDiagram_CreateFighterHeader(
+        mnDiagram_GetVisibleFighterCursorFrom(sorted, start, rank), assets);
+}
+
+#pragma push
+#pragma inline_depth(2)
 void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
-    int fighter_id;
     HSD_JObj* header;
     Diagram* data = GET_DIAGRAM(arg0);
     Diagram* data_alias = data;
@@ -2702,11 +2717,8 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     for (i = 0; i < 7; i++) {
         sorted = (u8*) assets;
         if (mnDiagram_CountUnlockedFightersInline() > i) {
-            header = mnDiagram_CreateFighterHeader(
-                (fighter_id = mnDiagram_GetVisibleFighterCursorFrom(
-                     sorted, arg2, i),
-                 fighter_id),
-                assets);
+            header = mnDiagram_CreateVisibleFighterHeader(sorted, arg2, i,
+                                                          assets);
             spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
                       HSD_JObjGetTranslationX(data->jobjs[7]);
             HSD_JObjSetTranslateX(header, spacing * i);
@@ -2719,9 +2731,8 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     for (i = 0; i < 0xA; i++) {
         sorted = (u8*) assets;
         if (mnDiagram_CountUnlockedFightersInline() > i) {
-            header = mnDiagram_CreateFighterHeader(
-                mnDiagram_GetVisibleFighterCursorFrom2(sorted, arg1, i),
-                assets);
+            header = mnDiagram_CreateVisibleFighterHeader2(sorted, arg1, i,
+                                                           assets);
             parent = data_alias->jobjs[9];
             spacing = HSD_JObjGetTranslationY(data_alias->jobjs[10]) -
                       HSD_JObjGetTranslationY(parent);
@@ -2730,6 +2741,7 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
         }
     }
 }
+#pragma pop
 
 static inline Diagram* mnDiagram_GetCurrentDiagramData(void)
 {
