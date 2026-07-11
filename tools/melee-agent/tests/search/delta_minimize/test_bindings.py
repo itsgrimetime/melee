@@ -222,6 +222,50 @@ int draw(int x, int y) {
 }
 """
 
+NON_CALL_REFERENCE_PREFIX = """\
+int helper(int value) { return value + 1; }
+int other(int value) { return value + 2; }
+"""
+
+COMPLETE_SIGNATURE_LEFT = """\
+static int *helper(int mode);
+static int *helper(int mode) { return 0; }
+int draw(int x) { return (helper(x) != 0) + 1; }
+"""
+COMPLETE_SIGNATURE_RIGHT = """\
+extern long **helper(unsigned int mode, int flags);
+extern long **helper(unsigned int mode, int flags) { return 0; }
+int draw(int x) { return (helper((unsigned int) x, 0) != 0) + 2; }
+"""
+
+FUNCTION_RETURNING_POINTER_LEFT = """\
+static int add(int x, int y) { return x + y; }
+static int (*factory(int mode))(int, int);
+static int (*factory(int mode))(int, int) { return add; }
+int draw(int x) { return factory(x) != 0; }
+"""
+FUNCTION_RETURNING_POINTER_RIGHT = """\
+static int add(int x, int y) { return x + y; }
+static int (*factory(int mode, int flags))(int, int);
+static int (*factory(int mode, int flags))(int, int) { return add; }
+int draw(int x) { return factory(x, 0) != 0; }
+"""
+
+ARRAY_BOUND_SCOPE_LEFT = """\
+int helper(int a, int b) { return a - b; }
+int draw(int x, int y) {
+    int helper[helper(x, y)];
+    return sizeof(helper);
+}
+"""
+ARRAY_BOUND_SCOPE_RIGHT = """\
+int helper(int b, int a) { return a - b; }
+int draw(int x, int y) {
+    int helper[helper(y, x)];
+    return sizeof(helper);
+}
+"""
+
 
 def test_parameter_and_call_reorder_become_one_atom():
     manifest = delta.extract_delta_manifest(PARAM_LEFT, PARAM_RIGHT, function="draw")
@@ -315,6 +359,114 @@ def test_parameter_type_change_uses_general_signature_coupling():
     assert materialize_mask(TYPE_CHANGE_LEFT, manifest, 1) == TYPE_CHANGE_RIGHT
 
 
+def test_complete_signature_spans_exclude_body_and_unrelated_initializer():
+    source = """\
+static int *helper(int mode), *sentinel = 0;
+static int *helper(int mode) { return 0; }
+"""
+
+    helper = build_binding_index(source).functions["helper"]
+
+    assert source[slice(*helper.definition_signature_span)].strip() == "static int *helper(int mode)"
+    assert tuple(source[slice(*span)].strip() for span in helper.declaration_signature_spans) == (
+        "static int *helper(int mode)",
+    )
+
+
+def test_complete_signature_and_call_changes_couple_without_shape_separation():
+    manifest = delta.extract_delta_manifest(
+        COMPLETE_SIGNATURE_LEFT,
+        COMPLETE_SIGNATURE_RIGHT,
+        function="draw",
+    )
+
+    coupled = next(atom for atom in manifest.atoms if "helper signature change" in atom.summary)
+    assert {patch.anchor_kind for patch in coupled.patches} >= {
+        "function_signature",
+        "parameter_list",
+        "argument_list",
+    }
+    assert len(manifest.atoms) == 2
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+    assert masks == (0b00, 0b01, 0b10, 0b11)
+    assert materialize_mask(COMPLETE_SIGNATURE_LEFT, manifest, 0) == COMPLETE_SIGNATURE_LEFT
+    assert materialize_mask(COMPLETE_SIGNATURE_LEFT, manifest, 0b11) == COMPLETE_SIGNATURE_RIGHT
+    for mask in masks:
+        candidate = materialize_mask(COMPLETE_SIGNATURE_LEFT, manifest, mask)
+        helper = build_binding_index(candidate).functions["helper"]
+        signatures = (
+            candidate[slice(*helper.declaration_signature_spans[0])].strip(),
+            candidate[slice(*helper.definition_signature_span)].strip(),
+            helper.direct_calls[0].argument_texts,
+        )
+        assert signatures in {
+            (
+                "static int *helper(int mode)",
+                "static int *helper(int mode)",
+                ("x",),
+            ),
+            (
+                "extern long **helper(unsigned int mode, int flags)",
+                "extern long **helper(unsigned int mode, int flags)",
+                ("(unsigned int) x", "0"),
+            ),
+        }
+
+
+def test_function_returning_function_pointer_uses_declared_function_parameters():
+    index = build_binding_index(FUNCTION_RETURNING_POINTER_LEFT)
+
+    factory = index.functions["factory"]
+    assert factory.parameter_names == ("mode",)
+    assert factory.parameter_texts == ("int mode",)
+    assert not any(blocker.symbol == "factory" for blocker in index.blockers)
+
+
+def test_function_returning_function_pointer_parameter_is_visible_in_body():
+    source = """\
+static int add(int x, int y) { return x + y; }
+static int (*factory(int add))(int, int) { return add(1, 2); }
+"""
+
+    index = build_binding_index(source)
+
+    assert index.functions["factory"].parameter_names == ("add",)
+    assert not index.functions["add"].direct_calls
+    assert any(blocker.symbol == "add" and blocker.reason == "shadowed-call" for blocker in index.blockers)
+
+
+def test_function_returning_function_pointer_direct_call_stays_coupled():
+    manifest = delta.extract_delta_manifest(
+        FUNCTION_RETURNING_POINTER_LEFT,
+        FUNCTION_RETURNING_POINTER_RIGHT,
+        function="draw",
+    )
+
+    assert len(manifest.atoms) == 1
+    assert "factory signature change" in manifest.atoms[0].summary
+    assert {patch.anchor_kind for patch in manifest.atoms[0].patches} >= {
+        "parameter_list",
+        "argument_list",
+    }
+    assert enumerate_legal_masks(manifest, max_candidates=2) == (0, 1)
+    assert materialize_mask(FUNCTION_RETURNING_POINTER_LEFT, manifest, 0) == FUNCTION_RETURNING_POINTER_LEFT
+    assert materialize_mask(FUNCTION_RETURNING_POINTER_LEFT, manifest, 1) == FUNCTION_RETURNING_POINTER_RIGHT
+
+
+def test_array_bound_call_precedes_local_declarator_scope():
+    manifest = delta.extract_delta_manifest(
+        ARRAY_BOUND_SCOPE_LEFT,
+        ARRAY_BOUND_SCOPE_RIGHT,
+        function="draw",
+    )
+
+    assert len(manifest.atoms) == 1
+    assert "helper parameter reorder" in manifest.atoms[0].summary
+    assert enumerate_legal_masks(manifest, max_candidates=2) == (0, 1)
+    assert materialize_mask(ARRAY_BOUND_SCOPE_LEFT, manifest, 0) == ARRAY_BOUND_SCOPE_LEFT
+    assert materialize_mask(ARRAY_BOUND_SCOPE_LEFT, manifest, 1) == ARRAY_BOUND_SCOPE_RIGHT
+
+
 @pytest.mark.parametrize(
     "right",
     [CALL_COUNT_CHANGE_RIGHT, DECLARATION_COUNT_CHANGE_RIGHT],
@@ -378,6 +530,67 @@ def test_changed_local_declaration_shadowing_unchanged_call_fails_closed():
     blocker = next(item for item in exc.value.details["blockers"] if item["reason"] == "shadowing-declaration")
     changed_offset = DECLARATION_SHADOW_RIGHT.index("helper = 1")
     assert blocker["span"][0] <= changed_offset < blocker["span"][1]
+
+
+@pytest.mark.parametrize(
+    ("left_expression", "right_expression"),
+    [
+        ("return helper != 0;", "return other != 0;"),
+        ("return &helper != 0;", "return &other != 0;"),
+        ("sink = helper; return 0;", "sink = other; return 0;"),
+    ],
+    ids=("comparison", "address", "assignment"),
+)
+def test_changed_non_call_tu_local_function_reference_fails_closed(left_expression, right_expression):
+    left = NON_CALL_REFERENCE_PREFIX + f"int draw(void) {{ {left_expression} }}\n"
+    right = NON_CALL_REFERENCE_PREFIX + f"int draw(void) {{ {right_expression} }}\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding") as exc:
+        delta.extract_delta_manifest(left, right, function="draw")
+
+    blockers = [
+        blocker for blocker in exc.value.details["blockers"] if blocker["reason"] == "non-call-function-reference"
+    ]
+    assert blockers
+    helper_offset = left.index("helper", left.index("int draw"))
+    assert any(blocker["span"][0] <= helper_offset < blocker["span"][1] for blocker in blockers)
+
+
+def test_changed_non_call_reference_expression_fails_closed():
+    left = NON_CALL_REFERENCE_PREFIX + "int draw(void) { return (helper != 0) + 1; }\n"
+    right = NON_CALL_REFERENCE_PREFIX + "int draw(void) { return (helper == 0) + 1; }\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
+        delta.extract_delta_manifest(left, right, function="draw")
+
+
+def test_unchanged_non_call_tu_local_function_reference_is_change_local():
+    left = NON_CALL_REFERENCE_PREFIX + "int draw(void) { return (helper != 0) + 1; }\n"
+    right = NON_CALL_REFERENCE_PREFIX + "int draw(void) { return (helper != 0) + 2; }\n"
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+
+    assert len(manifest.atoms) == 1
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 1) == right
+
+
+def test_unchanged_non_call_reference_does_not_block_changed_function_binding():
+    left = """\
+int helper(int a, int b) { return a - b; }
+int draw(int x, int y) { return (helper != 0) + helper(x, y); }
+"""
+    right = """\
+int helper(int b, int a) { return a - b; }
+int draw(int x, int y) { return (helper != 0) + helper(y, x); }
+"""
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+
+    assert len(manifest.atoms) == 1
+    assert "helper parameter reorder" in manifest.atoms[0].summary
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 1) == right
 
 
 def test_unique_rename_couples_declaration_definition_and_call():

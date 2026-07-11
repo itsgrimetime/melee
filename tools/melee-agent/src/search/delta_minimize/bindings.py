@@ -30,6 +30,8 @@ class FunctionBinding:
     parameter_texts: tuple[str, ...] = ()
     declaration_spans: tuple[tuple[int, int], ...] = ()
     declaration_parameter_spans: tuple[tuple[int, int], ...] = ()
+    definition_signature_span: tuple[int, int] | None = None
+    declaration_signature_spans: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,8 +69,8 @@ def build_binding_index(source: str) -> BindingIndex:
     source_bytes = source.encode("utf-8")
     root = get_parser().parse(source_bytes).root_node
     to_char = _byte_to_char_offsets(source)
-    function_nodes: dict[str, list[tuple[object, object, object]]] = defaultdict(list)
-    declaration_nodes: dict[str, list[tuple[object, object, object]]] = defaultdict(list)
+    function_nodes: dict[str, list[tuple[object, object, object, object]]] = defaultdict(list)
+    declaration_nodes: dict[str, list[tuple[object, object, object, object]]] = defaultdict(list)
     macro_names: set[str] = set()
     blockers: list[BindingBlocker] = []
 
@@ -88,14 +90,15 @@ def build_binding_index(source: str) -> BindingIndex:
     for node in root.named_children:
         if node.type == "function_definition":
             declarator = node.child_by_field_name("declarator")
-            name_node = _declarator_identifier(declarator)
-            parameters = _find_parameter_list(declarator)
-            if name_node is None or parameters is None:
+            parts = _function_declaration_parts(declarator)
+            if parts is None:
+                name_node = _declarator_identifier(declarator)
                 symbol = node_text(source_bytes, name_node) if name_node is not None else "*"
                 blockers.append(BindingBlocker(symbol, "k-and-r-or-unresolved-definition", _span(node, to_char)))
                 continue
+            name_node, parameters = parts
             name = node_text(source_bytes, name_node)
-            function_nodes[name].append((node, name_node, parameters))
+            function_nodes[name].append((node, name_node, parameters, declarator))
         elif node.type == "declaration":
             for declarator in node.named_children:
                 parts = _function_declaration_parts(declarator)
@@ -103,7 +106,7 @@ def build_binding_index(source: str) -> BindingIndex:
                     continue
                 name_node, parameters = parts
                 name = node_text(source_bytes, name_node)
-                declaration_nodes[name].append((node, name_node, parameters))
+                declaration_nodes[name].append((node, name_node, parameters, declarator))
         elif node.type in {"preproc_def", "preproc_function_def"}:
             name_node = node.child_by_field_name("name")
             if name_node is not None:
@@ -123,16 +126,17 @@ def build_binding_index(source: str) -> BindingIndex:
                     )
                 )
 
-    unique_nodes: dict[str, tuple[object, object, object]] = {}
+    unique_nodes: dict[str, tuple[object, object, object, object]] = {}
     for name, definitions in sorted(function_nodes.items()):
         if len(definitions) != 1:
             blockers.extend(
-                BindingBlocker(name, "duplicate-definition", _span(node, to_char)) for node, _, _ in definitions
+                BindingBlocker(name, "duplicate-definition", _span(node, to_char)) for node, _, _, _ in definitions
             )
             continue
         unique_nodes[name] = definitions[0]
 
     calls_by_name: dict[str, list[CallBinding]] = defaultdict(list)
+    supported_callee_spans: set[tuple[int, int]] = set()
     for call in _walk_type(root, "call_expression"):
         callee_node = call.child_by_field_name("function")
         arguments = call.child_by_field_name("arguments")
@@ -173,9 +177,46 @@ def build_binding_index(source: str) -> BindingIndex:
                 ),
             )
         )
+        supported_callee_spans.add((callee_node.start_byte, callee_node.end_byte))
+
+    declaration_name_spans = _declaration_name_byte_spans(root)
+    function_name_spans = {
+        (name_node.start_byte, name_node.end_byte)
+        for definitions in function_nodes.values()
+        for _, name_node, _, _ in definitions
+    } | {
+        (name_node.start_byte, name_node.end_byte)
+        for declarations in declaration_nodes.values()
+        for _, name_node, _, _ in declarations
+    }
+    for identifier in _walk_type(root, "identifier"):
+        name = node_text(source_bytes, identifier)
+        if name not in unique_nodes:
+            continue
+        identifier_span = (identifier.start_byte, identifier.end_byte)
+        if identifier_span in function_name_spans | declaration_name_spans | supported_callee_spans:
+            continue
+        owner = _ancestor(identifier, "function_definition")
+        if owner is not None and name in _visible_local_declarations(
+            identifier,
+            owner,
+            source_bytes,
+            to_char,
+        ):
+            continue
+        blockers.append(
+            BindingBlocker(
+                name,
+                "non-call-function-reference",
+                _span(_non_call_reference_node(identifier), to_char),
+            )
+        )
 
     functions: dict[str, FunctionBinding] = {}
-    for name, (definition, _, parameters) in sorted(unique_nodes.items(), key=lambda item: item[1][0].start_byte):
+    for name, (definition, _, parameters, _) in sorted(
+        unique_nodes.items(),
+        key=lambda item: item[1][0].start_byte,
+    ):
         parameter_names = _parameter_names(parameters, source_bytes)
         if parameter_names is None:
             blockers.append(BindingBlocker(name, "k-and-r-or-unnamed-parameters", _span(parameters, to_char)))
@@ -188,26 +229,44 @@ def build_binding_index(source: str) -> BindingIndex:
             direct_calls=tuple(sorted(calls_by_name[name], key=lambda item: item.call_span)),
             parameter_texts=_parameter_texts(parameters, source_bytes),
             declaration_spans=tuple(
-                _span(declaration, to_char) for declaration, _, _ in declaration_nodes.get(name, ())
+                _span(declaration, to_char) for declaration, _, _, _ in declaration_nodes.get(name, ())
             ),
             declaration_parameter_spans=tuple(
                 _span(declaration_parameters, to_char)
-                for _, _, declaration_parameters in declaration_nodes.get(name, ())
+                for _, _, declaration_parameters, _ in declaration_nodes.get(name, ())
+            ),
+            definition_signature_span=_definition_signature_span(definition, to_char),
+            declaration_signature_spans=tuple(
+                _declaration_signature_span(declaration, declaration_declarator, to_char)
+                for declaration, _, _, declaration_declarator in declaration_nodes.get(name, ())
             ),
         )
 
     for name in declaration_nodes.keys() - functions.keys():
         blockers.extend(
             BindingBlocker(name, "unresolved-external-declaration", _span(node, to_char))
-            for node, _, _ in declaration_nodes[name]
+            for node, _, _, _ in declaration_nodes[name]
         )
 
     blockers = sorted(set(blockers), key=lambda item: (item.span, item.symbol, item.reason))
     return BindingIndex(functions=functions, blockers=tuple(blockers))
 
 
-def validate_supported_bindings(index: BindingIndex, changed_names: set[str]) -> None:
-    blockers = [blocker for blocker in index.blockers if blocker.symbol in changed_names]
+def validate_supported_bindings(
+    index: BindingIndex,
+    changed_names: set[str],
+    changed_spans: Sequence[tuple[int, int]] | None = None,
+) -> None:
+    blockers = [
+        blocker
+        for blocker in index.blockers
+        if blocker.symbol in changed_names
+        and (
+            blocker.reason != "non-call-function-reference"
+            or changed_spans is None
+            or any(_spans_touch(change, blocker.span) for change in changed_spans)
+        )
+    ]
     if blockers:
         raise DeltaMinimizeError(
             "unsupported-semantic-binding",
@@ -221,17 +280,24 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
     groups = UnionFind(tuple(atom.atom_id for atom in atoms))
     _union_overlaps(groups, atoms)
 
-    left_changed = _changed_binding_names(left_index, atoms, side="left")
-    right_changed = _changed_binding_names(right_index, atoms, side="right")
-    validate_supported_bindings(left_index, left_changed)
-    validate_supported_bindings(right_index, right_changed)
+    left_changed_spans = _changed_spans(atoms, side="left")
+    right_changed_spans = _changed_spans(atoms, side="right")
+    left_changed = _changed_binding_names(left_index, left_changed_spans)
+    right_changed = _changed_binding_names(right_index, right_changed_spans)
+    validate_supported_bindings(left_index, left_changed, left_changed_spans)
+    validate_supported_bindings(right_index, right_changed, right_changed_spans)
 
     pairs = _pair_functions(left_index, right_index)
     semantic_labels: dict[str, list[str]] = defaultdict(list)
     reclassified: dict[tuple[str, int], str] = {}
     for left_function, right_function, renamed in pairs:
-        if _has_parameter_list_patch(atoms, left_function, right_function):
+        if _has_signature_patch(atoms, left_function, right_function):
             permutation = _parameter_permutation(left_function, right_function)
+            parameter_only = _signature_change_is_parameter_only(
+                atoms,
+                left_function,
+                right_function,
+            )
             coupled = _couple_signature_change(
                 groups,
                 atoms,
@@ -240,7 +306,7 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
                 reclassified,
             )
             if coupled:
-                change = "parameter reorder" if permutation is not None else "signature change"
+                change = "parameter reorder" if permutation is not None and parameter_only else "signature change"
                 semantic_labels[coupled[0]].append(f"{right_function.name} {change}")
         if renamed:
             coupled = _couple_rename(
@@ -312,15 +378,41 @@ def _parameter_permutation(left: FunctionBinding, right: FunctionBinding) -> tup
     return order
 
 
-def _has_parameter_list_patch(atoms, left: FunctionBinding, right: FunctionBinding) -> bool:
-    left_spans = (left.parameter_span, *left.declaration_parameter_spans)
-    right_spans = (right.parameter_span, *right.declaration_parameter_spans)
+def _has_signature_patch(atoms, left: FunctionBinding, right: FunctionBinding) -> bool:
+    left_spans = _signature_spans(left)
+    right_spans = _signature_spans(right)
     return any(
         any(_spans_touch((patch.left_start, patch.left_end), span) for span in left_spans)
         or any(_spans_touch((patch.right_start, patch.right_end), span) for span in right_spans)
         for atom in atoms
         for patch in atom.patches
     )
+
+
+def _signature_change_is_parameter_only(atoms, left: FunctionBinding, right: FunctionBinding) -> bool:
+    left_signatures = _signature_spans(left)
+    right_signatures = _signature_spans(right)
+    left_parameters = (left.parameter_span, *left.declaration_parameter_spans)
+    right_parameters = (right.parameter_span, *right.declaration_parameter_spans)
+    for atom in atoms:
+        for patch in atom.patches:
+            left_change = (patch.left_start, patch.left_end)
+            right_change = (patch.right_start, patch.right_end)
+            touches_signature = any(_spans_touch(left_change, span) for span in left_signatures) or any(
+                _spans_touch(right_change, span) for span in right_signatures
+            )
+            touches_parameters = any(_spans_touch(left_change, span) for span in left_parameters) or any(
+                _spans_touch(right_change, span) for span in right_parameters
+            )
+            if touches_signature and not touches_parameters:
+                return False
+    return True
+
+
+def _signature_spans(function: FunctionBinding) -> tuple[tuple[int, int], ...]:
+    definition = function.definition_signature_span or function.parameter_span
+    declarations = function.declaration_signature_spans or function.declaration_parameter_spans
+    return (definition, *declarations)
 
 
 def _couple_signature_change(
@@ -336,6 +428,36 @@ def _couple_signature_change(
             {"symbol": left.name, "left_calls": len(left.direct_calls), "right_calls": len(right.direct_calls)},
         )
     selected: list[str] = []
+    selected.extend(
+        _atoms_for_span(
+            atoms,
+            left.definition_signature_span or left.parameter_span,
+            right.definition_signature_span or right.parameter_span,
+            reclassified,
+            "function_signature",
+        )
+    )
+    left_declaration_signatures = left.declaration_signature_spans or left.declaration_parameter_spans
+    right_declaration_signatures = right.declaration_signature_spans or right.declaration_parameter_spans
+    if len(left_declaration_signatures) != len(right_declaration_signatures):
+        raise DeltaMinimizeError(
+            "ambiguous-delta-coupling",
+            {"symbol": left.name, "declaration_pairing": "count-mismatch"},
+        )
+    for left_span, right_span in zip(
+        left_declaration_signatures,
+        right_declaration_signatures,
+        strict=True,
+    ):
+        selected.extend(
+            _atoms_for_span(
+                atoms,
+                left_span,
+                right_span,
+                reclassified,
+                "function_signature",
+            )
+        )
     selected.extend(_atoms_for_span(atoms, left.parameter_span, right.parameter_span, reclassified, "parameter_list"))
     if len(left.declaration_parameter_spans) != len(right.declaration_parameter_spans):
         raise DeltaMinimizeError(
@@ -434,17 +556,19 @@ def _atoms_for_span(
     return tuple(dict.fromkeys(selected))
 
 
-def _changed_binding_names(index: BindingIndex, atoms, *, side: str) -> set[str]:
-    names: set[str] = set()
-    spans = [
+def _changed_spans(atoms, *, side: str) -> tuple[tuple[int, int], ...]:
+    return tuple(
         ((patch.left_start, patch.left_end) if side == "left" else (patch.right_start, patch.right_end))
         for atom in atoms
         for patch in atom.patches
-    ]
+    )
+
+
+def _changed_binding_names(index: BindingIndex, spans: Sequence[tuple[int, int]]) -> set[str]:
+    names: set[str] = set()
     for name, function in index.functions.items():
         binding_spans = [
-            function.parameter_span,
-            (function.definition_span[0], function.parameter_span[0]),
+            *_signature_spans(function),
             *function.declaration_spans,
             *(call.call_span for call in function.direct_calls),
         ]
@@ -587,17 +711,18 @@ def _parameter_texts(parameter_list, source_bytes: bytes) -> tuple[str, ...]:
 
 
 def _visible_local_declarations(
-    call,
+    reference,
     definition,
     source_bytes: bytes,
     to_char: list[int],
 ) -> dict[str, tuple[tuple[int, int], ...]]:
-    """Return declarations whose lexical scope contains and precedes ``call``."""
+    """Return declarations whose lexical scope contains ``reference``."""
 
     spans_by_name: dict[str, list[tuple[int, int]]] = defaultdict(list)
     declarator = definition.child_by_field_name("declarator")
-    parameters = _find_parameter_list(declarator)
-    if parameters is not None:
+    parts = _function_declaration_parts(declarator)
+    if parts is not None:
+        _, parameters = parts
         for parameter in parameters.named_children:
             identifier = _declarator_identifier(parameter.child_by_field_name("declarator"))
             if identifier is not None:
@@ -606,15 +731,15 @@ def _visible_local_declarations(
     if body is not None:
         for declaration in _walk_type(body, "declaration"):
             scope = _local_declaration_scope(declaration)
-            if scope is None or not _contains_node(scope, call):
+            if scope is None or not _contains_node(scope, reference):
                 continue
-            for identifier in _local_declaration_identifiers(declaration):
-                if identifier.end_byte <= call.start_byte:
+            for identifier, scope_start in _local_declaration_entries(declaration):
+                if scope_start <= reference.start_byte:
                     spans_by_name[node_text(source_bytes, identifier)].append(_span(declaration, to_char))
     return {name: tuple(dict.fromkeys(spans)) for name, spans in spans_by_name.items()}
 
 
-def _local_declaration_identifiers(declaration):
+def _local_declaration_entries(declaration):
     declarator_types = {
         "identifier",
         "init_declarator",
@@ -626,7 +751,38 @@ def _local_declaration_identifiers(declaration):
         if child.type in declarator_types:
             identifier = _declarator_identifier(child)
             if identifier is not None:
-                yield identifier
+                complete_declarator = (
+                    child.child_by_field_name("declarator") if child.type == "init_declarator" else child
+                )
+                if complete_declarator is not None:
+                    yield identifier, complete_declarator.end_byte
+
+
+def _declaration_name_byte_spans(root) -> set[tuple[int, int]]:
+    spans = {
+        (identifier.start_byte, identifier.end_byte)
+        for declaration in _walk_type(root, "declaration")
+        for identifier, _ in _local_declaration_entries(declaration)
+    }
+    for parameter in _walk_type(root, "parameter_declaration"):
+        identifier = _declarator_identifier(parameter.child_by_field_name("declarator"))
+        if identifier is not None:
+            spans.add((identifier.start_byte, identifier.end_byte))
+    return spans
+
+
+def _non_call_reference_node(identifier):
+    parent = identifier.parent
+    if parent is not None and parent.type in {
+        "assignment_expression",
+        "binary_expression",
+        "cast_expression",
+        "conditional_expression",
+        "subscript_expression",
+        "unary_expression",
+    }:
+        return parent
+    return identifier
 
 
 def _local_declaration_scope(declaration):
@@ -667,6 +823,16 @@ def _function_declaration_parts(node):
     return None
 
 
+def _definition_signature_span(definition, to_char: list[int]) -> tuple[int, int]:
+    body = definition.child_by_field_name("body")
+    end_byte = body.start_byte if body is not None else definition.end_byte
+    return to_char[definition.start_byte], to_char[end_byte]
+
+
+def _declaration_signature_span(declaration, declarator, to_char: list[int]) -> tuple[int, int]:
+    return to_char[declaration.start_byte], to_char[declarator.end_byte]
+
+
 def _function_pointer_object_identifier(node):
     if _function_declaration_parts(node) is not None:
         return None
@@ -690,15 +856,6 @@ def _declared_function_identifier(node):
             current = next(iter(current.named_children), None)
         else:
             current = current.child_by_field_name("declarator")
-    return None
-
-
-def _find_parameter_list(node):
-    current = node
-    while current is not None:
-        if current.type == "function_declarator":
-            return current.child_by_field_name("parameters")
-        current = current.child_by_field_name("declarator")
     return None
 
 
