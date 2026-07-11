@@ -164,6 +164,24 @@ def test_seed_source_drops_unbalanced_push_scope_spanning_other_code(tmp_path):
     assert out == "void mnFoo(void) {}"
 
 
+def test_seed_source_drops_scope_with_excess_adjacent_pop(tmp_path):
+    src = tmp_path / "src" / "melee" / "mn"
+    src.mkdir(parents=True)
+    (src / "mnfoo.c").write_text(
+        "#pragma push\n"
+        "void before(void) {}\n"
+        "#pragma push\n"
+        "#pragma inline_depth(2)\n"
+        "void mnFoo(void) {}\n"
+        "#pragma pop\n"
+        "#pragma pop\n"
+    )
+
+    out = _seed_source_from_repo("mnFoo", "melee/mn/mnfoo.c", tmp_path)
+
+    assert out == "void mnFoo(void) {}"
+
+
 def test_seed_source_stub_when_missing(tmp_path):
     out = _seed_source_from_repo("mnFoo", "melee/mn/missing.c", tmp_path)
     assert out == "// TODO: Decompile this function\n"

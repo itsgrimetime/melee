@@ -144,7 +144,7 @@ def _include_adjacent_pragma_scope(source: str, function: str) -> str:
         saw_closing_pragma = True
         trailing_end = index + 1
 
-    if push_count > pop_count:
+    if push_count != pop_count:
         return function
 
     trailing = (
