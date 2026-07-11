@@ -306,9 +306,10 @@ class DeltaRunStore:
             _mkdir_safe(self._safe_path("artifacts", directory))
 
         gitignore = self._safe_path("artifacts", ".gitignore")
-        existing = _read_regular_bytes(gitignore, corruption="corrupt-artifact-store")
-        if existing is None:
-            _write_bytes_atomic(gitignore, b"*\n")
+        with _exclusive_file_lock(gitignore):
+            existing = _read_regular_bytes(gitignore, corruption="corrupt-artifact-store")
+            if existing != b"*\n":
+                _write_bytes_atomic(gitignore, b"*\n")
 
         # ArtifactStore remains the shared layout/API owner. Its constructor is
         # safe here because every directory and file it may touch now exists and

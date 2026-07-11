@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -316,6 +317,24 @@ def test_broken_gitignore_symlink_is_rejected_before_store_initialization_writes
         DeltaRunStore(root)
 
     assert not escaped.exists()
+
+
+def test_existing_permissive_gitignore_is_normalized_to_full_coverage(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+    artifacts = root / "artifacts"
+    artifacts.mkdir(parents=True)
+    gitignore = artifacts / ".gitignore"
+    gitignore.write_text("objects/\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+
+    DeltaRunStore(root)
+
+    assert gitignore.read_bytes() == b"*\n"
+    ignored = subprocess.run(
+        ["git", "-C", str(root), "check-ignore", "--quiet", "artifacts/sources/candidate.c"],
+        check=False,
+    )
+    assert ignored.returncode == 0
 
 
 def test_candidate_paths_are_stable_and_reject_unsafe_ids(tmp_path: Path) -> None:
