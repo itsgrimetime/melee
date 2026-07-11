@@ -88,6 +88,24 @@ iter ig_idx reg degree nIntfr flags
 """
 
 
+def _with_single_role_coalesce(
+    rows: str,
+    *,
+    distinct_roots: int,
+    forced_count: int = 0,
+) -> str:
+    start = SINGLE_ROLE_PCDUMP.index("[COALESCE] enter")
+    end = SINGLE_ROLE_PCDUMP.index("\n\nSIMPLIFY GRAPH")
+    coalesce = (
+        "[COALESCE] enter class=0 n_virtuals=80\n"
+        "[COALESCE] natural mappings (virt -> root):\n"
+        f"{rows}"
+        "[COALESCE] exit class=0 n_virtuals=80 "
+        f"distinct_roots={distinct_roots} forced={forced_count}"
+    )
+    return SINGLE_ROLE_PCDUMP[:start] + coalesce + SINGLE_ROLE_PCDUMP[end:]
+
+
 def test_renumbered_igs_compare_by_stable_roles() -> None:
     donor = build_colorgraph_profile(DONOR_PCDUMP, "f", 0, {66: 1, 70: 2})
     candidate = build_colorgraph_profile(CANDIDATE_PCDUMP, "f", 0, {58: 1, 75: 2})
@@ -226,6 +244,202 @@ def test_exact_duplicate_coalesce_rows_dedupe_without_ambiguity() -> None:
 
     assert profile.complete is True
     assert profile.coalesce_pairs == frozenset({(1, 2)})
+
+
+@pytest.mark.parametrize(
+    "exit_line",
+    [
+        pytest.param(
+            "[COALESCE] exit class=1 n_virtuals=80 distinct_roots=80 forced=0",
+            id="class-mismatch",
+        ),
+        pytest.param(
+            "[COALESCE] exit class=0 n_virtuals=79 distinct_roots=79 forced=0",
+            id="virtual-count-mismatch",
+        ),
+    ],
+)
+def test_mismatched_coalesce_exit_marks_profile_incomplete(exit_line: str) -> None:
+    pcdump = SINGLE_ROLE_PCDUMP.replace(
+        "[COALESCE] exit class=0 n_virtuals=80 distinct_roots=80 forced=0",
+        exit_line,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1})
+
+    assert profile.complete is False
+
+
+@pytest.mark.parametrize(
+    "pcdump",
+    [
+        pytest.param(
+            _with_single_role_coalesce(
+                "  (none - no virtuals coalesced)\n",
+                distinct_roots=79,
+            ),
+            id="zero-mappings",
+        ),
+        pytest.param(
+            _with_single_role_coalesce("  58 -> 75\n", distinct_roots=80),
+            id="natural-mapping",
+        ),
+        pytest.param(
+            _with_single_role_coalesce(
+                "  58 -> 75\n[FORCE_COALESCE] alias[58]: 75 -> 58\n",
+                distinct_roots=79,
+                forced_count=1,
+            ),
+            id="undo-override",
+        ),
+    ],
+)
+def test_impossible_final_distinct_root_count_is_incomplete(pcdump: str) -> None:
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 75: 2})
+
+    assert profile.complete is False
+
+
+@pytest.mark.parametrize(
+    ("rows", "distinct_roots", "role_map"),
+    [
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[70]: 70 -> 70\n",
+            80,
+            {58: 1},
+            id="unmapped-alias",
+        ),
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[58]: 70 -> 58\n",
+            80,
+            {58: 1},
+            id="unmapped-old-root",
+        ),
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[58]: 58 -> 70\n",
+            79,
+            {58: 1},
+            id="unmapped-new-root",
+        ),
+    ],
+)
+def test_unmapped_forced_override_ig_is_incomplete(
+    rows: str,
+    distinct_roots: int,
+    role_map: dict[int, int],
+) -> None:
+    pcdump = _with_single_role_coalesce(
+        rows,
+        distinct_roots=distinct_roots,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, role_map)
+
+    assert profile.complete is False
+
+
+def test_forced_override_with_stale_old_root_is_incomplete() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[58]: 75 -> 58\n",
+        distinct_roots=80,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 75: 2})
+
+    assert profile.complete is False
+
+
+def test_forced_override_can_undo_natural_mapping() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n[FORCE_COALESCE] alias[58]: 75 -> 58\n",
+        distinct_roots=80,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 75: 2})
+
+    assert profile.complete is True
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_forced_override_redirects_final_mapping() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n[FORCE_COALESCE] alias[58]: 75 -> 76\n",
+        distinct_roots=79,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 76: 3},
+    )
+
+    assert profile.complete is True
+    assert profile.coalesce_pairs == frozenset({(1, 3)})
+
+
+def test_forced_overrides_replay_in_order() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n[FORCE_COALESCE] alias[58]: 75 -> 76\n[FORCE_COALESCE] alias[58]: 76 -> 58\n",
+        distinct_roots=80,
+        forced_count=2,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 76: 3},
+    )
+
+    assert profile.complete is True
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_ambiguous_forced_override_ig_is_incomplete() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[70]: 70 -> 70\n",
+        distinct_roots=80,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 70: 2, 71: 2},
+    )
+
+    assert profile.complete is False
+    assert profile.missing_roles == (2,)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param("  80 -> 58\n", id="natural-alias"),
+        pytest.param("  58 -> 80\n", id="natural-root"),
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[80]: 80 -> 80\n",
+            id="forced-alias-old-new",
+        ),
+    ],
+)
+def test_out_of_range_coalesce_ig_is_incomplete(rows: str) -> None:
+    forced_count = int("FORCE_COALESCE" in rows)
+    pcdump = _with_single_role_coalesce(
+        rows,
+        distinct_roots=80,
+        forced_count=forced_count,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 80: 2})
+
+    assert profile.complete is False
 
 
 @pytest.mark.parametrize(

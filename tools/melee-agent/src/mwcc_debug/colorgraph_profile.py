@@ -113,6 +113,7 @@ def build_colorgraph_profile(
             coalesce_section.distinct_roots is None
             or coalesce_section.forced_count != len(coalesce_section.forced_overrides)
             or coalesce_section.truncated
+            or not coalesce_section.exit_valid
         )
     unmapped_evidence = False
     ambiguous_evidence_roles: set[int] = set()
@@ -175,16 +176,45 @@ def build_colorgraph_profile(
     if coalesce_section is not None:
         roots_by_alias: dict[int, set[int]] = defaultdict(set)
         for alias_ig, root_ig in coalesce_section.mappings:
+            stable_role(alias_ig)
+            stable_role(root_ig)
+            if not (0 <= alias_ig < coalesce_section.n_virtuals and 0 <= root_ig < coalesce_section.n_virtuals):
+                incomplete = True
+            roots_by_alias[alias_ig].add(root_ig)
+
+        conflicting_aliases = {alias_ig for alias_ig, roots in roots_by_alias.items() if len(roots) > 1}
+        incomplete = incomplete or bool(conflicting_aliases)
+        for alias_ig in conflicting_aliases:
+            alias_role = stable_role(alias_ig)
+            if alias_role is not None:
+                conflicting_coalesce_roles.add(alias_role)
+
+        final_roots = {alias_ig: min(roots) for alias_ig, roots in roots_by_alias.items() if roots}
+        for alias_ig, old_root_ig, new_root_ig in coalesce_section.forced_overrides:
+            stable_role(alias_ig)
+            stable_role(old_root_ig)
+            stable_role(new_root_ig)
+            if not all(0 <= ig_idx < coalesce_section.n_virtuals for ig_idx in (alias_ig, old_root_ig, new_root_ig)):
+                incomplete = True
+            current_root_ig = final_roots.get(alias_ig, alias_ig)
+            if current_root_ig != old_root_ig:
+                incomplete = True
+            final_roots[alias_ig] = new_root_ig
+
+        final_nonself = {alias_ig: root_ig for alias_ig, root_ig in final_roots.items() if alias_ig != root_ig}
+        if coalesce_section.distinct_roots is not None:
+            expected_distinct_roots = coalesce_section.n_virtuals - len(final_nonself)
+            if (
+                not 0 <= coalesce_section.distinct_roots <= coalesce_section.n_virtuals
+                or coalesce_section.distinct_roots != expected_distinct_roots
+            ):
+                incomplete = True
+
+        for alias_ig, root_ig in final_nonself.items():
             alias_role = stable_role(alias_ig)
             root_role = stable_role(root_ig)
-            if alias_role is None or root_role is None:
-                continue
-            if alias_role == root_role:
-                incomplete = True
-                continue
-            roots_by_alias[alias_role].add(root_role)
-            coalesce_pairs.add((alias_role, root_role))
-        conflicting_coalesce_roles = {alias_role for alias_role, roots in roots_by_alias.items() if len(roots) > 1}
+            if alias_role is not None and root_role is not None:
+                coalesce_pairs.add((alias_role, root_role))
 
     assignment_roles = set(assignment_rows)
     expected_roles = required | assignment_roles

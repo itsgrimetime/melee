@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
-
 
 _COLORGRAPH_HEADER_RE = re.compile(
     r"^COLORGRAPH DECISIONS \(class=(\d+), result=(\d+)(?:, n_nodes=(\d+))?\)"
@@ -134,6 +132,9 @@ class CoalesceSection:
     distinct_roots: int | None = None
     forced_count: int = 0
     truncated: bool = False
+    exit_class_id: int | None = None
+    exit_n_virtuals: int | None = None
+    exit_valid: bool = True
 
 
 @dataclass
@@ -166,13 +167,13 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
     register class — and matching ig/cp events).
     """
     functions: list[FunctionEvents] = []
-    current_func: Optional[FunctionEvents] = None
-    current_cg: Optional[ColorgraphSection] = None
-    current_simplify: Optional[SimplifySection] = None
-    current_coalesce: Optional[CoalesceSection] = None
-    current_aliases: Optional[CoalescedAliasSection] = None
-    last_colorgraph_class: Optional[int] = None
-    last_decision: Optional[ColorgraphDecision] = None
+    current_func: FunctionEvents | None = None
+    current_cg: ColorgraphSection | None = None
+    current_simplify: SimplifySection | None = None
+    current_coalesce: CoalesceSection | None = None
+    current_aliases: CoalescedAliasSection | None = None
+    last_colorgraph_class: int | None = None
+    last_decision: ColorgraphDecision | None = None
     # True if next line might be the table header row we should skip
     expect_header_row = False
 
@@ -233,6 +234,7 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
             current_coalesce = CoalesceSection(
                 class_id=int(m.group(1)),
                 n_virtuals=int(m.group(2)),
+                exit_valid=False,
             )
             current_func.coalesce_sections.append(current_coalesce)
             current_cg = None
@@ -260,8 +262,14 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
                 continue
             m = _COALESCE_EXIT_RE.match(stripped)
             if m:
+                current_coalesce.exit_class_id = int(m.group(1))
+                current_coalesce.exit_n_virtuals = int(m.group(2))
                 current_coalesce.distinct_roots = int(m.group(3))
                 current_coalesce.forced_count = int(m.group(4))
+                current_coalesce.exit_valid = (
+                    current_coalesce.exit_class_id == current_coalesce.class_id
+                    and current_coalesce.exit_n_virtuals == current_coalesce.n_virtuals
+                )
                 current_coalesce = None
                 continue
 
@@ -371,7 +379,7 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
     return functions
 
 
-def find_function(events: list[FunctionEvents], name: str) -> Optional[FunctionEvents]:
+def find_function(events: list[FunctionEvents], name: str) -> FunctionEvents | None:
     for f in events:
         if f.name == name:
             return f
