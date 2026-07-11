@@ -941,10 +941,45 @@ def _canonical_value(value: object) -> object:
     return value
 
 
+_UNORDERED_SEQUENCE_KEYS = frozenset(
+    {
+        "asserted_labels",
+        "effect_ids",
+        "failed_gates",
+        "follow_up_commands",
+        "input_record_ids",
+        "missing_capability_ids",
+        "missing_evidence",
+        "missing_record_ids",
+        "output_record_ids",
+        "owner_record_ids",
+        "rejected_alternatives",
+        "warnings",
+    }
+)
+
+
+def _sort_semantic_collections(value: object, field_name: str = "") -> object:
+    """Sort schema-declared sets while preserving ordered sequence semantics."""
+
+    if isinstance(value, dict):
+        return {key: _sort_semantic_collections(item, key) for key, item in value.items()}
+    if isinstance(value, list):
+        if field_name == "proof_paths":
+            # Path order is semantic; only the collection of whole paths is a set.
+            paths = [list(path) for path in value]
+            return sorted(paths)
+        items = [_sort_semantic_collections(item) for item in value]
+        if field_name in _UNORDERED_SEQUENCE_KEYS:
+            return sorted(items, key=canonical_bytes)
+        return items
+    return value
+
+
 def report_to_canonical_dict(report: CausalDiffReport) -> dict[str, object]:
     """Return the stable ``causal-diff-report.v1`` JSON object."""
 
-    payload = _canonical_value(report)
+    payload = _sort_semantic_collections(_canonical_value(report))
     assert isinstance(payload, dict)
     effects = payload["effects"]
     assert isinstance(effects, dict)

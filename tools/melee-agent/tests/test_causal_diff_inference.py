@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.mwcc_debug.causal_diff.alignment import RolePair
+from src.mwcc_debug.causal_diff.alignment import (
+    AbstentionReason,
+    EffectAbstention,
+    RolePair,
+)
 from src.mwcc_debug.causal_diff.canonical import stable_id
 from src.mwcc_debug.causal_diff.effects import (
     AllocatorEffect,
@@ -138,6 +142,7 @@ def _case(
     role_confidence: Confidence | None = None,
     allocator_delta_confidence: Confidence = Confidence.DERIVED_UNIQUE,
     stack_delta_confidence: Confidence = Confidence.DERIVED_UNIQUE,
+    owner_confidence: Confidence = Confidence.DERIVED_UNIQUE,
     unrelated_stack_edge_delta: bool = False,
 ) -> InferenceCase:
     store = InMemoryEvidenceStore()
@@ -294,7 +299,12 @@ def _case(
             attributes={},
         )
     else:
-        owner_comparison = _comparison("node-changed", left_owner, right_owner)
+        owner_comparison = _comparison(
+            "node-changed",
+            left_owner,
+            right_owner,
+            confidence=owner_confidence,
+        )
     stack_comparison = (
         _comparison("edge-changed", unrelated_left, unrelated_right, ordinal=2)
         if unrelated_stack_edge_delta
@@ -459,6 +469,15 @@ def test_complete_heuristic_evidence_caps_at_candidate(case: InferenceCase, fail
 
     assert verdict.status is VerdictStatus.CANDIDATE_CAUSE
     assert failed_gate in verdict.failed_gates
+
+
+def test_complete_heuristic_owner_comparison_caps_at_candidate() -> None:
+    case = _case(owner_confidence=Confidence.HEURISTIC)
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.CANDIDATE_CAUSE
+    assert "gate-3-shared-owner" in verdict.failed_gates
 
 
 def test_unrelated_edge_delta_cannot_satisfy_stack_delta_gate() -> None:
@@ -675,6 +694,123 @@ def test_canonical_json_sorts_nested_semantic_collections() -> None:
     assert render_text(canonical) == render_text(permuted)
     payload = json.loads(render_json(permuted))
     assert payload["verdicts"][0]["proof_paths"] == [list(path) for path in paths_ordered]
+
+
+def test_canonical_json_recursively_sorts_effect_and_delta_collections() -> None:
+    case = proof_complete_unique()
+    report = build_report(_graphs(case), case.effects, case.comparisons)
+    verdict = report.verdicts[0]
+    owner_ids = tuple(sorted(case.pair.stack.owner_record_ids))
+    role = case.pair.allocator.role_correspondence
+    canonical_role = replace(role, asserted_labels=("direct", "paired"))
+    permuted_role = replace(role, asserted_labels=("paired", "direct"))
+    canonical_allocator = replace(
+        case.pair.allocator,
+        role_correspondence=canonical_role,
+    )
+    permuted_allocator = replace(
+        case.pair.allocator,
+        role_correspondence=permuted_role,
+    )
+    canonical_stack = replace(case.pair.stack, owner_record_ids=owner_ids)
+    permuted_stack = replace(
+        case.pair.stack,
+        owner_record_ids=tuple(reversed(owner_ids)),
+    )
+    canonical_pair = replace(
+        case.pair,
+        allocator=canonical_allocator,
+        stack=canonical_stack,
+    )
+    permuted_pair = replace(
+        case.pair,
+        allocator=permuted_allocator,
+        stack=permuted_stack,
+    )
+    canonical_abstention = EffectAbstention(
+        operand_key="use:9",
+        reason=AbstentionReason.MISSING_BACKEND_ROLE,
+        missing_capability_ids=("cap-a", "cap-z"),
+        missing_record_ids=("record-a", "record-z"),
+        follow_up_commands=("command-a", "command-z"),
+    )
+    permuted_abstention = replace(
+        canonical_abstention,
+        missing_capability_ids=("cap-z", "cap-a"),
+        missing_record_ids=("record-z", "record-a"),
+        follow_up_commands=("command-z", "command-a"),
+    )
+    canonical_effects = DerivedEffects(
+        (canonical_allocator,),
+        (canonical_stack,),
+        (canonical_pair,),
+        (canonical_abstention,),
+    )
+    permuted_effects = DerivedEffects(
+        (permuted_allocator,),
+        (permuted_stack,),
+        (permuted_pair,),
+        (permuted_abstention,),
+    )
+    canonical_verdict = replace(
+        verdict,
+        allocator_delta={
+            "effect_ids": ("effect-a", "effect-z"),
+            "nested": {"owner_record_ids": ("owner-a", "owner-z")},
+        },
+        stack_delta={"effect_ids": ("stack-a", "stack-z")},
+    )
+    permuted_verdict = replace(
+        verdict,
+        allocator_delta={
+            "effect_ids": ("effect-z", "effect-a"),
+            "nested": {"owner_record_ids": ("owner-z", "owner-a")},
+        },
+        stack_delta={"effect_ids": ("stack-z", "stack-a")},
+    )
+    canonical = replace(
+        report,
+        effects=canonical_effects,
+        verdicts=(canonical_verdict,),
+    )
+    permuted = replace(
+        report,
+        effects=permuted_effects,
+        verdicts=(permuted_verdict,),
+    )
+
+    assert render_json(canonical) == render_json(permuted)
+
+
+def test_text_sorts_verdicts_and_report_collections() -> None:
+    case = proof_complete_unique()
+    report = build_report(_graphs(case), case.effects, case.comparisons)
+    first = replace(
+        report.verdicts[0],
+        pair_id="0" * 64,
+        verdict_id="1" * 64,
+    )
+    second = replace(
+        report.verdicts[0],
+        pair_id="f" * 64,
+        verdict_id="e" * 64,
+    )
+    canonical = replace(
+        report,
+        verdicts=(first, second),
+        missing_evidence=("missing-a", "missing-z"),
+        warnings=("warning-a", "warning-z"),
+    )
+    permuted = replace(
+        report,
+        verdicts=(second, first),
+        missing_evidence=("missing-z", "missing-a"),
+        warnings=("warning-z", "warning-a"),
+    )
+
+    rendered = render_text(permuted)
+    assert render_text(canonical) == rendered
+    assert rendered.index(first.pair_id) < rendered.index(second.pair_id)
 
 
 def _compile_store(query: EvidenceQuery, compile_id: str) -> InMemoryEvidenceStore:

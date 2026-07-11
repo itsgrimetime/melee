@@ -54,9 +54,9 @@ def render_verdict_lines(verdict: CausalVerdict) -> list[str]:
 def render_missing_and_warning_lines(report: CausalDiffReport) -> list[str]:
     lines: list[str] = []
     if report.missing_evidence:
-        lines.append("missing evidence: " + ", ".join(report.missing_evidence))
+        lines.append("missing evidence: " + ", ".join(sorted(report.missing_evidence)))
     if report.warnings:
-        lines.append("warnings: " + ", ".join(report.warnings))
+        lines.append("warnings: " + ", ".join(sorted(report.warnings)))
     return lines
 
 
@@ -65,7 +65,10 @@ def render_text(report: CausalDiffReport) -> str:
         f"causal-diff - {report.function}",
         f"status: {report.analysis_status.value}",
     ]
-    for verdict in report.verdicts:
+    for verdict in sorted(
+        report.verdicts,
+        key=lambda item: (item.pair_id, item.verdict_id),
+    ):
         lines.extend(render_verdict_lines(verdict))
     lines.extend(render_missing_and_warning_lines(report))
     return "\n".join(lines) + "\n"
