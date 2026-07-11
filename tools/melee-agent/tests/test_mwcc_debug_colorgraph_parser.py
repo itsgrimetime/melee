@@ -43,6 +43,22 @@ IG CONSTRUCTED (class=1, n_nodes=8)
     assert events[0].coalesce_sections[0].exit_valid is True
 
 
+def test_parse_negative_natural_coalesce_endpoints_verbatim() -> None:
+    text = """\
+Starting function fn_test
+
+[COALESCE] enter class=1 n_virtuals=8
+[COALESCE] natural mappings (virt -> root):
+  -5 -> 3
+  6 -> -4
+[COALESCE] exit class=1 n_virtuals=8 distinct_roots=6 forced=0
+"""
+
+    section = parse_hook_events(text)[0].coalesce_sections[0]
+
+    assert section.mappings == [(-5, 3), (6, -4)]
+
+
 def test_parse_force_coalesce_override_applications() -> None:
     text = """
 Starting function fn_test
@@ -60,6 +76,22 @@ Starting function fn_test
     assert section.mappings == [(43, 40)]
     assert section.forced_overrides == [(43, 40, 43)]
     assert section.forced_count == 1
+
+
+def test_parse_negative_force_coalesce_endpoints_verbatim() -> None:
+    text = """\
+Starting function fn_test
+
+[COALESCE] enter class=0 n_virtuals=64
+[COALESCE] natural mappings (virt -> root):
+  (none - no virtuals coalesced)
+[FORCE_COALESCE] alias[-43]: -40 -> -41
+[COALESCE] exit class=0 n_virtuals=64 distinct_roots=64 forced=1
+"""
+
+    section = parse_hook_events(text)[0].coalesce_sections[0]
+
+    assert section.forced_overrides == [(-43, -40, -41)]
 
 
 def test_parse_mismatched_coalesce_exit_class_as_invalid_evidence() -> None:

@@ -177,6 +177,9 @@ def build_colorgraph_profile(
         if role is None:
             unmapped_evidence = True
             return None
+        if role < 0:
+            unmapped_evidence = True
+            return None
         if role in ambiguous_roles:
             ambiguous_evidence_roles.add(role)
             unmapped_evidence = True
@@ -343,6 +346,15 @@ def _validate_profile_integrity(profile: ColorGraphProfile) -> None:
     if not profile.complete:
         raise ValueError("incomplete color graph profile cannot be compared")
 
+    stable_roles = [role for role, _physical in profile.assignments]
+    stable_roles.extend(profile.simplify_order)
+    stable_roles.extend(profile.select_order)
+    stable_roles.extend(role for edge in profile.interference_edges for role in edge)
+    stable_roles.extend(role for pair in profile.coalesce_pairs for role in pair)
+    stable_roles.extend(profile.spills)
+    if any(role < 0 for role in stable_roles):
+        raise ValueError("negative stable role in color graph profile")
+
     assignment_counts = Counter(role for role, _physical in profile.assignments)
     simplify_counts = Counter(profile.simplify_order)
     select_counts = Counter(profile.select_order)
@@ -363,6 +375,8 @@ def colorgraph_distance(
 ) -> ColorDistance:
     """Compare a candidate to absolute assignments and donor graph evidence."""
     required = set(desired_phys)
+    if any(role < 0 for role in required):
+        raise ValueError("negative stable role in desired physical assignments")
     for profile in (candidate, donor):
         _validate_profile_integrity(profile)
         assignment_counts = Counter(role for role, _physical in profile.assignments)

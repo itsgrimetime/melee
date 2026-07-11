@@ -203,6 +203,94 @@ def test_stable_role_zero_lane_mismatch_is_deterministically_incomplete(
     assert profile.missing_roles == (0,)
 
 
+def test_aligned_negative_stable_role_is_rejected_from_every_lane() -> None:
+    profile = build_colorgraph_profile(SINGLE_ROLE_PCDUMP, "f", 0, {58: -1})
+
+    assert profile.complete is False
+    assert profile.assignments == ()
+    assert profile.simplify_order == ()
+    assert profile.select_order == ()
+    assert profile.spills == frozenset()
+
+
+def test_negative_decision_role_is_not_projected() -> None:
+    pcdump = SINGLE_ROLE_PCDUMP.replace(
+        "0 58 r22 0 0 0x00",
+        "0 75 r22 0 0 0x00",
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 75: -1})
+
+    assert profile.complete is False
+    assert profile.assignments == ()
+    assert profile.select_order == ()
+
+
+def test_negative_simplify_and_spill_role_is_not_projected() -> None:
+    pcdump = SINGLE_ROLE_PCDUMP.replace(
+        "0 58 0 0 0x00",
+        "0 75 0 0 0x08 SPILLED",
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 75: -1})
+
+    assert profile.complete is False
+    assert profile.simplify_order == ()
+    assert profile.spills == frozenset()
+
+
+def test_negative_interferer_role_is_not_projected() -> None:
+    pcdump = SINGLE_ROLE_PCDUMP.replace(
+        "0 58 r22 0 0 0x00",
+        "0 58 r22 1 1 0x00\n  interferers: 75=r3",
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 75: -1})
+
+    assert profile.complete is False
+    assert profile.interference_edges == frozenset()
+
+
+def test_negative_natural_coalesce_role_is_not_projected() -> None:
+    pcdump = _with_single_role_coalesce("  58 -> 75\n", distinct_roots=79)
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 75: -1})
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("rows", "distinct_roots"),
+    [
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[75]: 75 -> 75\n",
+            80,
+            id="alias-old-new",
+        ),
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[58]: 58 -> 75\n",
+            79,
+            id="new-root",
+        ),
+    ],
+)
+def test_negative_forced_override_role_is_not_projected(
+    rows: str,
+    distinct_roots: int,
+) -> None:
+    pcdump = _with_single_role_coalesce(
+        rows,
+        distinct_roots=distinct_roots,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 75: -1})
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
 def test_distance_uses_shared_order_projection_and_symmetric_set_deltas() -> None:
     donor = ColorGraphProfile(
         assignments=((1, 9), (2, 8)),
@@ -276,6 +364,78 @@ def test_distance_accepts_aligned_non_target_lane_roles() -> None:
     )
 
     assert distance == ColorDistance(0, 0, 0, 0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("assignments", ((-1, 22), (9, 4)), id="assignments"),
+        pytest.param("simplify_order", (-1, 9), id="simplify-order"),
+        pytest.param("select_order", (-1, 9), id="select-order"),
+        pytest.param(
+            "interference_edges",
+            frozenset({(-1, 9)}),
+            id="interference-left-endpoint",
+        ),
+        pytest.param(
+            "interference_edges",
+            frozenset({(1, -1)}),
+            id="interference-right-endpoint",
+        ),
+        pytest.param(
+            "coalesce_pairs",
+            frozenset({(-1, 9)}),
+            id="coalesce-alias-endpoint",
+        ),
+        pytest.param(
+            "coalesce_pairs",
+            frozenset({(1, -1)}),
+            id="coalesce-root-endpoint",
+        ),
+        pytest.param("spills", frozenset({-1}), id="spills"),
+    ],
+)
+def test_distance_rejects_negative_role_in_manual_profile(
+    field: str,
+    value: object,
+) -> None:
+    invalid = replace(_manual_complete_profile(), **{field: value})
+
+    with pytest.raises(ValueError, match="negative stable role"):
+        colorgraph_distance(invalid, _manual_complete_profile(), desired_phys={1: 22})
+
+
+def test_distance_rejects_negative_desired_physical_role() -> None:
+    with pytest.raises(
+        ValueError,
+        match="negative stable role in desired physical assignments",
+    ):
+        colorgraph_distance(
+            _manual_complete_profile(),
+            _manual_complete_profile(),
+            desired_phys={-1: 22},
+        )
+
+
+def test_manual_profile_integrity_accepts_stable_role_zero() -> None:
+    role_zero = ColorGraphProfile(
+        assignments=((0, 22),),
+        simplify_order=(0,),
+        select_order=(0,),
+        interference_edges=frozenset(),
+        coalesce_pairs=frozenset(),
+        spills=frozenset(),
+        complete=True,
+    )
+
+    assert colorgraph_distance(role_zero, role_zero, desired_phys={0: 22}) == ColorDistance(
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
 
 
 def test_final_matching_sections_supply_retry_state() -> None:
@@ -747,6 +907,39 @@ def test_out_of_range_coalesce_ig_is_incomplete(rows: str) -> None:
     profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 80: 2})
 
     assert profile.complete is False
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param("  -1 -> 58\n", id="natural-alias"),
+        pytest.param("  58 -> -1\n", id="natural-root"),
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[-1]: 58 -> 58\n",
+            id="forced-alias",
+        ),
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[58]: -1 -> 58\n",
+            id="forced-old-root",
+        ),
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[58]: 58 -> -1\n",
+            id="forced-new-root",
+        ),
+    ],
+)
+def test_negative_raw_coalesce_endpoint_is_incomplete(rows: str) -> None:
+    forced_count = int("FORCE_COALESCE" in rows)
+    pcdump = _with_single_role_coalesce(
+        rows,
+        distinct_roots=80,
+        forced_count=forced_count,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1})
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
 
 
 def test_out_of_range_natural_mapping_is_not_role_projected() -> None:
