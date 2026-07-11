@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from .stack_slot_bridge import STACK_ACCESS_OPCODES
 
 _REGISTER_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?P<kind>[fr])(?P<number>\d+)(?!\d)",
+    r"(?<![A-Za-z0-9_])(?P<kind>[fr])(?P<number>\d+)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 _ADDRESS_OFFSET_RE = re.compile(

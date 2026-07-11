@@ -167,10 +167,10 @@ def test_anonymous_frame_assignment_with_multiple_matching_owners_is_ambiguous()
 
 def test_registers_offsets_and_temp_ids_are_removed_from_identity() -> None:
     left = _temp_candidate(48, "lwz r31,48(r1)")
-    left["nearest_source_expression"]["name"] = "owner_48(r1)_r1_f1_@810"
+    left["nearest_source_expression"]["name"] = "owner_48(r1),r1,f1,@810"
     left["first_def"] = {"opcode": "lwz", "operands": "r50,48(r1)"}
     right = _temp_candidate(52, "lwz r31,52(r31)")
-    right["nearest_source_expression"]["name"] = "owner_52(r1)_r50_f31_@910"
+    right["nearest_source_expression"]["name"] = "owner_52(r1),r50,f31,@910"
     right["first_def"] = {"opcode": "lwz", "operands": "r31,52(r31)"}
 
     left_profile = build_stack_home_profile(_frame(80), _bridge(left))
@@ -197,6 +197,64 @@ def test_pcode_expression_first_def_normalizes_fpr_ids() -> None:
 
     assert left.homes[0].identity == right.homes[0].identity
     assert re.search(r"[fr]\d+", left.homes[0].identity, re.IGNORECASE) is None
+
+
+@pytest.mark.parametrize(
+    ("left_name", "right_name"),
+    [
+        ("r1field", "r2field"),
+        ("f2_owner", "f3_owner"),
+        ("owner_r1", "owner_r2"),
+        ("r1Field", "r2Field"),
+        ("ownerF2", "ownerF3"),
+    ],
+    ids=["prefix", "prefix-underscore", "suffix-underscore", "camel-prefix", "camel-suffix"],
+)
+def test_embedded_register_like_owner_names_remain_verbatim_and_distinct(
+    left_name: str,
+    right_name: str,
+) -> None:
+    left = _temp_candidate(24, "fadds f50,f40,f41")
+    left["nearest_source_expression"]["name"] = left_name
+    right = _temp_candidate(28, "fadds f70,f60,f61")
+    right["nearest_source_expression"]["name"] = right_name
+
+    left_profile = build_stack_home_profile(_frame(64), _bridge(left))
+    right_profile = build_stack_home_profile(_frame(64), _bridge(right))
+
+    assert left_name in left_profile.homes[0].identity
+    assert right_name in right_profile.homes[0].identity
+    assert left_profile.homes[0].identity != right_profile.homes[0].identity
+
+
+def test_punctuation_adjacent_standalone_registers_are_normalized() -> None:
+    left = _temp_candidate(24, "fadds f50,f40,f41")
+    left["nearest_source_expression"]["name"] = "owner(r1),f2"
+    right = _temp_candidate(28, "fadds f70,f60,f61")
+    right["nearest_source_expression"]["name"] = "owner(r31),f20"
+
+    left_profile = build_stack_home_profile(_frame(64), _bridge(left))
+    right_profile = build_stack_home_profile(_frame(64), _bridge(right))
+
+    assert left_profile.homes[0].identity == right_profile.homes[0].identity
+    assert "owner(<rreg>),<freg>" in left_profile.homes[0].identity
+
+
+def test_distance_does_not_join_embedded_register_like_owner_names() -> None:
+    reference_candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    reference_candidate["nearest_source_expression"]["name"] = "owner_r1"
+    candidate_candidate = _temp_candidate(28, "fadds f70,f60,f61")
+    candidate_candidate["nearest_source_expression"]["name"] = "owner_r2"
+
+    reference = build_stack_home_profile(_frame(64), _bridge(reference_candidate))
+    candidate = build_stack_home_profile(_frame(64), _bridge(candidate_candidate))
+
+    assert stack_home_distance(candidate, reference) == StackHomeDistance(
+        unresolved_or_mismatched_homes=2,
+        total_absolute_offset_delta=0,
+        home_order_inversions=0,
+        absolute_frame_size_delta=0,
+    )
 
 
 @pytest.mark.parametrize(
