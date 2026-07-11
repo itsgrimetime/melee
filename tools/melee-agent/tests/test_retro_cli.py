@@ -1,6 +1,8 @@
 import json
 import os
 import subprocess
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -97,6 +99,14 @@ def test_launch_dump_uses_process_group_timeout_runner(monkeypatch, tmp_path):
     seen = {}
 
     def fake_run(cmd, *, cwd, timeout, env=None):
+        launch_log = (out_dir / "launch.log").read_text()
+        assert "STATUS: running" in launch_log
+        assert "RETRO_SOURCE: src/melee/mn/mnvibration.c" in launch_log
+        assert "RETRO_FUNCTION: mnVibration_80248644" in launch_log
+        assert f"RETRO_OUTPUT_DIR: {out_dir}" in launch_log
+        assert "TIMEOUT_SECONDS: 17" in launch_log
+        command_text = retro.shlex.join([str(part) for part in cmd])
+        assert f"COMMAND: {command_text}" in launch_log
         seen["cmd"] = cmd
         seen["cwd"] = cwd
         seen["timeout"] = timeout
@@ -130,9 +140,294 @@ def test_launch_dump_uses_process_group_timeout_runner(monkeypatch, tmp_path):
     )
     assert str(retrowin32_bin) in seen["cmd"]
     assert seen["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(retro._PACKAGE_REPO)
-    assert (out_dir / "launch.log").read_text().startswith(
-        "[retro] running intervention hook"
+    launch_log = (out_dir / "launch.log").read_text()
+    assert "STATUS: exited" in launch_log
+    assert "EXIT: 0" in launch_log
+    assert "[retro] running intervention hook" in launch_log
+
+
+def test_launch_dump_timeout_retains_late_process_group_streams(
+    monkeypatch,
+    tmp_path,
+):
+    import src.cli.debug.retro as retro
+    import tools.mwcc_retro.setup as retro_setup
+    from src.mwcc_debug import diff_capture
+
+    melee_root = tmp_path / "melee"
+    out_dir = tmp_path / "out"
+    table = tmp_path / "table.json"
+    retrowin32_bin = tmp_path / "retrowin32"
+    for path in (table, retrowin32_bin):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fake\n")
+
+    class SetupResult:
+        pass
+
+    setup_result = SetupResult()
+    setup_result.retrowin32_bin = retrowin32_bin
+    monkeypatch.setattr(
+        retro_setup,
+        "ensure_for_root",
+        lambda *_args, **_kwargs: setup_result,
     )
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda *_args, **_kwargs: "mwcceppc.exe -c input.c -o out.o",
+    )
+
+    class FakePipe:
+        def close(self):
+            pass
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+        stdout = FakePipe()
+        stderr = FakePipe()
+
+        def communicate(self, timeout):
+            return (
+                "launcher stdout\n",
+                "[retro] waiting for gdb port 9001 lock: /tmp/retro.lock\n"
+                "[retro] acquired gdb port 9001 lock: /tmp/retro.lock\n",
+            )
+
+        def wait(self, timeout):
+            self.returncode = -9
+
+        def kill(self):
+            pass
+
+    class OuterTimeoutWinsThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+            self.alive = True
+            self.join_count = 0
+
+        def start(self):
+            pass
+
+        def join(self, timeout):
+            self.join_count += 1
+            if self.join_count == 2:
+                self.target()
+                self.alive = False
+
+        def is_alive(self):
+            return self.alive
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text, start_new_session):
+        return FakeProc()
+
+    monkeypatch.setattr(diff_capture.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(diff_capture.threading, "Thread", OuterTimeoutWinsThread)
+    monkeypatch.setattr(diff_capture, "_kill_process_tree", lambda *_args: None)
+    monkeypatch.setattr(diff_capture, "_unreaped_wibo_timeout_note", lambda: "")
+
+    outcome = retro._launch_dump(
+        src="input.c",
+        fn="target_fn",
+        phases="frontend",
+        compiler="1.2.5n",
+        out_dir=out_dir,
+        table=table,
+        melee_root=melee_root,
+        timeout=17,
+    )
+
+    assert outcome == retro.DumpOutcome(
+        exit_code=2,
+        produced=[],
+        missing=["timeout"],
+    )
+    launch_log = (out_dir / "launch.log").read_text()
+    assert "launcher stdout" in launch_log
+    assert "[retro] waiting for gdb port 9001 lock:" in launch_log
+    assert "[retro] acquired gdb port 9001 lock:" in launch_log
+
+
+def test_launch_dump_failed_run_does_not_consume_retained_frontend_trace(
+    monkeypatch,
+    tmp_path,
+):
+    import src.cli.debug.retro as retro
+    import tools.mwcc_retro.setup as retro_setup
+
+    melee_root = tmp_path / "melee"
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    table = tmp_path / "table.json"
+    retrowin32_bin = tmp_path / "retrowin32"
+    for path in (table, retrowin32_bin):
+        path.write_text("# fake\n")
+
+    stale_trace = (
+        "Starting function target_fn\n"
+        "Dumping function target_fn after IRO_BuildflowGraph \n"
+        "Flowgraph node 0  First=0, Last=0\n"
+    )
+    trace = out_dir / "iro-trace.txt"
+    trace.write_text(stale_trace)
+
+    class SetupResult:
+        pass
+
+    setup_result = SetupResult()
+    setup_result.retrowin32_bin = retrowin32_bin
+    monkeypatch.setattr(
+        retro_setup,
+        "ensure_for_root",
+        lambda *_args, **_kwargs: setup_result,
+    )
+    monkeypatch.setattr(
+        retro,
+        "_ninja_cmd_for_unit",
+        lambda *_args, **_kwargs: "mwcceppc.exe -c input.c -o out.o",
+    )
+    monkeypatch.setattr(
+        retro,
+        "_run_with_process_group_timeout",
+        lambda cmd, **_kwargs: subprocess.CompletedProcess(
+            cmd,
+            1,
+            "",
+            "gdb failed\n",
+        ),
+    )
+
+    outcome = retro._launch_dump(
+        src="input.c",
+        fn="target_fn",
+        phases="frontend",
+        compiler="1.2.5n",
+        out_dir=out_dir,
+        table=table,
+        melee_root=melee_root,
+    )
+
+    assert outcome == retro.DumpOutcome(
+        exit_code=2,
+        produced=[],
+        missing=["frontend"],
+    )
+    assert trace.read_text() == stale_trace
+    assert not (out_dir / "iro-summary.txt").exists()
+    assert not list(out_dir.glob("iro-*-*.txt"))
+
+
+def test_port_lock_reports_contention_and_keeps_blocking_acquisition(
+    monkeypatch,
+    capsys,
+):
+    import fcntl
+
+    from tools.mwcc_retro import mwcc_retro_debugger as debugger
+
+    calls = []
+
+    def fake_flock(_file, operation):
+        calls.append(operation)
+        if operation == fcntl.LOCK_EX | fcntl.LOCK_NB:
+            raise BlockingIOError
+
+    monkeypatch.setattr(fcntl, "flock", fake_flock)
+
+    with debugger._port_lock():
+        calls.append("yield")
+
+    assert calls == [
+        fcntl.LOCK_EX | fcntl.LOCK_NB,
+        fcntl.LOCK_EX,
+        "yield",
+        fcntl.LOCK_UN,
+    ]
+    stderr = capsys.readouterr().err
+    assert "[retro] waiting for gdb port 9001 lock:" in stderr
+    assert "[retro] acquired gdb port 9001 lock:" in stderr
+
+
+def test_main_holds_port_lock_across_complete_trace_lifecycle(monkeypatch, tmp_path):
+    import shutil
+
+    from tools.mwcc_retro import mwcc_retro_debugger as debugger
+
+    events = []
+    trace_tmp = tmp_path / "mwcc_retro_iro.txt"
+    trace_tmp.write_text("stale trace\n")
+    out_dir = tmp_path / "out"
+
+    @contextmanager
+    def fake_port_lock():
+        events.append("lock enter")
+        try:
+            yield
+        finally:
+            events.append("lock exit")
+
+    real_remove = os.remove
+
+    def fake_remove(path):
+        events.append("stale trace removal")
+        real_remove(path)
+
+    class FakeEmulator:
+        def poll(self):
+            return 0
+
+    def fake_popen(_cmd):
+        events.append("emulator")
+        return FakeEmulator()
+
+    def fake_run(_cmd, *, check, env):
+        assert check is True
+        assert env["RETRO_PORT"] == "9001"
+        events.append("gdb")
+        trace_tmp.write_text("fresh trace\n")
+
+    real_copy = shutil.copy
+
+    def fake_copy(src, dst):
+        events.append("trace copy")
+        return real_copy(src, dst)
+
+    monkeypatch.setattr(debugger, "_TRACE_TMP", str(trace_tmp))
+    monkeypatch.setattr(debugger, "_port_lock", fake_port_lock)
+    monkeypatch.setattr(debugger.os, "remove", fake_remove)
+    monkeypatch.setattr(debugger.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(debugger.subprocess, "run", fake_run)
+    monkeypatch.setattr(debugger.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(shutil, "copy", fake_copy)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mwcc_retro_debugger.py",
+            "-e",
+            "retrowin32",
+            "-a",
+            "mwcceppc.exe input.c",
+            "--table",
+            "table.json",
+            "--out",
+            str(out_dir),
+            "target_fn",
+        ],
+    )
+
+    debugger.main()
+
+    assert events == [
+        "lock enter",
+        "stale trace removal",
+        "emulator",
+        "gdb",
+        "trace copy",
+        "lock exit",
+    ]
+    assert (out_dir / "iro-trace.txt").read_text() == "fresh trace\n"
 
 
 def test_retro_dump_uses_package_table_with_explicit_melee_root(monkeypatch, tmp_path):
