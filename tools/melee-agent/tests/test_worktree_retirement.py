@@ -138,6 +138,24 @@ def test_parse_worktree_porcelain_rejects_sha1_oid_for_sha256_repository() -> No
 
 
 @pytest.mark.parametrize(
+    "branch",
+    [
+        b"codex/foo..bar",
+        b"codex/.hidden",
+        b"codex/topic.lock",
+        b"codex/topic@{1",
+        b"codex//topic",
+        b"codex/topic.",
+    ],
+)
+def test_parse_worktree_porcelain_rejects_invalid_branch_ref(branch: bytes) -> None:
+    with pytest.raises(worktrees.WorktreeParseError, match="valid Git ref"):
+        worktrees.parse_worktree_porcelain(
+            record(b"/tmp/invalid-branch", branch=branch), object_hex_length=40
+        )
+
+
+@pytest.mark.parametrize(
     ("name", "payload"),
     [
         (

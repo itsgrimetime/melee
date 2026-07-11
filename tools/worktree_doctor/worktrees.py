@@ -27,6 +27,7 @@ class WorktreeParseError(ValueError):
 _OBJECT_HEX_LENGTHS = {b"sha1": 40, b"sha256": 64}
 _HEX_OID = re.compile(rb"[0-9a-fA-F]+\Z")
 _BRANCH_PREFIX = b"refs/heads/"
+_INVALID_REF_BYTES = frozenset(b" ~^:?*[\\")
 _AGENT_BRANCH_PREFIXES = ("codex/", "claude/", "wall/")
 
 
@@ -65,6 +66,33 @@ def repository_object_hex_length(repo_root: Path) -> int:
 
 def _decode_field_value(value: bytes) -> str:
     return os.fsdecode(value)
+
+
+def _is_valid_git_ref(value: bytes) -> bool:
+    """Match ``git check-ref-format`` rules without decoding ref bytes."""
+
+    if (
+        value == b"@"
+        or value.startswith(b"/")
+        or value.endswith((b"/", b"."))
+        or b"//" in value
+        or b".." in value
+        or b"@{" in value
+    ):
+        return False
+
+    components = value.split(b"/")
+    if len(components) < 2 or any(
+        not component
+        or component.startswith(b".")
+        or component.endswith(b".lock")
+        for component in components
+    ):
+        return False
+
+    return not any(
+        byte < 0x20 or byte == 0x7F or byte in _INVALID_REF_BYTES for byte in value
+    )
 
 
 def _parse_record(fields: list[bytes], *, object_hex_length: int) -> RegisteredWorktree:
@@ -107,6 +135,8 @@ def _parse_record(fields: list[bytes], *, object_hex_length: int) -> RegisteredW
             seen.add(name)
             if not value.startswith(_BRANCH_PREFIX) or value == _BRANCH_PREFIX:
                 raise WorktreeParseError("branch field is not a refs/heads name")
+            if not _is_valid_git_ref(value):
+                raise WorktreeParseError("branch field is not a valid Git ref")
             branch = _decode_field_value(value[len(_BRANCH_PREFIX) :])
         elif field == b"detached":
             name = "detached"
