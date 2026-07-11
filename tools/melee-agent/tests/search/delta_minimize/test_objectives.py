@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -145,6 +146,8 @@ def _derivation_payload(force_phys: dict[int, int]) -> dict[str, object]:
             "target_reg": physical,
             "confidence": "exact",
             "force_vector_runnable": True,
+            "current_reg": physical + 1,
+            "already_target": False,
         }
         for ig_idx, physical in force_phys.items()
     ]
@@ -156,6 +159,9 @@ def _derivation_payload(force_phys: dict[int, int]) -> dict[str, object]:
             "status": "needs-move" if targets else "no-runnable-targets",
             "target_count": len(targets),
             "runnable_target_count": len(targets),
+            "already_target_count": 0,
+            "needs_move_count": len(targets),
+            "unknown_current_count": 0,
         },
         "force_vector_recommended": bool(targets),
     }
@@ -449,6 +455,133 @@ def test_derived_parent_conflicts_are_ambiguous_even_with_runnable_map(
         )
 
 
+@pytest.mark.parametrize(
+    "contradiction",
+    [
+        "recommendation",
+        "target-count",
+        "runnable-count",
+        "already-count",
+        "needs-move-count",
+        "unknown-count",
+        "already-status",
+        "unknown-status",
+        "extra-force-entry",
+    ],
+)
+def test_derived_actionability_envelope_contradictions_fail_closed(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+    contradiction: str,
+) -> None:
+    dump = tmp_path / "baseline.pcdump"
+    dump.write_text("unused", encoding="utf-8")
+    left = _parent("left", baseline_compile, dump, desired_phys)
+    right = _parent("right", baseline_compile, dump, desired_phys)
+    payload = deepcopy(_derivation_payload(desired_phys))
+    actionability = payload["actionability"]
+    targets = payload["targets"]
+    assert isinstance(actionability, dict)
+    assert isinstance(targets, list)
+
+    if contradiction == "recommendation":
+        payload["force_vector_recommended"] = False
+    elif contradiction == "target-count":
+        actionability["target_count"] = len(targets) + 1
+    elif contradiction == "runnable-count":
+        actionability["runnable_target_count"] = len(targets) + 1
+    elif contradiction == "already-count":
+        actionability["already_target_count"] = 1
+    elif contradiction == "needs-move-count":
+        actionability["needs_move_count"] = 0
+    elif contradiction == "unknown-count":
+        actionability["unknown_current_count"] = 1
+    elif contradiction == "already-status":
+        for target in targets:
+            target["current_reg"] = target["target_reg"]
+            target["already_target"] = True
+        actionability.update(
+            status="needs-move",
+            already_target_count=len(targets),
+            needs_move_count=0,
+        )
+    elif contradiction == "unknown-status":
+        for target in targets:
+            target["current_reg"] = None
+            target["already_target"] = None
+        actionability.update(
+            status="needs-move",
+            needs_move_count=0,
+            unknown_current_count=len(targets),
+        )
+    else:
+        force_phys = payload["force_phys"]
+        assert isinstance(force_phys, dict)
+        force_phys["999999"] = 1
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        infer_objective_manifest(
+            left,
+            right,
+            target_path=None,
+            donor_overrides={"objobjects": "left"},
+            derive_force_target=lambda *_: payload,
+        )
+
+
+def test_consistent_already_satisfied_derivation_envelope_is_accepted(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    dump = tmp_path / "baseline.pcdump"
+    dump.write_text("unused", encoding="utf-8")
+    left = _parent("left", baseline_compile, dump, desired_phys)
+    right = _parent("right", baseline_compile, dump, desired_phys)
+    payload = _derivation_payload(desired_phys)
+    targets = payload["targets"]
+    actionability = payload["actionability"]
+    assert isinstance(targets, list)
+    assert isinstance(actionability, dict)
+    for target_row in targets:
+        target_row["current_reg"] = target_row["target_reg"]
+        target_row["already_target"] = True
+    actionability.update(
+        status="already-satisfied",
+        already_target_count=len(targets),
+        needs_move_count=0,
+    )
+    payload["force_vector_recommended"] = False
+
+    manifest = infer_objective_manifest(
+        left,
+        right,
+        target_path=None,
+        donor_overrides={"objobjects": "left"},
+        derive_force_target=lambda *_: payload,
+    )
+
+    assert dict(manifest.desired_phys) == desired_phys
+
+
+def test_explicit_target_reparses_declared_baseline_contents(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    left, right, target = _explicit_inputs(tmp_path, baseline_compile, desired_phys)
+    left.pcdump_path.write_text("not a pcdump\n", encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        infer_objective_manifest(
+            left,
+            right,
+            target_path=target,
+            donor_overrides={"objobjects": "left"},
+        )
+
+
 def test_equal_assignment_distance_with_different_graphs_requires_color_donor(
     tmp_path: Path,
     baseline_compile: Compile,
@@ -602,6 +735,66 @@ def test_malformed_parent_types_fail_closed(
     malformed = replace(left, **changes)
     with pytest.raises(DeltaMinimizeError, match="invalid-parent-evidence"):
         infer_objective_manifest(malformed, right, target_path=target, donor_overrides={})
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "color-complete-bool",
+        "color-assignment-shape",
+        "color-edge-shape",
+        "objobject-complete-bool",
+        "objobject-identity-value",
+        "objobject-occurrence-shape",
+        "stack-complete-bool",
+        "stack-home-shape",
+        "stack-home-value",
+        "stack-blocker-shape",
+    ],
+)
+def test_malformed_nested_parent_profiles_fail_closed(
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+    malformation: str,
+) -> None:
+    left, right, target = _explicit_inputs(tmp_path, baseline_compile, desired_phys)
+    color = left.color_profile
+    assert color is not None
+
+    if malformation == "color-complete-bool":
+        malformed = replace(left, color_profile=replace(color, complete=1))
+    elif malformation == "color-assignment-shape":
+        malformed = replace(left, color_profile=replace(color, assignments=((1,),)))
+    elif malformation == "color-edge-shape":
+        malformed = replace(left, color_profile=replace(color, interference_edges=frozenset({(1,)})))
+    elif malformation == "objobject-complete-bool":
+        malformed = replace(left, objobject_profile=replace(left.objobject_profile, complete=1))
+    elif malformation == "objobject-identity-value":
+        identity = ObjObjectIdentity("local", 7, "int", FUNCTION, "x")
+        malformed = replace(left, objobject_profile=ObjObjectProfile((identity,), True))
+    elif malformation == "objobject-occurrence-shape":
+        malformed = replace(
+            left,
+            objobject_profile=replace(left.objobject_profile, occurrence_evidence=(object(),)),
+        )
+    elif malformation == "stack-complete-bool":
+        malformed = replace(left, stack_home_profile=replace(left.stack_home_profile, complete=1))
+    elif malformation == "stack-home-shape":
+        malformed = replace(left, stack_home_profile=replace(left.stack_home_profile, homes=[object()]))
+    elif malformation == "stack-home-value":
+        malformed_home = StackHome("symbol:x", True, 0, "absolute")
+        malformed = replace(left, stack_home_profile=replace(left.stack_home_profile, homes=(malformed_home,)))
+    else:
+        malformed = replace(left, stack_home_profile=replace(left.stack_home_profile, blockers=["bad"]))
+
+    with pytest.raises(DeltaMinimizeError):
+        infer_objective_manifest(
+            malformed,
+            right,
+            target_path=target,
+            donor_overrides={"objobjects": "left"},
+        )
 
 
 def test_manifest_serialization_is_deterministic_and_json_friendly(

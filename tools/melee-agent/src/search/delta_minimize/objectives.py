@@ -12,8 +12,8 @@ import yaml
 
 from ...mwcc_debug import role_descriptor, role_reanchor
 from ...mwcc_debug.colorgraph_profile import ColorGraphProfile, build_colorgraph_profile
-from ...mwcc_debug.objobject_profile import ObjObjectProfile
-from ...mwcc_debug.stack_home_profile import StackHomeProfile
+from ...mwcc_debug.objobject_profile import ObjObjectIdentity, ObjObjectProfile
+from ...mwcc_debug.stack_home_profile import StackHome, StackHomeProfile
 from .contracts import DeltaMinimizeError
 
 COLOR_TARGET_SCHEMA = "delta-minimize-color-target.v1"
@@ -293,6 +293,121 @@ def _validate_distance(value: object, length: int, reason: str) -> tuple[int, ..
     return value
 
 
+def _validate_role_pair(value: object, *, physical: bool = False) -> tuple[int, int] | None:
+    if not isinstance(value, tuple) or len(value) != 2:
+        return None
+    left, right = value
+    if not _is_int(left) or left < 0 or not _is_int(right):
+        return None
+    if physical:
+        if not 0 <= right <= 31:
+            return None
+    elif right < 0:
+        return None
+    return left, right
+
+
+def _validate_color_profile(profile: ColorGraphProfile) -> None:
+    if (
+        type(profile.complete) is not bool
+        or not isinstance(profile.assignments, tuple)
+        or not isinstance(profile.simplify_order, tuple)
+        or not isinstance(profile.select_order, tuple)
+        or not isinstance(profile.interference_edges, frozenset)
+        or not isinstance(profile.coalesce_pairs, frozenset)
+        or not isinstance(profile.spills, frozenset)
+        or not isinstance(profile.missing_roles, tuple)
+    ):
+        raise DeltaMinimizeError("invalid-parent-color-evidence")
+    assignments = [_validate_role_pair(item, physical=True) for item in profile.assignments]
+    simplify = profile.simplify_order
+    select = profile.select_order
+    edges = [_validate_role_pair(item) for item in profile.interference_edges]
+    coalesces = [_validate_role_pair(item) for item in profile.coalesce_pairs]
+    if (
+        any(item is None for item in assignments)
+        or any(not _is_int(role) or role < 0 for role in simplify)
+        or any(not _is_int(role) or role < 0 for role in select)
+        or any(item is None or item[0] >= item[1] for item in edges)
+        or any(item is None or item[0] >= item[1] for item in coalesces)
+        or any(not _is_int(role) or role < 0 for role in profile.spills)
+        or any(not _is_int(role) or role < 0 for role in profile.missing_roles)
+    ):
+        raise DeltaMinimizeError("invalid-parent-color-evidence")
+    assignment_roles = tuple(item[0] for item in assignments if item is not None)
+    known_roles = set(assignment_roles)
+    if (
+        len(assignment_roles) != len(set(assignment_roles))
+        or len(simplify) != len(set(simplify))
+        or len(select) != len(set(select))
+        or set(simplify) != known_roles
+        or set(select) != known_roles
+        or any(set(item) - known_roles for item in edges if item is not None)
+        or any(set(item) - known_roles for item in coalesces if item is not None)
+        or set(profile.spills) - known_roles
+        or (profile.complete and profile.missing_roles)
+    ):
+        raise DeltaMinimizeError("invalid-parent-color-evidence")
+
+
+def _validate_objobject_profile(profile: ObjObjectProfile) -> None:
+    if (
+        type(profile.complete) is not bool
+        or not isinstance(profile.identities, tuple)
+        or not isinstance(profile.occurrence_evidence, tuple)
+        or (profile.blocker is not None and (not isinstance(profile.blocker, str) or not profile.blocker))
+        or (profile.complete and profile.blocker is not None)
+        or (profile.occurrence_evidence and len(profile.occurrence_evidence) != len(profile.identities))
+    ):
+        raise DeltaMinimizeError("invalid-parent-objobject-evidence")
+    for identity in profile.identities:
+        if not isinstance(identity, ObjObjectIdentity):
+            raise DeltaMinimizeError("invalid-parent-objobject-evidence")
+        if any(
+            not isinstance(value, str) or not value
+            for value in (
+                identity.kind,
+                identity.source_name,
+                identity.type_name,
+                identity.scope,
+                identity.expression,
+            )
+        ):
+            raise DeltaMinimizeError("invalid-parent-objobject-evidence")
+    if any(item is not None and (not isinstance(item, str) or not item) for item in profile.occurrence_evidence):
+        raise DeltaMinimizeError("invalid-parent-objobject-evidence")
+
+
+def _validate_stack_home_profile(profile: StackHomeProfile) -> None:
+    if (
+        type(profile.complete) is not bool
+        or not isinstance(profile.homes, tuple)
+        or not isinstance(profile.blockers, tuple)
+        or (profile.frame_size is not None and (not _is_int(profile.frame_size) or profile.frame_size < 0))
+        or (profile.complete and profile.frame_size is None)
+        or any(not isinstance(blocker, str) or not blocker for blocker in profile.blockers)
+        or (profile.complete and profile.blockers)
+    ):
+        raise DeltaMinimizeError("invalid-parent-stack-evidence")
+    identities: list[str] = []
+    orders: list[int] = []
+    for home in profile.homes:
+        if (
+            not isinstance(home, StackHome)
+            or not isinstance(home.identity, str)
+            or not home.identity
+            or not _is_int(home.offset)
+            or not _is_int(home.order)
+            or home.order < 0
+            or home.reference_kind not in {"absolute", "proxy"}
+        ):
+            raise DeltaMinimizeError("invalid-parent-stack-evidence")
+        identities.append(home.identity)
+        orders.append(home.order)
+    if len(identities) != len(set(identities)) or sorted(orders) != list(range(len(orders))):
+        raise DeltaMinimizeError("invalid-parent-stack-evidence")
+
+
 def _validate_parent(parent: ParentObjectiveEvidence, expected_side: str) -> None:
     if not isinstance(parent, ParentObjectiveEvidence) or parent.side != expected_side:
         raise DeltaMinimizeError("invalid-parent-evidence")
@@ -316,6 +431,10 @@ def _validate_parent(parent: ParentObjectiveEvidence, expected_side: str) -> Non
         or not isinstance(parent.stack_unresolved, tuple)
     ):
         raise DeltaMinimizeError("invalid-parent-evidence")
+    if parent.color_profile is not None:
+        _validate_color_profile(parent.color_profile)
+    _validate_objobject_profile(parent.objobject_profile)
+    _validate_stack_home_profile(parent.stack_home_profile)
     for artifact in (
         parent.expected_assembly_artifact,
         parent.pcdump_artifact,
@@ -397,11 +516,11 @@ def _compile_for_explicit_target(
     right: ParentObjectiveEvidence,
     compile_loader: CompileLoader,
 ) -> role_descriptor.Compile:
-    for parent in (left, right):
-        if parent.pcdump_path.resolve() == target.baseline_dump:
-            return parent.compile
     try:
-        return compile_loader(target.baseline_dump, target.function, left.compile.source)
+        baseline = compile_loader(target.baseline_dump, target.function, left.compile.source)
+        if not isinstance(baseline, role_descriptor.Compile) or baseline.name != target.function:
+            raise ValueError("baseline compile does not contain target function")
+        return baseline
     except Exception as error:
         raise DeltaMinimizeError("ambiguous-color-target") from error
 
@@ -434,12 +553,34 @@ def _force_phys_from_derivation(payload: object, class_id: int) -> Mapping[int, 
     ):
         raise DeltaMinimizeError("ambiguous-color-target")
 
+    conflict_keys: set[tuple[int, str, int]] = set()
+    conflict_existing: dict[tuple[int, str, int], int] = {}
     for conflict in conflicts:
         if not isinstance(conflict, Mapping):
             raise DeltaMinimizeError("ambiguous-color-target")
         conflict_class = conflict.get("class_id")
-        if not _is_int(conflict_class):
+        conflict_kind = conflict.get("kind")
+        conflict_ig = conflict.get("ig_idx")
+        existing_phys = conflict.get("existing_phys")
+        conflicting_phys = conflict.get("conflicting_phys")
+        if (
+            not _is_int(conflict_class)
+            or conflict_class not in {0, 1}
+            or conflict_kind != ("r" if conflict_class == 0 else "f")
+            or not _is_int(conflict_ig)
+            or conflict_ig < 0
+            or not _is_int(existing_phys)
+            or not 0 <= existing_phys <= 31
+            or not _is_int(conflicting_phys)
+            or not 0 <= conflicting_phys <= 31
+            or existing_phys == conflicting_phys
+        ):
             raise DeltaMinimizeError("ambiguous-color-target")
+        key = (conflict_class, conflict_kind, conflict_ig)
+        if key in conflict_keys:
+            raise DeltaMinimizeError("ambiguous-color-target")
+        conflict_keys.add(key)
+        conflict_existing[key] = existing_phys
         if conflict_class == class_id:
             raise DeltaMinimizeError("ambiguous-color-target")
 
@@ -452,45 +593,99 @@ def _force_phys_from_derivation(payload: object, class_id: int) -> Mapping[int, 
 
     expected_kind = "r" if class_id == 0 else "f"
     class_force: dict[int, int] = {}
-    class_target_count = 0
+    target_keys: set[tuple[int, str, int]] = set()
+    expected_envelope_force: dict[int, int] = {}
+    runnable_count = 0
+    already_count = 0
+    needs_move_count = 0
+    unknown_count = 0
     for target in targets:
         if not isinstance(target, Mapping):
             raise DeltaMinimizeError("ambiguous-color-target")
         target_class = target.get("class_id")
         if not _is_int(target_class) or target_class not in {0, 1}:
             raise DeltaMinimizeError("ambiguous-color-target")
-        if target_class != class_id:
-            continue
-        class_target_count += 1
+        target_kind = target.get("kind")
+        if target_kind != ("r" if target_class == 0 else "f"):
+            raise DeltaMinimizeError("ambiguous-color-target")
         ig_idx = target.get("ig_idx")
         physical = target.get("target_reg")
+        runnable = target.get("force_vector_runnable")
+        current_reg = target.get("current_reg")
+        already_target = target.get("already_target")
         if (
-            target.get("kind") != expected_kind
-            or not _is_int(ig_idx)
+            not _is_int(ig_idx)
             or ig_idx < 0
             or not _is_int(physical)
             or not 0 <= physical <= 31
             or target.get("confidence") not in {"exact", "current-reg"}
-            or target.get("force_vector_runnable") is not True
-            or envelope_force.get(ig_idx) != physical
+            or type(runnable) is not bool
+            or (current_reg is not None and (not _is_int(current_reg) or not 0 <= current_reg <= 31))
+            or (already_target is not None and type(already_target) is not bool)
+            or (current_reg is None) != (already_target is None)
+            or (current_reg is not None and already_target is not (current_reg == physical))
         ):
+            raise DeltaMinimizeError("ambiguous-color-target")
+        key = (target_class, target_kind, ig_idx)
+        if (
+            key in target_keys
+            or runnable is (key in conflict_keys)
+            or (key in conflict_existing and conflict_existing[key] != physical)
+        ):
+            raise DeltaMinimizeError("ambiguous-color-target")
+        target_keys.add(key)
+        if runnable:
+            runnable_count += 1
+            previous_force = expected_envelope_force.get(ig_idx)
+            if previous_force is not None and previous_force != physical:
+                raise DeltaMinimizeError("ambiguous-color-target")
+            expected_envelope_force[ig_idx] = physical
+            if already_target is True:
+                already_count += 1
+            elif already_target is False:
+                needs_move_count += 1
+            else:
+                unknown_count += 1
+        if target_class != class_id:
+            continue
+        if not runnable or target_kind != expected_kind or envelope_force.get(ig_idx) != physical:
             raise DeltaMinimizeError("ambiguous-color-target")
         previous = class_force.get(ig_idx)
         if previous is not None and previous != physical:
             raise DeltaMinimizeError("ambiguous-color-target")
         class_force[ig_idx] = physical
 
+    if conflict_keys - target_keys or envelope_force != expected_envelope_force:
+        raise DeltaMinimizeError("ambiguous-color-target")
+
     status = actionability.get("status")
-    target_count = actionability.get("target_count")
-    runnable_count = actionability.get("runnable_target_count")
+    counts = {
+        "target_count": len(targets),
+        "runnable_target_count": runnable_count,
+        "already_target_count": already_count,
+        "needs_move_count": needs_move_count,
+        "unknown_current_count": unknown_count,
+    }
+    expected_status: str
+    if runnable_count and not needs_move_count and not unknown_count:
+        expected_status = "already-satisfied"
+    elif needs_move_count:
+        expected_status = "needs-move"
+    elif unknown_count:
+        expected_status = "current-unknown"
+    else:
+        expected_status = "no-runnable-targets"
+    expected_recommended = expected_status not in {
+        "already-satisfied",
+        "no-runnable-targets",
+    }
     if (
         not class_force
-        or class_target_count != len(class_force)
-        or status not in {"needs-move", "already-satisfied"}
-        or not _is_int(target_count)
-        or target_count < class_target_count
-        or not _is_int(runnable_count)
-        or runnable_count < class_target_count
+        or status != expected_status
+        or recommended is not expected_recommended
+        or any(
+            not _is_int(actionability.get(name)) or actionability.get(name) != value for name, value in counts.items()
+        )
     ):
         raise DeltaMinimizeError("ambiguous-color-target")
     return _immutable_sorted_int_mapping(class_force)
