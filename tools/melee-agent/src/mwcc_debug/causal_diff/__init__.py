@@ -9,6 +9,7 @@ from .bundles import (
     validate_capability_union,
 )
 from .canonical import canonical_bytes, stable_id
+from .commands import CausalDiffOptions, run_causal_diff
 from .models import (
     AdapterResult,
     ArtifactRef,
@@ -28,6 +29,7 @@ __all__ = [
     "ArtifactRef",
     "BackendArtifactRef",
     "BundleInputError",
+    "CausalDiffOptions",
     "CORE_BACKEND_CAPABILITIES",
     "ComparisonRecord",
     "CompileManifest",
@@ -43,6 +45,7 @@ __all__ = [
     "ValidatedBundle",
     "canonical_bytes",
     "load_bundle",
+    "run_causal_diff",
     "stable_id",
     "validate_bundle_pair",
     "validate_capability_union",

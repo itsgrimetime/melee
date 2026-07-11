@@ -502,6 +502,7 @@ __all__ = [
     'frame_reservations',
     'guide',
     'inspect_app',
+    'inspect_causal_diff',
     'inspect_asm',
     'inspect_explain_diff',
     'inspect_explain_schedule',
@@ -1763,6 +1764,161 @@ def _acquire_source_score_repo_lock(
 inspect_app = typer.Typer(
     help="Read, compare, and explain MWCC pcdumps."
 )
+
+
+_CAUSAL_FRONTIER_LABEL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_CAUSAL_ASSERTION_RE = re.compile(
+    r"^(?P<label>[A-Za-z0-9_-]+):(?P<operand>(?:def|use):\d+)="
+    r"(?P<spec>(?:(?:0|1|gpr|fpr|r|f):\d+|[rf]\d+))$",
+    re.IGNORECASE,
+)
+
+
+def _parse_causal_frontiers(values: Sequence[str]) -> tuple[tuple[str, Path], tuple[str, Path]]:
+    if len(values) != 2:
+        raise typer.BadParameter(
+            "exactly two --frontier LABEL=MANIFEST values are required",
+            param_hint="--frontier",
+        )
+    parsed: list[tuple[str, Path]] = []
+    for value in values:
+        label, separator, manifest = value.partition("=")
+        if not separator or not label or not manifest:
+            raise typer.BadParameter(
+                f"invalid frontier {value!r}; expected LABEL=MANIFEST",
+                param_hint="--frontier",
+            )
+        if _CAUSAL_FRONTIER_LABEL_RE.fullmatch(label) is None:
+            raise typer.BadParameter(
+                f"frontier label {label!r} must match [A-Za-z0-9_-]+",
+                param_hint="--frontier",
+            )
+        parsed.append((label, Path(manifest)))
+    if parsed[0][0] == parsed[1][0]:
+        raise typer.BadParameter(
+            "frontier labels must be unique",
+            param_hint="--frontier",
+        )
+    return parsed[0], parsed[1]
+
+
+def _parse_causal_offset(value: str) -> int:
+    try:
+        offset = int(value, 0)
+    except ValueError as error:
+        raise typer.BadParameter(
+            f"invalid retail offset {value!r}; expected an integer",
+            param_hint="--retail-offset",
+        ) from error
+    if offset < 0:
+        raise typer.BadParameter(
+            "retail offset must be nonnegative",
+            param_hint="--retail-offset",
+        )
+    return offset
+
+
+def _parse_causal_assertions(values: Sequence[str], labels: frozenset[str]) -> tuple[str, ...]:
+    parsed: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for value in values:
+        match = _CAUSAL_ASSERTION_RE.fullmatch(value.strip())
+        if match is None:
+            raise typer.BadParameter(
+                f"invalid frontier-node assertion {value!r}; expected LABEL:(def|use):N=SPEC",
+                param_hint="--frontier-node",
+            )
+        label, operand, spec = match.group("label", "operand", "spec")
+        if label not in labels:
+            raise typer.BadParameter(
+                f"frontier-node assertion names unknown label: {label}",
+                param_hint="--frontier-node",
+            )
+        key = (label, operand)
+        if key in seen:
+            raise typer.BadParameter(
+                f"duplicate frontier-node assertion: {label}:{operand}",
+                param_hint="--frontier-node",
+            )
+        seen.add(key)
+        parsed.append(f"{label}:{operand}={spec}")
+    return tuple(parsed)
+
+
+@inspect_app.command(name="causal-diff")
+def inspect_causal_diff(
+    function: Annotated[
+        str,
+        typer.Option("--function", "-f", help="Function to analyze."),
+    ],
+    frontiers: Annotated[
+        list[str],
+        typer.Option(
+            "--frontier",
+            help="Immutable frontier bundle as LABEL=MANIFEST; provide exactly two.",
+        ),
+    ],
+    retail_offset: Annotated[
+        str,
+        typer.Option(
+            "--retail-offset",
+            help="Required function-relative retail byte offset (decimal or 0x-prefixed).",
+        ),
+    ],
+    frontier_nodes: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--frontier-node",
+            help="Optional expert node assertion LABEL:OPERAND=SPEC; repeatable.",
+        ),
+    ] = None,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit causal-diff-report.v1 JSON."),
+    ] = False,
+    evidence_depth: Annotated[
+        int,
+        typer.Option(
+            "--evidence-depth",
+            min=1,
+            max=8,
+            help="Dependency traversal bound (1..8).",
+        ),
+    ] = 4,
+) -> None:
+    """Compare two immutable compiler-artifact frontiers without generating artifacts."""
+
+    from ...mwcc_debug.causal_diff.bundles import BundleInputError
+    from ...mwcc_debug.causal_diff.commands import CausalDiffOptions, run_causal_diff
+    from ...mwcc_debug.causal_diff.inference import exit_code_for_report
+    from ...mwcc_debug.causal_diff.render import render_json, render_text
+
+    parsed_frontiers = _parse_causal_frontiers(frontiers)
+    offset = _parse_causal_offset(retail_offset)
+    assertions = _parse_causal_assertions(
+        frontier_nodes or (),
+        frozenset(label for label, _manifest in parsed_frontiers),
+    )
+    try:
+        report = run_causal_diff(
+            CausalDiffOptions(
+                function=function,
+                frontiers=parsed_frontiers,
+                retail_offset=offset,
+                assertions=assertions,
+                evidence_depth=evidence_depth,
+            )
+        )
+    except (BundleInputError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    typer.echo(render_json(report) if json_out else render_text(report), nl=False)
+    exit_code = exit_code_for_report(report)
+    if exit_code:
+        raise typer.Exit(exit_code)
+
+
 def _parse_force_phys_class(raw: str) -> int:
     from src.cli.debug.dump import _FORCE_PHYS_CLASS_NAMES
     class_s = raw.strip().lower()

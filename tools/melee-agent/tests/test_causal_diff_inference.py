@@ -366,6 +366,49 @@ def proof_complete_unique() -> InferenceCase:
     return _case()
 
 
+def proof_path_at_depth_five() -> InferenceCase:
+    case = proof_complete_unique()
+    assert isinstance(case.query, InMemoryEvidenceStore)
+    store = InMemoryEvidenceStore()
+    original_nodes = tuple(
+        node for compile_id in (LEFT_COMPILE, RIGHT_COMPILE) for node in case.query.find_nodes(compile_id)
+    )
+    store.add_nodes(original_nodes)
+    role = case.pair.allocator.role_correspondence
+    allocators = {
+        LEFT_COMPILE: role.left,
+        RIGHT_COMPILE: role.right,
+    }
+    owner_comparison = next(
+        comparison
+        for comparison in case.comparisons
+        if comparison.relation_kind == "node-changed"
+        and case.query.get_node(comparison.left_record_id or "").kind == "source-expression"
+    )
+    owners = {
+        LEFT_COMPILE: case.query.get_node(owner_comparison.left_record_id or ""),
+        RIGHT_COMPILE: case.query.get_node(owner_comparison.right_record_id or ""),
+    }
+    retained_edges = []
+    for compile_id in (LEFT_COMPILE, RIGHT_COMPILE):
+        owner = owners[compile_id]
+        allocator = allocators[compile_id]
+        assert owner is not None
+        retained_edges.extend(
+            edge
+            for edge in case.query.find_edges(compile_id)
+            if frozenset((edge.source_id, edge.target_id)) != frozenset((owner.record_id, allocator.record_id))
+        )
+        intermediates = tuple(_node(compile_id, "enode", f"depth-{ordinal}-{compile_id[0]}") for ordinal in range(4))
+        store.add_nodes(intermediates)
+        chain = (owner, *intermediates, allocator)
+        retained_edges.extend(
+            _edge(compile_id, "lowers-to", source, target) for source, target in zip(chain, chain[1:])
+        )
+    store.add_edges(retained_edges)
+    return replace(case, query=store)
+
+
 def complete_heuristic_path() -> InferenceCase:
     return _case(heuristic_path=True)
 
@@ -409,6 +452,38 @@ def expert_asserted_complete_path() -> InferenceCase:
 )
 def test_normative_verdict_table(case: InferenceCase, expected: VerdictStatus) -> None:
     assert infer_pair(case.pair, case.query, case.comparisons).status is expected
+
+
+def test_evidence_depth_abstains_when_proof_path_is_truncated() -> None:
+    case = proof_path_at_depth_five()
+
+    shallow = infer_pair(case.pair, case.query, case.comparisons, evidence_depth=4)
+    deep = infer_pair(case.pair, case.query, case.comparisons, evidence_depth=5)
+
+    assert shallow.status is VerdictStatus.ABSTAIN
+    assert shallow.failed_gates == ("gate-8-evidence-integrity",)
+    assert "traversal-truncated:evidence-depth=4" in shallow.rejected_alternatives
+    assert deep.status is VerdictStatus.CAUSES
+
+
+def test_build_report_threads_evidence_depth_to_inference() -> None:
+    case = proof_path_at_depth_five()
+
+    shallow = build_report(_graphs(case), case.effects, case.comparisons, evidence_depth=4)
+    deep = build_report(_graphs(case), case.effects, case.comparisons, evidence_depth=5)
+
+    assert shallow.analysis_status is AnalysisStatus.ABSTAINED
+    assert deep.analysis_status is AnalysisStatus.COMPLETE
+
+
+@pytest.mark.parametrize("depth", (0, 9))
+def test_inference_rejects_evidence_depth_outside_one_to_eight(depth: int) -> None:
+    case = proof_complete_unique()
+
+    with pytest.raises(ValueError, match="between 1 and 8"):
+        infer_pair(case.pair, case.query, case.comparisons, evidence_depth=depth)
+    with pytest.raises(ValueError, match="between 1 and 8"):
+        build_report(_graphs(case), case.effects, case.comparisons, evidence_depth=depth)
 
 
 @pytest.mark.parametrize(

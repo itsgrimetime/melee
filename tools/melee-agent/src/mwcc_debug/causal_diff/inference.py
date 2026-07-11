@@ -134,6 +134,13 @@ class _OwnerEnumeration:
     alternatives: tuple[_OwnerAlternative, ...]
     rejected: tuple[str, ...]
     incomplete: bool
+    truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PathEnumeration:
+    paths: tuple[tuple[str, ...], ...]
+    truncated: bool
 
 
 class _ScopedEvidenceQuery:
@@ -284,32 +291,46 @@ def _all_simple_paths(
     query: EvidenceQuery,
     source_id: str,
     target_id: str,
-) -> tuple[tuple[str, ...], ...]:
-    """Enumerate every finite simple path in the caller-bounded evidence graph."""
+    max_depth: int,
+) -> _PathEnumeration:
+    """Enumerate simple paths up to ``max_depth`` evidence edges."""
 
     if source_id == target_id:
-        return ((source_id,),)
+        return _PathEnumeration(((source_id,),), truncated=False)
     paths: list[tuple[str, ...]] = []
+    truncated = False
 
-    def visit(node_id: str, visited: frozenset[str], path: tuple[str, ...]) -> None:
+    def visit(
+        node_id: str,
+        visited: frozenset[str],
+        path: tuple[str, ...],
+        depth: int,
+    ) -> None:
+        nonlocal truncated
         neighbors: list[tuple[str, EvidenceEdge]] = []
         for edge in query.neighbors(node_id, _PATH_EDGE_KINDS, "both"):
             other = edge.target_id if edge.source_id == node_id else edge.source_id
+            if other in visited:
+                continue
             neighbors.append((other, edge))
+        if depth >= max_depth:
+            truncated |= bool(neighbors)
+            return
         for other, edge in sorted(
             neighbors,
             key=lambda item: (item[1].kind, item[0], item[1].record_id),
         ):
-            if other in visited:
-                continue
             next_path = (*path, edge.record_id, other)
             if other == target_id:
                 paths.append(next_path)
             else:
-                visit(other, visited | {other}, next_path)
+                visit(other, visited | {other}, next_path, depth + 1)
 
-    visit(source_id, frozenset({source_id}), (source_id,))
-    return tuple(sorted(set(paths), key=lambda path: (len(path), path)))
+    visit(source_id, frozenset({source_id}), (source_id,), 0)
+    return _PathEnumeration(
+        tuple(sorted(set(paths), key=lambda path: (len(path), path))),
+        truncated=truncated,
+    )
 
 
 def _path_is_proof_capable(query: EvidenceQuery, path: tuple[str, ...]) -> bool:
@@ -385,6 +406,7 @@ def _owner_alternatives(
     pair: EffectPair,
     query: EvidenceQuery,
     comparisons: tuple[ComparisonRecord, ...],
+    evidence_depth: int,
 ) -> _OwnerEnumeration:
     allocator_by_compile = {
         pair.allocator.role_correspondence.left.compile_id: pair.allocator.role_correspondence.left,
@@ -396,6 +418,7 @@ def _owner_alternatives(
     complete: list[_OwnerAlternative] = []
     rejected: list[str] = []
     incomplete = False
+    truncated = False
     for comparison in comparisons:
         if comparison.relation_kind not in _DELTA_RELATIONS:
             continue
@@ -425,11 +448,27 @@ def _owner_alternatives(
             stack_target = stack_by_compile.get(owner.compile_id)
             if allocator is None or stack_target is None:
                 continue
-            allocator_paths = _all_simple_paths(query, owner.record_id, allocator.record_id)
-            stack_paths = _all_simple_paths(query, owner.record_id, stack_target.record_id)
-            if not allocator_paths or not stack_paths:
+            allocator_search = _all_simple_paths(
+                query,
+                owner.record_id,
+                allocator.record_id,
+                evidence_depth,
+            )
+            stack_search = _all_simple_paths(
+                query,
+                owner.record_id,
+                stack_target.record_id,
+                evidence_depth,
+            )
+            truncated |= allocator_search.truncated or stack_search.truncated
+            if not allocator_search.paths or not stack_search.paths:
                 continue
-            all_paths = tuple(sorted((*allocator_paths, *stack_paths), key=lambda path: (len(path), path)))
+            all_paths = tuple(
+                sorted(
+                    (*allocator_search.paths, *stack_search.paths),
+                    key=lambda path: (len(path), path),
+                )
+            )
             endpoint_alternatives.append(
                 _OwnerAlternative(
                     comparison=comparison,
@@ -486,8 +525,16 @@ def _owner_alternatives(
             rejected.append(comparison.record_id)
     return _OwnerEnumeration(
         alternatives=tuple(complete),
-        rejected=tuple(sorted(set(rejected))),
+        rejected=tuple(
+            sorted(
+                {
+                    *rejected,
+                    *((f"traversal-truncated:evidence-depth={evidence_depth}",) if truncated else ()),
+                }
+            )
+        ),
         incomplete=incomplete,
+        truncated=truncated,
     )
 
 
@@ -598,8 +645,13 @@ def infer_pair(
     pair: EffectPair,
     query: EvidenceQuery,
     comparisons: Iterable[ComparisonRecord],
+    *,
+    evidence_depth: int = 4,
 ) -> CausalVerdict:
     """Apply the normative strict-inference table to one eligible effect pair."""
+
+    if not 1 <= evidence_depth <= 8:
+        raise ValueError("evidence depth must be between 1 and 8")
 
     role = pair.allocator.role_correspondence
     role_comparison = role.comparison
@@ -633,7 +685,7 @@ def infer_pair(
     allocator_delta_proven = all(comparison.confidence in _PROOF_CONFIDENCES for comparison in allocator_deltas)
     stack_delta_proven = all(comparison.confidence in _PROOF_CONFIDENCES for comparison in stack_deltas)
 
-    owner_enumeration = _owner_alternatives(pair, query, records)
+    owner_enumeration = _owner_alternatives(pair, query, records, evidence_depth)
     alternatives = owner_enumeration.alternatives
     rejected = owner_enumeration.rejected
     comparison_endpoints = (
@@ -655,6 +707,15 @@ def infer_pair(
             if (record := _record_for_id(query, record_id)) is not None
         )
     if _evidence_integrity_failure(cited_records):
+        return _verdict(
+            pair,
+            status=VerdictStatus.ABSTAIN,
+            cause=None,
+            proof_paths=(),
+            rejected_alternatives=rejected,
+            failed_gates=(_GATE_8,),
+        )
+    if owner_enumeration.truncated:
         return _verdict(
             pair,
             status=VerdictStatus.ABSTAIN,
@@ -830,8 +891,13 @@ def build_report(
     graphs: Iterable[FrontierGraph],
     effects: DerivedEffects,
     comparisons: Iterable[ComparisonRecord],
+    *,
+    evidence_depth: int = 4,
 ) -> CausalDiffReport:
     """Infer every pair and aggregate a deterministic versioned report."""
+
+    if not 1 <= evidence_depth <= 8:
+        raise ValueError("evidence depth must be between 1 and 8")
 
     graph_pair = tuple(graphs)
     if len(graph_pair) != 2:
@@ -864,7 +930,12 @@ def build_report(
     inferred_verdicts = tuple(
         sorted(
             (
-                infer_pair(pair, query, comparison_records)
+                infer_pair(
+                    pair,
+                    query,
+                    comparison_records,
+                    evidence_depth=evidence_depth,
+                )
                 for pair in sorted(effects.pairs, key=lambda item: item.pair_id)
             ),
             key=lambda verdict: (verdict.pair_id, verdict.verdict_id),
