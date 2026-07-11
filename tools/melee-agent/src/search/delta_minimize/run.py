@@ -824,15 +824,15 @@ def _load_or_infer_objective(
     if old_context == context and old_manifest is not None:
         objective = _objective_from_dict(old_manifest, function=config.function)
         _validate_objective_donor_context(objective, config.donor_overrides)
-    else:
-        left = active.parent_objective(parents.left, "left", config)
-        right = active.parent_objective(parents.right, "right", config)
-        objective = active.infer_objective(left, right, config)
-        if not isinstance(objective, ObjectiveManifest) or objective.function != config.function:
-            raise DeltaMinimizeError("invalid-objective-manifest")
         try:
-            objective = _objective_from_dict(objective.to_dict(), function=config.function)
-            _validate_objective_donor_context(objective, config.donor_overrides)
+            expected = _infer_validated_objective(config, parents, active)
+        except DeltaMinimizeError as error:
+            raise DeltaMinimizeError("corrupt-objective-manifest") from error
+        if objective.to_dict() != expected.to_dict():
+            raise DeltaMinimizeError("corrupt-objective-manifest")
+    else:
+        try:
+            objective = _infer_validated_objective(config, parents, active)
         except DeltaMinimizeError as error:
             raise DeltaMinimizeError("invalid-objective-manifest") from error
         objective_payload = objective.to_dict()
@@ -841,6 +841,28 @@ def _load_or_infer_objective(
             "objective-inputs.json",
             _objective_context_envelope(context, objective_payload),
         )
+    return objective
+
+
+def _infer_validated_objective(
+    config: DeltaMinimizeConfig,
+    parents: ParentEvidenceBundle,
+    active: DeltaMinimizeBackends,
+) -> ObjectiveManifest:
+    """Derive the one canonical manifest permitted by current parent evidence.
+
+    Parent capture artifacts are already content-validated before this point,
+    so this repeats only deterministic profiling/inference.  Reusing a cache
+    entry therefore cannot make its semantically meaningful strings, target
+    fields, or donors authoritative merely by recomputing its JSON digest.
+    """
+    left = active.parent_objective(parents.left, "left", config)
+    right = active.parent_objective(parents.right, "right", config)
+    objective = active.infer_objective(left, right, config)
+    if not isinstance(objective, ObjectiveManifest) or objective.function != config.function:
+        raise DeltaMinimizeError("invalid-objective-manifest")
+    objective = _objective_from_dict(objective.to_dict(), function=config.function)
+    _validate_objective_donor_context(objective, config.donor_overrides)
     return objective
 
 

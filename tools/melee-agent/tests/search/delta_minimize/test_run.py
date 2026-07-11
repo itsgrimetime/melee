@@ -294,8 +294,8 @@ def test_run_evaluates_every_legal_mask_and_resumes(tmp_path: Path) -> None:
     assert second.to_dict() == first.to_dict()
     assert fixture.score_calls == 4
     assert fixture.parent_calls == 2
-    assert fixture.parent_objective_calls == 2
-    assert fixture.infer_calls == 1
+    assert fixture.parent_objective_calls == 4
+    assert fixture.infer_calls == 2
     assert second.cache_stats == {"parent_entries": 2, "candidate_entries": 4}
 
 
@@ -619,8 +619,119 @@ def test_valid_cached_objective_with_all_donor_overrides_is_reused(tmp_path: Pat
     second = run_delta_minimize(config, backends=fixture.backends())
 
     assert second.to_dict() == first.to_dict()
-    assert fixture.parent_objective_calls == 2
-    assert fixture.infer_calls == 1
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+    assert fixture.parent_objective_calls == 4
+    assert fixture.infer_calls == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "target-parent",
+        "target-explicit-provenance",
+        "target-coverage",
+        "target-causal-closure",
+        "target-role-identity",
+        "target-role-rank",
+        "target-role-descriptor",
+        "target-class",
+        "target-physical",
+        "opcode-artifact",
+        "opcode-donor",
+        "color-artifact",
+        "color-donor",
+        "objobject-artifact",
+        "stack-artifact",
+        "stack-donor",
+        "stack-reference-kind",
+    ),
+)
+def test_cached_objective_valid_shape_is_bound_to_current_parent_semantics(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "objective-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "target-parent":
+        manifest["target_spec"]["provenance"]["parent"] = "right"
+    elif mutation == "target-explicit-provenance":
+        manifest["target_spec"]["provenance"] = {
+            "schema_version": "delta-minimize-color-target.v1",
+            "baseline_dump": str(tmp_path / "parent-left.pcdump"),
+        }
+        manifest["references"]["color"]["inference_reason"] = (
+            "explicit-versioned-color-target;lower-desired-assignment-distance"
+        )
+    elif mutation == "target-coverage":
+        manifest["target_spec"]["target_coverage"] = 0.5
+    elif mutation == "target-causal-closure":
+        manifest["target_spec"]["causal_closure"] = True
+    elif mutation == "target-role-identity":
+        manifest["desired_phys"] = {"2": 3}
+        manifest["target_spec"]["roles"][0]["original_ig"] = 2
+    elif mutation == "target-role-rank":
+        manifest["target_spec"]["roles"][0]["role_order_rank"] = 1
+    elif mutation == "target-role-descriptor":
+        manifest["target_spec"]["roles"][0]["descriptor"] = {
+            "ig_idx": 1,
+            "first_def_sig": "li r#,0",
+            "use_site_multiset": [["add", 1]],
+            "is_param": False,
+            "var_name": "value",
+            "var_confidence": "high",
+            "assigned_reg": 3,
+            "live_range": [0, 1],
+            "use_count": 1,
+            "spilled": False,
+        }
+    elif mutation == "target-class":
+        manifest["class_id"] = 1
+        manifest["target_spec"]["roles"][0]["class_id"] = 1
+    elif mutation == "target-physical":
+        manifest["desired_phys"]["1"] = 4
+        manifest["target_spec"]["roles"][0]["desired_phys"] = 4
+    elif mutation == "opcode-artifact":
+        manifest["references"]["opcode"]["reference_artifact"] = "unbound-expected-object"
+    elif mutation == "opcode-donor":
+        manifest["references"]["opcode"]["donor"] = "left"
+        manifest["references"]["opcode"]["inference_reason"] = "expected-assembly-absolute;left-parent-closer"
+    elif mutation == "color-artifact":
+        manifest["references"]["color"]["reference_artifact"] = "unbound-color-profile"
+    elif mutation == "color-donor":
+        manifest["color_donor"] = "right"
+        manifest["objobject_donor"] = "right"
+        manifest["references"]["color"]["donor"] = "right"
+        manifest["references"]["objobjects"]["donor"] = "right"
+    elif mutation == "objobject-artifact":
+        manifest["references"]["objobjects"]["reference_artifact"] = "unbound-inspect-output"
+    elif mutation == "stack-artifact":
+        manifest["references"]["stack-homes"]["reference_artifact"] = "unbound-stack-profile"
+    elif mutation == "stack-donor":
+        manifest["stack_home_donor"] = "left"
+        manifest["references"]["stack-homes"]["donor"] = "left"
+    elif mutation == "stack-reference-kind":
+        manifest["references"]["stack-homes"]["reference_kind"] = "mixed"
+        manifest["references"]["stack-homes"]["unresolved"] = ["proxy-home"]
+
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    inputs_path = config.out_dir / "objective-inputs.json"
+    inputs = json.loads(inputs_path.read_text(encoding="utf-8"))
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    inputs["objective_manifest_digest"] = hashlib.sha256(canonical).hexdigest()
+    inputs_path.write_text(json.dumps(inputs), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+    # Resume validation may rederive from retained parents, but it must not
+    # recapture compiler/inspector evidence or evaluate candidates.
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
 
 
 @pytest.mark.parametrize(
