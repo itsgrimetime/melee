@@ -15061,6 +15061,16 @@ def inspect_explain_virtual(
             ),
         ),
     ] = None,
+    mwcc_inspect: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--mwcc-inspect",
+            help=(
+                "mwcc-inspect output for this TU/function; attaches "
+                "front-end ObjObject IDs to source-owner attribution."
+            ),
+        ),
+    ] = None,
     json_out: Annotated[
         bool,
         typer.Option("--json", help="Emit as JSON."),
@@ -15097,6 +15107,11 @@ def inspect_explain_virtual(
                     source_label = str(candidate.relative_to(DEFAULT_MELEE_ROOT))
                 except ValueError:
                     source_label = str(candidate)
+    inspect_text = None
+    if mwcc_inspect is not None:
+        if not mwcc_inspect.is_file():
+            raise typer.BadParameter(f"mwcc-inspect output not found: {mwcc_inspect}")
+        inspect_text = mwcc_inspect.read_text(encoding="utf-8", errors="replace")
 
     pcdump_text = pcdump_path.read_text()
     virtual_list = _parse_virtual_csv(virtuals)
@@ -15126,6 +15141,7 @@ def inspect_explain_virtual(
         source_text=source_text,
         source_file=source_label,
         reg_class=reg_class,
+        inspect_text=inspect_text,
     )
     if json_out:
         print(json.dumps(report.to_dict(), indent=2))
