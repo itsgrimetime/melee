@@ -14,13 +14,14 @@ from src.mwcc_debug.causal_diff.models import (
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 
 
-def _prov() -> Provenance:
+def _prov(*, input_record_ids: tuple[str, ...] = ()) -> Provenance:
     return Provenance(
         artifact_sha256="a" * 64,
         parser="unit-test.v1",
         raw_start=10,
         raw_end=20,
         derivation_rule="raw",
+        input_record_ids=input_record_ids,
     )
 
 
@@ -35,6 +36,25 @@ def _node(compile_id: str, local_key: str, role_key: str) -> EvidenceNode:
         adapter_confidence=Confidence.OBSERVED,
         provenance=_prov(),
         attributes={"virtual": int(local_key)},
+    )
+
+
+def _comparison(
+    relation_kind: str,
+    left_record_id: str | None,
+    right_record_id: str | None,
+) -> ComparisonRecord:
+    return ComparisonRecord(
+        record_id=f"comparison-{relation_kind}",
+        analysis_id="analysis-a",
+        relation_kind=relation_kind,
+        left_compile_id="compile-a",
+        left_record_id=left_record_id,
+        right_compile_id="compile-b",
+        right_record_id=right_record_id,
+        confidence=Confidence.DERIVED_UNIQUE,
+        provenance=_prov(),
+        attributes={},
     )
 
 
@@ -114,3 +134,112 @@ def test_record_id_collisions_are_rejected_across_record_categories() -> None:
     )
     with pytest.raises(ValueError, match="record ID collision"):
         store.add_edges((replace(edge, record_id=source.record_id),))
+
+
+def test_factories_bind_input_confidences_to_provenance_ids() -> None:
+    source = _node("compile-a", "66", "row-counter")
+    kwargs = {
+        "compile_id": "compile-a",
+        "function": "fn_test",
+        "kind": "virtual-register",
+        "local_key": "67",
+        "role_key": "row-count",
+        "producer_confidence": Confidence.OBSERVED,
+        "adapter_confidence": Confidence.OBSERVED,
+        "attributes": {"virtual": 67},
+    }
+    with pytest.raises(ValueError, match="input confidences must correspond"):
+        EvidenceNode.create(
+            **kwargs,
+            provenance=_prov(input_record_ids=(source.record_id,)),
+        )
+    with pytest.raises(ValueError, match="input confidences must correspond"):
+        EvidenceNode.create(
+            **kwargs,
+            provenance=_prov(),
+            input_confidences=(Confidence.HEURISTIC,),
+        )
+
+
+def test_store_rejects_confidence_laundered_by_direct_construction() -> None:
+    store = InMemoryEvidenceStore()
+    source = replace(
+        _node("compile-a", "66", "row-counter"),
+        producer_confidence=Confidence.HEURISTIC,
+        confidence=Confidence.HEURISTIC,
+    )
+    store.add_nodes((source,))
+    derived = replace(
+        _node("compile-a", "67", "row-count"),
+        provenance=_prov(input_record_ids=(source.record_id,)),
+        confidence=Confidence.OBSERVED,
+    )
+    with pytest.raises(ValueError, match="record confidence"):
+        store.add_nodes((derived,))
+
+
+def test_direct_construction_recursively_detaches_mutable_attributes() -> None:
+    attributes = {"nested": {"values": [1, 2]}}
+    node = EvidenceNode(
+        record_id="direct-node",
+        compile_id="compile-a",
+        function="fn_test",
+        kind="virtual-register",
+        role_key="row-counter",
+        producer_confidence=Confidence.OBSERVED,
+        adapter_confidence=Confidence.OBSERVED,
+        confidence=Confidence.OBSERVED,
+        provenance=_prov(),
+        attributes=attributes,
+    )
+    store = InMemoryEvidenceStore()
+    store.add_nodes((node,))
+
+    attributes["nested"]["values"].append(3)
+
+    stored = store.get_node(node.record_id)
+    assert stored is not None
+    assert stored.attributes["nested"]["values"] == (1, 2)
+
+
+@pytest.mark.parametrize(
+    ("relation_kind", "left_record_id", "right_record_id"),
+    (
+        ("role-corresponds-to", None, "right"),
+        ("node-changed", "left", None),
+        ("edge-changed", None, "right"),
+        ("node-added", "left", "right"),
+        ("edge-added", "left", None),
+        ("node-removed", "left", "right"),
+        ("edge-removed", None, "right"),
+    ),
+)
+def test_comparison_relations_reject_the_wrong_endpoint_shape(
+    relation_kind: str,
+    left_record_id: str | None,
+    right_record_id: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="comparison endpoints"):
+        _comparison(relation_kind, left_record_id, right_record_id)
+
+
+@pytest.mark.parametrize(
+    ("relation_kind", "left_record_id", "right_record_id"),
+    (
+        ("role-corresponds-to", "left", "right"),
+        ("node-changed", "left", "right"),
+        ("edge-changed", "left", "right"),
+        ("node-added", None, "right"),
+        ("edge-added", None, "right"),
+        ("node-removed", "left", None),
+        ("edge-removed", "left", None),
+    ),
+)
+def test_comparison_relations_accept_the_normalized_endpoint_shape(
+    relation_kind: str,
+    left_record_id: str | None,
+    right_record_id: str | None,
+) -> None:
+    comparison = _comparison(relation_kind, left_record_id, right_record_id)
+    assert comparison.left_record_id == left_record_id
+    assert comparison.right_record_id == right_record_id

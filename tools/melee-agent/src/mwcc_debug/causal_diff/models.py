@@ -22,6 +22,9 @@ _CONFIDENCE_RANK = {
     Confidence.OBSERVED: 2,
 }
 
+_ADDED_RELATIONS = frozenset({"node-added", "edge-added"})
+_REMOVED_RELATIONS = frozenset({"node-removed", "edge-removed"})
+
 
 def min_confidence(
     *confidences: Confidence,
@@ -33,6 +36,16 @@ def min_confidence(
     if not values:
         raise ValueError("at least one confidence is required")
     return min(values, key=_CONFIDENCE_RANK.__getitem__)
+
+
+def _validated_input_confidences(
+    provenance: Provenance,
+    input_confidences: Iterable[Confidence],
+) -> tuple[Confidence, ...]:
+    values = tuple(input_confidences)
+    if len(values) != len(provenance.input_record_ids):
+        raise ValueError("input confidences must correspond to provenance input record IDs")
+    return values
 
 
 def _immutable_value(value: object) -> object:
@@ -58,6 +71,9 @@ class Provenance:
     derivation_rule: str
     input_record_ids: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "input_record_ids", tuple(self.input_record_ids))
+
 
 @dataclass(frozen=True, slots=True)
 class EvidenceNode:
@@ -71,6 +87,9 @@ class EvidenceNode:
     confidence: Confidence
     provenance: Provenance
     attributes: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attributes", _immutable_attributes(self.attributes))
 
     @classmethod
     def create(
@@ -87,6 +106,7 @@ class EvidenceNode:
         attributes: Mapping[str, object],
         input_confidences: Iterable[Confidence] = (),
     ) -> EvidenceNode:
+        input_confidences = _validated_input_confidences(provenance, input_confidences)
         return cls(
             record_id=stable_id(compile_id, kind, local_key),
             compile_id=compile_id,
@@ -124,6 +144,9 @@ class EvidenceEdge:
     provenance: Provenance
     attributes: Mapping[str, object]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attributes", _immutable_attributes(self.attributes))
+
     @classmethod
     def create(
         cls,
@@ -140,6 +163,7 @@ class EvidenceEdge:
         attributes: Mapping[str, object],
         input_confidences: Iterable[Confidence] = (),
     ) -> EvidenceEdge:
+        input_confidences = _validated_input_confidences(provenance, input_confidences)
         local_key = (
             kind,
             source_id,
@@ -182,6 +206,17 @@ class ComparisonRecord:
     provenance: Provenance
     attributes: Mapping[str, object]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attributes", _immutable_attributes(self.attributes))
+        if self.relation_kind in _ADDED_RELATIONS:
+            valid_endpoints = self.left_record_id is None and self.right_record_id is not None
+        elif self.relation_kind in _REMOVED_RELATIONS:
+            valid_endpoints = self.left_record_id is not None and self.right_record_id is None
+        else:
+            valid_endpoints = self.left_record_id is not None and self.right_record_id is not None
+        if not valid_endpoints:
+            raise ValueError(f"invalid comparison endpoints for relation: {self.relation_kind}")
+
     @classmethod
     def create(
         cls,
@@ -199,6 +234,7 @@ class ComparisonRecord:
         input_confidences: Iterable[Confidence] = (),
         occurrence_ordinal: int = 0,
     ) -> ComparisonRecord:
+        input_confidences = _validated_input_confidences(provenance, input_confidences)
         local_key = (
             relation_kind,
             left_compile_id,

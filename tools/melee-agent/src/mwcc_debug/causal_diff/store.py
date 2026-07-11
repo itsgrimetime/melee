@@ -7,7 +7,13 @@ from enum import Enum
 from typing import Iterable, Literal, Mapping, Protocol, TypeVar
 
 from .canonical import canonical_bytes
-from .models import AdapterResult, ComparisonRecord, EvidenceEdge, EvidenceNode
+from .models import (
+    AdapterResult,
+    ComparisonRecord,
+    EvidenceEdge,
+    EvidenceNode,
+    min_confidence,
+)
 
 
 class EvidenceSink(Protocol):
@@ -146,12 +152,41 @@ class InMemoryEvidenceStore:
             pending_content[record.record_id] = content
         return pending
 
+    def _validate_confidences(self, pending: Mapping[str, _Record]) -> None:
+        for record in pending.values():
+            input_confidences: list = []
+            for input_record_id in record.provenance.input_record_ids:
+                if input_record_id == record.record_id:
+                    raise ValueError(f"record cannot cite itself as provenance input: {record.record_id}")
+                input_record = pending.get(input_record_id) or self._record_for_id(input_record_id)
+                if input_record is None:
+                    raise ValueError(f"provenance input record not found: {input_record_id}")
+                input_confidences.append(input_record.confidence)
+
+            if isinstance(record, (EvidenceNode, EvidenceEdge)):
+                expected = min_confidence(
+                    record.producer_confidence,
+                    record.adapter_confidence,
+                    input_confidences=input_confidences,
+                )
+            else:
+                expected = min_confidence(
+                    record.confidence,
+                    input_confidences=input_confidences,
+                )
+            if record.confidence != expected:
+                raise ValueError(
+                    f"record confidence does not match producer, adapter, and provenance inputs: {record.record_id}"
+                )
+
     def add_nodes(self, records: Iterable[EvidenceNode]) -> None:
         pending = self._validated_batch(records)
+        self._validate_confidences(pending)
         self._nodes.update(pending)
 
     def add_edges(self, records: Iterable[EvidenceEdge]) -> None:
         pending = self._validated_batch(records)
+        self._validate_confidences(pending)
         for edge in pending.values():
             source = self._nodes.get(edge.source_id)
             target = self._nodes.get(edge.target_id)
@@ -163,6 +198,7 @@ class InMemoryEvidenceStore:
 
     def add_comparisons(self, records: Iterable[ComparisonRecord]) -> None:
         pending = self._validated_batch(records)
+        self._validate_confidences(pending)
         for comparison in pending.values():
             self._validate_comparison_endpoint(
                 comparison.left_record_id,
