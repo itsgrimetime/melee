@@ -400,6 +400,167 @@ def test_forced_overrides_replay_in_order() -> None:
     assert profile.coalesce_pairs == frozenset()
 
 
+def test_coalesce_chain_resolves_every_alias_to_ultimate_root() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  75 -> 76\n",
+        distinct_roots=78,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 76: 3},
+    )
+
+    assert profile.complete is True
+    assert profile.coalesce_pairs == frozenset({(1, 3), (2, 3)})
+    assert (1, 2) not in profile.coalesce_pairs
+
+
+def test_branching_coalesce_aliases_share_the_ultimate_root() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  76 -> 75\n",
+        distinct_roots=78,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 76: 3},
+    )
+
+    assert profile.complete is True
+    assert profile.coalesce_pairs == frozenset({(1, 2), (3, 2)})
+
+
+def test_self_coalesce_root_terminates_without_emitting_an_alias() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 58\n",
+        distinct_roots=80,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1})
+
+    assert profile.complete is True
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_forced_override_is_applied_before_transitive_resolution() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  75 -> 76\n[FORCE_COALESCE] alias[75]: 76 -> 77\n",
+        distinct_roots=78,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 76: 3, 77: 4},
+    )
+
+    assert profile.complete is True
+    assert profile.coalesce_pairs == frozenset({(1, 4), (2, 4)})
+
+
+@pytest.mark.parametrize(
+    ("rows", "distinct_roots"),
+    [
+        pytest.param("  58 -> 75\n  75 -> 58\n", 78, id="two-node"),
+        pytest.param(
+            "  58 -> 75\n  75 -> 76\n  76 -> 58\n",
+            77,
+            id="three-node",
+        ),
+    ],
+)
+def test_coalesce_cycle_is_incomplete_without_stale_pairs(
+    rows: str,
+    distinct_roots: int,
+) -> None:
+    pcdump = _with_single_role_coalesce(rows, distinct_roots=distinct_roots)
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 76: 3},
+    )
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_alias_leading_to_conflicting_roots_emits_no_stale_pair() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  75 -> 76\n  75 -> 77\n",
+        distinct_roots=77,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 76: 3, 77: 4},
+    )
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_alias_leading_to_out_of_range_mapping_emits_no_stale_pair() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  75 -> 80\n",
+        distinct_roots=78,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 80: 3},
+    )
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_stale_forced_override_blocks_affected_alias_component() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  75 -> 76\n[FORCE_COALESCE] alias[75]: 77 -> 78\n",
+        distinct_roots=78,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 76: 3, 77: 4, 78: 5},
+    )
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+def test_transitive_root_cardinality_must_match_exactly() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  58 -> 75\n  75 -> 76\n",
+        distinct_roots=79,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 2, 76: 3},
+    )
+
+    assert profile.complete is False
+
+
 def test_ambiguous_forced_override_ig_is_incomplete() -> None:
     pcdump = _with_single_role_coalesce(
         "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[70]: 70 -> 70\n",
@@ -440,6 +601,53 @@ def test_out_of_range_coalesce_ig_is_incomplete(rows: str) -> None:
     profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 80: 2})
 
     assert profile.complete is False
+
+
+def test_out_of_range_natural_mapping_is_not_role_projected() -> None:
+    pcdump = _with_single_role_coalesce(
+        "  80 -> 58\n",
+        distinct_roots=80,
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 80: 2})
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[80]: 80 -> 58\n",
+            id="alias",
+        ),
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[58]: 80 -> 75\n",
+            id="old-root",
+        ),
+        pytest.param(
+            "  (none - no virtuals coalesced)\n[FORCE_COALESCE] alias[58]: 58 -> 80\n",
+            id="new-root",
+        ),
+    ],
+)
+def test_out_of_range_forced_override_is_not_role_projected(rows: str) -> None:
+    pcdump = _with_single_role_coalesce(
+        rows,
+        distinct_roots=79,
+        forced_count=1,
+    )
+
+    profile = build_colorgraph_profile(
+        pcdump,
+        "f",
+        0,
+        {58: 1, 75: 3, 80: 2},
+    )
+
+    assert profile.complete is False
+    assert profile.coalesce_pairs == frozenset()
 
 
 @pytest.mark.parametrize(
@@ -540,6 +748,70 @@ def test_negative_ig_sentinels_count_as_rows_but_not_roles() -> None:
     assert profile.assignments == ((1, 22),)
     assert profile.simplify_order == (1,)
     assert profile.select_order == (1,)
+
+
+def test_positive_simplify_only_role_is_reported_incomplete() -> None:
+    pcdump = SINGLE_ROLE_PCDUMP.replace(
+        "0 58 r22 0 0 0x00",
+        "0 -1 r-1 0 0 0x00",
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1})
+
+    assert profile.complete is False
+    assert profile.missing_roles == (1,)
+
+
+def test_out_of_range_decision_is_not_role_projected() -> None:
+    pcdump = SINGLE_ROLE_PCDUMP.replace(
+        "0 58 r22 0 0 0x00",
+        "0 80 r22 0 0 0x00",
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 80: 2})
+
+    assert profile.complete is False
+    assert profile.assignments == ()
+    assert profile.select_order == ()
+
+
+def test_out_of_range_interferer_is_not_role_projected() -> None:
+    pcdump = SINGLE_ROLE_PCDUMP.replace(
+        "0 58 r22 0 0 0x00",
+        "0 58 r22 1 1 0x00\n  interferers: 80=r3",
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 80: 2})
+
+    assert profile.complete is False
+    assert profile.interference_edges == frozenset()
+
+
+def test_out_of_range_simplify_entry_is_not_role_projected() -> None:
+    pcdump = SINGLE_ROLE_PCDUMP.replace(
+        "0 58 0 0 0x00",
+        "0 80 0 0 0x00",
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 80: 2})
+
+    assert profile.complete is False
+    assert profile.simplify_order == ()
+
+
+def test_maximum_in_range_ig_is_valid_in_every_evidence_lane() -> None:
+    pcdump = CANDIDATE_PCDUMP.replace("75", "79").replace(
+        "  58 -> 79\n[COALESCE] exit class=0 n_virtuals=80 distinct_roots=79 forced=0",
+        "  58 -> 79\n"
+        "  79 -> 79\n"
+        "[FORCE_COALESCE] alias[79]: 79 -> 79\n"
+        "[COALESCE] exit class=0 n_virtuals=80 distinct_roots=79 forced=1",
+    )
+
+    profile = build_colorgraph_profile(pcdump, "f", 0, {58: 1, 79: 2})
+
+    assert profile.complete is True
+    assert profile.coalesce_pairs == frozenset({(1, 2)})
 
 
 def test_negative_sentinel_does_not_mask_truncated_simplify_rows() -> None:
