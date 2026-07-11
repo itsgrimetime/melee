@@ -752,65 +752,57 @@ def _check_git_ownership(
     *,
     no_index_ignore: bool = False,
 ) -> None:
-    root_tracked = _git_tracked(worktree, artifact_dir, reasons)
-    if root_tracked is True:
+    tracked_result = _run_git(
+        worktree,
+        ["ls-files", "--stage", "-z", "--", artifact_dir.as_posix()],
+    )
+    if tracked_result is None or tracked_result.returncode != 0:
+        _add_reason(reasons, "git-error")
+        return
+
+    tracked_paths: set[str] = set()
+    for record in tracked_result.stdout.split("\0"):
+        if not record:
+            continue
+        _, separator, path = record.partition("\t")
+        if separator:
+            tracked_paths.add(path)
+
+    root_path = artifact_dir.as_posix()
+    if root_path in tracked_paths:
         _add_reason(reasons, "root-git-tracked")
         return
-    if root_tracked is None:
+
+    untracked_paths: list[str] = []
+    for file_path in files:
+        relative = (artifact_dir / file_path).as_posix()
+        if relative in tracked_paths:
+            _add_reason(reasons, "git-tracked")
+        else:
+            untracked_paths.append(relative)
+
+    root_ignore_path = f"{root_path}/"
+    ignore_inputs = [root_ignore_path, *untracked_paths]
+    ignore_args = ["check-ignore", "--stdin", "-z"]
+    if no_index_ignore:
+        ignore_args.append("--no-index")
+    ignored_result = _run_git(
+        worktree,
+        ignore_args,
+        input_text="\0".join(ignore_inputs) + "\0",
+    )
+    if ignored_result is None or ignored_result.returncode not in (0, 1):
+        _add_reason(reasons, "git-error")
+        if untracked_paths:
+            _add_reason(reasons, "contains-nonignored")
+        _add_reason(reasons, "root-not-git-ignored")
         return
 
-    for file_path in files:
-        relative = artifact_dir / file_path
-        tracked = _git_tracked(worktree, relative, reasons)
-        if tracked is True:
-            _add_reason(reasons, "git-tracked")
-            continue
-        if tracked is None:
-            continue
-        if not _git_ignored(worktree, relative, reasons, no_index=no_index_ignore):
-            _add_reason(reasons, "contains-nonignored")
-
-    if not _git_ignored(
-        worktree,
-        artifact_dir,
-        reasons,
-        no_index=no_index_ignore,
-        directory=True,
-    ):
+    ignored_paths = {path for path in ignored_result.stdout.split("\0") if path}
+    if any(path not in ignored_paths for path in untracked_paths):
+        _add_reason(reasons, "contains-nonignored")
+    if root_ignore_path not in ignored_paths:
         _add_reason(reasons, "root-not-git-ignored")
-
-
-def _git_ignored(
-    worktree: Path,
-    relative: Path,
-    reasons: list[str],
-    *,
-    no_index: bool = False,
-    directory: bool = False,
-) -> bool:
-    args = ["check-ignore", "--quiet"]
-    if no_index:
-        args.append("--no-index")
-    path = relative.as_posix()
-    if directory:
-        path += "/"
-    args.extend(("--", path))
-    result = _run_git(worktree, args)
-    if result is None or result.returncode not in (0, 1):
-        _add_reason(reasons, "git-error")
-        return False
-    return result.returncode == 0
-
-
-def _git_tracked(worktree: Path, relative: Path, reasons: list[str]) -> bool | None:
-    result = _run_git(worktree, ["ls-files", "--error-unmatch", "--stage", "--", relative.as_posix()])
-    if result is None or result.returncode not in (0, 1):
-        _add_reason(reasons, "git-error")
-        return None
-    if result.returncode == 1:
-        return False
-    expected = relative.as_posix()
-    return any(line.rpartition("\t")[2] == expected for line in result.stdout.splitlines())
 
 
 def _walk_regular_files(root_fd: int) -> _TreeFacts:
@@ -972,6 +964,9 @@ def _scan_directories(scan_root: Path) -> Iterator[_ScannedDirectory]:
         while pending:
             directory = pending.pop()
             try:
+                if _has_git_marker(directory.fd):
+                    yield directory
+                    continue
                 try:
                     with os.scandir(directory.fd) as entries:
                         directory_entries = sorted(entries, key=lambda entry: entry.name, reverse=True)
@@ -997,12 +992,19 @@ def _scan_directories(scan_root: Path) -> Iterator[_ScannedDirectory]:
                                 child.inode,
                             )
                         )
-                yield directory
             finally:
                 os.close(directory.fd)
     finally:
         for directory in pending:
             os.close(directory.fd)
+
+
+def _has_git_marker(directory_fd: int) -> bool:
+    try:
+        marker = os.stat(".git", dir_fd=directory_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISDIR(marker.st_mode) or stat.S_ISREG(marker.st_mode)
 
 
 def _open_directory_path(path: Path) -> tuple[_DirectoryHandle | None, str | None]:
@@ -1137,6 +1139,7 @@ def _run_git(
     args: Sequence[str],
     *,
     cwd_fd: int | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str] | None:
     run_options: dict[str, object] = {}
     if cwd_fd is None:
@@ -1155,6 +1158,7 @@ def _run_git(
             ["git", *args],
             capture_output=True,
             text=True,
+            input=input_text,
             timeout=_GIT_TIMEOUT_SECONDS,
             check=False,
             **run_options,

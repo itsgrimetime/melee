@@ -203,6 +203,78 @@ def test_default_discovery_only_uses_registered_worktrees(tmp_path: Path) -> Non
     assert unregistered.resolve() not in artifacts.discover_worktrees(repo)
 
 
+def test_scan_root_only_validates_git_markers_and_prunes_repo_contents(
+    tmp_path: Path, monkeypatch
+) -> None:
+    nonrepo = tmp_path / "nonrepo"
+    nonrepo.mkdir()
+    scan_root = tmp_path / "scan-root"
+    repo = scan_root / "arbitrary" / "depth" / "repo"
+    repo.mkdir(parents=True)
+    _run_git(repo, "init")
+
+    nested_repo = repo / "large" / "tree" / "nested-repo"
+    nested_repo.mkdir(parents=True)
+    _run_git(nested_repo, "init")
+    for index in range(64):
+        (repo / "large" / "tree" / f"directory-{index}" / "child").mkdir(parents=True)
+
+    real_run_git = artifacts._run_git
+    validated: list[Path] = []
+
+    def record_git(cwd, args, **kwargs):
+        if args == ["rev-parse", "--show-toplevel"]:
+            validated.append(Path(cwd))
+        return real_run_git(cwd, args, **kwargs)
+
+    monkeypatch.setattr(artifacts, "_run_git", record_git)
+
+    discovered = artifacts.discover_worktrees(nonrepo, scan_roots=[scan_root])
+
+    assert discovered == (repo.resolve(),)
+    assert validated == [repo.resolve()]
+    assert nested_repo.resolve() not in discovered
+
+
+def test_git_ownership_batches_large_candidate_queries(tmp_path: Path, monkeypatch) -> None:
+    _, linked = _make_repo_and_linked_worktree(tmp_path)
+    for index in range(63):
+        _write_ignored_file(linked / "build" / f"object-{index}.o", b"x")
+    _track_file(linked, "build/tracked\nobject.o", "tracked")
+
+    real_run_git = artifacts._run_git
+    ownership_calls: list[tuple[list[str], str | None]] = []
+
+    def record_git(cwd, args, **kwargs):
+        if args and args[0] in {"ls-files", "check-ignore"}:
+            ownership_calls.append((list(args), kwargs.get("input_text")))
+        return real_run_git(cwd, args, **kwargs)
+
+    monkeypatch.setattr(artifacts, "_run_git", record_git)
+
+    candidate = _candidate(
+        artifacts.inspect_artifacts(
+            [linked], min_age_days=0, min_bytes=0, now=NOW, active_commands=[]
+        ),
+        linked,
+        "build",
+    )
+
+    ls_files_calls = [call for call in ownership_calls if call[0][0] == "ls-files"]
+    check_ignore_calls = [call for call in ownership_calls if call[0][0] == "check-ignore"]
+    assert len(ls_files_calls) == 1
+    assert len(check_ignore_calls) == 1
+    assert "git-tracked" in candidate.skip_reasons
+    assert ls_files_calls[0][0] == ["ls-files", "--stage", "-z", "--", "build"]
+    assert check_ignore_calls[0][0] == ["check-ignore", "--stdin", "-z"]
+    ignore_input = check_ignore_calls[0][1]
+    assert ignore_input is not None
+    ignore_paths = ignore_input.split("\0")
+    assert ignore_paths[0] == "build/"
+    assert ignore_paths[-1] == ""
+    assert set(ignore_paths[1:-1]) == {f"build/object-{index}.o" for index in range(63)}
+
+
 def test_current_worktree_is_reported_but_never_eligible_for_cleanup(tmp_path: Path) -> None:
     repo, linked = _make_repo_and_linked_worktree(tmp_path)
     _write_ignored_file(repo / "build/primary.o", b"primary")
