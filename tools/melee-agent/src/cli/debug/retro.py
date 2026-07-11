@@ -2067,6 +2067,14 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
             return DumpOutcome(exit_code=0, produced=["hook"], missing=[])
         return DumpOutcome(exit_code=2, produced=[], missing=["hook"])
 
+    if proc.returncode != 0:
+        missing = []
+        if phases in ("frontend", "all"):
+            missing.append("frontend")
+        if phases in ("backend", "all"):
+            missing.append("backend")
+        return DumpOutcome(exit_code=2, produced=[], missing=missing)
+
     produced: list[str] = []
     missing: list[str] = []
     target_absent = False  # set by the host-side trace filter below
@@ -2099,8 +2107,6 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         elif phases == "backend":
             missing.append("backend")
 
-    if proc.returncode != 0 and not produced and not target_absent:
-        return DumpOutcome(exit_code=2, produced=produced, missing=missing)
     if target_absent and not produced:
         return DumpOutcome(exit_code=3, produced=produced, missing=missing)
     if missing:
