@@ -327,6 +327,38 @@ def test_scratch_recover_best_emits_best_source_and_diff(tmp_path, monkeypatch):
     assert payload["verdict"] == "new high-water"
 
 
+def test_scratch_recover_best_creates_output_parent_directories(tmp_path, monkeypatch):
+    """recover-best creates missing parents before writing UTF-8 source."""
+    ledger_path = tmp_path / "attempts.json"
+    monkeypatch.setenv("DECOMP_ATTEMPT_LEDGER_FILE", str(ledger_path))
+
+    from src.cli.tracking import record_attempt
+
+    source_code = "void Func_80000020(void) { /* café */ }\n"
+    record_attempt(
+        "Func_80000020",
+        match_percent=94.0,
+        outcome="improved",
+        source_code=source_code,
+    )
+    output_file = tmp_path / "nested" / "recovery" / "best.c"
+
+    result = runner.invoke(
+        app,
+        [
+            "scratch",
+            "recover-best",
+            "Func_80000020",
+            "--output",
+            str(output_file),
+            "--no-diff",
+        ],
+    )
+
+    assert result.exit_code == 0, result.exception
+    assert output_file.read_text(encoding="utf-8") == source_code
+
+
 def test_register_only_stall_does_not_recommend_move_on(tmp_path, monkeypatch):
     """Register-allocation churn is tracked but never recommends moving on."""
     ledger_path = tmp_path / "attempts.json"
