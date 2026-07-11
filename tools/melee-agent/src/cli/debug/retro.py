@@ -155,6 +155,26 @@ def _write_backend_outputs(
         )
 
 
+_BACKEND_REQUIRED_OUTPUTS = (
+    "backend-trace.v1.json",
+    "regalloc-summary.txt",
+    "backend-summary.txt",
+)
+
+
+def _validate_backend_outputs(out_dir: Path) -> None:
+    missing = [
+        name
+        for name in _BACKEND_REQUIRED_OUTPUTS
+        if not (out_dir / name).is_file()
+    ]
+    if missing:
+        raise RuntimeError(
+            "backend trace command reported success but did not produce "
+            "required output(s): " + ", ".join(missing)
+        )
+
+
 def _write_backend_candidate_outputs(out_dir: Path, trace: dict) -> None:
     from tools.mwcc_retro import backend_schema, backend_summary
 
@@ -2209,6 +2229,8 @@ def dump_cmd(
             )
             if backend_outcome.trace is not None:
                 _write_backend_outputs(out_dir, backend_outcome.trace, backend_outcome.fidelity)
+                if backend_outcome.exit_code == 0:
+                    _validate_backend_outputs(out_dir)
         except RuntimeError as exc:
             typer.secho(str(exc), fg="red", err=True)
             raise typer.Exit(2)
@@ -2271,6 +2293,8 @@ def backend_cmd(
             raise RuntimeError("backend trace runner returned success without a trace")
         if outcome.trace is not None:
             _write_backend_outputs(out_dir, outcome.trace, outcome.fidelity)
+            if outcome.exit_code == 0:
+                _validate_backend_outputs(out_dir)
     except RuntimeError as exc:
         typer.secho(str(exc), fg="red", err=True)
         raise typer.Exit(2)
