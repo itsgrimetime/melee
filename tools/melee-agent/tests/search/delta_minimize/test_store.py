@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from src.search.delta_minimize.store import (
     ParentEvidenceKey,
     write_json_atomic,
 )
+from src.search.store import ArtifactStore
 
 KEY = EvidenceKey(
     source_hash="source",
@@ -204,6 +206,117 @@ def test_store_uses_artifact_store_for_content_addressed_sources(tmp_path: Path)
     assert first == second
     assert first.parent == tmp_path / "artifacts" / "sources"
 
+    legacy = ArtifactStore(tmp_path / "artifacts")
+    assert legacy.put_source("int draw(void) { return 0; }\n") == first
+
+
+def test_source_write_is_atomic_durable_and_concurrency_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = DeltaRunStore(tmp_path)
+    fsynced: list[int] = []
+    real_fsync = os.fsync
+
+    def record_fsync(fd: int) -> None:
+        fsynced.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", record_fsync)
+    source = "int draw(void) { return 0; }\n"
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        paths = list(pool.map(store.put_source, [source] * 8))
+
+    assert len(set(paths)) == 1
+    assert paths[0].read_text() == source
+    assert len(fsynced) >= 2
+
+
+def test_source_replace_failure_publishes_nothing_and_cleans_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DeltaRunStore(tmp_path)
+    monkeypatch.setattr(
+        os,
+        "replace",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("boom")),
+    )
+
+    with pytest.raises(OSError, match="boom"):
+        store.put_source("int draw(void) { return 0; }\n")
+
+    assert list((tmp_path / "artifacts" / "sources").glob("*.c")) == []
+    assert list((tmp_path / "artifacts" / "sources").glob(".*.tmp")) == []
+
+
+def test_corrupt_preexisting_source_blob_fails_closed(tmp_path: Path) -> None:
+    store = DeltaRunStore(tmp_path)
+    source = "int draw(void) { return 0; }\n"
+    digest = hashlib.sha256(source.encode()).hexdigest()[:32]
+    path = tmp_path / "artifacts" / "sources" / f"{digest}.c"
+    path.write_bytes(b"wrong bytes")
+
+    with pytest.raises(DeltaMinimizeError, match="corrupt-source-artifact"):
+        store.put_source(source)
+
+    assert path.read_bytes() == b"wrong bytes"
+
+
+def test_broken_source_blob_symlink_cannot_write_outside_root(tmp_path: Path) -> None:
+    store = DeltaRunStore(tmp_path / "run")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    source = "int draw(void) { return 0; }\n"
+    digest = hashlib.sha256(source.encode()).hexdigest()[:32]
+    path = store.root / "artifacts" / "sources" / f"{digest}.c"
+    escaped = outside / "escaped.c"
+    path.symlink_to(escaped)
+
+    with pytest.raises(DeltaMinimizeError, match="unsafe-store-path"):
+        store.put_source(source)
+
+    assert not escaped.exists()
+    assert path.is_symlink()
+
+
+def test_symlinked_sources_directory_cannot_write_outside_root(tmp_path: Path) -> None:
+    store = DeltaRunStore(tmp_path / "run")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sources = store.root / "artifacts" / "sources"
+    sources.rmdir()
+    sources.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(DeltaMinimizeError, match="unsafe-store-path"):
+        store.put_source("int draw(void) { return 0; }\n")
+
+    assert list(outside.iterdir()) == []
+
+
+def test_artifact_symlink_is_rejected_before_store_initialization_writes(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "artifacts").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(DeltaMinimizeError, match="unsafe-store-path"):
+        DeltaRunStore(root)
+
+    assert list(outside.iterdir()) == []
+
+
+def test_broken_gitignore_symlink_is_rejected_before_store_initialization_writes(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+    artifacts = root / "artifacts"
+    artifacts.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escaped = outside / "escaped.gitignore"
+    (artifacts / ".gitignore").symlink_to(escaped)
+
+    with pytest.raises(DeltaMinimizeError, match="unsafe-store-path"):
+        DeltaRunStore(root)
+
+    assert not escaped.exists()
+
 
 def test_candidate_paths_are_stable_and_reject_unsafe_ids(tmp_path: Path) -> None:
     store = DeltaRunStore(tmp_path)
@@ -213,6 +326,9 @@ def test_candidate_paths_are_stable_and_reject_unsafe_ids(tmp_path: Path) -> Non
         store.inspect_output_path("../escape")
     with pytest.raises(DeltaMinimizeError, match="invalid-candidate-id"):
         store.inspect_output_path("nested/id")
+    assert store.inspect_output_path("a" * 255).parent.name == "a" * 255
+    with pytest.raises(DeltaMinimizeError, match="invalid-candidate-id"):
+        store.inspect_output_path("a" * 256)
 
 
 def test_symlinked_evidence_component_is_rejected(tmp_path: Path) -> None:

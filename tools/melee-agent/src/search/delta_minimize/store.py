@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import stat
 import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -18,7 +20,7 @@ from src.search.store import ArtifactStore
 from .contracts import DeltaMinimizeError
 
 _EVIDENCE_SCHEMA = "delta-minimize-evidence.v1"
-_CANDIDATE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z")
+_CANDIDATE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}\Z")
 _PROVENANCE_FIELDS = frozenset(
     {
         "cflags_hash",
@@ -101,6 +103,80 @@ def _mkdir_safe(path: Path) -> None:
     safe.mkdir(parents=True, exist_ok=True)
     if _has_symlink_component(safe) or not safe.is_dir():
         raise DeltaMinimizeError("unsafe-store-path", {"path": str(path)})
+
+
+def _open_safe_directory(path: Path) -> int:
+    safe = _require_safe_path(path)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(safe, flags)
+    except OSError as error:
+        raise DeltaMinimizeError("unsafe-store-path", {"path": str(path)}) from error
+    if not stat.S_ISDIR(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise DeltaMinimizeError("unsafe-store-path", {"path": str(path)})
+    return fd
+
+
+def _read_regular_bytes(path: Path, *, corruption: str) -> bytes | None:
+    """Read a regular file without following its final path component."""
+
+    safe = _require_safe_path(path)
+    directory_fd = _open_safe_directory(safe.parent)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        try:
+            fd = os.open(safe.name, flags, dir_fd=directory_fd)
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            raise DeltaMinimizeError("unsafe-store-path", {"path": str(path)}) from error
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise DeltaMinimizeError(corruption, {"path": str(path)})
+            with os.fdopen(fd, "rb") as handle:
+                fd = -1
+                return handle.read()
+        finally:
+            if fd >= 0:
+                os.close(fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _write_bytes_atomic(path: Path, blob: bytes) -> None:
+    """Durably replace one regular file through an already-open directory."""
+
+    safe = _require_safe_path(path)
+    _mkdir_safe(safe.parent)
+    safe = _require_safe_path(safe)
+    directory_fd = _open_safe_directory(safe.parent)
+    temp_name = f".{safe.name}.{secrets.token_hex(8)}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = -1
+    try:
+        fd = os.open(temp_name, flags, 0o600, dir_fd=directory_fd)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(blob)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _require_safe_path(safe)
+        os.replace(
+            temp_name,
+            safe.name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        os.fsync(directory_fd)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(temp_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        os.close(directory_fd)
 
 
 @contextmanager
@@ -217,9 +293,30 @@ class DeltaRunStore:
         _mkdir_safe(self.root)
         self.provenance: dict[str, str] = {}
         self._provenance_bound = False
-        self.sources = ArtifactStore(self._safe_path("artifacts"))
+        self.sources = self._initialize_artifact_store()
         if provenance is not None:
             self.bind_provenance(provenance)
+
+    def _initialize_artifact_store(self) -> ArtifactStore:
+        """Prepare every legacy ArtifactStore path before its constructor runs."""
+
+        artifact_root = self._safe_path("artifacts")
+        _mkdir_safe(artifact_root)
+        for directory in ("sources", "manifests", "objects"):
+            _mkdir_safe(self._safe_path("artifacts", directory))
+
+        gitignore = self._safe_path("artifacts", ".gitignore")
+        existing = _read_regular_bytes(gitignore, corruption="corrupt-artifact-store")
+        if existing is None:
+            _write_bytes_atomic(gitignore, b"*\n")
+
+        # ArtifactStore remains the shared layout/API owner. Its constructor is
+        # safe here because every directory and file it may touch now exists and
+        # has passed the no-symlink checks above.
+        for component in (artifact_root, *(artifact_root / name for name in ("sources", "manifests", "objects"))):
+            _require_safe_path(component)
+        _require_safe_path(gitignore)
+        return ArtifactStore(artifact_root)
 
     def _safe_path(self, *parts: str) -> Path:
         if any(not isinstance(part, str) or not part or Path(part).name != part for part in parts):
@@ -249,9 +346,16 @@ class DeltaRunStore:
     def put_source(self, source_text: str) -> Path:
         if not isinstance(source_text, str):
             raise TypeError("candidate source must be text")
-        self._safe_path("artifacts")
-        path = self.sources.put_source(source_text)
-        _require_safe_path(path)
+        blob = source_text.encode()
+        digest = hashlib.sha256(blob).hexdigest()[:32]
+        path = self._safe_path("artifacts", "sources", f"{digest}.c")
+        with _exclusive_file_lock(path):
+            existing = _read_regular_bytes(path, corruption="corrupt-source-artifact")
+            if existing is not None:
+                if existing != blob or hashlib.sha256(existing).hexdigest()[:32] != digest:
+                    raise DeltaMinimizeError("corrupt-source-artifact", {"path": str(path)})
+                return path
+            _write_bytes_atomic(path, blob)
         return path
 
     def bind_provenance(self, provenance: Mapping[str, str]) -> None:
