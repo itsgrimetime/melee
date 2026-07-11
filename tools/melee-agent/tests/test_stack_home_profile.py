@@ -258,6 +258,62 @@ def test_distance_does_not_join_embedded_register_like_owner_names() -> None:
 
 
 @pytest.mark.parametrize(
+    ("left_name", "right_name"),
+    [
+        ("owner@810field", "owner@910field"),
+        ("prefix_@810", "prefix_@910"),
+        ("@810_suffix", "@910_suffix"),
+    ],
+    ids=["embedded", "underscore-prefix", "underscore-suffix"],
+)
+def test_embedded_temp_like_owner_names_remain_verbatim_and_distinct(
+    left_name: str,
+    right_name: str,
+) -> None:
+    left = _temp_candidate(24, "fadds f50,f40,f41")
+    left["nearest_source_expression"]["name"] = left_name
+    right = _temp_candidate(28, "fadds f70,f60,f61")
+    right["nearest_source_expression"]["name"] = right_name
+
+    left_profile = build_stack_home_profile(_frame(64), _bridge(left))
+    right_profile = build_stack_home_profile(_frame(64), _bridge(right))
+
+    assert left_name in left_profile.homes[0].identity
+    assert right_name in right_profile.homes[0].identity
+    assert left_profile.homes[0].identity != right_profile.homes[0].identity
+
+
+def test_punctuation_and_whitespace_adjacent_standalone_temps_are_normalized() -> None:
+    left = _temp_candidate(24, "fadds f50,f40,f41")
+    left["nearest_source_expression"]["name"] = "owner(@810), @811"
+    right = _temp_candidate(28, "fadds f70,f60,f61")
+    right["nearest_source_expression"]["name"] = "owner(@910), @911"
+
+    left_profile = build_stack_home_profile(_frame(64), _bridge(left))
+    right_profile = build_stack_home_profile(_frame(64), _bridge(right))
+
+    assert left_profile.homes[0].identity == right_profile.homes[0].identity
+    assert "owner(<temp>),<temp>" in left_profile.homes[0].identity
+
+
+def test_distance_does_not_join_embedded_temp_like_owner_names() -> None:
+    reference_candidate = _temp_candidate(24, "fadds f50,f40,f41")
+    reference_candidate["nearest_source_expression"]["name"] = "owner@810field"
+    candidate_candidate = _temp_candidate(28, "fadds f70,f60,f61")
+    candidate_candidate["nearest_source_expression"]["name"] = "owner@910field"
+
+    reference = build_stack_home_profile(_frame(64), _bridge(reference_candidate))
+    candidate = build_stack_home_profile(_frame(64), _bridge(candidate_candidate))
+
+    assert stack_home_distance(candidate, reference) == StackHomeDistance(
+        unresolved_or_mismatched_homes=2,
+        total_absolute_offset_delta=0,
+        home_order_inversions=0,
+        absolute_frame_size_delta=0,
+    )
+
+
+@pytest.mark.parametrize(
     "opcode",
     [
         " stfs",
@@ -394,6 +450,35 @@ def test_first_def_rejects_malformed_mnemonic_suffixes(opcode: str) -> None:
 
     assert profile.homes == ()
     assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+@pytest.mark.parametrize("opcode", ["v810", "IG:810"], ids=["virtual", "ig"])
+def test_first_def_rejects_exact_compiler_virtual_tokens(opcode: str) -> None:
+    profile = build_stack_home_profile(
+        _frame(64),
+        _bridge(_temp_candidate(20, f"{opcode} f50,f40,f41")),
+    )
+
+    assert profile.homes == ()
+    assert profile.blockers == ("unresolved-compiler-temp-home",)
+
+
+@pytest.mark.parametrize(
+    ("opcode", "normalized"),
+    [("VADDUWM", "vadduwm"), ("igloo", "igloo")],
+    ids=["v-prefix", "ig-prefix"],
+)
+def test_first_def_virtual_like_mnemonic_prefixes_still_use_mnemonic_validator(
+    opcode: str,
+    normalized: str,
+) -> None:
+    profile = build_stack_home_profile(
+        _frame(64),
+        _bridge(_temp_candidate(20, f"{opcode} f50,f40,f41")),
+    )
+
+    assert profile.complete is True
+    assert f'"opcode":"{normalized}"' in profile.homes[0].identity
 
 
 def test_named_home_absorbs_duplicate_bridge_access_instead_of_becoming_temp() -> None:

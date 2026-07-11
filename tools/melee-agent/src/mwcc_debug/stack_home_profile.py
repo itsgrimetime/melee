@@ -17,7 +17,7 @@ _ADDRESS_OFFSET_RE = re.compile(
     r"[-+]?(?:0x[0-9a-f]+|\d+)\s*\(\s*r\d+\s*\)",
     re.IGNORECASE,
 )
-_UNSTABLE_TEMP_RE = re.compile(r"@\d+")
+_UNSTABLE_TEMP_RE = re.compile(r"(?<![A-Za-z0-9_])@\d+(?![A-Za-z0-9_])")
 _COMPILER_VIRTUAL_RE = re.compile(r"(?<![A-Za-z0-9_])(?P<kind>IG:|v)\d+(?![A-Za-z0-9_])")
 _EVIDENCE_SITE_RE = re.compile(r"\bB(?P<block>\d+):(?P<instr>\d+)\b")
 _SPACE_RE = re.compile(r"\s+")
@@ -118,6 +118,7 @@ def _normalize_first_def_opcode(value: object) -> str | None:
         not isinstance(value, str)
         or _FIRST_DEF_OPCODE_RE.fullmatch(value) is None
         or _REGISTER_RE.fullmatch(value) is not None
+        or _COMPILER_VIRTUAL_RE.fullmatch(value) is not None
     ):
         return None
     return value.lower()
