@@ -157,6 +157,40 @@ def extract_primitive_manifest(
     return manifest
 
 
+def extract_delta_manifest(
+    left: str,
+    right: str,
+    *,
+    function: str,
+) -> DeltaManifest:
+    """Extract primitive deltas, then couple semantically linked bindings."""
+
+    from .bindings import build_binding_index, couple_semantic_atoms
+
+    primitive = extract_primitive_manifest(left, right, function=function)
+    atoms = couple_semantic_atoms(
+        build_binding_index(left),
+        build_binding_index(right),
+        primitive.atoms,
+    )
+    manifest = DeltaManifest(
+        schema_version=primitive.schema_version,
+        function=primitive.function,
+        left_hash=primitive.left_hash,
+        right_hash=primitive.right_hash,
+        atoms=atoms,
+    )
+    _validate_manifest(manifest)
+    full_mask = (1 << len(atoms)) - 1
+    if not _mask_is_legal(manifest, 0) or not _mask_is_legal(manifest, full_mask):
+        raise DeltaMinimizeError("endpoint-reproduction-failed")
+    if materialize_mask(left, manifest, 0) != left:
+        raise DeltaMinimizeError("endpoint-reproduction-failed", {"endpoint": "left"})
+    if materialize_mask(left, manifest, full_mask) != right:
+        raise DeltaMinimizeError("endpoint-reproduction-failed", {"endpoint": "right"})
+    return manifest
+
+
 def enumerate_legal_masks(
     manifest: DeltaManifest,
     *,
