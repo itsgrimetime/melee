@@ -370,10 +370,15 @@ path and entry type match one of these classes:
 
 Retained evidence always overrides `build/**`. Protected roots include
 `build/diagnostics`, `build/diagnostics/runs`, `build/runs`, and every
-manifest-owned or configured run/artifact root returned by the artifact
-lifecycle's canonical retained-root resolver. Retirement calls that shared
-resolver rather than duplicating its list; malformed manifests/configuration
-fail closed. Any ignored entry beneath a retained root yields
+manifest-owned run/artifact root discovered from the ignored inventory.
+Discovery examines every ignored regular file named `manifest.json` using a
+dedicated `worktree_doctor.retained_evidence` classifier: the JSON must carry
+the exact `melee-agent.mwcc-debug-artifact-run/v1` format, its run ID must match
+its direct parent, and the sibling `evidence/` and `transient/` layout must pass
+the artifact lifecycle's ownership rules. The artifact root is the validated
+run directory's parent, so caller-supplied custom roots require no separate
+registry. A manifest-like file with malformed format/layout remains unknown
+ignored data and fails closed. Any ignored entry beneath a retained root yields
 `retained-evidence-present`. The 30-day/10-GiB artifact-pruner contract alone
 owns removal of this evidence. Retirement cannot bypass it with an idle-age
 override and remains blocked until an explicit artifact-pruner apply clears
@@ -533,7 +538,7 @@ Behavior and integration tests must cover:
 - Strict NUL-safe ignored inventory parsing, including newlines, malformed or
   unterminated output, duplicate/traversing paths, and output/entry overflow.
 - Every disposable allowlist class, plus denial precedence for logs/dumps.
-- Default and manifest-configured retained diagnostic evidence roots producing
+- Default and manifest-discovered custom retained diagnostic evidence roots producing
   `retained-evidence-present` until the dedicated 30-day/10-GiB artifact
   pruner clears them, including a cross-feature fixture that becomes eligible
   only after that lifecycle runs.
