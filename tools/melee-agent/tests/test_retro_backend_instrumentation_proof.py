@@ -83,6 +83,22 @@ def minimal_instrumentation_proof() -> dict[str, object]:
     }
 
 
+def promoted_registry(
+    proof: dict[str, object], compiler_sha256: str = "a" * 64
+) -> dict[str, object]:
+    return {
+        "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs": [
+            {
+                "compiler_executable_sha256": compiler_sha256,
+                "proof_id": proof["proof_id"],
+                "proof_sha256": proof_sha256(proof),
+                "promoted": True,
+            }
+        ],
+    }
+
+
 def test_minimal_proof_has_valid_shape_and_stable_canonical_digest():
     proof = minimal_instrumentation_proof()
     reordered = {key: proof[key] for key in reversed(proof)}
@@ -94,26 +110,93 @@ def test_minimal_proof_has_valid_shape_and_stable_canonical_digest():
 
 def test_embedded_proof_requires_exact_promoted_registry_tuple():
     proof = minimal_instrumentation_proof()
-    digest = proof_sha256(proof)
-    table = {
-        "instrumentation_proofs": [
-            {
-                "compiler_executable_sha256": "a" * 64,
-                "proof_id": proof["proof_id"],
-                "proof_sha256": digest,
-                "promoted": True,
-            }
-        ]
-    }
+    table = promoted_registry(proof)
 
     assert validate_embedded_proof(proof, table, "a" * 64) == ()
     assert validate_embedded_proof(proof, table, "b" * 64) == (
+        "proof compiler digest does not match capture compiler digest",
         "instrumentation proof is not independently promoted for this compiler",
     )
 
     table["instrumentation_proofs"][0]["promoted"] = False
     assert validate_embedded_proof(proof, table, "a" * 64)[-1] == (
         "instrumentation proof is not independently promoted for this compiler"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate_table", "expected"),
+    [
+        (
+            lambda table: table.pop("instrumentation_proof_schema"),
+            "instrumentation_proof_schema must be mwcc-retro-lifetime-proof.v1",
+        ),
+        (
+            lambda table: table.update(
+                {"instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v2"}
+            ),
+            "instrumentation_proof_schema must be mwcc-retro-lifetime-proof.v1",
+        ),
+        (
+            lambda table: table["instrumentation_proofs"][0].update(
+                {"unexpected": True}
+            ),
+            "instrumentation proof registry row 0 has unexpected fields",
+        ),
+        (
+            lambda table: table["instrumentation_proofs"][0].update(
+                {"compiler_executable_sha256": []}
+            ),
+            "instrumentation proof registry row 0 compiler_executable_sha256",
+        ),
+    ],
+)
+def test_embedded_proof_rejects_invalid_registry_before_trust(mutate_table, expected):
+    proof = minimal_instrumentation_proof()
+    table = promoted_registry(proof)
+    mutate_table(table)
+
+    errors = validate_embedded_proof(proof, table, "a" * 64)
+
+    assert any(expected in error for error in errors)
+    assert "instrumentation proof is not independently promoted for this compiler" in errors
+
+
+@pytest.mark.parametrize(
+    "hostile_value",
+    [float("nan"), float("inf"), 1 << 100],
+)
+def test_embedded_proof_rejects_noncanonical_payload_without_raising(hostile_value):
+    proof = minimal_instrumentation_proof()
+    proof["initialization_address"] = hostile_value
+
+    errors = validate_embedded_proof(proof, promoted_registry(minimal_instrumentation_proof()), "a" * 64)
+
+    assert "instrumentation proof is not RFC 8785 canonicalizable" in errors
+    assert "instrumentation proof is not independently promoted for this compiler" in errors
+
+
+def test_embedded_proof_rejects_recursive_payload_without_raising():
+    proof = minimal_instrumentation_proof()
+    recursive: list[object] = []
+    recursive.append(recursive)
+    proof["operand_rules"] = recursive
+
+    errors = validate_embedded_proof(
+        proof, promoted_registry(minimal_instrumentation_proof()), "a" * 64
+    )
+
+    assert "instrumentation proof is not RFC 8785 canonicalizable" in errors
+    assert "instrumentation proof is not independently promoted for this compiler" in errors
+
+
+def test_embedded_proof_rejects_wrong_type_payload_and_registry_without_raising():
+    errors = validate_embedded_proof([], [], "a" * 64)
+
+    assert errors == (
+        "instrumentation proof must be object",
+        "instrumentation proof registry must be object",
+        "instrumentation proof is not independently promoted for this compiler",
     )
 
 
@@ -195,16 +278,7 @@ def test_malformed_enum_values_report_errors_without_crashing():
 
 def test_trusted_proof_from_trace_requires_one_function_and_returns_value_object():
     proof = minimal_instrumentation_proof()
-    table = {
-        "instrumentation_proofs": [
-            {
-                "compiler_executable_sha256": "a" * 64,
-                "proof_id": proof["proof_id"],
-                "proof_sha256": proof_sha256(proof),
-                "promoted": True,
-            }
-        ]
-    }
+    table = promoted_registry(proof)
     trace = {
         "functions": [
             {
@@ -227,3 +301,62 @@ def test_trusted_proof_from_trace_requires_one_function_and_returns_value_object
     )
     with pytest.raises(ValueError, match="expected one function 'missing', found 0"):
         trusted_proof_from_trace(trace, "missing", table)
+
+
+@pytest.mark.parametrize(
+    ("trace", "message"),
+    [
+        ({}, "trace functions must be list"),
+        ({"functions": {}}, "trace functions must be list"),
+        ({"functions": [None]}, "trace function 0 must be object"),
+        (
+            {"functions": [{"name": "target"}]},
+            "function 'target' object_bindings must be object",
+        ),
+        (
+            {"functions": [{"name": "target", "object_bindings": []}]},
+            "function 'target' object_bindings must be object",
+        ),
+        (
+            {
+                "functions": [
+                    {"name": "target", "object_bindings": {"lifetime_proof": []}}
+                ]
+            },
+            "function 'target' lifetime_proof must be object",
+        ),
+        (
+            {
+                "functions": [
+                    {
+                        "name": "target",
+                        "object_bindings": {
+                            "lifetime_proof": minimal_instrumentation_proof(),
+                            "capture_identity": [],
+                        },
+                    }
+                ]
+            },
+            "function 'target' capture_identity must be object",
+        ),
+        (
+            {
+                "functions": [
+                    {
+                        "name": "target",
+                        "object_bindings": {
+                            "lifetime_proof": minimal_instrumentation_proof(),
+                            "capture_identity": {},
+                        },
+                    }
+                ]
+            },
+            "function 'target' capture compiler digest must be 64 lowercase hex",
+        ),
+    ],
+)
+def test_trusted_proof_from_trace_controls_incomplete_and_wrong_type_evidence(
+    trace, message
+):
+    with pytest.raises(ValueError, match=message):
+        trusted_proof_from_trace(trace, "target", promoted_registry(minimal_instrumentation_proof()))

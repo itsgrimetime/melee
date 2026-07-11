@@ -30,6 +30,9 @@ def test_gc125n_struct_map_loader_reads_installed_registry():
 
 
 def test_instrumentation_registry_gate_rejects_malformed_or_promoted_guesses():
+    assert struct_map.validate_instrumentation_proof_registry([]) == [
+        "instrumentation proof registry must be object"
+    ]
     assert struct_map.validate_instrumentation_proof_registry({}) == [
         "instrumentation_proof_schema must be mwcc-retro-lifetime-proof.v1",
         "instrumentation_proofs must be list",

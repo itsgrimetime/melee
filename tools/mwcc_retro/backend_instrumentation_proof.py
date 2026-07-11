@@ -7,7 +7,10 @@ from dataclasses import dataclass
 
 import rfc8785
 
-from .struct_map import load_gc125n_struct_map
+from .struct_map import (
+    load_gc125n_struct_map,
+    validate_instrumentation_proof_registry,
+)
 
 PROOF_SCHEMA = "mwcc-retro-lifetime-proof.v1"
 PROOF_MODE = "allocation-generation"
@@ -98,7 +101,7 @@ def _is_lower_sha256(value: object) -> bool:
 def _unexpected_fields(
     value: Mapping[str, object], expected: frozenset[str], label: str
 ) -> str | None:
-    extra = sorted(set(value) - expected)
+    extra = sorted(set(value) - expected, key=repr)
     missing = sorted(expected - set(value))
     if not extra and not missing:
         return None
@@ -277,8 +280,10 @@ def _validate_operand_rules(
     return errors
 
 
-def validate_proof_shape(payload: Mapping[str, object]) -> tuple[str, ...]:
+def validate_proof_shape(payload: object) -> tuple[str, ...]:
     """Validate the closed, canonically ordered lifetime-proof schema."""
+    if not isinstance(payload, Mapping):
+        return ("instrumentation proof must be object",)
     errors: list[str] = []
     field_error = _unexpected_fields(payload, _PROOF_FIELDS, "unexpected proof")
     if field_error:
@@ -328,47 +333,95 @@ def validate_proof_shape(payload: Mapping[str, object]) -> tuple[str, ...]:
 
 
 def validate_embedded_proof(
-    payload: Mapping[str, object],
-    struct_map: Mapping[str, object],
+    payload: object,
+    struct_map: object,
     compiler_executable_sha256: str,
 ) -> tuple[str, ...]:
     """Validate proof shape and require its exact independently promoted tuple."""
     errors = list(validate_proof_shape(payload))
-    digest = proof_sha256(payload)
-    registry = struct_map.get("instrumentation_proofs", [])
-    trusted: set[tuple[object, object, object]] = set()
-    if isinstance(registry, list):
-        for row in registry:
-            if isinstance(row, Mapping) and row.get("promoted") is True:
-                trusted.add(
-                    (
-                        row.get("compiler_executable_sha256"),
-                        row.get("proof_id"),
-                        row.get("proof_sha256"),
-                    )
-                )
-    key = (compiler_executable_sha256, payload.get("proof_id"), digest)
-    if key not in trusted:
+    digest: str | None = None
+    if isinstance(payload, Mapping):
+        try:
+            digest = proof_sha256(payload)
+        except (
+            rfc8785.CanonicalizationError,
+            OverflowError,
+            RecursionError,
+            TypeError,
+            ValueError,
+        ):
+            errors.append("instrumentation proof is not RFC 8785 canonicalizable")
+
+    registry_errors = validate_instrumentation_proof_registry(struct_map)
+    errors.extend(registry_errors)
+
+    compiler_matches = isinstance(payload, Mapping) and (
+        payload.get("compiler_executable_sha256") == compiler_executable_sha256
+    )
+    if isinstance(payload, Mapping) and not compiler_matches:
+        errors.append("proof compiler digest does not match capture compiler digest")
+
+    trusted = False
+    if (
+        isinstance(payload, Mapping)
+        and isinstance(struct_map, Mapping)
+        and digest is not None
+        and not registry_errors
+        and compiler_matches
+    ):
+        key = (compiler_executable_sha256, payload.get("proof_id"), digest)
+        registry = struct_map["instrumentation_proofs"]
+        trusted = any(
+            row["promoted"] is True
+            and (
+                row["compiler_executable_sha256"],
+                row["proof_id"],
+                row["proof_sha256"],
+            )
+            == key
+            for row in registry
+        )
+    if not trusted:
         errors.append("instrumentation proof is not independently promoted for this compiler")
     return tuple(errors)
 
 
 def trusted_proof_from_trace(
-    trace: Mapping[str, object],
+    trace: object,
     function: str,
-    struct_map: Mapping[str, object] | None = None,
+    struct_map: object | None = None,
 ) -> InstrumentationProof:
     """Extract one function's embedded proof after independent trust validation."""
     table = load_gc125n_struct_map() if struct_map is None else struct_map
-    functions = trace["functions"]
-    matches = [row for row in functions if row["name"] == function]
+    if not isinstance(trace, Mapping):
+        raise ValueError("trace must be object")
+    functions = trace.get("functions")
+    if not isinstance(functions, list):
+        raise ValueError("trace functions must be list")
+    matches: list[Mapping[str, object]] = []
+    for index, row in enumerate(functions):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"trace function {index} must be object")
+        if not isinstance(row.get("name"), str):
+            raise ValueError(f"trace function {index} name must be string")
+        if row["name"] == function:
+            matches.append(row)
     if len(matches) != 1:
         raise ValueError(f"expected one function {function!r}, found {len(matches)}")
-    object_bindings = matches[0]["object_bindings"]
-    payload = object_bindings["lifetime_proof"]
-    compiler_sha256 = object_bindings["capture_identity"][
-        "compiler_executable_sha256"
-    ]
+    object_bindings = matches[0].get("object_bindings")
+    if not isinstance(object_bindings, Mapping):
+        raise ValueError(f"function {function!r} object_bindings must be object")
+    payload = object_bindings.get("lifetime_proof")
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"function {function!r} lifetime_proof must be object")
+    capture_identity = object_bindings.get("capture_identity")
+    if not isinstance(capture_identity, Mapping):
+        raise ValueError(f"function {function!r} capture_identity must be object")
+    compiler_sha256 = capture_identity.get("compiler_executable_sha256")
+    if not _is_lower_sha256(compiler_sha256):
+        raise ValueError(
+            f"function {function!r} capture compiler digest must be 64 lowercase hex"
+        )
     errors = validate_embedded_proof(payload, table, compiler_sha256)
     if errors:
         raise ValueError("; ".join(errors))

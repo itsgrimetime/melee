@@ -130,8 +130,10 @@ def _is_lower_sha256(value: object) -> bool:
     )
 
 
-def validate_instrumentation_proof_registry(table: Mapping[str, object]) -> list[str]:
+def validate_instrumentation_proof_registry(table: object) -> list[str]:
     """Validate the independent proof trust registry without promoting entries."""
+    if not isinstance(table, Mapping):
+        return ["instrumentation proof registry must be object"]
     errors: list[str] = []
     if table.get("instrumentation_proof_schema") != INSTRUMENTATION_PROOF_SCHEMA:
         errors.append(
