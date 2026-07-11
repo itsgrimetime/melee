@@ -36,6 +36,7 @@ _COALESCE_ENTER_RE = re.compile(
     r"^\[COALESCE\] enter class=(\d+) n_virtuals=(\d+)"
 )
 _COALESCE_MAPPING_RE = re.compile(r"^\s*(\d+)\s+->\s+(\d+)\s*$")
+_COALESCE_CAPPED_RE = re.compile(r"^\s*\.\.\.\(capped at \d+\)\s*$")
 _COALESCE_EXIT_RE = re.compile(
     r"^\[COALESCE\] exit class=(\d+) n_virtuals=(\d+) "
     r"distinct_roots=(\d+) forced=(\d+)"
@@ -132,6 +133,7 @@ class CoalesceSection:
     # (virt, old_root, new_root), emitted by the backend FORCE_COALESCE hook.
     distinct_roots: int | None = None
     forced_count: int = 0
+    truncated: bool = False
 
 
 @dataclass
@@ -252,6 +254,9 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
             m = _COALESCE_MAPPING_RE.match(stripped)
             if m:
                 current_coalesce.mappings.append((int(m.group(1)), int(m.group(2))))
+                continue
+            if _COALESCE_CAPPED_RE.match(stripped):
+                current_coalesce.truncated = True
                 continue
             m = _COALESCE_EXIT_RE.match(stripped)
             if m:

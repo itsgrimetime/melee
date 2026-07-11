@@ -1,4 +1,5 @@
 """Tests for mwcc_debug hook-event parsing used by debug inspect diff."""
+
 from __future__ import annotations
 
 import src.mwcc_debug.colorgraph_parser as colorgraph_parser
@@ -73,6 +74,24 @@ Starting function fn_test
     assert events[0].coalesce_sections[0].class_id == 0
     assert events[0].coalesce_sections[0].mappings == []
     assert events[0].coalesce_sections[0].distinct_roots == 4
+
+
+def test_parse_capped_natural_coalesce_mappings() -> None:
+    text = """
+Starting function fn_test
+
+[COALESCE] enter class=0 n_virtuals=400
+[COALESCE] natural mappings (virt -> root):
+  1 -> 0
+  ...(capped at 256)
+[COALESCE] exit class=0 n_virtuals=400 distinct_roots=100 forced=0
+""".strip()
+
+    events = parse_hook_events(text)
+
+    section = events[0].coalesce_sections[0]
+    assert section.mappings == [(1, 0)]
+    assert section.truncated is True
 
 
 def test_parse_coalesced_aliases_after_colorgraph_section() -> None:

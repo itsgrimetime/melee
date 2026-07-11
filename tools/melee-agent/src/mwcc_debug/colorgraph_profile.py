@@ -51,6 +51,10 @@ def _empty_profile(missing_roles: set[int] | frozenset[int]) -> ColorGraphProfil
     )
 
 
+def _has_coherent_iterations(rows: list) -> bool:
+    return sorted(row.iter_idx for row in rows) == list(range(len(rows)))
+
+
 def build_colorgraph_profile(
     pcdump: str,
     function: str,
@@ -83,10 +87,33 @@ def build_colorgraph_profile(
 
     role_to_igs: dict[int, set[int]] = defaultdict(set)
     for ig_idx, role in role_map.items():
+        if ig_idx < 0:
+            continue
         role_to_igs[role].add(ig_idx)
     ambiguous_roles = {role for role, igs in role_to_igs.items() if len(igs) != 1}
 
-    incomplete = not simplify or not coalesce
+    incomplete = simplify_section is None or coalesce_section is None
+    incomplete = incomplete or (
+        decision_section.result != 1
+        or decision_section.n_nodes < 0
+        or decision_section.n_nodes != len(decision_section.decisions)
+        or not _has_coherent_iterations(decision_section.decisions)
+        or any(
+            decision.n_interferers < 0 or decision.n_interferers != len(decision.interferers)
+            for decision in decision_section.decisions
+        )
+    )
+    if simplify_section is not None:
+        incomplete = incomplete or (
+            len(simplify_section.entries) != len(decision_section.decisions)
+            or not _has_coherent_iterations(simplify_section.entries)
+        )
+    if coalesce_section is not None:
+        incomplete = incomplete or (
+            coalesce_section.distinct_roots is None
+            or coalesce_section.forced_count != len(coalesce_section.forced_overrides)
+            or coalesce_section.truncated
+        )
     unmapped_evidence = False
     ambiguous_evidence_roles: set[int] = set()
 
@@ -109,16 +136,14 @@ def build_colorgraph_profile(
     interference_edges: set[tuple[int, int]] = set()
     for decision in sorted(decision_section.decisions, key=lambda item: item.iter_idx):
         role = stable_role(decision.ig_idx)
+        interferer_roles = [(other_ig, stable_role(other_ig)) for other_ig, _other_phys in decision.interferers]
         if decision.ig_idx < 0:
             continue
         if role is None:
-            for other_ig, _other_phys in decision.interferers:
-                stable_role(other_ig)
             continue
         assignment_rows[role].append(decision.assigned_reg)
         select_roles.append(role)
-        for other_ig, _other_phys in decision.interferers:
-            other_role = stable_role(other_ig)
+        for other_ig, other_role in interferer_roles:
             if other_ig < 0 or other_role is None:
                 continue
             if other_role == role:
@@ -146,7 +171,9 @@ def build_colorgraph_profile(
         incomplete = True
 
     coalesce_pairs: set[tuple[int, int]] = set()
+    conflicting_coalesce_roles: set[int] = set()
     if coalesce_section is not None:
+        roots_by_alias: dict[int, set[int]] = defaultdict(set)
         for alias_ig, root_ig in coalesce_section.mappings:
             alias_role = stable_role(alias_ig)
             root_role = stable_role(root_ig)
@@ -155,11 +182,22 @@ def build_colorgraph_profile(
             if alias_role == root_role:
                 incomplete = True
                 continue
+            roots_by_alias[alias_role].add(root_role)
             coalesce_pairs.add((alias_role, root_role))
+        conflicting_coalesce_roles = {alias_role for alias_role, roots in roots_by_alias.items() if len(roots) > 1}
 
     assignment_roles = set(assignment_rows)
-    missing_roles = set(required - assignment_roles)
+    expected_roles = required | assignment_roles
+    assignment_counts = {role: len(regs) for role, regs in assignment_rows.items()}
+    simplify_counts = Counter(simplify_roles)
+    select_counts = Counter(select_roles)
+    missing_roles = {
+        role
+        for role in expected_roles
+        if assignment_counts.get(role, 0) != 1 or simplify_counts[role] != 1 or select_counts[role] != 1
+    }
     missing_roles.update(ambiguous_evidence_roles)
+    missing_roles.update(conflicting_coalesce_roles)
     incomplete = incomplete or unmapped_evidence or bool(missing_roles)
 
     return ColorGraphProfile(
@@ -199,6 +237,16 @@ def colorgraph_distance(
     """Compare a candidate to absolute assignments and donor graph evidence."""
     if not candidate.complete or not donor.complete:
         raise ValueError("incomplete color graph profile cannot be compared")
+
+    required = set(desired_phys)
+    for profile in (candidate, donor):
+        assignment_counts = Counter(role for role, _physical in profile.assignments)
+        simplify_counts = Counter(profile.simplify_order)
+        select_counts = Counter(profile.select_order)
+        if any(
+            assignment_counts[role] != 1 or simplify_counts[role] != 1 or select_counts[role] != 1 for role in required
+        ):
+            raise ValueError("incomplete color graph profile cannot be compared")
 
     candidate_assignments = dict(candidate.assignments)
     return ColorDistance(
