@@ -16,6 +16,7 @@ from src.mwcc_debug.causal_diff.effects import (
 )
 from src.mwcc_debug.causal_diff.inference import (
     AnalysisStatus,
+    AppliedRule,
     VerdictStatus,
     build_report,
     exit_code_for_report,
@@ -126,12 +127,18 @@ class InferenceCase:
 def _case(
     *,
     heuristic_path: bool = False,
+    missing_owner_side: str | None = None,
+    owner_relation: str = "node-changed",
     two_owners: bool = False,
     no_shared_path: bool = False,
     missing_anchor: bool = False,
     truncated: bool = False,
     contradictory: bool = False,
     expert_asserted: bool = False,
+    role_confidence: Confidence | None = None,
+    allocator_delta_confidence: Confidence = Confidence.DERIVED_UNIQUE,
+    stack_delta_confidence: Confidence = Confidence.DERIVED_UNIQUE,
+    unrelated_stack_edge_delta: bool = False,
 ) -> InferenceCase:
     store = InMemoryEvidenceStore()
     left_allocator = _node(LEFT_COMPILE, "allocator-node", "allocator-left")
@@ -172,21 +179,39 @@ def _case(
                     left_stack,
                     confidence=(Confidence.HEURISTIC if heuristic_path else Confidence.DERIVED_UNIQUE),
                 ),
-                _edge(
-                    RIGHT_COMPILE,
-                    "materializes-as-stack-object",
-                    right_owner,
-                    right_stack,
+                *(
+                    ()
+                    if missing_owner_side == "right"
+                    else (
+                        _edge(
+                            RIGHT_COMPILE,
+                            "materializes-as-stack-object",
+                            right_owner,
+                            right_stack,
+                        ),
+                    )
                 ),
             ]
         )
+        if missing_owner_side == "left":
+            path_edges = [
+                edge
+                for edge in path_edges
+                if not (edge.source_id == left_owner.record_id and edge.target_id == left_stack.record_id)
+            ]
     store.add_edges(path_edges)
 
     role_comparison = _comparison(
         "role-corresponds-to",
         left_allocator,
         right_allocator,
-        confidence=(Confidence.HEURISTIC if expert_asserted else Confidence.DERIVED_UNIQUE),
+        confidence=(
+            role_confidence
+            if role_confidence is not None
+            else Confidence.HEURISTIC
+            if expert_asserted
+            else Confidence.DERIVED_UNIQUE
+        ),
         attributes={
             "operand_key": "def:0",
             "expert_assertion": expert_asserted,
@@ -213,6 +238,11 @@ def _case(
         direction="first-exact-second-mismatch",
         role_correspondence=role_pair,
     )
+    unrelated_left = _edge(LEFT_COMPILE, "lowers-to", left_owner, left_allocator)
+    unrelated_right = _edge(RIGHT_COMPILE, "lowers-to", right_owner, right_allocator)
+    stack_owner_record_ids = [left_stack.record_id, right_stack.record_id]
+    if unrelated_stack_edge_delta:
+        stack_owner_record_ids.extend((unrelated_left.record_id, unrelated_right.record_id))
     stack_effect = StackEffect(
         effect_id=stable_id(ANALYSIS_ID, "stack-effect", "row-home"),
         role_key="row-home",
@@ -222,7 +252,7 @@ def _case(
         second_label="paired",
         second_offset=16,
         direction="first-mismatch-second-exact",
-        owner_record_ids=(left_stack.record_id, right_stack.record_id),
+        owner_record_ids=tuple(stack_owner_record_ids),
     )
     pair = EffectPair(
         pair_id=stable_id(
@@ -235,11 +265,58 @@ def _case(
         allocator_exact_stack_mismatch_label="direct",
         allocator_mismatch_stack_exact_label="paired",
     )
+    if owner_relation == "node-added":
+        owner_comparison = ComparisonRecord.create(
+            analysis_id=ANALYSIS_ID,
+            relation_kind="node-added",
+            left_compile_id=LEFT_COMPILE,
+            left_record_id=None,
+            right_compile_id=RIGHT_COMPILE,
+            right_record_id=right_owner.record_id,
+            producer_confidence=Confidence.DERIVED_UNIQUE,
+            adapter_confidence=Confidence.DERIVED_UNIQUE,
+            provenance=_provenance(right_owner.record_id),
+            input_confidences=(right_owner.confidence,),
+            attributes={},
+        )
+    elif owner_relation == "node-removed":
+        owner_comparison = ComparisonRecord.create(
+            analysis_id=ANALYSIS_ID,
+            relation_kind="node-removed",
+            left_compile_id=LEFT_COMPILE,
+            left_record_id=left_owner.record_id,
+            right_compile_id=RIGHT_COMPILE,
+            right_record_id=None,
+            producer_confidence=Confidence.DERIVED_UNIQUE,
+            adapter_confidence=Confidence.DERIVED_UNIQUE,
+            provenance=_provenance(left_owner.record_id),
+            input_confidences=(left_owner.confidence,),
+            attributes={},
+        )
+    else:
+        owner_comparison = _comparison("node-changed", left_owner, right_owner)
+    stack_comparison = (
+        _comparison("edge-changed", unrelated_left, unrelated_right, ordinal=2)
+        if unrelated_stack_edge_delta
+        else _comparison(
+            "node-changed",
+            left_stack,
+            right_stack,
+            confidence=stack_delta_confidence,
+            ordinal=2,
+        )
+    )
     comparisons = [
         role_comparison,
-        _comparison("node-changed", left_owner, right_owner),
-        _comparison("node-changed", left_allocator, right_allocator, ordinal=1),
-        _comparison("node-changed", left_stack, right_stack, ordinal=2),
+        owner_comparison,
+        _comparison(
+            "node-changed",
+            left_allocator,
+            right_allocator,
+            confidence=allocator_delta_confidence,
+            ordinal=1,
+        ),
+        stack_comparison,
     ]
 
     if two_owners:
@@ -324,6 +401,75 @@ def test_normative_verdict_table(case: InferenceCase, expected: VerdictStatus) -
     assert infer_pair(case.pair, case.query, case.comparisons).status is expected
 
 
+@pytest.mark.parametrize(
+    "case",
+    (
+        _case(missing_owner_side="left"),
+        _case(missing_owner_side="right"),
+        _case(owner_relation="node-added"),
+        _case(owner_relation="node-removed"),
+    ),
+)
+def test_shared_owner_requires_changed_endpoints_and_complete_bilateral_paths(
+    case: InferenceCase,
+) -> None:
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert "gate-3-shared-owner" in verdict.failed_gates
+
+
+def test_proof_paths_include_owner_and_role_comparison_records() -> None:
+    case = proof_complete_unique()
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+    owner_comparison = next(
+        comparison
+        for comparison in case.comparisons
+        if comparison.relation_kind == "node-changed"
+        and case.query.get_node(comparison.left_record_id or "").kind == "source-expression"
+    )
+    proof_members = {record_id for path in verdict.proof_paths for record_id in path}
+
+    assert verdict.status is VerdictStatus.CAUSES
+    assert len(verdict.proof_paths) == 4
+    assert owner_comparison.record_id in proof_members
+    assert case.pair.allocator.role_correspondence.comparison.record_id in proof_members
+
+
+@pytest.mark.parametrize(
+    ("case", "failed_gate"),
+    (
+        (
+            _case(stack_delta_confidence=Confidence.HEURISTIC),
+            "gate-5-stack-delta",
+        ),
+        (
+            _case(allocator_delta_confidence=Confidence.HEURISTIC),
+            "gate-4-allocator-delta",
+        ),
+        (
+            _case(role_confidence=Confidence.HEURISTIC),
+            "gate-2-backend-role-identity",
+        ),
+        (_case(heuristic_path=True), "gate-7-proof-capable-path"),
+    ),
+)
+def test_complete_heuristic_evidence_caps_at_candidate(case: InferenceCase, failed_gate: str) -> None:
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.CANDIDATE_CAUSE
+    assert failed_gate in verdict.failed_gates
+
+
+def test_unrelated_edge_delta_cannot_satisfy_stack_delta_gate() -> None:
+    case = _case(unrelated_stack_edge_delta=True)
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert "gate-5-stack-delta" in verdict.failed_gates
+
+
 @pytest.mark.parametrize("case", (complete_no_shared_path(), truncated_path()))
 def test_every_verdict_states_operational_causality_scope(
     case: InferenceCase,
@@ -333,17 +479,22 @@ def test_every_verdict_states_operational_causality_scope(
     assert verdict.recommendation.startswith("Operational compiler-evidence scope:")
 
 
-def _graphs(case: InferenceCase, warnings: tuple[str, ...] = ()) -> tuple[object, object]:
+def _graphs(
+    case: InferenceCase,
+    warnings: tuple[str, ...] = (),
+    stores: tuple[EvidenceQuery, EvidenceQuery] | None = None,
+) -> tuple[object, object]:
     manifest = SimpleNamespace(function="fn_test")
+    left_store, right_store = stores or (case.query, case.query)
     return (
         SimpleNamespace(
             bundle=SimpleNamespace(label="direct", compile_id=LEFT_COMPILE, manifest=manifest),
-            store=case.query,
+            store=left_store,
             warnings=warnings,
         ),
         SimpleNamespace(
             bundle=SimpleNamespace(label="paired", compile_id=RIGHT_COMPILE, manifest=manifest),
-            store=case.query,
+            store=right_store,
             warnings=(),
         ),
     )
@@ -385,9 +536,17 @@ def test_all_abstentions_exit_three() -> None:
     assert exit_code_for_report(report) == 3
 
 
-def test_complete_graph_without_eligible_pairs_reports_no_difference() -> None:
+@pytest.mark.parametrize("collection", ("empty", "stack-only", "allocator-only"))
+def test_complete_graph_without_eligible_pairs_reports_no_difference(
+    collection: str,
+) -> None:
     case = proof_complete_unique()
-    effects = replace(case.effects, pairs=())
+    effects = DerivedEffects(
+        allocator_effects=(case.pair.allocator,) if collection == "allocator-only" else (),
+        stack_effects=(case.pair.stack,) if collection == "stack-only" else (),
+        pairs=(),
+        abstentions=(),
+    )
 
     report = build_report(_graphs(case), effects, case.comparisons)
 
@@ -426,11 +585,140 @@ def test_report_rendering_is_canonical_and_concise() -> None:
     )
     text = render_text(report)
     assert text.startswith("causal-diff - fn_test\nstatus: complete\nCAUSES")
-    assert "allocator:" in text
-    assert "stack:" in text
-    assert "shortest path:" in text
+    verdict = report.verdicts[0]
+    assert f"allocator: effect_id={case.pair.allocator.effect_id}" in text
+    assert f"stack: effect_id={case.pair.stack.effect_id}" in text
+    assert text.count("proof path ") == len(verdict.proof_paths)
+    for path in verdict.proof_paths:
+        assert " -> ".join(path) in text
     assert "melee-agent debug inspect" in text
     assert "full graph" not in text
+
+
+def test_canonical_json_sorts_nested_semantic_collections() -> None:
+    case = proof_complete_unique()
+    report = build_report(_graphs(case), case.effects, case.comparisons)
+    verdict = report.verdicts[0]
+    allocator_second = replace(
+        case.pair.allocator,
+        effect_id="0" * 64,
+        operand_key="use:9",
+    )
+    stack_second = replace(
+        case.pair.stack,
+        effect_id="1" * 64,
+        role_key="other-home",
+    )
+    pair_second = replace(
+        case.pair,
+        pair_id="2" * 64,
+        allocator=allocator_second,
+        stack=stack_second,
+    )
+    effects_ordered = DerivedEffects(
+        allocator_effects=tuple(
+            sorted(
+                (case.pair.allocator, allocator_second),
+                key=lambda item: item.effect_id,
+            )
+        ),
+        stack_effects=tuple(sorted((case.pair.stack, stack_second), key=lambda item: item.effect_id)),
+        pairs=tuple(sorted((case.pair, pair_second), key=lambda item: item.pair_id)),
+        abstentions=(),
+    )
+    paths_ordered = tuple(sorted(verdict.proof_paths))
+    normalized_verdict = replace(
+        verdict,
+        proof_paths=paths_ordered,
+        rejected_alternatives=("a", "z"),
+        failed_gates=("gate-a", "gate-z"),
+        follow_up_commands=("command-a", "command-z"),
+    )
+    rules = (
+        AppliedRule("rule-a", ("a", "z"), ("out-a",)),
+        AppliedRule("rule-z", ("b", "y"), ("out-z",)),
+    )
+    canonical = replace(
+        report,
+        effects=effects_ordered,
+        verdicts=(normalized_verdict,),
+        applied_rules=rules,
+    )
+    permuted = replace(
+        canonical,
+        effects=DerivedEffects(
+            tuple(reversed(effects_ordered.allocator_effects)),
+            tuple(reversed(effects_ordered.stack_effects)),
+            tuple(reversed(effects_ordered.pairs)),
+            (),
+        ),
+        verdicts=(
+            replace(
+                normalized_verdict,
+                proof_paths=tuple(reversed(paths_ordered)),
+                rejected_alternatives=("z", "a"),
+                failed_gates=("gate-z", "gate-a"),
+                follow_up_commands=("command-z", "command-a"),
+            ),
+        ),
+        applied_rules=tuple(
+            replace(
+                rule,
+                input_record_ids=tuple(reversed(rule.input_record_ids)),
+                output_record_ids=tuple(reversed(rule.output_record_ids)),
+            )
+            for rule in reversed(rules)
+        ),
+    )
+
+    assert render_json(canonical) == render_json(permuted)
+    assert render_text(canonical) == render_text(permuted)
+    payload = json.loads(render_json(permuted))
+    assert payload["verdicts"][0]["proof_paths"] == [list(path) for path in paths_ordered]
+
+
+def _compile_store(query: EvidenceQuery, compile_id: str) -> InMemoryEvidenceStore:
+    store = InMemoryEvidenceStore()
+    nodes = query.find_nodes(compile_id)
+    store.add_nodes(nodes)
+    store.add_edges(query.find_edges(compile_id))
+    return store
+
+
+def test_distinct_frontier_queries_render_identically() -> None:
+    case = proof_complete_unique()
+    shared = build_report(_graphs(case), case.effects, case.comparisons)
+    distinct_graphs = _graphs(
+        case,
+        stores=(
+            _compile_store(case.query, LEFT_COMPILE),
+            _compile_store(case.query, RIGHT_COMPILE),
+        ),
+    )
+
+    distinct = build_report(distinct_graphs, case.effects, case.comparisons)
+
+    assert render_json(distinct) == render_json(shared)
+
+
+def test_unrelated_compile_records_do_not_affect_owner_alternatives() -> None:
+    case = proof_complete_unique()
+    baseline = infer_pair(case.pair, case.query, case.comparisons)
+    third = _node("e" * 64, "source-expression", "pollution-third")
+    fourth = _node("f" * 64, "source-expression", "pollution-fourth")
+    assert isinstance(case.query, InMemoryEvidenceStore)
+    case.query.add_nodes((third, fourth))
+    polluted_comparison = _comparison("node-changed", third, fourth, ordinal=99)
+
+    polluted = infer_pair(
+        case.pair,
+        case.query,
+        (*case.comparisons, polluted_comparison),
+    )
+
+    assert polluted.status is baseline.status
+    assert polluted.proof_paths == baseline.proof_paths
+    assert polluted.rejected_alternatives == baseline.rejected_alternatives
 
 
 def test_invalid_evidence_metadata_forces_abstention() -> None:

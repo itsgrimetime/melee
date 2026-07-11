@@ -10,7 +10,7 @@ from typing import Iterable, Literal, Mapping
 from .canonical import canonical_bytes, stable_id
 from .effects import DerivedEffects, EffectPair
 from .graph import FrontierGraph
-from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode
+from .models import AdapterResult, ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode
 from .store import EvidenceQuery
 
 _PATH_EDGE_KINDS = frozenset(
@@ -129,6 +129,153 @@ class _OwnerAlternative:
     proof_capable: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _OwnerEnumeration:
+    alternatives: tuple[_OwnerAlternative, ...]
+    rejected: tuple[str, ...]
+    incomplete: bool
+
+
+class _ScopedEvidenceQuery:
+    """Read-only union restricted to the two frontier compile scopes."""
+
+    def __init__(
+        self,
+        queries: Iterable[EvidenceQuery],
+        compile_ids: frozenset[str],
+    ) -> None:
+        self._queries = tuple({id(query): query for query in queries}.values())
+        self._compile_ids = compile_ids
+
+    def get_node(self, record_id: str) -> EvidenceNode | None:
+        for query in self._queries:
+            node = query.get_node(record_id)
+            if node is not None and node.compile_id in self._compile_ids:
+                return node
+        return None
+
+    def get_edge(self, record_id: str) -> EvidenceEdge | None:
+        for query in self._queries:
+            edge = query.get_edge(record_id)
+            if edge is not None and edge.compile_id in self._compile_ids:
+                return edge
+        return None
+
+    def neighbors(
+        self,
+        record_id: str,
+        edge_kinds: frozenset[str] | None = None,
+        direction: Literal["in", "out", "both"] = "both",
+    ) -> tuple[EvidenceEdge, ...]:
+        records = {
+            edge.record_id: edge
+            for query in self._queries
+            for edge in query.neighbors(record_id, edge_kinds, direction)
+            if edge.compile_id in self._compile_ids
+            and self.get_node(edge.source_id) is not None
+            and self.get_node(edge.target_id) is not None
+        }
+        return tuple(
+            sorted(
+                records.values(),
+                key=lambda edge: (
+                    edge.kind,
+                    edge.source_id,
+                    edge.target_id,
+                    edge.record_id,
+                ),
+            )
+        )
+
+    def find_nodes(
+        self,
+        compile_id: str,
+        node_kind: str | None = None,
+        role_key: str | None = None,
+    ) -> tuple[EvidenceNode, ...]:
+        if compile_id not in self._compile_ids:
+            return ()
+        records = {
+            node.record_id: node
+            for query in self._queries
+            for node in query.find_nodes(compile_id, node_kind, role_key)
+        }
+        return tuple(
+            sorted(
+                records.values(),
+                key=lambda node: (node.kind, node.role_key or "", node.record_id),
+            )
+        )
+
+    def find_edges(
+        self,
+        compile_id: str,
+        edge_kind: str | None = None,
+        endpoint: str | None = None,
+    ) -> tuple[EvidenceEdge, ...]:
+        if compile_id not in self._compile_ids:
+            return ()
+        records = {
+            edge.record_id: edge
+            for query in self._queries
+            for edge in query.find_edges(compile_id, edge_kind, endpoint)
+            if self.get_node(edge.source_id) is not None and self.get_node(edge.target_id) is not None
+        }
+        return tuple(
+            sorted(
+                records.values(),
+                key=lambda edge: (
+                    edge.kind,
+                    edge.source_id,
+                    edge.target_id,
+                    edge.record_id,
+                ),
+            )
+        )
+
+    def find_comparisons(
+        self,
+        analysis_id: str,
+        relation_kind: str | None = None,
+        endpoint: str | None = None,
+    ) -> tuple[ComparisonRecord, ...]:
+        records = {
+            comparison.record_id: comparison
+            for query in self._queries
+            for comparison in query.find_comparisons(analysis_id, relation_kind, endpoint)
+            if comparison.left_compile_id in self._compile_ids and comparison.right_compile_id in self._compile_ids
+        }
+        return tuple(sorted(records.values(), key=lambda item: item.record_id))
+
+    def subgraph(
+        self,
+        roots: Iterable[str],
+        edge_kinds: frozenset[str],
+        max_depth: int,
+    ) -> AdapterResult:
+        if max_depth < 0:
+            raise ValueError("max_depth must be non-negative")
+        included = {record_id for record_id in roots if self.get_node(record_id)}
+        edge_ids: set[str] = set()
+        frontier = sorted(included)
+        for _depth in range(max_depth):
+            next_frontier: set[str] = set()
+            for record_id in frontier:
+                for edge in self.neighbors(record_id, edge_kinds):
+                    edge_ids.add(edge.record_id)
+                    other = edge.target_id if edge.source_id == record_id else edge.source_id
+                    if other not in included:
+                        included.add(other)
+                        next_frontier.add(other)
+            frontier = sorted(next_frontier)
+            if not frontier:
+                break
+        return AdapterResult(
+            nodes=tuple(node for record_id in sorted(included) if (node := self.get_node(record_id)) is not None),
+            edges=tuple(edge for record_id in sorted(edge_ids) if (edge := self.get_edge(record_id)) is not None),
+        )
+
+
 def _record_for_id(query: EvidenceQuery, record_id: str) -> EvidenceNode | EvidenceEdge | None:
     return query.get_node(record_id) or query.get_edge(record_id)
 
@@ -207,62 +354,79 @@ def _evidence_integrity_failure(records: Iterable[object]) -> bool:
     )
 
 
-def _comparison_touches(
-    comparison: ComparisonRecord,
+def _bilateral_node_deltas(
+    comparisons: tuple[ComparisonRecord, ...],
     record_ids: frozenset[str],
-) -> bool:
-    return bool(
-        record_ids
-        & {record_id for record_id in (comparison.left_record_id, comparison.right_record_id) if record_id is not None}
+) -> tuple[ComparisonRecord, ...]:
+    return tuple(
+        comparison
+        for comparison in comparisons
+        if comparison.relation_kind == "node-changed"
+        and comparison.left_record_id is not None
+        and comparison.right_record_id is not None
+        and frozenset({comparison.left_record_id, comparison.right_record_id}) == record_ids
     )
 
 
-def _material_owner_comparisons(
-    query: EvidenceQuery,
-    comparisons: tuple[ComparisonRecord, ...],
-) -> tuple[tuple[ComparisonRecord, tuple[EvidenceNode, ...]], ...]:
-    owners: list[tuple[ComparisonRecord, tuple[EvidenceNode, ...]]] = []
-    for comparison in comparisons:
-        if comparison.relation_kind not in _DELTA_RELATIONS:
-            continue
-        endpoints = tuple(
-            node
-            for record_id in (comparison.left_record_id, comparison.right_record_id)
-            if record_id is not None and (node := query.get_node(record_id)) is not None and node.kind in _OWNER_KINDS
-        )
-        if endpoints:
-            owners.append((comparison, tuple(sorted(endpoints, key=lambda node: node.record_id))))
-    return tuple(sorted(owners, key=lambda item: item[0].record_id))
+def _stack_nodes_by_compile(pair: EffectPair, query: EvidenceQuery) -> Mapping[str, EvidenceNode]:
+    expected_compile_ids = {
+        pair.allocator.role_correspondence.left.compile_id,
+        pair.allocator.role_correspondence.right.compile_id,
+    }
+    candidates: dict[str, list[EvidenceNode]] = {}
+    for record_id in pair.stack.owner_record_ids:
+        node = query.get_node(record_id)
+        if node is not None and node.kind == "stack-object" and node.compile_id in expected_compile_ids:
+            candidates.setdefault(node.compile_id, []).append(node)
+    return MappingProxyType({compile_id: nodes[0] for compile_id, nodes in candidates.items() if len(nodes) == 1})
 
 
 def _owner_alternatives(
     pair: EffectPair,
     query: EvidenceQuery,
     comparisons: tuple[ComparisonRecord, ...],
-) -> tuple[tuple[_OwnerAlternative, ...], tuple[str, ...]]:
+) -> _OwnerEnumeration:
     allocator_by_compile = {
         pair.allocator.role_correspondence.left.compile_id: pair.allocator.role_correspondence.left,
         pair.allocator.role_correspondence.right.compile_id: pair.allocator.role_correspondence.right,
     }
-    stack_by_compile: dict[str, list[EvidenceNode]] = {}
-    for record_id in pair.stack.owner_record_ids:
-        node = query.get_node(record_id)
-        if node is not None and node.kind == "stack-object":
-            stack_by_compile.setdefault(node.compile_id, []).append(node)
+    expected_compile_ids = frozenset(allocator_by_compile)
+    stack_by_compile = _stack_nodes_by_compile(pair, query)
 
     complete: list[_OwnerAlternative] = []
     rejected: list[str] = []
-    for comparison, endpoints in _material_owner_comparisons(query, comparisons):
+    incomplete = False
+    for comparison in comparisons:
+        if comparison.relation_kind not in _DELTA_RELATIONS:
+            continue
+        endpoints = tuple(
+            node
+            for record_id in (
+                comparison.left_record_id,
+                comparison.right_record_id,
+            )
+            if record_id is not None and (node := query.get_node(record_id)) is not None and node.kind in _OWNER_KINDS
+        )
+        if not endpoints:
+            continue
+        if (
+            comparison.relation_kind != "node-changed"
+            or comparison.left_record_id is None
+            or comparison.right_record_id is None
+            or {node.compile_id for node in endpoints} != expected_compile_ids
+            or len(endpoints) != 2
+        ):
+            incomplete = True
+            rejected.append(comparison.record_id)
+            continue
         endpoint_alternatives: list[_OwnerAlternative] = []
         for owner in endpoints:
             allocator = allocator_by_compile.get(owner.compile_id)
-            stack_targets = tuple(sorted(stack_by_compile.get(owner.compile_id, ()), key=lambda node: node.record_id))
-            if allocator is None or not stack_targets:
+            stack_target = stack_by_compile.get(owner.compile_id)
+            if allocator is None or stack_target is None:
                 continue
             allocator_paths = _all_simple_paths(query, owner.record_id, allocator.record_id)
-            stack_paths = tuple(
-                path for target in stack_targets for path in _all_simple_paths(query, owner.record_id, target.record_id)
-            )
+            stack_paths = _all_simple_paths(query, owner.record_id, stack_target.record_id)
             if not allocator_paths or not stack_paths:
                 continue
             all_paths = tuple(sorted((*allocator_paths, *stack_paths), key=lambda path: (len(path), path)))
@@ -277,7 +441,7 @@ def _owner_alternatives(
                     ),
                 )
             )
-        if endpoint_alternatives:
+        if len(endpoint_alternatives) == 2:
             preferred_compile = next(
                 (
                     node.compile_id
@@ -315,19 +479,34 @@ def _owner_alternatives(
                     proof_capable=all(alternative.proof_capable for alternative in endpoint_alternatives),
                 )
             )
+        elif endpoint_alternatives:
+            incomplete = True
+            rejected.append(comparison.record_id)
         else:
             rejected.append(comparison.record_id)
-    return tuple(complete), tuple(sorted(set(rejected)))
+    return _OwnerEnumeration(
+        alternatives=tuple(complete),
+        rejected=tuple(sorted(set(rejected))),
+        incomplete=incomplete,
+    )
 
 
-def _shortest_paths(alternatives: tuple[_OwnerAlternative, ...]) -> tuple[tuple[str, ...], ...]:
+def _shortest_paths(
+    alternatives: tuple[_OwnerAlternative, ...],
+    role_comparison_id: str,
+) -> tuple[tuple[str, ...], ...]:
     selected: list[tuple[str, ...]] = []
     for alternative in alternatives:
         endpoints: dict[str, list[tuple[str, ...]]] = {}
         for path in alternative.paths:
             endpoints.setdefault(path[-1], []).append(path)
         selected.extend(
-            min(paths, key=lambda path: (len(path), path)) for _endpoint, paths in sorted(endpoints.items())
+            (
+                alternative.comparison.record_id,
+                role_comparison_id,
+                *min(paths, key=lambda path: (len(path), path)),
+            )
+            for _endpoint, paths in sorted(endpoints.items())
         )
     return tuple(sorted(set(selected), key=lambda path: (len(path), path)))
 
@@ -422,11 +601,23 @@ def infer_pair(
 ) -> CausalVerdict:
     """Apply the normative strict-inference table to one eligible effect pair."""
 
-    records = tuple(sorted(comparisons, key=lambda record: record.record_id))
     role = pair.allocator.role_correspondence
     role_comparison = role.comparison
+    compile_ids = frozenset({role.left.compile_id, role.right.compile_id})
+    query = _ScopedEvidenceQuery((query,), compile_ids)
+    records = tuple(
+        sorted(
+            (
+                comparison
+                for comparison in comparisons
+                if comparison.left_compile_id in compile_ids and comparison.right_compile_id in compile_ids
+            ),
+            key=lambda record: record.record_id,
+        )
+    )
     allocator_ids = frozenset({role.left.record_id, role.right.record_id})
-    stack_ids = frozenset(pair.stack.owner_record_ids)
+    stack_nodes_by_compile = _stack_nodes_by_compile(pair, query)
+    stack_ids = frozenset(node.record_id for node in stack_nodes_by_compile.values())
 
     identity_records = (query.get_node(role.left.record_id), query.get_node(role.right.record_id))
     identity_complete = all(record is not None for record in identity_records)
@@ -437,24 +628,14 @@ def infer_pair(
     )
     role_proof_capable = role_comparison.confidence in _PROOF_CONFIDENCES
     role_registered = any(comparison.record_id == role_comparison.record_id for comparison in records)
-    allocator_deltas = tuple(
-        comparison
-        for comparison in records
-        if comparison.relation_kind in _DELTA_RELATIONS and _comparison_touches(comparison, allocator_ids)
-    )
-    stack_deltas = tuple(
-        comparison
-        for comparison in records
-        if comparison.relation_kind in _DELTA_RELATIONS and _comparison_touches(comparison, stack_ids)
-    )
-    allocator_delta_proven = bool(allocator_deltas) and all(
-        comparison.confidence in _PROOF_CONFIDENCES for comparison in allocator_deltas
-    )
-    stack_delta_proven = bool(stack_deltas) and all(
-        comparison.confidence in _PROOF_CONFIDENCES for comparison in stack_deltas
-    )
+    allocator_deltas = _bilateral_node_deltas(records, allocator_ids)
+    stack_deltas = _bilateral_node_deltas(records, stack_ids)
+    allocator_delta_proven = all(comparison.confidence in _PROOF_CONFIDENCES for comparison in allocator_deltas)
+    stack_delta_proven = all(comparison.confidence in _PROOF_CONFIDENCES for comparison in stack_deltas)
 
-    alternatives, rejected = _owner_alternatives(pair, query, records)
+    owner_enumeration = _owner_alternatives(pair, query, records)
+    alternatives = owner_enumeration.alternatives
+    rejected = owner_enumeration.rejected
     comparison_endpoints = (
         _record_for_id(query, record_id)
         for comparison in records
@@ -491,7 +672,7 @@ def infer_pair(
             rejected_alternatives=rejected,
             failed_gates=(_GATE_1,),
         )
-    if not role_registered or (not role_proof_capable and not expert_asserted):
+    if not role_registered:
         return _verdict(
             pair,
             status=VerdictStatus.ABSTAIN,
@@ -502,11 +683,14 @@ def infer_pair(
         )
     failed_required = tuple(
         gate
-        for passed, gate in (
-            (allocator_delta_proven, _GATE_4),
-            (stack_delta_proven, _GATE_5),
+        for present, gate in (
+            (bool(allocator_deltas), _GATE_4),
+            (
+                len(stack_nodes_by_compile) == 2 and bool(stack_deltas),
+                _GATE_5,
+            ),
         )
-        if not passed
+        if not present
     )
     if failed_required:
         return _verdict(
@@ -516,6 +700,15 @@ def infer_pair(
             proof_paths=(),
             rejected_alternatives=rejected,
             failed_gates=failed_required,
+        )
+    if owner_enumeration.incomplete:
+        return _verdict(
+            pair,
+            status=VerdictStatus.ABSTAIN,
+            cause=None,
+            proof_paths=(),
+            rejected_alternatives=rejected,
+            failed_gates=(_GATE_3,),
         )
     if not alternatives:
         return _verdict(
@@ -527,9 +720,16 @@ def infer_pair(
             failed_gates=(),
         )
 
-    proof_paths = _shortest_paths(alternatives)
+    proof_paths = _shortest_paths(alternatives, role_comparison.record_id)
     all_proof_capable = all(alternative.proof_capable for alternative in alternatives)
-    if len(alternatives) == 1 and all_proof_capable and role_proof_capable and not expert_asserted:
+    if (
+        len(alternatives) == 1
+        and all_proof_capable
+        and role_proof_capable
+        and allocator_delta_proven
+        and stack_delta_proven
+        and not expert_asserted
+    ):
         return _verdict(
             pair,
             status=VerdictStatus.CAUSES,
@@ -542,6 +742,12 @@ def infer_pair(
         gate
         for failed, gate in (
             (expert_asserted or not role_proof_capable, _GATE_2),
+            (
+                any(alternative.comparison.confidence not in _PROOF_CONFIDENCES for alternative in alternatives),
+                _GATE_3,
+            ),
+            (not allocator_delta_proven, _GATE_4),
+            (not stack_delta_proven, _GATE_5),
             (len(alternatives) > 1, _GATE_6),
             (not all_proof_capable, _GATE_7),
         )
@@ -633,10 +839,10 @@ def build_report(
     functions = {str(graph.bundle.manifest.function) for graph in graph_pair}
     if len(functions) != 1:
         raise ValueError("causal report frontiers must name one function")
-    stores = {id(graph.store): graph.store for graph in graph_pair}
-    if len(stores) != 1:
-        raise ValueError("causal report frontiers must share one evidence query")
-    query = next(iter(stores.values()))
+    query = _ScopedEvidenceQuery(
+        (graph.store for graph in graph_pair),
+        frozenset(str(graph.bundle.compile_id) for graph in graph_pair),
+    )
     comparison_records = tuple(sorted(comparisons, key=lambda record: record.record_id))
     fallback_analysis_id = stable_id(
         "causal-analysis",
@@ -666,7 +872,7 @@ def build_report(
     )
     verdicts = (
         (_no_eligible_pair_verdict(analysis_id, effects),)
-        if not inferred_verdicts and effects.allocator_effects and not effects.abstentions
+        if not inferred_verdicts and not effects.abstentions
         else inferred_verdicts
     )
     missing_evidence = tuple(
@@ -740,9 +946,33 @@ def report_to_canonical_dict(report: CausalDiffReport) -> dict[str, object]:
 
     payload = _canonical_value(report)
     assert isinstance(payload, dict)
+    effects = payload["effects"]
+    assert isinstance(effects, dict)
+    effects["allocator_effects"] = sorted(effects["allocator_effects"], key=lambda item: item["effect_id"])
+    effects["stack_effects"] = sorted(effects["stack_effects"], key=lambda item: item["effect_id"])
+    effects["pairs"] = sorted(effects["pairs"], key=lambda item: item["pair_id"])
+    effects["abstentions"] = sorted(
+        effects["abstentions"],
+        key=lambda item: (item["operand_key"], item["reason"]),
+    )
     payload["comparisons"] = sorted(payload["comparisons"], key=lambda item: item["record_id"])
     payload["verdicts"] = sorted(payload["verdicts"], key=lambda item: (item["pair_id"], item["verdict_id"]))
-    payload["applied_rules"] = sorted(payload["applied_rules"], key=lambda item: item["rule_id"])
+    for verdict in payload["verdicts"]:
+        verdict["proof_paths"] = sorted(verdict["proof_paths"])
+        verdict["rejected_alternatives"] = sorted(verdict["rejected_alternatives"])
+        verdict["failed_gates"] = sorted(verdict["failed_gates"])
+        verdict["follow_up_commands"] = sorted(verdict["follow_up_commands"])
+    for rule in payload["applied_rules"]:
+        rule["input_record_ids"] = sorted(rule["input_record_ids"])
+        rule["output_record_ids"] = sorted(rule["output_record_ids"])
+    payload["applied_rules"] = sorted(
+        payload["applied_rules"],
+        key=lambda item: (
+            item["rule_id"],
+            item["input_record_ids"],
+            item["output_record_ids"],
+        ),
+    )
     payload["missing_evidence"] = sorted(payload["missing_evidence"])
     payload["warnings"] = sorted(payload["warnings"])
     return payload

@@ -13,7 +13,11 @@ def render_json(report: CausalDiffReport) -> str:
 
 
 def _delta_text(delta: Mapping[str, object]) -> str:
-    ordered = ((key, delta[key]) for key in sorted(delta) if key not in {"effect_id"})
+    ordered_keys = (
+        *(key for key in ("effect_id", "effect_ids") if key in delta),
+        *(key for key in sorted(delta) if key not in {"effect_id", "effect_ids"}),
+    )
+    ordered = ((key, delta[key]) for key in ordered_keys)
     return ", ".join(f"{key}={value}" for key, value in ordered)
 
 
@@ -22,10 +26,15 @@ def render_verdict_lines(verdict: CausalVerdict) -> list[str]:
     cause = "none" if verdict.cause is None else verdict.cause.record_id
     lines = [f"{label}: {verdict.pair_id}", f"  cause: {cause}"]
     if verdict.proof_paths:
-        shortest = min(verdict.proof_paths, key=lambda path: (len(path), path))
-        lines.append("  shortest path: " + " -> ".join(shortest))
+        lines.extend(
+            f"  proof path {index}: " + " -> ".join(path)
+            for index, path in enumerate(
+                sorted(verdict.proof_paths),
+                start=1,
+            )
+        )
     else:
-        lines.append("  shortest path: none")
+        lines.append("  proof paths: none")
     lines.extend(
         (
             f"  allocator: {_delta_text(verdict.allocator_delta)}",
@@ -33,12 +42,12 @@ def render_verdict_lines(verdict: CausalVerdict) -> list[str]:
         )
     )
     if verdict.failed_gates:
-        lines.append("  failed gates: " + ", ".join(verdict.failed_gates))
+        lines.append("  failed gates: " + ", ".join(sorted(verdict.failed_gates)))
     if verdict.rejected_alternatives:
-        lines.append("  rejected alternatives: " + ", ".join(verdict.rejected_alternatives))
+        lines.append("  rejected alternatives: " + ", ".join(sorted(verdict.rejected_alternatives)))
     lines.append(f"  recommendation: {verdict.recommendation}")
     lines.append("  commands:")
-    lines.extend(f"    {command}" for command in verdict.follow_up_commands)
+    lines.extend(f"    {command}" for command in sorted(verdict.follow_up_commands))
     return lines
 
 
