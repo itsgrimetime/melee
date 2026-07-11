@@ -223,6 +223,14 @@ mktemp -d $(shell_quote "${REMOTE_DIR}/build/mwcc-inspect-${TU_BASE}.XXXXXX")
 exit
 REMOTE_PREP
 )
+  if [[ -z "${REMOTE_TMP}" ]]; then
+    echo "[mwcc-inspect] remote candidate tempdir was empty after mktemp" >&2
+    exit 1
+  fi
+  if [[ "${REMOTE_TMP}" != /* ]]; then
+    echo "[mwcc-inspect] remote candidate tempdir was not absolute: ${REMOTE_TMP}" >&2
+    exit 1
+  fi
   REMOTE_SOURCE="${REMOTE_TMP}/${REL_SRC}"
   remote_bash <<REMOTE_MKDIR
 set -euo pipefail
