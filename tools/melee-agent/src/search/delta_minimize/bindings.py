@@ -18,6 +18,13 @@ class CallBinding:
     call_span: tuple[int, int]
     argument_span: tuple[int, int]
     argument_texts: tuple[str, ...]
+    callee_name_span: tuple[int, int] | None = None
+
+
+@dataclass(frozen=True)
+class DeclarationSignature:
+    shared_prefix_span: tuple[int, int]
+    declarator_span: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,9 @@ class FunctionBinding:
     declaration_parameter_spans: tuple[tuple[int, int], ...] = ()
     definition_signature_span: tuple[int, int] | None = None
     declaration_signature_spans: tuple[tuple[int, int], ...] = ()
+    definition_name_span: tuple[int, int] | None = None
+    declaration_name_spans: tuple[tuple[int, int], ...] = ()
+    declaration_signatures: tuple[DeclarationSignature, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -190,6 +200,7 @@ def build_binding_index(source: str) -> BindingIndex:
                 argument_texts=tuple(
                     node_text(source_bytes, argument).strip() for argument in arguments.named_children
                 ),
+                callee_name_span=_span(callee_node, to_char),
             )
         )
         supported_callee_spans.add((callee_node.start_byte, callee_node.end_byte))
@@ -228,7 +239,7 @@ def build_binding_index(source: str) -> BindingIndex:
         )
 
     functions: dict[str, FunctionBinding] = {}
-    for name, (definition, _, parameters, _) in sorted(
+    for name, (definition, definition_name, parameters, _) in sorted(
         unique_nodes.items(),
         key=lambda item: item[1][0].start_byte,
     ):
@@ -251,8 +262,12 @@ def build_binding_index(source: str) -> BindingIndex:
                 for _, _, declaration_parameters, _ in declaration_nodes.get(name, ())
             ),
             definition_signature_span=_definition_signature_span(definition, to_char),
-            declaration_signature_spans=tuple(
-                _declaration_signature_span(declaration, declaration_declarator, to_char)
+            definition_name_span=_span(definition_name, to_char),
+            declaration_name_spans=tuple(
+                _span(declaration_name, to_char) for _, declaration_name, _, _ in declaration_nodes.get(name, ())
+            ),
+            declaration_signatures=tuple(
+                _declaration_signature(declaration, declaration_declarator, to_char)
                 for declaration, _, _, declaration_declarator in declaration_nodes.get(name, ())
             ),
         )
@@ -441,8 +456,19 @@ def _signature_change_is_parameter_only(atoms, left: FunctionBinding, right: Fun
 
 def _signature_spans(function: FunctionBinding) -> tuple[tuple[int, int], ...]:
     definition = function.definition_signature_span or function.parameter_span
-    declarations = function.declaration_signature_spans or function.declaration_parameter_spans
+    declarations = tuple(span for signature in _declaration_signature_parts(function) for span in signature)
     return (definition, *declarations)
+
+
+def _declaration_signature_parts(
+    function: FunctionBinding,
+) -> tuple[tuple[tuple[int, int], ...], ...]:
+    if function.declaration_signatures:
+        return tuple(
+            (signature.shared_prefix_span, signature.declarator_span) for signature in function.declaration_signatures
+        )
+    spans = function.declaration_signature_spans or function.declaration_parameter_spans
+    return tuple((span,) for span in spans)
 
 
 def _couple_signature_change(
@@ -467,27 +493,33 @@ def _couple_signature_change(
             "function_signature",
         )
     )
-    left_declaration_signatures = left.declaration_signature_spans or left.declaration_parameter_spans
-    right_declaration_signatures = right.declaration_signature_spans or right.declaration_parameter_spans
+    left_declaration_signatures = _declaration_signature_parts(left)
+    right_declaration_signatures = _declaration_signature_parts(right)
     if len(left_declaration_signatures) != len(right_declaration_signatures):
         raise DeltaMinimizeError(
             "ambiguous-delta-coupling",
             {"symbol": left.name, "declaration_pairing": "count-mismatch"},
         )
-    for left_span, right_span in zip(
+    for left_signature, right_signature in zip(
         left_declaration_signatures,
         right_declaration_signatures,
         strict=True,
     ):
-        selected.extend(
-            _atoms_for_span(
-                atoms,
-                left_span,
-                right_span,
-                reclassified,
-                "function_signature",
+        if len(left_signature) != len(right_signature):
+            raise DeltaMinimizeError(
+                "ambiguous-delta-coupling",
+                {"symbol": left.name, "declaration_pairing": "shape-mismatch"},
             )
-        )
+        for left_span, right_span in zip(left_signature, right_signature, strict=True):
+            selected.extend(
+                _atoms_for_span(
+                    atoms,
+                    left_span,
+                    right_span,
+                    reclassified,
+                    "function_signature",
+                )
+            )
     selected.extend(_atoms_for_span(atoms, left.parameter_span, right.parameter_span, reclassified, "parameter_list"))
     if len(left.declaration_parameter_spans) != len(right.declaration_parameter_spans):
         raise DeltaMinimizeError(
@@ -533,38 +565,45 @@ def _couple_rename(
             "ambiguous-delta-coupling",
             {"symbols": [left.name, right.name]},
         )
-    left_name_span = (left.definition_span[0], left.parameter_span[0])
-    right_name_span = (right.definition_span[0], right.parameter_span[0])
+    left_name_span = left.definition_name_span or (left.definition_span[0], left.parameter_span[0])
+    right_name_span = right.definition_name_span or (right.definition_span[0], right.parameter_span[0])
     selected = list(_atoms_for_span(atoms, left_name_span, right_name_span))
-    if len(left.declaration_spans) != len(right.declaration_spans):
+    left_declaration_names = _declaration_name_spans(left)
+    right_declaration_names = _declaration_name_spans(right)
+    if len(left_declaration_names) != len(right_declaration_names):
         raise DeltaMinimizeError(
             "ambiguous-delta-coupling",
             {"symbols": [left.name, right.name], "declaration_pairing": "count-mismatch"},
         )
-    for left_span, right_span, left_parameters, right_parameters in zip(
-        left.declaration_spans,
-        right.declaration_spans,
-        left.declaration_parameter_spans,
-        right.declaration_parameter_spans,
+    for left_span, right_span in zip(
+        left_declaration_names,
+        right_declaration_names,
         strict=True,
     ):
-        selected.extend(
-            _atoms_for_span(
-                atoms,
-                (left_span[0], left_parameters[0]),
-                (right_span[0], right_parameters[0]),
-            )
-        )
+        selected.extend(_atoms_for_span(atoms, left_span, right_span))
     for left_call, right_call in zip(left.direct_calls, right.direct_calls, strict=True):
         selected.extend(
             _atoms_for_span(
                 atoms,
-                (left_call.call_span[0], left_call.argument_span[0]),
-                (right_call.call_span[0], right_call.argument_span[0]),
+                left_call.callee_name_span or (left_call.call_span[0], left_call.argument_span[0]),
+                right_call.callee_name_span or (right_call.call_span[0], right_call.argument_span[0]),
             )
         )
     _union_ids(groups, selected)
     return tuple(dict.fromkeys(selected))
+
+
+def _declaration_name_spans(function: FunctionBinding) -> tuple[tuple[int, int], ...]:
+    if function.declaration_name_spans:
+        return function.declaration_name_spans
+    return tuple(
+        (declaration[0], parameters[0])
+        for declaration, parameters in zip(
+            function.declaration_spans,
+            function.declaration_parameter_spans,
+            strict=True,
+        )
+    )
 
 
 def _atoms_for_span(
@@ -599,7 +638,6 @@ def _changed_binding_names(index: BindingIndex, spans: Sequence[tuple[int, int]]
     for name, function in index.functions.items():
         binding_spans = [
             *_signature_spans(function),
-            *function.declaration_spans,
             *(call.call_span for call in function.direct_calls),
         ]
         if any(_spans_touch(change, binding) for change in spans for binding in binding_spans):
@@ -861,8 +899,15 @@ def _definition_signature_span(definition, to_char: list[int]) -> tuple[int, int
     return to_char[definition.start_byte], to_char[end_byte]
 
 
-def _declaration_signature_span(declaration, declarator, to_char: list[int]) -> tuple[int, int]:
-    return to_char[declaration.start_byte], to_char[declarator.end_byte]
+def _declaration_signature(declaration, declarator, to_char: list[int]) -> DeclarationSignature:
+    first_declarator = next(_declaration_declarators(declaration))
+    return DeclarationSignature(
+        shared_prefix_span=(
+            to_char[declaration.start_byte],
+            to_char[first_declarator.start_byte],
+        ),
+        declarator_span=_span(declarator, to_char),
+    )
 
 
 def _function_pointer_object_identifier(node):

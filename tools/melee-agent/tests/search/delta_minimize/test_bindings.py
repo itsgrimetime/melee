@@ -368,9 +368,13 @@ static int *helper(int mode) { return 0; }
     helper = build_binding_index(source).functions["helper"]
 
     assert source[slice(*helper.definition_signature_span)].strip() == "static int *helper(int mode)"
-    assert tuple(source[slice(*span)].strip() for span in helper.declaration_signature_spans) == (
-        "static int *helper(int mode)",
-    )
+    assert tuple(
+        (
+            source[slice(*signature.shared_prefix_span)],
+            source[slice(*signature.declarator_span)],
+        )
+        for signature in helper.declaration_signatures
+    ) == (("static int ", "*helper(int mode)"),)
 
 
 def test_complete_signature_and_call_changes_couple_without_shape_separation():
@@ -394,8 +398,11 @@ def test_complete_signature_and_call_changes_couple_without_shape_separation():
     for mask in masks:
         candidate = materialize_mask(COMPLETE_SIGNATURE_LEFT, manifest, mask)
         helper = build_binding_index(candidate).functions["helper"]
+        declaration = helper.declaration_signatures[0]
         signatures = (
-            candidate[slice(*helper.declaration_signature_spans[0])].strip(),
+            (
+                candidate[slice(*declaration.shared_prefix_span)] + candidate[slice(*declaration.declarator_span)]
+            ).strip(),
             candidate[slice(*helper.definition_signature_span)].strip(),
             helper.direct_calls[0].argument_texts,
         )
@@ -411,6 +418,83 @@ def test_complete_signature_and_call_changes_couple_without_shape_separation():
                 ("(unsigned int) x", "0"),
             ),
         }
+
+
+def test_later_prototype_signature_does_not_absorb_preceding_marker():
+    left = """\
+int marker = 1, helper(int a);
+int helper(int a) { return a; }
+int draw(int x) { return helper(x); }
+"""
+    right = """\
+int marker = 2, helper(int a, int b);
+int helper(int a, int b) { return a; }
+int draw(int x) { return helper(x, 0); }
+"""
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert masks == (0b00, 0b01, 0b10, 0b11)
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 0b11) == right
+    combinations = set()
+    for mask in masks:
+        candidate = materialize_mask(left, manifest, mask)
+        helper = build_binding_index(candidate).functions["helper"]
+        declaration = helper.declaration_signatures[0]
+        signature_shape = (
+            candidate[slice(*declaration.declarator_span)],
+            candidate[slice(*helper.definition_signature_span)].strip(),
+            helper.direct_calls[0].argument_texts,
+        )
+        assert candidate[slice(*declaration.shared_prefix_span)] == "int "
+        assert signature_shape in {
+            ("helper(int a)", "int helper(int a)", ("x",)),
+            (
+                "helper(int a, int b)",
+                "int helper(int a, int b)",
+                ("x", "0"),
+            ),
+        }
+        combinations.add(("marker = 2" in candidate, len(helper.parameter_names)))
+    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
+
+
+def test_first_prototype_signature_does_not_absorb_following_marker():
+    left = """\
+int helper(int a), marker = 1;
+int helper(int a) { return a; }
+int draw(int x) { return helper(x); }
+"""
+    right = """\
+int helper(int a, int b), marker = 2;
+int helper(int a, int b) { return a; }
+int draw(int x) { return helper(x, 0); }
+"""
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert masks == (0b00, 0b01, 0b10, 0b11)
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 0b11) == right
+    combinations = set()
+    for mask in masks:
+        candidate = materialize_mask(left, manifest, mask)
+        helper = build_binding_index(candidate).functions["helper"]
+        declaration = helper.declaration_signatures[0]
+        assert candidate[slice(*declaration.shared_prefix_span)] == "int "
+        assert candidate[slice(*declaration.declarator_span)] in {
+            "helper(int a)",
+            "helper(int a, int b)",
+        }
+        assert (helper.parameter_names, helper.direct_calls[0].argument_texts) in {
+            (("a",), ("x",)),
+            (("a", "b"), ("x", "0")),
+        }
+        combinations.add(("marker = 2" in candidate, len(helper.parameter_names)))
+    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
 
 
 def test_function_returning_function_pointer_uses_declared_function_parameters():
@@ -783,6 +867,41 @@ def test_unique_rename_couples_declaration_definition_and_call():
     assert len(manifest.atoms) == 1
     assert "helper to assist rename" in manifest.atoms[0].summary
     assert enumerate_legal_masks(manifest, max_candidates=2) == (0, 1)
+
+
+def test_later_prototype_rename_uses_exact_name_spans():
+    left = """\
+int marker = 1, helper(int a);
+int helper(int a) { return a; }
+int draw(int x) { return helper(x); }
+"""
+    right = """\
+int marker = 2, assist(int a);
+int assist(int a) { return a; }
+int draw(int x) { return assist(x); }
+"""
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert masks == (0b00, 0b01, 0b10, 0b11)
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, 0b11) == right
+    combinations = set()
+    for mask in masks:
+        candidate = materialize_mask(left, manifest, mask)
+        name = "assist" if "int assist(int a) {" in candidate else "helper"
+        function = build_binding_index(candidate).functions[name]
+        assert candidate[slice(*function.definition_name_span)] == name
+        assert tuple(candidate[slice(*span)] for span in function.declaration_name_spans) == (name,)
+        assert candidate[slice(*function.direct_calls[0].callee_name_span)] == name
+        combinations.add(("marker = 2" in candidate, name))
+    assert combinations == {
+        (False, "helper"),
+        (False, "assist"),
+        (True, "helper"),
+        (True, "assist"),
+    }
 
 
 def test_ambiguous_rename_fails_closed():
