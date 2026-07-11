@@ -13,6 +13,34 @@ _INSTRUCTION_RE = re.compile(
 _SELF_RELATIVE_TARGET_RE = re.compile(r"<[^>]+\+0x(?P<offset>[0-9A-Fa-f]+)>")
 _NUMERIC_TARGET_RE = re.compile(r"(?:^|,\s*)(?:0x)?(?P<offset>[0-9A-Fa-f]+)\s*$")
 _TERMINALS = {"blr", "bctr", "rfi"}
+_DIRECT_CONDITIONAL_BRANCH_BASES = frozenset(
+    {
+        "bc",
+        "beq",
+        "bf",
+        "bge",
+        "bgt",
+        "ble",
+        "blt",
+        "bne",
+        "bng",
+        "bnl",
+        "bns",
+        "bnu",
+        "bso",
+        "bt",
+        "bun",
+        "bdnz",
+        "bdnzf",
+        "bdnzt",
+        "bdz",
+        "bdzf",
+        "bdzt",
+    }
+)
+_DIRECT_CONDITIONAL_CALLS = frozenset(
+    f"{base}{suffix}" for base in _DIRECT_CONDITIONAL_BRANCH_BASES for suffix in ("l", "la")
+)
 
 
 @dataclass(frozen=True)
@@ -44,8 +72,9 @@ def _is_branch_and_link(opcode: str) -> bool:
     if opcode.endswith(("ctr", "lr")):
         return False
 
-    # Direct forms encode LK before the optional absolute-address suffix.
-    return opcode.endswith(("l", "la"))
+    # Direct aliases add LK to a complete base mnemonic. Explicit composition
+    # avoids treating bases such as `bnl` and absolute `bnla` as link forms.
+    return opcode in {"bl", "bla"} or opcode in _DIRECT_CONDITIONAL_CALLS
 
 
 def _branch_kind(opcode: str) -> str | None:

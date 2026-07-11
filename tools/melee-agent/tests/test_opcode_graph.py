@@ -226,6 +226,109 @@ def test_parser_keeps_nearby_non_link_controls_as_branches_or_terminals(
     )
 
 
+@pytest.mark.parametrize(
+    "opcode, is_call",
+    [
+        ("bnl", False),
+        ("bnl+", False),
+        ("bnl-", False),
+        ("bnla", False),
+        ("bnla+", False),
+        ("bnla-", False),
+        ("bnll", True),
+        ("bnll+", True),
+        ("bnll-", True),
+        ("bnlla", True),
+        ("bnlla+", True),
+        ("bnlla-", True),
+    ],
+)
+def test_parser_composes_bnl_absolute_and_link_suffixes_without_collision(
+    opcode: str,
+    is_call: bool,
+) -> None:
+    graph = parse_opcode_graph(
+        [
+            "+000: 2c 03 00 00  cmpwi r3, 0",
+            f"+004: 40 82 00 0c  {opcode} <fn+0x10>",
+            "+008: 38 63 00 01  addi r3, r3, 1",
+            "+00c: 4e 80 00 20  blr",
+            "+010: 38 60 00 00  li r3, 0",
+            "+014: 4e 80 00 20  blr",
+        ]
+    )
+
+    if is_call:
+        assert graph == OpcodeGraph(
+            nodes=(("cmpwi", opcode, "addi", "blr"), ("li", "blr")),
+            edges=frozenset(),
+        )
+    else:
+        assert graph == OpcodeGraph(
+            nodes=(("cmpwi", opcode), ("addi", "blr"), ("li", "blr")),
+            edges=frozenset({(0, 1), (0, 2)}),
+        )
+
+
+@pytest.mark.parametrize(
+    "opcode, is_call",
+    [
+        ("bng", False),
+        ("bnga", False),
+        ("bngl", True),
+        ("bngla", True),
+        ("ble", False),
+        ("blea", False),
+        ("blel", True),
+        ("blela", True),
+        ("bdnzt", False),
+        ("bdnzta", False),
+        ("bdnztl", True),
+        ("bdnztla", True),
+    ],
+)
+def test_parser_composes_other_cr_and_counted_branch_aliases(
+    opcode: str,
+    is_call: bool,
+) -> None:
+    graph = parse_opcode_graph(
+        [
+            f"+000: 40 82 00 08  {opcode} <fn+0x8>",
+            "+004: 4e 80 00 20  blr",
+            "+008: 4e 80 00 20  blr",
+        ]
+    )
+
+    if is_call:
+        assert graph == OpcodeGraph(
+            nodes=((opcode, "blr"), ("blr",)),
+            edges=frozenset(),
+        )
+    else:
+        assert graph == OpcodeGraph(
+            nodes=((opcode,), ("blr",), ("blr",)),
+            edges=frozenset({(0, 1), (0, 2)}),
+        )
+
+
+@pytest.mark.parametrize("opcode", ["bunknownl", "bunknownla+"])
+def test_parser_treats_unknown_direct_link_shaped_mnemonics_conservatively(
+    opcode: str,
+) -> None:
+    graph = parse_opcode_graph(
+        [
+            f"+000: 40 82 00 08  {opcode} <fn+0x8>",
+            "+004: 4e 80 00 20  blr",
+            "+008: 4e 80 00 20  blr",
+        ]
+    )
+
+    assert graph == OpcodeGraph(
+        nodes=((opcode,), ("blr",), ("blr",)),
+        edges=frozenset({(0, 1), (0, 2)}),
+    )
+
+
 def test_parser_selects_duplicate_offsets_deterministically_across_permutations() -> None:
     duplicate_a = "+000: 38 60 00 01  li r3, 1"
     duplicate_b = "+000: 38 63 00 01  addi r3, r3, 1"
