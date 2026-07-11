@@ -1,0 +1,136 @@
+================================================================================
+FUNCTION: mnDiagram_DrawFighterHeaders
+  Type: function(void* arg0, int arg1, int arg2)[returns void]
+
+STATEMENTS (IR):
+--------------------------------------------------------------------------------
+:16542312  [header] = [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255)) , HSD_JObjAnimAll([@1861]) , FORCELOAD([@1859])
+  [EASS] [header] = [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255)) , HSD_JObjAnimAll([@1861]) , FORCELOAD([@1859])
+    [EINDIRECT] [header]
+      [EOBJREF] header
+        -> ObjObject @ 0x00FEC898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+    [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255)) , HSD_JObjAnimAll([@1861]) , FORCELOAD([@1859])
+      [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255)) , HSD_JObjAnimAll([@1861])
+        [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255))
+          [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1)
+            [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859])
+              [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84])
+                [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12])
+                  [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]])
+                    [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180
+                      [EASS] [@1862] = [[fighter_id] = [@1863] , fighter_id]
+                        [EINDIRECT] [@1862]
+                          [EOBJREF] @1862
+                            -> ObjObject @ 0x00FC5878: @1862 (DataType: DLOCAL, Type: int)
+                        [EINDIRECT] [[fighter_id] = [@1863] , fighter_id]
+                          [ECOMMA] [fighter_id] = [@1863] , fighter_id
+                            [EASS] [fighter_id] = [@1863]
+                              [EINDIRECT] [fighter_id]
+                                [EOBJREF] fighter_id
+                                  -> ObjObject @ 0x00FEC850: fighter_id (DataType: DLOCAL, Type: int)
+                              [EINDIRECT] [@1863]
+                                [EOBJREF] @1863
+                                  -> ObjObject @ 0x00FC63A0: @1863 (DataType: DLOCAL, Type: int)
+                            [EOBJREF] fighter_id
+                              -> ObjObject @ 0x00FEC850: fighter_id (DataType: DLOCAL, Type: int)
+
+LOCAL VARIABLES (first appearance order, with ObjObject addresses):
+--------------------------------------------------------------------------------
+  [0] 0x00FEC8E0  data
+  [1] 0x00FC22C0  arg0
+  [2] 0x00FEC988  data_alias
+  [3] 0x00FEC9F0  assets
+  [4] 0x00FECB00  i
+  [5] 0x00FECA78  sorted
+  [6] 0x00FC4FD8  @1854
+  [7] 0x00FC5050  @1855
+  [8] 0x00FC4F30  @1852
+  [9] 0x00FC64F0  @1866
+  [10] 0x00FC6478  @1865
+  [11] 0x00FC23B0  arg2
+  [12] 0x00FC65E0  @1868
+  [13] 0x00FC66D0  @1870
+  [14] 0x00FC6568  @1867
+  [15] 0x00FC63A0  @1863
+  [16] 0x00FC6658  @1869
+  [17] 0x00FEC898  header
+  [18] 0x00FC5878  @1862
+  [19] 0x00FEC850  fighter_id
+  [20] 0x00FC5788  @1860
+  [21] 0x00FC5710  @1859
+  [22] 0x00FC5800  @1861
+  [23] 0x00FECAC8  spacing
+  [24] 0x00FC7578  @1877
+  [25] 0x00FC78D8  @1878
+  [26] 0x00FCB420  @1911
+  [27] 0x00FECB48  parent
+  [28] 0x00FC82E0  @1884
+  [29] 0x00FC8358  @1885
+  [30] 0x00FC8238  @1882
+  [31] 0x00FC98E8  @1898
+  [32] 0x00FC9870  @1897
+  [33] 0x00FC2338  arg1
+  [34] 0x00FC97F8  @1896
+  [35] 0x00FC99D8  @1900
+  [36] 0x00FC9780  @1895
+  [37] 0x00FC96A8  @1893
+  [38] 0x00FC9960  @1899
+  [39] 0x00FC8B80  @1892
+  [40] 0x00FC8A90  @1890
+  [41] 0x00FC8A18  @1889
+  [42] 0x00FC8B08  @1891
+  [43] 0x00FCA880  @1907
+  [44] 0x00FCB9F8  @1913
+
+LOCAL VARIABLES (sorted by ObjObject address):
+--------------------------------------------------------------------------------
+  [0] 0x00FC22C0  arg0
+  [1] 0x00FC2338  arg1
+  [2] 0x00FC23B0  arg2
+  [3] 0x00FC4F30  @1852
+  [4] 0x00FC4FD8  @1854
+  [5] 0x00FC5050  @1855
+  [6] 0x00FC5710  @1859
+  [7] 0x00FC5788  @1860
+  [8] 0x00FC5800  @1861
+  [9] 0x00FC5878  @1862
+  [10] 0x00FC63A0  @1863
+  [11] 0x00FC6478  @1865
+  [12] 0x00FC64F0  @1866
+  [13] 0x00FC6568  @1867
+  [14] 0x00FC65E0  @1868
+  [15] 0x00FC6658  @1869
+  [16] 0x00FC66D0  @1870
+  [17] 0x00FC7578  @1877
+  [18] 0x00FC78D8  @1878
+  [19] 0x00FC8238  @1882
+  [20] 0x00FC82E0  @1884
+  [21] 0x00FC8358  @1885
+  [22] 0x00FC8A18  @1889
+  [23] 0x00FC8A90  @1890
+  [24] 0x00FC8B08  @1891
+  [25] 0x00FC8B80  @1892
+  [26] 0x00FC96A8  @1893
+  [27] 0x00FC9780  @1895
+  [28] 0x00FC97F8  @1896
+  [29] 0x00FC9870  @1897
+  [30] 0x00FC98E8  @1898
+  [31] 0x00FC9960  @1899
+  [32] 0x00FC99D8  @1900
+  [33] 0x00FCA880  @1907
+  [34] 0x00FCB420  @1911
+  [35] 0x00FCB9F8  @1913
+  [36] 0x00FEC850  fighter_id
+  [37] 0x00FEC898  header
+  [38] 0x00FEC8E0  data
+  [39] 0x00FEC988  data_alias
+  [40] 0x00FEC9F0  assets
+  [41] 0x00FECA78  sorted
+  [42] 0x00FECAC8  spacing
+  [43] 0x00FECB00  i
+  [44] 0x00FECB48  parent
+================================================================================
+
+================================================================================
+FUNCTION: later_fn
+  Type: function()[returns void]
