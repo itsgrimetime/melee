@@ -14,6 +14,7 @@ from .backend_adapter import _operand_roles
 from .canonical import stable_id
 from .graph import FrontierGraph
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance, min_confidence
+from .object_binding_adapter import ObjectBindingEvidence, proof_complete
 
 _REGISTER = re.compile(r"\b([rf])\d+\b")
 _ADDI_ZERO_COPY = re.compile(
@@ -106,6 +107,8 @@ class _LocalRoleResolution:
     allocator_map_edge: EvidenceEdge | None
     confidence: Confidence
     asserted: bool = False
+    verified_retail_path: bool = False
+    supporting_records: tuple[EvidenceNode | EvidenceEdge, ...] = ()
 
     @property
     def evidence_chain(self) -> tuple[EvidenceNode | EvidenceEdge, ...]:
@@ -118,9 +121,259 @@ class _LocalRoleResolution:
                 self.virtual,
                 self.allocator_map_edge,
                 self.node,
+                *self.supporting_records,
             )
             if record is not None
         )
+
+
+@dataclass(frozen=True, slots=True)
+class BackendOwnerRoleTuple:
+    operand_key: str
+    register_class: str
+    semantic_stack_role: str
+    type_size: int
+    frame_area: str
+
+    def values(self) -> tuple[str, str, str, int, str]:
+        return (
+            self.operand_key,
+            self.register_class,
+            self.semantic_stack_role,
+            self.type_size,
+            self.frame_area,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BackendOwnerPath:
+    evidence: ObjectBindingEvidence
+    owner: EvidenceNode
+    anchor: EvidenceNode
+    pcode: EvidenceNode
+    lineage: EvidenceNode
+    virtual: EvidenceNode
+    allocator: EvidenceNode
+    stack: EvidenceNode
+    supporting_records: tuple[EvidenceNode | EvidenceEdge, ...]
+
+    @property
+    def capture_run_id(self) -> str:
+        return self.evidence.capture_run_id
+
+
+@dataclass(frozen=True, slots=True)
+class BackendOwnerCandidate:
+    role_tuple: BackendOwnerRoleTuple
+    left: BackendOwnerPath
+    right: BackendOwnerPath
+
+
+def _proof_edge(
+    evidence: ObjectBindingEvidence,
+    kind: str,
+    source_id: str,
+    target_id: str,
+) -> tuple[EvidenceEdge, ...]:
+    return tuple(
+        edge
+        for edge in evidence.edges
+        if edge.kind == kind
+        and edge.source_id == source_id
+        and edge.target_id == target_id
+        and edge.confidence in {Confidence.OBSERVED, Confidence.DERIVED_UNIQUE}
+        and edge.provenance.parser == "mwcc-retro-backend-trace.v2"
+        and edge.attributes.get("capture_run_id") == evidence.capture_run_id
+    )
+
+
+def _local_backend_owner_paths(
+    evidence: ObjectBindingEvidence,
+    role: BackendOwnerRoleTuple,
+) -> tuple[BackendOwnerPath, ...]:
+    nodes = {node.record_id: node for node in evidence.nodes}
+    register_class_id = 1 if role.register_class in {"f", "fpr"} else 0
+    paths: list[BackendOwnerPath] = []
+    anchors = tuple(
+        node
+        for node in evidence.nodes
+        if node.kind == "assembly-operand-anchor" and node.attributes.get("machine_operand_key") == role.operand_key
+    )
+    owners = tuple(
+        node
+        for node in evidence.nodes
+        if node.kind == "compiler-object"
+        and node.attributes.get("type_size") == role.type_size
+        and role.frame_area in node.attributes.get("areas", ())
+    )
+    for anchor in anchors:
+        anchor_edges = tuple(
+            edge
+            for edge in evidence.edges
+            if edge.kind == "assembly-anchor-emitted-by-pcode"
+            and edge.source_id == anchor.record_id
+            and edge.target_id in nodes
+        )
+        for anchor_edge in anchor_edges:
+            pcode = nodes[anchor_edge.target_id]
+            lineage_edges = tuple(
+                edge
+                for edge in evidence.edges
+                if edge.kind == "pcode-operand-lineage"
+                and edge.source_id == pcode.record_id
+                and edge.target_id in nodes
+            )
+            for lineage_edge in lineage_edges:
+                lineage = nodes[lineage_edge.target_id]
+                virtual_edges = tuple(
+                    edge
+                    for edge in evidence.edges
+                    if edge.kind == "pcode-operand-uses-virtual"
+                    and edge.source_id == lineage.record_id
+                    and edge.target_id in nodes
+                )
+                for virtual_edge in virtual_edges:
+                    virtual = nodes[virtual_edge.target_id]
+                    if virtual.attributes.get("class_id") != register_class_id:
+                        continue
+                    allocator_edges = tuple(
+                        edge
+                        for edge in evidence.edges
+                        if edge.kind == "maps-to-allocator-node"
+                        and edge.source_id == virtual.record_id
+                        and edge.target_id in nodes
+                    )
+                    for owner in owners:
+                        object_edges = _proof_edge(
+                            evidence,
+                            "object-materializes-virtual",
+                            owner.record_id,
+                            virtual.record_id,
+                        )
+                        stack_edges = tuple(
+                            edge
+                            for edge in evidence.edges
+                            if edge.kind == "object-has-stack-home"
+                            and edge.source_id == owner.record_id
+                            and edge.target_id in nodes
+                            and edge.attributes.get("area") == role.frame_area
+                            and edge.attributes.get("semantic_stack_role") == role.semantic_stack_role
+                        )
+                        for object_edge in object_edges:
+                            for allocator_edge in allocator_edges:
+                                allocator = nodes[allocator_edge.target_id]
+                                for stack_edge in stack_edges:
+                                    stack = nodes[stack_edge.target_id]
+                                    supporting = (
+                                        anchor,
+                                        anchor_edge,
+                                        pcode,
+                                        lineage_edge,
+                                        lineage,
+                                        virtual_edge,
+                                        virtual,
+                                        object_edge,
+                                        owner,
+                                        allocator_edge,
+                                        allocator,
+                                        stack_edge,
+                                        stack,
+                                    )
+                                    if all(
+                                        record.confidence
+                                        in {
+                                            Confidence.OBSERVED,
+                                            Confidence.DERIVED_UNIQUE,
+                                        }
+                                        for record in supporting
+                                    ):
+                                        paths.append(
+                                            BackendOwnerPath(
+                                                evidence,
+                                                owner,
+                                                anchor,
+                                                pcode,
+                                                lineage,
+                                                virtual,
+                                                allocator,
+                                                stack,
+                                                supporting,
+                                            )
+                                        )
+    return tuple(
+        sorted(
+            paths,
+            key=lambda path: (
+                path.owner.record_id,
+                path.anchor.record_id,
+                path.stack.record_id,
+                tuple(record.record_id for record in path.supporting_records),
+            ),
+        )
+    )
+
+
+def resolve_backend_owner_candidates(
+    evidence_pair: tuple[ObjectBindingEvidence, ObjectBindingEvidence],
+    role_tuple: BackendOwnerRoleTuple,
+) -> tuple[BackendOwnerCandidate, ...]:
+    """Enumerate every semantic bilateral owner without cross-run identities."""
+
+    left, right = evidence_pair
+    left_paths = _local_backend_owner_paths(left, role_tuple)
+    right_paths = _local_backend_owner_paths(right, role_tuple)
+    return tuple(
+        BackendOwnerCandidate(role_tuple, left_path, right_path)
+        for left_path in left_paths
+        for right_path in right_paths
+    )
+
+
+def backend_owner_correspondences(
+    analysis_id: str,
+    candidates: tuple[BackendOwnerCandidate, ...],
+) -> tuple[ComparisonRecord, ...]:
+    """Render analysis-scoped semantic owner alternatives, never graph edges."""
+
+    unique = len(candidates) == 1
+    comparisons: list[ComparisonRecord] = []
+    for ordinal, candidate in enumerate(candidates):
+        inputs = (
+            *candidate.left.supporting_records,
+            *candidate.right.supporting_records,
+        )
+        confidence = min_confidence(*(record.confidence for record in inputs)) if unique else Confidence.HEURISTIC
+        comparisons.append(
+            ComparisonRecord.create(
+                analysis_id=analysis_id,
+                relation_kind="backend-owner-corresponds-to",
+                left_compile_id=candidate.left.owner.compile_id,
+                left_record_id=candidate.left.owner.record_id,
+                right_compile_id=candidate.right.owner.compile_id,
+                right_record_id=candidate.right.owner.record_id,
+                producer_confidence=confidence,
+                adapter_confidence=confidence,
+                provenance=Provenance(
+                    artifact_sha256=analysis_id,
+                    parser="causal-backend-owner-alignment.v1",
+                    raw_start=None,
+                    raw_end=None,
+                    derivation_rule=(
+                        "semantic-owner-role-tuple:" + ":".join(str(value) for value in candidate.role_tuple.values())
+                    ),
+                    input_record_ids=tuple(record.record_id for record in inputs),
+                ),
+                input_confidences=tuple(record.confidence for record in inputs),
+                occurrence_ordinal=ordinal,
+                attributes={
+                    "role_tuple": candidate.role_tuple.values(),
+                    "alternative_count": len(candidates),
+                    "proof_complete": unique,
+                    "scope": "analysis",
+                },
+            )
+        )
+    return tuple(comparisons)
 
 
 def _label(graph: FrontierGraph) -> str:
@@ -314,6 +567,85 @@ def _allocator_from_virtual(graph: FrontierGraph, virtual_id: str) -> tuple[tupl
     )
 
 
+def _verified_retail_local_role(
+    graph: FrontierGraph,
+    candidate: EvidenceNode,
+    retail_offset: int,
+    role: OperandRole,
+) -> tuple[_LocalRoleResolution | None, AbstentionReason]:
+    evidence = graph.backend.object_bindings
+    if evidence is None or not proof_complete(evidence):
+        return None, AbstentionReason.MISSING_BACKEND_ROLE
+    nodes = {node.record_id: node for node in evidence.nodes}
+    proof_confidences = {Confidence.OBSERVED, Confidence.DERIVED_UNIQUE}
+
+    def edges(kind: str, source_id: str) -> tuple[EvidenceEdge, ...]:
+        return tuple(
+            edge
+            for edge in evidence.edges
+            if edge.kind == kind
+            and edge.source_id == source_id
+            and edge.target_id in nodes
+            and edge.confidence in proof_confidences
+            and edge.provenance.parser == "mwcc-retro-backend-trace.v2"
+            and edge.attributes.get("capture_run_id") == evidence.capture_run_id
+        )
+
+    alternatives: dict[str, list[_LocalRoleResolution]] = {}
+    anchors = tuple(
+        node
+        for node in evidence.nodes
+        if node.kind == "assembly-operand-anchor"
+        and node.attributes.get("code_offset") == retail_offset
+        and node.attributes.get("machine_operand_key") == role.key
+    )
+    class_id = 1 if role.register_kind == "f" else 0
+    for anchor in anchors:
+        for anchor_edge in edges("assembly-anchor-emitted-by-pcode", anchor.record_id):
+            pcode = nodes[anchor_edge.target_id]
+            for lineage_edge in edges("pcode-operand-lineage", pcode.record_id):
+                lineage = nodes[lineage_edge.target_id]
+                for virtual_edge in edges("pcode-operand-uses-virtual", lineage.record_id):
+                    virtual = nodes[virtual_edge.target_id]
+                    if virtual.attributes.get("class_id") != class_id:
+                        continue
+                    for allocator_edge in edges("maps-to-allocator-node", virtual.record_id):
+                        allocator = nodes[allocator_edge.target_id]
+                        supporting = (
+                            anchor,
+                            anchor_edge,
+                            lineage_edge,
+                            lineage,
+                        )
+                        chain = (
+                            candidate,
+                            pcode,
+                            virtual_edge,
+                            virtual,
+                            allocator_edge,
+                            allocator,
+                            *supporting,
+                        )
+                        alternatives.setdefault(allocator.record_id, []).append(
+                            _LocalRoleResolution(
+                                node=allocator,
+                                candidate=candidate,
+                                pcode=pcode,
+                                use_def_edge=virtual_edge,
+                                virtual=virtual,
+                                allocator_map_edge=allocator_edge,
+                                confidence=min_confidence(*(record.confidence for record in chain)),
+                                verified_retail_path=True,
+                                supporting_records=supporting,
+                            )
+                        )
+    if len(alternatives) == 1:
+        return next(iter(alternatives.values()))[0], AbstentionReason.MISSING_BACKEND_ROLE
+    if alternatives:
+        return None, AbstentionReason.AMBIGUOUS_BACKEND_ROLE
+    return None, AbstentionReason.MISSING_BACKEND_ROLE
+
+
 def _automatic_local_role(
     graph: FrontierGraph, retail_offset: int, role: OperandRole
 ) -> tuple[_LocalRoleResolution | None, AbstentionReason]:
@@ -323,6 +655,9 @@ def _automatic_local_role(
     raw_position = _raw_operand_position(graph, retail_offset, role)
     if raw_position is None:
         return None, AbstentionReason.MISSING_BACKEND_ROLE
+    verified, verified_reason = _verified_retail_local_role(graph, candidate, retail_offset, role)
+    if verified is not None or verified_reason is AbstentionReason.AMBIGUOUS_BACKEND_ROLE:
+        return verified, verified_reason
     signature = _normalized_instruction(candidate.attributes.get("opcode"), candidate.attributes.get("operands"))
     expected_neighborhood = tuple(
         _normalized_instruction_text(item) for item in candidate.attributes.get("retail_neighborhood_signature", ())
@@ -450,6 +785,7 @@ def _role_comparison(
     asserted_labels = tuple(
         label for label, local in ((_label(left_graph), left), (_label(right_graph), right)) if local.asserted
     )
+    verified_retail = left.verified_retail_path and right.verified_retail_path
     confidence = Confidence.HEURISTIC if asserted_labels else min_confidence(left.confidence, right.confidence)
     inputs = (*left.evidence_chain, *right.evidence_chain)
     return ComparisonRecord.create(
@@ -467,7 +803,11 @@ def _role_comparison(
             raw_start=None,
             raw_end=None,
             derivation_rule=(
-                "operand-scoped-expert-assertion" if asserted_labels else "round-trip-role-descriptor-match"
+                "operand-scoped-expert-assertion"
+                if asserted_labels
+                else (
+                    "verified-retail-semantic-operand-role" if verified_retail else "round-trip-role-descriptor-match"
+                )
             ),
             input_record_ids=tuple(node.record_id for node in inputs),
         ),
@@ -482,6 +822,7 @@ def _role_comparison(
             "expert_assertion": bool(asserted_labels),
             "asserted_labels": asserted_labels,
             "verdict_cap": "candidate-cause" if asserted_labels else None,
+            "identity_mode": ("verified-retail-semantic-role" if verified_retail else "round-trip-role-descriptor"),
         },
     )
 
@@ -589,7 +930,8 @@ def align_anchor(
         if left is None or right is None:
             abstentions.append(_abstention(role.key, reasons[0] if reasons else AbstentionReason.MISSING_BACKEND_ROLE))
             continue
-        if not (left.asserted or right.asserted) and not _round_trip_matches(
+        verified_retail_pair = left.verified_retail_path and right.verified_retail_path
+        if not (left.asserted or right.asserted or verified_retail_pair) and not _round_trip_matches(
             left_graph, left.node, right_graph, right.node, role.expected_phys
         ):
             abstentions.append(_abstention(role.key, AbstentionReason.UNSTABLE_ROLE_IDENTITY))
@@ -639,15 +981,63 @@ def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[Frontier
         )
         if actual != expected:
             raise ValueError("role comparison scope does not match frontier pair")
-    return alignment.comparisons
+    comparisons = list(alignment.comparisons)
+    ordered_graphs = tuple(sorted(graph_pair, key=_label))
+    left_evidence = ordered_graphs[0].backend.object_bindings
+    right_evidence = ordered_graphs[1].backend.object_bindings
+    if left_evidence is None or right_evidence is None:
+        return tuple(comparisons)
+
+    def role_shapes(evidence: ObjectBindingEvidence) -> frozenset[tuple[str, int, str]]:
+        nodes = {node.record_id: node for node in evidence.nodes}
+        values: set[tuple[str, int, str]] = set()
+        for edge in evidence.edges:
+            if edge.kind != "object-has-stack-home":
+                continue
+            owner = nodes.get(edge.source_id)
+            if owner is None or owner.kind != "compiler-object":
+                continue
+            semantic_role = edge.attributes.get("semantic_stack_role")
+            type_size = owner.attributes.get("type_size")
+            area = edge.attributes.get("area")
+            if (
+                isinstance(semantic_role, str)
+                and semantic_role
+                and isinstance(type_size, int)
+                and not isinstance(type_size, bool)
+                and isinstance(area, str)
+                and area
+            ):
+                values.add((semantic_role, type_size, area))
+        return frozenset(values)
+
+    shared_shapes = role_shapes(left_evidence) & role_shapes(right_evidence)
+    for operand in alignment.operand_roles:
+        register_class = "fpr" if operand.register_kind == "f" else "gpr"
+        for semantic_role, type_size, area in sorted(shared_shapes):
+            role_tuple = BackendOwnerRoleTuple(
+                operand.key,
+                register_class,
+                semantic_role,
+                type_size,
+                area,
+            )
+            candidates = resolve_backend_owner_candidates((left_evidence, right_evidence), role_tuple)
+            comparisons.extend(backend_owner_correspondences(alignment.analysis_id, candidates))
+    return tuple(comparisons)
 
 
 __all__ = [
     "AbstentionReason",
     "AnchorAlignment",
+    "BackendOwnerCandidate",
+    "BackendOwnerPath",
+    "BackendOwnerRoleTuple",
     "EffectAbstention",
     "OperandRole",
     "RolePair",
     "align_anchor",
+    "backend_owner_correspondences",
     "build_role_comparisons",
+    "resolve_backend_owner_candidates",
 ]

@@ -31,6 +31,11 @@ _PATH_EDGE_KINDS = frozenset(
         "bridge-candidate-materializes-stack-object",
         "bridge-has-stack-access",
         "bridge-has-source-expression",
+        "assembly-anchor-emitted-by-pcode",
+        "pcode-operand-lineage",
+        "pcode-operand-uses-virtual",
+        "object-materializes-virtual",
+        "object-has-stack-home",
     }
 )
 _OWNER_KINDS = frozenset({"compiler-object", "source-expression", "objobject", "inline-scope"})
@@ -1046,6 +1051,18 @@ def build_report(
         if not inferred_verdicts and not effects.abstentions
         else inferred_verdicts
     )
+    backend_missing = {
+        reason
+        for graph in graph_pair
+        if (
+            reason := getattr(
+                getattr(getattr(graph, "backend", None), "object_bindings", None),
+                "abstention_reason",
+                None,
+            )
+        )
+        is not None
+    }
     missing_evidence = tuple(
         sorted(
             {f"{abstention.reason.value}:{abstention.operand_key}" for abstention in effects.abstentions}
@@ -1062,6 +1079,7 @@ def build_report(
                 if any(_GATE_9 in verdict.failed_gates for verdict in verdicts)
                 else set()
             )
+            | backend_missing
         )
     )
     warnings = tuple(sorted({warning for graph in graph_pair for warning in graph.warnings}))

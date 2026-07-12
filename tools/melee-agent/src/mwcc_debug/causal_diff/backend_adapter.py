@@ -15,6 +15,7 @@ from ..pressure_explorer.facts import facts_from_backend_trace, facts_from_pcdum
 from ..pressure_explorer.models import AllocatorFacts
 from .bundles import BundleInputError, ValidatedBundle
 from .models import AdapterResult, Confidence, EvidenceEdge, EvidenceNode, Provenance
+from .object_binding_adapter import ObjectBindingEvidence, adapt_object_bindings
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,7 @@ class BackendEvidence:
     role_compile: role_descriptor.Compile | None
     nodes_by_class_ig: Mapping[tuple[int, int], str]
     nodes_by_virtual: Mapping[tuple[str, int], str]
+    object_bindings: ObjectBindingEvidence | None = None
 
     @property
     def verified_capabilities(self) -> frozenset[str]:
@@ -568,6 +570,7 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
     pcdump_text = ""
     role_compile: role_descriptor.Compile | None = None
     pcode_roles_exact = True
+    object_bindings = adapt_object_bindings(bundle)
     try:
         source_text = bundle.artifact_paths["source"].read_bytes().decode("utf-8")
     except (OSError, UnicodeError) as error:
@@ -620,9 +623,11 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
                 pcode_roles_exact = pcode_roles_exact and local_roles_exact
                 raw_pcdump: str | None = text
                 trace_interference_confidences = None
-            elif backend.format == "backend-trace.v1":
-                parser = "backend-trace.v1"
+            elif backend.format in {"backend-trace.v1", "backend-trace.v2"}:
+                parser = "backend-trace.v1" if backend.format == "backend-trace.v1" else "mwcc-retro-backend-trace.v2"
                 version = bundle.manifest.producer_versions.get("backend_trace")
+                if backend.format == "backend-trace.v2":
+                    version = bundle.manifest.producer_versions.get("mwcc_retro")
                 if version != parser:
                     raise BundleInputError(f"unsupported backend-trace producer version: {version!r}")
                 facts = facts_from_backend_trace(Path(path), function=bundle.manifest.function)
@@ -671,6 +676,9 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
                 raise BundleInputError(f"overlapping backend evidence for virtual register {key}")
             nodes_by_virtual[key] = node
 
+    nodes.extend(object_bindings.nodes)
+    edges.extend(object_bindings.edges)
+
     normalized_nodes = _deduplicate_nodes(nodes)
     normalized_edges = _deduplicate_edges(edges)
     node_kinds = {node.kind for node in normalized_nodes}
@@ -686,6 +694,7 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
         verified.add("allocator-decisions")
     if "interferes-with" in edge_kinds:
         verified.add("interference-edges")
+    verified.update(object_bindings.capabilities)
 
     result = AdapterResult(
         nodes=normalized_nodes,
@@ -698,6 +707,7 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
         role_compile=role_compile,
         nodes_by_class_ig=MappingProxyType({key: node.record_id for key, node in nodes_by_class_ig.items()}),
         nodes_by_virtual=MappingProxyType({key: node.record_id for key, node in nodes_by_virtual.items()}),
+        object_bindings=(object_bindings if object_bindings.capture_run_id else None),
     )
 
 

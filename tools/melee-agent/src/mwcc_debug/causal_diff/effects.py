@@ -38,6 +38,11 @@ _OWNERSHIP_EDGE_KINDS = frozenset(
         "bridge-candidate-materializes-stack-object",
         "bridge-has-stack-access",
         "bridge-has-source-expression",
+        "assembly-anchor-emitted-by-pcode",
+        "pcode-operand-lineage",
+        "pcode-operand-uses-virtual",
+        "object-materializes-virtual",
+        "object-has-stack-home",
     }
 )
 
