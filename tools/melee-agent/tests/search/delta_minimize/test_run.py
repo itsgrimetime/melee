@@ -1125,7 +1125,8 @@ def _production_provenance_fixture(
             "build/tools/wibo build/compilers/GC/1.2.5n/mwcceppc.exe "
             "-O4,p -inline auto -i include -c src/melee/test.c "
             "-o build/GALE01/src/melee && python tools/transform_dep.py"
-        )
+        ),
+        "sequence": [],
     }
     dependency_rows = {
         "value": "\n".join(
@@ -1134,7 +1135,8 @@ def _production_provenance_fixture(
                 "    src/melee/test.c",
                 "    include/test.h",
             )
-        )
+        ),
+        "sequence": [],
     }
     upstream = {"value": ""}
     ref_commit = {"value": "a" * 40}
@@ -1148,9 +1150,15 @@ def _production_provenance_fixture(
         if args[:2] == ["ninja", "-n"]:
             return subprocess.CompletedProcess(args, 0, freshness["value"], "")
         if args[:3] == ["ninja", "-t", "commands"]:
-            return subprocess.CompletedProcess(args, 0, command["value"] + "\n", "")
+            value = command["sequence"].pop(0) if command["sequence"] else command["value"]
+            return subprocess.CompletedProcess(args, 0, value + "\n", "")
         if args[:3] == ["ninja", "-t", "deps"]:
-            return subprocess.CompletedProcess(args, 0, dependency_rows["value"] + "\n", "")
+            value = (
+                dependency_rows["sequence"].pop(0)
+                if dependency_rows["sequence"]
+                else dependency_rows["value"]
+            )
+            return subprocess.CompletedProcess(args, 0, value + "\n", "")
         if args[:4] == ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name"]:
             return subprocess.CompletedProcess(
                 args,
@@ -1369,6 +1377,30 @@ def test_stale_dependency_closure_cannot_authorize_new_header_cache_reuse(
         tmp_path / "header-changed-store",
         header_changed,
     )
+
+
+def test_interleaved_rebuild_cannot_publish_mixed_compiler_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, controls = _production_provenance_fixture(tmp_path, monkeypatch)
+    original_command = controls["command"]["value"]
+    rebuilt_command = original_command.replace("-O4,p", "-O3")
+    rebuilt_header = config.melee_root / "include/rebuilt.h"
+    rebuilt_header.write_text("#define REBUILT_VALUE 1\n", encoding="utf-8")
+    rebuilt_dependencies = "\n".join(
+        (
+            "build/GALE01/src/melee/test.o: #deps 3, deps mtime 3 (VALID)",
+            "    src/melee/test.c",
+            "    include/test.h",
+            "    include/rebuilt.h",
+        )
+    )
+    controls["command"]["sequence"] = [original_command, rebuilt_command]
+    controls["dependencies"]["sequence"] = [rebuilt_dependencies, rebuilt_dependencies]
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-compiler-context$"):
+        run_module._default_parent_provenance(config)
 
 
 def test_production_objective_adapter_supplies_real_register_diff_deriver(

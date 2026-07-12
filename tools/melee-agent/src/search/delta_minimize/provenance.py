@@ -180,6 +180,17 @@ def _dependency_rows(root: Path, source: Path, target: str) -> tuple[Mapping[str
     return tuple({"path": path, "sha256": rows[path]} for path in sorted(rows))
 
 
+def _compiler_context_snapshot(
+    root: Path,
+    source: Path,
+    target: str,
+) -> tuple[tuple[str, ...], tuple[Mapping[str, str], ...]]:
+    return (
+        _normalized_compile_command(root, source, target),
+        _dependency_rows(root, source, target),
+    )
+
+
 def compiler_provenance(root: Path, source: Path) -> tuple[str, str]:
     """Hash the resolved compile command, dependency closure, and compiler bytes."""
 
@@ -187,11 +198,18 @@ def compiler_provenance(root: Path, source: Path) -> tuple[str, str]:
         paths = unit_paths(root, source)
         target = paths.our_obj.absolute().relative_to(root.absolute()).as_posix()
         _require_ninja_fresh(root, target)
-        command = _normalized_compile_command(root, source, target)
-        dependencies = _dependency_rows(root, source, target)
+        first_snapshot = _compiler_context_snapshot(root, source, target)
+        _require_ninja_fresh(root, target)
+        second_snapshot = _compiler_context_snapshot(root, source, target)
         _require_ninja_fresh(root, target)
     except (OSError, ValueError) as error:
         raise DeltaMinimizeError("invalid-compiler-context") from error
+    if first_snapshot != second_snapshot:
+        raise DeltaMinimizeError(
+            "invalid-compiler-context",
+            {"target": target, "reason": "unstable-compiler-context"},
+        )
+    command, dependencies = second_snapshot
     cflags_hash = _canonical_hash(
         {
             "schema_version": _COMPILER_CONTEXT_SCHEMA,
