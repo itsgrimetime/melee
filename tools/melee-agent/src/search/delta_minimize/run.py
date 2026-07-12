@@ -1366,7 +1366,10 @@ def _resolve_namespaces_for_run(
     if not sections or sections[-1].n_virtuals < 32:
         raise DeltaMinimizeError("invalid-canonical-namespace-evidence")
     domain = tuple(range(sections[-1].n_virtuals))
-    reviewed_anchors = {role: role for role in target.force_phys}
+    nonbaseline_side = "right" if target.baseline_side == "left" else "left"
+    reviewed_anchors = dict(
+        target.parent_role_bindings[nonbaseline_side].canonical_to_parent
+    )
 
     rows: list[tuple[str, str, str | None, int | None, RawCandidateEvidence]] = [
         (
@@ -1377,11 +1380,11 @@ def _resolve_namespaces_for_run(
             canonical_raw,
         ),
         (
-            f"parent:{'right' if target.baseline_side == 'left' else 'left'}",
+            f"parent:{nonbaseline_side}",
             "parent",
-            "right" if target.baseline_side == "left" else "left",
+            nonbaseline_side,
             None,
-            parent_rows["right" if target.baseline_side == "left" else "left"],
+            parent_rows[nonbaseline_side],
         ),
     ]
     rows.extend(

@@ -19,8 +19,16 @@ from src.mwcc_debug.stack_home_profile import StackHomeProfile
 from src.search.cli import search_app
 from src.search.delta_minimize.epochs import PARSER_SCHEMA_HASH
 from src.search.delta_minimize.evaluator import RawCandidateEvidence
+from src.search.delta_minimize.namespace_review import (
+    load_review_request,
+    seal_namespace_review,
+)
 from src.search.delta_minimize.objectives import ParentObjectiveEvidence, infer_objective_manifest
-from src.search.delta_minimize.run import DeltaMinimizeBackends, run_delta_minimize
+from src.search.delta_minimize.run import (
+    DeltaMinimizeBackends,
+    DeltaMinimizeConfig,
+    run_delta_minimize,
+)
 from tests.search.delta_minimize.test_run import _CountingFixture
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "delta_minimize"
@@ -370,3 +378,184 @@ def test_reviewed_v2_roles_publish_complete_reproducible_frontier(
     assert json.loads((tmp_path / "v2" / "result.json").read_text()) == result
     assert fixture.captured_sources[0] == left.read_bytes()
     assert fixture.captured_sources[3] == right.read_bytes()
+
+
+@pytest.mark.parametrize("baseline_side", ("left", "right"))
+def test_nonbaseline_nonidentity_anchor_discovery_seal_and_rerun(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    baseline_side: str,
+) -> None:
+    left = FIXTURES / "left.c"
+    right = FIXTURES / "right.c"
+    sources = {
+        "left": left.read_text(encoding="utf-8"),
+        "right": right.read_text(encoding="utf-8"),
+    }
+    fixture = _ReviewedRoleFixture(tmp_path, sources["left"], sources["right"])
+    dumps = {"left": fixture.left_dump, "right": fixture.right_dump}
+    template = Compile.from_text(
+        dumps[baseline_side].read_text(encoding="utf-8"),
+        "f",
+        sources[baseline_side],
+    )
+    descriptors = build_descriptors(template, 0)
+    virtual_count = template.fev.coalesce_sections[-1].n_virtuals
+    canonical, alias = list(descriptors)[:2]
+    desired = {canonical: 30}
+    duplicated = {
+        ig_idx: replace(descriptor, first_def_sig=f"fixture-role:{ig_idx}")
+        for ig_idx, descriptor in descriptors.items()
+    }
+    duplicated[alias] = replace(duplicated[canonical], ig_idx=alias)
+    nonbaseline_side = "right" if baseline_side == "left" else "left"
+
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_descriptors",
+        lambda _compile, class_id: duplicated if class_id == 0 else {},
+    )
+
+    def prove_namespace(_reference, candidate_compile, class_id, count, reviewed=None):
+        del reviewed
+        assert class_id == 0
+        assert count == virtual_count
+        if candidate_compile.source == sources[nonbaseline_side]:
+            return None
+        return {role: role for role in range(count)}
+
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "prove_virtual_namespace_map",
+        prove_namespace,
+    )
+
+    def color_profile(
+        _pcdump: str,
+        _function: str,
+        _class_id: int,
+        role_map: dict[int, int],
+        *,
+        required_roles: frozenset[int],
+    ) -> ColorGraphProfile:
+        roles = tuple(sorted(set(role_map.values())))
+        return ColorGraphProfile(
+            assignments=tuple((role, desired.get(role, 0)) for role in roles),
+            simplify_order=roles,
+            select_order=roles,
+            interference_edges=frozenset(),
+            coalesce_pairs=frozenset(),
+            spills=frozenset(),
+            complete=required_roles <= set(roles),
+        )
+
+    monkeypatch.setattr(objectives_module, "build_colorgraph_profile", color_profile)
+    monkeypatch.setattr(evaluator_module, "build_colorgraph_profile", color_profile)
+    monkeypatch.setattr(evaluator_module, "_stack_axis", lambda *_args: (0, 0, 0, 0))
+    monkeypatch.setattr(evaluator_module, "_objobject_axis", lambda *_args: (0, 0))
+
+    def score_rows(rows, _score_config):
+        fixture.score_calls += 1
+        row = rows[0]
+        mask = int(row["candidate_id"].split("-")[1], 2)
+        source = Path(row["source_file"])
+        fixture.captured_sources[mask] = source.read_bytes()
+        dump = dumps["left"] if mask != 3 else dumps["right"]
+        return [
+            {
+                **row,
+                "pcdump_path": str(dump),
+                "score_returncode": 0,
+                "score_error_kind": None,
+                "score_stderr": "",
+                "checkdiff_evidence": {
+                    "match": False,
+                    "target_asm": ["+000: 38 60 00 00 li r3,0"],
+                    "current_asm": ["+000: 38 80 00 00 li r4,0"],
+                    "classification": {"primary": "instruction-identical"},
+                },
+            }
+        ]
+
+    base = fixture.backends()
+    backends = replace(
+        base,
+        evaluation=replace(base.evaluation, score_rows=score_rows),
+    )
+    target = tmp_path / f"target-{baseline_side}.yaml"
+    parent_maps = {
+        baseline_side: {canonical: canonical},
+        nonbaseline_side: {canonical: alias},
+    }
+    target.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "delta-minimize-color-target.v2",
+                "function": "f",
+                "class_id": 0,
+                "baseline_side": baseline_side,
+                "baseline_dump": str(dumps[baseline_side]),
+                "force_phys": desired,
+                "coalesce_preservation": False,
+                "parent_role_bindings": {
+                    side: {
+                        "source_sha256": hashlib.sha256(sources[side].encode()).hexdigest(),
+                        "pcdump_sha256": hashlib.sha256(dumps[side].read_bytes()).hexdigest(),
+                        "canonical_to_parent": parent_maps[side],
+                    }
+                    for side in ("left", "right")
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    cflags = tmp_path / "unit.c"
+    cflags.write_text("/* unit */\n", encoding="utf-8")
+    config = DeltaMinimizeConfig(
+        function="f",
+        left=left,
+        right=right,
+        out_dir=tmp_path / f"run-{baseline_side}",
+        max_candidates=64,
+        target_path=target,
+        donor_overrides={
+            "color": baseline_side,
+            "objobjects": baseline_side,
+            "stack-homes": baseline_side,
+        },
+        include_objobjects=True,
+        melee_root=tmp_path,
+        cflags_from=cflags,
+    )
+
+    discovered = run_delta_minimize(config, backends=backends)
+    request = load_review_request(config.out_dir / "namespace-review-request.yaml")
+
+    assert discovered.status == "incomplete"
+    assert request.canonical_artifact_id == f"parent:{baseline_side}"
+    assert dict(request.reviewed_anchors) == {canonical: alias}
+    full_map = {role: role for role in request.domain}
+    full_map[canonical], full_map[alias] = alias, canonical
+    map_path = tmp_path / f"{nonbaseline_side}-map.yaml"
+    map_path.write_text(yaml.safe_dump(full_map, sort_keys=True), encoding="utf-8")
+    reviewed = seal_namespace_review(
+        request,
+        identity_ids=(),
+        map_paths={f"parent:{nonbaseline_side}": map_path},
+    )
+    review_path = tmp_path / f"reviewed-{baseline_side}.yaml"
+    reviewed.write(review_path)
+
+    rerun = run_delta_minimize(
+        replace(config, namespace_review_path=review_path),
+        backends=backends,
+    )
+
+    assert rerun.status in {"matched", "joint-zero", "frontier"}
+    assert rerun.pareto is not None
+    assert rerun.candidate_counts == {"legal": 4, "viable": 4, "complete": 4}
+    assert fixture.score_calls == 4
+    resolution_path = config.out_dir / rerun.objective_manifest["namespace_resolution"]["resolution_artifact"]
+    resolution = json.loads(resolution_path.read_text(encoding="utf-8"))
+    assert resolution["resolutions"][f"parent:{nonbaseline_side}"]["source"] == "reviewed-v1"
