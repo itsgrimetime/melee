@@ -343,8 +343,9 @@ def _normalized_occurrences(
     virtual_maps: Mapping[str, Mapping[int, int]],
     *,
     reference: bool,
-) -> dict[tuple[str, int], tuple] | None:
+) -> tuple[dict[tuple[str, int], tuple], tuple] | None:
     occurrences: dict[tuple[str, int], list[tuple]] = defaultdict(list)
+    instruction_stream: list[tuple] = []
     for block in semantic_pass.blocks:
         if block.index not in canonical_blocks:
             return None
@@ -400,6 +401,9 @@ def _normalized_occurrences(
             )
             if unresolved:
                 return None
+            instruction_stream.append(
+                (canonical_block, instruction_ordinal, normalized_instruction)
+            )
             for operand_ordinal, (kind, number) in enumerate(instruction.regs):
                 if number < 32:
                     continue
@@ -412,7 +416,10 @@ def _normalized_occurrences(
                         normalized_instruction,
                     )
                 )
-    return {role: tuple(sorted(items)) for role, items in occurrences.items()}
+    return (
+        {role: tuple(sorted(items)) for role, items in occurrences.items()},
+        tuple(sorted(instruction_stream)),
+    )
 
 
 def prove_virtual_namespace_map(
@@ -510,19 +517,23 @@ def prove_virtual_namespace_map(
         or any(candidate_to_reference[reg_kind].get(key) != value for key, value in reviewed_map.items())
     ):
         return None
-    reference_occurrences = _normalized_occurrences(
+    reference_semantics = _normalized_occurrences(
         reference_pass,
         block_pairing.reference_canonical,
         candidate_to_reference,
         reference=True,
     )
-    candidate_occurrences = _normalized_occurrences(
+    candidate_semantics = _normalized_occurrences(
         candidate_pass,
         block_pairing.candidate_canonical,
         candidate_to_reference,
         reference=False,
     )
-    if reference_occurrences is None or candidate_occurrences is None:
+    if reference_semantics is None or candidate_semantics is None:
+        return None
+    reference_occurrences, reference_instructions = reference_semantics
+    candidate_occurrences, candidate_instructions = candidate_semantics
+    if candidate_instructions != reference_instructions:
         return None
     for kind, kind_map in candidate_to_reference.items():
         for candidate_ig, reference_ig in kind_map.items():

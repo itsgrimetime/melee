@@ -500,6 +500,26 @@ def test_pairwise_namespace_validates_seeded_role_second_occurrence() -> None:
     assert role_map is None
 
 
+def test_pairwise_namespace_validates_zero_virtual_branch_target() -> None:
+    baseline = _raw_namespace_compile()
+    changed = deepcopy(baseline)
+    virtual_count = baseline.fev.coalesce_sections[-1].n_virtuals
+    block = next(block for block in changed.fn.passes[0].blocks if block.index == 3)
+    branch = next(instruction for instruction in block.instructions if instruction.opcode == "bt")
+    assert branch.regs == []
+    assert branch.operands.endswith("B7")
+    branch.operands = branch.operands.removesuffix("B7") + "B4"
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        changed,
+        0,
+        virtual_count,
+    )
+
+    assert role_map is None
+
+
 def _reviewed_seed_compile() -> Compile:
     compile = _raw_namespace_compile()
     compile.fev.coalesce_sections[-1].n_virtuals = 61
