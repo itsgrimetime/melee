@@ -1677,6 +1677,143 @@ def test_fetch_job_refuses_symlinked_owned_destination_before_rsync(
     assert list(outside.iterdir()) == []
 
 
+def test_complete_refetch_clears_prior_partial_warning_after_manifest(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def partial_runner(argv: list[str], **_: object) -> pr.CommandResult:
+        if argv[0] == "ssh":
+            return pr.CommandResult(0, "stopped", "")
+        return pr.CommandResult(23, "", "partial")
+
+    dest = pr.fetch_job(job, runner=partial_runner)
+    warning = dest / "remote-fetch-warning.json"
+    assert warning.is_file()
+
+    pr.fetch_job(
+        job,
+        runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+    )
+
+    assert not warning.exists()
+    manifest = json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert manifest["state"] == "complete"
+    (dest / "remote-run" / "metadata.json").write_text(
+        json.dumps(job.__dict__, indent=2, sort_keys=True) + "\n"
+    )
+    inventory = lrr.inventory_local_remote_runs(
+        Path(job.local_perm_dir).parent.parent,
+        git_runner=lambda argv, **_: subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    assert inventory.runs[0].fetch_manifest_status == "complete"
+    assert "fetch-partial" not in inventory.runs[0].local_reasons
+
+
+def test_partial_refetch_keeps_and_updates_warning(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    stderr = "first partial"
+
+    def runner(argv: list[str], **_: object) -> pr.CommandResult:
+        if argv[0] == "ssh":
+            return pr.CommandResult(0, "stopped", "")
+        return pr.CommandResult(23, "", stderr)
+
+    dest = pr.fetch_job(job, runner=runner)
+    warning = dest / "remote-fetch-warning.json"
+    first = warning.read_bytes()
+    stderr = "second partial"
+    pr.fetch_job(job, runner=runner)
+
+    assert warning.is_file()
+    assert warning.read_bytes() != first
+    assert "second partial" in warning.read_text()
+    assert json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())["state"] == "partial"
+
+
+@pytest.mark.parametrize("unsafe_kind", ["symlink", "directory"])
+def test_partial_fetch_refuses_unsafe_warning_without_touching_outside(
+    tmp_path: Path,
+    unsafe_kind: str,
+) -> None:
+    job = _sample_job(tmp_path)
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    dest.mkdir(parents=True)
+    warning = dest / "remote-fetch-warning.json"
+    outside = tmp_path / "outside-warning"
+    outside.write_text("untouched")
+    if unsafe_kind == "symlink":
+        warning.symlink_to(outside)
+    else:
+        warning.mkdir()
+
+    def runner(argv: list[str], **_: object) -> pr.CommandResult:
+        if argv[0] == "ssh":
+            return pr.CommandResult(0, "stopped", "")
+        return pr.CommandResult(23, "", "partial")
+
+    with pytest.raises(pr.RemoteJobError, match="warning"):
+        pr.fetch_job(job, runner=runner)
+
+    assert outside.read_text() == "untouched"
+
+
+def test_complete_warning_clear_failure_is_controlled_and_remains_protected(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    dest.mkdir(parents=True)
+    warning = dest / "remote-fetch-warning.json"
+    outside = tmp_path / "outside-warning"
+    outside.write_text("untouched")
+    warning.symlink_to(outside)
+
+    with pytest.raises(pr.RemoteJobError, match="warning"):
+        pr.fetch_job(
+            job,
+            runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+        )
+
+    assert outside.read_text() == "untouched"
+    assert warning.is_symlink()
+    perm_root = Path(job.local_perm_dir).parent.parent
+    inventory = lrr.inventory_local_remote_runs(
+        perm_root,
+        git_runner=lambda argv, **_: subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    assert "fetch-warning-invalid" in inventory.runs[0].local_reasons
+
+
+def test_complete_manifest_failure_does_not_clear_prior_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    dest.mkdir(parents=True)
+    warning = dest / "remote-fetch-warning.json"
+    warning.write_text('{"status":"partial","job_id":"prior"}\n')
+    prior = warning.read_bytes()
+    monkeypatch.setattr(
+        lrr,
+        "write_local_fetch_manifest",
+        lambda *_args, **_kwargs: lrr.ManifestWriteResult(
+            "publish-failed",
+            dest / lrr.FETCH_MANIFEST_FILENAME,
+            "disk full",
+        ),
+    )
+
+    with pytest.raises(pr.RemoteJobError, match="fetch manifest"):
+        pr.fetch_job(
+            job,
+            runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+        )
+
+    assert warning.read_bytes() == prior
+
+
 def test_cleanup_remote_run_dir_deletes_only_remote_runs_child(tmp_path: Path) -> None:
     job = _sample_job(tmp_path)
     calls: list[tuple[list[str], bool]] = []

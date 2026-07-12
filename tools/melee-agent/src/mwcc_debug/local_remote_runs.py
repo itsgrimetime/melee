@@ -714,9 +714,11 @@ def write_local_fetch_manifest(
         return ManifestWriteResult("unsafe-existing", manifest, existing_detail)
 
     temp = run / f".melee-agent-local-fetch.{uuid.uuid4().hex}.tmp"
+    backup = run / f".melee-agent-local-fetch.{uuid.uuid4().hex}.backup"
     descriptor: int | None = None
     temp_identity: tuple[int, int] | None = None
     published = False
+    backup_created = False
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -762,7 +764,16 @@ def write_local_fetch_manifest(
                     manifest,
                     "existing manifest changed before update",
                 )
-            os.replace(temp, manifest)
+            _rename_no_replace(manifest, backup)
+            backup_created = True
+            backup_stat = backup.lstat()
+            if (
+                not stat.S_ISREG(backup_stat.st_mode)
+                or (backup_stat.st_dev, backup_stat.st_ino)
+                != (existing_stat.st_dev, existing_stat.st_ino)
+            ):
+                raise RuntimeError("manifest backup identity mismatch")
+            _rename_no_replace(temp, manifest)
             status = "updated"
         published = True
         _fsync_directory(run)
@@ -773,6 +784,13 @@ def write_local_fetch_manifest(
         )
         if readback.payload != payload:
             raise RuntimeError("published manifest readback mismatch")
+        if backup_created:
+            backup.unlink()
+            backup_created = False
+            try:
+                _fsync_directory(run)
+            except OSError:
+                pass
         return ManifestWriteResult(status, manifest)
     except Exception as exc:
         if published and temp_identity is not None:
@@ -785,6 +803,27 @@ def write_local_fetch_manifest(
                 ):
                     manifest.unlink()
                     _fsync_directory(run)
+            except OSError:
+                pass
+        if backup_created and existing_stat is not None:
+            try:
+                try:
+                    current_manifest = manifest.lstat()
+                except FileNotFoundError:
+                    current_manifest = None
+                if current_manifest is None:
+                    backup_stat = backup.lstat()
+                    if (
+                        stat.S_ISREG(backup_stat.st_mode)
+                        and (backup_stat.st_dev, backup_stat.st_ino)
+                        == (existing_stat.st_dev, existing_stat.st_ino)
+                    ):
+                        _rename_no_replace(backup, manifest)
+                        backup_created = False
+                        try:
+                            _fsync_directory(run)
+                        except OSError:
+                            pass
             except OSError:
                 pass
         return ManifestWriteResult(

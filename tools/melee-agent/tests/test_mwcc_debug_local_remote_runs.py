@@ -1911,6 +1911,43 @@ def test_write_fetch_manifest_cleans_temp_when_atomic_publish_fails(
     assert not list(run.glob(".melee-agent-local-fetch.*.tmp"))
 
 
+def test_write_fetch_manifest_update_restores_prior_on_post_publish_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    summary = _summary(perm_root)
+    assert summary.identity is not None
+    audit = {"total": 0, "by_status": {}, "by_semantic_risk_bucket": {}, "candidates": []}
+    first = lrr.write_local_fetch_manifest(
+        run,
+        identity=summary.identity,
+        state="partial",
+        candidate_audit=audit,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+    assert first.ok
+    prior = first.path.read_bytes()
+    monkeypatch.setattr(
+        lrr,
+        "_fsync_directory",
+        lambda _path: (_ for _ in ()).throw(OSError("fsync failed")),
+    )
+
+    update = lrr.write_local_fetch_manifest(
+        run,
+        identity=summary.identity,
+        state="complete",
+        candidate_audit=audit,
+        clock=lambda: datetime(2026, 7, 12, tzinfo=UTC),
+    )
+
+    assert update.status == "publish-failed"
+    assert first.path.read_bytes() == prior
+    assert not list(run.glob(".melee-agent-local-fetch.*"))
+
+
 def test_retain_local_remote_run_writes_bound_marker_and_protects_run(tmp_path: Path) -> None:
     perm_root = tmp_path / "decomp-permuter"
     run = _make_run(perm_root)
