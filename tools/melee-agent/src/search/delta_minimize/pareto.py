@@ -49,8 +49,7 @@ def reduce_pareto(
         profile
         for profile in viable
         if not any(
-            other.candidate_id != profile.candidate_id and dominates(other.axes, profile.axes)
-            for other in viable
+            other.candidate_id != profile.candidate_id and dominates(other.axes, profile.axes) for other in viable
         )
     ]
     return _build_summary(frontier, viable, atom_count=atom_count)
@@ -68,8 +67,7 @@ def _build_summary(
         frontier_by_vector[profile.axes].append(profile)
 
     groups = tuple(
-        _build_group(vector, frontier_by_vector[vector], atom_count=atom_count)
-        for vector in sorted(frontier_by_vector)
+        _build_group(vector, frontier_by_vector[vector], atom_count=atom_count) for vector in sorted(frontier_by_vector)
     )
     ordered_frontier = sorted(frontier, key=_stable_mask_key)
     frontier_ids = tuple(profile.candidate_id for profile in ordered_frontier)
@@ -83,7 +81,9 @@ def _build_summary(
     zero = AxisDistances.zero()
     zero_groups = [group for group in groups if group.objective_vector == zero]
     zero_ids = tuple(candidate_id for group in zero_groups for candidate_id in group.candidate_ids)
-    joint_ids = {candidate_id for group in zero_groups for candidate_id in (*group.minimal_from_left, *group.minimal_from_right)}
+    joint_ids = {
+        candidate_id for group in zero_groups for candidate_id in (*group.minimal_from_left, *group.minimal_from_right)
+    }
     frontier_by_id = {profile.candidate_id: profile for profile in ordered_frontier}
     joint_solutions = tuple(
         profile.candidate_id

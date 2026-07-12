@@ -411,9 +411,7 @@ def test_delta_minimize_cli_accepts_safe_relative_paths(monkeypatch, tmp_path: P
     assert captured["config"].out_dir == tmp_path / "results"
 
 
-def test_delta_minimize_cli_falls_back_to_cross_worktree_unit_path(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_delta_minimize_cli_falls_back_to_cross_worktree_unit_path(monkeypatch, tmp_path: Path) -> None:
     left, _right, _unit = _invoke_paths(tmp_path)
     repo_unit = tmp_path / "src" / "melee" / "mn" / "mndiagram.c"
     repo_unit.parent.mkdir(parents=True)
@@ -427,9 +425,7 @@ def test_delta_minimize_cli_falls_back_to_cross_worktree_unit_path(
     monkeypatch.setattr(
         search_cli,
         "_resolve_structure_source_file",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            search_cli.typer.BadParameter("function absent from report")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(search_cli.typer.BadParameter("function absent from report")),
     )
     monkeypatch.setattr(
         search_cli,

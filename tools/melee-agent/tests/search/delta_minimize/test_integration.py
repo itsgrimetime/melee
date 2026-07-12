@@ -10,13 +10,10 @@ from src.search.cli import search_app
 from src.search.delta_minimize.run import run_delta_minimize
 from tests.search.delta_minimize.test_run import _CountingFixture
 
-
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "delta_minimize"
 
 
-def test_wrapper_direct_fixture_has_exact_reproducible_frontier(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_wrapper_direct_fixture_has_exact_reproducible_frontier(monkeypatch, tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
     left = FIXTURES / "left.c"
     right = FIXTURES / "right.c"
