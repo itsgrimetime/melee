@@ -1485,6 +1485,35 @@ def _strict_registered_canonical_paths(
     return tuple(canonical_paths)
 
 
+def _common_git_dir_error(
+    common_git_dir: Path,
+    *,
+    locked_common_git_dir: Path,
+    locked_common_git_identity: tuple[int, int],
+    phase: str,
+) -> RetirementError | None:
+    try:
+        canonical = common_git_dir.resolve(strict=True)
+        canonical_stat = canonical.stat()
+        identity = (canonical_stat.st_dev, canonical_stat.st_ino)
+    except OSError as error:
+        return RetirementError(
+            reason="common-git-dir-changed",
+            detail=f"{phase} common Git directory is unavailable: {error}",
+        )
+    if (
+        canonical != locked_common_git_dir
+        or identity != locked_common_git_identity
+    ):
+        return RetirementError(
+            reason="common-git-dir-changed",
+            detail=(
+                f"{phase} common Git directory does not match the locked directory"
+            ),
+        )
+    return None
+
+
 def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult:
     """Plan or safely apply retirement of eligible registered worktrees."""
 
@@ -1554,42 +1583,18 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
                     preflight.global_errors, detail="preflight inspection failed"
                 ),
             )
-        try:
-            preflight_common_git_dir = preflight.common_git_dir.resolve(strict=True)
-            preflight_common_git_stat = preflight_common_git_dir.stat()
-            preflight_common_git_identity = (
-                preflight_common_git_stat.st_dev,
-                preflight_common_git_stat.st_ino,
-            )
-        except OSError as error:
+        common_git_error = _common_git_dir_error(
+            preflight.common_git_dir,
+            locked_common_git_dir=locked_common_git_dir,
+            locked_common_git_identity=locked_common_git_identity,
+            phase="preflight",
+        )
+        if common_git_error is not None:
             return RetirementResult(
                 planned=(),
                 removed=(),
                 skipped=(),
-                errors=(
-                    RetirementError(
-                        reason="common-git-dir-changed",
-                        detail=f"preflight common Git directory is unavailable: {error}",
-                    ),
-                ),
-            )
-        if (
-            preflight_common_git_dir != locked_common_git_dir
-            or preflight_common_git_identity != locked_common_git_identity
-        ):
-            return RetirementResult(
-                planned=(),
-                removed=(),
-                skipped=(),
-                errors=(
-                    RetirementError(
-                        reason="common-git-dir-changed",
-                        detail=(
-                            "preflight common Git directory does not match the "
-                            "locked directory"
-                        ),
-                    ),
-                ),
+                errors=(common_git_error,),
             )
 
         planned = _retirement_plan(preflight)
@@ -1607,6 +1612,15 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
                 current_report = _fresh_retirement_report(report)
             except WorktreeParseError as error:
                 errors.append(_porcelain_error(error, phase="revalidate"))
+                break
+            common_git_error = _common_git_dir_error(
+                current_report.common_git_dir,
+                locked_common_git_dir=locked_common_git_dir,
+                locked_common_git_identity=locked_common_git_identity,
+                phase=f"revalidation for {candidate.path}",
+            )
+            if common_git_error is not None:
+                errors.append(common_git_error)
                 break
             if current_report.global_errors:
                 errors.extend(

@@ -1776,6 +1776,50 @@ def test_retirement_late_global_failure_reports_partial_result(tmp_path: Path, m
     assert second.exists()
 
 
+@pytest.mark.parametrize("failure", ["changed", "unavailable"])
+def test_retirement_late_common_git_dir_failure_reports_partial_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    repo, first, _branch, _head = _old_retirement_fixture(tmp_path, "a-first")
+    _repo, second, _branch, _head = _old_retirement_fixture(tmp_path, "b-second")
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    real_inspect = worktrees.inspect_worktrees
+    calls = 0
+    changed_common_git_dir = tmp_path / "changed-common-git"
+    if failure == "changed":
+        changed_common_git_dir.mkdir()
+
+    def inspect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        current = real_inspect(
+            *args, process_snapshot=_quiet_snapshot(), **kwargs
+        )
+        if calls == 3:
+            return replace(current, common_git_dir=changed_common_git_dir)
+        return current
+
+    monkeypatch.setattr(worktrees, "inspect_worktrees", inspect)
+    initial = real_inspect(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=24,
+        process_snapshot=_quiet_snapshot(),
+    )
+
+    result = worktrees.retire_worktrees(initial, apply=True)
+
+    assert [item.path for item in result.removed] == [first]
+    assert result.skipped == ()
+    assert [error.reason for error in result.errors] == [
+        "common-git-dir-changed"
+    ]
+    assert not first.exists()
+    assert second.exists()
+
+
 def test_retirement_local_failure_continues_to_next_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, first, _branch, _head = _old_retirement_fixture(tmp_path, "a-first")
     _repo, second, _branch, _head = _old_retirement_fixture(tmp_path, "b-second")
