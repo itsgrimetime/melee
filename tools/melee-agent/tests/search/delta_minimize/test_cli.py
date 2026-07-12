@@ -640,6 +640,25 @@ def test_text_renderer_lists_all_blockers() -> None:
     ) in text
 
 
+def test_text_renderer_requests_versioned_target_for_role_ambiguity() -> None:
+    result = replace(
+        _result(status="incomplete"),
+        blockers=("ambiguous-color-target",),
+    )
+
+    text = render_delta_minimize_text(result)
+
+    assert (
+        "required override: --target PATH_TO_VERSIONED_DELTA_MINIMIZE_COLOR_TARGET"
+        in text
+    )
+    assert (
+        "cross-parent role ambiguity requires a v2 target with reviewed "
+        "cross-parent bindings"
+    ) in text
+    assert "PATH_TO_EXISTING_DELTA_MINIMIZE_COLOR_TARGET_V1" not in text
+
+
 def test_text_renderer_shell_quotes_only_recorded_resume_values() -> None:
     result = replace(
         _result(status="incomplete"),

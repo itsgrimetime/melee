@@ -268,7 +268,12 @@ def _recovery_lines(result: DeltaMinimizeResult) -> list[str]:
     blockers = set(result.blockers)
     lines: list[str] = []
     if "ambiguous-color-target" in blockers:
-        lines.append("required override: --target PATH_TO_EXISTING_DELTA_MINIMIZE_COLOR_TARGET_V1")
+        lines.extend(
+            (
+                "required override: --target PATH_TO_VERSIONED_DELTA_MINIMIZE_COLOR_TARGET",
+                "cross-parent role ambiguity requires a v2 target with reviewed cross-parent bindings",
+            )
+        )
     donor_axes = (
         ("ambiguous-color-donor", "color"),
         ("ambiguous-objobject-donor", "objobjects"),
