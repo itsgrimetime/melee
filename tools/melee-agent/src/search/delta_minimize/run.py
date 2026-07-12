@@ -51,7 +51,9 @@ from .evaluator import (
 )
 from .objectives import (
     COLOR_TARGET_SCHEMA,
+    COLOR_TARGET_SCHEMA_V2,
     OBJECTIVE_MANIFEST_SCHEMA,
+    ROLE_NAMESPACE_SCHEMA,
     AxisReference,
     ObjectiveManifest,
     ParentObjectiveEvidence,
@@ -61,9 +63,9 @@ from .objectives import (
 from .pareto import reduce_pareto
 from .store import DeltaRunStore
 
-PARSER_SCHEMA_HASH = "opcode.v1+color.v1+objobjects.v1+stack-homes.v1+delta-extractor.v2+candidate-evidence.v2"
+PARSER_SCHEMA_HASH = "opcode.v1+color.v1+objobjects.v1+stack-homes.v1+delta-extractor.v2+candidate-evidence.v3"
 RESULT_SCHEMA = "delta-minimize-result.v1"
-OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v2"
+OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v3"
 _OBJECTIVE_AXES = frozenset({"opcode", "color", "objobjects", "stack-homes"})
 _DONOR_OVERRIDE_AXES = frozenset({"color", "objobjects", "stack-homes"})
 _REGISTER_CLASSES = frozenset({0, 1})
@@ -408,7 +410,19 @@ def _validate_target_descriptor(payload: object, *, original_ig: int) -> None:
             raise ValueError
 
 
-def _validate_target_provenance(payload: object) -> None:
+def _valid_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _validate_target_provenance(
+    payload: object,
+    *,
+    desired_phys: Mapping[int, int],
+) -> None:
     if not isinstance(payload, Mapping):
         raise ValueError
     if set(payload) == {"inference", "parent"}:
@@ -421,6 +435,63 @@ def _validate_target_provenance(payload: object) -> None:
             or not isinstance(payload["baseline_dump"], str)
             or not payload["baseline_dump"]
         ):
+            raise ValueError
+        return
+    if set(payload) == {
+        "schema_version",
+        "baseline_side",
+        "baseline_dump",
+        "baseline_dump_sha256",
+        "parent_role_bindings",
+        "namespace_schema",
+    }:
+        baseline_side = payload["baseline_side"]
+        baseline_hash = payload["baseline_dump_sha256"]
+        bindings = payload["parent_role_bindings"]
+        if (
+            payload["schema_version"] != COLOR_TARGET_SCHEMA_V2
+            or baseline_side not in {"left", "right"}
+            or not isinstance(payload["baseline_dump"], str)
+            or not payload["baseline_dump"]
+            or not _valid_sha256(baseline_hash)
+            or payload["namespace_schema"] != ROLE_NAMESPACE_SCHEMA
+            or not isinstance(bindings, Mapping)
+            or tuple(bindings) != ("left", "right")
+        ):
+            raise ValueError
+        for side in ("left", "right"):
+            binding = bindings[side]
+            if (
+                not isinstance(binding, Mapping)
+                or set(binding) != {
+                    "source_sha256",
+                    "pcdump_sha256",
+                    "canonical_to_parent",
+                }
+                or not _valid_sha256(binding["source_sha256"])
+                or not _valid_sha256(binding["pcdump_sha256"])
+                or not isinstance(binding["canonical_to_parent"], Mapping)
+            ):
+                raise ValueError
+            canonical_to_parent: dict[int, int] = {}
+            for canonical, parent in binding["canonical_to_parent"].items():
+                if (
+                    not isinstance(canonical, str)
+                    or not canonical.isdecimal()
+                    or str(int(canonical)) != canonical
+                    or int(canonical) in canonical_to_parent
+                    or not _is_nonnegative_int(parent)
+                ):
+                    raise ValueError
+                canonical_to_parent[int(canonical)] = parent
+            if (
+                set(canonical_to_parent) != set(desired_phys)
+                or len(set(canonical_to_parent.values())) != len(canonical_to_parent)
+                or side == baseline_side
+                and any(canonical != parent for canonical, parent in canonical_to_parent.items())
+            ):
+                raise ValueError
+        if baseline_hash != bindings[baseline_side]["pcdump_sha256"]:
             raise ValueError
         return
     raise ValueError
@@ -455,7 +526,10 @@ def _validate_target_spec(
         or not payload["roles"]
     ):
         raise ValueError
-    _validate_target_provenance(payload["provenance"])
+    _validate_target_provenance(
+        payload["provenance"],
+        desired_phys=desired_phys,
+    )
     role_phys: dict[int, int] = {}
     ranked_roles: set[int] = set()
     for role in payload["roles"]:
@@ -625,9 +699,12 @@ def _validate_objective_donor_context(
             raise ValueError
 
         provenance = objective.target_spec["provenance"]
-        target_reason = (
-            "cross-parent-round-trip-derived-target" if "inference" in provenance else "explicit-versioned-color-target"
-        )
+        if "inference" in provenance:
+            target_reason = "cross-parent-round-trip-derived-target"
+        elif provenance["schema_version"] in {COLOR_TARGET_SCHEMA, COLOR_TARGET_SCHEMA_V2}:
+            target_reason = "explicit-versioned-color-target"
+        else:
+            raise ValueError
         color_override = overrides.get("color")
         if color_override is not None:
             color_reason = "explicit-color-donor-override"

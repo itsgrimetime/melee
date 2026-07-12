@@ -20,7 +20,7 @@ from .contracts import DeltaMinimizeError
 COLOR_TARGET_SCHEMA = "delta-minimize-color-target.v1"
 COLOR_TARGET_SCHEMA_V2 = "delta-minimize-color-target.v2"
 ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v1"
-OBJECTIVE_MANIFEST_SCHEMA = "delta-minimize-objectives.v1"
+OBJECTIVE_MANIFEST_SCHEMA = "delta-minimize-objectives.v2"
 _TARGET_FIELDS = frozenset(
     {
         "schema_version",
@@ -624,6 +624,45 @@ def _target_spec(
     )
 
 
+def _explicit_target_provenance(loaded: LoadedColorTarget) -> Mapping[str, Any]:
+    if loaded.schema_version == COLOR_TARGET_SCHEMA:
+        return {
+            "schema_version": loaded.schema_version,
+            "baseline_dump": str(loaded.baseline_dump),
+        }
+    if (
+        loaded.schema_version != COLOR_TARGET_SCHEMA_V2
+        or loaded.baseline_side not in {"left", "right"}
+        or set(loaded.parent_role_bindings) != {"left", "right"}
+    ):
+        raise DeltaMinimizeError("invalid-color-target-parent-bindings")
+    try:
+        baseline_dump_sha256 = hashlib.sha256(loaded.baseline_dump.read_bytes()).hexdigest()
+    except OSError as error:
+        raise DeltaMinimizeError("invalid-color-target-baseline") from error
+    bindings = {
+        side: {
+            "source_sha256": loaded.parent_role_bindings[side].source_sha256,
+            "pcdump_sha256": loaded.parent_role_bindings[side].pcdump_sha256,
+            "canonical_to_parent": {
+                str(canonical): parent
+                for canonical, parent in sorted(
+                    loaded.parent_role_bindings[side].canonical_to_parent.items()
+                )
+            },
+        }
+        for side in ("left", "right")
+    }
+    return {
+        "schema_version": COLOR_TARGET_SCHEMA_V2,
+        "baseline_side": loaded.baseline_side,
+        "baseline_dump": str(loaded.baseline_dump),
+        "baseline_dump_sha256": baseline_dump_sha256,
+        "parent_role_bindings": bindings,
+        "namespace_schema": ROLE_NAMESPACE_SCHEMA,
+    }
+
+
 def _role_identity_witness(descriptor: role_descriptor.RoleDescriptor) -> tuple[Any, ...]:
     """Return only semantic role facts that can prove raw-IG identity.
 
@@ -1177,6 +1216,128 @@ def _allocator_namespace_witness(
     )
 
 
+def _structural_namespace_witness(
+    compile: role_descriptor.Compile,
+    class_id: int,
+) -> Mapping[str, Any] | None:
+    """Return exact, versioned allocator namespace identity evidence.
+
+    The witness intentionally omits allocator outcomes that are scored as
+    objective lanes: physical assignments, interference edges, spill state,
+    and live ranges.  It retains only the per-IG semantic identity and the
+    allocator traversals/projections needed to prove that raw IG positions
+    name the same namespace in two independently captured dumps.
+    """
+    decisions = [
+        section
+        for section in compile.fev.colorgraph_sections
+        if section.class_id == class_id
+    ]
+    simplify = [
+        section
+        for section in compile.fev.simplify_sections
+        if section.class_id == class_id
+    ]
+    coalesce = [
+        section
+        for section in compile.fev.coalesce_sections
+        if section.class_id == class_id
+    ]
+    if not decisions or not simplify or not coalesce:
+        return None
+    decision_section = decisions[-1]
+    simplify_section = simplify[-1]
+    coalesce_section = coalesce[-1]
+    n_virtuals = coalesce_section.n_virtuals
+    if (
+        n_virtuals <= 0
+        or decision_section.result != 1
+        or decision_section.n_nodes < len(decision_section.decisions)
+        or len(decision_section.decisions) != len(simplify_section.entries)
+        or simplify_section.n_class_regs != n_virtuals
+        or coalesce_section.distinct_roots is None
+        or coalesce_section.truncated
+        or not coalesce_section.exit_valid
+        or coalesce_section.exit_class_id not in {None, class_id}
+        or coalesce_section.exit_n_virtuals not in {None, n_virtuals}
+        or coalesce_section.forced_count != len(coalesce_section.forced_overrides)
+    ):
+        return None
+
+    decision_order = tuple(
+        row.ig_idx
+        for row in sorted(
+            decision_section.decisions,
+            key=lambda item: item.iter_idx,
+        )
+        if row.ig_idx >= 0
+    )
+    simplify_order = tuple(
+        row.ig_idx
+        for row in sorted(
+            simplify_section.entries,
+            key=lambda item: item.iter_idx,
+        )
+        if row.ig_idx >= 0
+    )
+    if (
+        len(decision_order) != len(decision_section.decisions)
+        or len(set(decision_order)) != len(decision_order)
+        or len(set(simplify_order)) != len(simplify_order)
+        or any(ig_idx >= n_virtuals for ig_idx in decision_order)
+        or any(ig_idx >= n_virtuals for ig_idx in simplify_order)
+    ):
+        return None
+    descriptors = role_descriptor.build_descriptors(compile, class_id)
+    if set(descriptors) != set(decision_order):
+        return None
+
+    mappings = tuple(tuple(mapping) for mapping in coalesce_section.mappings)
+    overrides = tuple(tuple(override) for override in coalesce_section.forced_overrides)
+    if any(
+        len(mapping) != 2
+        or any(not _is_int(ig_idx) or not 0 <= ig_idx < n_virtuals for ig_idx in mapping)
+        for mapping in mappings
+    ) or any(
+        len(override) != 3
+        or any(not _is_int(ig_idx) or not 0 <= ig_idx < n_virtuals for ig_idx in override)
+        for override in overrides
+    ):
+        return None
+
+    semantic_roles = tuple(
+        (
+            ig_idx,
+            MappingProxyType({
+                "first_def_sig": descriptors[ig_idx].first_def_sig,
+                "use_site_multiset": tuple(
+                    tuple(item) for item in descriptors[ig_idx].use_site_multiset
+                ),
+                "is_param": descriptors[ig_idx].is_param,
+                "strong_name": (
+                    descriptors[ig_idx].var_name
+                    if descriptors[ig_idx].var_name
+                    and descriptors[ig_idx].var_confidence
+                    in {"best-guess", "verified"}
+                    else None
+                ),
+            }),
+        )
+        for ig_idx in sorted(descriptors)
+    )
+    return MappingProxyType(
+        {
+            "schema_version": ROLE_NAMESPACE_SCHEMA,
+            "class_id": class_id,
+            "virtual_count": n_virtuals,
+            "semantic_roles": semantic_roles,
+            "decision_order": decision_order,
+            "simplify_order": simplify_order,
+            "coalesce_mappings": mappings,
+            "forced_overrides": overrides,
+            "distinct_roots": coalesce_section.distinct_roots,
+        }
+    )
 def _assignment_distance(profile: ColorGraphProfile, desired_phys: Mapping[int, int]) -> int:
     assignments = dict(profile.assignments)
     return sum(assignments.get(role) != physical for role, physical in desired_phys.items())
@@ -1278,10 +1439,7 @@ def infer_objective_manifest(
             baseline_compile,
             loaded.force_phys,
             loaded.class_id,
-            {
-                "schema_version": loaded.schema_version,
-                "baseline_dump": str(loaded.baseline_dump),
-            },
+            _explicit_target_provenance(loaded),
             loaded.coalesce_preservation,
         )
         _require_complete_reanchor(

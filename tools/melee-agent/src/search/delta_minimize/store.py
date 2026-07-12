@@ -19,7 +19,7 @@ from src.search.store import ArtifactStore
 
 from .contracts import DeltaMinimizeError
 
-_EVIDENCE_SCHEMA = "delta-minimize-evidence.v1"
+_EVIDENCE_SCHEMA = "delta-minimize-evidence.v2"
 _CANDIDATE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}\Z")
 _PROVENANCE_FIELDS = frozenset(
     {

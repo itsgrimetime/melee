@@ -12,7 +12,7 @@ import pytest
 import src.search.delta_minimize.evaluator as evaluator_module
 import src.search.delta_minimize.objectives as objectives_module
 from src.mwcc_debug.colorgraph_profile import ColorGraphProfile
-from src.mwcc_debug.role_descriptor import Compile, build_descriptors, build_target_spec
+from src.mwcc_debug.role_descriptor import Compile, RoleDescriptor, build_descriptors, build_target_spec
 from src.search.delta_minimize.contracts import DeltaMinimizeError
 from src.search.delta_minimize.delta import MaterializedCandidate
 from src.search.delta_minimize.evaluator import (
@@ -23,7 +23,13 @@ from src.search.delta_minimize.evaluator import (
     capture_candidate,
     profile_candidate,
 )
-from src.search.delta_minimize.objectives import AxisReference, ObjectiveManifest
+from src.search.delta_minimize.objectives import (
+    COLOR_TARGET_SCHEMA_V2,
+    OBJECTIVE_MANIFEST_SCHEMA,
+    ROLE_NAMESPACE_SCHEMA,
+    AxisReference,
+    ObjectiveManifest,
+)
 from src.search.delta_minimize.store import DeltaRunStore
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "role_identity"
@@ -209,6 +215,366 @@ def test_asm_lines_ignores_checkdiff_blank_terminator() -> None:
         {"target_asm": ["+000: 38 60 00 00 li r3,0", ""]},
         "target_asm",
     ) == ["+000: 38 60 00 00 li r3,0"]
+
+
+def _namespace_compile() -> Compile:
+    text = (FIXTURES / "mnVibration_matched_pcdump.txt").read_text(encoding="utf-8")
+    return Compile.from_text(text, FUNCTION, "")
+
+
+def _namespace_descriptors(compile: Compile) -> dict[int, RoleDescriptor]:
+    return {
+        ig_idx: replace(
+            descriptor,
+            first_def_sig=f"ig:{ig_idx}:{descriptor.first_def_sig}",
+        )
+        for ig_idx, descriptor in build_descriptors(compile, 0).items()
+    }
+
+
+def test_structural_namespace_witness_excludes_allocator_outcome_lanes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = _namespace_compile()
+    changed = deepcopy(baseline)
+    baseline_descriptors = _namespace_descriptors(baseline)
+    changed_descriptors = {
+        ig_idx: replace(
+            descriptor,
+            assigned_reg=(descriptor.assigned_reg or 0) + 1,
+            live_range=(100, 200),
+            spilled=not descriptor.spilled,
+        )
+        for ig_idx, descriptor in baseline_descriptors.items()
+    }
+    decision = changed.fev.colorgraph_sections[-1].decisions[0]
+    decision.assigned_reg = (decision.assigned_reg + 1) % 32
+    decision.interferers = [(decision.ig_idx, decision.assigned_reg)]
+    decision.flags ^= 1
+    simplify = changed.fev.simplify_sections[-1].entries[0]
+    simplify.flags ^= 8
+    simplify.spilled = not simplify.spilled
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_descriptors",
+        lambda compile, _class_id: (
+            baseline_descriptors if compile is baseline else changed_descriptors
+        ),
+    )
+
+    baseline_witness = objectives_module._structural_namespace_witness(baseline, 0)
+    changed_witness = objectives_module._structural_namespace_witness(changed, 0)
+
+    assert baseline_witness == changed_witness
+    assert baseline_witness is not None
+    assert list(baseline_witness.items())[:2] == [
+        ("schema_version", ROLE_NAMESPACE_SCHEMA),
+        ("class_id", 0),
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "virtual-count",
+        "semantic-identity",
+        "decision-traversal",
+        "simplify-traversal",
+        "coalesce-mapping",
+        "forced-override",
+    ),
+)
+def test_structural_namespace_witness_distinguishes_identity_facts(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    baseline = _namespace_compile()
+    changed = deepcopy(baseline)
+    baseline_descriptors = _namespace_descriptors(baseline)
+    changed_descriptors = dict(baseline_descriptors)
+    if mutation == "virtual-count":
+        changed.fev.coalesce_sections[-1].n_virtuals += 1
+    elif mutation == "semantic-identity":
+        ig_idx = next(iter(changed_descriptors))
+        changed_descriptors[ig_idx] = replace(
+            changed_descriptors[ig_idx],
+            first_def_sig=f"changed:{changed_descriptors[ig_idx].first_def_sig}",
+        )
+    elif mutation == "decision-traversal":
+        first, second = changed.fev.colorgraph_sections[-1].decisions[:2]
+        first.iter_idx, second.iter_idx = second.iter_idx, first.iter_idx
+    elif mutation == "simplify-traversal":
+        first, second = [
+            row
+            for row in changed.fev.simplify_sections[-1].entries
+            if row.ig_idx >= 0
+        ][:2]
+        first.iter_idx, second.iter_idx = second.iter_idx, first.iter_idx
+    elif mutation == "coalesce-mapping":
+        section = changed.fev.coalesce_sections[-1]
+        section.mappings = [*section.mappings, (0, 1)]
+    else:
+        changed.fev.coalesce_sections[-1].forced_overrides.append((0, 0, 1))
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_descriptors",
+        lambda compile, _class_id: (
+            baseline_descriptors if compile is baseline else changed_descriptors
+        ),
+    )
+
+    baseline_witness = objectives_module._structural_namespace_witness(baseline, 0)
+    changed_witness = objectives_module._structural_namespace_witness(changed, 0)
+
+    assert baseline_witness is not None
+    assert changed_witness is None or changed_witness != baseline_witness
+
+
+def _v2_color_case(
+    tmp_path: Path,
+) -> tuple[
+    RawCandidateEvidence,
+    ObjectiveManifest,
+    ParentEvidenceBundle,
+    dict[str, Compile],
+]:
+    pcdump_text = (FIXTURES / "mnVibration_matched_pcdump.txt").read_text(encoding="utf-8")
+    raws: dict[str, RawCandidateEvidence] = {}
+    compiles: dict[str, Compile] = {}
+    for side, source_text in (
+        ("left", "int left(void) { return 1; }\n"),
+        ("right", "int right(void) { return 2; }\n"),
+        ("candidate", "int candidate(void) { return 3; }\n"),
+    ):
+        source = tmp_path / f"{side}.c"
+        pcdump = tmp_path / f"{side}.pcdump"
+        source.write_text(source_text, encoding="utf-8")
+        emitted_pcdump = pcdump_text if side != "candidate" else f"{pcdump_text}\n"
+        pcdump.write_text(emitted_pcdump, encoding="utf-8")
+        raws[side] = RawCandidateEvidence(
+            candidate_id=side,
+            mask=0,
+            source_path=str(source),
+            source_hash=hashlib.sha256(source.read_bytes()).hexdigest(),
+            compile_status="compiled",
+            viable=True,
+            pcdump_path=str(pcdump),
+            checkdiff_evidence={},
+            inspect_text=None,
+            compiler_stderr="",
+            pcdump_hash=hashlib.sha256(pcdump.read_bytes()).hexdigest(),
+        )
+        compiles[side] = Compile.from_text(emitted_pcdump, FUNCTION, source_text)
+    descriptors = _namespace_descriptors(compiles["left"])
+    desired = {ig_idx: 0 for ig_idx in descriptors}
+    target = build_target_spec(
+        compiles["left"],
+        desired,
+        0,
+        "force_proof_proxy",
+        {},
+    )
+    bindings = {
+        side: {
+            "source_sha256": raws[side].source_hash,
+            "pcdump_sha256": raws[side].pcdump_hash,
+            "canonical_to_parent": {
+                str(ig_idx): ig_idx for ig_idx in sorted(desired)
+            },
+        }
+        for side in ("left", "right")
+    }
+    provenance = {
+        "schema_version": COLOR_TARGET_SCHEMA_V2,
+        "baseline_side": "left",
+        "baseline_dump": raws["left"].pcdump_path,
+        "baseline_dump_sha256": raws["left"].pcdump_hash,
+        "parent_role_bindings": bindings,
+        "namespace_schema": ROLE_NAMESPACE_SCHEMA,
+    }
+    objective = ObjectiveManifest(
+        schema_version=OBJECTIVE_MANIFEST_SCHEMA,
+        function=FUNCTION,
+        class_id=0,
+        target_spec={**asdict(target), "provenance": provenance},
+        desired_phys=desired,
+        color_donor="left",
+        objobject_donor="left",
+        stack_home_donor=None,
+        references=_objective_stub().references,
+    )
+    parents = ParentEvidenceBundle(
+        raws["left"],
+        raws["right"],
+        "cflags",
+        "compiler",
+        "object",
+        "inspector-v1",
+        "parsers",
+    )
+    return raws["candidate"], objective, parents, compiles
+
+
+def _capture_color_role_maps(
+    monkeypatch: pytest.MonkeyPatch,
+    desired: dict[int, int],
+) -> list[dict[int, int]]:
+    captured: list[dict[int, int]] = []
+
+    def profile(_text, _function, _class_id, role_map, **_kwargs):
+        captured.append(dict(role_map))
+        roles = tuple(sorted(desired))
+        return ColorGraphProfile(
+            assignments=tuple((role, desired[role]) for role in roles),
+            simplify_order=roles,
+            select_order=roles,
+            interference_edges=frozenset(),
+            coalesce_pairs=frozenset(),
+            spills=frozenset(),
+            complete=True,
+        )
+
+    monkeypatch.setattr(evaluator_module, "build_colorgraph_profile", profile)
+    return captured
+
+
+def test_candidate_exact_parent_hashes_consume_reviewed_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate, objective, parents, compiles = _v2_color_case(tmp_path)
+    candidate = replace(
+        candidate,
+        source_path=parents.left.source_path,
+        source_hash=parents.left.source_hash,
+        pcdump_path=parents.left.pcdump_path,
+        pcdump_hash=parents.left.pcdump_hash,
+    )
+    captured = _capture_color_role_maps(monkeypatch, dict(objective.desired_phys))
+    monkeypatch.setattr(evaluator_module, "_compile", lambda raw, _function: compiles[raw.candidate_id])
+    monkeypatch.setattr(
+        evaluator_module.role_reanchor,
+        "reanchor",
+        lambda *_args, **_kwargs: pytest.fail("reviewed hash binding did not bypass reanchor"),
+    )
+
+    evaluator_module._color_axis(candidate, objective, parents)
+
+    expected = {ig_idx: ig_idx for ig_idx in objective.desired_phys}
+    assert captured == [expected, expected]
+
+
+def test_hybrid_equal_witness_inherits_parent_binding_despite_ambiguous_roles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate, objective, parents, compiles = _v2_color_case(tmp_path)
+    captured = _capture_color_role_maps(monkeypatch, dict(objective.desired_phys))
+    monkeypatch.setattr(evaluator_module, "_compile", lambda raw, _function: compiles[raw.candidate_id])
+    duplicate = {
+        ig_idx: replace(
+            descriptor,
+            first_def_sig="same",
+            use_site_multiset=(),
+            var_name=None,
+            var_confidence=None,
+        )
+        for ig_idx, descriptor in _namespace_descriptors(compiles["left"]).items()
+    }
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_descriptors",
+        lambda *_args: duplicate,
+    )
+    monkeypatch.setattr(
+        evaluator_module.role_reanchor,
+        "reanchor",
+        lambda *_args, **_kwargs: pytest.fail("equal witness did not bypass ambiguous reanchor"),
+    )
+
+    evaluator_module._color_axis(candidate, objective, parents)
+
+    expected = {ig_idx: ig_idx for ig_idx in objective.desired_phys}
+    assert captured == [expected, expected]
+
+
+def test_matching_both_parent_witnesses_requires_agreeing_bindings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate, objective, parents, compiles = _v2_color_case(tmp_path)
+    provenance = deepcopy(objective.target_spec["provenance"])
+    keys = sorted(objective.desired_phys)
+    provenance["parent_role_bindings"]["right"]["canonical_to_parent"] = {
+        str(canonical): parent for canonical, parent in zip(keys, reversed(keys), strict=True)
+    }
+    objective = replace(
+        objective,
+        target_spec={**dict(objective.target_spec), "provenance": provenance},
+    )
+    monkeypatch.setattr(evaluator_module, "_compile", lambda raw, _function: compiles[raw.candidate_id])
+
+    with pytest.raises(ValueError, match="conflicting proven parent role bindings"):
+        evaluator_module._color_axis(candidate, objective, parents)
+
+
+@pytest.mark.parametrize("same_dump", (False, True))
+def test_changed_namespace_or_source_falls_back_to_semantic_reanchor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    same_dump: bool,
+) -> None:
+    candidate, objective, parents, compiles = _v2_color_case(tmp_path)
+    if same_dump:
+        candidate = replace(
+            candidate,
+            pcdump_path=parents.left.pcdump_path,
+            pcdump_hash=parents.left.pcdump_hash,
+        )
+    monkeypatch.setattr(evaluator_module, "_compile", lambda raw, _function: compiles[raw.candidate_id])
+    monkeypatch.setattr(
+        evaluator_module,
+        "_structural_namespace_witness",
+        lambda compile, _class_id: {"compile": id(compile)},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        evaluator_module.role_reanchor,
+        "reanchor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("semantic-fallback")),
+    )
+
+    with pytest.raises(ValueError, match="^semantic-fallback$"):
+        evaluator_module._color_axis(candidate, objective, parents)
+
+
+def test_ambiguous_binding_fallback_makes_viable_candidate_incomplete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate, objective, parents, _compiles = _v2_color_case(tmp_path)
+    candidate = replace(
+        candidate,
+        checkdiff_evidence={
+            "match": False,
+            "target_asm": ["+000: 38 60 00 00 li r3,0"],
+            "current_asm": ["+000: 38 80 00 00 li r4,0"],
+        },
+        inspection_mode="no-objobjects",
+    )
+    monkeypatch.setattr(
+        evaluator_module,
+        "_color_axis",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("ambiguous binding fallback")),
+    )
+    monkeypatch.setattr(evaluator_module, "_stack_axis", lambda *_args, **_kwargs: (0, 0, 0, 0))
+
+    profile = profile_candidate(candidate, objective, parents=parents)
+
+    assert profile.viable is True
+    assert profile.complete is False
+    assert profile.axes is None
+    assert "incomplete-color-evidence" in profile.blockers
 
 
 def test_derived_target_uses_correlated_exact_allocator_namespace(

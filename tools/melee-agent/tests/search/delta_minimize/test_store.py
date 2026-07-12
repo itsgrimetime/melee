@@ -59,6 +59,21 @@ def test_complete_evidence_resumes_without_runner(tmp_path: Path) -> None:
     assert envelope["key_digest"] == KEY.digest()
 
 
+def test_candidate_evidence_schema_rejects_pre_binding_cache_payloads(
+    tmp_path: Path,
+) -> None:
+    store = DeltaRunStore(tmp_path)
+    store.write_evidence(KEY, {"status": "complete", "value": 7})
+    path = store.evidence_path(KEY)
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+
+    assert envelope["schema_version"] == "delta-minimize-evidence.v2"
+
+    envelope["schema_version"] = "delta-minimize-evidence.v1"
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    assert store.load_evidence(KEY) is None
+
+
 def test_evidence_key_digest_matches_the_frozen_canonical_contract() -> None:
     expected = hashlib.sha256(json.dumps(KEY.to_dict(), sort_keys=True).encode()).hexdigest()[:32]
 

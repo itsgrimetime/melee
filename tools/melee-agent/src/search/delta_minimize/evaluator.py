@@ -24,7 +24,13 @@ from ...mwcc_debug.source_candidate_scoring import ScoreSourceConfig, score_reta
 from ...mwcc_debug.stack_home_profile import build_stack_home_profile
 from ...mwcc_debug.stack_slot_bridge import explain_stack_slot_localizer
 from .contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
-from .objectives import ObjectiveManifest, _allocator_namespace_witness
+from .objectives import (
+    COLOR_TARGET_SCHEMA_V2,
+    ROLE_NAMESPACE_SCHEMA,
+    ObjectiveManifest,
+    _allocator_namespace_witness,
+    _structural_namespace_witness,
+)
 
 
 def _is_int(value: object) -> bool:
@@ -708,6 +714,180 @@ def _donor_raw(parents: ParentEvidenceBundle | None, side: str | None) -> RawCan
     return None
 
 
+def _evidence_content_hashes(evidence: RawCandidateEvidence) -> tuple[str, str]:
+    if evidence.pcdump_path is None:
+        raise ValueError("missing pcdump evidence")
+    source_hash = hashlib.sha256(Path(evidence.source_path).read_bytes()).hexdigest()
+    pcdump_hash = hashlib.sha256(Path(evidence.pcdump_path).read_bytes()).hexdigest()
+    if (
+        evidence.source_hash != source_hash
+        or evidence.pcdump_hash is None
+        or evidence.pcdump_hash != pcdump_hash
+    ):
+        raise ValueError("inconsistent candidate content hashes")
+    return source_hash, pcdump_hash
+
+
+def _v2_parent_role_maps(
+    objective: ObjectiveManifest,
+    parents: ParentEvidenceBundle,
+) -> dict[str, dict[int, int]] | None:
+    """Validate persisted reviewed bindings and invert them to raw role maps."""
+    provenance = objective.target_spec.get("provenance")
+    if not isinstance(provenance, Mapping):
+        return None
+    if provenance.get("schema_version") != COLOR_TARGET_SCHEMA_V2:
+        if {
+            "baseline_side",
+            "baseline_dump_sha256",
+            "parent_role_bindings",
+            "namespace_schema",
+        } & set(provenance):
+            raise ValueError("invalid v2 role binding provenance")
+        return None
+    if set(provenance) != {
+        "schema_version",
+        "baseline_side",
+        "baseline_dump",
+        "baseline_dump_sha256",
+        "parent_role_bindings",
+        "namespace_schema",
+    }:
+        raise ValueError("invalid v2 role binding provenance")
+    baseline_side = provenance["baseline_side"]
+    bindings = provenance["parent_role_bindings"]
+    if (
+        baseline_side not in {"left", "right"}
+        or not isinstance(provenance["baseline_dump"], str)
+        or not provenance["baseline_dump"]
+        or provenance["namespace_schema"] != ROLE_NAMESPACE_SCHEMA
+        or not isinstance(bindings, Mapping)
+        or tuple(bindings) != ("left", "right")
+    ):
+        raise ValueError("invalid v2 role binding provenance")
+    desired = set(objective.desired_phys)
+    raw_maps: dict[str, dict[int, int]] = {}
+    parent_rows = {"left": parents.left, "right": parents.right}
+    for side in ("left", "right"):
+        binding = bindings[side]
+        if (
+            not isinstance(binding, Mapping)
+            or set(binding) != {
+                "source_sha256",
+                "pcdump_sha256",
+                "canonical_to_parent",
+            }
+            or not isinstance(binding["source_sha256"], str)
+            or not isinstance(binding["pcdump_sha256"], str)
+            or not isinstance(binding["canonical_to_parent"], Mapping)
+        ):
+            raise ValueError("invalid v2 role binding provenance")
+        canonical_to_parent: dict[int, int] = {}
+        for raw_canonical, parent_ig in binding["canonical_to_parent"].items():
+            if (
+                not isinstance(raw_canonical, str)
+                or not raw_canonical.isdecimal()
+                or str(int(raw_canonical)) != raw_canonical
+                or int(raw_canonical) in canonical_to_parent
+                or not _is_int(parent_ig)
+                or parent_ig < 0
+            ):
+                raise ValueError("invalid v2 role binding provenance")
+            canonical_to_parent[int(raw_canonical)] = parent_ig
+        if (
+            set(canonical_to_parent) != desired
+            or len(set(canonical_to_parent.values())) != len(canonical_to_parent)
+            or side == baseline_side
+            and any(canonical != parent for canonical, parent in canonical_to_parent.items())
+        ):
+            raise ValueError("invalid v2 role binding provenance")
+        source_hash, pcdump_hash = _evidence_content_hashes(parent_rows[side])
+        if (
+            source_hash != binding["source_sha256"]
+            or pcdump_hash != binding["pcdump_sha256"]
+        ):
+            raise ValueError("unbound v2 parent role evidence")
+        raw_maps[side] = {
+            parent_ig: canonical
+            for canonical, parent_ig in canonical_to_parent.items()
+        }
+    if (
+        provenance["baseline_dump_sha256"]
+        != bindings[baseline_side]["pcdump_sha256"]
+    ):
+        raise ValueError("invalid v2 baseline binding")
+    return raw_maps
+
+
+def _agreeing_proven_map(
+    maps: Sequence[Mapping[int, int]],
+) -> dict[int, int] | None:
+    if not maps:
+        return None
+    first = dict(maps[0])
+    if any(dict(candidate) != first for candidate in maps[1:]):
+        raise ValueError("conflicting proven parent role bindings")
+    return first
+
+
+def _candidate_proven_role_map(
+    evidence: RawCandidateEvidence,
+    candidate_compile: role_descriptor.Compile,
+    objective: ObjectiveManifest,
+    parent_maps: Mapping[str, Mapping[int, int]],
+    parent_compiles: Mapping[str, role_descriptor.Compile],
+) -> dict[int, int] | None:
+    source_hash, pcdump_hash = _evidence_content_hashes(evidence)
+    provenance = objective.target_spec["provenance"]
+    bindings = provenance["parent_role_bindings"]
+    direct = [
+        parent_maps[side]
+        for side in ("left", "right")
+        if source_hash == bindings[side]["source_sha256"]
+        and pcdump_hash == bindings[side]["pcdump_sha256"]
+    ]
+    proven = _agreeing_proven_map(direct)
+    if proven is not None:
+        return proven
+
+    candidate_witness = _structural_namespace_witness(
+        candidate_compile,
+        objective.class_id,
+    )
+    if candidate_witness is None:
+        return None
+    inherited = [
+        parent_maps[side]
+        for side in ("left", "right")
+        if candidate_witness
+        == _structural_namespace_witness(
+            parent_compiles[side],
+            objective.class_id,
+        )
+    ]
+    return _agreeing_proven_map(inherited)
+
+
+def _overlay_graph_roles(
+    ordinary: Mapping[int, int],
+    proven: Mapping[int, int],
+) -> dict[int, int]:
+    merged = dict(ordinary)
+    for candidate_ig, donor_ig in proven.items():
+        existing = merged.get(candidate_ig)
+        if (
+            existing is not None
+            and existing != donor_ig
+            or any(
+                other_candidate != candidate_ig and other_donor == donor_ig
+                for other_candidate, other_donor in merged.items()
+            )
+        ):
+            raise ValueError("conflicting proven graph role binding")
+        merged[candidate_ig] = donor_ig
+    return merged
+
+
 def _color_axis(
     evidence: RawCandidateEvidence,
     objective: ObjectiveManifest,
@@ -744,7 +924,12 @@ def _color_axis(
         return tuple(colorgraph_distance(candidate_profile, donor_profile, desired).as_tuple())  # type: ignore[return-value]
 
     candidate_compile = _compile(evidence, objective.function)
-    donor_compile = _compile(donor_raw, objective.function)
+    parent_compiles = {
+        "left": _compile(parents.left, objective.function),
+        "right": _compile(parents.right, objective.function),
+    }
+    donor_side = "left" if objective.color_donor is None else objective.color_donor
+    donor_compile = parent_compiles[donor_side]
     target = _target_spec(objective.target_spec)
     candidate_witness = _allocator_namespace_witness(candidate_compile, objective.class_id)
     donor_witness = _allocator_namespace_witness(donor_compile, objective.class_id)
@@ -770,9 +955,41 @@ def _color_axis(
         )
         return tuple(colorgraph_distance(candidate_profile, donor_profile, desired).as_tuple())  # type: ignore[return-value]
 
-    candidate_target = role_reanchor.reanchor(target, candidate_compile, class_id=objective.class_id)
-    donor_target = role_reanchor.reanchor(target, donor_compile, class_id=objective.class_id)
-    if set(candidate_target.matched.values()) != set(desired) or set(donor_target.matched.values()) != set(desired):
+    parent_maps = _v2_parent_role_maps(objective, parents)
+    candidate_proven: dict[int, int] | None = None
+    donor_proven: dict[int, int] | None = None
+    if parent_maps is not None:
+        candidate_proven = _candidate_proven_role_map(
+            evidence,
+            candidate_compile,
+            objective,
+            parent_maps,
+            parent_compiles,
+        )
+        donor_proven = dict(parent_maps[donor_side])
+
+    if candidate_proven is None:
+        candidate_target = role_reanchor.reanchor(
+            target,
+            candidate_compile,
+            class_id=objective.class_id,
+        )
+        candidate_target_roles = dict(candidate_target.matched)
+    else:
+        candidate_target_roles = dict(candidate_proven)
+    if donor_proven is None:
+        donor_target = role_reanchor.reanchor(
+            target,
+            donor_compile,
+            class_id=objective.class_id,
+        )
+        donor_target_roles_raw = dict(donor_target.matched)
+    else:
+        donor_target_roles_raw = dict(donor_proven)
+    if (
+        set(candidate_target_roles.values()) != set(desired)
+        or set(donor_target_roles_raw.values()) != set(desired)
+    ):
         raise ValueError("incomplete target reanchor")
 
     donor_descriptors = role_descriptor.build_descriptors(donor_compile, objective.class_id)
@@ -785,23 +1002,57 @@ def _color_axis(
         "force_proof_proxy",
         {"inference": "delta-candidate-color-profile"},
     )
-    candidate_graph = role_reanchor.reanchor(graph_target, candidate_compile, class_id=objective.class_id)
-    if _load_text(evidence.pcdump_path) == _load_text(donor_raw.pcdump_path):
+    proven_graph_roles: dict[int, int] = {}
+    if candidate_proven is not None and donor_proven is not None:
+        donor_by_canonical = {
+            canonical: donor_ig for donor_ig, canonical in donor_proven.items()
+        }
+        proven_graph_roles = {
+            candidate_ig: donor_by_canonical[canonical]
+            for candidate_ig, canonical in candidate_proven.items()
+            if canonical in donor_by_canonical
+        }
+    if (
+        set(proven_graph_roles.values()) == set(donor_descriptors)
+        and len(proven_graph_roles) == len(donor_descriptors)
+    ):
+        candidate_graph_roles = proven_graph_roles
+    elif _load_text(evidence.pcdump_path) == _load_text(donor_raw.pcdump_path):
         # Byte-identical backend evidence has an exact IG identity relation;
         # using it is stronger than asking the descriptor matcher to break
         # ties between otherwise indistinguishable roles.
         candidate_graph_roles = {ig_idx: ig_idx for ig_idx in donor_descriptors}
     else:
-        if candidate_graph.diagnostics or set(candidate_graph.matched.values()) != set(donor_descriptors):
+        candidate_graph = role_reanchor.reanchor(
+            graph_target,
+            candidate_compile,
+            class_id=objective.class_id,
+        )
+        candidate_graph_roles = _overlay_graph_roles(
+            candidate_graph.matched,
+            proven_graph_roles,
+        )
+        unresolved = set(candidate_graph.diagnostics) - set(
+            proven_graph_roles.values()
+        )
+        if (
+            unresolved
+            or set(candidate_graph_roles.values()) != set(donor_descriptors)
+        ):
             raise ValueError("incomplete graph reanchor")
-        candidate_graph_roles = candidate_graph.matched
 
-    donor_target_roles = {ig_idx: original for ig_idx, original in donor_target.matched.items()}
-    donor_role_map = {ig_idx: donor_target_roles.get(ig_idx, 1_000_000 + ig_idx) for ig_idx in donor_descriptors}
+    donor_role_map = {
+        ig_idx: donor_target_roles_raw.get(ig_idx, 1_000_000 + ig_idx)
+        for ig_idx in donor_descriptors
+    }
     candidate_role_map = {
         candidate_ig: donor_role_map[donor_ig] for candidate_ig, donor_ig in candidate_graph_roles.items()
     }
-    candidate_role_map.update(candidate_target.matched)
+    for candidate_ig, canonical in candidate_target_roles.items():
+        existing = candidate_role_map.get(candidate_ig)
+        if existing is not None and existing != canonical:
+            raise ValueError("conflicting candidate target role binding")
+        candidate_role_map[candidate_ig] = canonical
     candidate_profile = build_colorgraph_profile(
         _load_text(evidence.pcdump_path),
         objective.function,

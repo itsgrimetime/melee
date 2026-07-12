@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -11,7 +12,13 @@ from src.search.delta_minimize import run as run_module
 from src.search.delta_minimize.contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
 from src.search.delta_minimize.delta import DeltaAtom, DeltaManifest
 from src.search.delta_minimize.evaluator import EvaluationBackends, RawCandidateEvidence
-from src.search.delta_minimize.objectives import AxisReference, ObjectiveManifest
+from src.search.delta_minimize.objectives import (
+    COLOR_TARGET_SCHEMA_V2,
+    OBJECTIVE_MANIFEST_SCHEMA,
+    ROLE_NAMESPACE_SCHEMA,
+    AxisReference,
+    ObjectiveManifest,
+)
 from src.search.delta_minimize.run import (
     DeltaMinimizeBackends,
     DeltaMinimizeConfig,
@@ -99,7 +106,7 @@ def _objective(
         ),
     }
     return ObjectiveManifest(
-        schema_version="delta-minimize-objectives.v1",
+        schema_version=OBJECTIVE_MANIFEST_SCHEMA,
         function="f",
         class_id=0,
         target_spec={
@@ -124,6 +131,101 @@ def _objective(
         stack_home_donor=stack_donor,
         references=references,
     )
+
+
+def _v2_objective() -> ObjectiveManifest:
+    objective = _objective()
+    provenance = {
+        "schema_version": COLOR_TARGET_SCHEMA_V2,
+        "baseline_side": "left",
+        "baseline_dump": "/evidence/left.pcdump",
+        "baseline_dump_sha256": "b" * 64,
+        "parent_role_bindings": {
+            "left": {
+                "source_sha256": "1" * 64,
+                "pcdump_sha256": "b" * 64,
+                "canonical_to_parent": {"1": 1},
+            },
+            "right": {
+                "source_sha256": "2" * 64,
+                "pcdump_sha256": "3" * 64,
+                "canonical_to_parent": {"1": 7},
+            },
+        },
+        "namespace_schema": ROLE_NAMESPACE_SCHEMA,
+    }
+    return replace(
+        objective,
+        target_spec={**dict(objective.target_spec), "provenance": provenance},
+        references={
+            **dict(objective.references),
+            "color": replace(
+                objective.references["color"],
+                inference_reason="explicit-versioned-color-target;lower-desired-assignment-distance",
+            ),
+        },
+    )
+
+
+def test_v2_objective_provenance_round_trips_with_exact_bindings() -> None:
+    payload = _v2_objective().to_dict()
+
+    restored = run_module._objective_from_dict(payload, function="f")
+
+    assert restored.to_dict() == payload
+    provenance = restored.target_spec["provenance"]
+    assert tuple(provenance["parent_role_bindings"]) == ("left", "right")
+    assert provenance["namespace_schema"] == ROLE_NAMESPACE_SCHEMA
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "left-source-hash",
+        "right-pcdump-hash",
+        "left-role-map",
+        "right-role-map",
+        "baseline-side",
+        "baseline-dump-hash",
+        "namespace-schema",
+        "added-field",
+        "removed-field",
+    ),
+)
+def test_v2_objective_provenance_tampering_fails_closed(mutation: str) -> None:
+    payload = deepcopy(_v2_objective().to_dict())
+    provenance = payload["target_spec"]["provenance"]
+    bindings = provenance["parent_role_bindings"]
+    if mutation == "left-source-hash":
+        bindings["left"]["source_sha256"] = "not-a-hash"
+    elif mutation == "right-pcdump-hash":
+        bindings["right"]["pcdump_sha256"] = "not-a-hash"
+    elif mutation == "left-role-map":
+        bindings["left"]["canonical_to_parent"] = {"1": 2}
+    elif mutation == "right-role-map":
+        bindings["right"]["canonical_to_parent"] = {"2": 7}
+    elif mutation == "baseline-side":
+        provenance["baseline_side"] = "middle"
+    elif mutation == "baseline-dump-hash":
+        provenance["baseline_dump_sha256"] = "4" * 64
+    elif mutation == "namespace-schema":
+        provenance["namespace_schema"] = "delta-minimize-role-namespace.v0"
+    elif mutation == "added-field":
+        provenance["unexpected"] = True
+    else:
+        del provenance["namespace_schema"]
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_module._objective_from_dict(payload, function="f")
+
+
+@pytest.mark.parametrize("side", ("left", "right"))
+def test_v2_binding_changes_objective_content_epoch(side: str) -> None:
+    original = _v2_objective().to_dict()
+    changed = deepcopy(original)
+    changed["target_spec"]["provenance"]["parent_role_bindings"][side]["source_sha256"] = "9" * 64
+
+    assert run_module._hash_json(changed) != run_module._hash_json(original)
 
 
 class _CountingFixture:
@@ -659,7 +761,7 @@ def test_objective_cache_persists_context_with_valid_digest(tmp_path: Path) -> N
     context = payload["context"]
     canonical = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
 
-    assert payload["schema_version"] == "delta-minimize-objective-inputs.v2"
+    assert payload["schema_version"] == "delta-minimize-objective-inputs.v3"
     assert payload["context_digest"] == hashlib.sha256(canonical).hexdigest()
     manifest = json.loads((config.out_dir / "objective-manifest.json").read_text(encoding="utf-8"))
     manifest_blob = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
@@ -676,6 +778,19 @@ def test_malformed_objective_cache_context_fails_closed(tmp_path: Path) -> None:
     cache_path = config.out_dir / "objective-inputs.json"
     payload = json.loads(cache_path.read_text(encoding="utf-8"))
     payload["context_digest"] = "0" * 64
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-cache-context$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_pre_binding_objective_input_schema_is_rejected(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    cache_path = config.out_dir / "objective-inputs.json"
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "delta-minimize-objective-inputs.v2"
     cache_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-cache-context$"):
@@ -715,7 +830,7 @@ def test_invalid_integrity_bound_objective_manifest_fails_closed(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     if mutation == "schema":
-        manifest["schema_version"] = "delta-minimize-objectives.v0"
+        manifest["schema_version"] = "delta-minimize-objectives.v1"
     elif mutation == "function":
         manifest["function"] = "other"
     elif mutation == "axis-deletion":
