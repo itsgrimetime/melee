@@ -124,8 +124,73 @@ would reduce those scores, but was not done here because Task 6 explicitly
 scopes the implementation to one production file and the current helpers map
 directly to separately tested contract gates.
 
-Capstone is present in the validated environment but is not declared by the
-current melee-agent project metadata. The validator therefore imports it only
-at decode time and fails closed if absent; changing dependency metadata would
-cross the requested Task 6 file boundary. Task 8 integration should confirm
-the packaged runtime supplies the target decoder before enabling v2 assembly.
+The initial implementation found Capstone present in the validation
+environment but absent from project metadata. The review remediation below
+resolves that packaging concern with an explicit bounded dependency while
+retaining fail-closed runtime handling.
+
+## Review remediation
+
+The Task 6 review was addressed in a second strict RED/GREEN cycle. The first
+adversarial selection reproduced 33 failures with 11 already-safe cases. The
+new tests prove the following corrections:
+
+1. Every raw rewrite and mutation row is closed-shape validated and its event
+   sequence is checked as an exact non-boolean integer before event merging.
+   Coverage and cap accounting use all raw rows, including malformed rows.
+2. Emission now participates in chronological shared-event replay. It freezes
+   complete PCode state, lineage parents, and allocator origins at the exact
+   emission sequence. A later rewrite cannot retroactively prove an earlier
+   anchor, and a final state changed after emission is rejected.
+3. The machine decoder now uses Capstone only to parse the instruction and raw
+   operands. A closed PowerPC semantic inventory supplies roles. REG operands
+   and MEM bases are flattened into deterministic positions; RA=0 is omitted;
+   update bases are `use-def`; indexed GPR/FPR, arithmetic, compare, branch,
+   special-register moves, and Gekko paired-single D forms are covered.
+   Unknown semantic forms and `lmw`/`stmw` reject the complete range. Missing
+   or extra flattened mappings are rejected. `capstone>=5,<6` is now a declared
+   melee-agent dependency.
+4. Register classes are closed to `(0, gpr, r)` and `(1, fpr, f)`. Every
+   serialized or decoded physical register is constrained to `0..31` before an
+   anchor can be constructed.
+5. Coverage counts, bounds, caps, drops, and top-level collection counters use
+   exact non-boolean RFC 8785-safe integers. Equal booleans/floats cannot pass
+   Python numeric equality.
+6. Candidate objects must be ELF32, big-endian, `EM_PPC`, and `ET_REL`; the
+   function must resolve uniquely to a positive-size defined `STT_FUNC` in an
+   executable `SHT_PROGBITS` section with an in-bounds extent.
+7. Mutation inputs use a closed operand shape that forbids
+   `parent_lineage_ids`; only fresh output definitions may serialize parents.
+8. The five negative JSON fixtures are now standalone invalid payloads loaded
+   directly by the parametrized validator test. Decoder tests extend beyond
+   ADDI through immediate, indexed, floating, update, special, memory-base,
+   paired-single, unsupported, and ambiguous cases.
+
+The focused suite now contains 101 tests. The optional C901 audit improved
+from 14 flagged helpers to 12 after extracting ELF validation/relocation
+parsing and PowerPC semantic/operand decoding helpers. No complexity warning
+is suppressed. Remaining reports are concentrated in the deliberately closed
+schema, transition, range, and coverage validators; default project Ruff is
+clean.
+
+The decoder dependency concern recorded above is resolved by the explicit
+project dependency. Runtime import still fails closed if an installation is
+broken rather than emitting heuristic evidence.
+
+Final post-review verification:
+
+```text
+python -m pytest \
+  tests/test_retro_backend_pcode_lineage.py \
+  tests/test_retro_backend_instrumentation_proof.py \
+  tests/test_retro_struct_map.py \
+  tests/test_retro_backend_object_bindings.py \
+  tests/test_retro_backend_identity.py \
+  tests/test_causal_diff_bundles.py -q -o addopts=''
+383 passed
+```
+
+`ruff format --check`, default `ruff check`, and `git diff --check` pass. The
+explicit optional C901 audit reports the 12 unsuppressed helpers summarized
+above and no longer reports the ELF or decoder helpers refactored during this
+review cycle.

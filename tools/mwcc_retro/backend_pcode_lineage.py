@@ -59,6 +59,15 @@ class _FunctionObjectView:
     relocations: tuple[tuple[int, int, int, str, int], ...]
 
 
+@dataclass(frozen=True)
+class _EmissionObservation:
+    pcode_id: str
+    event_sequence: int
+    state: Mapping[str, object]
+    parents: Mapping[str, tuple[str, ...]]
+    origins: Mapping[str, tuple[Mapping[str, object], ...]]
+
+
 @dataclass
 class _Context:
     errors: list[str]
@@ -75,6 +84,7 @@ class _Context:
     current: dict[str, Mapping[str, object]]
     parents: dict[str, tuple[str, ...]]
     origins: dict[str, list[Mapping[str, object]]]
+    allocatable_lineages: set[str]
 
 
 @dataclass(frozen=True)
@@ -107,6 +117,32 @@ def _nonnegative(value: object) -> bool:
 
 def _positive(value: object) -> bool:
     return _int(value) and value > 0
+
+
+def _physical(value: object) -> bool:
+    return _int(value) and 0 <= value <= 31
+
+
+_CLASS_SHAPES = {0: ("gpr", "r"), 1: ("fpr", "f")}
+
+
+def _validate_class_shape(
+    *,
+    class_id: object,
+    virtual_kind: object,
+    label: str,
+    errors: list[str],
+    class_name: object | None = None,
+) -> None:
+    shape = _CLASS_SHAPES.get(class_id) if _nonnegative(class_id) else None
+    if shape is None:
+        errors.append(f"{label} class_id must be 0 or 1")
+        return
+    expected_name, expected_kind = shape
+    if class_name is not None and class_name != expected_name:
+        errors.append(f"{label} class/class_name coupling is invalid")
+    if virtual_kind is not None and virtual_kind != expected_kind:
+        errors.append(f"{label} class/virtual kind coupling is invalid")
 
 
 def _sha(value: object) -> bool:
@@ -261,6 +297,7 @@ def _context(proof: object, errors: list[str]) -> _Context | None:
         {},
         {},
         {},
+        set(),
     )
 
 
@@ -336,6 +373,66 @@ def _active(ctx: _Context, address: object, generation: object, sequence: object
     return True
 
 
+def _validated_elf(stream: object) -> ELFFile:
+    ident = stream.read(16)
+    if len(ident) < 16 or ident[:4] != b"\x7fELF":
+        raise _Malformed("candidate object must be ELF")
+    if ident[4] != 1:
+        raise _Malformed("candidate object must be ELF32")
+    if ident[5] != 2:
+        raise _Malformed("candidate object must be big-endian")
+    stream.seek(0)
+    elf = ELFFile(stream)
+    if elf.elfclass != 32:
+        raise _Malformed("candidate object must be ELF32")
+    if elf.little_endian:
+        raise _Malformed("candidate object must be big-endian")
+    if elf.header["e_machine"] != "EM_PPC":
+        raise _Malformed("candidate object machine must be EM_PPC")
+    if elf.header["e_type"] != "ET_REL":
+        raise _Malformed("candidate object type must be ET_REL")
+    return elf
+
+
+def _unique_function_symbol(elf: ELFFile, function: str) -> object:
+    matches = [
+        symbol
+        for section in elf.iter_sections()
+        if isinstance(section, SymbolTableSection)
+        for symbol in section.iter_symbols()
+        if symbol.name == function and symbol["st_info"]["type"] == "STT_FUNC" and symbol["st_shndx"] != "SHN_UNDEF"
+    ]
+    if len(matches) != 1:
+        raise _Malformed(f"expected one defined function symbol {function!r}, found {len(matches)}")
+    return matches[0]
+
+
+def _object_relocations(elf: ELFFile, section_index: int) -> tuple[tuple[int, int, int, str, int], ...]:
+    rows: list[tuple[int, int, int, str, int]] = []
+    for relocation_section in elf.iter_sections():
+        if not isinstance(relocation_section, RelocationSection) or int(relocation_section["sh_info"]) != section_index:
+            continue
+        symbol_table = elf.get_section(relocation_section["sh_link"])
+        if not isinstance(symbol_table, SymbolTableSection):
+            raise _Malformed("relocation symbol table is invalid")
+        for relocation in relocation_section.iter_relocations():
+            symbol_index = int(relocation["r_info_sym"])
+            if symbol_index >= symbol_table.num_symbols():
+                raise _Malformed("relocation target symbol index is out of range")
+            target = symbol_table.get_symbol(symbol_index)
+            addend = int(relocation["r_addend"]) if relocation_section.is_RELA() else 0
+            rows.append(
+                (
+                    int(relocation["r_offset"]),
+                    int(relocation["r_info_type"]),
+                    symbol_index,
+                    target.name,
+                    addend,
+                )
+            )
+    return tuple(sorted(rows, key=lambda row: (row[0], row[1], row[2], row[4])))
+
+
 def _load_object(path: object, function: object) -> _FunctionObjectView:
     if not isinstance(path, (str, Path)):
         raise _Malformed("candidate object path must be path-like")
@@ -343,21 +440,8 @@ def _load_object(path: object, function: object) -> _FunctionObjectView:
         raise _Malformed("function must be non-empty string")
     function.encode("utf-8")
     with Path(path).open("rb") as stream:
-        elf = ELFFile(stream)
-        matches: list[tuple[SymbolTableSection, int, object]] = []
-        for section in elf.iter_sections():
-            if not isinstance(section, SymbolTableSection):
-                continue
-            for index, symbol in enumerate(section.iter_symbols()):
-                if (
-                    symbol.name == function
-                    and symbol["st_info"]["type"] == "STT_FUNC"
-                    and symbol["st_shndx"] != "SHN_UNDEF"
-                ):
-                    matches.append((section, index, symbol))
-        if len(matches) != 1:
-            raise _Malformed(f"expected one defined function symbol {function!r}, found {len(matches)}")
-        _symtab, _index, symbol = matches[0]
+        elf = _validated_elf(stream)
+        symbol = _unique_function_symbol(elf, function)
         size = int(symbol["st_size"])
         if size <= 0:
             raise _Malformed("function symbol must have positive size")
@@ -365,37 +449,22 @@ def _load_object(path: object, function: object) -> _FunctionObjectView:
         if not isinstance(section_index, int):
             raise _Malformed("function symbol section is not concrete")
         section = elf.get_section(section_index)
+        if section["sh_type"] != "SHT_PROGBITS":
+            raise _Malformed("function section must be SHT_PROGBITS")
+        if int(section["sh_flags"]) & 0x4 == 0:
+            raise _Malformed("function section must be executable")
         start = int(symbol["st_value"])
         data = bytes(section.data())
         if start < 0 or start + size > len(data):
             raise _Malformed("function symbol extent lies outside section")
-        relocations: list[tuple[int, int, int, str, int]] = []
-        for relocation_section in elf.iter_sections():
-            if (
-                not isinstance(relocation_section, RelocationSection)
-                or int(relocation_section["sh_info"]) != section_index
-            ):
-                continue
-            symbol_table = elf.get_section(relocation_section["sh_link"])
-            if not isinstance(symbol_table, SymbolTableSection):
-                raise _Malformed("relocation symbol table is invalid")
-            for relocation in relocation_section.iter_relocations():
-                symbol_index = int(relocation["r_info_sym"])
-                if symbol_index >= symbol_table.num_symbols():
-                    raise _Malformed("relocation target symbol index is out of range")
-                target = symbol_table.get_symbol(symbol_index)
-                addend = int(relocation["r_addend"]) if relocation_section.is_RELA() else 0
-                relocations.append(
-                    (
-                        int(relocation["r_offset"]),
-                        int(relocation["r_info_type"]),
-                        symbol_index,
-                        target.name,
-                        addend,
-                    )
-                )
-        relocations.sort(key=lambda row: (row[0], row[1], row[2], row[4]))
-        return _FunctionObjectView(section.name, section_index, start, size, data, tuple(relocations))
+        return _FunctionObjectView(
+            section.name,
+            section_index,
+            start,
+            size,
+            data,
+            _object_relocations(elf, section_index),
+        )
 
 
 _INSTRUCTION_FIELDS = frozenset(
@@ -539,7 +608,7 @@ def _validate_operands(
             ctx.errors.append(f"{label} operand {index} raw payload digest must be lowercase SHA-256")
         if "parent_lineage_ids" in row:
             if not allow_parents:
-                ctx.errors.append(f"{label} operand {index} snapshot must omit parent_lineage_ids")
+                ctx.errors.append(f"{label} operand {index} must omit parent_lineage_ids")
             parents = _rows(row.get("parent_lineage_ids"), f"{label} operand {index} parents", ctx.errors)
             if any(not isinstance(parent, str) or not parent for parent in parents):
                 ctx.errors.append(f"{label} operand {index} parents must be non-empty strings")
@@ -591,6 +660,12 @@ def _validate_parsed(
                         f"{label} parsed operand {index} allocation requirement/role/class disagrees with trusted rule"
                     )
         requirement = row.get("allocation_requirement")
+        _validate_class_shape(
+            class_id=row.get("class_id"),
+            virtual_kind=row.get("virtual_kind"),
+            label=f"{label} parsed operand {index}",
+            errors=ctx.errors,
+        )
         if requirement == "allocator-rewrite-required":
             if (
                 row.get("virtual_kind") not in ("r", "f")
@@ -602,9 +677,11 @@ def _validate_parsed(
             if (
                 row.get("virtual_kind") is not None
                 or row.get("virtual") is not None
-                or not _nonnegative(row.get("physical_register"))
+                or not _physical(row.get("physical_register"))
             ):
                 ctx.errors.append(f"{label} fixed operand has invalid virtual/physical shape")
+            if not _physical(row.get("physical_register")):
+                ctx.errors.append(f"{label} parsed operand {index} physical register must be in 0..31")
         else:
             ctx.errors.append(f"{label} has unknown allocation requirement")
         key = (
@@ -749,9 +826,14 @@ def _validate_instructions(
             inventory = _validate_operands(
                 snapshot.get("operand_lineage_inventory"), snapshot.get("arg_count"), label, ctx
             )
-            parsed_by_stage[str(stage)] = _validate_parsed(
-                snapshot.get("parsed_register_operands"), opcode_id, inventory, label, ctx
-            )
+            parsed_rows = _validate_parsed(snapshot.get("parsed_register_operands"), opcode_id, inventory, label, ctx)
+            parsed_by_stage[str(stage)] = parsed_rows
+            if snap_index == 0:
+                ctx.allocatable_lineages.update(
+                    str(parsed_row.get("operand_lineage_id"))
+                    for parsed_row in parsed_rows
+                    if parsed_row.get("allocation_requirement") == "allocator-rewrite-required"
+                )
             if snap_index == 0 and stage == "allocator_input" and isinstance(pcode_id, str):
                 for operand_row in inventory:
                     if isinstance(operand_row.get("operand_lineage_id"), str) and _nonnegative(
@@ -794,7 +876,13 @@ def _validate_instructions(
     return valid_rows, snapshots_by_stage
 
 
-def _validate_state(raw: object, label: str, ctx: _Context) -> Mapping[str, object] | None:
+def _validate_state(
+    raw: object,
+    label: str,
+    ctx: _Context,
+    *,
+    allow_parents: bool,
+) -> Mapping[str, object] | None:
     row = _closed(raw, _STATE_FIELDS, label, ctx.errors)
     if row is None:
         return None
@@ -813,7 +901,7 @@ def _validate_state(raw: object, label: str, ctx: _Context) -> Mapping[str, obje
         ctx.errors.append(f"{label} references unknown opcode_id")
     if not _nonnegative(row.get("arg_count")):
         ctx.errors.append(f"{label} arg_count must be nonnegative integer")
-    _validate_operands(row.get("operands"), row.get("arg_count"), label, ctx, allow_parents=True)
+    _validate_operands(row.get("operands"), row.get("arg_count"), label, ctx, allow_parents=allow_parents)
     pcode = ctx.pcode_rows.get(row.get("pcode_id")) if isinstance(row.get("pcode_id"), str) else None
     if pcode is None:
         ctx.errors.append(f"{label} references unknown pcode_id")
@@ -900,12 +988,17 @@ def _validate_rewrite(
                 ctx.errors.append(f"{label} {field} disagrees with parsed occurrence")
         if parsed.get("allocation_requirement") != "allocator-rewrite-required":
             ctx.errors.append(f"{label} rewrites a fixed physical operand")
-    if row.get("class_name") != ({0: "gpr", 1: "fpr"}.get(row.get("class_id"))):
-        ctx.errors.append(f"{label} class name disagrees with class id")
+    _validate_class_shape(
+        class_id=row.get("class_id"),
+        class_name=row.get("class_name"),
+        virtual_kind=row.get("virtual_kind"),
+        label=label,
+        errors=ctx.errors,
+    )
     if row.get("ig_id") != row.get("virtual"):
         ctx.errors.append(f"{label} virtual must equal ig_id")
-    if not _nonnegative(row.get("allocated_physical")):
-        ctx.errors.append(f"{label} allocated physical must be nonnegative integer")
+    if not _physical(row.get("allocated_physical")):
+        ctx.errors.append(f"{label} physical register must be in 0..31")
     if row.get("source_stage") != "allocator_operand_rewrite" or row.get("confidence") != "observed":
         ctx.errors.append(f"{label} source/confidence shape is invalid")
     lineage = row.get("operand_lineage_id")
@@ -953,12 +1046,12 @@ def _validate_mutation(
     inputs = [
         state
         for i, item in enumerate(input_raw)
-        if (state := _validate_state(item, f"{label} input {i}", ctx)) is not None
+        if (state := _validate_state(item, f"{label} input {i}", ctx, allow_parents=False)) is not None
     ]
     outputs = [
         state
         for i, item in enumerate(output_raw)
-        if (state := _validate_state(item, f"{label} output {i}", ctx)) is not None
+        if (state := _validate_state(item, f"{label} output {i}", ctx, allow_parents=True)) is not None
     ]
     input_ids = [state.get("pcode_id") for state in inputs]
     output_ids = [state.get("pcode_id") for state in outputs]
@@ -1061,22 +1154,86 @@ def _validate_mutation(
     return row
 
 
+def _observe_emission(
+    row: Mapping[str, object],
+    snapshots: Mapping[tuple[str, str], Mapping[str, object]],
+    ctx: _Context,
+) -> _EmissionObservation | None:
+    pcode_id = str(row.get("pcode_id"))
+    label = f"PCode {pcode_id} emission"
+    snapshot = snapshots.get((pcode_id, "code_emission"))
+    if snapshot is None:
+        ctx.errors.append(f"{label} event lacks code_emission snapshot")
+        return None
+    if ctx.emission_sites.get(row.get("emission_site_id")) is None:
+        ctx.errors.append(f"PCode {pcode_id} references unknown emission site")
+    if row.get("emission_runtime_address") != row.get("runtime_address") or row.get(
+        "emission_allocation_generation"
+    ) != row.get("allocation_generation"):
+        ctx.errors.append(f"{label} raw identity does not reconstruct pcode_id")
+    _active(
+        ctx,
+        row.get("emission_runtime_address"),
+        row.get("emission_allocation_generation"),
+        row.get("emission_lifecycle_sequence_at_capture"),
+        label,
+    )
+    current_state = ctx.current.get(pcode_id)
+    emitted_state = _state_from_snapshot(row, snapshot)
+    if current_state is None or _state_signature(current_state) != _state_signature(emitted_state):
+        ctx.errors.append(f"{label} snapshot disagrees with replay state at emission sequence")
+    sequence = row.get("emission_event_sequence")
+    if not _nonnegative(sequence):
+        ctx.errors.append(f"{label} event sequence must be nonnegative integer")
+        return None
+    return _EmissionObservation(
+        pcode_id,
+        sequence,
+        emitted_state,
+        MappingProxyType(dict(ctx.parents)),
+        MappingProxyType({key: tuple(values) for key, values in ctx.origins.items()}),
+    )
+
+
 def _replay_pcode_events(
     payload: Mapping[str, object],
     snapshots: Mapping[tuple[str, str], Mapping[str, object]],
     ctx: _Context,
-) -> tuple[list[Mapping[str, object]], list[Mapping[str, object]], list[tuple[int, str, Mapping[str, object]]]]:
+) -> tuple[
+    list[Mapping[str, object]],
+    list[Mapping[str, object]],
+    list[tuple[int, str, Mapping[str, object]]],
+    list[_EmissionObservation],
+]:
     rewrite_raw = _rows(payload.get("pcode_occurrences"), "pcode_occurrences", ctx.errors)
     mutation_raw = _rows(payload.get("pcode_operand_lineage_events"), "pcode_operand_lineage_events", ctx.errors)
     rewrites: list[Mapping[str, object]] = []
     mutations: list[Mapping[str, object]] = []
+    emissions: list[_EmissionObservation] = []
     events: list[tuple[int, str, Mapping[str, object]]] = []
-    for index, row in enumerate(rewrite_raw):
-        if isinstance(row, Mapping) and _nonnegative(row.get("pcode_event_sequence")):
-            events.append((row["pcode_event_sequence"], "rewrite", row))
-    for index, row in enumerate(mutation_raw):
-        if isinstance(row, Mapping) and _nonnegative(row.get("pcode_event_sequence")):
-            events.append((row["pcode_event_sequence"], "mutation", row))
+    raw_rewrite_keys: list[tuple[int, str, int]] = []
+    raw_mutation_sequences: list[int] = []
+    for index, raw_row in enumerate(rewrite_raw):
+        row = _closed(raw_row, _REWRITE_FIELDS, f"PCode rewrite {index}", ctx.errors)
+        if row is None:
+            continue
+        sequence = row.get("pcode_event_sequence")
+        if not _nonnegative(sequence):
+            ctx.errors.append(f"PCode rewrite {index} event sequence must be nonnegative integer")
+            continue
+        events.append((sequence, "rewrite", row))
+        if isinstance(row.get("pcode_id"), str) and _nonnegative(row.get("operand_index")):
+            raw_rewrite_keys.append((sequence, row["pcode_id"], row["operand_index"]))
+    for index, raw_row in enumerate(mutation_raw):
+        row = _closed(raw_row, _MUTATION_FIELDS, f"PCode mutation {index}", ctx.errors)
+        if row is None:
+            continue
+        sequence = row.get("pcode_event_sequence")
+        if not _nonnegative(sequence):
+            ctx.errors.append(f"PCode mutation {index} event sequence must be nonnegative integer")
+            continue
+        events.append((sequence, "mutation", row))
+        raw_mutation_sequences.append(sequence)
     for row in ctx.pcode_rows.values():
         if _nonnegative(row.get("emission_event_sequence")):
             events.append((row["emission_event_sequence"], "emission", row))
@@ -1104,18 +1261,18 @@ def _replay_pcode_events(
             )
             if validated is not None:
                 mutations.append(validated)
-    rewrite_keys = [
-        (row.get("pcode_event_sequence"), row.get("pcode_id"), row.get("operand_index")) for row in rewrites
-    ]
-    if rewrite_keys != sorted(rewrite_keys):
+        elif kind == "emission":
+            observation = _observe_emission(row, snapshots, ctx)
+            if observation is not None:
+                emissions.append(observation)
+    if raw_rewrite_keys != sorted(raw_rewrite_keys):
         ctx.errors.append("pcode_occurrences must be canonically ordered")
-    mutation_sequences = [row.get("pcode_event_sequence") for row in mutations]
-    if mutation_sequences != sorted(mutation_sequences):
+    if raw_mutation_sequences != sorted(raw_mutation_sequences):
         ctx.errors.append("pcode_operand_lineage_events must be canonically ordered")
     for (pcode_id, stage), _snapshot in snapshots.items():
         if stage == "mutation_output" and mutation_outputs_seen[pcode_id] != 1:
             ctx.errors.append(f"PCode {pcode_id} mutation_output snapshot must correspond to exactly one new output")
-    return rewrites, mutations, events
+    return rewrites, mutations, events, emissions
 
 
 _RANGE_FIELDS = frozenset({"start", "end_exclusive", "bytes", "relocations", "machine_operand_mappings"})
@@ -1134,22 +1291,39 @@ _MAPPING_FIELDS = frozenset(
 )
 
 
-def _lineage_origins(lineage: str, ctx: _Context, active: set[str] | None = None) -> list[Mapping[str, object]]:
+def _lineage_origins(
+    lineage: str,
+    ctx: _Context,
+    active: set[str] | None = None,
+    *,
+    parents: Mapping[str, tuple[str, ...]] | None = None,
+    origins: Mapping[str, tuple[Mapping[str, object], ...]] | None = None,
+) -> list[Mapping[str, object]]:
     stack = set() if active is None else active
     if lineage in stack:
         ctx.errors.append(f"cyclic operand lineage at {lineage}")
         return []
-    direct = ctx.origins.get(lineage, [])
+    parent_map = ctx.parents if parents is None else parents
+    origin_map: Mapping[str, object] = ctx.origins if origins is None else origins
+    direct = origin_map.get(lineage, [])
     if direct:
         return list(direct)
-    parents = ctx.parents.get(lineage)
-    if parents is None:
+    lineage_parents = parent_map.get(lineage)
+    if lineage_parents is None:
         ctx.errors.append(f"undeclared operand lineage {lineage}")
         return []
     stack.add(lineage)
     result: list[Mapping[str, object]] = []
-    for parent in parents:
-        result.extend(_lineage_origins(parent, ctx, stack))
+    for parent in lineage_parents:
+        result.extend(
+            _lineage_origins(
+                parent,
+                ctx,
+                stack,
+                parents=parent_map,
+                origins=origins,
+            )
+        )
     stack.remove(lineage)
     unique: dict[tuple[object, ...], Mapping[str, object]] = {}
     for origin in result:
@@ -1158,57 +1332,304 @@ def _lineage_origins(lineage: str, ctx: _Context, active: set[str] | None = None
     return list(unique.values())
 
 
+_INDEXED_LOADS = frozenset(
+    {
+        "lbzx",
+        "lbzux",
+        "lhzx",
+        "lhzux",
+        "lhax",
+        "lhaux",
+        "lwzx",
+        "lwzux",
+        "lwbrx",
+        "lwarx",
+        "eciwx",
+        "lfsx",
+        "lfsux",
+        "lfdx",
+        "lfdux",
+    }
+)
+_INDEXED_LOAD_UPDATES = frozenset({"lbzux", "lhzux", "lhaux", "lwzux", "lfsux", "lfdux"})
+_INDEXED_STORES = frozenset(
+    {
+        "stbx",
+        "stbux",
+        "sthx",
+        "sthux",
+        "stwx",
+        "stwux",
+        "sthbrx",
+        "stwbrx",
+        "stwcx",
+        "ecowx",
+        "stfsx",
+        "stfsux",
+        "stfdx",
+        "stfdux",
+    }
+)
+_INDEXED_STORE_UPDATES = frozenset({"stbux", "sthux", "stwux", "stfsux", "stfdux"})
+_INTEGER_RESULTS = frozenset(
+    {
+        "add",
+        "addc",
+        "adde",
+        "addme",
+        "addze",
+        "subf",
+        "subfc",
+        "subfe",
+        "subfme",
+        "subfze",
+        "neg",
+        "mullw",
+        "mulhw",
+        "mulhwu",
+        "divw",
+        "divwu",
+        "and",
+        "andc",
+        "or",
+        "orc",
+        "xor",
+        "nand",
+        "nor",
+        "eqv",
+        "slw",
+        "srw",
+        "sraw",
+        "srawi",
+        "cntlzw",
+        "extsb",
+        "extsh",
+        "mr",
+        "not",
+    }
+)
+_COMPARE_OR_TRAP = frozenset({"cmpw", "cmplw", "tw", "td", "fcmpu", "fcmpo"})
+_SPECIAL_DEFS = frozenset({"mfcr", "mfctr", "mflr", "mfxer", "mfspr", "mftb", "mffs"})
+_SPECIAL_USES = frozenset({"mtcrf", "mtctr", "mtlr", "mtxer", "mtspr", "mtfsf"})
+_CACHE_USES = frozenset({"dcbf", "dcbi", "dcbst", "dcbt", "dcbtst", "dcbz", "icbi"})
+_FLOAT_RESULTS = frozenset(
+    {
+        "fadd",
+        "fadds",
+        "fsub",
+        "fsubs",
+        "fmul",
+        "fmuls",
+        "fdiv",
+        "fdivs",
+        "fsqrt",
+        "fsqrts",
+        "fres",
+        "frsqrte",
+        "fsel",
+        "fmadd",
+        "fmadds",
+        "fmsub",
+        "fmsubs",
+        "fnmadd",
+        "fnmadds",
+        "fnmsub",
+        "fnmsubs",
+        "fmr",
+        "fabs",
+        "fnabs",
+        "fneg",
+        "frsp",
+        "fctiw",
+        "fctiwz",
+    }
+)
+_PRIMARY_SEMANTIC_FORMS = {
+    **{primary: "load" for primary in (32, 34, 40, 42, 48, 50)},
+    **{primary: "load-update" for primary in (33, 35, 41, 43, 49, 51)},
+    **{primary: "store" for primary in (36, 38, 44, 52, 54)},
+    **{primary: "store-update" for primary in (37, 39, 45, 53, 55)},
+    **{primary: "all-use" for primary in (2, 3, 10, 11)},
+    **{primary: "result" for primary in (7, 8, 12, 13, 14, 15, 21, 23, 24, 25, 26, 27, 28, 29)},
+    20: "result-update",
+    **{primary: "no-register" for primary in (16, 17, 18, 19)},
+}
+_MNEMONIC_SEMANTIC_FORMS = {
+    **{mnemonic: "indexed-load" for mnemonic in _INDEXED_LOADS},
+    **{mnemonic: "indexed-store" for mnemonic in _INDEXED_STORES},
+    **{mnemonic: "result" for mnemonic in _INTEGER_RESULTS | _FLOAT_RESULTS},
+    **{mnemonic: "all-use" for mnemonic in _COMPARE_OR_TRAP | _SPECIAL_USES | _CACHE_USES},
+    **{mnemonic: "result" for mnemonic in _SPECIAL_DEFS},
+}
+
+
+def _register_identity(name: str) -> tuple[int, int] | None:
+    lowered = name.lower()
+    if lowered.startswith("r") and lowered[1:].isdigit():
+        physical = int(lowered[1:])
+        return (0, physical) if 0 <= physical <= 31 else None
+    if lowered.startswith("f") and lowered[1:].isdigit():
+        physical = int(lowered[1:])
+        return (1, physical) if 0 <= physical <= 31 else None
+    return None
+
+
+def _result_roles(_mnemonic: str, count: int) -> list[str]:
+    return ["def"] + ["use"] * (count - 1) if count else []
+
+
+def _result_update_roles(_mnemonic: str, count: int) -> list[str]:
+    return ["use-def"] + ["use"] * (count - 1) if count else []
+
+
+def _load_update_roles(_mnemonic: str, count: int) -> list[str]:
+    if count != 2:
+        raise _Malformed("update load requires nonzero base register")
+    return ["def", "use-def"]
+
+
+def _store_update_roles(_mnemonic: str, count: int) -> list[str]:
+    if count != 2:
+        raise _Malformed("update store requires nonzero base register")
+    return ["use", "use-def"]
+
+
+def _no_register_roles(mnemonic: str, count: int) -> list[str]:
+    if count:
+        raise _Malformed(f"ambiguous PowerPC semantic form {mnemonic!r}")
+    return []
+
+
+def _indexed_roles(mnemonic: str, count: int, *, store: bool) -> list[str]:
+    roles = ["use" if store else "def"] + ["use"] * (count - 1)
+    updates = _INDEXED_STORE_UPDATES if store else _INDEXED_LOAD_UPDATES
+    if mnemonic in updates and count > 1:
+        roles[1] = "use-def"
+    return roles
+
+
+_ROLE_BUILDERS = {
+    "load": lambda mnemonic, count: _result_roles(mnemonic, count),
+    "load-update": _load_update_roles,
+    "store": lambda _mnemonic, count: ["use"] * count,
+    "store-update": _store_update_roles,
+    "all-use": lambda _mnemonic, count: ["use"] * count,
+    "result": _result_roles,
+    "result-update": _result_update_roles,
+    "no-register": _no_register_roles,
+    "indexed-load": lambda mnemonic, count: _indexed_roles(mnemonic, count, store=False),
+    "indexed-store": lambda mnemonic, count: _indexed_roles(mnemonic, count, store=True),
+}
+
+
+def _roles_for_form(form: str, mnemonic: str, count: int) -> list[str]:
+    builder = _ROLE_BUILDERS.get(form)
+    if builder is None:
+        raise _Malformed(f"ambiguous PowerPC semantic form {mnemonic!r}")
+    return builder(mnemonic, count)
+
+
+def _roles_for_semantic_form(primary: int, mnemonic: str, count: int) -> list[str]:
+    if primary in {46, 47}:
+        raise _Malformed("unsupported multi-register PowerPC memory instruction")
+    form = _PRIMARY_SEMANTIC_FORMS.get(primary) or _MNEMONIC_SEMANTIC_FORMS.get(mnemonic)
+    if form is not None:
+        return _roles_for_form(form, mnemonic, count)
+    raise _Malformed(f"unsupported PowerPC semantic form {mnemonic!r}")
+
+
+def _paired_single_registers(word: int, offset: int) -> list[tuple[int, int, str, int, int]]:
+    primary = word >> 26
+    register = (word >> 21) & 31
+    base_register = (word >> 16) & 31
+    roles = {
+        56: ("def", "use"),
+        57: ("def", "use-def"),
+        60: ("use", "use"),
+        61: ("use", "use-def"),
+    }[primary]
+    identities = [(1, register)]
+    selected_roles = [roles[0]]
+    if primary in {57, 61} and base_register == 0:
+        raise _Malformed("paired-single update requires nonzero base register")
+    if base_register != 0:
+        identities.append((0, base_register))
+        selected_roles.append(roles[1])
+    counters: Counter[str] = Counter()
+    result: list[tuple[int, int, str, int, int]] = []
+    for position, ((class_id, physical), role) in enumerate(zip(identities, selected_roles, strict=True)):
+        key = f"{role}:{counters[role]}"
+        counters[role] += 1
+        result.append((offset, position, key, class_id, physical))
+    return result
+
+
+def _standard_instruction_registers(
+    decoder: object,
+    raw: bytes,
+    address: int,
+    offset: int,
+    reg_operand_type: int,
+    mem_operand_type: int,
+) -> list[tuple[int, int, str, int, int]]:
+    instructions = list(decoder.disasm(raw, address))
+    if len(instructions) != 1 or instructions[0].size != 4:
+        raise _Malformed("emitted range does not decode as complete PowerPC instructions")
+    instruction = instructions[0]
+    identities: list[tuple[int, int]] = []
+    for operand in instruction.operands:
+        register_name: str | None = None
+        if operand.type == reg_operand_type:
+            register_name = instruction.reg_name(operand.reg)
+        elif operand.type == mem_operand_type and operand.mem.base:
+            register_name = instruction.reg_name(operand.mem.base)
+        if register_name and (identity := _register_identity(register_name)) is not None:
+            identities.append(identity)
+    mnemonic = instruction.mnemonic.lower().rstrip(".")
+    if mnemonic in {"mr", "not"} and len(identities) == 2:
+        identities.append(identities[1])
+    roles = _roles_for_semantic_form(int.from_bytes(raw, "big") >> 26, mnemonic, len(identities))
+    if len(roles) != len(identities):
+        raise _Malformed(f"ambiguous PowerPC semantic form {mnemonic!r}")
+    counters: Counter[str] = Counter()
+    result: list[tuple[int, int, str, int, int]] = []
+    for position, ((class_id, physical), role) in enumerate(zip(identities, roles, strict=True)):
+        key = f"{role}:{counters[role]}"
+        counters[role] += 1
+        result.append((offset, position, key, class_id, physical))
+    return result
+
+
 def _decode_registers(code: bytes, base: int) -> list[tuple[int, int, str, int, int]]:
-    """Decode explicit GPR/FPR operands and assign semantic role ordinals."""
+    """Decode complete explicit GPR/FPR effects using a closed semantic inventory."""
 
     try:
         from capstone import CS_ARCH_PPC, CS_MODE_32, CS_MODE_BIG_ENDIAN, Cs
-        from capstone.ppc import PPC_OP_REG
-    except ImportError as exc:  # pragma: no cover - fail-closed deployment path
+        from capstone.ppc import PPC_OP_MEM, PPC_OP_REG
+    except ImportError as exc:  # pragma: no cover - declared runtime dependency
         raise _Malformed("PowerPC decoder is unavailable") from exc
+    if len(code) % 4:
+        raise _Malformed("emitted range does not contain complete PowerPC instructions")
     decoder = Cs(CS_ARCH_PPC, CS_MODE_32 | CS_MODE_BIG_ENDIAN)
     decoder.detail = True
-    instructions = list(decoder.disasm(code, base))
-    if sum(instruction.size for instruction in instructions) != len(code) or any(
-        instruction.size != 4 for instruction in instructions
-    ):
-        raise _Malformed("emitted range does not decode as complete PowerPC instructions")
     result: list[tuple[int, int, str, int, int]] = []
-    for instruction in instructions:
-        mnemonic = instruction.mnemonic.lower().rstrip(".")
-        counters: Counter[str] = Counter()
-        register_operands = [
-            (position, operand) for position, operand in enumerate(instruction.operands) if operand.type == PPC_OP_REG
-        ]
-        for ordinal, (position, operand) in enumerate(register_operands):
-            name = instruction.reg_name(operand.reg).lower()
-            if name.startswith("r") and name[1:].isdigit():
-                class_id, physical = 0, int(name[1:])
-            elif name.startswith("f") and name[1:].isdigit():
-                class_id, physical = 1, int(name[1:])
-            else:
-                raise _Malformed(f"unsupported decoded register class {name!r}")
-            if mnemonic.startswith(("st", "tw", "td", "mt")) or mnemonic in {
-                "dcbf",
-                "dcbi",
-                "dcbst",
-                "dcbt",
-                "dcbtst",
-                "dcbz",
-                "icbi",
-            }:
-                role = "use"
-            elif mnemonic.startswith(("cmp", "fcmp")):
-                role = "use"
-            elif mnemonic in {"rlwimi", "rldimi"} and ordinal == 0:
-                role = "use-def"
-            elif ordinal == 0:
-                role = "def"
-            else:
-                role = "use"
-            key = f"{role}:{counters[role]}"
-            counters[role] += 1
-            result.append((instruction.address - base, position, key, class_id, physical))
+    for offset in range(0, len(code), 4):
+        raw = code[offset : offset + 4]
+        word = int.from_bytes(raw, "big")
+        primary = word >> 26
+        if primary in {56, 57, 60, 61}:
+            result.extend(_paired_single_registers(word, offset))
+            continue
+        result.extend(
+            _standard_instruction_registers(
+                decoder,
+                raw,
+                base + offset,
+                offset,
+                PPC_OP_REG,
+                PPC_OP_MEM,
+            )
+        )
     return result
 
 
@@ -1219,6 +1640,7 @@ def _validate_ranges(
     ctx: _Context,
     all_intervals: list[tuple[int, int, str]],
     anchors: dict[tuple[int, str], list[AnchorVirtualBinding]],
+    observation: _EmissionObservation | None,
 ) -> None:
     pcode_id = str(row.get("pcode_id"))
     ranges = _rows(row.get("code_ranges"), f"PCode {pcode_id} code_ranges", ctx.errors)
@@ -1315,8 +1737,8 @@ def _validate_ranges(
                 ctx.errors.append(f"{label} mapping {mapping_index} lineage id must be non-empty string")
             if not isinstance(mapping.get("machine_operand_key"), str) or not mapping.get("machine_operand_key"):
                 ctx.errors.append(f"{label} mapping {mapping_index} machine operand key must be non-empty string")
-            if not _nonnegative(mapping.get("physical_register")):
-                ctx.errors.append(f"{label} mapping {mapping_index} physical register must be nonnegative integer")
+            if not _physical(mapping.get("physical_register")):
+                ctx.errors.append(f"{label} mapping {mapping_index} physical register must be in 0..31")
             mappings_by_position.setdefault((offset, position), []).append(mapping)
             mapping_keys.append(
                 (offset, position, mapping.get("emission_pcode_operand_index"), mapping.get("operand_lineage_id"))
@@ -1345,14 +1767,23 @@ def _validate_ranges(
             if mapping.get("physical_register") != physical:
                 ctx.errors.append(f"{label} decoded physical register mismatch")
             lineage = str(mapping.get("operand_lineage_id"))
-            origins = _lineage_origins(lineage, ctx)
-            if not origins and parsed.get("allocation_requirement") == "fixed-physical":
+            origins = _lineage_origins(
+                lineage,
+                ctx,
+                parents=observation.parents if observation is not None else MappingProxyType({}),
+                origins=observation.origins if observation is not None else MappingProxyType({}),
+            )
+            if (
+                not origins
+                and lineage not in ctx.allocatable_lineages
+                and parsed.get("allocation_requirement") == "fixed-physical"
+            ):
                 if mapping.get("physical_register") != parsed.get("physical_register"):
                     ctx.errors.append(f"{label} fixed emission physical register disagrees")
                 continue
             if len(origins) != 1:
                 qualifier = "multiple" if len(origins) > 1 else "no"
-                ctx.errors.append(f"{label} emitted lineage has {qualifier} allocator origins")
+                ctx.errors.append(f"{label} emitted lineage has {qualifier} allocator origins at emission")
                 continue
             origin = origins[0]
             expected_physical = origin.get("allocated_physical")
@@ -1382,10 +1813,14 @@ def _validate_emissions(
     snapshots: Mapping[tuple[str, str], Mapping[str, object]],
     view: _FunctionObjectView,
     ctx: _Context,
+    observations: list[_EmissionObservation],
 ) -> tuple[int, dict[tuple[int, str], AnchorVirtualBinding]]:
     all_intervals: list[tuple[int, int, str]] = []
     alternatives: dict[tuple[int, str], list[AnchorVirtualBinding]] = {}
     emitted_ids: list[str] = []
+    observations_by_id: dict[str, list[_EmissionObservation]] = {}
+    for observation in observations:
+        observations_by_id.setdefault(observation.pcode_id, []).append(observation)
     for row in instruction_rows:
         pcode_id = str(row.get("pcode_id"))
         emission = snapshots.get((pcode_id, "code_emission"))
@@ -1408,26 +1843,13 @@ def _validate_emissions(
         emitted_ids.append(pcode_id)
         if not has_sequence:
             ctx.errors.append(f"final PCode has no emission event: {pcode_id}")
-        if ctx.emission_sites.get(row.get("emission_site_id")) is None:
-            ctx.errors.append(f"PCode {pcode_id} references unknown emission site")
-        if row.get("emission_runtime_address") != row.get("runtime_address") or row.get(
-            "emission_allocation_generation"
-        ) != row.get("allocation_generation"):
-            ctx.errors.append(f"PCode {pcode_id} emission raw identity does not reconstruct pcode_id")
-        _active(
-            ctx,
-            row.get("emission_runtime_address"),
-            row.get("emission_allocation_generation"),
-            row.get("emission_lifecycle_sequence_at_capture"),
-            f"PCode {pcode_id} emission",
-        )
-        final_state = ctx.current.get(pcode_id)
-        emitted_state = _state_from_snapshot(row, emission)
-        if final_state is None or _state_signature(final_state) != _state_signature(emitted_state):
-            ctx.errors.append(f"PCode {pcode_id} emission snapshot disagrees with final replay state")
+        matches = observations_by_id.get(pcode_id, [])
+        observation = matches[0] if len(matches) == 1 else None
+        if observation is None:
+            ctx.errors.append(f"PCode {pcode_id} must have exactly one chronological emission observation")
         if row.get("section_name") != view.section_name:
             ctx.errors.append(f"PCode {pcode_id} section name disagrees with candidate object")
-        _validate_ranges(row, emission, view, ctx, all_intervals, alternatives)
+        _validate_ranges(row, emission, view, ctx, all_intervals, alternatives, observation)
     final_ids = set(ctx.current)
     emission_counts = Counter(emitted_ids)
     for pcode_id in sorted(final_ids):
@@ -1435,6 +1857,9 @@ def _validate_emissions(
             ctx.errors.append(f"final PCode has no emission event: {pcode_id}")
         elif emission_counts[pcode_id] != 1:
             ctx.errors.append(f"final PCode has multiple emission events: {pcode_id}")
+        matches = observations_by_id.get(pcode_id, [])
+        if len(matches) == 1 and _state_signature(matches[0].state) != _state_signature(ctx.current[pcode_id]):
+            ctx.errors.append(f"PCode {pcode_id} final state changed after its emission")
     for pcode_id in set(emitted_ids) - final_ids:
         ctx.errors.append(f"non-final PCode has emission event: {pcode_id}")
     for previous, current in zip(sorted(all_intervals), sorted(all_intervals)[1:]):
@@ -1512,12 +1937,26 @@ def _empty_errors(value: object, label: str, errors: list[str]) -> None:
         errors.append(f"{label} errors must be empty")
 
 
+def _validate_recomputed_int(
+    value: object,
+    expected: int,
+    field: str,
+    errors: list[str],
+    *,
+    nonnegative: bool = True,
+) -> None:
+    valid = _nonnegative(value) if nonnegative else _int(value)
+    if not valid:
+        errors.append(f"{field} must be integer" + (" >= 0" if nonnegative else ""))
+    elif value != expected:
+        errors.append(f"{field} does not match recomputed PCode coverage")
+
+
 def _validate_coverage(
     payload: Mapping[str, object],
     instruction_rows: list[Mapping[str, object]],
     rewrites: list[Mapping[str, object]],
     mutations: list[Mapping[str, object]],
-    event_count: int,
     emission_count: int,
     snapshots: Mapping[tuple[str, str], Mapping[str, object]],
     ctx: _Context,
@@ -1544,14 +1983,45 @@ def _validate_coverage(
     for prefix, proof_count in site_counts:
         expected = pcode.get(f"{prefix}_sites_expected")
         hooked = pcode.get(f"{prefix}_sites_hooked")
-        if not _nonnegative(expected) or expected != proof_count:
-            ctx.errors.append(f"{prefix} expected site count does not match trusted proof")
-        if not _nonnegative(hooked) or hooked != expected:
+        _validate_recomputed_int(
+            expected,
+            proof_count,
+            f"{prefix}_sites_expected",
+            ctx.errors,
+        )
+        if not _nonnegative(hooked):
+            ctx.errors.append(f"{prefix}_sites_hooked must be integer >= 0")
+        elif hooked != expected:
             ctx.errors.append(f"{prefix} site coverage is incomplete")
-    first = 0 if event_count else -1
-    last = event_count - 1
-    if pcode.get("first_event_sequence") != first or pcode.get("last_event_sequence") != last:
-        ctx.errors.append("PCode coverage event bounds do not match replay")
+    raw_event_count = (
+        len(payload.get("pcode_occurrences", []))
+        + len(payload.get("pcode_operand_lineage_events", []))
+        + sum(
+            1
+            for row in instruction_rows
+            if isinstance(row.get("stage_snapshots"), list)
+            and any(
+                isinstance(snapshot, Mapping) and snapshot.get("stage") == "code_emission"
+                for snapshot in row["stage_snapshots"]
+            )
+        )
+    )
+    first = 0 if raw_event_count else -1
+    last = raw_event_count - 1
+    _validate_recomputed_int(
+        pcode.get("first_event_sequence"),
+        first,
+        "first_event_sequence",
+        ctx.errors,
+        nonnegative=False,
+    )
+    _validate_recomputed_int(
+        pcode.get("last_event_sequence"),
+        last,
+        "last_event_sequence",
+        ctx.errors,
+        nonnegative=False,
+    )
     first_parsed: list[Mapping[str, object]] = []
     for row in instruction_rows:
         pcode_id = str(row.get("pcode_id"))
@@ -1565,14 +2035,13 @@ def _validate_coverage(
         "parsed_register_operands": len(first_parsed),
         "allocatable_register_operands": len(allocatable),
         "fixed_physical_register_operands": len(fixed),
-        "rewrite_events": len(rewrites),
-        "mutation_events": len(mutations),
+        "rewrite_events": len(payload.get("pcode_occurrences", [])),
+        "mutation_events": len(payload.get("pcode_operand_lineage_events", [])),
         "final_pcodes": len(ctx.current),
         "emission_events": emission_count,
     }
     for field, expected in counts.items():
-        if not _nonnegative(pcode.get(field)) or pcode.get(field) != expected:
-            ctx.errors.append(f"{field} does not match recomputed PCode coverage")
+        _validate_recomputed_int(pcode.get(field), expected, field, ctx.errors)
     expected_rewrites = Counter()
     for row in instruction_rows:
         pcode_id = str(row.get("pcode_id"))
@@ -1589,17 +2058,28 @@ def _validate_coverage(
     event_cap = pcode.get("event_cap")
     if not _positive(event_cap):
         ctx.errors.append("PCode event_cap must be positive integer")
-    elif event_count >= event_cap:
+    elif raw_event_count >= event_cap:
         ctx.errors.append("PCode event cap was reached")
-    if pcode.get("dropped_events") != 0:
+    dropped = pcode.get("dropped_events")
+    if not _nonnegative(dropped):
+        ctx.errors.append("dropped_events must be integer >= 0")
+    elif dropped != 0:
         ctx.errors.append("PCode events were dropped")
     if pcode.get("truncated") is not False:
         ctx.errors.append("PCode instrumentation is truncated")
     _empty_errors(pcode.get("errors"), "pcode instrumentation", ctx.errors)
-    if coverage.get("pcode_instructions_seen") != len(instruction_rows):
-        ctx.errors.append("pcode_instructions_seen does not match pcode_instructions")
-    if coverage.get("pcode_occurrences_seen") != len(rewrites):
-        ctx.errors.append("pcode_occurrences_seen does not match pcode_occurrences")
+    _validate_recomputed_int(
+        coverage.get("pcode_instructions_seen"),
+        len(instruction_rows),
+        "pcode_instructions_seen",
+        ctx.errors,
+    )
+    _validate_recomputed_int(
+        coverage.get("pcode_occurrences_seen"),
+        len(payload.get("pcode_occurrences", [])),
+        "pcode_occurrences_seen",
+        ctx.errors,
+    )
     caps = coverage.get("caps")
     if not isinstance(caps, Mapping):
         ctx.errors.append("coverage caps must be object")
@@ -1662,9 +2142,15 @@ def validate_pcode_lineage(
         _replay_lifecycle(top, ctx)
         view = _load_object(candidate_object, function)
         instructions, snapshots = _validate_instructions(top, function, ctx)
-        rewrites, mutations, events = _replay_pcode_events(top, snapshots, ctx)
-        emission_count, bindings = _validate_emissions(instructions, snapshots, view, ctx)
-        _validate_coverage(top, instructions, rewrites, mutations, len(events), emission_count, snapshots, ctx)
+        rewrites, mutations, _events, emission_observations = _replay_pcode_events(top, snapshots, ctx)
+        emission_count, bindings = _validate_emissions(
+            instructions,
+            snapshots,
+            view,
+            ctx,
+            emission_observations,
+        )
+        _validate_coverage(top, instructions, rewrites, mutations, emission_count, snapshots, ctx)
     except Exception as exc:
         errors.append(f"PCode lineage contains malformed values: {type(exc).__name__}: {exc}")
         bindings = {}

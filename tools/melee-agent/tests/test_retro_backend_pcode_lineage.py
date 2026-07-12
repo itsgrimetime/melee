@@ -19,6 +19,7 @@ from tools.mwcc_retro.backend_instrumentation_proof import (  # noqa: E402
 from tools.mwcc_retro.backend_pcode_lineage import (  # noqa: E402
     AnchorVirtualBinding,
     PCodeLineageValidation,
+    _decode_registers,
     validate_pcode_lineage,
 )
 
@@ -37,6 +38,12 @@ def _candidate_elf(
     function_size: int | None = None,
     duplicate_function: bool = False,
     relocation: tuple[int, int, str, int] | None = None,
+    byte_order: str = ">",
+    elf_class: int = 1,
+    elf_type: int = 1,
+    machine: int = 20,
+    text_kind: int = 1,
+    text_flags: int = 0x6,
 ) -> bytes:
     """Build a minimal ELF32/PowerPC relocatable object for validator tests."""
 
@@ -54,18 +61,18 @@ def _candidate_elf(
 
     size = len(code) if function_size is None else function_size
     symbols = [b"\0" * 16]
-    symbols.append(struct.pack(">IIIBBH", name_offsets[function], 0, size, 0x12, 0, 1))
+    symbols.append(struct.pack(f"{byte_order}IIIBBH", name_offsets[function], 0, size, 0x12, 0, 1))
     if duplicate_function:
-        symbols.append(struct.pack(">IIIBBH", name_offsets[function], 0, size, 0x12, 0, 1))
+        symbols.append(struct.pack(f"{byte_order}IIIBBH", name_offsets[function], 0, size, 0x12, 0, 1))
     target_index = 0
     if relocation is not None:
         target_index = len(symbols)
-        symbols.append(struct.pack(">IIIBBH", name_offsets[relocation[2]], 0, 0, 0x10, 0, 0))
+        symbols.append(struct.pack(f"{byte_order}IIIBBH", name_offsets[relocation[2]], 0, 0, 0x10, 0, 0))
     symtab = b"".join(symbols)
     rela = b""
     if relocation is not None:
         offset, relocation_type, _target, addend = relocation
-        rela = struct.pack(">IIi", offset, (target_index << 8) | relocation_type, addend)
+        rela = struct.pack(f"{byte_order}IIi", offset, (target_index << 8) | relocation_type, addend)
 
     sections = [code, rela, symtab, strtab, shstr]
     offsets: list[int] = []
@@ -75,8 +82,9 @@ def _candidate_elf(
         offsets.append(cursor)
         cursor += len(data)
     shoff = _align(cursor, 4)
-    ident = b"\x7fELF" + bytes((1, 2, 1, 0, 0)) + b"\0" * 7
-    header = ident + struct.pack(">HHIIIIIHHHHHH", 1, 20, 1, 0, 0, shoff, 0, 52, 0, 0, 40, 6, 5)
+    data_encoding = 2 if byte_order == ">" else 1
+    ident = b"\x7fELF" + bytes((elf_class, data_encoding, 1, 0, 0)) + b"\0" * 7
+    header = ident + struct.pack(f"{byte_order}HHIIIIIHHHHHH", elf_type, machine, 1, 0, 0, shoff, 0, 52, 0, 0, 40, 6, 5)
     image = bytearray(header)
     for offset, data in zip(offsets, sections, strict=True):
         image.extend(b"\0" * (offset - len(image)))
@@ -87,11 +95,21 @@ def _candidate_elf(
         name: str, kind: int, flags: int, offset: int, data: bytes, link: int, info: int, align: int, entsize: int
     ) -> bytes:
         return struct.pack(
-            ">IIIIIIIIII", sh_name.get(name, 0), kind, flags, 0, offset, len(data), link, info, align, entsize
+            f"{byte_order}IIIIIIIIII",
+            sh_name.get(name, 0),
+            kind,
+            flags,
+            0,
+            offset,
+            len(data),
+            link,
+            info,
+            align,
+            entsize,
         )
 
     image.extend(b"\0" * 40)
-    image.extend(shdr(".text", 1, 0x6, offsets[0], code, 0, 0, 4, 0))
+    image.extend(shdr(".text", text_kind, text_flags, offsets[0], code, 0, 0, 4, 0))
     image.extend(shdr(".rela.text", 4, 0, offsets[1], rela, 3, 1, 4, 12))
     image.extend(shdr(".symtab", 2, 0, offsets[2], symtab, 4, 1, 4, 16))
     image.extend(shdr(".strtab", 3, 0, offsets[3], strtab, 0, 0, 1, 0))
@@ -448,26 +466,7 @@ def test_recursive_or_mutable_shapes_never_raise(candidate_object: Path) -> None
 )
 def test_invalid_lineage_fixtures_fail_closed(fixture_name: str, message: str, candidate_object: Path) -> None:
     fixture = json.loads((FIXTURE_ROOT / fixture_name).read_text())
-    payload = minimal_payload()
-    event = payload["pcode_operand_lineage_events"][0]
-    if fixture_name == "self_parent.json":
-        event["outputs"][0]["operands"][0] = operand(0, "ol-3", 8, "d", ["ol-3"])
-    elif fixture_name == "fresh_clone_id.json":
-        event["mutation_kind"] = "clone"
-        event["outputs"].append(copy.deepcopy(event["outputs"][0]))
-        event["outputs"][0]["pcode_id"] = "pc-1"
-        event["outputs"][0]["runtime_address"] = 0x3000
-        event["outputs"][0]["operands"][0] = operand(0, "ol-3", 8, "d", ["ol-0"])
-    elif fixture_name == "duplicate_output.json":
-        event["mutation_kind"] = "clone"
-        event["outputs"].append(copy.deepcopy(event["outputs"][0]))
-    elif fixture_name == "missing_emission.json":
-        payload["pcode_instructions"][0]["emission_event_sequence"] = None
-    elif fixture_name == "wrong_machine_register.json":
-        payload["pcode_instructions"][0]["code_ranges"][0]["machine_operand_mappings"][0]["physical_register"] = 20
-    assert fixture["expected"] == message
-
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_pcode_lineage(fixture, trusted_proof(), candidate_object, "fn")
 
     assert any(message in error for error in result.errors)
     assert result.capabilities == frozenset()
@@ -900,3 +899,251 @@ def test_binding_value_is_frozen() -> None:
     binding = AnchorVirtualBinding(0, "use:0", "pc-0", "ol-1", 0, 66, 21, "derived-unique")
     with pytest.raises(Exception):
         binding.virtual = 99
+
+
+@pytest.mark.parametrize(
+    ("collection", "row", "coverage_field", "message"),
+    [
+        ("pcode_occurrences", {"pcode_event_sequence": False}, "rewrite_events", "PCode rewrite 2 fields"),
+        ("pcode_operand_lineage_events", 7, "mutation_events", "PCode mutation 1 must be object"),
+    ],
+)
+def test_every_raw_event_is_closed_and_counted_before_merge(
+    candidate_object: Path,
+    collection: str,
+    row: object,
+    coverage_field: str,
+    message: str,
+) -> None:
+    payload = minimal_payload()
+    payload[collection].append(row)
+    payload["coverage"]["pcode_instrumentation"][coverage_field] += 1
+    payload["coverage"]["pcode_occurrences_seen"] = len(payload["pcode_occurrences"])
+
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+
+    assert any(message in error for error in result.errors), result.errors
+    assert len(result.normalized[collection]) == len(payload[collection])
+    assert result.capabilities == frozenset()
+
+
+def test_malformed_raw_event_still_counts_toward_event_cap(candidate_object: Path) -> None:
+    payload = minimal_payload()
+    payload["pcode_occurrences"].append({"pcode_event_sequence": False})
+    coverage = payload["coverage"]["pcode_instrumentation"]
+    coverage.update(
+        {
+            "rewrite_events": 3,
+            "last_event_sequence": 4,
+            "event_cap": 5,
+        }
+    )
+    payload["coverage"]["pcode_occurrences_seen"] = 3
+
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+
+    assert any("event cap was reached" in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
+def test_emission_cannot_use_allocator_origin_observed_later(candidate_object: Path) -> None:
+    payload = minimal_payload()
+    payload["pcode_operand_lineage_events"][0]["pcode_event_sequence"] = 0
+    payload["pcode_instructions"][0]["emission_event_sequence"] = 1
+    payload["pcode_occurrences"][0]["pcode_event_sequence"] = 2
+    payload["pcode_occurrences"][1]["pcode_event_sequence"] = 3
+
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+
+    assert any("no allocator origins at emission" in error for error in result.errors), result.errors
+    assert result.anchor_bindings == {}
+    assert result.capabilities == frozenset()
+
+
+def _d_form(primary: int, register: int, base: int, displacement: int = 8) -> bytes:
+    return ((primary << 26) | (register << 21) | (base << 16) | (displacement & 0xFFFF)).to_bytes(4, "big")
+
+
+def _x_form(register: int, base: int, index: int, xo: int) -> bytes:
+    return ((31 << 26) | (register << 21) | (base << 16) | (index << 11) | (xo << 1)).to_bytes(4, "big")
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (_d_form(32, 3, 4), [(0, 0, "def:0", 0, 3), (0, 1, "use:0", 0, 4)]),
+        (_d_form(32, 3, 0), [(0, 0, "def:0", 0, 3)]),
+        (_d_form(33, 3, 4), [(0, 0, "def:0", 0, 3), (0, 1, "use-def:0", 0, 4)]),
+        (_d_form(36, 3, 4), [(0, 0, "use:0", 0, 3), (0, 1, "use:1", 0, 4)]),
+        (_d_form(37, 3, 4), [(0, 0, "use:0", 0, 3), (0, 1, "use-def:0", 0, 4)]),
+        (_d_form(50, 2, 4), [(0, 0, "def:0", 1, 2), (0, 1, "use:0", 0, 4)]),
+        (_d_form(51, 2, 4), [(0, 0, "def:0", 1, 2), (0, 1, "use-def:0", 0, 4)]),
+        (_d_form(54, 2, 4), [(0, 0, "use:0", 1, 2), (0, 1, "use:1", 0, 4)]),
+        (_d_form(55, 2, 4), [(0, 0, "use:0", 1, 2), (0, 1, "use-def:0", 0, 4)]),
+        (_x_form(3, 4, 5, 23), [(0, 0, "def:0", 0, 3), (0, 1, "use:0", 0, 4), (0, 2, "use:1", 0, 5)]),
+        (_x_form(3, 4, 5, 55), [(0, 0, "def:0", 0, 3), (0, 1, "use-def:0", 0, 4), (0, 2, "use:0", 0, 5)]),
+        (_x_form(3, 4, 5, 151), [(0, 0, "use:0", 0, 3), (0, 1, "use:1", 0, 4), (0, 2, "use:2", 0, 5)]),
+        (_x_form(3, 4, 5, 183), [(0, 0, "use:0", 0, 3), (0, 1, "use-def:0", 0, 4), (0, 2, "use:1", 0, 5)]),
+        (_x_form(2, 4, 5, 599), [(0, 0, "def:0", 1, 2), (0, 1, "use:0", 0, 4), (0, 2, "use:1", 0, 5)]),
+        (_x_form(2, 4, 5, 631), [(0, 0, "def:0", 1, 2), (0, 1, "use-def:0", 0, 4), (0, 2, "use:0", 0, 5)]),
+        (_x_form(2, 4, 5, 727), [(0, 0, "use:0", 1, 2), (0, 1, "use:1", 0, 4), (0, 2, "use:2", 0, 5)]),
+        (_x_form(2, 4, 5, 759), [(0, 0, "use:0", 1, 2), (0, 1, "use-def:0", 0, 4), (0, 2, "use:1", 0, 5)]),
+        (_x_form(3, 4, 4, 266), [(0, 0, "def:0", 0, 3), (0, 1, "use:0", 0, 4), (0, 2, "use:1", 0, 4)]),
+        (bytes.fromhex("7c832378"), [(0, 0, "def:0", 0, 3), (0, 1, "use:0", 0, 4), (0, 2, "use:1", 0, 4)]),
+        (bytes.fromhex("7c042800"), [(0, 0, "use:0", 0, 4), (0, 1, "use:1", 0, 5)]),
+        (bytes.fromhex("7c6903a6"), [(0, 0, "use:0", 0, 3)]),
+        (bytes.fromhex("7c6902a6"), [(0, 0, "def:0", 0, 3)]),
+        (bytes.fromhex("4e800020"), []),
+        (_d_form(56, 2, 4), [(0, 0, "def:0", 1, 2), (0, 1, "use:0", 0, 4)]),
+        (_d_form(57, 2, 4), [(0, 0, "def:0", 1, 2), (0, 1, "use-def:0", 0, 4)]),
+        (_d_form(60, 2, 4), [(0, 0, "use:0", 1, 2), (0, 1, "use:1", 0, 4)]),
+        (_d_form(61, 2, 4), [(0, 0, "use:0", 1, 2), (0, 1, "use-def:0", 0, 4)]),
+    ],
+)
+def test_powerpc_semantic_decoder_roles_and_flat_positions(
+    code: bytes, expected: list[tuple[int, int, str, int, int]]
+) -> None:
+    assert _decode_registers(code, 0) == expected
+
+
+@pytest.mark.parametrize("code", [_d_form(46, 28, 4), _d_form(47, 28, 4)])
+def test_multi_register_memory_instructions_reject_whole_range(code: bytes) -> None:
+    with pytest.raises(ValueError, match="unsupported multi-register"):
+        _decode_registers(code, 0)
+
+
+def test_unknown_semantic_form_rejects_instead_of_guessing() -> None:
+    with pytest.raises(ValueError, match="unsupported PowerPC semantic form"):
+        _decode_registers(bytes.fromhex("7c0004ac"), 0)  # sync
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda p: (
+                p["pcode_instructions"][0]["stage_snapshots"][0]["parsed_register_operands"][0].update(
+                    {"virtual_kind": "f"}
+                ),
+                p["pcode_occurrences"][0].update({"virtual_kind": "f"}),
+            ),
+            "class/virtual kind coupling",
+        ),
+        (
+            lambda p: (
+                p["pcode_occurrences"][0].update({"allocated_physical": 32}),
+                p["pcode_instructions"][0]["stage_snapshots"][1]["parsed_register_operands"][0].update(
+                    {"physical_register": 32}
+                ),
+                p["pcode_instructions"][0]["code_ranges"][0]["machine_operand_mappings"][0].update(
+                    {"physical_register": 32}
+                ),
+            ),
+            "physical register must be in 0..31",
+        ),
+    ],
+)
+def test_register_class_and_physical_domains_fail_closed(candidate_object: Path, mutate, message: str) -> None:
+    payload = minimal_payload()
+    mutate(payload)
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any(message in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("coverage", "pcode_instrumentation", "first_event_sequence"), False, "first_event_sequence must be integer"),
+        (("coverage", "pcode_instrumentation", "dropped_events"), False, "dropped_events must be integer"),
+        (("coverage", "pcode_instrumentation", "final_pcodes"), True, "final_pcodes must be integer"),
+        (("coverage", "pcode_instructions_seen"), True, "pcode_instructions_seen must be integer"),
+        (("coverage", "pcode_instrumentation", "rewrite_events"), 2.0, "normalization failed"),
+    ],
+)
+def test_coverage_scalars_require_exact_non_bool_safe_integers(
+    candidate_object: Path, path: tuple[str, ...], value: object, message: str
+) -> None:
+    payload = minimal_payload()
+    target = payload
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any(message in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("elf_kwargs", "message"),
+    [
+        ({"elf_class": 2}, "ELF32"),
+        ({"byte_order": "<"}, "big-endian"),
+        ({"machine": 3}, "EM_PPC"),
+        ({"elf_type": 2}, "ET_REL"),
+        ({"text_kind": 8}, "SHT_PROGBITS"),
+        ({"text_flags": 0x2}, "executable"),
+    ],
+)
+def test_candidate_object_requires_exact_powerpc_relocatable_elf(
+    tmp_path: Path, elf_kwargs: dict[str, object], message: str
+) -> None:
+    candidate = tmp_path / "wrong.o"
+    candidate.write_bytes(_candidate_elf(**elf_kwargs))
+    result = validate_pcode_lineage(minimal_payload(), trusted_proof(), candidate, "fn")
+    assert any(message in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
+def test_mutation_input_may_not_declare_parent_lineages(candidate_object: Path) -> None:
+    payload = minimal_payload()
+    payload["pcode_operand_lineage_events"][0]["inputs"][0]["operands"][0]["parent_lineage_ids"] = []
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any("input 0 operand 0 must omit parent_lineage_ids" in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
+def _lwz_payload() -> dict[str, object]:
+    payload = minimal_payload()
+    payload["pcode_instructions"][0]["code_ranges"][0]["bytes"] = "80640008"
+    for index, physical in enumerate((3, 4)):
+        payload["pcode_occurrences"][index]["allocated_physical"] = physical
+        payload["pcode_instructions"][0]["stage_snapshots"][1]["parsed_register_operands"][index][
+            "physical_register"
+        ] = physical
+        payload["pcode_instructions"][0]["code_ranges"][0]["machine_operand_mappings"][index]["physical_register"] = (
+            physical
+        )
+    return payload
+
+
+def test_memory_base_mapping_uses_flattened_position(tmp_path: Path) -> None:
+    candidate = tmp_path / "lwz.o"
+    candidate.write_bytes(_candidate_elf(_d_form(32, 3, 4)))
+    result = validate_pcode_lineage(_lwz_payload(), trusted_proof(), candidate, "fn")
+    assert result.errors == ()
+    assert set(result.anchor_bindings) == {(0, "def:0"), (0, "use:0")}
+
+
+@pytest.mark.parametrize("change", ["missing", "extra"])
+def test_memory_base_mapping_rejects_missing_or_extra_register(tmp_path: Path, change: str) -> None:
+    candidate = tmp_path / "lwz.o"
+    candidate.write_bytes(_candidate_elf(_d_form(32, 3, 4)))
+    payload = _lwz_payload()
+    mappings = payload["pcode_instructions"][0]["code_ranges"][0]["machine_operand_mappings"]
+    if change == "missing":
+        mappings.pop()
+    else:
+        mappings.append(
+            {
+                "instruction_offset_within_range": 0,
+                "machine_operand_position": 2,
+                "machine_operand_key": "use:1",
+                "emission_pcode_operand_index": 1,
+                "operand_lineage_id": "ol-1",
+                "physical_register": 4,
+            }
+        )
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    assert any("exactly one mapping for every decoded register operand" in error for error in result.errors)
+    assert result.capabilities == frozenset()
