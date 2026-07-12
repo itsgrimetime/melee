@@ -64,6 +64,120 @@ def add_frame_object(
     mem.s32(type_ptr + 0x02, size)
 
 
+def legacy_layout_memory() -> Memory:
+    mem = Memory()
+    mem.u32(0x700000, 0x710000)
+    mem.u32(0x700004, 0)
+    mem.u32(0x700008, 0)
+    mem.s32(0x70000C, 32)
+    mem.s32(0x700010, 16)
+    add_frame_object(
+        mem,
+        list_node=0x710000,
+        obj=0x711000,
+        name_record=0x712000,
+        name="legacy_local",
+        stack_offset=-8,
+        type_ptr=0x713000,
+        size=4,
+    )
+    return mem
+
+
+def test_snapshot_frame_state_pre_task5_signature_matches_explicit_layout() -> None:
+    mem = legacy_layout_memory()
+    common = {
+        "list_vas": {
+            "locals": 0x700000,
+            "arguments": 0x700004,
+            "temps": 0x700008,
+        },
+        "frame_base_size_va": 0x70000C,
+        "frame_call_args_size_va": 0x700010,
+        "source_stage": "final_scheduler",
+    }
+
+    explicit = backend_frame_state.snapshot_frame_state(
+        mem.read_u32,
+        mem.read_s32,
+        mem.read_cstr,
+        **common,
+        **CAPTURE_LAYOUT_KWARGS,
+    )
+    legacy = backend_frame_state.snapshot_frame_state(
+        mem.read_u32,
+        mem.read_s32,
+        mem.read_cstr,
+        **common,
+    )
+
+    assert legacy == explicit
+
+
+def test_snapshot_probe_frame_state_pre_task5_signature_matches_explicit_layout() -> None:
+    mem = legacy_layout_memory()
+    common = {
+        "list_vas": {
+            "locals": 0x700000,
+            "arguments": 0x700004,
+            "temps": 0x700008,
+        },
+        "frame_base_size_va": 0x70000C,
+        "frame_call_args_size_va": 0x700010,
+    }
+
+    explicit = backend_frame_state.snapshot_probe_frame_state(
+        mem.read_u32,
+        mem.read_s32,
+        mem.read_cstr,
+        **common,
+        **CAPTURE_LAYOUT_KWARGS,
+    )
+    legacy = backend_frame_state.snapshot_probe_frame_state(
+        mem.read_u32,
+        mem.read_s32,
+        mem.read_cstr,
+        **common,
+    )
+
+    assert legacy == explicit
+
+
+@pytest.mark.parametrize(
+    "layout_kwargs",
+    [
+        {"object_offsets": OBJECT_OFFSETS},
+        {"list_offsets": LIST_OFFSETS},
+        {"name_record_text_offset": 0x0A},
+    ],
+)
+@pytest.mark.parametrize("probe", [False, True])
+def test_frame_snapshot_rejects_partial_layout_mix(
+    layout_kwargs: dict[str, object], probe: bool
+) -> None:
+    snapshotter = (
+        backend_frame_state.snapshot_probe_frame_state
+        if probe
+        else backend_frame_state.snapshot_frame_state
+    )
+    kwargs = {
+        "list_vas": {},
+        "frame_base_size_va": 0x70000C,
+        "frame_call_args_size_va": 0x700010,
+        **layout_kwargs,
+    }
+    if not probe:
+        kwargs["source_stage"] = "final_scheduler"
+
+    with pytest.raises(ValueError, match="layout arguments must be supplied together"):
+        snapshotter(
+            lambda _addr: 0,
+            lambda _addr: 0,
+            lambda _addr, _limit=96: "",
+            **kwargs,
+        )
+
+
 def test_snapshot_frame_state_emits_stack_local_map_event() -> None:
     mem = Memory()
     mem.u32(0x700000, 0x710000)

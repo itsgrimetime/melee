@@ -20,6 +20,48 @@ IMAGE_POINTER_HIGH = POINTER_LOW
 MAX_OBJECTS = 256
 PROBE_MAX_OBJECTS = 6
 
+
+def _resolve_frame_layout(
+    object_offsets: backend_object_snapshot.ObjObjectOffsets | None,
+    list_offsets: backend_object_snapshot.FrameListOffsets | None,
+    name_record_text_offset: int | None,
+) -> tuple[
+    backend_object_snapshot.ObjObjectOffsets,
+    backend_object_snapshot.FrameListOffsets,
+    int,
+]:
+    supplied = (
+        object_offsets is not None,
+        list_offsets is not None,
+        name_record_text_offset is not None,
+    )
+    if any(supplied) and not all(supplied):
+        raise ValueError("frame layout arguments must be supplied together")
+    if all(supplied):
+        assert object_offsets is not None
+        assert list_offsets is not None
+        assert name_record_text_offset is not None
+        return object_offsets, list_offsets, name_record_text_offset
+
+    from tools.mwcc_retro import struct_map
+
+    layout = struct_map.load_object_capture_layout(
+        struct_map.load_gc125n_struct_map()
+    )
+    return (
+        backend_object_snapshot.ObjObjectOffsets(
+            name_record=layout.objobject_name_record,
+            type_pointer=layout.objobject_type_pointer,
+            type_size=layout.type_size,
+            stack_offset=layout.objobject_stack_offset,
+        ),
+        backend_object_snapshot.FrameListOffsets(
+            next=layout.object_list_next,
+            object=layout.object_list_object,
+        ),
+        layout.name_record_text,
+    )
+
 def snapshot_frame_state(
     read_u32: ReadU32,
     read_s32: ReadS32,
@@ -32,10 +74,15 @@ def snapshot_frame_state(
     max_objects: int = MAX_OBJECTS,
     lifecycle_sequence: int | None = None,
     generation_for: GenerationFor | None = None,
-    object_offsets: backend_object_snapshot.ObjObjectOffsets,
-    list_offsets: backend_object_snapshot.FrameListOffsets,
-    name_record_text_offset: int,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets | None = None,
+    list_offsets: backend_object_snapshot.FrameListOffsets | None = None,
+    name_record_text_offset: int | None = None,
 ) -> dict[str, Any]:
+    object_offsets, list_offsets, name_record_text_offset = _resolve_frame_layout(
+        object_offsets,
+        list_offsets,
+        name_record_text_offset,
+    )
     partial_facts: list[dict[str, object]] = []
     try:
         return _snapshot_frame_state(
@@ -145,12 +192,17 @@ def snapshot_probe_frame_state(
     frame_base_size_va: int,
     frame_call_args_size_va: int,
     max_objects: int = PROBE_MAX_OBJECTS,
-    object_offsets: backend_object_snapshot.ObjObjectOffsets,
-    list_offsets: backend_object_snapshot.FrameListOffsets,
-    name_record_text_offset: int,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets | None = None,
+    list_offsets: backend_object_snapshot.FrameListOffsets | None = None,
+    name_record_text_offset: int | None = None,
 ) -> dict[str, Any]:
     """Return the legacy ``backend-map-probe.json`` frame evidence shape."""
 
+    object_offsets, list_offsets, name_record_text_offset = _resolve_frame_layout(
+        object_offsets,
+        list_offsets,
+        name_record_text_offset,
+    )
     if max_objects <= 0:
         raise ValueError(f"max_objects must be positive, got {max_objects}")
 
