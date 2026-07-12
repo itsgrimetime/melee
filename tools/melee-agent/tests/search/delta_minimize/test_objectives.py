@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import yaml
 
 import src.search.delta_minimize.objectives as objectives_module
 from src.mwcc_debug import role_descriptor
@@ -16,6 +18,7 @@ from src.mwcc_debug.stack_home_profile import StackHome, StackHomeProfile
 from src.search.delta_minimize import DeltaMinimizeError
 from src.search.delta_minimize.objectives import (
     ParentObjectiveEvidence,
+    ParentRoleBinding,
     infer_objective_manifest,
     load_color_target,
 )
@@ -161,6 +164,63 @@ def _write_target(
     return path
 
 
+def _v2_target_data(baseline: Path, desired: dict[int, int]) -> dict[str, object]:
+    dump_hash = hashlib.sha256(baseline.read_bytes()).hexdigest()
+    canonical = {str(ig_idx): ig_idx for ig_idx in desired}
+    return {
+        "schema_version": "delta-minimize-color-target.v2",
+        "function": FUNCTION,
+        "class_id": 0,
+        "baseline_side": "left",
+        "baseline_dump": baseline.name,
+        "force_phys": {str(ig_idx): physical for ig_idx, physical in desired.items()},
+        "coalesce_preservation": True,
+        "parent_role_bindings": {
+            "left": {
+                "source_sha256": "1" * 64,
+                "pcdump_sha256": dump_hash,
+                "canonical_to_parent": canonical,
+            },
+            "right": {
+                "source_sha256": "2" * 64,
+                "pcdump_sha256": "3" * 64,
+                "canonical_to_parent": canonical,
+            },
+        },
+    }
+
+
+def _write_v2_target(root: Path, baseline: Path, desired: dict[int, int]) -> Path:
+    path = root / "target-v2.yaml"
+    path.write_text(yaml.safe_dump(_v2_target_data(baseline, desired), sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _write_bound_v2_target(
+    root: Path,
+    left: ParentObjectiveEvidence,
+    right: ParentObjectiveEvidence,
+    desired: dict[int, int],
+    *,
+    right_map: dict[int, int] | None = None,
+) -> Path:
+    data = _v2_target_data(left.pcdump_path, desired)
+    bindings = data["parent_role_bindings"]
+    assert isinstance(bindings, dict)
+    for parent in (left, right):
+        binding = bindings[parent.side]
+        assert isinstance(binding, dict)
+        binding["source_sha256"] = hashlib.sha256(parent.compile.source.encode("utf-8")).hexdigest()
+        binding["pcdump_sha256"] = hashlib.sha256(parent.pcdump_path.read_bytes()).hexdigest()
+    if right_map is not None:
+        right_binding = bindings["right"]
+        assert isinstance(right_binding, dict)
+        right_binding["canonical_to_parent"] = {str(key): value for key, value in right_map.items()}
+    path = root / "bound-v2.yaml"
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return path
+
+
 def _color_profile(
     desired: dict[int, int],
     *,
@@ -301,6 +361,70 @@ def _explicit_inputs(
     return left, right, target
 
 
+def _duplicate_role_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> tuple[
+    ParentObjectiveEvidence,
+    ParentObjectiveEvidence,
+    role_descriptor.TargetSpec,
+    dict[str, ParentRoleBinding],
+    dict[int, int],
+]:
+    del desired_phys
+    desired = {64: 30, 78: 29}
+    canonical = tuple(desired)
+    left_compile = baseline_compile
+    right_compile = deepcopy(baseline_compile)
+    fixture_descriptors = list(build_descriptors(baseline_compile, 0).values())[:2]
+    assert len(fixture_descriptors) == 2
+    baseline_descriptors = {
+        canonical_ig: replace(descriptor, ig_idx=canonical_ig)
+        for canonical_ig, descriptor in zip(canonical, fixture_descriptors, strict=True)
+    }
+    alias_base = 164
+    aliases = {canonical[0]: alias_base, canonical[1]: alias_base + 1}
+    right_descriptors = dict(baseline_descriptors)
+    for canonical_ig, alias_ig in aliases.items():
+        right_descriptors[alias_ig] = replace(
+            baseline_descriptors[canonical_ig],
+            ig_idx=alias_ig,
+        )
+
+    def duplicate_descriptors(compile: Compile, class_id: int):
+        assert class_id == 0
+        if compile is right_compile:
+            return right_descriptors
+        return baseline_descriptors
+
+    monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", duplicate_descriptors)
+    dump_text = (FIXTURES / "mnVibration_matched_pcdump.txt").read_text(encoding="utf-8")
+    left_dump = tmp_path / "left.pcdump"
+    right_dump = tmp_path / "right.pcdump"
+    left_dump.write_text(dump_text, encoding="utf-8")
+    right_dump.write_text(dump_text, encoding="utf-8")
+    left = _parent("left", left_compile, left_dump, desired)
+    right = _parent("right", right_compile, right_dump, desired)
+    target_spec = objectives_module._target_spec(
+        left_compile,
+        desired,
+        0,
+        {"schema_version": "delta-minimize-color-target.v2"},
+        False,
+    )
+    bindings = {
+        parent.side: ParentRoleBinding(
+            source_sha256=hashlib.sha256(parent.compile.source.encode("utf-8")).hexdigest(),
+            pcdump_sha256=hashlib.sha256(parent.pcdump_path.read_bytes()).hexdigest(),
+            canonical_to_parent={ig_idx: ig_idx for ig_idx in canonical},
+        )
+        for parent in (left, right)
+    }
+    return left, right, target_spec, bindings, aliases
+
+
 def test_color_target_v1_validates_function_and_baseline(
     tmp_path: Path,
     desired_phys: dict[int, int],
@@ -314,6 +438,108 @@ def test_color_target_v1_validates_function_and_baseline(
     assert dict(target.force_phys) == desired_phys
     assert target.baseline_dump == baseline.resolve()
     assert target.coalesce_preservation is True
+
+
+def test_color_target_v2_loads_reviewed_parent_role_bindings(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.pcdump"
+    baseline.write_bytes(b"reviewed baseline dump\n")
+    target_path = _write_v2_target(tmp_path, baseline, {64: 30, 78: 29})
+
+    loaded = load_color_target(target_path, function=FUNCTION)
+
+    assert loaded.schema_version == "delta-minimize-color-target.v2"
+    assert loaded.baseline_side == "left"
+    assert dict(loaded.parent_role_bindings["right"].canonical_to_parent) == {64: 64, 78: 78}
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "missing-top-level-field",
+        "extra-top-level-field",
+        "missing-binding-field",
+        "extra-binding-field",
+        "missing-side",
+        "uppercase-hash",
+        "short-hash",
+        "partial-canonical-map",
+        "extra-canonical-key",
+        "duplicate-parent-ig",
+        "nonidentity-baseline",
+    ],
+)
+def test_color_target_v2_rejects_malformed_parent_role_binding(
+    tmp_path: Path,
+    malformation: str,
+) -> None:
+    baseline = tmp_path / "baseline.pcdump"
+    baseline.write_bytes(b"reviewed baseline dump\n")
+    data = _v2_target_data(baseline, {64: 30, 78: 29})
+    bindings = data["parent_role_bindings"]
+    assert isinstance(bindings, dict)
+    left = bindings["left"]
+    right = bindings["right"]
+    assert isinstance(left, dict)
+    assert isinstance(right, dict)
+
+    if malformation == "missing-top-level-field":
+        del data["baseline_side"]
+    elif malformation == "extra-top-level-field":
+        data["unexpected"] = True
+    elif malformation == "missing-binding-field":
+        del right["source_sha256"]
+    elif malformation == "extra-binding-field":
+        right["unexpected"] = True
+    elif malformation == "missing-side":
+        del bindings["right"]
+    elif malformation == "uppercase-hash":
+        right["source_sha256"] = "A" * 64
+    elif malformation == "short-hash":
+        right["pcdump_sha256"] = "3" * 63
+    elif malformation == "partial-canonical-map":
+        right["canonical_to_parent"] = {"64": 64}
+    elif malformation == "extra-canonical-key":
+        right["canonical_to_parent"] = {"64": 64, "78": 78, "99": 99}
+    elif malformation == "duplicate-parent-ig":
+        right["canonical_to_parent"] = {"64": 64, "78": 64}
+    else:
+        left["canonical_to_parent"] = {"64": 78, "78": 64}
+
+    target_path = tmp_path / "malformed-v2.yaml"
+    target_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError):
+        load_color_target(target_path, function=FUNCTION)
+
+
+def test_color_target_v2_rejects_baseline_dump_hash_mismatch(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.pcdump"
+    baseline.write_bytes(b"reviewed baseline dump\n")
+    data = _v2_target_data(baseline, {64: 30, 78: 29})
+    bindings = data["parent_role_bindings"]
+    assert isinstance(bindings, dict)
+    left = bindings["left"]
+    assert isinstance(left, dict)
+    left["pcdump_sha256"] = "0" * 64
+    target_path = tmp_path / "tampered-v2.yaml"
+    target_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError):
+        load_color_target(target_path, function=FUNCTION)
+
+
+def test_color_target_v1_has_no_reviewed_parent_bindings(
+    tmp_path: Path,
+    desired_phys: dict[int, int],
+) -> None:
+    baseline = tmp_path / "baseline.pcdump"
+    baseline.write_text("dump", encoding="utf-8")
+
+    loaded = load_color_target(_write_target(tmp_path, baseline, desired_phys), function=FUNCTION)
+
+    assert loaded.schema_version == "delta-minimize-color-target.v1"
+    assert loaded.baseline_side is None
+    assert dict(loaded.parent_role_bindings) == {}
 
 
 def test_color_target_accepts_canonical_json_force_phys_keys(
@@ -652,6 +878,178 @@ def test_independent_parent_targets_use_cross_parent_semantic_reanchor(
 
     assert dict(loaded.force_phys) == left_force
     assert reanchors == ["left", "right"]
+
+
+def test_v2_reviewed_parent_bindings_resolve_duplicate_semantic_roles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    left, right, target_spec, _bindings, _aliases = _duplicate_role_inputs(
+        monkeypatch,
+        tmp_path,
+        baseline_compile,
+        desired_phys,
+    )
+    desired = {role.original_ig: role.desired_phys for role in target_spec.roles}
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        objectives_module._require_complete_reanchor(target_spec, right.compile, 0, desired)
+
+    target_path = _write_bound_v2_target(tmp_path, left, right, desired)
+    monkeypatch.setattr(objectives_module, "_complete_profile_role_map", lambda *_args, **_kwargs: {})
+    seen_role_maps: dict[str, dict[int, int]] = {}
+
+    def capture_profile(parent, role_map, _desired):
+        seen_role_maps[parent.side] = dict(role_map)
+        assert parent.color_profile is not None
+        return parent.color_profile
+
+    monkeypatch.setattr(objectives_module, "_profile_for_parent", capture_profile)
+
+    manifest = infer_objective_manifest(
+        left,
+        right,
+        target_path=target_path,
+        donor_overrides={"objobjects": "left"},
+        compile_loader=lambda *_args: left.compile,
+    )
+
+    expected = {canonical: canonical for canonical in desired}
+    assert dict(manifest.desired_phys) == desired
+    assert seen_role_maps == {"left": expected, "right": expected}
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    ["source-hash", "pcdump-hash", "absent-parent-ig", "wrong-class"],
+)
+def test_reviewed_parent_reanchor_rejects_invalid_bound_parent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+    malformation: str,
+) -> None:
+    _left, right, target_spec, bindings, _aliases = _duplicate_role_inputs(
+        monkeypatch,
+        tmp_path,
+        baseline_compile,
+        desired_phys,
+    )
+    binding = bindings["right"]
+    parent = right
+    if malformation == "source-hash":
+        binding = replace(binding, source_sha256="0" * 64)
+    elif malformation == "pcdump-hash":
+        binding = replace(binding, pcdump_sha256="0" * 64)
+    elif malformation == "absent-parent-ig":
+        mapping = dict(binding.canonical_to_parent)
+        mapping[next(iter(mapping))] = 999999
+        binding = replace(binding, canonical_to_parent=mapping)
+    else:
+        parent = replace(right, class_id=1)
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        objectives_module._reviewed_parent_reanchor(target_spec, parent, binding)
+
+
+def test_reviewed_parent_reanchor_rejects_viable_nonminimum_semantic_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    _left, right, target_spec, bindings, aliases = _duplicate_role_inputs(
+        monkeypatch,
+        tmp_path,
+        baseline_compile,
+        desired_phys,
+    )
+    binding = bindings["right"]
+    canonical = next(iter(binding.canonical_to_parent))
+    selected = aliases[canonical]
+    mapping = dict(binding.canonical_to_parent)
+    mapping[canonical] = selected
+    binding = replace(binding, canonical_to_parent=mapping)
+
+    def controlled_cost(reference, candidate):
+        if candidate.ig_idx == canonical:
+            return 0.0
+        if candidate.ig_idx == selected:
+            return 0.1
+        return 1.0
+
+    monkeypatch.setattr(objectives_module.role_matcher, "role_cost", controlled_cost)
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        objectives_module._reviewed_parent_reanchor(target_spec, right, binding)
+
+
+def test_v2_reviewed_role_map_rejects_full_profile_mapping_collision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    left, right, target_spec, _bindings, aliases = _duplicate_role_inputs(
+        monkeypatch,
+        tmp_path,
+        baseline_compile,
+        desired_phys,
+    )
+    desired = {role.original_ig: role.desired_phys for role in target_spec.roles}
+    canonical = next(iter(desired))
+    target_path = _write_bound_v2_target(tmp_path, left, right, desired)
+
+    def colliding_profile_map(_reference, parent, _class_id, **_kwargs):
+        if parent is right.compile:
+            return {aliases[canonical]: canonical}
+        return {}
+
+    monkeypatch.setattr(objectives_module, "_complete_profile_role_map", colliding_profile_map)
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-donor$"):
+        infer_objective_manifest(
+            left,
+            right,
+            target_path=target_path,
+            donor_overrides={"objobjects": "left"},
+            compile_loader=lambda *_args: left.compile,
+        )
+
+
+def test_duplicate_semantic_roles_remain_ambiguous_for_v1_and_automatic_derivation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    left, right, target_spec, _bindings, _aliases = _duplicate_role_inputs(
+        monkeypatch,
+        tmp_path,
+        baseline_compile,
+        desired_phys,
+    )
+    desired = {role.original_ig: role.desired_phys for role in target_spec.roles}
+    v1_target = _write_target(tmp_path, left.pcdump_path, desired)
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        infer_objective_manifest(
+            left,
+            right,
+            target_path=v1_target,
+            donor_overrides={"objobjects": "left"},
+            compile_loader=lambda *_args: left.compile,
+        )
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        infer_objective_manifest(
+            left,
+            right,
+            target_path=None,
+            donor_overrides={"objobjects": "left"},
+            derive_force_target=lambda *_args: _derivation_payload(desired),
+        )
 
 
 def test_correlated_allocator_orders_allow_complete_exact_graph_namespace(

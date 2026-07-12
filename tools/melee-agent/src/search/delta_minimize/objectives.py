@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 import yaml
 
-from ...mwcc_debug import role_descriptor, role_reanchor
+from ...mwcc_debug import role_descriptor, role_matcher, role_reanchor
 from ...mwcc_debug.colorgraph_profile import ColorGraphProfile, build_colorgraph_profile
 from ...mwcc_debug.objobject_profile import ObjObjectIdentity, ObjObjectProfile
 from ...mwcc_debug.stack_home_profile import StackHome, StackHomeProfile
 from .contracts import DeltaMinimizeError
 
 COLOR_TARGET_SCHEMA = "delta-minimize-color-target.v1"
+COLOR_TARGET_SCHEMA_V2 = "delta-minimize-color-target.v2"
+ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v1"
 OBJECTIVE_MANIFEST_SCHEMA = "delta-minimize-objectives.v1"
 _TARGET_FIELDS = frozenset(
     {
@@ -26,6 +29,25 @@ _TARGET_FIELDS = frozenset(
         "baseline_dump",
         "force_phys",
         "coalesce_preservation",
+    }
+)
+_TARGET_V2_FIELDS = frozenset(
+    {
+        "schema_version",
+        "function",
+        "class_id",
+        "baseline_side",
+        "baseline_dump",
+        "force_phys",
+        "coalesce_preservation",
+        "parent_role_bindings",
+    }
+)
+_PARENT_BINDING_FIELDS = frozenset(
+    {
+        "source_sha256",
+        "pcdump_sha256",
+        "canonical_to_parent",
     }
 )
 _DONOR_AXES = frozenset({"color", "objobjects", "stack-homes"})
@@ -103,12 +125,24 @@ def _freeze(value: Any) -> Any:
 
 
 @dataclass(frozen=True)
+class ParentRoleBinding:
+    source_sha256: str
+    pcdump_sha256: str
+    canonical_to_parent: Mapping[int, int]
+
+
+@dataclass(frozen=True)
 class LoadedColorTarget:
     function: str
     class_id: int
     baseline_dump: Path
     force_phys: Mapping[int, int]
     coalesce_preservation: bool
+    schema_version: str = COLOR_TARGET_SCHEMA
+    baseline_side: str | None = None
+    parent_role_bindings: Mapping[str, ParentRoleBinding] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 @dataclass(frozen=True)
@@ -248,37 +282,102 @@ def _resolve_baseline_path(target_path: Path, raw: object) -> Path:
     return baseline
 
 
+def _parse_canonical_ig_key(raw: object, reason: str) -> int:
+    if _is_int(raw) and raw >= 0:
+        return raw
+    if isinstance(raw, str) and (
+        raw == "0"
+        or (raw and "1" <= raw[0] <= "9" and all("0" <= char <= "9" for char in raw[1:]))
+    ):
+        return int(raw)
+    raise DeltaMinimizeError(reason)
+
+
 def _validate_force_phys(raw: object) -> Mapping[int, int]:
     if not isinstance(raw, Mapping) or not raw:
         raise DeltaMinimizeError("invalid-color-target-force-phys")
     force_phys: dict[int, int] = {}
     for raw_ig_idx, physical in raw.items():
-        if _is_int(raw_ig_idx) and raw_ig_idx >= 0:
-            ig_idx = raw_ig_idx
-        elif isinstance(raw_ig_idx, str) and (
-            raw_ig_idx == "0"
-            or (raw_ig_idx and "1" <= raw_ig_idx[0] <= "9" and all("0" <= char <= "9" for char in raw_ig_idx[1:]))
-        ):
-            ig_idx = int(raw_ig_idx)
-        else:
-            raise DeltaMinimizeError("invalid-color-target-force-phys")
+        ig_idx = _parse_canonical_ig_key(raw_ig_idx, "invalid-color-target-force-phys")
         if ig_idx in force_phys or not _is_int(physical) or not 0 <= physical <= 31:
             raise DeltaMinimizeError("invalid-color-target-force-phys")
         force_phys[ig_idx] = physical
     return _immutable_sorted_int_mapping(force_phys)
 
 
+def _validate_sha256_text(raw: object) -> str:
+    if (
+        not isinstance(raw, str)
+        or len(raw) != 64
+        or any(char not in "0123456789abcdef" for char in raw)
+    ):
+        raise DeltaMinimizeError("invalid-color-target-parent-bindings")
+    return raw
+
+
+def _validate_parent_role_bindings(
+    raw: object,
+    force_phys: Mapping[int, int],
+    baseline_side: str,
+) -> Mapping[str, ParentRoleBinding]:
+    if not isinstance(raw, Mapping) or set(raw) != {"left", "right"}:
+        raise DeltaMinimizeError("invalid-color-target-parent-bindings")
+    bindings: dict[str, ParentRoleBinding] = {}
+    for side in ("left", "right"):
+        raw_binding = raw[side]
+        if not isinstance(raw_binding, Mapping) or set(raw_binding) != _PARENT_BINDING_FIELDS:
+            raise DeltaMinimizeError("invalid-color-target-parent-bindings")
+        raw_map = raw_binding["canonical_to_parent"]
+        if not isinstance(raw_map, Mapping):
+            raise DeltaMinimizeError("invalid-color-target-parent-bindings")
+        canonical_to_parent: dict[int, int] = {}
+        for raw_canonical, raw_parent in raw_map.items():
+            canonical = _parse_canonical_ig_key(
+                raw_canonical,
+                "invalid-color-target-parent-bindings",
+            )
+            if (
+                canonical in canonical_to_parent
+                or not _is_int(raw_parent)
+                or raw_parent < 0
+            ):
+                raise DeltaMinimizeError("invalid-color-target-parent-bindings")
+            canonical_to_parent[canonical] = raw_parent
+        if (
+            set(canonical_to_parent) != set(force_phys)
+            or len(set(canonical_to_parent.values())) != len(canonical_to_parent)
+            or (
+                side == baseline_side
+                and any(canonical != parent for canonical, parent in canonical_to_parent.items())
+            )
+        ):
+            raise DeltaMinimizeError("invalid-color-target-parent-bindings")
+        bindings[side] = ParentRoleBinding(
+            source_sha256=_validate_sha256_text(raw_binding["source_sha256"]),
+            pcdump_sha256=_validate_sha256_text(raw_binding["pcdump_sha256"]),
+            canonical_to_parent=_immutable_sorted_int_mapping(canonical_to_parent),
+        )
+    return MappingProxyType(bindings)
+
+
 def load_color_target(path: Path, *, function: str) -> LoadedColorTarget:
-    """Load the exact, fail-closed ``delta-minimize-color-target.v1`` schema."""
+    """Load an exact, fail-closed versioned color-target schema."""
     if not isinstance(path, Path) or _path_has_symlink(path.absolute()) or not path.is_file():
         raise DeltaMinimizeError("invalid-color-target-file")
     if not isinstance(function, str) or not function:
         raise DeltaMinimizeError("color-target-function-mismatch")
     data = _load_unique_yaml(path)
-    if set(data) != _TARGET_FIELDS:
-        raise DeltaMinimizeError("invalid-color-target-fields")
-    if data["schema_version"] != COLOR_TARGET_SCHEMA:
+    schema_version = data.get("schema_version")
+    if schema_version == COLOR_TARGET_SCHEMA:
+        expected_fields = _TARGET_FIELDS
+    elif schema_version == COLOR_TARGET_SCHEMA_V2:
+        expected_fields = _TARGET_V2_FIELDS
+    elif set(data) == _TARGET_FIELDS:
         raise DeltaMinimizeError("unsupported-color-target-schema")
+    else:
+        raise DeltaMinimizeError("invalid-color-target-fields")
+    if set(data) != expected_fields:
+        raise DeltaMinimizeError("invalid-color-target-fields")
     if not isinstance(data["function"], str) or data["function"] != function:
         raise DeltaMinimizeError("color-target-function-mismatch")
     class_id = data["class_id"]
@@ -287,12 +386,35 @@ def load_color_target(path: Path, *, function: str) -> LoadedColorTarget:
     coalesce = data["coalesce_preservation"]
     if not isinstance(coalesce, bool):
         raise DeltaMinimizeError("invalid-color-target-coalesce-policy")
+    baseline_dump = _resolve_baseline_path(path, data["baseline_dump"])
+    force_phys = _validate_force_phys(data["force_phys"])
+    baseline_side: str | None = None
+    parent_role_bindings: Mapping[str, ParentRoleBinding] = MappingProxyType({})
+    if schema_version == COLOR_TARGET_SCHEMA_V2:
+        raw_baseline_side = data["baseline_side"]
+        if not isinstance(raw_baseline_side, str) or raw_baseline_side not in {"left", "right"}:
+            raise DeltaMinimizeError("invalid-color-target-baseline-side")
+        baseline_side = raw_baseline_side
+        parent_role_bindings = _validate_parent_role_bindings(
+            data["parent_role_bindings"],
+            force_phys,
+            baseline_side,
+        )
+        try:
+            baseline_hash = hashlib.sha256(baseline_dump.read_bytes()).hexdigest()
+        except OSError as error:
+            raise DeltaMinimizeError("invalid-color-target-baseline") from error
+        if baseline_hash != parent_role_bindings[baseline_side].pcdump_sha256:
+            raise DeltaMinimizeError("invalid-color-target-baseline-hash")
     return LoadedColorTarget(
         function=function,
         class_id=class_id,
-        baseline_dump=_resolve_baseline_path(path, data["baseline_dump"]),
-        force_phys=_validate_force_phys(data["force_phys"]),
+        baseline_dump=baseline_dump,
+        force_phys=force_phys,
         coalesce_preservation=coalesce,
+        schema_version=schema_version,
+        baseline_side=baseline_side,
+        parent_role_bindings=parent_role_bindings,
     )
 
 
@@ -570,6 +692,69 @@ def _require_complete_reanchor(
     return result
 
 
+def _reviewed_parent_reanchor(
+    target_spec: role_descriptor.TargetSpec,
+    parent: ParentObjectiveEvidence,
+    binding: ParentRoleBinding,
+) -> role_reanchor.ReanchorResult:
+    """Validate and apply one provenance-bound reviewed parent role map."""
+    try:
+        source_sha256 = hashlib.sha256(parent.compile.source.encode("utf-8")).hexdigest()
+        pcdump_sha256 = hashlib.sha256(parent.pcdump_path.read_bytes()).hexdigest()
+    except (OSError, UnicodeError) as error:
+        raise DeltaMinimizeError("ambiguous-color-target") from error
+    target_roles = {
+        role.original_ig: role
+        for role in target_spec.roles
+        if role.class_id == parent.class_id
+    }
+    desired_phys = {
+        canonical: role.desired_phys
+        for canonical, role in target_roles.items()
+    }
+    mapping = dict(binding.canonical_to_parent)
+    if (
+        target_spec.function != parent.function
+        or parent.function != parent.compile.name
+        or source_sha256 != binding.source_sha256
+        or pcdump_sha256 != binding.pcdump_sha256
+        or set(mapping) != set(desired_phys)
+        or len(set(mapping.values())) != len(mapping)
+        or any(role.descriptor is None for role in target_roles.values())
+    ):
+        raise DeltaMinimizeError("ambiguous-color-target")
+    parent_descriptors = role_descriptor.build_descriptors(parent.compile, parent.class_id)
+    for canonical, parent_ig in mapping.items():
+        selected = parent_descriptors.get(parent_ig)
+        reference = target_roles[canonical].descriptor
+        if selected is None or reference is None:
+            raise DeltaMinimizeError("ambiguous-color-target")
+        selected_cost = role_matcher.role_cost(reference, selected)
+        candidate_costs = [
+            role_matcher.role_cost(reference, descriptor)
+            for descriptor in parent_descriptors.values()
+        ]
+        viable_costs = [cost for cost in candidate_costs if cost < role_matcher.MATCH_THRESHOLD]
+        if (
+            selected_cost >= role_matcher.MATCH_THRESHOLD
+            or not viable_costs
+            or selected_cost != min(viable_costs)
+        ):
+            raise DeltaMinimizeError("ambiguous-color-target")
+    return role_reanchor.ReanchorResult(
+        class_id=parent.class_id,
+        force_phys={
+            parent_ig: desired_phys[canonical]
+            for canonical, parent_ig in mapping.items()
+        },
+        diagnostics={},
+        matched={
+            parent_ig: canonical
+            for canonical, parent_ig in mapping.items()
+        },
+    )
+
+
 def _compile_for_explicit_target(
     target: LoadedColorTarget,
     left: ParentObjectiveEvidence,
@@ -578,7 +763,15 @@ def _compile_for_explicit_target(
 ) -> role_descriptor.Compile:
     try:
         baseline_path = target.baseline_dump.resolve()
-        matching_parents = [parent for parent in (left, right) if parent.pcdump_path.resolve() == baseline_path]
+        if target.baseline_side is None:
+            matching_parents = [parent for parent in (left, right) if parent.pcdump_path.resolve() == baseline_path]
+        else:
+            baseline_parent = {"left": left, "right": right}[target.baseline_side]
+            matching_parents = (
+                [baseline_parent]
+                if baseline_parent.pcdump_path.resolve() == baseline_path
+                else []
+            )
         if not matching_parents:
             raise ValueError("baseline source cannot be bound to either parent")
         sources = {parent.compile.source for parent in matching_parents}
@@ -894,6 +1087,27 @@ def _complete_profile_role_map(
         raise DeltaMinimizeError("ambiguous-color-donor") from error
 
 
+def _overlay_reviewed_role_map(
+    profile_role_map: Mapping[int, int],
+    reviewed: role_reanchor.ReanchorResult,
+) -> Mapping[int, int]:
+    merged = dict(profile_role_map)
+    for parent_ig, canonical in reviewed.matched.items():
+        existing = merged.get(parent_ig)
+        if (
+            (existing is not None and existing != canonical)
+            or any(
+                other_ig != parent_ig and other_canonical == canonical
+                for other_ig, other_canonical in merged.items()
+            )
+        ):
+            raise DeltaMinimizeError("ambiguous-color-donor")
+        merged[parent_ig] = canonical
+    if len(set(merged.values())) != len(merged):
+        raise DeltaMinimizeError("ambiguous-color-donor")
+    return _immutable_sorted_int_mapping(merged)
+
+
 def _allocator_namespace_witness(
     compile: role_descriptor.Compile,
     class_id: int,
@@ -1065,7 +1279,7 @@ def infer_objective_manifest(
             loaded.force_phys,
             loaded.class_id,
             {
-                "schema_version": COLOR_TARGET_SCHEMA,
+                "schema_version": loaded.schema_version,
                 "baseline_dump": str(loaded.baseline_dump),
             },
             loaded.coalesce_preservation,
@@ -1080,20 +1294,31 @@ def infer_objective_manifest(
         color_target_artifact = str(target_path.resolve())
         target_reason = "explicit-versioned-color-target"
 
-    _require_complete_reanchor(
-        target_spec,
-        left.compile,
-        loaded.class_id,
-        loaded.force_phys,
-        exact_identity=profile_reference_compile is left.compile,
-    )
-    _require_complete_reanchor(
-        target_spec,
-        right.compile,
-        loaded.class_id,
-        loaded.force_phys,
-        exact_identity=profile_reference_compile is right.compile,
-    )
+    reviewed_reanchors: dict[str, role_reanchor.ReanchorResult] = {}
+    if loaded.schema_version == COLOR_TARGET_SCHEMA_V2:
+        reviewed_reanchors = {
+            parent.side: _reviewed_parent_reanchor(
+                target_spec,
+                parent,
+                loaded.parent_role_bindings[parent.side],
+            )
+            for parent in (left, right)
+        }
+    else:
+        _require_complete_reanchor(
+            target_spec,
+            left.compile,
+            loaded.class_id,
+            loaded.force_phys,
+            exact_identity=profile_reference_compile is left.compile,
+        )
+        _require_complete_reanchor(
+            target_spec,
+            right.compile,
+            loaded.class_id,
+            loaded.force_phys,
+            exact_identity=profile_reference_compile is right.compile,
+        )
     left_profile_roles = _complete_profile_role_map(
         profile_reference_compile,
         left.compile,
@@ -1106,6 +1331,15 @@ def infer_objective_manifest(
         loaded.class_id,
         allow_exact_namespace=derived_exact_identity,
     )
+    if reviewed_reanchors:
+        left_profile_roles = _overlay_reviewed_role_map(
+            left_profile_roles,
+            reviewed_reanchors["left"],
+        )
+        right_profile_roles = _overlay_reviewed_role_map(
+            right_profile_roles,
+            reviewed_reanchors["right"],
+        )
     left_color = _profile_for_parent(left, left_profile_roles, loaded.force_phys)
     right_color = _profile_for_parent(right, right_profile_roles, loaded.force_phys)
 
