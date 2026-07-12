@@ -1239,6 +1239,7 @@ def _provenance_consumers(
         canonical_artifact_id=left.artifact_id,
         canonical_source_sha256=left.source_sha256,
         canonical_pcdump_sha256=left.pcdump_sha256,
+        lattice_atom_count=3,
         reviewed_anchors={0: 0},
         artifacts=(left, right),
     )
