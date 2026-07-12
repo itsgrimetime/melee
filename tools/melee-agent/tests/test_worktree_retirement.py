@@ -1243,6 +1243,7 @@ def _retirement_report(
         common_git_dir=common_git_dir,
         current_worktree=tmp_path / "repo",
         min_idle_hours=24,
+        inspected_at=1000.0,
         records=records,
         global_errors=global_errors,
     )
@@ -1546,6 +1547,225 @@ def test_worktrees_human_output_contains_same_ordered_facts(
     assert "estimated_reclaimed_bytes=0" in output
 
 
+def test_worktrees_fixed_report_uses_its_inspection_reference_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    item = replace(
+        _retirement_record(
+            tmp_path / "agent",
+            branch="codex/fixed-report",
+            last_activity=100.0,
+        ),
+        eligible=False,
+        skip_reasons=("below-min-idle",),
+    )
+    report = replace(_retirement_report(tmp_path, (item,)), inspected_at=1000.0)
+    monkeypatch.setattr(worktree_doctor, "ROOT", report.repo_root)
+    monkeypatch.setattr(worktrees, "inspect_worktrees", lambda *_args, **_kwargs: report)
+
+    monkeypatch.setattr(worktree_doctor.time, "time", lambda: 50_000.0)
+    assert worktree_doctor.main(["worktrees", "report", "--json"]) == 0
+    first = json.loads(capsys.readouterr().out)
+    monkeypatch.setattr(worktree_doctor.time, "time", lambda: 90_000.0)
+    assert worktree_doctor.main(["worktrees", "report", "--json"]) == 0
+    second = json.loads(capsys.readouterr().out)
+
+    assert first == second
+    assert first["worktrees"][0]["idle_seconds"] == 900.0
+    assert first["worktrees"][0]["skip_reasons"] == ["below-min-idle"]
+
+
+def test_inspection_binds_reference_time_before_a_long_record_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registered = worktrees.RegisteredWorktree(
+        path=repo,
+        head="a" * 40,
+        branch="master",
+        detached=False,
+        locked_reason=None,
+        prunable_reason=None,
+    )
+    clock = [1000.0]
+    item = _retirement_record(repo, branch="master", last_activity=100.0)
+
+    monkeypatch.setattr(worktrees.time, "time", lambda: clock[0])
+    monkeypatch.setattr(
+        worktrees, "discover_registered_worktrees", lambda _repo: (registered,)
+    )
+    monkeypatch.setattr(worktrees, "common_git_dir", lambda _repo: repo / ".git")
+
+    def inspect_one(*_args, **kwargs):
+        assert kwargs["now"] == 1000.0
+        clock[0] = 50_000.0
+        return item
+
+    monkeypatch.setattr(worktrees, "_inspect_one", inspect_one)
+
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=24,
+        process_snapshot=_quiet_snapshot(),
+    )
+
+    assert report.inspected_at == 1000.0
+
+
+def test_worktrees_apply_serializes_authoritative_preflight_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    initial_item = _retirement_record(
+        tmp_path / "initial", branch="codex/initial", last_activity=100.0
+    )
+    authoritative_item = _retirement_record(
+        tmp_path / "authoritative",
+        branch="codex/authoritative",
+        last_activity=500.0,
+    )
+    initial = replace(
+        _retirement_report(tmp_path, (initial_item,)), inspected_at=1000.0
+    )
+    authoritative = replace(
+        _retirement_report(tmp_path, (authoritative_item,)), inspected_at=2000.0
+    )
+    planned = worktrees.RetirementCandidate(
+        authoritative_item.path,
+        authoritative_item.branch,
+        authoritative_item.head,
+        authoritative_item.estimated_disk_bytes,
+        authoritative_item.last_activity,
+    )
+    result = replace(
+        worktrees.RetirementResult((planned,), (), (), ()),
+        authoritative_report=authoritative,
+    )
+    monkeypatch.setattr(worktree_doctor, "ROOT", initial.repo_root)
+    monkeypatch.setattr(worktrees, "inspect_worktrees", lambda *_args, **_kwargs: initial)
+    monkeypatch.setattr(worktrees, "retire_worktrees", lambda *_args, **_kwargs: result)
+
+    assert worktree_doctor.main(
+        ["worktrees", "retire", "--apply", "--json"]
+    ) == 2
+    payload = json.loads(capsys.readouterr().out)
+
+    assert [record["branch"] for record in payload["worktrees"]] == [
+        "codex/authoritative"
+    ]
+    assert payload["worktrees"][0]["idle_seconds"] == 1500.0
+    assert payload["summary"]["eligible_count"] == 1
+
+
+def test_worktrees_human_record_is_schema_complete_and_escapes_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    unapproved = tuple(Path(f"secret-{index}\nvalue") for index in range(22))
+    ignored = tuple(
+        worktrees.IgnoredEntry(path, "file", 1, index + 1, 10, 50.0)
+        for index, path in enumerate(unapproved + (Path("build/allowed.o"),))
+    )
+    item = replace(
+        _retirement_record(
+            tmp_path / "agent\npath",
+            branch="codex/human\nbranch",
+            head="0123456789abcdef" * 2 + "01234567",
+            estimated_disk_bytes=12288,
+            last_activity=100.0,
+        ),
+        dirty=False,
+        ignored_entries=ignored,
+        unapproved_ignored_paths=unapproved,
+        active_pids=(7, 11),
+        merged_into_master=True,
+        eligible=False,
+        skip_reasons=("contains-unapproved-ignored", "active-process"),
+    )
+    report = replace(_retirement_report(tmp_path, (item,)), inspected_at=1000.0)
+    monkeypatch.setattr(worktree_doctor, "ROOT", report.repo_root)
+    monkeypatch.setattr(worktrees, "inspect_worktrees", lambda *_args, **_kwargs: report)
+
+    assert worktree_doctor.main(["worktrees", "report"]) == 0
+    output = capsys.readouterr().out
+    record_line = next(line for line in output.splitlines() if line.startswith("worktree="))
+    displayed_unapproved = json.dumps(
+        [str(path) for path in unapproved[:20]],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    escaped_item_path = str(item.path).replace("\n", "\\n")
+
+    assert record_line == (
+        f"worktree={escaped_item_path} "
+        "branch=codex/human\\nbranch head=0123456789ab "
+        "estimated_disk_bytes=12288 last_activity=100 idle_seconds=900 "
+        "dirty=false active_pids=[7,11] merged_into_master=true "
+        "ignored_path_count=23 unapproved_ignored_path_count=22 "
+        f"unapproved_ignored_paths={displayed_unapproved} "
+        "eligibility=ineligible "
+        "reasons=contains-unapproved-ignored,active-process"
+    )
+    assert "agent\npath" not in output
+    assert "secret-0\nvalue" not in output
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_worktrees_git_discovery_failure_uses_safe_repository_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    json_output: bool,
+) -> None:
+    root = tmp_path / "repo\nroot"
+    monkeypatch.setattr(worktree_doctor, "ROOT", root)
+    monkeypatch.setattr(
+        worktrees,
+        "inspect_worktrees",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            worktrees.WorktreeParseError("git discovery\nfailed")
+        ),
+    )
+    monkeypatch.setattr(
+        worktrees,
+        "common_git_dir",
+        lambda *_args, **_kwargs: pytest.fail("recovery repeated Git discovery"),
+    )
+
+    arguments = ["worktrees", "report"]
+    if json_output:
+        arguments.append("--json")
+    assert worktree_doctor.main(arguments) == 1
+    captured = capsys.readouterr()
+
+    assert captured.err == ""
+    if json_output:
+        payload = json.loads(captured.out)
+        assert payload["schema_version"] == 1
+        assert payload["repository"] == {
+            "root": str(root),
+            "common_git_dir": str(root / ".git"),
+            "current_worktree": str(root),
+        }
+        assert payload["errors"] == [
+            {
+                "reason": "worktree-porcelain-invalid",
+                "detail": "git discovery\nfailed",
+            }
+        ]
+    else:
+        escaped_root = str(root).replace("\n", "\\n")
+        assert f"root={escaped_root}" in captured.out
+        assert "detail=git discovery\\nfailed" in captured.out
+        assert "git discovery\nfailed" not in captured.out
+
+
 def test_report_and_dry_run_preserve_index_and_use_exact_status_command(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1622,6 +1842,7 @@ def test_retirement_dry_run_is_canonical_ordered_and_read_only(tmp_path: Path, m
     assert result.removed == ()
     assert result.skipped == ()
     assert result.errors == ()
+    assert result.authoritative_report is report
 
 
 def test_retirement_apply_lock_contention_fails_before_planning(
@@ -1979,6 +2200,8 @@ def test_retirement_apply_removes_checkout_and_preserves_branch(
     result = worktrees.retire_worktrees(report, apply=True)
 
     assert [item.path for item in result.removed] == [linked]
+    assert result.authoritative_report is not None
+    assert result.authoritative_report.inspected_at >= report.inspected_at
     assert not linked.exists()
     assert (
         real_run(

@@ -115,6 +115,7 @@ class WorktreeReport:
     common_git_dir: Path
     current_worktree: Path
     min_idle_hours: float
+    inspected_at: float
     records: tuple[WorktreeRecord, ...]
     global_errors: tuple[str, ...]
 
@@ -158,6 +159,7 @@ class RetirementResult:
     removed: tuple[RetirementRemoval, ...]
     skipped: tuple[RetirementSkip, ...]
     errors: tuple[RetirementError, ...]
+    authoritative_report: WorktreeReport | None = None
 
 
 _OBJECT_HEX_LENGTHS = {b"sha1": 40, b"sha256": 64}
@@ -1309,6 +1311,7 @@ def inspect_worktrees(
         common_git_dir=common_git_dir(repo_root),
         current_worktree=current_worktree.resolve(strict=False),
         min_idle_hours=min_idle_hours,
+        inspected_at=current_time,
         records=records,
         global_errors=snapshot.errors,
     )
@@ -1525,6 +1528,7 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
             errors=_retirement_errors(
                 report.global_errors, detail="initial inspection failed"
             ),
+            authoritative_report=report,
         )
     if not apply:
         return RetirementResult(
@@ -1532,6 +1536,7 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
             removed=(),
             skipped=(),
             errors=(),
+            authoritative_report=report,
         )
 
     lock_descriptor: int | None = None
@@ -1563,6 +1568,7 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
                         detail=str(error),
                     ),
                 ),
+                authoritative_report=report,
             )
 
         try:
@@ -1573,6 +1579,7 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
                 removed=(),
                 skipped=(),
                 errors=(_porcelain_error(error, phase="preflight"),),
+                authoritative_report=report,
             )
         if preflight.global_errors:
             return RetirementResult(
@@ -1582,6 +1589,7 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
                 errors=_retirement_errors(
                     preflight.global_errors, detail="preflight inspection failed"
                 ),
+                authoritative_report=preflight,
             )
         common_git_error = _common_git_dir_error(
             preflight.common_git_dir,
@@ -1595,6 +1603,7 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
                 removed=(),
                 skipped=(),
                 errors=(common_git_error,),
+                authoritative_report=preflight,
             )
 
         planned = _retirement_plan(preflight)
@@ -1721,6 +1730,7 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
             removed=tuple(removed),
             skipped=tuple(skipped),
             errors=tuple(errors),
+            authoritative_report=preflight,
         )
     finally:
         if lock_descriptor is not None:

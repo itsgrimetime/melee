@@ -315,9 +315,11 @@ def _assets_main(argv: Sequence[str]) -> int:
     } else 1
 
 
-def _worktree_record_payload(record, *, now: float) -> dict[str, object]:
+def _worktree_record_payload(record, *, inspected_at: float) -> dict[str, object]:
     idle_seconds = (
-        None if record.last_activity is None else now - record.last_activity
+        None
+        if record.last_activity is None
+        else inspected_at - record.last_activity
     )
     return {
         "path": str(record.path),
@@ -339,9 +341,14 @@ def _worktree_record_payload(record, *, now: float) -> dict[str, object]:
 
 
 def _worktrees_payload(report, result, *, mode: str) -> dict[str, object]:
-    now = time.time()
+    authoritative_report = (
+        result.authoritative_report
+        if result is not None and result.authoritative_report is not None
+        else report
+    )
     records = sorted(
-        report.records, key=lambda record: str(record.canonical_path)
+        authoritative_report.records,
+        key=lambda record: str(record.canonical_path),
     )
     if result is None:
         planned = ()
@@ -363,14 +370,17 @@ def _worktrees_payload(report, result, *, mode: str) -> dict[str, object]:
         "schema_version": 1,
         "resource": "worktrees",
         "mode": mode,
-        "thresholds": {"min_idle_hours": report.min_idle_hours},
+        "thresholds": {"min_idle_hours": authoritative_report.min_idle_hours},
         "repository": {
-            "root": str(report.repo_root),
-            "common_git_dir": str(report.common_git_dir),
-            "current_worktree": str(report.current_worktree),
+            "root": str(authoritative_report.repo_root),
+            "common_git_dir": str(authoritative_report.common_git_dir),
+            "current_worktree": str(authoritative_report.current_worktree),
         },
         "worktrees": [
-            _worktree_record_payload(record, now=now) for record in records
+            _worktree_record_payload(
+                record, inspected_at=authoritative_report.inspected_at
+            )
+            for record in records
         ],
         "planned": [
             {
@@ -419,9 +429,22 @@ def _worktrees_payload(report, result, *, mode: str) -> dict[str, object]:
 def _format_worktree_value(value: object) -> str:
     if value is None:
         return "unknown"
+    if isinstance(value, bool):
+        return "true" if value else "false"
     if isinstance(value, float):
         return f"{value:g}"
     return str(value)
+
+
+def _escape_worktree_text(value: object) -> str:
+    rendered = json.dumps(str(value), ensure_ascii=True)
+    return rendered[1:-1]
+
+
+def _format_worktree_list(values: Sequence[object]) -> str:
+    return json.dumps(
+        list(values), ensure_ascii=True, separators=(",", ":")
+    )
 
 
 def _print_worktrees_payload(payload: dict[str, object]) -> None:
@@ -433,49 +456,72 @@ def _print_worktrees_payload(payload: dict[str, object]) -> None:
     print(f"thresholds: min_idle_hours={thresholds['min_idle_hours']}")
     print(
         "repository: "
-        f"root={repository['root']} common_git_dir={repository['common_git_dir']} "
-        f"current_worktree={repository['current_worktree']}"
+        f"root={_escape_worktree_text(repository['root'])} "
+        f"common_git_dir={_escape_worktree_text(repository['common_git_dir'])} "
+        f"current_worktree={_escape_worktree_text(repository['current_worktree'])}"
     )
     for record in payload["worktrees"]:
         assert isinstance(record, dict)
         reasons = record["skip_reasons"]
         assert isinstance(reasons, list)
-        reason_text = ",".join(str(reason) for reason in reasons) or "-"
+        reason_text = ",".join(_escape_worktree_text(reason) for reason in reasons) or "-"
         eligibility = "eligible" if record["eligible"] else "ineligible"
-        branch = record["branch"] if record["branch"] is not None else "-"
+        branch = (
+            _escape_worktree_text(record["branch"])
+            if record["branch"] is not None
+            else "-"
+        )
+        active_pids = record["active_pids"]
+        unapproved = record["unapproved_ignored_paths"]
+        assert isinstance(active_pids, list)
+        assert isinstance(unapproved, list)
         print(
-            f"worktree={record['path']} branch={branch} "
-            f"head={str(record['head'])[:12]} "
+            f"worktree={_escape_worktree_text(record['path'])} branch={branch} "
+            f"head={_escape_worktree_text(str(record['head'])[:12])} "
             f"estimated_disk_bytes={record['estimated_disk_bytes']} "
+            f"last_activity={_format_worktree_value(record['last_activity'])} "
             f"idle_seconds={_format_worktree_value(record['idle_seconds'])} "
+            f"dirty={_format_worktree_value(record['dirty'])} "
+            f"active_pids={_format_worktree_list(active_pids)} "
+            f"merged_into_master={_format_worktree_value(record['merged_into_master'])} "
+            f"ignored_path_count={record['ignored_path_count']} "
+            f"unapproved_ignored_path_count={len(unapproved)} "
+            f"unapproved_ignored_paths={_format_worktree_list(unapproved[:20])} "
             f"eligibility={eligibility} reasons={reason_text}"
         )
     for candidate in payload["planned"]:
         assert isinstance(candidate, dict)
         print(
-            f"planned: path={candidate['path']} branch={candidate['branch']} "
-            f"head={str(candidate['head'])[:12]} "
+            f"planned: path={_escape_worktree_text(candidate['path'])} "
+            f"branch={_escape_worktree_text(candidate['branch'])} "
+            f"head={_escape_worktree_text(str(candidate['head'])[:12])} "
             f"estimated_disk_bytes={candidate['estimated_disk_bytes']} "
             f"last_activity={_format_worktree_value(candidate['last_activity'])}"
         )
     for removal in payload["removed"]:
         assert isinstance(removal, dict)
         print(
-            f"removed: path={removal['path']} branch={removal['branch']} "
-            f"head={str(removal['head'])[:12]} "
-            f"branch_head_after={removal['branch_head_after']} "
+            f"removed: path={_escape_worktree_text(removal['path'])} "
+            f"branch={_escape_worktree_text(removal['branch'])} "
+            f"head={_escape_worktree_text(str(removal['head'])[:12])} "
+            f"branch_head_after={_escape_worktree_text(removal['branch_head_after'])} "
             f"estimated_reclaimed_bytes={removal['estimated_reclaimed_bytes']}"
         )
     for skip in payload["skipped"]:
         assert isinstance(skip, dict)
         print(
-            f"skipped: path={skip['path']} branch={skip['branch']} "
-            f"head={str(skip['head'])[:12]} phase={skip['phase']} "
-            f"reason={skip['reason']}"
+            f"skipped: path={_escape_worktree_text(skip['path'])} "
+            f"branch={_escape_worktree_text(skip['branch'])} "
+            f"head={_escape_worktree_text(str(skip['head'])[:12])} "
+            f"phase={_escape_worktree_text(skip['phase'])} "
+            f"reason={_escape_worktree_text(skip['reason'])}"
         )
     for error in payload["errors"]:
         assert isinstance(error, dict)
-        print(f"error: reason={error['reason']} detail={error['detail']}")
+        print(
+            f"error: reason={_escape_worktree_text(error['reason'])} "
+            f"detail={_escape_worktree_text(error['detail'])}"
+        )
     summary = payload["summary"]
     assert isinstance(summary, dict)
     print(
@@ -534,6 +580,9 @@ def _worktrees_main(argv: Sequence[str]) -> int:
     if args.min_idle_hours < 0 or not math.isfinite(args.min_idle_hours):
         parser.error("--min-idle-hours must be finite and non-negative")
 
+    mode = "apply" if args.command == "retire" and args.apply else (
+        "dry-run" if args.command == "retire" else "report"
+    )
     try:
         report = worktrees.inspect_worktrees(
             ROOT,
@@ -543,9 +592,10 @@ def _worktrees_main(argv: Sequence[str]) -> int:
     except worktrees.WorktreeParseError as error:
         report = worktrees.WorktreeReport(
             repo_root=ROOT,
-            common_git_dir=worktrees.common_git_dir(ROOT),
+            common_git_dir=ROOT / ".git",
             current_worktree=ROOT,
             min_idle_hours=args.min_idle_hours,
+            inspected_at=time.time(),
             records=(),
             global_errors=(),
         )
@@ -558,17 +608,13 @@ def _worktrees_main(argv: Sequence[str]) -> int:
                     reason="worktree-porcelain-invalid", detail=str(error)
                 ),
             ),
-        )
-        mode = "apply" if args.command == "retire" and args.apply else (
-            "dry-run" if args.command == "retire" else "report"
+            authoritative_report=report,
         )
     else:
         if args.command == "report":
             result = None
-            mode = "report"
         else:
             result = worktrees.retire_worktrees(report, apply=args.apply)
-            mode = "apply" if args.apply else "dry-run"
 
     payload = _worktrees_payload(report, result, mode=mode)
     if args.json:
