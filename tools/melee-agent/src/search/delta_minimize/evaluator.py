@@ -28,8 +28,6 @@ from .objectives import (
     COLOR_TARGET_SCHEMA_V2,
     ROLE_NAMESPACE_SCHEMA,
     ObjectiveManifest,
-    _allocator_namespace_witness,
-    _structural_namespace_witness,
 )
 
 
@@ -850,21 +848,30 @@ def _candidate_proven_role_map(
     if proven is not None:
         return proven
 
-    candidate_witness = _structural_namespace_witness(
-        candidate_compile,
-        objective.class_id,
-    )
-    if candidate_witness is None:
-        return None
-    inherited = [
-        parent_maps[side]
-        for side in ("left", "right")
-        if candidate_witness
-        == _structural_namespace_witness(
+    inherited: list[dict[int, int]] = []
+    for side in ("left", "right"):
+        sections = [
+            section
+            for section in parent_compiles[side].fev.coalesce_sections
+            if section.class_id == objective.class_id
+        ]
+        if not sections:
+            continue
+        candidate_to_parent = role_descriptor.prove_virtual_namespace_map(
             parent_compiles[side],
+            candidate_compile,
             objective.class_id,
+            sections[-1].n_virtuals,
         )
-    ]
+        if candidate_to_parent is None:
+            continue
+        inherited.append(
+            {
+                candidate_ig: parent_maps[side][parent_ig]
+                for candidate_ig, parent_ig in candidate_to_parent.items()
+                if parent_ig in parent_maps[side]
+            }
+        )
     return _agreeing_proven_map(inherited)
 
 
@@ -931,26 +938,40 @@ def _color_axis(
     donor_side = "left" if objective.color_donor is None else objective.color_donor
     donor_compile = parent_compiles[donor_side]
     target = _target_spec(objective.target_spec)
-    candidate_witness = _allocator_namespace_witness(candidate_compile, objective.class_id)
-    donor_witness = _allocator_namespace_witness(donor_compile, objective.class_id)
+    donor_sections = [
+        section
+        for section in donor_compile.fev.coalesce_sections
+        if section.class_id == objective.class_id
+    ]
+    exact_graph_roles = (
+        role_descriptor.prove_virtual_namespace_map(
+            donor_compile,
+            candidate_compile,
+            objective.class_id,
+            donor_sections[-1].n_virtuals,
+        )
+        if donor_sections
+        else None
+    )
     if (
         target.provenance.get("inference") == "parent-register-diff"
-        and candidate_witness is not None
-        and candidate_witness == donor_witness
+        and exact_graph_roles is not None
     ):
-        role_map = {ig_idx: ig_idx for ig_idx in range(candidate_witness[0])}
+        donor_role_map = {
+            ig_idx: ig_idx for ig_idx in range(donor_sections[-1].n_virtuals)
+        }
         candidate_profile = build_colorgraph_profile(
             _load_text(evidence.pcdump_path),
             objective.function,
             objective.class_id,
-            role_map,
+            exact_graph_roles,
             required_roles=frozenset(desired),
         )
         donor_profile = build_colorgraph_profile(
             _load_text(donor_raw.pcdump_path),
             objective.function,
             objective.class_id,
-            role_map,
+            donor_role_map,
             required_roles=frozenset(desired),
         )
         return tuple(colorgraph_distance(candidate_profile, donor_profile, desired).as_tuple())  # type: ignore[return-value]
@@ -1012,23 +1033,21 @@ def _color_axis(
             for candidate_ig, canonical in candidate_proven.items()
             if canonical in donor_by_canonical
         }
-    candidate_structural_witness = _structural_namespace_witness(
-        candidate_compile,
-        objective.class_id,
-    )
-    donor_structural_witness = _structural_namespace_witness(
-        donor_compile,
-        objective.class_id,
-    )
     donor_graph_igs = tuple(sorted(donor_descriptors))
-    if (
-        candidate_proven is not None
-        and donor_proven is not None
-        and candidate_structural_witness is not None
-        and candidate_structural_witness == donor_structural_witness
-    ):
-        donor_graph_igs = tuple(range(candidate_structural_witness["virtual_count"]))
-        candidate_graph_roles = {ig_idx: ig_idx for ig_idx in donor_graph_igs}
+    reviewed_graph_roles = (
+        role_descriptor.prove_virtual_namespace_map(
+            donor_compile,
+            candidate_compile,
+            objective.class_id,
+            donor_sections[-1].n_virtuals,
+            proven_graph_roles,
+        )
+        if donor_sections and proven_graph_roles
+        else None
+    )
+    if reviewed_graph_roles is not None:
+        donor_graph_igs = tuple(range(donor_sections[-1].n_virtuals))
+        candidate_graph_roles = reviewed_graph_roles
     elif (
         set(proven_graph_roles.values()) == set(donor_descriptors)
         and len(proven_graph_roles) == len(donor_descriptors)

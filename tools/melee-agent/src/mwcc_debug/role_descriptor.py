@@ -1,17 +1,20 @@
 from __future__ import annotations
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Mapping, Optional
 from .colorgraph_parser import parse_hook_events, find_function, FunctionEvents
 from .parser import parse_pcdump, analyze_function, Function
 from .coalesce_ir_facts import collect, IrFacts
 from .first_divergence import select_class_section, decision_views
+from .symbol_bridge import find_first_def
 
 _REG = re.compile(r"\b([rf])\d+\b")     # rNN/fNN register tokens (virtual or phys)
 _REG_NUMBER = re.compile(r"\b([rf])(\d+)\b")
+_RELOCATION = re.compile(r"@(\d+)")
 _SPACE = re.compile(r"\s+")
+_EARLY_SEMANTIC_PASS = "BEFORE GLOBAL OPTIMIZATION"
 
 
 def normalize_first_def(fd) -> str:
@@ -167,6 +170,325 @@ def build_virtual_semantic_identities(
     if len(set(identities.values())) != virtual_count:
         return None
     return identities
+
+
+def _early_semantic_pass(c: Compile):
+    matches = [item for item in c.fn.passes if item.name == _EARLY_SEMANTIC_PASS]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _rank_signatures(signatures: Mapping[tuple, tuple]) -> dict[tuple, int]:
+    values = sorted({repr(value) for value in signatures.values()})
+    ranks = {value: index for index, value in enumerate(values)}
+    return {key: ranks[repr(value)] for key, value in signatures.items()}
+
+
+def _partition(colors: Mapping[tuple, int]) -> frozenset[frozenset[tuple]]:
+    groups: dict[int, set[tuple]] = defaultdict(set)
+    for key, color in colors.items():
+        groups[color].add(key)
+    return frozenset(frozenset(group) for group in groups.values())
+
+
+def _cfg_block_map(reference_pass, candidate_pass) -> dict[int, int] | None:
+    sides = (
+        {block.index: block for block in reference_pass.blocks},
+        {block.index: block for block in candidate_pass.blocks},
+    )
+    if not sides[0] or len(sides[0]) != len(sides[1]):
+        return None
+    colors = _rank_signatures(
+        {
+            (side, block.index): (
+                len(block.pred),
+                len(block.succ),
+                len(block.labels),
+                block.index == 0,
+            )
+            for side, blocks in enumerate(sides)
+            for block in blocks.values()
+        }
+    )
+    for _iteration in range(len(sides[0]) + 1):
+        signatures = {
+            (side, block.index): (
+                len(block.pred),
+                len(block.succ),
+                len(block.labels),
+                block.index == 0,
+                tuple(sorted(colors[(side, item)] for item in block.pred)),
+                tuple(sorted(colors[(side, item)] for item in block.succ)),
+            )
+            for side, blocks in enumerate(sides)
+            for block in blocks.values()
+            if all((side, item) in colors for item in (*block.pred, *block.succ))
+        }
+        if len(signatures) != len(colors):
+            return None
+        refined = _rank_signatures(signatures)
+        stable = _partition(refined) == _partition(colors)
+        colors = refined
+        if stable:
+            break
+    else:
+        return None
+    by_side: list[dict[int, list[int]]] = []
+    for side in (0, 1):
+        groups: dict[int, list[int]] = defaultdict(list)
+        for (entry_side, block_idx), color in colors.items():
+            if entry_side == side:
+                groups[color].append(block_idx)
+        by_side.append(groups)
+    result = {
+        by_side[1][color][0]: by_side[0][color][0]
+        for color in by_side[0].keys() & by_side[1].keys()
+        if len(by_side[0][color]) == 1 and len(by_side[1][color]) == 1
+    }
+    return result or None
+
+
+def _instruction_skeleton(instruction, *, normalize_relocation: bool) -> tuple:
+    def replace_register(match: re.Match[str]) -> str:
+        kind = match.group(1).lower()
+        number = int(match.group(2))
+        return f"<{kind}:physical:{number}>" if number < 32 else f"<{kind}:virtual>"
+
+    operands = instruction.operands.strip().lower()
+    if normalize_relocation:
+        operands = _RELOCATION.sub("<relocation-family>", operands)
+    return (
+        instruction.opcode.strip().lower(),
+        _SPACE.sub(" ", _REG_NUMBER.sub(replace_register, operands)),
+        tuple(_SPACE.sub(" ", item.strip().lower()) for item in instruction.annotations),
+    )
+
+
+def _block_instruction_skeletons(block) -> tuple[tuple, ...]:
+    relocation_families = {
+        family
+        for instruction in block.instructions
+        for family in _RELOCATION.findall(instruction.operands)
+    }
+    normalize_relocation = len(relocation_families) <= 1
+    return tuple(
+        _instruction_skeleton(
+            instruction,
+            normalize_relocation=normalize_relocation,
+        )
+        for instruction in block.instructions
+    )
+
+
+def _semantic_occurrence_identity(
+    c: Compile,
+    semantic_pass,
+    reg_kind: str,
+    virtual: int,
+    candidate_to_reference: Mapping[int, int],
+    *,
+    reference: bool,
+) -> tuple | None:
+    occurrences = [
+        instruction
+        for block in semantic_pass.blocks
+        for instruction in block.instructions
+        if (reg_kind, virtual) in instruction.regs
+    ]
+    first_def = find_first_def(virtual, semantic_pass, reg_kind=reg_kind)
+    if first_def is None or not occurrences:
+        return None
+    relocation_families = {
+        family
+        for instruction in occurrences
+        for family in _RELOCATION.findall(instruction.operands)
+    }
+    relocation_families.update(_RELOCATION.findall(first_def.operands))
+    if len(relocation_families) > 1:
+        return None
+    proven_reference = set(candidate_to_reference.values())
+
+    def normalize(instruction) -> tuple:
+        def replace_register(match: re.Match[str]) -> str:
+            kind = match.group(1).lower()
+            number = int(match.group(2))
+            if (kind, number) == (reg_kind, virtual):
+                return f"<{kind}:self>"
+            if number < 32:
+                return f"<{kind}:physical:{number}>"
+            canonical = (
+                number if reference and number in proven_reference
+                else candidate_to_reference.get(number) if not reference
+                else None
+            )
+            return (
+                f"<{kind}:role:{canonical}>"
+                if canonical is not None
+                else f"<{kind}:unresolved>"
+            )
+
+        operands = _RELOCATION.sub(
+            "<relocation-family>",
+            instruction.operands.strip().lower(),
+        )
+        return (
+            instruction.opcode.strip().lower(),
+            _SPACE.sub(" ", _REG_NUMBER.sub(replace_register, operands)),
+            tuple(_SPACE.sub(" ", item.strip().lower()) for item in instruction.annotations),
+        )
+
+    return (
+        normalize(first_def),
+        tuple(sorted(Counter(normalize(item) for item in occurrences).items())),
+    )
+
+
+def prove_virtual_namespace_map(
+    reference: Compile,
+    candidate: Compile,
+    class_id: int,
+    virtual_count: int,
+    reviewed: Mapping[int, int] | None = None,
+) -> dict[int, int] | None:
+    """Prove a complete candidate-IG to reference-IG bijection pairwise."""
+    reg_kind = _reg_kind_for_class(class_id)
+    reference_sections = [
+        section for section in reference.fev.coalesce_sections if section.class_id == class_id
+    ]
+    candidate_sections = [
+        section for section in candidate.fev.coalesce_sections if section.class_id == class_id
+    ]
+    if (
+        virtual_count < 32
+        or not reference_sections
+        or not candidate_sections
+        or reference_sections[-1].n_virtuals != virtual_count
+        or candidate_sections[-1].n_virtuals != virtual_count
+    ):
+        return None
+    reference_pass = _early_semantic_pass(reference)
+    candidate_pass = _early_semantic_pass(candidate)
+    if reference_pass is None or candidate_pass is None:
+        return None
+    block_map = _cfg_block_map(reference_pass, candidate_pass)
+    if block_map is None:
+        return None
+    domain = set(range(32, virtual_count))
+    candidate_to_reference = dict(reviewed or {})
+    if (
+        any(key not in domain or value not in domain for key, value in candidate_to_reference.items())
+        or len(set(candidate_to_reference.values())) != len(candidate_to_reference)
+    ):
+        return None
+    reference_to_candidate = {
+        reference_ig: candidate_ig
+        for candidate_ig, reference_ig in candidate_to_reference.items()
+    }
+    reference_blocks = {block.index: block for block in reference_pass.blocks}
+    candidate_blocks = {block.index: block for block in candidate_pass.blocks}
+    for candidate_block_idx, reference_block_idx in block_map.items():
+        reference_block = reference_blocks[reference_block_idx]
+        candidate_block = candidate_blocks[candidate_block_idx]
+        reference_skeletons = _block_instruction_skeletons(reference_block)
+        candidate_skeletons = _block_instruction_skeletons(candidate_block)
+        reference_counts = Counter(reference_skeletons)
+        candidate_counts = Counter(candidate_skeletons)
+        reference_unique = {
+            skeleton: index
+            for index, skeleton in enumerate(reference_skeletons)
+            if reference_counts[skeleton] == 1
+        }
+        candidate_unique = {
+            skeleton: index
+            for index, skeleton in enumerate(candidate_skeletons)
+            if candidate_counts[skeleton] == 1
+        }
+        for skeleton in reference_unique.keys() & candidate_unique.keys():
+            reference_instruction = reference_block.instructions[reference_unique[skeleton]]
+            candidate_instruction = candidate_block.instructions[candidate_unique[skeleton]]
+            if len(reference_instruction.regs) != len(candidate_instruction.regs):
+                continue
+            for reference_reg, candidate_reg in zip(
+                reference_instruction.regs,
+                candidate_instruction.regs,
+                strict=True,
+            ):
+                if reference_reg[0] != candidate_reg[0]:
+                    return None
+                kind = reference_reg[0]
+                reference_ig = reference_reg[1]
+                candidate_ig = candidate_reg[1]
+                if reference_ig < 32 or candidate_ig < 32:
+                    if reference_ig != candidate_ig:
+                        return None
+                    continue
+                if kind != reg_kind or reference_ig not in domain or candidate_ig not in domain:
+                    continue
+                if (
+                    candidate_ig in candidate_to_reference
+                    and candidate_to_reference[candidate_ig] != reference_ig
+                    or reference_ig in reference_to_candidate
+                    and reference_to_candidate[reference_ig] != candidate_ig
+                ):
+                    return None
+                candidate_to_reference[candidate_ig] = reference_ig
+                reference_to_candidate[reference_ig] = candidate_ig
+
+    for _iteration in range(len(domain) + 1):
+        unresolved_reference = sorted(domain - set(reference_to_candidate))
+        unresolved_candidate = sorted(domain - set(candidate_to_reference))
+        if not unresolved_reference and not unresolved_candidate:
+            break
+        reference_identities = {
+            virtual: _semantic_occurrence_identity(
+                reference,
+                reference_pass,
+                reg_kind,
+                virtual,
+                candidate_to_reference,
+                reference=True,
+            )
+            for virtual in unresolved_reference
+        }
+        candidate_identities = {
+            virtual: _semantic_occurrence_identity(
+                candidate,
+                candidate_pass,
+                reg_kind,
+                virtual,
+                candidate_to_reference,
+                reference=False,
+            )
+            for virtual in unresolved_candidate
+        }
+        reference_counts = Counter(reference_identities.values())
+        candidate_counts = Counter(candidate_identities.values())
+        additions: list[tuple[int, int]] = []
+        for candidate_ig, identity in candidate_identities.items():
+            if (
+                identity is None
+                or candidate_counts[identity] != 1
+                or reference_counts[identity] != 1
+            ):
+                continue
+            reference_ig = next(
+                key for key, value in reference_identities.items() if value == identity
+            )
+            additions.append((candidate_ig, reference_ig))
+        if not additions:
+            return None
+        for candidate_ig, reference_ig in additions:
+            candidate_to_reference[candidate_ig] = reference_ig
+            reference_to_candidate[reference_ig] = candidate_ig
+    if (
+        set(candidate_to_reference) != domain
+        or set(candidate_to_reference.values()) != domain
+        or len(reference_to_candidate) != len(domain)
+    ):
+        return None
+    return {
+        **{physical: physical for physical in range(32)},
+        **dict(sorted(candidate_to_reference.items())),
+    }
 
 
 def build_descriptors(c: Compile, class_id: int) -> dict:

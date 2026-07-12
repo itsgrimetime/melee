@@ -23,7 +23,7 @@ from .contracts import DeltaMinimizeError
 
 COLOR_TARGET_SCHEMA = "delta-minimize-color-target.v1"
 COLOR_TARGET_SCHEMA_V2 = "delta-minimize-color-target.v2"
-ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v3"
+ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v4"
 OBJECTIVE_MANIFEST_SCHEMA = "delta-minimize-objectives.v2"
 _TARGET_FIELDS = frozenset(
     {
@@ -1098,6 +1098,7 @@ def _complete_profile_role_map(
     *,
     allow_exact_namespace: bool = False,
     allow_reviewed_namespace: bool = False,
+    reviewed_roles: Mapping[int, int] | None = None,
 ) -> Mapping[int, int]:
     """Reanchor every structurally stable allocator role into one parent.
 
@@ -1107,19 +1108,22 @@ def _complete_profile_role_map(
     comparable across parents.  The color-profile parser will fail closed if
     genuinely ambiguous roles leave evidence unmapped.
     """
-    if allow_reviewed_namespace:
-        reference_witness = _structural_namespace_witness(reference_compile, class_id)
-        parent_witness = _structural_namespace_witness(parent_compile, class_id)
-        if reference_witness is not None and reference_witness == parent_witness:
-            return {
-                ig_idx: ig_idx
-                for ig_idx in range(reference_witness["virtual_count"])
-            }
-    if allow_exact_namespace:
-        reference_witness = _allocator_namespace_witness(reference_compile, class_id)
-        parent_witness = _allocator_namespace_witness(parent_compile, class_id)
-        if reference_witness is not None and reference_witness == parent_witness:
-            return {ig_idx: ig_idx for ig_idx in range(reference_witness[0])}
+    if allow_reviewed_namespace or allow_exact_namespace:
+        sections = [
+            section
+            for section in reference_compile.fev.coalesce_sections
+            if section.class_id == class_id
+        ]
+        if sections:
+            proven = role_descriptor.prove_virtual_namespace_map(
+                reference_compile,
+                parent_compile,
+                class_id,
+                sections[-1].n_virtuals,
+                reviewed_roles if allow_reviewed_namespace else None,
+            )
+            if proven is not None:
+                return proven
 
     descriptors = role_descriptor.build_descriptors(reference_compile, class_id)
     if not descriptors:
@@ -1475,6 +1479,9 @@ def infer_objective_manifest(
         loaded.class_id,
         allow_exact_namespace=derived_exact_identity,
         allow_reviewed_namespace=loaded.schema_version == COLOR_TARGET_SCHEMA_V2,
+        reviewed_roles=(
+            reviewed_reanchors["left"].matched if reviewed_reanchors else None
+        ),
     )
     right_profile_roles = _complete_profile_role_map(
         profile_reference_compile,
@@ -1482,6 +1489,9 @@ def infer_objective_manifest(
         loaded.class_id,
         allow_exact_namespace=derived_exact_identity,
         allow_reviewed_namespace=loaded.schema_version == COLOR_TARGET_SCHEMA_V2,
+        reviewed_roles=(
+            reviewed_reanchors["right"].matched if reviewed_reanchors else None
+        ),
     )
     if reviewed_reanchors:
         left_profile_roles = _overlay_reviewed_role_map(

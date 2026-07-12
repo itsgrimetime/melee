@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from copy import deepcopy
 from dataclasses import asdict, replace
@@ -222,8 +223,12 @@ def test_asm_lines_ignores_checkdiff_blank_terminator() -> None:
 
 
 def _namespace_compile() -> Compile:
+    return _with_complete_virtual_identity(_raw_namespace_compile())
+
+
+def _raw_namespace_compile() -> Compile:
     text = (FIXTURES / "mnVibration_matched_pcdump.txt").read_text(encoding="utf-8")
-    return _with_complete_virtual_identity(Compile.from_text(text, FUNCTION, ""))
+    return Compile.from_text(text, FUNCTION, "")
 
 
 def _with_complete_virtual_identity(compile: Compile) -> Compile:
@@ -348,6 +353,148 @@ def test_structural_namespace_witness_covers_nondecision_use_operands() -> None:
     changed_witness = objectives_module._structural_namespace_witness(changed, 0)
 
     assert baseline_witness is None or changed_witness != baseline_witness
+
+
+def test_early_ir_identity_covers_virtuals_missing_from_late_pass() -> None:
+    compile = _raw_namespace_compile()
+    virtual_count = compile.fev.coalesce_sections[-1].n_virtuals
+    assert set(compile.ir_facts.by_reg) < {
+        ("r", ig_idx) for ig_idx in range(virtual_count)
+    }
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        compile,
+        deepcopy(compile),
+        0,
+        virtual_count,
+    )
+
+    assert role_map is not None
+    assert set(role_map) == set(range(virtual_count))
+
+
+def test_early_ir_semantic_change_changes_full_identity() -> None:
+    baseline = _raw_namespace_compile()
+    changed = deepcopy(baseline)
+    virtual_count = baseline.fev.coalesce_sections[-1].n_virtuals
+    changed_instructions = [
+        instruction
+        for block in changed.fn.passes[0].blocks
+        for instruction in block.instructions
+        if ("r", 33) in instruction.regs
+    ]
+    assert len(changed_instructions) == 2
+    for instruction in changed_instructions:
+        instruction.operands = f"{instruction.operands}+semantic-change"
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        changed,
+        0,
+        virtual_count,
+    )
+
+    assert role_map is None
+
+
+def test_early_ir_occurrences_prove_nonidentity_namespace_bijection() -> None:
+    baseline = _raw_namespace_compile()
+    peer = deepcopy(baseline)
+    virtual_count = baseline.fev.coalesce_sections[-1].n_virtuals
+    first_ig, second_ig = 47, 54
+    for block in peer.fn.passes[0].blocks:
+        for instruction in block.instructions:
+            instruction.operands = re.sub(
+                rf"\br({first_ig}|{second_ig})\b",
+                lambda match: (
+                    f"r{second_ig}"
+                    if int(match.group(1)) == first_ig
+                    else f"r{first_ig}"
+                ),
+                instruction.operands,
+            )
+            instruction.regs = [
+                (
+                    kind,
+                    second_ig
+                    if kind == "r" and number == first_ig
+                    else first_ig
+                    if kind == "r" and number == second_ig
+                    else number,
+                )
+                for kind, number in instruction.regs
+            ]
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        peer,
+        0,
+        virtual_count,
+    )
+
+    assert role_map is not None
+    assert set(role_map) == set(range(virtual_count))
+    assert role_map[first_ig] == second_ig
+    assert role_map[second_ig] == first_ig
+
+
+def test_pairwise_namespace_rejects_conflicting_reviewed_anchor() -> None:
+    baseline = _raw_namespace_compile()
+    peer = deepcopy(baseline)
+    virtual_count = baseline.fev.coalesce_sections[-1].n_virtuals
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        peer,
+        0,
+        virtual_count,
+        {47: 54},
+    )
+
+    assert role_map is None
+
+
+def test_pairwise_namespace_rejects_missing_early_ir_virtual() -> None:
+    baseline = _raw_namespace_compile()
+    peer = deepcopy(baseline)
+    virtual_count = baseline.fev.coalesce_sections[-1].n_virtuals
+    for block in peer.fn.passes[0].blocks:
+        for instruction in block.instructions:
+            instruction.operands = re.sub(r"\br47\b", "r3", instruction.operands)
+            instruction.regs = [
+                (kind, 3 if kind == "r" and number == 47 else number)
+                for kind, number in instruction.regs
+            ]
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        peer,
+        0,
+        virtual_count,
+    )
+
+    assert role_map is None
+
+
+def test_pairwise_namespace_excludes_late_allocator_objective_state() -> None:
+    baseline = _raw_namespace_compile()
+    changed = deepcopy(baseline)
+    virtual_count = baseline.fev.coalesce_sections[-1].n_virtuals
+    decision = changed.fev.colorgraph_sections[-1].decisions[0]
+    decision.assigned_reg = (decision.assigned_reg + 1) % 32
+    decision.interferers = [(decision.ig_idx, decision.assigned_reg)]
+    decision.n_interferers = 1
+    changed.fev.simplify_sections[-1].entries.reverse()
+    changed.fev.coalesce_sections[-1].mappings.reverse()
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        changed,
+        0,
+        virtual_count,
+    )
+
+    assert role_map == {ig_idx: ig_idx for ig_idx in range(virtual_count)}
 
 
 @pytest.mark.parametrize(
@@ -691,10 +838,9 @@ def test_changed_namespace_or_source_falls_back_to_semantic_reanchor(
         )
     monkeypatch.setattr(evaluator_module, "_compile", lambda raw, _function: compiles[raw.candidate_id])
     monkeypatch.setattr(
-        evaluator_module,
-        "_structural_namespace_witness",
-        lambda compile, _class_id: {"compile": id(compile)},
-        raising=False,
+        evaluator_module.role_descriptor,
+        "prove_virtual_namespace_map",
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         evaluator_module.role_reanchor,
@@ -834,6 +980,10 @@ def test_derived_target_does_not_reuse_raw_namespace_when_role_semantics_change(
         candidate_descriptors[changed_ig],
         first_def_sig=f"changed:{candidate_descriptors[changed_ig].first_def_sig}",
     )
+    for block in candidate_compile.fn.passes[0].blocks:
+        for instruction in block.instructions:
+            if ("r", changed_ig) in instruction.regs:
+                instruction.operands = f"{instruction.operands}+semantic-change"
     desired = {changed_ig: 22}
     target = build_target_spec(
         donor_compile,

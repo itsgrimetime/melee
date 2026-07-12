@@ -939,7 +939,7 @@ def test_v2_reviewed_parent_bindings_resolve_duplicate_semantic_roles(
     assert seen_role_maps == {"left": expected, "right": expected}
     provenance = manifest.target_spec["provenance"]
     assert provenance["schema_version"] == "delta-minimize-color-target.v2"
-    assert provenance["namespace_schema"] == "delta-minimize-role-namespace.v3"
+    assert provenance["namespace_schema"] == "delta-minimize-role-namespace.v4"
     assert tuple(provenance["parent_role_bindings"]) == ("left", "right")
 
 
