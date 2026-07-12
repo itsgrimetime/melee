@@ -573,7 +573,7 @@ def test_detect_orphaned_permuter_processes_requires_exact_helpers_and_proven_cw
     )
 
     def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
-        if argv[0] == "ps":
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
             return pr.CommandResult(0, ps_stdout, "")
         pid = int(argv[argv.index("-p") + 1])
         cwd = outside if pid == 104 else worker_cwd
@@ -592,6 +592,36 @@ def test_detect_orphaned_permuter_processes_requires_exact_helpers_and_proven_cw
     assert all(proc.cwd == worker_cwd.resolve() for proc in found)
 
 
+def test_process_table_forces_c_locale_for_stable_birth_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    ps_commands: list[list[str]] = []
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
+            ps_commands.append(argv)
+            return pr.CommandResult(
+                0,
+                f"101 1 501 S 00:00:01 {PROCESS_BIRTH} {command}",
+                "",
+            )
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    found = pr.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+        runner=fake_runner,
+        current_pgid=999,
+    )
+
+    assert ps_commands[0][:3] == ["env", "LC_ALL=C", "ps"]
+    assert [proc.pid for proc in found] == [101]
+
+
 def test_wibo_substrings_remain_report_only_and_never_gain_kill_authority(
     tmp_path: Path,
 ) -> None:
@@ -605,7 +635,7 @@ def test_wibo_substrings_remain_report_only_and_never_gain_kill_authority(
     )
 
     def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
-        if argv[0] == "ps":
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
             return pr.CommandResult(0, ps_stdout, "")
         return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
 
@@ -639,7 +669,7 @@ def test_detect_orphaned_permuter_processes_rejects_malformed_birth_identity(
     command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
 
     def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
-        if argv[0] == "ps":
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
             return pr.CommandResult(
                 0,
                 f"101 1 501 S 00:00:01 Nope Jul 11 12:34:56 2026 {command}",
@@ -668,7 +698,7 @@ def test_terminate_orphaned_permuter_processes_refuses_mixed_group(
     )
 
     def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
-        if argv[0] == "ps":
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
             return pr.CommandResult(0, ps_stdout, "")
         return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
 
@@ -709,7 +739,7 @@ def test_terminate_orphaned_permuter_processes_rejects_birth_identity_change_bef
     new_birth = "Fri Jul 11 13:34:56 2026"
 
     def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
-        if argv[0] == "ps":
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
             return pr.CommandResult(
                 0,
                 f"101 1 501 S 00:00:01 {new_birth} {command}",
@@ -760,7 +790,7 @@ def test_terminate_orphaned_permuter_processes_rejects_birth_identity_change_bef
     )
 
     def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
-        if argv[0] == "ps":
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
             return pr.CommandResult(0, next(snapshots), "")
         return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
 
@@ -805,7 +835,7 @@ def test_terminate_orphaned_permuter_processes_revalidates_before_sigkill(
     )
 
     def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
-        if argv[0] == "ps":
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
             return pr.CommandResult(0, next(snapshots), "")
         return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
 

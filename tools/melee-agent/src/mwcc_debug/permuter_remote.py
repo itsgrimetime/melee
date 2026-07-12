@@ -677,7 +677,7 @@ def _read_process_table(
     try:
         result = runner(
             [
-                "ps", "-axo",
+                "env", "LC_ALL=C", "ps", "-axo",
                 "pid=,ppid=,pgid=,stat=,etime=,lstart=,command=",
             ],
             check=False,
