@@ -10,6 +10,8 @@ from .coalesce_ir_facts import collect, IrFacts
 from .first_divergence import select_class_section, decision_views
 
 _REG = re.compile(r"\b([rf])\d+\b")     # rNN/fNN register tokens (virtual or phys)
+_REG_NUMBER = re.compile(r"\b([rf])(\d+)\b")
+_SPACE = re.compile(r"\s+")
 
 
 def normalize_first_def(fd) -> str:
@@ -71,6 +73,55 @@ def _use_multiset(vf) -> tuple:
     return tuple(sorted(c.items()))
 
 
+def _semantic_use_multiset(
+    c: Compile,
+    reg_kind: str,
+    ig_idx: int,
+    facts,
+) -> tuple | None:
+    signatures: Counter[tuple[str, str, tuple[str, ...]]] = Counter()
+    for _block, instruction in facts.use_sites:
+        dependency_owners: dict[tuple[str, bool], tuple[str, int]] = {}
+        unresolved = False
+
+        def replace_register(match: re.Match[str]) -> str:
+            nonlocal unresolved
+            kind = match.group(1).lower()
+            number = int(match.group(2))
+            if (kind, number) == (reg_kind, ig_idx):
+                return f"<{kind}:self>"
+            if number < 32:
+                return f"<{kind}:physical:{number}>"
+            dependency = c.ir_facts.by_reg.get((kind, number))
+            if dependency is None or dependency.use_sites_truncated:
+                unresolved = True
+                return f"<{kind}:unresolved>"
+            anchor = (normalize_first_def(dependency.first_def), dependency.is_param)
+            if not any(anchor):
+                unresolved = True
+                return f"<{kind}:unresolved>"
+            owner = dependency_owners.setdefault(anchor, (kind, number))
+            if owner != (kind, number):
+                unresolved = True
+                return f"<{kind}:ambiguous>"
+            return f"<{kind}:dependency:{anchor[0]}:param={int(anchor[1])}>"
+
+        operands = _REG_NUMBER.sub(
+            replace_register,
+            instruction.operands.strip().lower(),
+        )
+        if unresolved:
+            return None
+        signatures[
+            (
+                instruction.opcode.strip().lower(),
+                _SPACE.sub(" ", operands),
+                tuple(_SPACE.sub(" ", item.strip().lower()) for item in instruction.annotations),
+            )
+        ] += 1
+    return tuple(sorted(signatures.items()))
+
+
 def build_virtual_semantic_identities(
     c: Compile,
     class_id: int,
@@ -101,9 +152,12 @@ def build_virtual_semantic_identities(
         }
         if len(strong_names) > 1:
             return None
+        use_identity = _semantic_use_multiset(c, reg_kind, ig_idx, facts)
+        if use_identity is None:
+            return None
         identity = (
             normalize_first_def(facts.first_def),
-            _use_multiset(facts),
+            use_identity,
             facts.is_param,
             next(iter(strong_names), None),
         )

@@ -14,6 +14,7 @@ import src.search.delta_minimize.evaluator as evaluator_module
 import src.search.delta_minimize.objectives as objectives_module
 from src.mwcc_debug.coalesce_ir_facts import VirtualFacts
 from src.mwcc_debug.colorgraph_profile import ColorGraphProfile
+from src.mwcc_debug.parser import Instruction
 from src.mwcc_debug.role_descriptor import Compile, RoleDescriptor, build_descriptors, build_target_spec
 from src.mwcc_debug.symbol_bridge import FirstDef
 from src.search.delta_minimize.contracts import DeltaMinimizeError
@@ -321,6 +322,34 @@ def test_structural_namespace_witness_covers_coalesced_virtual_identity() -> Non
     assert baseline_witness is None or changed_witness != baseline_witness
 
 
+def test_structural_namespace_witness_covers_nondecision_use_operands() -> None:
+    baseline = _namespace_compile()
+    changed = deepcopy(baseline)
+    decision_igs = set(_namespace_descriptors(baseline))
+    coalesced_ig = next(
+        alias
+        for alias, _root in baseline.fev.coalesce_sections[-1].mappings
+        if alias not in decision_igs
+    )
+    for compile, offset in ((baseline, 4), (changed, 8)):
+        compile.ir_facts.by_reg[("r", coalesced_ig)].use_sites = [
+            (
+                0,
+                Instruction(
+                    opcode="stw",
+                    operands=f"r{coalesced_ig},{offset}(r3)",
+                    annotations=[],
+                    regs=[("r", coalesced_ig), ("r", 3)],
+                ),
+            )
+        ]
+
+    baseline_witness = objectives_module._structural_namespace_witness(baseline, 0)
+    changed_witness = objectives_module._structural_namespace_witness(changed, 0)
+
+    assert baseline_witness is None or changed_witness != baseline_witness
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -329,10 +358,9 @@ def test_structural_namespace_witness_covers_coalesced_virtual_identity() -> Non
         "decision-traversal",
         "simplify-traversal",
         "coalesce-mapping",
-        "forced-override",
     ),
 )
-def test_structural_namespace_witness_distinguishes_identity_facts(
+def test_namespace_witness_uses_identity_not_objective_lanes(
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
 ) -> None:
@@ -362,9 +390,7 @@ def test_structural_namespace_witness_distinguishes_identity_facts(
         first.iter_idx, second.iter_idx = second.iter_idx, first.iter_idx
     elif mutation == "coalesce-mapping":
         section = changed.fev.coalesce_sections[-1]
-        section.mappings = [*section.mappings, (0, 1)]
-    else:
-        changed.fev.coalesce_sections[-1].forced_overrides.append((0, 0, 1))
+        section.mappings = list(reversed(section.mappings))
     monkeypatch.setattr(
         objectives_module.role_descriptor,
         "build_descriptors",
@@ -375,9 +401,17 @@ def test_structural_namespace_witness_distinguishes_identity_facts(
 
     baseline_witness = objectives_module._structural_namespace_witness(baseline, 0)
     changed_witness = objectives_module._structural_namespace_witness(changed, 0)
+    baseline_exact = objectives_module._allocator_namespace_witness(baseline, 0)
+    changed_exact = objectives_module._allocator_namespace_witness(changed, 0)
 
     assert baseline_witness is not None
-    assert changed_witness is None or changed_witness != baseline_witness
+    assert baseline_exact is not None
+    if mutation in {"virtual-count", "semantic-identity"}:
+        assert changed_witness is None or changed_witness != baseline_witness
+        assert changed_exact is None or changed_exact != baseline_exact
+    else:
+        assert changed_witness == baseline_witness
+        assert changed_exact == baseline_exact
 
 
 @pytest.mark.parametrize(

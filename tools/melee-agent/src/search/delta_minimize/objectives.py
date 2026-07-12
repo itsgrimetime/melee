@@ -23,7 +23,7 @@ from .contracts import DeltaMinimizeError
 
 COLOR_TARGET_SCHEMA = "delta-minimize-color-target.v1"
 COLOR_TARGET_SCHEMA_V2 = "delta-minimize-color-target.v2"
-ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v2"
+ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v3"
 OBJECTIVE_MANIFEST_SCHEMA = "delta-minimize-objectives.v2"
 _TARGET_FIELDS = frozenset(
     {
@@ -1202,14 +1202,6 @@ def _allocator_namespace_witness(
     simplify_order = tuple(
         row.ig_idx for row in sorted(simplify_section.entries, key=lambda item: item.iter_idx) if row.ig_idx >= 0
     )
-    evidence_igs = set(decision_order) | set(simplify_order)
-    evidence_igs.update(
-        ig_idx for row in decision_section.decisions for ig_idx, _physical in row.interferers if ig_idx >= 0
-    )
-    evidence_igs.update(ig_idx for mapping in coalesce_section.mappings for ig_idx in mapping if ig_idx >= 0)
-    evidence_igs.update(ig_idx for override in coalesce_section.forced_overrides for ig_idx in override if ig_idx >= 0)
-    if not evidence_igs or any(ig_idx >= n_virtuals for ig_idx in evidence_igs):
-        return None
     descriptors = role_descriptor.build_descriptors(compile, class_id)
     if set(descriptors) != set(decision_order):
         return None
@@ -1224,12 +1216,6 @@ def _allocator_namespace_witness(
     return (
         n_virtuals,
         semantic_roles,
-        decision_order,
-        simplify_order,
-        frozenset(evidence_igs),
-        tuple(coalesce_section.mappings),
-        tuple(coalesce_section.forced_overrides),
-        coalesce_section.distinct_roots,
     )
 
 
@@ -1242,8 +1228,10 @@ def _structural_namespace_witness(
     The witness intentionally omits allocator outcomes that are scored as
     objective lanes: physical assignments, interference edges, spill state,
     and live ranges.  It retains only the per-IG semantic identity and the
-    allocator traversals/projections needed to prove that raw IG positions
-    name the same namespace in two independently captured dumps.
+    normalized per-IG semantic identity needed to prove that raw IG positions
+    name the same namespace in two independently captured dumps.  Allocator
+    traversals and coalescing are validated for coherence but are not identity
+    fields because they are color-objective state.
     """
     decisions = [
         section
@@ -1340,11 +1328,6 @@ def _structural_namespace_witness(
             "class_id": class_id,
             "virtual_count": n_virtuals,
             "semantic_roles": semantic_roles,
-            "decision_order": decision_order,
-            "simplify_order": simplify_order,
-            "coalesce_mappings": mappings,
-            "forced_overrides": overrides,
-            "distinct_roots": coalesce_section.distinct_roots,
         }
     )
 def _assignment_distance(profile: ColorGraphProfile, desired_phys: Mapping[int, int]) -> int:

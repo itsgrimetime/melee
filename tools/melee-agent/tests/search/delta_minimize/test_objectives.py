@@ -939,7 +939,7 @@ def test_v2_reviewed_parent_bindings_resolve_duplicate_semantic_roles(
     assert seen_role_maps == {"left": expected, "right": expected}
     provenance = manifest.target_spec["provenance"]
     assert provenance["schema_version"] == "delta-minimize-color-target.v2"
-    assert provenance["namespace_schema"] == "delta-minimize-role-namespace.v2"
+    assert provenance["namespace_schema"] == "delta-minimize-role-namespace.v3"
     assert tuple(provenance["parent_role_bindings"]) == ("left", "right")
 
 
@@ -1120,7 +1120,7 @@ def test_duplicate_semantic_roles_reject_exact_allocator_namespace(
     assert objectives_module._allocator_namespace_witness(baseline_compile, 0) is None
 
 
-def test_divergent_allocator_order_rejects_exact_graph_namespace(
+def test_divergent_allocator_order_preserves_exact_semantic_namespace(
     monkeypatch: pytest.MonkeyPatch,
     baseline_compile: Compile,
 ) -> None:
@@ -1133,7 +1133,9 @@ def test_divergent_allocator_order_rejects_exact_graph_namespace(
     monkeypatch.setattr(
         objectives_module.role_reanchor,
         "reanchor",
-        lambda *_args, **_kwargs: type("Partial", (), {"matched": {}})(),
+        lambda *_args, **_kwargs: pytest.fail(
+            "objective-only allocator order must not force semantic reanchor"
+        ),
     )
     monkeypatch.setattr(
         objectives_module.role_descriptor,
@@ -1148,7 +1150,12 @@ def test_divergent_allocator_order_rejects_exact_graph_namespace(
         allow_exact_namespace=True,
     )
 
-    assert role_map == {}
+    coalesce = [
+        section
+        for section in baseline_compile.fev.coalesce_sections
+        if section.class_id == 0
+    ][-1]
+    assert role_map == {ig_idx: ig_idx for ig_idx in range(coalesce.n_virtuals)}
 
 
 def test_missing_derived_parent_target_is_reported_as_ambiguous(
