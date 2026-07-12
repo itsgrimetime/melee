@@ -599,6 +599,215 @@ def test_semantically_foreign_support_cannot_be_cited_as_owner_proof() -> None:
     assert not proof_complete(poisoned)
 
 
+def _poison_typed_support(
+    evidence: ObjectBindingEvidence,
+    support_kind: str,
+    mutate,
+    *,
+    support_filter=lambda _attributes: True,
+) -> tuple[ObjectBindingEvidence, tuple[object, ...]]:
+    support = next(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == support_kind
+        and support_filter(node.attributes)
+    )
+    poisoned_support = replace(
+        support,
+        attributes=MappingProxyType(mutate(dict(support.attributes))),
+    )
+    poisoned = replace(
+        evidence,
+        nodes=tuple(poisoned_support if node.record_id == support.record_id else node for node in evidence.nodes),
+    )
+    dependents = tuple(
+        record
+        for record in (*poisoned.nodes, *poisoned.edges)
+        if record.kind != "backend-support-record" and support.record_id in record.provenance.input_record_ids
+    )
+    return poisoned, dependents
+
+
+@pytest.mark.parametrize(
+    ("support_kind", "support_filter", "mutate"),
+    (
+        (
+            "object-stage-snapshot",
+            lambda _attributes: True,
+            lambda attributes: {**attributes, "stage": "foreign-stage"},
+        ),
+        (
+            "pcode-generation",
+            lambda _attributes: True,
+            lambda attributes: {**attributes, "allocation_generation": 99},
+        ),
+        (
+            "pcode-code-range",
+            lambda _attributes: True,
+            lambda attributes: {
+                **attributes,
+                "start": 0x230,
+                "end_exclusive": 0x240,
+            },
+        ),
+        (
+            "pcode-emission",
+            lambda _attributes: True,
+            lambda attributes: {**attributes, "code_offset": 0x238},
+        ),
+        (
+            "pcode-rewrite",
+            lambda _attributes: True,
+            lambda attributes: {**attributes, "allocation_generation": 99},
+        ),
+        (
+            "pcode-lineage-event",
+            lambda attributes: attributes.get("event_kind") == "emission-lineage",
+            lambda attributes: {**attributes, "event_kind": "foreign-relation"},
+        ),
+        (
+            "pcode-lineage-event",
+            lambda attributes: attributes.get("side") == "outputs" and bool(attributes.get("parent_lineage_ids")),
+            lambda attributes: {
+                **attributes,
+                "parent_lineage_ids": ("foreign-parent",),
+            },
+        ),
+        (
+            "object-virtual-binding",
+            lambda _attributes: True,
+            lambda attributes: {**attributes, "allocation_generation": 99},
+        ),
+        (
+            "object-frame-binding",
+            lambda _attributes: True,
+            lambda attributes: {**attributes, "size": 99},
+        ),
+    ),
+    ids=(
+        "snapshot-stage",
+        "pcode-generation",
+        "range-bounds",
+        "emission-offset",
+        "rewrite-generation",
+        "lineage-relation",
+        "lineage-parent",
+        "object-generation",
+        "frame-size",
+    ),
+)
+def test_foreign_typed_support_semantics_invalidate_owner_proof(
+    support_kind,
+    support_filter,
+    mutate,
+) -> None:
+    poisoned, dependents = _poison_typed_support(
+        emit_object_binding_evidence(_adapter_input()),
+        support_kind,
+        mutate,
+        support_filter=support_filter,
+    )
+
+    assert dependents
+    assert all(not exact_owner_path_record(poisoned, dependent) for dependent in dependents)
+    assert not proof_complete(poisoned)
+
+
+def test_every_support_kind_has_closed_typed_semantics_and_valid_dependents() -> None:
+    evidence = emit_object_binding_evidence(_adapter_input())
+    base = {"capture_run_id", "verified_capability", "support_kind"}
+    expected_shapes = {
+        "object-stage-snapshot": (
+            base
+            | {
+                "object_id",
+                "stage",
+                "allocation_generation",
+                "lifecycle_sequence_at_capture",
+            },
+        ),
+        "pcode-generation": (base | {"pcode_id", "allocation_generation"},),
+        "pcode-code-range": (base | {"pcode_id", "allocation_generation", "start", "end_exclusive"},),
+        "pcode-emission": (
+            base
+            | {
+                "pcode_id",
+                "allocation_generation",
+                "code_offset",
+                "machine_operand_key",
+                "operand_lineage_id",
+            },
+        ),
+        "pcode-rewrite": (
+            base
+            | {
+                "pcode_id",
+                "allocation_generation",
+                "operand_lineage_id",
+                "class_id",
+                "virtual",
+            },
+        ),
+        "pcode-lineage-event": (
+            base
+            | {
+                "pcode_id",
+                "allocation_generation",
+                "code_offset",
+                "operand_lineage_id",
+                "event_kind",
+            },
+            base
+            | {
+                "pcode_id",
+                "allocation_generation",
+                "event_index",
+                "side",
+                "mutation_kind",
+                "operand_lineage_id",
+                "parent_lineage_ids",
+            },
+        ),
+        "object-virtual-binding": (
+            base
+            | {
+                "object_id",
+                "allocation_generation",
+                "class_id",
+                "virtual",
+                "ig_id",
+            },
+        ),
+        "object-frame-binding": (
+            base
+            | {
+                "object_id",
+                "allocation_generation",
+                "area",
+                "semantic_stack_role",
+                "final_r1_offset",
+                "size",
+            },
+        ),
+    }
+    support_by_id = {node.record_id: node for node in evidence.nodes if node.kind == "backend-support-record"}
+    accepted_kinds: set[str] = set()
+    for support in support_by_id.values():
+        support_kind = str(support.attributes["support_kind"])
+        assert set(support.attributes) in expected_shapes[support_kind]
+        dependents = tuple(
+            record
+            for record in (*evidence.nodes, *evidence.edges)
+            if record.kind != "backend-support-record" and support.record_id in record.provenance.input_record_ids
+        )
+        assert dependents
+        assert all(exact_owner_path_record(evidence, dependent) for dependent in dependents)
+        accepted_kinds.add(support_kind)
+
+    assert accepted_kinds == set(expected_shapes)
+
+
 def _replace_evidence_record(
     evidence: ObjectBindingEvidence,
     kind: str,
@@ -724,6 +933,7 @@ def _future_complete_owner_pipeline(
     semantic_change: bool,
     ambiguous_owner: bool = False,
     mixed_owner_alternative: bool = False,
+    force_owner_observed: bool = False,
 ):
     monkeypatch.setattr(
         "src.mwcc_debug.causal_diff.alignment.role_descriptor.build_descriptors",
@@ -756,6 +966,28 @@ def _future_complete_owner_pipeline(
                 ),
             )
         )
+        if force_owner_observed:
+            evidence = replace(
+                evidence,
+                nodes=tuple(
+                    replace(
+                        node,
+                        producer_confidence=Confidence.OBSERVED,
+                        adapter_confidence=Confidence.OBSERVED,
+                        confidence=Confidence.OBSERVED,
+                    )
+                    for node in evidence.nodes
+                ),
+                edges=tuple(
+                    replace(
+                        edge,
+                        producer_confidence=Confidence.OBSERVED,
+                        adapter_confidence=Confidence.OBSERVED,
+                        confidence=Confidence.OBSERVED,
+                    )
+                    for edge in evidence.edges
+                ),
+            )
         store = InMemoryEvidenceStore()
         original_nodes = tuple(
             node for node in original.store.find_nodes(original.bundle.compile_id) if node.kind != "stack-object"
@@ -856,28 +1088,67 @@ def test_future_complete_owner_pipeline_reaches_mandatory_source_gate(
     assert "source-object-binding-missing" in report.missing_evidence
 
 
+def test_semantic_owner_delta_cites_and_propagates_exact_path_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _deltas, report = _future_complete_owner_pipeline(
+        monkeypatch,
+        semantic_change=True,
+        force_owner_observed=True,
+    )
+    owner_correspondence = next(
+        comparison for comparison in report.comparisons if comparison.relation_kind == "backend-owner-corresponds-to"
+    )
+    owner_delta = next(
+        comparison
+        for comparison in report.comparisons
+        if comparison.relation_kind == "node-changed" and comparison.attributes.get("kind") == "compiler-object"
+    )
+
+    assert owner_correspondence.confidence is Confidence.OBSERVED
+    assert owner_delta.confidence is owner_correspondence.confidence
+    assert {
+        owner_correspondence.record_id,
+        *owner_correspondence.provenance.input_record_ids,
+    } <= set(owner_delta.provenance.input_record_ids)
+
+
 def test_ambiguous_backend_owner_alternatives_never_become_derived_delta(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deltas, _report = _future_complete_owner_pipeline(
+    deltas, report = _future_complete_owner_pipeline(
         monkeypatch,
         semantic_change=True,
         ambiguous_owner=True,
     )
 
     assert not any(comparison.attributes.get("kind") == "compiler-object" for comparison in deltas)
+    assert report.verdicts
+    assert all(verdict.status is VerdictStatus.ABSTAIN for verdict in report.verdicts)
+    assert all("gate-6-unique-owner-chain" in verdict.failed_gates for verdict in report.verdicts)
+    assert all(
+        any(alternative.startswith("backend-owner-ambiguous:") for alternative in verdict.rejected_alternatives)
+        for verdict in report.verdicts
+    )
 
 
 def test_proof_looking_owner_is_rejected_when_heuristic_alternative_remains(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deltas, _report = _future_complete_owner_pipeline(
+    deltas, report = _future_complete_owner_pipeline(
         monkeypatch,
         semantic_change=True,
         mixed_owner_alternative=True,
     )
 
     assert not any(comparison.attributes.get("kind") == "compiler-object" for comparison in deltas)
+    assert report.verdicts
+    assert all(verdict.status is VerdictStatus.ABSTAIN for verdict in report.verdicts)
+    assert all("gate-6-unique-owner-chain" in verdict.failed_gates for verdict in report.verdicts)
+    assert all(
+        any(alternative.startswith("backend-owner-ambiguous:") for alternative in verdict.rejected_alternatives)
+        for verdict in report.verdicts
+    )
 
 
 def test_future_verified_anchor_path_replaces_ambiguous_v1_backend_role(

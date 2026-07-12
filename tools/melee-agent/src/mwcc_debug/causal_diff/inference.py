@@ -56,6 +56,7 @@ _DELTA_RELATIONS = frozenset(
 )
 _PROOF_CONFIDENCES = frozenset({Confidence.OBSERVED, Confidence.DERIVED_UNIQUE})
 _DIAGNOSTIC_ONLY_PARSERS = frozenset({"mwcc-debug-pcdump.v1"})
+_BACKEND_OWNER_AMBIGUOUS = "backend-owner-ambiguous"
 
 _GATE_1 = "gate-1-anchor-identity"
 _GATE_2 = "gate-2-backend-role-identity"
@@ -750,6 +751,14 @@ def infer_pair(
             key=lambda record: record.record_id,
         )
     )
+    owner_ambiguities = tuple(
+        comparison
+        for comparison in records
+        if comparison.relation_kind == _BACKEND_OWNER_AMBIGUOUS
+        and (role_tuple := comparison.attributes.get("role_tuple"))
+        and isinstance(role_tuple, (list, tuple))
+        and role_tuple[0] == pair.allocator.operand_key
+    )
     allocator_ids = frozenset({role.left.record_id, role.right.record_id})
     stack_nodes_by_compile = _stack_nodes_by_compile(pair, query)
     stack_ids = frozenset(node.record_id for node in stack_nodes_by_compile.values())
@@ -837,6 +846,28 @@ def infer_pair(
             proof_paths=(),
             rejected_alternatives=rejected,
             failed_gates=(_GATE_2,),
+        )
+    if owner_ambiguities:
+        ambiguity_rejections = tuple(
+            sorted(
+                {
+                    *rejected,
+                    *(f"backend-owner-ambiguous:{comparison.record_id}" for comparison in owner_ambiguities),
+                    *(
+                        f"alternative-owner-comparison:{record_id}"
+                        for comparison in owner_ambiguities
+                        for record_id in comparison.attributes.get("alternative_record_ids", ())
+                    ),
+                }
+            )
+        )
+        return _verdict(
+            pair,
+            status=VerdictStatus.ABSTAIN,
+            cause=None,
+            proof_paths=(),
+            rejected_alternatives=ambiguity_rejections,
+            failed_gates=(_GATE_3, _GATE_6),
         )
     failed_required = tuple(
         gate
@@ -1114,6 +1145,17 @@ def build_report(
                 else set()
             )
             | backend_missing
+            | (
+                {_BACKEND_OWNER_AMBIGUOUS}
+                if any(
+                    any(
+                        alternative.startswith("backend-owner-ambiguous:")
+                        for alternative in verdict.rejected_alternatives
+                    )
+                    for verdict in verdicts
+                )
+                else set()
+            )
         )
     )
     warnings = tuple(sorted({warning for graph in graph_pair for warning in graph.warnings}))

@@ -98,6 +98,127 @@ _REQUIRED_EDGE_SUPPORT_KINDS = {
 }
 
 
+def _is_nonempty_str(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_string_tuple(value: object) -> bool:
+    return isinstance(value, tuple) and all(_is_nonempty_str(item) for item in value)
+
+
+def _is_lineage_side(value: object) -> bool:
+    return isinstance(value, str) and value in {"inputs", "outputs"}
+
+
+_BASE_SUPPORT_SCHEMA = {
+    "capture_run_id": _is_nonempty_str,
+    "verified_capability": _is_nonempty_str,
+    "support_kind": _is_nonempty_str,
+}
+
+
+def _support_schema(**fields):
+    return {**_BASE_SUPPORT_SCHEMA, **fields}
+
+
+_SUPPORT_ATTRIBUTE_SCHEMAS = {
+    "object-stage-snapshot": (
+        _support_schema(
+            object_id=_is_nonempty_str,
+            stage=_is_nonempty_str,
+            allocation_generation=_is_int,
+            lifecycle_sequence_at_capture=_is_int,
+        ),
+    ),
+    "pcode-generation": (
+        _support_schema(
+            pcode_id=_is_nonempty_str,
+            allocation_generation=_is_int,
+        ),
+    ),
+    "pcode-code-range": (
+        _support_schema(
+            pcode_id=_is_nonempty_str,
+            allocation_generation=_is_int,
+            start=_is_int,
+            end_exclusive=_is_int,
+        ),
+    ),
+    "pcode-emission": (
+        _support_schema(
+            pcode_id=_is_nonempty_str,
+            allocation_generation=_is_int,
+            code_offset=_is_int,
+            machine_operand_key=_is_nonempty_str,
+            operand_lineage_id=_is_nonempty_str,
+        ),
+    ),
+    "pcode-rewrite": (
+        _support_schema(
+            pcode_id=_is_nonempty_str,
+            allocation_generation=_is_int,
+            operand_lineage_id=_is_nonempty_str,
+            class_id=_is_int,
+            virtual=_is_int,
+        ),
+    ),
+    "pcode-lineage-event": (
+        _support_schema(
+            pcode_id=_is_nonempty_str,
+            allocation_generation=_is_int,
+            code_offset=_is_int,
+            operand_lineage_id=_is_nonempty_str,
+            event_kind=lambda value: value == "emission-lineage",
+        ),
+        _support_schema(
+            pcode_id=_is_nonempty_str,
+            allocation_generation=_is_int,
+            event_index=_is_int,
+            side=_is_lineage_side,
+            mutation_kind=_is_nonempty_str,
+            operand_lineage_id=_is_nonempty_str,
+            parent_lineage_ids=_is_string_tuple,
+        ),
+    ),
+    "object-virtual-binding": (
+        _support_schema(
+            object_id=_is_nonempty_str,
+            allocation_generation=_is_int,
+            class_id=_is_int,
+            virtual=_is_int,
+            ig_id=_is_int,
+        ),
+    ),
+    "object-frame-binding": (
+        _support_schema(
+            object_id=_is_nonempty_str,
+            allocation_generation=_is_int,
+            area=_is_nonempty_str,
+            semantic_stack_role=_is_nonempty_str,
+            final_r1_offset=_is_int,
+            size=_is_int,
+        ),
+    ),
+}
+
+
+def _support_attributes_are_typed(
+    support_kind: object,
+    attributes: Mapping[str, object],
+) -> bool:
+    schemas = _SUPPORT_ATTRIBUTE_SCHEMAS.get(support_kind)
+    if schemas is None:
+        return False
+    return any(
+        set(attributes) == set(schema) and all(predicate(attributes[key]) for key, predicate in schema.items())
+        for schema in schemas
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ObjectBindingAdapterInput:
     compile_id: str
@@ -358,11 +479,21 @@ def emit_object_binding_evidence(
             by_object[object_id] = node
 
     if _PCODE_RANGE in capabilities:
+        pcode_rows = _rows(source.pcode_validation.normalized.get("pcode_instructions"))
+        pcode_generation_by_id = {
+            str(row["pcode_id"]): row["allocation_generation"]
+            for row in pcode_rows
+            if _is_nonempty_str(row.get("pcode_id")) and _is_int(row.get("allocation_generation"))
+        }
         for event_index, event in enumerate(
             _rows(source.pcode_validation.normalized.get("pcode_operand_lineage_events"))
         ):
             for side in ("inputs", "outputs"):
                 for state in _rows(event.get(side)):
+                    pcode_id = state.get("pcode_id")
+                    allocation_generation = pcode_generation_by_id.get(str(pcode_id))
+                    if allocation_generation is None:
+                        continue
                     for operand in _rows(state.get("operands")):
                         lineage_id = operand.get("operand_lineage_id")
                         if not isinstance(lineage_id, str) or not lineage_id:
@@ -370,8 +501,10 @@ def emit_object_binding_evidence(
                         support = support_node(
                             _PCODE_RANGE,
                             "pcode-lineage-event",
-                            (event_index, side, lineage_id),
+                            (event_index, side, pcode_id, lineage_id),
                             {
+                                "pcode_id": pcode_id,
+                                "allocation_generation": allocation_generation,
                                 "event_index": event_index,
                                 "side": side,
                                 "mutation_kind": event.get("mutation_kind"),
@@ -394,7 +527,7 @@ def emit_object_binding_evidence(
             nodes.append(lineage)
             by_lineage[lineage_id] = lineage
 
-        for row in _rows(source.pcode_validation.normalized.get("pcode_instructions")):
+        for row in pcode_rows:
             pcode_id = row.get("pcode_id")
             if not isinstance(pcode_id, str) or not pcode_id:
                 continue
@@ -416,6 +549,7 @@ def emit_object_binding_evidence(
                     (pcode_id, range_index, code_range.get("start"), code_range.get("end_exclusive")),
                     {
                         "pcode_id": pcode_id,
+                        "allocation_generation": row.get("allocation_generation"),
                         "start": code_range.get("start"),
                         "end_exclusive": code_range.get("end_exclusive"),
                     },
@@ -438,6 +572,7 @@ def emit_object_binding_evidence(
                         (pcode_id, range_index, mapping_index, operand_key),
                         {
                             "pcode_id": pcode_id,
+                            "allocation_generation": row.get("allocation_generation"),
                             "code_offset": offset,
                             "machine_operand_key": operand_key,
                             "operand_lineage_id": lineage_id,
@@ -450,6 +585,7 @@ def emit_object_binding_evidence(
                         (pcode_id, range_index, mapping_index, lineage_id),
                         {
                             "pcode_id": pcode_id,
+                            "allocation_generation": row.get("allocation_generation"),
                             "code_offset": offset,
                             "operand_lineage_id": lineage_id,
                             "event_kind": "emission-lineage",
@@ -489,12 +625,16 @@ def emit_object_binding_evidence(
             for row in rewrite_rows
         }
         for rewrite_key, rewrite in rewrites.items():
+            rewrite_generation = pcode_generation_by_id.get(str(rewrite.get("pcode_id")))
+            if rewrite_generation is None:
+                continue
             support = support_node(
                 _PCODE_RANGE,
                 "pcode-rewrite",
                 rewrite_key,
                 {
                     "pcode_id": rewrite.get("pcode_id"),
+                    "allocation_generation": rewrite_generation,
                     "operand_lineage_id": rewrite.get("operand_lineage_id"),
                     "class_id": rewrite.get("class_id"),
                     "virtual": rewrite.get("virtual"),
@@ -728,6 +868,7 @@ def emit_object_binding_evidence(
                 (row.get("object_id"), class_id, virtual_number, row.get("ig_id")),
                 {
                     "object_id": row.get("object_id"),
+                    "allocation_generation": object_node.attributes.get("allocation_generation"),
                     "class_id": class_id,
                     "virtual": virtual_number,
                     "ig_id": row.get("ig_id"),
@@ -813,9 +954,11 @@ def emit_object_binding_evidence(
                 (row.get("object_id"), area),
                 {
                     "object_id": row.get("object_id"),
+                    "allocation_generation": object_node.attributes.get("allocation_generation"),
                     "area": area,
                     "semantic_stack_role": role,
                     "final_r1_offset": row.get("final_r1_offset"),
+                    "size": row.get("size"),
                 },
                 _confidence(row.get("confidence"), Confidence.HEURISTIC),
             )
@@ -1046,6 +1189,272 @@ def proof_complete(
     return False
 
 
+def _matching_nodes(
+    nodes: Mapping[str, EvidenceNode],
+    kind: str,
+    **attributes: object,
+) -> tuple[EvidenceNode, ...]:
+    return tuple(
+        node
+        for node in nodes.values()
+        if node.kind == kind and all(node.attributes.get(key) == value for key, value in attributes.items())
+    )
+
+
+def _support_topology_is_exact(
+    evidence: ObjectBindingEvidence,
+    support: EvidenceNode,
+    dependent: EvidenceNode | EvidenceEdge,
+    nodes: Mapping[str, EvidenceNode],
+) -> bool:
+    attributes = support.attributes
+    support_kind = attributes["support_kind"]
+    if support_kind == "object-stage-snapshot":
+        if dependent.kind != "compiler-object":
+            return False
+        snapshots = _rows(dependent.attributes.get("stage_snapshots"))
+        return (
+            dependent.attributes.get("object_id") == attributes["object_id"]
+            and dependent.attributes.get("allocation_generation") == attributes["allocation_generation"]
+            and any(
+                snapshot.get("stage") == attributes["stage"]
+                and snapshot.get("allocation_generation") == attributes["allocation_generation"]
+                and snapshot.get("lifecycle_sequence_at_capture") == attributes["lifecycle_sequence_at_capture"]
+                for snapshot in snapshots
+            )
+        )
+
+    if support_kind.startswith("pcode-"):
+        pcode_nodes = _matching_nodes(
+            nodes,
+            "retail-pcode",
+            pcode_id=attributes["pcode_id"],
+            allocation_generation=attributes["allocation_generation"],
+        )
+        if len(pcode_nodes) != 1:
+            return False
+        pcode = pcode_nodes[0]
+        anchor_edges = tuple(
+            edge
+            for edge in evidence.edges
+            if edge.kind == "assembly-anchor-emitted-by-pcode" and edge.target_id == pcode.record_id
+        )
+        if support_kind == "pcode-generation":
+            topology_ids = {pcode.record_id}
+            topology_ids.update(edge.record_id for edge in anchor_edges)
+            topology_ids.update(edge.source_id for edge in anchor_edges)
+            return dependent.record_id in topology_ids
+
+        if support_kind == "pcode-code-range":
+            start = attributes["start"]
+            end_exclusive = attributes["end_exclusive"]
+            raw_ranges = _rows(pcode.attributes.get("code_ranges"))
+            if start >= end_exclusive or not any(
+                code_range.get("start") == start and code_range.get("end_exclusive") == end_exclusive
+                for code_range in raw_ranges
+            ):
+                return False
+            matching_anchors = tuple(
+                edge
+                for edge in anchor_edges
+                if (anchor := nodes.get(edge.source_id)) is not None
+                and anchor.attributes.get("code_offset") == edge.attributes.get("code_offset")
+                and _is_int(anchor.attributes.get("code_offset"))
+                and start <= anchor.attributes["code_offset"] < end_exclusive
+            )
+            topology_ids = {item.record_id for item in matching_anchors}
+            topology_ids.update(item.source_id for item in matching_anchors)
+            return dependent.record_id in topology_ids
+
+        if support_kind == "pcode-emission":
+            raw_emission = any(
+                code_range.get("start") == attributes["code_offset"]
+                and any(
+                    mapping.get("machine_operand_key") == attributes["machine_operand_key"]
+                    and mapping.get("operand_lineage_id") == attributes["operand_lineage_id"]
+                    for mapping in _rows(code_range.get("machine_operand_mappings"))
+                )
+                for code_range in _rows(pcode.attributes.get("code_ranges"))
+            )
+            if not raw_emission:
+                return False
+            matching_lineage_edges = tuple(
+                edge
+                for edge in evidence.edges
+                if edge.kind == "pcode-operand-lineage"
+                and edge.source_id == pcode.record_id
+                and edge.attributes.get("code_offset") == attributes["code_offset"]
+                and edge.attributes.get("machine_operand_key") == attributes["machine_operand_key"]
+                and (lineage := nodes.get(edge.target_id)) is not None
+                and lineage.attributes.get("operand_lineage_id") == attributes["operand_lineage_id"]
+            )
+            matching_anchors = tuple(
+                edge
+                for edge in anchor_edges
+                if (anchor := nodes.get(edge.source_id)) is not None
+                and anchor.attributes.get("code_offset") == attributes["code_offset"]
+                and anchor.attributes.get("machine_operand_key") == attributes["machine_operand_key"]
+            )
+            if not matching_lineage_edges or not matching_anchors:
+                return False
+            topology_ids = {edge.record_id for edge in matching_lineage_edges}
+            topology_ids.update(edge.record_id for edge in matching_anchors)
+            topology_ids.update(edge.source_id for edge in matching_anchors)
+            return dependent.record_id in topology_ids
+
+        if support_kind == "pcode-rewrite":
+            if dependent.kind != "pcode-operand-uses-virtual" or not isinstance(dependent, EvidenceEdge):
+                return False
+            lineage = nodes.get(dependent.source_id)
+            virtual = nodes.get(dependent.target_id)
+            return (
+                lineage is not None
+                and virtual is not None
+                and dependent.attributes.get("pcode_id") == attributes["pcode_id"]
+                and dependent.attributes.get("operand_lineage_id") == attributes["operand_lineage_id"]
+                and lineage.attributes.get("operand_lineage_id") == attributes["operand_lineage_id"]
+                and virtual.attributes.get("class_id") == attributes["class_id"]
+                and virtual.attributes.get("virtual") == attributes["virtual"]
+            )
+
+        if support_kind == "pcode-lineage-event":
+            operand_id = attributes["operand_lineage_id"]
+            if "event_kind" in attributes:
+                if dependent.kind == "pcode-operand":
+                    return dependent.attributes.get("operand_lineage_id") == operand_id
+                if dependent.kind == "pcode-operand-lineage" and isinstance(dependent, EvidenceEdge):
+                    target = nodes.get(dependent.target_id)
+                    return (
+                        dependent.source_id == pcode.record_id
+                        and dependent.attributes.get("code_offset") == attributes["code_offset"]
+                        and target is not None
+                        and target.attributes.get("operand_lineage_id") == operand_id
+                    )
+                if dependent.kind in {
+                    "assembly-operand-anchor",
+                    "assembly-anchor-emitted-by-pcode",
+                }:
+                    matching_lineage = any(
+                        edge.kind == "pcode-operand-lineage"
+                        and edge.source_id == pcode.record_id
+                        and edge.attributes.get("code_offset") == attributes["code_offset"]
+                        and (target := nodes.get(edge.target_id)) is not None
+                        and target.attributes.get("operand_lineage_id") == operand_id
+                        for edge in evidence.edges
+                    )
+                    return matching_lineage and (dependent.attributes.get("code_offset") == attributes["code_offset"])
+                return False
+            if dependent.kind == "pcode-operand":
+                if dependent.attributes.get("operand_lineage_id") != operand_id:
+                    return False
+                mutation_edges = tuple(
+                    edge
+                    for edge in evidence.edges
+                    if edge.kind == "pcode-operand-lineage"
+                    and edge.attributes.get("mutation_kind") == attributes["mutation_kind"]
+                )
+                if attributes["side"] == "outputs":
+                    return any(
+                        edge.target_id == dependent.record_id
+                        and (parent := nodes.get(edge.source_id)) is not None
+                        and parent.attributes.get("operand_lineage_id") in attributes["parent_lineage_ids"]
+                        for edge in mutation_edges
+                    )
+                return any(edge.source_id == dependent.record_id for edge in mutation_edges)
+            if dependent.kind != "pcode-operand-lineage" or not isinstance(dependent, EvidenceEdge):
+                return False
+            source = nodes.get(dependent.source_id)
+            target = nodes.get(dependent.target_id)
+            if source is None or target is None:
+                return False
+            if dependent.attributes.get("mutation_kind") != attributes["mutation_kind"]:
+                return False
+            if attributes["side"] == "outputs":
+                return (
+                    target.attributes.get("operand_lineage_id") == operand_id
+                    and source.attributes.get("operand_lineage_id") in attributes["parent_lineage_ids"]
+                )
+            return source.attributes.get("operand_lineage_id") == operand_id
+
+    if support_kind == "object-virtual-binding":
+        owners = _matching_nodes(
+            nodes,
+            "compiler-object",
+            object_id=attributes["object_id"],
+            allocation_generation=attributes["allocation_generation"],
+        )
+        virtuals = _matching_nodes(
+            nodes,
+            "retail-virtual-register",
+            class_id=attributes["class_id"],
+            virtual=attributes["virtual"],
+        )
+        allocators = _matching_nodes(
+            nodes,
+            "allocator-node",
+            class_id=attributes["class_id"],
+            virtual=attributes["virtual"],
+            ig_id=attributes["ig_id"],
+        )
+        if len(owners) != 1 or len(virtuals) != 1 or len(allocators) != 1:
+            return False
+        owner, virtual, allocator = owners[0], virtuals[0], allocators[0]
+        object_edges = tuple(
+            edge
+            for edge in evidence.edges
+            if edge.kind == "object-materializes-virtual"
+            and edge.source_id == owner.record_id
+            and edge.target_id == virtual.record_id
+        )
+        allocator_edges = tuple(
+            edge
+            for edge in evidence.edges
+            if edge.kind == "maps-to-allocator-node"
+            and edge.source_id == virtual.record_id
+            and edge.target_id == allocator.record_id
+        )
+        if not object_edges or not allocator_edges:
+            return False
+        topology_ids = {virtual.record_id, allocator.record_id}
+        topology_ids.update(edge.record_id for edge in object_edges)
+        topology_ids.update(edge.record_id for edge in allocator_edges)
+        return dependent.record_id in topology_ids
+
+    if support_kind == "object-frame-binding":
+        owners = _matching_nodes(
+            nodes,
+            "compiler-object",
+            object_id=attributes["object_id"],
+            allocation_generation=attributes["allocation_generation"],
+        )
+        stacks = _matching_nodes(
+            nodes,
+            "stack-object",
+            area=attributes["area"],
+            offset=attributes["final_r1_offset"],
+            size=attributes["size"],
+        )
+        stacks = tuple(stack for stack in stacks if stack.role_key == attributes["semantic_stack_role"])
+        if len(owners) != 1 or len(stacks) != 1:
+            return False
+        owner, stack = owners[0], stacks[0]
+        frame_edges = tuple(
+            edge
+            for edge in evidence.edges
+            if edge.kind == "object-has-stack-home"
+            and edge.source_id == owner.record_id
+            and edge.target_id == stack.record_id
+            and edge.attributes.get("area") == attributes["area"]
+            and edge.attributes.get("semantic_stack_role") == attributes["semantic_stack_role"]
+        )
+        return bool(frame_edges) and dependent.record_id in {
+            stack.record_id,
+            *(edge.record_id for edge in frame_edges),
+        }
+
+    return False
+
+
 def exact_owner_path_record(
     evidence: ObjectBindingEvidence,
     record: EvidenceNode | EvidenceEdge,
@@ -1079,35 +1488,6 @@ def exact_owner_path_record(
     ) -> bool:
         support_kind = support.attributes.get("support_kind")
         capability = _SUPPORT_CAPABILITIES.get(support_kind)
-        contexts = [dependent.attributes]
-        if isinstance(dependent, EvidenceEdge):
-            contexts.extend(
-                endpoint.attributes
-                for endpoint_id in (dependent.source_id, dependent.target_id)
-                if (endpoint := nodes.get(endpoint_id)) is not None
-            )
-        shared_semantic_keys = {
-            "object_id",
-            "pcode_id",
-            "operand_lineage_id",
-            "machine_operand_key",
-            "class_id",
-            "virtual",
-            "ig_id",
-            "area",
-            "semantic_stack_role",
-        }
-        support_matches_topology = all(
-            not (expected := tuple(context[key] for context in contexts if key in context))
-            or any(support.attributes[key] == value for value in expected)
-            for key in shared_semantic_keys
-            if key in support.attributes
-        )
-        final_offset = support.attributes.get("final_r1_offset")
-        stack_offsets = tuple(context["offset"] for context in contexts if "offset" in context)
-        support_matches_topology = support_matches_topology and (
-            final_offset is None or not stack_offsets or any(final_offset == value for value in stack_offsets)
-        )
         return (
             support.kind == "backend-support-record"
             and capability is not None
@@ -1122,7 +1502,13 @@ def exact_owner_path_record(
             and support.attributes.get("capture_run_id") == evidence.capture_run_id
             and support.provenance.artifact_sha256 == dependent.provenance.artifact_sha256
             and not support.provenance.input_record_ids
-            and support_matches_topology
+            and _support_attributes_are_typed(support_kind, support.attributes)
+            and _support_topology_is_exact(
+                evidence,
+                support,
+                dependent,
+                nodes,
+            )
         )
 
     def cited_support(

@@ -100,8 +100,11 @@ def _delta(
     right: EvidenceNode | EvidenceEdge | None,
     attributes: Mapping[str, object],
     ordinal: int,
+    supporting_records: tuple[EvidenceNode | EvidenceEdge | ComparisonRecord, ...] = (),
+    confidence: Confidence = Confidence.DERIVED_UNIQUE,
 ) -> ComparisonRecord:
-    inputs = tuple(record for record in (left, right) if record is not None)
+    inputs_by_id = {record.record_id: record for record in (*supporting_records, left, right) if record is not None}
+    inputs = tuple(inputs_by_id[record_id] for record_id in sorted(inputs_by_id))
     return ComparisonRecord.create(
         analysis_id=analysis_id,
         relation_kind=relation_kind,
@@ -109,8 +112,8 @@ def _delta(
         left_record_id=None if left is None else left.record_id,
         right_compile_id=right_compile_id,
         right_record_id=None if right is None else right.record_id,
-        producer_confidence=Confidence.DERIVED_UNIQUE,
-        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        producer_confidence=confidence,
+        adapter_confidence=confidence,
         provenance=Provenance(
             artifact_sha256=analysis_id,
             parser=_PARSER_VERSION,
@@ -132,6 +135,53 @@ def _analysis_id(comparisons: tuple[ComparisonRecord, ...]) -> str | None:
     return next(iter(analysis_ids), None)
 
 
+def _owner_ambiguity_records(
+    analysis_id: str,
+    comparisons: tuple[ComparisonRecord, ...],
+) -> tuple[ComparisonRecord, ...]:
+    grouped: dict[bytes, list[ComparisonRecord]] = {}
+    for comparison in comparisons:
+        grouped.setdefault(
+            canonical_bytes(_canonical_value(comparison.attributes.get("role_tuple"))),
+            [],
+        ).append(comparison)
+    records: list[ComparisonRecord] = []
+    for ordinal, alternatives in enumerate(
+        sorted(grouped.values(), key=lambda items: min(item.record_id for item in items))
+    ):
+        ordered = tuple(sorted(alternatives, key=lambda item: item.record_id))
+        first = ordered[0]
+        records.append(
+            ComparisonRecord.create(
+                analysis_id=analysis_id,
+                relation_kind="backend-owner-ambiguous",
+                left_compile_id=first.left_compile_id,
+                left_record_id=first.left_record_id,
+                right_compile_id=first.right_compile_id,
+                right_record_id=first.right_record_id,
+                producer_confidence=Confidence.HEURISTIC,
+                adapter_confidence=Confidence.HEURISTIC,
+                provenance=Provenance(
+                    artifact_sha256=analysis_id,
+                    parser=_PARSER_VERSION,
+                    raw_start=None,
+                    raw_end=None,
+                    derivation_rule="rejected-backend-owner-alternatives",
+                    input_record_ids=tuple(item.record_id for item in ordered),
+                ),
+                input_confidences=tuple(item.confidence for item in ordered),
+                occurrence_ordinal=ordinal,
+                attributes={
+                    "reason": "backend-owner-ambiguous",
+                    "role_tuple": first.attributes.get("role_tuple"),
+                    "alternative_record_ids": tuple(item.record_id for item in ordered),
+                    "alternative_owner_pairs": tuple((item.left_record_id, item.right_record_id) for item in ordered),
+                },
+            )
+        )
+    return tuple(records)
+
+
 def diff_frontiers(
     graphs: Iterable[FrontierGraph], comparisons: Iterable[ComparisonRecord]
 ) -> tuple[ComparisonRecord, ...]:
@@ -149,8 +199,20 @@ def diff_frontiers(
     left_nodes, right_nodes = _nodes(left_graph), _nodes(right_graph)
     left_by_id = {node.record_id: node for node in left_nodes}
     right_by_id = {node.record_id: node for node in right_nodes}
+    evidence_records_by_id = {
+        record.record_id: record
+        for graph in (left_graph, right_graph)
+        for record in (
+            *graph.store.find_nodes(_compile_id(graph)),
+            *graph.store.find_edges(_compile_id(graph)),
+        )
+    }
     aligned: dict[str, str] = {}
     owner_semantic_states: dict[tuple[str, str], tuple[object, object]] = {}
+    owner_delta_support: dict[
+        tuple[str, str],
+        tuple[EvidenceNode | EvidenceEdge | ComparisonRecord, ...],
+    ] = {}
     all_owner_comparisons = tuple(
         comparison for comparison in comparison_records if comparison.relation_kind == "backend-owner-corresponds-to"
     )
@@ -165,6 +227,7 @@ def diff_frontiers(
         and comparison.attributes.get("right_path_proof_complete") is True
         and _verified_owner_semantic_state(comparison.attributes.get("left_semantic_state"))
         and _verified_owner_semantic_state(comparison.attributes.get("right_semantic_state"))
+        and set(comparison.provenance.input_record_ids) <= evidence_records_by_id.keys()
     )
     left_owner_counts = Counter(comparison.left_record_id for comparison in all_owner_comparisons)
     right_owner_counts = Counter(comparison.right_record_id for comparison in all_owner_comparisons)
@@ -173,6 +236,9 @@ def diff_frontiers(
         for comparison in owner_comparisons
         if left_owner_counts[comparison.left_record_id] == 1 and right_owner_counts[comparison.right_record_id] == 1
     }
+    rejected_owner_comparisons = tuple(
+        comparison for comparison in all_owner_comparisons if comparison.record_id not in accepted_owner_ids
+    )
     for comparison in comparison_records:
         if comparison.relation_kind not in {
             "role-corresponds-to",
@@ -187,15 +253,23 @@ def diff_frontiers(
         if comparison.left_record_id in left_by_id and comparison.right_record_id in right_by_id:
             aligned[comparison.left_record_id] = comparison.right_record_id
             if comparison.relation_kind == "backend-owner-corresponds-to":
-                owner_semantic_states[(comparison.left_record_id, comparison.right_record_id)] = (
+                owner_pair = (
+                    comparison.left_record_id,
+                    comparison.right_record_id,
+                )
+                owner_semantic_states[owner_pair] = (
                     comparison.attributes.get("left_semantic_state"),
                     comparison.attributes.get("right_semantic_state"),
+                )
+                owner_delta_support[owner_pair] = (
+                    comparison,
+                    *(evidence_records_by_id[record_id] for record_id in comparison.provenance.input_record_ids),
                 )
     for left, right in _unique_role_pairs(left_nodes, right_nodes):
         aligned.setdefault(left.record_id, right.record_id)
 
-    deltas: list[ComparisonRecord] = []
-    ordinal = 0
+    deltas = list(_owner_ambiguity_records(analysis_id, rejected_owner_comparisons))
+    ordinal = len(deltas)
     aligned_right = set(aligned.values())
     unaligned_left_owners = {
         node.record_id for node in left_nodes if node.kind == "compiler-object" and node.record_id not in aligned
@@ -206,6 +280,7 @@ def diff_frontiers(
     for left_id, right_id in sorted(aligned.items()):
         left, right = left_by_id[left_id], right_by_id[right_id]
         owner_states = owner_semantic_states.get((left_id, right_id))
+        owner_support = owner_delta_support.get((left_id, right_id), ())
         compared_left = left.attributes if owner_states is None else owner_states[0]
         compared_right = right.attributes if owner_states is None else owner_states[1]
         if left.kind == right.kind and _same_attributes(compared_left, compared_right):
@@ -225,6 +300,12 @@ def diff_frontiers(
                     "right_attributes": compared_right,
                 },
                 ordinal=ordinal,
+                supporting_records=owner_support,
+                confidence=(
+                    owner_support[0].confidence
+                    if owner_support and isinstance(owner_support[0], ComparisonRecord)
+                    else Confidence.DERIVED_UNIQUE
+                ),
             )
         )
         ordinal += 1
