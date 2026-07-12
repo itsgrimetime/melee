@@ -130,6 +130,34 @@ or stack-home truth.
 - Invalidate current publications before discovery/rerun while preserving
   compatible content-addressed raw evidence caches.
 
+### Production evidence provenance
+
+Raw cache reuse is permitted only when the production compiler and inspector
+contexts are exact. The `cflags_hash` lane therefore fingerprints Ninja's
+resolved MWCC command and the SHA-256 of every repo-local dependency reported
+for the translation unit by Ninja's valid dependency database. The compiler
+identity separately includes the selected `mwcceppc.exe` bytes and available
+build-configuration inputs. A missing command, absent dependency closure,
+stale dependency record, external dependency, or unreadable context fails
+closed with `invalid-compiler-context`; users must configure/build the unit
+before retrying.
+
+The inspector lane fingerprints both `tools/workflow/mwcc-inspect.sh` and the
+local diff-capture adapter, plus the workflow's effective host, remote root,
+CLI path, Bash path, connection timeout, compiler path, and selected remote
+ref. For delta-minimize's retained candidate sources, the selected ref is the
+explicit override, local upstream, or configured/default `master`, in the
+same order used by the workflow. Before capture, both provenance and the
+workflow resolve that selection locally to an exact 40-character commit; the
+workflow sends the commit, not a moving symbolic ref, to the remote checkout.
+An unavailable local ref fails closed even if the remote happens to know it.
+
+The remote inspector executable cannot be read locally, so its configured
+host/path identity is bound instead of a binary digest. If an operator
+replaces bytes in place at that exact remote identity without changing the
+path, cache provenance cannot detect it; changing the path (or clearing the
+affected output cache) is required.
+
 ## Epochs and persistence
 
 Add a namespace-resolution epoch containing the v5 namespace schema, reviewed

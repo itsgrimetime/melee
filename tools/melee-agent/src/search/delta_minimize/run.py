@@ -73,6 +73,7 @@ from .objectives import (
     resolve_namespace_map,
 )
 from .pareto import reduce_pareto
+from .provenance import compiler_provenance, inspector_provenance
 from .store import DeltaRunStore
 
 RESULT_SCHEMA = "delta-minimize-result.v1"
@@ -1872,31 +1873,19 @@ def _default_parent_provenance(config: DeltaMinimizeConfig) -> Mapping[str, str]
         raise DeltaMinimizeError("missing-expected-object", {"path": str(expected)})
     try:
         expected_hash = _file_hash(expected)
-        unit_bytes = config.cflags_from.read_bytes()
     except (OSError, ValueError) as error:
         raise DeltaMinimizeError("invalid-compiler-context") from error
-
-    build_identity = hashlib.sha256()
-    build_identity.update(str(config.cflags_from.absolute()).encode())
-    build_identity.update(b"\0")
-    build_identity.update(unit_bytes)
-    compiler_identity = hashlib.sha256(b"mwcc_233_163n\0")
-    for relative in ("config/GALE01/config.yml", "configure.py"):
-        path = config.melee_root / relative
-        if path.is_file() and not path.is_symlink():
-            compiler_identity.update(relative.encode())
-            compiler_identity.update(b"\0")
-            compiler_identity.update(path.read_bytes())
+    cflags_hash, compiler_fingerprint = compiler_provenance(
+        config.melee_root,
+        config.cflags_from,
+    )
     inspector_source = Path(__file__).parents[2] / "mwcc_debug" / "diff_capture.py"
-    inspector_digest = hashlib.sha256(
-        inspector_source.read_bytes() if inspector_source.is_file() else b"mwcc-inspect"
-    ).hexdigest()
     return {
-        "cflags_hash": build_identity.hexdigest(),
-        "compiler_fingerprint": f"mwcc_233_163n:{compiler_identity.hexdigest()}",
+        "cflags_hash": cflags_hash,
+        "compiler_fingerprint": compiler_fingerprint,
         "expected_object_hash": expected_hash,
         "parser_schema_hash": PARSER_SCHEMA_HASH,
-        "inspector_version": f"mwcc-inspect:{inspector_digest}",
+        "inspector_version": inspector_provenance(config.melee_root, inspector_source),
     }
 
 

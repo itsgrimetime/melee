@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -30,6 +31,7 @@ from src.search.delta_minimize.run import (
     default_delta_minimize_backends,
     run_delta_minimize,
 )
+from src.search.delta_minimize.store import DeltaRunStore
 
 LEFT = "int f(void) {\n int a = 1;\n int b = 2;\n return a+b;\n}\n"
 RIGHT = "int f(void) {\n int a = 3;\n int b = 4;\n return a+b;\n}\n"
@@ -1097,6 +1099,227 @@ def test_parent_checkdiff_requirement_validates_fresh_capture(tmp_path: Path) ->
 
 def test_production_parent_cache_requires_checkdiff_evidence() -> None:
     assert default_delta_minimize_backends().parent_requires_checkdiff is True
+
+
+def _production_provenance_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[DeltaMinimizeConfig, dict[str, str]]:
+    root = tmp_path / "repo"
+    unit = root / "src/melee/test.c"
+    header = root / "include/test.h"
+    expected = root / "build/GALE01/obj/melee/test.o"
+    inspector = root / "tools/workflow/mwcc-inspect.sh"
+    compiler = root / "build/compilers/GC/1.2.5n/mwcceppc.exe"
+    for path in (unit, header, expected, inspector, compiler):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text('#include "test.h"\nint f(void) { return TEST_VALUE; }\n', encoding="utf-8")
+    header.write_text("#define TEST_VALUE 1\n", encoding="utf-8")
+    expected.write_bytes(b"expected object")
+    inspector.write_text("#!/usr/bin/env bash\n# inspector v1\n", encoding="utf-8")
+    compiler.write_bytes(b"mwcc compiler v1")
+    (root / "build.ninja").write_text("# queried through ninja -t\n", encoding="utf-8")
+
+    command = {
+        "value": (
+            "build/tools/wibo build/compilers/GC/1.2.5n/mwcceppc.exe "
+            "-O4,p -inline auto -i include -c src/melee/test.c "
+            "-o build/GALE01/src/melee && python tools/transform_dep.py"
+        )
+    }
+    dependency_rows = {
+        "value": "\n".join(
+            (
+                "build/GALE01/src/melee/test.o: #deps 2, deps mtime 1 (VALID)",
+                "    src/melee/test.c",
+                "    include/test.h",
+            )
+        )
+    }
+    upstream = {"value": ""}
+    ref_commit = {"value": "a" * 40}
+
+    def fake_run(args, **kwargs):
+        assert kwargs["cwd"] == root
+        assert kwargs["text"] is True
+        assert kwargs["capture_output"] is True
+        assert kwargs["check"] is False
+        if args[:3] == ["ninja", "-t", "commands"]:
+            return subprocess.CompletedProcess(args, 0, command["value"] + "\n", "")
+        if args[:3] == ["ninja", "-t", "deps"]:
+            return subprocess.CompletedProcess(args, 0, dependency_rows["value"] + "\n", "")
+        if args[:4] == ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name"]:
+            return subprocess.CompletedProcess(
+                args,
+                0 if upstream["value"] else 1,
+                upstream["value"] + ("\n" if upstream["value"] else ""),
+                "",
+            )
+        if args[:3] == ["git", "rev-parse", "--verify"]:
+            return subprocess.CompletedProcess(args, 0, ref_commit["value"] + "\n", "")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(run_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("MWCC_INSPECT_REMOTE_REF", "refs/heads/reviewed")
+    monkeypatch.setenv("MWCC_INSPECT_HOST", "inspector-a")
+    monkeypatch.setenv("MWCC_INSPECT_REMOTE_DIR", "/remote/melee")
+    monkeypatch.setenv("MWCC_INSPECT_CLI", "/remote/inspector.exe")
+    monkeypatch.setenv("MWCC_INSPECT_REMOTE_BASH", "C:\\msys64\\bash.exe")
+    config = _config(tmp_path, melee_root=root, cflags_from=unit)
+    return config, {
+        "header": str(header),
+        "inspector": str(inspector),
+        "command": command,
+        "dependencies": dependency_rows,
+        "upstream": upstream,
+        "ref_commit": ref_commit,
+    }
+
+
+def _provenance_consumers(
+    tmp_path: Path,
+    provenance: dict[str, str],
+) -> tuple[str, str, str]:
+    candidate = SimpleNamespace(source_hash="1" * 64)
+    config = SimpleNamespace(function="f", include_objobjects=True)
+    store = DeltaRunStore(
+        tmp_path,
+        provenance={**provenance, "objective_manifest_hash": "2" * 64},
+    )
+    evidence_digest = store.evidence_key(candidate, config).digest()
+    parent_digest = store.parent_evidence_key(candidate, config, provenance).digest()
+    domain = tuple(range(32))
+    left = NamespaceArtifact(
+        artifact_id="parent:left",
+        kind="parent",
+        side="left",
+        candidate=None,
+        mask=None,
+        source_sha256="1" * 64,
+        pcdump_sha256="3" * 64,
+        domain=domain,
+        automatically_resolved=True,
+        diagnostic=None,
+    )
+    right = replace(
+        left,
+        artifact_id="parent:right",
+        side="right",
+        source_sha256="4" * 64,
+        pcdump_sha256="5" * 64,
+        automatically_resolved=False,
+        diagnostic="ambiguous-automatic-v5",
+    )
+    request = NamespaceReviewRequest(
+        function="f",
+        class_id=0,
+        register_class="GPR",
+        namespace_schema=ROLE_NAMESPACE_SCHEMA,
+        parser_schema_hash=PARSER_SCHEMA_HASH,
+        target_sha256="6" * 64,
+        delta_manifest_sha256="7" * 64,
+        left_source_sha256=left.source_sha256,
+        right_source_sha256=right.source_sha256,
+        cflags_hash=provenance["cflags_hash"],
+        compiler_fingerprint=provenance["compiler_fingerprint"],
+        expected_object_hash=provenance["expected_object_hash"],
+        inspector_version=provenance["inspector_version"],
+        canonical_artifact_id=left.artifact_id,
+        canonical_source_sha256=left.source_sha256,
+        canonical_pcdump_sha256=left.pcdump_sha256,
+        reviewed_anchors={0: 0},
+        artifacts=(left, right),
+    )
+    return evidence_digest, parent_digest, request.sha256
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "header",
+        "compile-flags",
+        "inspector-script",
+        "inspector-host",
+        "inspector-remote-dir",
+        "inspector-cli",
+        "inspector-bash",
+        "inspector-ref",
+        "inspector-ref-commit",
+        "inspector-default-ref",
+        "inspector-upstream",
+        "inspector-connect-timeout",
+    ),
+)
+def test_production_provenance_binds_complete_compiler_and_inspector_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    config, controls = _production_provenance_fixture(tmp_path, monkeypatch)
+    if mutation == "inspector-default-ref":
+        monkeypatch.delenv("MWCC_INSPECT_REMOTE_REF")
+        monkeypatch.setenv("MWCC_INSPECT_DEFAULT_REMOTE_REF", "refs/heads/default-a")
+    elif mutation == "inspector-upstream":
+        monkeypatch.delenv("MWCC_INSPECT_REMOTE_REF")
+        controls["upstream"]["value"] = "origin/upstream-a"
+    baseline = dict(run_module._default_parent_provenance(config))
+    baseline_consumers = _provenance_consumers(tmp_path / "baseline-store", baseline)
+
+    if mutation == "header":
+        Path(controls["header"]).write_text("#define TEST_VALUE 2\n", encoding="utf-8")
+    elif mutation == "compile-flags":
+        controls["command"]["value"] = controls["command"]["value"].replace("-O4,p", "-O3")
+    elif mutation == "inspector-script":
+        Path(controls["inspector"]).write_text("#!/usr/bin/env bash\n# inspector v2\n", encoding="utf-8")
+    elif mutation == "inspector-host":
+        monkeypatch.setenv("MWCC_INSPECT_HOST", "inspector-b")
+    elif mutation == "inspector-remote-dir":
+        monkeypatch.setenv("MWCC_INSPECT_REMOTE_DIR", "/different/melee")
+    elif mutation == "inspector-cli":
+        monkeypatch.setenv("MWCC_INSPECT_CLI", "/remote/inspector-v2.exe")
+    elif mutation == "inspector-bash":
+        monkeypatch.setenv("MWCC_INSPECT_REMOTE_BASH", "C:\\other\\bash.exe")
+    elif mutation == "inspector-ref":
+        monkeypatch.setenv("MWCC_INSPECT_REMOTE_REF", "refs/heads/reviewed-v2")
+    elif mutation == "inspector-ref-commit":
+        controls["ref_commit"]["value"] = "b" * 40
+    elif mutation == "inspector-default-ref":
+        monkeypatch.setenv("MWCC_INSPECT_DEFAULT_REMOTE_REF", "refs/heads/default-b")
+    elif mutation == "inspector-upstream":
+        controls["upstream"]["value"] = "origin/upstream-b"
+    else:
+        monkeypatch.setenv("MWCC_INSPECT_CONNECT_TIMEOUT", "30")
+
+    changed = dict(run_module._default_parent_provenance(config))
+    changed_consumers = _provenance_consumers(tmp_path / "changed-store", changed)
+
+    if mutation in {"header", "compile-flags"}:
+        assert changed["cflags_hash"] != baseline["cflags_hash"]
+    else:
+        assert changed["inspector_version"] != baseline["inspector_version"]
+    assert changed_consumers[0] != baseline_consumers[0]
+    assert changed_consumers[1] != baseline_consumers[1]
+    assert changed_consumers[2] != baseline_consumers[2]
+
+
+@pytest.mark.parametrize("failure", ("missing-command", "missing-dependencies", "stale-dependencies"))
+def test_production_provenance_fails_closed_without_exact_compile_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    config, controls = _production_provenance_fixture(tmp_path, monkeypatch)
+    if failure == "missing-command":
+        controls["command"]["value"] = ""
+    elif failure == "missing-dependencies":
+        controls["dependencies"]["value"] = "build/GALE01/src/melee/test.o: deps not found"
+    else:
+        controls["dependencies"]["value"] = controls["dependencies"]["value"].replace(
+            "(VALID)", "(STALE)"
+        )
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-compiler-context$"):
+        run_module._default_parent_provenance(config)
 
 
 def test_production_objective_adapter_supplies_real_register_diff_deriver(
