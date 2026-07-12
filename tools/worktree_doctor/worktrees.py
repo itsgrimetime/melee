@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import selectors
@@ -116,6 +117,47 @@ class WorktreeReport:
     min_idle_hours: float
     records: tuple[WorktreeRecord, ...]
     global_errors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RetirementCandidate:
+    path: Path
+    branch: str
+    head: str
+    estimated_disk_bytes: int
+    last_activity: float
+
+
+@dataclass(frozen=True)
+class RetirementSkip:
+    path: Path
+    branch: str
+    head: str
+    phase: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class RetirementRemoval:
+    path: Path
+    branch: str
+    head: str
+    branch_head_after: str
+    estimated_reclaimed_bytes: int
+
+
+@dataclass(frozen=True)
+class RetirementError:
+    reason: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class RetirementResult:
+    planned: tuple[RetirementCandidate, ...]
+    removed: tuple[RetirementRemoval, ...]
+    skipped: tuple[RetirementSkip, ...]
+    errors: tuple[RetirementError, ...]
 
 
 _OBJECT_HEX_LENGTHS = {b"sha1": 40, b"sha256": 64}
@@ -1270,3 +1312,344 @@ def inspect_worktrees(
         records=records,
         global_errors=snapshot.errors,
     )
+
+
+def _retirement_plan(report: WorktreeReport) -> tuple[RetirementCandidate, ...]:
+    candidates: list[RetirementCandidate] = []
+    ordered_records = sorted(
+        report.records, key=lambda record: os.fspath(record.canonical_path)
+    )
+    for record in ordered_records:
+        if not record.eligible or record.branch is None or record.last_activity is None:
+            continue
+        candidates.append(
+            RetirementCandidate(
+                path=record.path,
+                branch=record.branch,
+                head=record.head,
+                estimated_disk_bytes=record.estimated_disk_bytes,
+                last_activity=record.last_activity,
+            )
+        )
+    return tuple(candidates)
+
+
+def _retirement_errors(
+    reasons: Sequence[str], *, detail: str
+) -> tuple[RetirementError, ...]:
+    return tuple(RetirementError(reason=reason, detail=detail) for reason in reasons)
+
+
+def _fresh_retirement_report(report: WorktreeReport) -> WorktreeReport:
+    return inspect_worktrees(
+        report.repo_root,
+        current_worktree=report.current_worktree,
+        min_idle_hours=report.min_idle_hours,
+    )
+
+
+def _record_at_path(
+    report: WorktreeReport, canonical_path: Path
+) -> WorktreeRecord | None:
+    return next(
+        (
+            record
+            for record in report.records
+            if record.canonical_path == canonical_path
+        ),
+        None,
+    )
+
+
+_REVALIDATION_REASON_PRIORITY = (
+    "dirty-worktree",
+    "active-process",
+    "locked-worktree",
+    "prunable-worktree",
+    "detached-head",
+    "branch-missing",
+    "branch-head-mismatch",
+    "retained-evidence-present",
+    "contains-unapproved-ignored",
+    "asset-validation-failed",
+)
+
+
+def _revalidation_reason(
+    planned: WorktreeRecord, current: WorktreeRecord | None
+) -> str | None:
+    if current is None:
+        return "changed-during-retirement"
+    if (
+        current.path_device != planned.path_device
+        or current.path_inode != planned.path_inode
+    ):
+        return "replaced-during-retirement"
+
+    for reason in _REVALIDATION_REASON_PRIORITY:
+        if reason in current.skip_reasons:
+            return reason
+
+    identity_facts = (
+        current.path,
+        current.canonical_path,
+        current.head,
+        current.branch,
+        current.detached,
+        current.locked_reason,
+        current.prunable_reason,
+        current.branch_head,
+    )
+    planned_identity_facts = (
+        planned.path,
+        planned.canonical_path,
+        planned.head,
+        planned.branch,
+        planned.detached,
+        planned.locked_reason,
+        planned.prunable_reason,
+        planned.branch_head,
+    )
+    bound_facts = (
+        current.last_activity,
+        current.estimated_disk_bytes,
+        current.dirty,
+        current.ignored_entries,
+        current.unapproved_ignored_paths,
+        current.retained_evidence,
+        current.asset_snapshot,
+        current.dol_identity,
+        current.active_pids,
+    )
+    planned_bound_facts = (
+        planned.last_activity,
+        planned.estimated_disk_bytes,
+        planned.dirty,
+        planned.ignored_entries,
+        planned.unapproved_ignored_paths,
+        planned.retained_evidence,
+        planned.asset_snapshot,
+        planned.dol_identity,
+        planned.active_pids,
+    )
+    if identity_facts != planned_identity_facts or bound_facts != planned_bound_facts:
+        return "changed-during-retirement"
+    if not current.eligible:
+        return (
+            current.skip_reasons[0]
+            if current.skip_reasons
+            else "changed-during-retirement"
+        )
+    return None
+
+
+def _skip(candidate: RetirementCandidate, *, phase: str, reason: str) -> RetirementSkip:
+    return RetirementSkip(
+        path=candidate.path,
+        branch=candidate.branch,
+        head=candidate.head,
+        phase=phase,
+        reason=reason,
+    )
+
+
+def _porcelain_error(error: WorktreeParseError, *, phase: str) -> RetirementError:
+    return RetirementError(
+        reason="worktree-porcelain-invalid",
+        detail=f"{phase}: {error}",
+    )
+
+
+def _path_exists_nofollow(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult:
+    """Plan or safely apply retirement of eligible registered worktrees."""
+
+    if report.global_errors:
+        return RetirementResult(
+            planned=(),
+            removed=(),
+            skipped=(),
+            errors=_retirement_errors(
+                report.global_errors, detail="initial inspection failed"
+            ),
+        )
+    if not apply:
+        return RetirementResult(
+            planned=_retirement_plan(report),
+            removed=(),
+            skipped=(),
+            errors=(),
+        )
+
+    lock_path = report.common_git_dir / "worktree-doctor-retirement.lock"
+    lock_descriptor: int | None = None
+    try:
+        try:
+            lock_descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(
+                lock_descriptor,
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+        except OSError as error:
+            if lock_descriptor is not None:
+                os.close(lock_descriptor)
+                lock_descriptor = None
+            return RetirementResult(
+                planned=(),
+                removed=(),
+                skipped=(),
+                errors=(
+                    RetirementError(
+                        reason="retirement-lock-unavailable",
+                        detail=str(error),
+                    ),
+                ),
+            )
+
+        try:
+            preflight = _fresh_retirement_report(report)
+        except WorktreeParseError as error:
+            return RetirementResult(
+                planned=(),
+                removed=(),
+                skipped=(),
+                errors=(_porcelain_error(error, phase="preflight"),),
+            )
+        if preflight.global_errors:
+            return RetirementResult(
+                planned=(),
+                removed=(),
+                skipped=(),
+                errors=_retirement_errors(
+                    preflight.global_errors, detail="preflight inspection failed"
+                ),
+            )
+
+        planned = _retirement_plan(preflight)
+        preflight_records = {
+            record.path: record for record in preflight.records if record.eligible
+        }
+        removed: list[RetirementRemoval] = []
+        skipped: list[RetirementSkip] = []
+        errors: list[RetirementError] = []
+
+        for candidate in planned:
+            original = preflight_records[candidate.path]
+            canonical_path = original.canonical_path
+            try:
+                current_report = _fresh_retirement_report(report)
+            except WorktreeParseError as error:
+                errors.append(_porcelain_error(error, phase="revalidate"))
+                break
+            if current_report.global_errors:
+                errors.extend(
+                    _retirement_errors(
+                        current_report.global_errors,
+                        detail=f"revalidation failed for {candidate.path}",
+                    )
+                )
+                break
+            current = _record_at_path(current_report, canonical_path)
+            reason = _revalidation_reason(original, current)
+            if reason is not None:
+                skipped.append(_skip(candidate, phase="revalidate", reason=reason))
+                continue
+
+            final_process_snapshot = collect_process_snapshot()
+            if final_process_snapshot.errors:
+                errors.extend(
+                    _retirement_errors(
+                        final_process_snapshot.errors,
+                        detail=f"final process check failed for {candidate.path}",
+                    )
+                )
+                break
+            if final_process_snapshot.active_pids(canonical_path, candidate.path):
+                skipped.append(
+                    _skip(
+                        candidate,
+                        phase="revalidate",
+                        reason="active-process",
+                    )
+                )
+                continue
+
+            args = [
+                "git",
+                "-C",
+                os.fspath(report.repo_root),
+                "worktree",
+                "remove",
+                "--",
+                os.fspath(candidate.path),
+            ]
+            try:
+                removal = subprocess.run(args, capture_output=True)
+            except OSError:
+                skipped.append(
+                    _skip(candidate, phase="remove", reason="git-remove-failed")
+                )
+                continue
+            if removal.returncode != 0:
+                skipped.append(
+                    _skip(candidate, phase="remove", reason="git-remove-failed")
+                )
+                continue
+
+            try:
+                registered = discover_registered_worktrees(report.repo_root)
+            except WorktreeParseError as error:
+                errors.append(_porcelain_error(error, phase="verify"))
+                break
+            still_registered = any(item.path == candidate.path for item in registered)
+            if _path_exists_nofollow(candidate.path) or still_registered:
+                skipped.append(
+                    _skip(candidate, phase="verify", reason="git-remove-failed")
+                )
+                continue
+
+            branch_result = _git_bytes(
+                report.repo_root,
+                ("rev-parse", "--verify", f"refs/heads/{candidate.branch}"),
+            )
+            branch_head_after = os.fsdecode(branch_result.stdout.strip())
+            if branch_result.returncode != 0 or branch_head_after != candidate.head:
+                skipped.append(
+                    _skip(
+                        candidate,
+                        phase="verify",
+                        reason="branch-preservation-failed",
+                    )
+                )
+                continue
+            removed.append(
+                RetirementRemoval(
+                    path=candidate.path,
+                    branch=candidate.branch,
+                    head=candidate.head,
+                    branch_head_after=branch_head_after,
+                    estimated_reclaimed_bytes=candidate.estimated_disk_bytes,
+                )
+            )
+
+        return RetirementResult(
+            planned=planned,
+            removed=tuple(removed),
+            skipped=tuple(skipped),
+            errors=tuple(errors),
+        )
+    finally:
+        if lock_descriptor is not None:
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_descriptor)

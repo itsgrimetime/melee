@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import fcntl
 import importlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -1188,3 +1191,441 @@ def test_collect_process_snapshot_fails_closed(
     assert snapshot.paths == ()
     assert snapshot.commands == ()
     assert snapshot.errors == (expected,)
+
+
+def _retirement_record(
+    path: Path,
+    *,
+    branch: str = "codex/retire",
+    head: str = "a" * 40,
+    estimated_disk_bytes: int = 4096,
+    last_activity: float = 1.0,
+) -> worktrees.WorktreeRecord:
+    path.mkdir(parents=True, exist_ok=True)
+    identity = path.lstat()
+    return worktrees.WorktreeRecord(
+        path=path,
+        canonical_path=path.resolve(strict=False),
+        path_device=identity.st_dev,
+        path_inode=identity.st_ino,
+        head=head,
+        branch=branch,
+        detached=False,
+        locked_reason=None,
+        prunable_reason=None,
+        branch_head=head,
+        estimated_disk_bytes=estimated_disk_bytes,
+        last_activity=last_activity,
+        dirty=False,
+        ignored_entries=(),
+        unapproved_ignored_paths=(),
+        retained_evidence=retained_evidence.RetainedEvidenceSnapshot((), ()),
+        asset_snapshot=None,
+        dol_identity=None,
+        active_pids=(),
+        merged_into_master=None,
+        eligible=True,
+        skip_reasons=(),
+    )
+
+
+def _retirement_report(
+    tmp_path: Path,
+    records: tuple[worktrees.WorktreeRecord, ...],
+    *,
+    global_errors: tuple[str, ...] = (),
+) -> worktrees.WorktreeReport:
+    common_git_dir = tmp_path / "common-git"
+    common_git_dir.mkdir(exist_ok=True)
+    return worktrees.WorktreeReport(
+        repo_root=tmp_path / "repo",
+        common_git_dir=common_git_dir,
+        current_worktree=tmp_path / "repo",
+        min_idle_hours=24,
+        records=records,
+        global_errors=global_errors,
+    )
+
+
+def test_retirement_dry_run_is_canonical_ordered_and_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    later = _retirement_record(tmp_path / "z-agent", branch="codex/z")
+    earlier = _retirement_record(tmp_path / "a-agent", branch="codex/a")
+    report = _retirement_report(tmp_path, (later, earlier))
+    monkeypatch.setattr(
+        worktrees.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("dry-run executed a command"),
+    )
+
+    result = worktrees.retire_worktrees(report, apply=False)
+
+    assert [item.path for item in result.planned] == [earlier.path, later.path]
+    assert result.removed == ()
+    assert result.skipped == ()
+    assert result.errors == ()
+
+
+def test_retirement_apply_lock_contention_fails_before_planning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = _retirement_record(tmp_path / "agent")
+    report = _retirement_report(tmp_path, (item,))
+    lock_path = report.common_git_dir / "worktree-doctor-retirement.lock"
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    monkeypatch.setattr(
+        worktrees.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("lock failure executed Git"),
+    )
+    try:
+        result = worktrees.retire_worktrees(report, apply=True)
+    finally:
+        os.close(descriptor)
+
+    assert result.planned == ()
+    assert result.removed == ()
+    assert result.skipped == ()
+    assert [error.reason for error in result.errors] == ["retirement-lock-unavailable"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("porcelain", "worktree-porcelain-invalid"),
+        ("process", "process-query-failed"),
+    ],
+)
+def test_retirement_global_preflight_failure_prevents_every_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected: str,
+) -> None:
+    item = _retirement_record(tmp_path / "agent")
+    report = _retirement_report(tmp_path, (item,))
+
+    def fail_preflight(*_args, **_kwargs):
+        if failure == "porcelain":
+            raise worktrees.WorktreeParseError("malformed porcelain")
+        return replace(report, global_errors=("process-query-failed",))
+
+    monkeypatch.setattr(worktrees, "inspect_worktrees", fail_preflight)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        worktrees.subprocess,
+        "run",
+        lambda args, **_kwargs: calls.append(args) or subprocess.CompletedProcess(args, 0, b"", b""),
+    )
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert result.planned == ()
+    assert result.removed == ()
+    assert [error.reason for error in result.errors] == [expected]
+    assert not any("remove" in args for args in calls)
+
+
+def _local_revalidation_mutation(
+    name: str, item: worktrees.WorktreeRecord
+) -> tuple[worktrees.WorktreeRecord | None, str]:
+    if name == "dirty":
+        return replace(item, dirty=True, eligible=False, skip_reasons=("dirty-worktree",)), "dirty-worktree"
+    if name == "active":
+        return replace(item, active_pids=(123,), eligible=False, skip_reasons=("active-process",)), "active-process"
+    if name == "locked":
+        return replace(item, locked_reason="hold", eligible=False, skip_reasons=("locked-worktree",)), "locked-worktree"
+    if name == "detached":
+        return replace(
+            item, branch=None, branch_head=None, detached=True, eligible=False, skip_reasons=("detached-head",)
+        ), "detached-head"
+    if name == "unregistered":
+        return None, "changed-during-retirement"
+    if name == "head":
+        return replace(item, head="b" * 40, branch_head="b" * 40), "changed-during-retirement"
+    if name == "branch":
+        return replace(item, branch="codex/changed"), "changed-during-retirement"
+    if name == "branch-ref":
+        return replace(
+            item, branch_head="b" * 40, eligible=False, skip_reasons=("branch-head-mismatch",)
+        ), "branch-head-mismatch"
+    if name == "inode":
+        assert item.path_inode is not None
+        return replace(item, path_inode=item.path_inode + 1), "replaced-during-retirement"
+    if name == "newer":
+        assert item.last_activity is not None
+        return replace(item, last_activity=item.last_activity + 1), "changed-during-retirement"
+    if name == "disk":
+        return replace(item, estimated_disk_bytes=item.estimated_disk_bytes + 512), "changed-during-retirement"
+    if name == "inventory":
+        entry = worktrees.IgnoredEntry(Path("build/new.o"), "file", 1, 2, 3, 4.0)
+        return replace(item, ignored_entries=(entry,)), "changed-during-retirement"
+    if name == "retained":
+        snapshot = retained_evidence.RetainedEvidenceSnapshot((Path("build/runs"),), ())
+        return replace(
+            item, retained_evidence=snapshot, eligible=False, skip_reasons=("retained-evidence-present",)
+        ), "retained-evidence-present"
+    if name == "unknown-ignored":
+        return replace(
+            item,
+            unapproved_ignored_paths=(Path(".env"),),
+            eligible=False,
+            skip_reasons=("contains-unapproved-ignored",),
+        ), "contains-unapproved-ignored"
+    if name == "asset":
+        return replace(item, eligible=False, skip_reasons=("asset-validation-failed",)), "asset-validation-failed"
+    raise AssertionError(name)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "dirty",
+        "active",
+        "locked",
+        "detached",
+        "unregistered",
+        "head",
+        "branch",
+        "branch-ref",
+        "inode",
+        "newer",
+        "disk",
+        "inventory",
+        "retained",
+        "unknown-ignored",
+        "asset",
+    ],
+)
+def test_retirement_revalidation_skips_changed_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    item = _retirement_record(tmp_path / "agent")
+    report = _retirement_report(tmp_path, (item,))
+    changed, expected = _local_revalidation_mutation(mutation, item)
+    reports = [report, replace(report, records=() if changed is None else (changed,))]
+    monkeypatch.setattr(worktrees, "inspect_worktrees", lambda *_args, **_kwargs: reports.pop(0))
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        worktrees.subprocess,
+        "run",
+        lambda args, **_kwargs: calls.append(args) or subprocess.CompletedProcess(args, 0, b"", b""),
+    )
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert result.removed == ()
+    assert [(skip.phase, skip.reason) for skip in result.skipped] == [("revalidate", expected)]
+    assert result.errors == ()
+    assert not any("remove" in args for args in calls)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("porcelain", "worktree-porcelain-invalid"),
+        ("process", "process-query-failed"),
+    ],
+)
+def test_retirement_global_revalidation_failure_stops_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected: str,
+) -> None:
+    item = _retirement_record(tmp_path / "agent")
+    report = _retirement_report(tmp_path, (item,))
+    calls = 0
+
+    def inspect(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return report
+        if failure == "porcelain":
+            raise worktrees.WorktreeParseError("malformed porcelain")
+        return replace(report, global_errors=("process-query-failed",))
+
+    monkeypatch.setattr(worktrees, "inspect_worktrees", inspect)
+    monkeypatch.setattr(
+        worktrees.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("global failure attempted removal"),
+    )
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert len(result.planned) == 1
+    assert result.removed == ()
+    assert result.skipped == ()
+    assert [error.reason for error in result.errors] == [expected]
+
+
+def test_retirement_refreshes_processes_after_candidate_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = _retirement_record(tmp_path / "agent")
+    report = _retirement_report(tmp_path, (item,))
+    reports = [report, report]
+    monkeypatch.setattr(
+        worktrees, "inspect_worktrees", lambda *_args, **_kwargs: reports.pop(0)
+    )
+    monkeypatch.setattr(
+        worktrees,
+        "collect_process_snapshot",
+        lambda: worktrees.ProcessSnapshot(
+            paths=((123, item.path / "late-open-file"),), commands=(), errors=()
+        ),
+    )
+    monkeypatch.setattr(
+        worktrees.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("late active process was removed"),
+    )
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert [(skip.phase, skip.reason) for skip in result.skipped] == [
+        ("revalidate", "active-process")
+    ]
+
+
+def _old_retirement_fixture(tmp_path: Path, name: str) -> tuple[Path, Path, str, str]:
+    repo = tmp_path / "repo"
+    if not repo.exists():
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        _git(repo, "config", "user.email", "tests@example.invalid")
+        _git(repo, "config", "user.name", "Worktree Tests")
+        (repo / ".gitignore").write_text("build/\n", encoding="utf-8")
+        (repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        _git(repo, "add", ".gitignore", "tracked.txt")
+        _git(repo, "commit", "-qm", "fixture")
+    branch = f"codex/{name}"
+    linked = repo / ".claude" / "worktrees" / name
+    linked.parent.mkdir(parents=True, exist_ok=True)
+    _git(repo, "worktree", "add", "-qb", branch, os.fspath(linked))
+    output = linked / "build/obj/file.o"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"object")
+    _age_worktree_activity(linked, time.time() - 7 * 24 * 3600)
+    return repo, linked, branch, _git(repo, "rev-parse", branch).stdout.strip().decode()
+
+
+def test_retirement_apply_removes_checkout_and_preserves_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, linked, branch, original_head = _old_retirement_fixture(tmp_path, "one")
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+
+    def recording_run(args, **kwargs):
+        commands.append([os.fspath(value) for value in args])
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(worktrees.subprocess, "run", recording_run)
+    monkeypatch.setattr(shutil, "rmtree", lambda *_args, **_kwargs: pytest.fail("recursive deletion used"))
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=24,
+        process_snapshot=_quiet_snapshot(),
+    )
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert [item.path for item in result.removed] == [linked]
+    assert not linked.exists()
+    assert (
+        real_run(
+            ["git", "-C", os.fspath(repo), "show-ref", "--verify", f"refs/heads/{branch}"],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+    assert (
+        real_run(["git", "-C", os.fspath(repo), "rev-parse", branch], capture_output=True).stdout.strip().decode()
+        == original_head
+    )
+    assert [command for command in commands if "remove" in command] == [
+        [
+            "git",
+            "-C",
+            os.fspath(repo.resolve(strict=False)),
+            "worktree",
+            "remove",
+            "--",
+            os.fspath(linked),
+        ]
+    ]
+    flattened = [token for command in commands for token in command]
+    assert "--force" not in flattened
+    assert "-d" not in flattened
+    assert "-D" not in flattened
+    assert "update-ref" not in flattened
+    assert "prune" not in flattened
+
+
+def test_retirement_path_absence_check_detects_dangling_symlink(
+    tmp_path: Path,
+) -> None:
+    dangling = tmp_path / "recreated-worktree"
+    dangling.symlink_to(tmp_path / "missing-target")
+
+    assert worktrees._path_exists_nofollow(dangling) is True
+
+
+def test_retirement_late_global_failure_reports_partial_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, first, _branch, _head = _old_retirement_fixture(tmp_path, "a-first")
+    _repo, second, _branch, _head = _old_retirement_fixture(tmp_path, "b-second")
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    real_inspect = worktrees.inspect_worktrees
+    calls = 0
+
+    def inspect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        current = real_inspect(*args, process_snapshot=_quiet_snapshot(), **kwargs)
+        if calls == 3:
+            return replace(current, global_errors=("process-query-failed",))
+        return current
+
+    monkeypatch.setattr(worktrees, "inspect_worktrees", inspect)
+    initial = real_inspect(repo, current_worktree=repo, min_idle_hours=24, process_snapshot=_quiet_snapshot())
+
+    result = worktrees.retire_worktrees(initial, apply=True)
+
+    assert [item.path for item in result.removed] == [first]
+    assert result.skipped == ()
+    assert [error.reason for error in result.errors] == ["process-query-failed"]
+    assert not first.exists()
+    assert second.exists()
+
+
+def test_retirement_local_failure_continues_to_next_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, first, _branch, _head = _old_retirement_fixture(tmp_path, "a-first")
+    _repo, second, _branch, _head = _old_retirement_fixture(tmp_path, "b-second")
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    real_inspect = worktrees.inspect_worktrees
+    calls = 0
+
+    def inspect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            (first / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+        return real_inspect(*args, process_snapshot=_quiet_snapshot(), **kwargs)
+
+    monkeypatch.setattr(worktrees, "inspect_worktrees", inspect)
+    initial = real_inspect(repo, current_worktree=repo, min_idle_hours=24, process_snapshot=_quiet_snapshot())
+
+    result = worktrees.retire_worktrees(initial, apply=True)
+
+    assert [(item.path, item.reason) for item in result.skipped] == [(first, "dirty-worktree")]
+    assert [item.path for item in result.removed] == [second]
+    assert result.errors == ()
+    assert first.exists()
+    assert not second.exists()
