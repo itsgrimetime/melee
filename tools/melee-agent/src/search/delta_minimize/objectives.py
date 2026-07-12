@@ -12,7 +12,11 @@ from typing import Any, Callable, Mapping
 import yaml
 
 from ...mwcc_debug import role_descriptor, role_matcher, role_reanchor
-from ...mwcc_debug.colorgraph_profile import ColorGraphProfile, build_colorgraph_profile
+from ...mwcc_debug.colorgraph_profile import (
+    ColorGraphProfile,
+    _allocator_sections_are_coherent,
+    build_colorgraph_profile,
+)
 from ...mwcc_debug.objobject_profile import ObjObjectIdentity, ObjObjectProfile
 from ...mwcc_debug.stack_home_profile import StackHome, StackHomeProfile
 from .contracts import DeltaMinimizeError
@@ -1249,18 +1253,11 @@ def _structural_namespace_witness(
     simplify_section = simplify[-1]
     coalesce_section = coalesce[-1]
     n_virtuals = coalesce_section.n_virtuals
-    if (
-        n_virtuals <= 0
-        or decision_section.result != 1
-        or decision_section.n_nodes < len(decision_section.decisions)
-        or len(decision_section.decisions) != len(simplify_section.entries)
-        or simplify_section.n_class_regs != n_virtuals
-        or coalesce_section.distinct_roots is None
-        or coalesce_section.truncated
-        or not coalesce_section.exit_valid
-        or coalesce_section.exit_class_id not in {None, class_id}
-        or coalesce_section.exit_n_virtuals not in {None, n_virtuals}
-        or coalesce_section.forced_count != len(coalesce_section.forced_overrides)
+    if not _allocator_sections_are_coherent(
+        decision_section,
+        simplify_section,
+        coalesce_section,
+        class_id,
     ):
         return None
 

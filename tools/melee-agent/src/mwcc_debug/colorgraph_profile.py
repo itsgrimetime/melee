@@ -96,6 +96,81 @@ def _resolve_alias_roots(
     return resolved, unresolved
 
 
+def _allocator_sections_are_coherent(
+    decision_section,
+    simplify_section,
+    coalesce_section,
+    class_id: int,
+) -> bool:
+    """Validate the allocator sections needed for exact namespace evidence."""
+    if simplify_section is None or coalesce_section is None:
+        return False
+    n_virtuals = coalesce_section.n_virtuals
+    if (
+        decision_section.class_id != class_id
+        or simplify_section.class_id != class_id
+        or coalesce_section.class_id != class_id
+        or simplify_section.n_class_regs <= 0
+        or n_virtuals <= 0
+        or simplify_section.n_class_regs != n_virtuals
+        or decision_section.result != 1
+        or decision_section.n_nodes < 0
+        or decision_section.n_nodes < len(decision_section.decisions)
+        or not _has_coherent_iterations(decision_section.decisions)
+        or len(simplify_section.entries) != len(decision_section.decisions)
+        or not _has_coherent_iterations(simplify_section.entries)
+        or any(
+            decision.n_interferers < 0
+            or decision.n_interferers != len(decision.interferers)
+            for decision in decision_section.decisions
+        )
+        or coalesce_section.distinct_roots is None
+        or coalesce_section.forced_count
+        != len(coalesce_section.forced_overrides)
+        or coalesce_section.truncated
+        or not coalesce_section.exit_valid
+        or coalesce_section.exit_class_id not in {None, class_id}
+        or coalesce_section.exit_n_virtuals not in {None, n_virtuals}
+    ):
+        return False
+
+    roots_by_alias: dict[int, set[int]] = defaultdict(set)
+    for alias_ig, root_ig in coalesce_section.mappings:
+        if not (
+            0 <= alias_ig < n_virtuals
+            and 0 <= root_ig < n_virtuals
+        ):
+            return False
+        roots_by_alias[alias_ig].add(root_ig)
+    if any(len(roots) != 1 for roots in roots_by_alias.values()):
+        return False
+    final_roots = {
+        alias_ig: next(iter(roots))
+        for alias_ig, roots in roots_by_alias.items()
+    }
+    for alias_ig, old_root_ig, new_root_ig in coalesce_section.forced_overrides:
+        if not all(
+            0 <= ig_idx < n_virtuals
+            for ig_idx in (alias_ig, old_root_ig, new_root_ig)
+        ):
+            return False
+        if final_roots.get(alias_ig, alias_ig) != old_root_ig:
+            return False
+        final_roots[alias_ig] = new_root_ig
+
+    resolved_roots, unresolved_igs = _resolve_alias_roots(
+        final_roots,
+        n_virtuals,
+    )
+    if unresolved_igs or len(resolved_roots) != n_virtuals:
+        return False
+    distinct_roots = coalesce_section.distinct_roots
+    return (
+        0 <= distinct_roots <= n_virtuals
+        and distinct_roots == len(set(resolved_roots.values()))
+    )
+
+
 def build_colorgraph_profile(
     pcdump: str,
     function: str,
@@ -133,35 +208,12 @@ def build_colorgraph_profile(
         role_to_igs[role].add(ig_idx)
     ambiguous_roles = {role for role, igs in role_to_igs.items() if len(igs) != 1}
 
-    incomplete = simplify_section is None or coalesce_section is None
-    if simplify_section is not None and coalesce_section is not None:
-        incomplete = incomplete or (
-            simplify_section.n_class_regs <= 0
-            or coalesce_section.n_virtuals <= 0
-            or simplify_section.n_class_regs != coalesce_section.n_virtuals
-        )
-    incomplete = incomplete or (
-        decision_section.result != 1
-        or decision_section.n_nodes < 0
-        or decision_section.n_nodes < len(decision_section.decisions)
-        or not _has_coherent_iterations(decision_section.decisions)
-        or any(
-            decision.n_interferers < 0 or decision.n_interferers != len(decision.interferers)
-            for decision in decision_section.decisions
-        )
+    incomplete = not _allocator_sections_are_coherent(
+        decision_section,
+        simplify_section,
+        coalesce_section,
+        class_id,
     )
-    if simplify_section is not None:
-        incomplete = incomplete or (
-            len(simplify_section.entries) != len(decision_section.decisions)
-            or not _has_coherent_iterations(simplify_section.entries)
-        )
-    if coalesce_section is not None:
-        incomplete = incomplete or (
-            coalesce_section.distinct_roots is None
-            or coalesce_section.forced_count != len(coalesce_section.forced_overrides)
-            or coalesce_section.truncated
-            or not coalesce_section.exit_valid
-        )
     unmapped_evidence = False
     out_of_range_evidence = False
     ambiguous_evidence_roles: set[int] = set()

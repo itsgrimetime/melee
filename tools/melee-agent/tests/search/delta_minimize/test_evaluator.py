@@ -250,6 +250,7 @@ def test_structural_namespace_witness_excludes_allocator_outcome_lanes(
     decision = changed.fev.colorgraph_sections[-1].decisions[0]
     decision.assigned_reg = (decision.assigned_reg + 1) % 32
     decision.interferers = [(decision.ig_idx, decision.assigned_reg)]
+    decision.n_interferers = len(decision.interferers)
     decision.flags ^= 1
     simplify = changed.fev.simplify_sections[-1].entries[0]
     simplify.flags ^= 8
@@ -328,6 +329,62 @@ def test_structural_namespace_witness_distinguishes_identity_facts(
 
     assert baseline_witness is not None
     assert changed_witness is None or changed_witness != baseline_witness
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    (
+        "decision-duplicate-iteration",
+        "decision-offset-iterations",
+        "simplify-duplicate-iteration",
+        "simplify-offset-iterations",
+        "decision-interferer-count",
+        "decision-node-count",
+        "coalesce-conflicting-alias",
+        "coalesce-cycle",
+        "coalesce-forced-old-root",
+        "coalesce-distinct-root-projection",
+    ),
+)
+def test_structural_namespace_witness_rejects_invalid_allocator_sections(
+    monkeypatch: pytest.MonkeyPatch,
+    malformation: str,
+) -> None:
+    compile = _namespace_compile()
+    descriptors = _namespace_descriptors(compile)
+    decision = compile.fev.colorgraph_sections[-1]
+    simplify = compile.fev.simplify_sections[-1]
+    coalesce = compile.fev.coalesce_sections[-1]
+    if malformation == "decision-duplicate-iteration":
+        decision.decisions[1].iter_idx = decision.decisions[0].iter_idx
+    elif malformation == "decision-offset-iterations":
+        for row in decision.decisions:
+            row.iter_idx += 1
+    elif malformation == "simplify-duplicate-iteration":
+        simplify.entries[1].iter_idx = simplify.entries[0].iter_idx
+    elif malformation == "simplify-offset-iterations":
+        for row in simplify.entries:
+            row.iter_idx += 1
+    elif malformation == "decision-interferer-count":
+        decision.decisions[0].n_interferers += 1
+    elif malformation == "decision-node-count":
+        decision.n_nodes = len(decision.decisions) - 1
+    elif malformation == "coalesce-conflicting-alias":
+        coalesce.mappings.extend(((0, 1), (0, 2)))
+    elif malformation == "coalesce-cycle":
+        coalesce.mappings.extend(((0, 1), (1, 0)))
+    elif malformation == "coalesce-forced-old-root":
+        coalesce.forced_overrides.append((0, 1, 2))
+        coalesce.forced_count = len(coalesce.forced_overrides)
+    else:
+        coalesce.distinct_roots -= 1
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_descriptors",
+        lambda *_args: descriptors,
+    )
+
+    assert objectives_module._structural_namespace_witness(compile, 0) is None
 
 
 def _v2_color_case(
