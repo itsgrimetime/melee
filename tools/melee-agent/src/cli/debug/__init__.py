@@ -6307,8 +6307,8 @@ def _bootstrap_permuter_dir(
     force: bool,
 ) -> dict:
     """Bootstrap a decomp-permuter function dir and return action metadata."""
-    from src.cli.debug import (_acquire_checkdiff_repo_lock, _bootstrap_dependency_context, _detect_new_permuter_import_dir, _find_unit_for_function, _inject_bootstrap_same_tu_inlined_callees, _permuter_import_dirs, _promote_permuter_import_dir, _read_bootstrap_source_file, _read_bootstrap_target_asm, _resolve_bootstrap_melee_root, _sanitize_bootstrap_assert_macros, _source_contains_perm_macros, _staged_permuter_import_source, _tmp_asm_path_for_function)  # noqa: PLC0415
-    from ...mwcc_debug.fix_perm_compile import fix_perm_dir
+    from src.cli.debug import (_acquire_checkdiff_repo_lock, _bootstrap_dependency_context, _detect_new_permuter_import_dir, _find_unit_for_function, _find_wibo, _inject_bootstrap_same_tu_inlined_callees, _permuter_import_dirs, _promote_permuter_import_dir, _read_bootstrap_source_file, _read_bootstrap_target_asm, _resolve_bootstrap_melee_root, _sanitize_bootstrap_assert_macros, _source_contains_perm_macros, _staged_permuter_import_source, _tmp_asm_path_for_function)  # noqa: PLC0415
+    from ...mwcc_debug.fix_perm_compile import fix_perm_dir, validate_wibo_path
     from ...mwcc_debug.permuter_config import (
         build_spec,
         repair_bootstrap_settings_toml,
@@ -6320,6 +6320,12 @@ def _bootstrap_permuter_dir(
         source_file=source_file,
         melee_root=melee_root,
     )
+    wibo_path = _find_wibo()
+    try:
+        wibo_path = validate_wibo_path(wibo_path)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2)
     unit = _find_unit_for_function(function, melee_root)
     if unit is None:
         typer.echo(
@@ -6465,7 +6471,7 @@ def _bootstrap_permuter_dir(
     base_text_before_fix = (
         base_path.read_text(encoding="utf-8") if base_path.exists() else None
     )
-    fix_result = fix_perm_dir(fn_dir)
+    fix_result = fix_perm_dir(fn_dir, wibo_path=wibo_path)
     if base_text_before_fix is not None and base_path.exists():
         base_text_after_fix = base_path.read_text(encoding="utf-8")
         if base_text_after_fix != base_text_before_fix and base_o_path.exists():
@@ -7262,10 +7268,35 @@ def _extract_cflags_from_compile_sh(text: str) -> Optional[str]:
     re-emit them inside the new wrapper. If the compile.sh doesn't
     match any of these shapes, returns None.
     """
+    compiler_token = re.compile(r"mwcceppc(?:_debug)?\.exe(?:\}|$)")
+    for line in text.splitlines():
+        try:
+            tokens = shlex.split(line, posix=True)
+        except ValueError:
+            continue
+        compiler_index = next(
+            (
+                index
+                for index, token in enumerate(tokens)
+                if compiler_token.search(token)
+            ),
+            None,
+        )
+        if compiler_index is None:
+            continue
+        flag_tokens: list[str] = []
+        for token in tokens[compiler_index + 1 :]:
+            if token == "-c" or token in {"$INPUT", "${INPUT}"}:
+                break
+            flag_tokens.append(token)
+        if flag_tokens:
+            return shlex.join(flag_tokens)
+
+    # Retain the legacy regex as a fallback for unusual generated shell that
+    # shlex cannot tokenize, while preferring token parsing for quoted compiler
+    # paths and ``${MWCC_DEBUG_COMPILER:-...}`` parameter expansions.
     m = _CFLAGS_LINE_RE.search(text)
-    if not m:
-        return None
-    return m.group(1).strip()
+    return m.group(1).strip() if m else None
 
 
 def _find_wibo() -> Optional[Path]:
@@ -7273,23 +7304,16 @@ def _find_wibo() -> Optional[Path]:
 
     1. $MWCC_DEBUG_WIBO env var
     2. <melee_root>/tools/mwcc_debug/bin/wibo (vendored — built by build_wibo.sh)
-    3. <melee_root>/../melee-harness/bin/wibo (adjacent harness checkout)
-    4. ~/code/melee-harness/bin/wibo
+    3. <installed_checkout>/tools/mwcc_debug/bin/wibo (editable install)
+    4. Adjacent melee-harness checkout for either root
+    5. ~/code/melee-harness/bin/wibo
     """
-    import os as _os
-    env = _os.environ.get("MWCC_DEBUG_WIBO")
-    if env:
-        p = Path(env).expanduser()
-        return p if p.exists() else None
-    candidates = [
-        DEFAULT_MELEE_ROOT / "tools" / "mwcc_debug" / "bin" / "wibo",
-        DEFAULT_MELEE_ROOT.parent / "melee-harness" / "bin" / "wibo",
-        Path("~/code/melee-harness/bin/wibo").expanduser(),
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    return None
+    from ...mwcc_debug.fix_perm_compile import resolve_wibo_path
+
+    return resolve_wibo_path(
+        melee_root=DEFAULT_MELEE_ROOT,
+        module_file=Path(__file__),
+    )
 
 
 def _find_compiler_dir() -> Path:

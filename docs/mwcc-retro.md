@@ -90,7 +90,9 @@ compiler addresses and structure fields into the backend map:
 - `backend-map-evidence.json`: normalized promotable-vs-blocked facts derived
   from the live probe. Promotable entries use `confidence: live-invariant`;
   blocked entries include a reason.
-- `launch.log`: the emulator/gdb transcript.
+- `launch.log`: created at launch with the requested source, function, output
+  directory, timeout, and command; after launch it also records any fixed-port
+  wait diagnostics and the emulator/gdb transcript.
 
 The live probe runs the raw `.o` byte-parity gate before trusting any backend
 state. Use `--static-only` when you only need the candidate report. Some map
@@ -218,7 +220,7 @@ All output goes to `build/mwcc_retro/<unit>/<fn>/`:
 | `backend-ig-snapshot-events.v1.jsonl` | Partial `regclass`/`node`/`edge`/coalesce/order/color events | `probe-backend-ig` |
 | `backend-pcode-snapshot.json` | Partial retail PCode snapshot status | `probe-backend-pcode` |
 | `backend-pcode-snapshot-events.v1.jsonl` | Partial `block`/`pcode_instruction` events | `probe-backend-pcode` |
-| `launch.log` | Emulator stdout/stderr for this run | `dump`, failed probes |
+| `launch.log` | Launch state, fixed-port wait diagnostics, and emulator/gdb stdout/stderr | `dump`, failed probes |
 | `provenance.json` | Compiler identity, vendor SHAs, fidelity-gate result | `dump` |
 
 ## Name-spoof note

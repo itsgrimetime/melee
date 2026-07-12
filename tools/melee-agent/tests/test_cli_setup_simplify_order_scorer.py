@@ -15,8 +15,9 @@ on any machine. Covers:
 
 from __future__ import annotations
 
-import os
 import json
+import os
+import shlex
 import shutil
 import stat
 import textwrap
@@ -28,7 +29,6 @@ from typer.testing import CliRunner
 
 import src.cli.debug as cli_debug
 from src.cli import app
-
 
 runner = CliRunner()
 
@@ -141,6 +141,34 @@ def _stub_wibo_and_compiler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     return wibo, debug_compiler
 
 
+@pytest.mark.parametrize("remote_portable", [False, True])
+def test_generated_compile_wrapper_cflags_can_be_reextracted(
+    tmp_path: Path, remote_portable: bool
+) -> None:
+    """A generated wrapper must be valid input to a later ``--force`` run."""
+    wibo = tmp_path / "runtime dir" / "wibo"
+    wibo.parent.mkdir(parents=True)
+    wibo.write_text("#!/bin/sh\nexit 0\n")
+    wibo.chmod(0o755)
+    compiler = tmp_path / "compiler dir" / "mwcceppc_debug.exe"
+    compiler.parent.mkdir(parents=True)
+    compiler.write_bytes(b"MZ")
+    expected = ["-O4,p", "-pragma", "cats off", "-inline", "auto"]
+    cflags = shlex.join(expected)
+
+    wrapper = cli_debug._build_simplify_order_compile_sh(
+        wibo_path=wibo,
+        debug_compiler=compiler,
+        project_root=tmp_path / "project root",
+        cflags=cflags,
+        remote_portable=remote_portable,
+    )
+
+    extracted = cli_debug._extract_cflags_from_compile_sh(wrapper)
+    assert extracted is not None
+    assert shlex.split(extracted) == expected
+
+
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
@@ -195,6 +223,11 @@ def test_setup_writes_spec_settings_and_compile(
     assert "mwcceppc_debug.exe" in csh
     assert "-Cpp_exceptions off" in csh  # cflags preserved
     assert "/fake/project/root" in csh  # project root preserved
+    explicit = '[[ -n "${MWCC_DEBUG_WIBO:-}" && -f "$MWCC_DEBUG_WIBO" && -x "$MWCC_DEBUG_WIBO" ]]'
+    worktree = '[[ -f "tools/mwcc_debug/bin/wibo" && -x "tools/mwcc_debug/bin/wibo" ]]'
+    baked = f'[[ -f "{wibo}" && -x "{wibo}" ]]'
+    assert csh.index(explicit) < csh.index(worktree) < csh.index(baked)
+    assert "build/tools/wibo" not in csh
     # And executable
     mode = (perm_dir / "compile.sh").stat().st_mode
     assert mode & stat.S_IXUSR
@@ -302,7 +335,7 @@ def test_setup_source_file_force_phys_writes_remote_ready_full_tu_artifacts(
         ),
     )
     baseline = _make_baseline_dump(tmp_path, function)
-    _stub_wibo_and_compiler(tmp_path, monkeypatch)
+    wibo, _debug_compiler = _stub_wibo_and_compiler(tmp_path, monkeypatch)
     monkeypatch.setattr(cli_debug, "DEFAULT_MELEE_ROOT", melee_root)
 
     result = runner.invoke(
@@ -338,8 +371,12 @@ def test_setup_source_file_force_phys_writes_remote_ready_full_tu_artifacts(
     assert 'STAGE="src/melee/mn/.permuter_stage_$$.c"' in compile_sh
     assert "-DREAL_TU_FLAG=1" in compile_sh
     assert "-i src/melee/mn" in compile_sh
-    assert "/Users/" not in compile_sh
-    assert str(tmp_path) not in compile_sh
+    explicit = '[[ -n "${MWCC_DEBUG_WIBO:-}" && -f "$MWCC_DEBUG_WIBO" && -x "$MWCC_DEBUG_WIBO" ]]'
+    remote = '[[ -n "${MELEE_ROOT:-}" && -f "$MELEE_ROOT/tools/mwcc_debug/bin/wibo"'
+    baked = f'[[ -f "{wibo}" && -x "{wibo}" ]]'
+    assert compile_sh.index(explicit) < compile_sh.index(remote) < compile_sh.index(baked)
+    assert str(source) not in compile_sh
+    assert "cd /Users/mike/code/melee" not in compile_sh
 
 
 def test_full_unit_compile_wrapper_splices_candidate_into_retained_unit(
@@ -889,6 +926,37 @@ def test_setup_force_phys_invalid_format_errors(
     assert result.exit_code != 0
     err = result.stderr or result.stdout
     assert "force-phys" in err.lower()
+
+
+def test_setup_rejects_non_executable_resolved_wibo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    function = "fn_test"
+    perm_root = _make_perm_dir(tmp_path, function=function)
+    baseline = _make_baseline_dump(tmp_path, function)
+    wibo = tmp_path / "bin" / "wibo"
+    wibo.parent.mkdir()
+    wibo.write_text("#!/bin/sh\nexit 0\n")
+    compiler_dir = tmp_path / "fake_compilers"
+    compiler_dir.mkdir()
+    (compiler_dir / "mwcceppc_debug.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(cli_debug, "_find_wibo", lambda: wibo)
+    monkeypatch.setattr(cli_debug, "_find_compiler_dir", lambda: compiler_dir)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "permute", "setup-simplify-order-scorer",
+            "--function", function,
+            "--want-first", "42",
+            "--baseline-dump", str(baseline),
+            "--perm-root", str(perm_root),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "wibo is not an executable file" in result.output
+    assert not (perm_root / "nonmatchings" / function / "simplify_order_target.yaml").exists()
 
 
 def test_score_force_phys_scores_assignment_hits_when_simplify_order_is_unusable(

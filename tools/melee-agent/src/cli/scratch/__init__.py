@@ -823,7 +823,8 @@ def scratch_recover_best(
         f"#{payload['attempt_index']} ({payload['match_percent']:.1f}%)"
     )
     if output_file is not None:
-        output_file.write_text(source_code)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(source_code, encoding="utf-8")
         console.print(f"[green]Wrote source to:[/green] {output_file}")
     else:
         console.print(source_code, markup=False)

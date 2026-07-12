@@ -330,30 +330,6 @@ def test_suggest_inlines_score_output_dir_uses_targetless_retained_source(
             ],
         )
 
-    def fake_score_source(candidates, config):
-        captured["candidates"] = candidates
-        captured["config"] = config
-        return [
-            {
-                "candidate_id": candidates[0].candidate_id,
-                "family": "inline-local-write-helper",
-                "strategy": "block-macro",
-                "source_model_layer_dimension_id": "inline-local-write-helper",
-                "source_retained": str(config.output_dir / "local-write-0001.c"),
-                "pcdump_path": str(config.output_dir / "local-write-0001.pcdump.txt"),
-                "source_hunks": [{"hunk_id": "h001"}],
-                "match_percent": 95.75,
-                "checkdiff_match_percent": 95.75,
-                "structural_guard": {
-                    "accepted": False,
-                    "classification_primary": "instruction-sequence",
-                    "normalized_diff_lines": 16,
-                },
-                "score_returncode": 0,
-                "terminal_safe": True,
-            }
-        ]
-
     def fake_subprocess_run(cmd, **kwargs):
         if cmd[:2] == ["python", "tools/checkdiff.py"]:
             return subprocess.CompletedProcess(
@@ -362,10 +338,46 @@ def test_suggest_inlines_score_output_dir_uses_targetless_retained_source(
                 stdout=json.dumps({"fuzzy_match_percent": 95.78}),
                 stderr="",
             )
+        if "score-source" in cmd:
+            retained_source = pathlib.Path(cmd[cmd.index("score-source") + 1])
+            retained_source.resolve().relative_to(melee_root.resolve())
+            assert not retained_source.resolve().is_relative_to(output_dir.resolve())
+            assert "Candidate" in retained_source.read_text(encoding="utf-8")
+            artifact_source = (
+                melee_root
+                / "build"
+                / "diagnostics"
+                / "score_source"
+                / "run-0001"
+                / "evidence"
+                / "source"
+                / "candidate.c"
+            )
+            artifact_source.parent.mkdir(parents=True)
+            artifact_source.write_bytes(retained_source.read_bytes())
+            captured["score_source_candidate"] = retained_source.resolve()
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps({
+                    "score": 16,
+                    "match_percent": 95.75,
+                    "checkdiff_match_percent": 95.75,
+                    "pcdump_path": str(
+                        artifact_source.parent.parent / "candidate.pcdump.txt"
+                    ),
+                    "artifact_source": str(artifact_source),
+                    "structural_guard": {
+                        "accepted": False,
+                        "classification_primary": "instruction-sequence",
+                        "normalized_diff_lines": 16,
+                    },
+                }),
+                stderr="",
+            )
         raise AssertionError(f"unexpected subprocess command: {cmd}")
 
     import src.cli.debug.suggest as suggest_cli
-    import src.mwcc_debug.source_candidate_scoring as scoring_mod
     import src.mwcc_debug.suggest_inlines as suggest_mod
 
     monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
@@ -375,7 +387,6 @@ def test_suggest_inlines_score_output_dir_uses_targetless_retained_source(
         lambda function, root: "melee/mn/sample",
     )
     monkeypatch.setattr(suggest_mod, "run", fake_run)
-    monkeypatch.setattr(scoring_mod, "score_source_candidates", fake_score_source)
     monkeypatch.setattr(suggest_cli.subprocess, "run", fake_subprocess_run)
 
     result = CliRunner().invoke(
@@ -395,16 +406,17 @@ def test_suggest_inlines_score_output_dir_uses_targetless_retained_source(
     )
 
     assert result.exit_code == 0, result.output
-    config = captured["config"]
-    assert config.target is None
-    assert config.output_dir == output_dir
-    assert config.full_unit_source is True
     payload = json.loads(result.output)
     assert payload["status"] == "terminal"
     assert payload["score_mode"] == "score-source"
     assert payload["score_output_dir"] == str(output_dir)
     row = payload["score_rows"][0]
-    assert row["source_retained"].endswith("local-write-0001.c")
+    durable_source = output_dir / "local-write-0001.c"
+    assert row["source_file"] == str(durable_source)
+    assert row["source_retained"] == str(durable_source)
+    assert row["c_file"] == str(durable_source)
+    assert not captured["score_source_candidate"].exists()
+    assert durable_source.is_file()
     assert row["pcdump_path"].endswith(".pcdump.txt")
     assert row["source_hunks"] == [{"hunk_id": "h001"}]
     assert row["checkdiff_baseline_pct"] == 95.78

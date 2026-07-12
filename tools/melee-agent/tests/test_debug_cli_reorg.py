@@ -17740,6 +17740,91 @@ def test_virtual_to_var_compiler_temp_exits_success(monkeypatch, tmp_path: Path)
     assert "first defining op" in err
 
 
+def test_explain_virtual_cli_attaches_mwcc_inspect_objobject(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    source = melee_root / "src" / "melee" / "mn" / "sample.c"
+    source.parent.mkdir(parents=True)
+    source.write_text(textwrap.dedent("""\
+        void fn_owner(int arg0)
+        {
+            int owned;
+            owned = arg0 + 1;
+            sink(owned);
+        }
+    """))
+    pcdump = tmp_path / "sample.pcdump.txt"
+    pcdump.write_text(textwrap.dedent("""\
+        Starting function fn_owner
+        BEFORE REGISTER COLORING
+        fn_owner
+        B0: Succ={} Pred={} Labels={}
+            mr r32,r3
+            li r33,0
+        COLORGRAPH DECISIONS (class=0, result=1, n_nodes=2)
+          iter ig_idx phys degree nIntfr flags
+            0 32 r3 0 0 0x00
+            1 33 r4 0 0 0x00
+    """))
+    inspect_dump = tmp_path / "sample.inspect.txt"
+    inspect_dump.write_text(textwrap.dedent("""\
+        ================================================================================
+        FUNCTION: fn_owner
+
+        STATEMENTS (IR):
+        --------------------------------------------------------------------------------
+        :0         owned = arg0 + 1
+          [EOBJREF] owned
+            -> ObjObject @ 0x007AF200: owned (DataType: DLOCAL, Type: int)
+
+        LOCAL VARIABLES (sorted by ObjObject address):
+        --------------------------------------------------------------------------------
+          [0] 0x007AF1C8  arg0
+          [1] 0x007AF200  owned
+        ================================================================================
+    """))
+
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, melee_root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_resolve_pcdump_path",
+        lambda path, function, melee_root=None, require_fresh=False: pcdump,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "inspect",
+            "explain-virtual",
+            "-f",
+            "fn_owner",
+            "--virtuals",
+            "r33",
+            "--pcdump",
+            str(pcdump),
+            "--mwcc-inspect",
+            str(inspect_dump),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    source_info = payload["virtuals"][0]["source"]
+    assert source_info["owner_status"] == "source-owned"
+    assert source_info["owner_scope_path"] == ["fn_owner"]
+    assert source_info["objobject_id"] == "0x007AF200"
+    assert source_info["objobject_name"] == "owned"
+
+
 def test_virtual_to_var_surfaces_call_return_copy_chain(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

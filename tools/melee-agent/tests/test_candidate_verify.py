@@ -5,6 +5,8 @@ from pathlib import Path
 import json
 import subprocess
 
+import pytest
+
 from src.mwcc_debug.candidate_verify import (
     CheckdiffResult,
     parse_checkdiff_json,
@@ -16,6 +18,8 @@ from src.mwcc_debug import source_shape
 from src.mwcc_debug.source_candidate_scoring import (
     ScoreSourceConfig,
     SourceCandidate,
+    _stage_score_source_candidate,
+    score_retained_source_rows,
     score_source_candidates,
 )
 from src.mwcc_debug.source_shape import CandidatePatch
@@ -307,6 +311,301 @@ def test_score_source_patch_candidates_write_retained_sources_and_merge_payload(
     assert row["source_hunks"] == [{"hunk_id": "h001"}]
 
 
+def test_score_source_candidates_stage_external_retained_source(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "melee"
+    output_dir = tmp_path / "external"
+    candidate_text = "void fn_test(void) { ExternalCandidate(); }\n"
+    captured: dict[str, Path] = {}
+
+    def fake_run(cmd, *, cwd, env, **kwargs):
+        staged_source = Path(cmd[cmd.index("score-source") + 1]).resolve()
+        durable_source = (output_dir / "external-candidate.c").resolve()
+        artifact_source = (
+            repo_root
+            / "build"
+            / "diagnostics"
+            / "score_source"
+            / "run-0001"
+            / "evidence"
+            / "source"
+            / "candidate.c"
+        ).resolve()
+        staged_source.relative_to(repo_root.resolve())
+        assert staged_source != durable_source
+        assert staged_source.read_text(encoding="utf-8") == candidate_text
+        artifact_source.parent.mkdir(parents=True)
+        artifact_source.write_text(candidate_text, encoding="utf-8")
+        captured["staged_source"] = staged_source
+        captured["artifact_source"] = artifact_source
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps({
+                "score": 0,
+                "artifact_source": str(artifact_source),
+                "source_file": str(staged_source),
+                "source_retained": str(staged_source),
+                "c_file": str(staged_source),
+                "structural_guard": {"accepted": True},
+            }),
+            stderr="",
+        )
+
+    config = ScoreSourceConfig(
+        repo_root=repo_root,
+        function="fn_test",
+        target=None,
+        cflags_from=Path("src/melee/test.c"),
+        expression_source=Path("src/melee/test.c"),
+        expression_baseline=None,
+        expression_reg_class="gpr",
+        output_dir=output_dir,
+        timeout=5.0,
+    )
+
+    rows = score_source_candidates(
+        [
+            SourceCandidate(
+                candidate_id="external-candidate",
+                source_text=candidate_text,
+            )
+        ],
+        config,
+        runner=fake_run,
+    )
+
+    durable_source = (output_dir / "external-candidate.c").resolve()
+    staged_source = captured["staged_source"]
+    artifact_source = captured["artifact_source"]
+    assert not staged_source.exists()
+    assert durable_source.read_text(encoding="utf-8") == candidate_text
+    assert rows[0]["source_file"] == str(durable_source)
+    assert rows[0]["source_retained"] == str(durable_source)
+    assert rows[0]["c_file"] == str(durable_source)
+    assert str(staged_source) in rows[0]["score_command_executed"]
+    assert str(artifact_source) in rows[0]["score_command"]
+    assert str(staged_source) not in rows[0]["score_command"]
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_error", "expected_returncode"),
+    [
+        ("timeout", "score-source-timeout", 124),
+        ("interruption", "score-source-interrupted", 130),
+    ],
+)
+def test_score_source_external_exception_keeps_durable_replay_command(
+    tmp_path: Path,
+    failure_kind: str,
+    expected_error: str,
+    expected_returncode: int,
+) -> None:
+    repo_root = tmp_path / "melee"
+    output_dir = tmp_path / "external"
+    captured: dict[str, Path] = {}
+
+    def fake_run(cmd, *, cwd, env, **kwargs):
+        staged_source = Path(cmd[cmd.index("score-source") + 1]).resolve()
+        staged_source.relative_to(repo_root.resolve())
+        assert staged_source.read_text(encoding="utf-8").endswith(
+            "ExternalCandidate(); }\n"
+        )
+        captured["staged_source"] = staged_source
+        if failure_kind == "timeout":
+            raise subprocess.TimeoutExpired(
+                cmd,
+                timeout=15.0,
+                output="partial output",
+                stderr="timed out",
+            )
+        raise KeyboardInterrupt
+
+    config = ScoreSourceConfig(
+        repo_root=repo_root,
+        function="fn_test",
+        target=None,
+        cflags_from=Path("src/melee/test.c"),
+        expression_source=Path("src/melee/test.c"),
+        expression_baseline=None,
+        expression_reg_class="gpr",
+        output_dir=output_dir,
+        timeout=5.0,
+    )
+
+    rows = score_source_candidates(
+        [
+            SourceCandidate(
+                candidate_id=f"external-{failure_kind}",
+                source_text="void fn_test(void) { ExternalCandidate(); }\n",
+            )
+        ],
+        config,
+        runner=fake_run,
+    )
+
+    durable_source = (output_dir / f"external-{failure_kind}.c").resolve()
+    staged_source = captured["staged_source"]
+    staging_root = (
+        repo_root / "build" / "diagnostics" / "score_source_staging"
+    )
+    assert not staged_source.exists()
+    assert list(staging_root.iterdir()) == []
+    assert durable_source.is_file()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["error"] == expected_error
+    assert row["score_returncode"] == expected_returncode
+    assert row["score_error_kind"] == "infrastructure"
+    assert row["source_file"] == str(durable_source)
+    assert row["source_retained"] == str(durable_source)
+    assert row["c_file"] == str(durable_source)
+    assert str(staged_source) in row["score_command_executed"]
+    assert str(staged_source) not in row["score_command"]
+    assert str(durable_source) in row["score_command"]
+
+
+def test_score_source_context_entry_interruption_uses_durable_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "melee"
+    output_dir = tmp_path / "external"
+    captured: dict[str, Path] = {}
+
+    def interrupt_copy(source, destination):
+        captured["staged_source"] = Path(destination)
+        raise KeyboardInterrupt
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("score-source runner must not be called")
+
+    import src.mwcc_debug.source_candidate_scoring as scoring_mod
+
+    monkeypatch.setattr(scoring_mod.shutil, "copyfile", interrupt_copy)
+    config = ScoreSourceConfig(
+        repo_root=repo_root,
+        function="fn_test",
+        target=None,
+        cflags_from=Path("src/melee/test.c"),
+        expression_source=Path("src/melee/test.c"),
+        expression_baseline=None,
+        expression_reg_class="gpr",
+        output_dir=output_dir,
+        timeout=5.0,
+    )
+
+    rows = score_source_candidates(
+        [
+            SourceCandidate(
+                candidate_id="external-entry-interruption",
+                source_text="void fn_test(void) { ExternalCandidate(); }\n",
+            )
+        ],
+        config,
+        runner=fake_run,
+    )
+
+    durable_source = (
+        output_dir / "external-entry-interruption.c"
+    ).resolve()
+    staged_source = captured["staged_source"]
+    staging_root = (
+        repo_root / "build" / "diagnostics" / "score_source_staging"
+    )
+    assert not staged_source.exists()
+    assert list(staging_root.iterdir()) == []
+    assert durable_source.is_file()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["error"] == "score-source-interrupted"
+    assert row["score_returncode"] == 130
+    assert row["score_error_kind"] == "infrastructure"
+    assert row["source_file"] == str(durable_source)
+    assert row["source_retained"] == str(durable_source)
+    assert row["c_file"] == str(durable_source)
+    assert row["score_command_executed"] == row["score_command"]
+    assert str(durable_source) in row["score_command"]
+
+
+def test_score_source_staging_rejects_symlink_escape(tmp_path: Path) -> None:
+    repo_root = tmp_path / "melee"
+    candidate_path = tmp_path / "external" / "candidate.c"
+    candidate_path.parent.mkdir()
+    candidate_path.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    staging_root = (
+        repo_root / "build" / "diagnostics" / "score_source_staging"
+    )
+    staging_root.parent.mkdir(parents=True)
+    escaped_root = tmp_path / "escaped-staging"
+    escaped_root.mkdir()
+    staging_root.symlink_to(escaped_root, target_is_directory=True)
+
+    with pytest.raises(
+        ValueError,
+        match="score-source staging root resolves outside repository",
+    ):
+        with _stage_score_source_candidate(candidate_path, repo_root):
+            raise AssertionError("escaped staging path must not be yielded")
+
+    assert list(escaped_root.iterdir()) == []
+
+
+def test_score_retained_source_rows_missing_external_candidate_returns_failure_row(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "melee"
+    missing_source = tmp_path / "external" / "missing-candidate.c"
+    staging_root = (
+        repo_root / "build" / "diagnostics" / "score_source_staging"
+    )
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("score-source runner must not be called")
+
+    config = ScoreSourceConfig(
+        repo_root=repo_root,
+        function="fn_test",
+        target=None,
+        cflags_from=Path("src/melee/test.c"),
+        expression_source=Path("src/melee/test.c"),
+        expression_baseline=None,
+        expression_reg_class="gpr",
+        output_dir=tmp_path / "external",
+        timeout=5.0,
+    )
+
+    rows = score_retained_source_rows(
+        [
+            {
+                "candidate_id": "missing-external-candidate",
+                "source_file": str(missing_source),
+                "full_unit_source": True,
+            }
+        ],
+        config,
+        runner=fake_run,
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["error"] == "candidate-path-missing"
+    assert row["score_error_kind"] == "infrastructure"
+    assert row["source_file"] == str(missing_source)
+    assert row["source_retained"] == str(missing_source)
+    assert row["c_file"] == str(missing_source)
+    assert row["status"] == "failed"
+    assert row["terminal_safe"] is False
+    assert row["blockers"] == [
+        {
+            "reason": "score-source-error:candidate-path-missing",
+            "candidate_id": "missing-external-candidate",
+        }
+    ]
+    assert not staging_root.exists()
+
+
 def test_score_source_patch_candidate_error_row_is_preserved(
     tmp_path: Path,
 ) -> None:
@@ -451,6 +750,8 @@ def test_score_source_candidates_can_retain_and_score_without_target(
     )
 
     row = rows[0]
+    retained_source = Path(captured["cmd"][captured["cmd"].index("score-source") + 1])
+    assert retained_source == Path(row["source_retained"])
     assert Path(row["source_retained"]).is_file()
     assert row["pcdump_path"].endswith(".pcdump.txt")
     assert row["checkdiff_match_percent"] == 95.75

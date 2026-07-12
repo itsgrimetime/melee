@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 from .colorgraph_parser import find_function, parse_hook_events
 from .copy_trace import find_virtual_to_ig
@@ -131,6 +131,20 @@ _CAST_ONLY_EXPR_RE = re.compile(
     r"(?:\s*\*)*"
     r"\s*\)\s*$"
 )
+_MWCC_INSPECT_FUNCTION_RE = re.compile(
+    r"(?ms)^FUNCTION:\s+(?P<name>[A-Za-z_][A-Za-z_0-9]*)\b"
+    r"(?P<body>.*?)(?=^=+\s*$\n^FUNCTION:|\Z)"
+)
+_MWCC_INSPECT_OBJREF_RE = re.compile(
+    r"ObjObject\s+@\s+(?P<id>0x[0-9A-Fa-f]+):\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z_0-9]*)"
+    r"(?:\s+\(DataType:\s*(?P<data_type>[^,)]*)"
+    r"(?:,\s*Type:\s*(?P<type>[^)]*))?\))?"
+)
+_MWCC_INSPECT_LOCAL_ROW_RE = re.compile(
+    r"(?m)^\s*\[\d+\]\s+(?P<id>0x[0-9A-Fa-f]+)\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z_0-9]*)\b"
+)
 
 
 @dataclass(frozen=True)
@@ -161,6 +175,19 @@ class SourceAttribution:
     call_symbol: str | None = None
     copy_chain: tuple[int, ...] = ()
     use_sites: tuple[InstructionSite, ...] = ()
+    owner_status: str | None = None
+    owner_scope_path: tuple[str, ...] = ()
+    objobject_id: str | None = None
+    objobject_name: str | None = None
+    stack_home_offset: int | None = None
+
+
+@dataclass(frozen=True)
+class InspectObjObject:
+    objobject_id: str
+    name: str
+    type: str | None = None
+    data_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +243,69 @@ def _instruction_site_from_occurrence(occurrence) -> InstructionSite | None:
         instr_idx=occurrence.instr_idx,
         opcode=occurrence.opcode,
         operands=occurrence.operands,
+    )
+
+
+def _mwcc_inspect_function_body(
+    inspect_text: str | None,
+    function: str,
+) -> str:
+    if not inspect_text:
+        return ""
+    for match in _MWCC_INSPECT_FUNCTION_RE.finditer(inspect_text):
+        if match.group("name") == function:
+            return match.group("body")
+    return inspect_text
+
+
+def _parse_mwcc_inspect_objobjects(
+    inspect_text: str | None,
+    function: str,
+) -> dict[str, InspectObjObject]:
+    body = _mwcc_inspect_function_body(inspect_text, function)
+    if not body:
+        return {}
+    by_name: dict[str, InspectObjObject] = {}
+    for match in _MWCC_INSPECT_LOCAL_ROW_RE.finditer(body):
+        name = match.group("name")
+        by_name.setdefault(
+            name,
+            InspectObjObject(objobject_id=match.group("id"), name=name),
+        )
+    for match in _MWCC_INSPECT_OBJREF_RE.finditer(body):
+        name = match.group("name")
+        by_name[name] = InspectObjObject(
+            objobject_id=match.group("id"),
+            name=name,
+            type=(
+                match.group("type").strip()
+                if match.group("type") is not None else None
+            ),
+            data_type=(
+                match.group("data_type").strip()
+                if match.group("data_type") is not None else None
+            ),
+        )
+    return by_name
+
+
+def _with_owner_objobject(
+    source: SourceAttribution | None,
+    objobjects_by_name: dict[str, InspectObjObject],
+) -> SourceAttribution | None:
+    if source is None or source.objobject_id is not None:
+        return source
+    owner_name = source.name or source.base_var
+    if not owner_name:
+        return source
+    obj = objobjects_by_name.get(owner_name)
+    if obj is None:
+        return source
+    return replace(
+        source,
+        objobject_id=obj.objobject_id,
+        objobject_name=obj.name,
+        type=source.type or obj.type,
     )
 
 
@@ -330,6 +420,8 @@ def _source_from_binding(
         source_file=source_file,
         source_line=getattr(binding, "decl_line", None),
         expression=getattr(binding, "var_name", None),
+        owner_status="source-owned",
+        owner_scope_path=tuple(getattr(binding, "scope_path", ()) or ()),
     )
 
 
@@ -410,6 +502,10 @@ def _source_from_load(
             field_offset=offset,
             field_name=field_name,
             first_def=site,
+            owner_status="source-owned",
+            owner_scope_path=tuple(
+                getattr(base_binding, "scope_path", ()) or ()
+            ),
         )
     invalid_low_confidence_scalar_base = _is_low_confidence_scalar_field_base(
         binding=base_binding,
@@ -454,6 +550,8 @@ def _source_from_load(
                 field_offset=offset,
                 field_name=resolved.field_name,
                 first_def=site,
+                owner_status="source-owned",
+                owner_scope_path=base_source.owner_scope_path,
             )
     resolved = infer_global_field_source(field_context, offset=offset)
     if resolved is not None:
@@ -471,6 +569,7 @@ def _source_from_load(
             field_offset=offset,
             field_name=resolved.field_name,
             first_def=site,
+            owner_status="source-owned",
         )
     return None if invalid_low_confidence_scalar_base else direct
 
@@ -501,6 +600,7 @@ def _source_from_symbolic_global_load(
         expression=resolved.expression,
         base_var=symbol,
         first_def=site,
+        owner_status="source-owned",
     )
 
 
@@ -538,6 +638,11 @@ def _copy_source_from_virtual(
         call_symbol=source.call_symbol,
         copy_chain=(int(match.group("dest")), src_virtual, *source.copy_chain),
         use_sites=source.use_sites,
+        owner_status=source.owner_status,
+        owner_scope_path=source.owner_scope_path,
+        objobject_id=source.objobject_id,
+        objobject_name=source.objobject_name,
+        stack_home_offset=source.stack_home_offset,
     )
 
 
@@ -580,6 +685,25 @@ def _source_from_first_def(site: InstructionSite, *, source_file: str | None) ->
         base_virtual=base_virtual,
         field_offset=field_offset,
         first_def=site,
+        owner_status="compiler-generated/no-owner",
+        stack_home_offset=field_offset if base_virtual == 1 else None,
+    )
+
+
+def _source_without_owner(
+    *,
+    site: InstructionSite | None,
+    source_file: str | None,
+    reason: str | None = None,
+) -> SourceAttribution:
+    if site is not None:
+        return _source_from_first_def(site, source_file=source_file)
+    return SourceAttribution(
+        kind="unattributed",
+        confidence="no-pcode-owner",
+        source_file=source_file,
+        expression=reason,
+        owner_status="compiler-generated/no-owner",
     )
 
 
@@ -757,6 +881,7 @@ def _source_from_fpr_expression_assignment(
         source_col=col,
         expression=expression,
         first_def=site,
+        owner_status="source-owned",
     )
 
 
@@ -780,6 +905,7 @@ def _source_from_call_return_origin(origin, *, source_file: str | None) -> Sourc
             )
             if site is not None
         ),
+        owner_status="source-owned",
     )
 
 
@@ -1057,6 +1183,7 @@ def explain_virtuals(
     source_file: str | None = None,
     reg_class: str | None = "gpr",
     enable_field_context: bool = True,
+    inspect_text: str | None = None,
 ) -> VirtualAttributionReport:
     """Explain source provenance, pcdump live blocks, and pair interference."""
     requested: list[int] = []
@@ -1089,6 +1216,7 @@ def explain_virtuals(
     )
     source_cache: dict[tuple[str, int], SourceAttribution | None] = {}
     events = find_function(parse_hook_events(pcdump_text), function)
+    objobjects_by_name = _parse_mwcc_inspect_objobjects(inspect_text, function)
 
     provisional: list[VirtualAttribution] = []
     decisions_by_virtual: dict[int, object] = {}
@@ -1139,6 +1267,17 @@ def explain_virtuals(
             field_context=field_context,
             source_cache=source_cache,
         )
+        source = _with_owner_objobject(source, objobjects_by_name)
+        if source is None and mapping.status in {
+            "colorgraph",
+            "simplify-only",
+            "pcode-only",
+        }:
+            source = _source_without_owner(
+                site=first_occurrence,
+                source_file=source_file,
+                reason=mapping.note,
+            )
         decision = _decision_for(events, mapping.class_id, mapping.ig_idx)
         if decision is not None:
             decisions_by_virtual[virtual] = decision
@@ -1226,6 +1365,20 @@ def render_virtual_attribution_text(report: VirtualAttributionReport) -> str:
                 f"  source:{loc} {expr} "
                 f"({source.kind}, {source.confidence})"
             )
+            if source.owner_status:
+                scope = ""
+                if source.owner_scope_path:
+                    try:
+                        from .scope_path import format_for_display
+                        scope = f" scope={format_for_display(source.owner_scope_path)}"
+                    except Exception:
+                        scope = " scope=" + "/".join(source.owner_scope_path)
+                lines.append(f"  owner: {source.owner_status}{scope}")
+            if source.objobject_id:
+                name = source.objobject_name or source.name or source.base_var or "?"
+                lines.append(f"  obj:    {name} @ {source.objobject_id}")
+            if source.stack_home_offset is not None:
+                lines.append(f"  stack:  r1+0x{source.stack_home_offset:X}")
             if source.base_virtual is not None:
                 base = source.base_var or "?"
                 lines.append(

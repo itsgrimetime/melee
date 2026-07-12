@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1991,7 +1992,37 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         RETRO_FUNCTION=fn,
         RETRO_FUNCTION_ALIASES=_backend_function_aliases_json(fn, melee_root=melee_root),
     )
-    log = (out_dir / "launch.log")
+    log = out_dir / "launch.log"
+    command_text = shlex.join([str(part) for part in cmd])
+
+    def write_launch_log(
+        *,
+        status: str,
+        exit_text: str | None = None,
+        stdout: object = "",
+        stderr: object = "",
+    ) -> None:
+        lines = [
+            f"STATUS: {status}",
+            f"RETRO_SOURCE: {src}",
+            f"RETRO_FUNCTION: {fn}",
+            f"RETRO_OUTPUT_DIR: {out_dir}",
+            f"TIMEOUT_SECONDS: {timeout}",
+            f"COMMAND: {command_text}",
+        ]
+        if exit_text is not None:
+            lines.extend(
+                [
+                    f"EXIT: {exit_text}",
+                    "STDOUT:",
+                    _stream_text(stdout),
+                    "--- stderr ---",
+                    _stream_text(stderr),
+                ]
+            )
+        log.write_text("\n".join(lines) + "\n")
+
+    write_launch_log(status="running")
     try:
         proc = _run_with_process_group_timeout(
             cmd,
@@ -2000,15 +2031,23 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
             env=env,
         )
     except subprocess.TimeoutExpired as exc:
-        log.write_text(
-            _stream_text(exc.output)
-            + "\n--- stderr ---\n"
-            + _stream_text(exc.stderr)
-            + f"\n[retro] launcher timed out after {timeout}s; "
-              "killed process group\n"
+        write_launch_log(
+            status="timed out",
+            exit_text=f"timeout after {timeout}s",
+            stdout=exc.output,
+            stderr=(
+                _stream_text(exc.stderr)
+                + f"\n[retro] launcher timed out after {timeout}s; "
+                "killed process group"
+            ),
         )
         return DumpOutcome(exit_code=2, produced=[], missing=["timeout"])
-    log.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
+    write_launch_log(
+        status="exited",
+        exit_text=str(proc.returncode),
+        stdout=proc.stdout,
+        stderr=proc.stderr,
+    )
 
     combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
     safety_aborted = "[retro] ABORT" in combined
@@ -2027,6 +2066,14 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         if ran and proc.returncode == 0:
             return DumpOutcome(exit_code=0, produced=["hook"], missing=[])
         return DumpOutcome(exit_code=2, produced=[], missing=["hook"])
+
+    if proc.returncode != 0:
+        missing = []
+        if phases in ("frontend", "all"):
+            missing.append("frontend")
+        if phases in ("backend", "all"):
+            missing.append("backend")
+        return DumpOutcome(exit_code=2, produced=[], missing=missing)
 
     produced: list[str] = []
     missing: list[str] = []
@@ -2060,8 +2107,6 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         elif phases == "backend":
             missing.append("backend")
 
-    if proc.returncode != 0 and not produced and not target_absent:
-        return DumpOutcome(exit_code=2, produced=produced, missing=missing)
     if target_absent and not produced:
         return DumpOutcome(exit_code=3, produced=produced, missing=missing)
     if missing:

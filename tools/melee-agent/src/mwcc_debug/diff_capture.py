@@ -775,7 +775,12 @@ def _run_with_process_group_timeout(
 
     if timed_out:
         exc = result.get("exc")
+        stdout = getattr(exc, "output", None)
+        if stdout is None:
+            stdout = result.get("stdout")
         stderr = getattr(exc, "stderr", None)
+        if stderr is None:
+            stderr = result.get("stderr")
         survivor_note = _unreaped_wibo_timeout_note()
         if survivor_note:
             stderr_text = "" if stderr is None else str(stderr)
@@ -785,7 +790,7 @@ def _run_with_process_group_timeout(
         raise subprocess.TimeoutExpired(
             cmd=cmd,
             timeout=timeout,
-            output=getattr(exc, "output", None),
+            output=stdout,
             stderr=stderr,
         ) from exc
 
