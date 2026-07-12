@@ -901,7 +901,7 @@ def _color_axis(
     donor_explicit = _explicit_color_role_map(donor_payload)
     desired = dict(objective.desired_phys)
     if namespace_resolutions is not None:
-        candidate_id = f"candidate:mask-{evidence.mask:03b}"
+        candidate_id = f"candidate:{evidence.candidate_id}"
         candidate_resolution = namespace_resolutions.get(candidate_id)
         donor_resolution = namespace_resolutions.get(f"parent:{donor_side}")
         if (

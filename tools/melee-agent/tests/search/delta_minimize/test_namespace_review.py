@@ -98,6 +98,7 @@ def _request() -> NamespaceReviewRequest:
         canonical_artifact_id="parent:left",
         canonical_source_sha256=SHA["canonical_source"],
         canonical_pcdump_sha256=SHA["canonical_pcdump"],
+        lattice_atom_count=3,
         reviewed_anchors={64: 64, 78: 78},
         artifacts=(
             _artifact(
@@ -262,6 +263,52 @@ def test_request_rejects_bad_candidate_identity(
 
     with pytest.raises(DeltaMinimizeError):
         load_review_request(path)
+
+
+def test_candidate_artifact_accepts_manifest_width_above_three_bits() -> None:
+    artifact = NamespaceArtifact(
+        artifact_id="candidate:mask-1000",
+        kind="candidate",
+        side=None,
+        candidate="mask-1000",
+        mask=8,
+        source_sha256=SHA["candidate_source"],
+        pcdump_sha256=SHA["candidate_dump"],
+        domain=DOMAIN,
+        automatically_resolved=False,
+        diagnostic="ambiguous-pairwise-namespace",
+    )
+
+    assert artifact.artifact_id == "candidate:mask-1000"
+    assert artifact.mask == 8
+
+
+def test_request_binds_candidate_identity_to_lattice_atom_count() -> None:
+    request = _request()
+    wide_artifact = NamespaceArtifact(
+        artifact_id="candidate:mask-1000",
+        kind="candidate",
+        side=None,
+        candidate="mask-1000",
+        mask=8,
+        source_sha256=SHA["candidate_source"],
+        pcdump_sha256=SHA["candidate_dump"],
+        domain=DOMAIN,
+        automatically_resolved=False,
+        diagnostic="ambiguous-pairwise-namespace",
+    )
+
+    widened = replace(
+        request,
+        lattice_atom_count=4,
+        artifacts=(*request.artifacts[:2], wide_artifact),
+    )
+
+    assert widened.lattice_atom_count == 4
+    assert widened.artifacts[-1].artifact_id == "candidate:mask-1000"
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-namespace-review-request$"):
+        replace(widened, lattice_atom_count=3)
 
 
 def test_request_rejects_duplicate_artifact_ids(tmp_path: Path) -> None:

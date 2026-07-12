@@ -12,9 +12,9 @@ import yaml
 
 from src.search.delta_minimize import run as run_module
 from src.search.delta_minimize.contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
-from src.search.delta_minimize.delta import DeltaAtom, DeltaManifest
+from src.search.delta_minimize.delta import DeltaAtom, DeltaManifest, MaterializedCandidate
 from src.search.delta_minimize.epochs import PARSER_SCHEMA_HASH
-from src.search.delta_minimize.evaluator import EvaluationBackends, RawCandidateEvidence
+from src.search.delta_minimize.evaluator import EvaluationBackends, ParentEvidenceBundle, RawCandidateEvidence
 from src.search.delta_minimize.namespace_review import NamespaceArtifact, NamespaceReviewRequest
 from src.search.delta_minimize.objectives import (
     COLOR_TARGET_SCHEMA_V2,
@@ -508,10 +508,10 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
             automatically_resolved = candidate.mask == 0
             artifacts.append(
                 NamespaceArtifact(
-                    artifact_id=f"candidate:mask-{candidate.mask:03b}",
+                    artifact_id=f"candidate:{candidate.candidate_id}",
                     kind="candidate",
                     side=None,
-                    candidate=f"mask-{candidate.mask:03b}",
+                    candidate=candidate.candidate_id,
                     mask=candidate.mask,
                     source_sha256=raw.source_hash,
                     pcdump_sha256=raw.pcdump_hash,
@@ -537,6 +537,7 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
             canonical_artifact_id="parent:left",
             canonical_source_sha256=parents.left.source_hash,
             canonical_pcdump_sha256=parents.left.pcdump_hash,
+            lattice_atom_count=len(manifest.atoms),
             reviewed_anchors={64: 64, 78: 78},
             artifacts=tuple(artifacts),
         )
@@ -586,6 +587,120 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
     assert not (config.out_dir / "candidates.json").exists()
 
 
+def test_v2_namespace_resolution_uses_manifest_width_above_three_bits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_path = tmp_path / "target.yaml"
+    target_path.write_text("reviewed target\n", encoding="utf-8")
+    domain = tuple(range(110))
+    bindings = {
+        side: SimpleNamespace(canonical_to_parent={64: 64, 78: 78}) for side in ("left", "right")
+    }
+    monkeypatch.setattr(
+        run_module,
+        "load_color_target",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            schema_version=COLOR_TARGET_SCHEMA_V2,
+            baseline_side="left",
+            class_id=0,
+            parent_role_bindings=bindings,
+        ),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_compile",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            fev=SimpleNamespace(coalesce_sections=[SimpleNamespace(class_id=0, n_virtuals=len(domain))])
+        ),
+    )
+
+    seen_ids: list[str] = []
+
+    def resolve_namespace_map(**kwargs):
+        artifact_id = kwargs["artifact_id"]
+        seen_ids.append(artifact_id)
+        unresolved = artifact_id == "candidate:mask-1000"
+        return NamespaceMapResolution(
+            artifact_id=artifact_id,
+            source_sha256=kwargs["source_sha256"],
+            pcdump_sha256=kwargs["pcdump_sha256"],
+            raw_to_canonical=None if unresolved else {role: role for role in domain},
+            source="unresolved" if unresolved else "automatic-v5",
+        )
+
+    monkeypatch.setattr(run_module, "resolve_namespace_map", resolve_namespace_map)
+
+    def evidence(candidate_id: str, mask: int) -> RawCandidateEvidence:
+        source = tmp_path / f"{candidate_id}.c"
+        pcdump = tmp_path / f"{candidate_id}.pcdump"
+        source.write_text(f"source {candidate_id}\n", encoding="utf-8")
+        pcdump.write_text(f"pcdump {candidate_id}\n", encoding="utf-8")
+        return RawCandidateEvidence(
+            candidate_id=candidate_id,
+            mask=mask,
+            source_path=str(source),
+            source_hash=hashlib.sha256(source.read_bytes()).hexdigest(),
+            compile_status="compiled",
+            viable=True,
+            pcdump_path=str(pcdump),
+            checkdiff_evidence={},
+            inspect_text="FUNCTION: f\nFrontend: OBJOBJECTS\n",
+            compiler_stderr="",
+            pcdump_hash=hashlib.sha256(pcdump.read_bytes()).hexdigest(),
+        )
+
+    parent_left = evidence("parent-left", 0)
+    parent_right = evidence("parent-right", 15)
+    parents = ParentEvidenceBundle(
+        left=parent_left,
+        right=parent_right,
+        cflags_hash="c" * 64,
+        compiler_fingerprint="compiler-v1",
+        expected_object_hash="e" * 64,
+        inspector_version="inspector-v1",
+        parser_schema_hash=PARSER_SCHEMA_HASH,
+    )
+    raw_candidates = (evidence("mask-0000", 0), evidence("mask-1000", 8))
+    candidates = tuple(
+        MaterializedCandidate(
+            candidate_id=raw.candidate_id,
+            mask=raw.mask,
+            source_hash=raw.source_hash,
+            source_path=Path(raw.source_path),
+            applied_atom_ids=(),
+        )
+        for raw in raw_candidates
+    )
+    manifest = DeltaManifest(
+        schema_version="delta-manifest.v2",
+        function="f",
+        left_hash=parent_left.source_hash,
+        right_hash=parent_right.source_hash,
+        atoms=tuple(
+            DeltaAtom(atom_id=f"atom-{index}", kind="declaration", patches=()) for index in range(4)
+        ),
+    )
+
+    state = run_module._resolve_namespaces_for_run(
+        _config(tmp_path, target_path=target_path),
+        parents,
+        candidates,
+        raw_candidates,
+        manifest,
+    )
+
+    assert state.request.lattice_atom_count == 4
+    assert seen_ids == [
+        "parent:left",
+        "parent:right",
+        "candidate:mask-0000",
+        "candidate:mask-1000",
+    ]
+    assert state.unresolved_ids == ("candidate:mask-1000",)
+    assert state.request.artifacts[-1].candidate == "mask-1000"
+
+
 def test_changed_review_digest_republishes_profiles_but_reuses_raw_candidates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -621,7 +736,7 @@ def test_changed_review_digest_republishes_profiles_but_reuses_raw_candidates(
             ("parent:right", "parent", "right", None, parents.right),
             *[
                 (
-                    f"candidate:mask-{candidate.mask:03b}",
+                    f"candidate:{candidate.candidate_id}",
                     "candidate",
                     None,
                     candidate.mask,
@@ -635,7 +750,7 @@ def test_changed_review_digest_republishes_profiles_but_reuses_raw_candidates(
                 artifact_id=artifact_id,
                 kind=kind,
                 side=side,
-                candidate=None if mask is None else f"mask-{mask:03b}",
+                candidate=None if mask is None else raw.candidate_id,
                 mask=mask,
                 source_sha256=raw.source_hash,
                 pcdump_sha256=raw.pcdump_hash,
@@ -662,6 +777,7 @@ def test_changed_review_digest_republishes_profiles_but_reuses_raw_candidates(
             canonical_artifact_id="parent:left",
             canonical_source_sha256=parents.left.source_hash,
             canonical_pcdump_sha256=parents.left.pcdump_hash,
+            lattice_atom_count=len(manifest.atoms),
             reviewed_anchors={64: 64, 78: 78},
             artifacts=artifacts,
         )

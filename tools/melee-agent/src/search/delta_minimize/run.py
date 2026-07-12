@@ -1323,9 +1323,7 @@ def _raw_capture_epoch(
 
 
 def _namespace_artifact_id(candidate: MaterializedCandidate) -> str:
-    if not 0 <= candidate.mask <= 7:
-        raise DeltaMinimizeError("unsupported-namespace-review-lattice")
-    return f"candidate:mask-{candidate.mask:03b}"
+    return f"candidate:{candidate.candidate_id}"
 
 
 def _uses_reviewed_namespace_sidecar(target: Any | None) -> bool:
@@ -1437,6 +1435,7 @@ def _resolve_namespaces_for_run(
 
     automatic = resolve_all()
     automatic_by_id = {resolution.artifact_id: resolution for resolution in automatic}
+    candidate_by_mask = {candidate.mask: candidate for candidate in candidates}
     artifacts: list[NamespaceArtifact] = []
     for artifact_id, kind, side, mask, _raw in rows:
         resolution = automatic_by_id[artifact_id]
@@ -1445,7 +1444,7 @@ def _resolve_namespaces_for_run(
                 artifact_id=artifact_id,
                 kind=kind,
                 side=side,
-                candidate=None if mask is None else f"mask-{mask:03b}",
+                candidate=None if mask is None else candidate_by_mask[mask].candidate_id,
                 mask=mask,
                 source_sha256=resolution.source_sha256,
                 pcdump_sha256=resolution.pcdump_sha256,
@@ -1474,6 +1473,7 @@ def _resolve_namespaces_for_run(
         canonical_pcdump_sha256=canonical_raw.pcdump_hash or "",
         reviewed_anchors=reviewed_anchors,
         artifacts=tuple(artifacts),
+        lattice_atom_count=len(manifest.atoms),
     )
     reviewed = (
         None

@@ -459,6 +459,7 @@ def _namespace_request() -> NamespaceReviewRequest:
         canonical_artifact_id="parent:left",
         canonical_source_sha256="3" * 64,
         canonical_pcdump_sha256="7" * 64,
+        lattice_atom_count=3,
         reviewed_anchors={64: 64, 78: 78},
         artifacts=(
             NamespaceArtifact(

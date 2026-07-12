@@ -722,6 +722,7 @@ def _reviewed_resolution_context(
         canonical_artifact_id="parent:left",
         canonical_source_sha256="1" * 64,
         canonical_pcdump_sha256="2" * 64,
+        lattice_atom_count=3,
         reviewed_anchors={64: 64, 78: 78},
         artifacts=(
             NamespaceArtifact(
@@ -1039,8 +1040,9 @@ def _v2_color_case(
         source.write_text(source_text, encoding="utf-8")
         emitted_pcdump = pcdump_text if side != "candidate" else f"{pcdump_text}\n"
         pcdump.write_text(emitted_pcdump, encoding="utf-8")
+        candidate_id = "mask-000" if side == "candidate" else side
         raws[side] = RawCandidateEvidence(
-            candidate_id=side,
+            candidate_id=candidate_id,
             mask=0,
             source_path=str(source),
             source_hash=hashlib.sha256(source.read_bytes()).hexdigest(),
@@ -1052,7 +1054,7 @@ def _v2_color_case(
             compiler_stderr="",
             pcdump_hash=hashlib.sha256(pcdump.read_bytes()).hexdigest(),
         )
-        compiles[side] = _with_complete_virtual_identity(Compile.from_text(emitted_pcdump, FUNCTION, source_text))
+        compiles[candidate_id] = _with_complete_virtual_identity(Compile.from_text(emitted_pcdump, FUNCTION, source_text))
     descriptors = _namespace_descriptors(compiles["left"])
     desired = {ig_idx: 0 for ig_idx in descriptors}
     target = build_target_spec(
@@ -1133,11 +1135,16 @@ def _expected_complete_identity_role_map(
     return {ig_idx: ig_idx if ig_idx in desired else 1_000_000 + ig_idx for ig_idx in range(witness["virtual_count"])}
 
 
+@pytest.mark.parametrize("candidate_id", ("mask-000", "mask-1000"))
 def test_candidate_color_profile_consumes_resolved_canonical_maps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    candidate_id: str,
 ) -> None:
     candidate, objective, parents, compiles = _v2_color_case(tmp_path)
+    original_candidate_id = candidate.candidate_id
+    candidate = replace(candidate, candidate_id=candidate_id, mask=int(candidate_id.removeprefix("mask-"), 2))
+    compiles[candidate_id] = compiles[original_candidate_id]
     virtual_count = compiles["left"].fev.coalesce_sections[-1].n_virtuals
     domain = tuple(range(virtual_count))
     candidate_map = {role: role for role in domain}
@@ -1147,8 +1154,8 @@ def test_candidate_color_profile_consumes_resolved_canonical_maps(
     captured = _capture_color_role_maps(monkeypatch, dict(objective.desired_phys))
     monkeypatch.setattr(evaluator_module, "_compile", lambda raw, _function: compiles[raw.candidate_id])
     resolutions = {
-        "candidate:mask-000": NamespaceMapResolution(
-            artifact_id="candidate:mask-000",
+        f"candidate:{candidate_id}": NamespaceMapResolution(
+            artifact_id=f"candidate:{candidate_id}",
             source_sha256=candidate.source_hash,
             pcdump_sha256=candidate.pcdump_hash,
             raw_to_canonical=candidate_map,

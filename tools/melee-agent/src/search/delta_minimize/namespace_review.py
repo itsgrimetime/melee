@@ -55,6 +55,7 @@ _REQUEST_FIELDS = frozenset(
         "canonical_pcdump_sha256",
         "reviewed_anchors",
         "artifacts",
+        "lattice_atom_count",
     }
 )
 _BINDING_FIELDS = frozenset(
@@ -130,6 +131,15 @@ def _canonical_int(raw: object, reason: str) -> int:
     ):
         return int(raw)
     raise DeltaMinimizeError(reason)
+
+
+def _candidate_mask_width(candidate: object, mask: object) -> int:
+    if not isinstance(candidate, str) or not candidate.startswith("mask-") or not _is_int(mask):
+        raise DeltaMinimizeError("invalid-namespace-artifact")
+    bits = candidate.removeprefix("mask-")
+    if not 1 <= len(bits) <= 20 or any(bit not in "01" for bit in bits) or int(bits, 2) != mask:
+        raise DeltaMinimizeError("invalid-namespace-artifact")
+    return len(bits)
 
 
 def _int_mapping(raw: object, reason: str) -> Mapping[int, int]:
@@ -245,11 +255,10 @@ class NamespaceArtifact:
             ):
                 raise DeltaMinimizeError("invalid-namespace-artifact")
         elif self.kind == "candidate":
+            width = _candidate_mask_width(self.candidate, self.mask)
             if (
                 self.side is not None
-                or not _is_int(self.mask)
-                or not 0 <= self.mask <= 7
-                or self.candidate != f"mask-{self.mask:03b}"
+                or not 0 <= self.mask < (1 << width)
                 or self.artifact_id != f"candidate:{self.candidate}"
             ):
                 raise DeltaMinimizeError("invalid-namespace-artifact")
@@ -305,6 +314,7 @@ class NamespaceReviewRequest:
     canonical_artifact_id: str
     canonical_source_sha256: str
     canonical_pcdump_sha256: str
+    lattice_atom_count: int
     reviewed_anchors: Mapping[int, int]
     artifacts: tuple[NamespaceArtifact, ...]
     schema_version: str = NAMESPACE_REVIEW_REQUEST_SCHEMA
@@ -318,6 +328,8 @@ class NamespaceReviewRequest:
             raise DeltaMinimizeError("unsupported-namespace-review-epoch")
         _text(self.function, "invalid-namespace-review-request")
         if (self.class_id, self.register_class) not in {(0, "GPR"), (1, "FPR")}:
+            raise DeltaMinimizeError("invalid-namespace-review-request")
+        if not _is_int(self.lattice_atom_count) or not 0 <= self.lattice_atom_count <= 20:
             raise DeltaMinimizeError("invalid-namespace-review-request")
         for digest in (
             self.target_sha256,
@@ -343,6 +355,17 @@ class NamespaceReviewRequest:
         ):
             raise DeltaMinimizeError("invalid-namespace-review-request")
         artifacts = tuple(sorted(self.artifacts, key=_artifact_sort_key))
+        mask_width = max(1, self.lattice_atom_count)
+        if any(
+            artifact.kind == "candidate"
+            and (
+                artifact.mask is None
+                or artifact.mask >= (1 << self.lattice_atom_count)
+                or artifact.candidate != f"mask-{artifact.mask:0{mask_width}b}"
+            )
+            for artifact in artifacts
+        ):
+            raise DeltaMinimizeError("invalid-namespace-review-request")
         artifact_ids = {artifact.artifact_id for artifact in artifacts}
         if len(artifact_ids) != len(artifacts):
             raise DeltaMinimizeError("duplicate-namespace-artifact-id")
@@ -405,6 +428,7 @@ class NamespaceReviewRequest:
             "canonical_pcdump_sha256": self.canonical_pcdump_sha256,
             "reviewed_anchors": dict(self.reviewed_anchors),
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
+            "lattice_atom_count": self.lattice_atom_count,
         }
 
     def to_yaml(self) -> str:
