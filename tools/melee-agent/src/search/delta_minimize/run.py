@@ -196,6 +196,7 @@ class DeltaMinimizeBackends:
     parent_objective: Callable[[RawCandidateEvidence, str, DeltaMinimizeConfig], Any]
     infer_objective: Callable[[Any, Any, DeltaMinimizeConfig], ObjectiveManifest]
     evaluation: EvaluationBackends
+    parent_requires_checkdiff: bool = False
     profile_candidate: Callable[..., CandidateProfile] = profile_candidate
     extract_manifest: Callable[..., DeltaManifest] = extract_delta_manifest
 
@@ -728,7 +729,7 @@ def _capture_parents(
                     candidate.source_path,
                     candidate.source_hash,
                     include_objobjects=config.include_objobjects,
-                    require_checkdiff=False,
+                    require_checkdiff=active.parent_requires_checkdiff,
                 )
             except DeltaMinimizeError:
                 reusable = False
@@ -1259,6 +1260,7 @@ def default_delta_minimize_backends() -> DeltaMinimizeBackends:
         parent_objective=_default_parent_objective,
         infer_objective=_default_infer_objective,
         evaluation=evaluation,
+        parent_requires_checkdiff=True,
     )
 
 

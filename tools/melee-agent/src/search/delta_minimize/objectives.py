@@ -502,6 +502,24 @@ def _target_spec(
     )
 
 
+def _role_identity_witness(descriptor: role_descriptor.RoleDescriptor) -> tuple[Any, ...]:
+    """Return only semantic role facts that can prove raw-IG identity.
+
+    Weak source-name attribution is diagnostic and may vary between otherwise
+    equivalent dumps.  Strong attribution participates because the role
+    matcher treats it as identity evidence.
+    """
+    strong_name = (
+        descriptor.var_name if descriptor.var_name and descriptor.var_confidence in {"best-guess", "verified"} else None
+    )
+    return (
+        descriptor.first_def_sig,
+        descriptor.use_site_multiset,
+        descriptor.is_param,
+        strong_name,
+    )
+
+
 def _require_complete_reanchor(
     target: role_descriptor.TargetSpec,
     compile: role_descriptor.Compile,
@@ -522,6 +540,11 @@ def _require_complete_reanchor(
             or set(target_roles) != set(desired_phys)
             or set(desired_phys) - set(descriptors)
             or any(target_roles[ig].desired_phys != physical for ig, physical in desired_phys.items())
+            or any(
+                target_roles[ig].descriptor is None
+                or _role_identity_witness(target_roles[ig].descriptor) != _role_identity_witness(descriptors[ig])
+                for ig in desired_phys
+            )
         ):
             raise DeltaMinimizeError("ambiguous-color-target")
         exact = dict(desired_phys)
@@ -917,8 +940,13 @@ def _allocator_namespace_witness(
     evidence_igs.update(ig_idx for override in coalesce_section.forced_overrides for ig_idx in override if ig_idx >= 0)
     if not evidence_igs or any(ig_idx >= n_virtuals for ig_idx in evidence_igs):
         return None
+    descriptors = role_descriptor.build_descriptors(compile, class_id)
+    if set(descriptors) != set(decision_order):
+        return None
+    semantic_roles = tuple((ig_idx, _role_identity_witness(descriptors[ig_idx])) for ig_idx in sorted(descriptors))
     return (
         n_virtuals,
+        semantic_roles,
         decision_order,
         simplify_order,
         frozenset(evidence_igs),

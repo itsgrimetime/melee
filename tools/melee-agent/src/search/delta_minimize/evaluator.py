@@ -311,9 +311,6 @@ def _compile_diagnostics(row: Mapping[str, Any]) -> str:
 def _compile_rejected(row: Mapping[str, Any]) -> bool:
     if row.get("score_error_kind") != "candidate":
         return False
-    error = str(row.get("error") or "").lower()
-    if row.get("terminal_safe") is True and "not in compiled pcdump" in error:
-        return True
     if row.get("pcdump_path"):
         return False
     diagnostics = _compile_diagnostics(row).lower()
@@ -429,16 +426,6 @@ def _invoke_inspector(
     return result
 
 
-def _inspector_compile_rejection(output: Path) -> str | None:
-    try:
-        text = output.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return None
-    if "Compiler:" in text and "Error:" in text and "Compilation finished." in text:
-        return text
-    return None
-
-
 def _recover_complete_inspector_output(output: Path, function: str) -> str | None:
     try:
         text = output.read_text(encoding="utf-8")
@@ -534,6 +521,11 @@ def capture_candidate(
     if checkdiff is not None and not isinstance(checkdiff, Mapping):
         raise DeltaMinimizeError("malformed-score-source-result")
     if row.get("score_error_kind") == "candidate" and not rejected:
+        if row.get("terminal_safe") is True and "not in compiled pcdump" in str(row.get("error") or "").lower():
+            raise DeltaMinimizeError(
+                "candidate-target-function-missing",
+                {"candidate_id": candidate_id, "function": config.function},
+            )
         raise DeltaMinimizeError(
             "candidate-score-infrastructure",
             {"candidate_id": candidate_id, "error": row.get("error")},
@@ -591,19 +583,6 @@ def capture_candidate(
         except (subprocess.TimeoutExpired, TimeoutError) as error:
             raise DeltaMinimizeError("inspector-timeout", {"candidate_id": candidate_id}) from error
         except DeltaMinimizeError as error:
-            diagnostics = _inspector_compile_rejection(inspect_output) if error.reason == "inspector-failed" else None
-            if diagnostics is not None:
-                evidence = RawCandidateEvidence(
-                    **{
-                        **evidence.to_dict(),
-                        "compile_status": "rejected",
-                        "viable": False,
-                        "compiler_stderr": "\n".join(item for item in (evidence.compiler_stderr, diagnostics) if item),
-                        "blockers": tuple(dict.fromkeys((*evidence.blockers, "inspector-compile-rejected"))),
-                    }
-                )
-                store.write_evidence(key, evidence.to_dict())
-                return evidence
             inspect_text = (
                 _recover_complete_inspector_output(inspect_output, config.function)
                 if error.reason == "inspector-failed"
@@ -982,7 +961,7 @@ def _stack_axis(
     if unresolved:
         if donor is None or donor.checkdiff_evidence is None:
             raise ValueError("missing stack proxy donor")
-        donor_profile = build_stack_home_profile(*_frame_and_stack(donor.checkdiff_evidence, objective.function))
+        donor_profile = build_stack_home_profile(*_evidence_frame_and_stack(donor, objective.function))
         if not donor_profile.complete:
             raise ValueError("incomplete stack proxy donor")
 

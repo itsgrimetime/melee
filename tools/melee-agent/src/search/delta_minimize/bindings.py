@@ -445,6 +445,11 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
             if coupled:
                 semantic_labels[coupled[0]].append(f"{left_function.name} to {right_function.name} rename")
 
+    _couple_structural_delimiters(
+        groups,
+        atoms,
+        semantic_labels,
+    )
     _couple_local_binding_changes(
         groups,
         atoms,
@@ -464,6 +469,76 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
         labels_by_root,
         reclassified,
     )
+
+
+def _couple_structural_delimiters(
+    groups: UnionFind,
+    atoms,
+    semantic_labels: dict[str, list[str]],
+) -> None:
+    """Keep the two boundaries of an introduced/removed compound together."""
+    boundaries: dict[tuple[str, str], dict[str, list[str]]] = defaultdict(lambda: {"open": [], "close": []})
+    streams: dict[tuple[str, str], list[tuple[int, str, bool, bool]]] = defaultdict(list)
+    for atom in atoms:
+        for patch in atom.patches:
+            anchor = patch.anchor_symbol
+            if not isinstance(anchor, str) or "|" not in anchor:
+                continue
+            left_anchor, right_anchor = anchor.split("|", 1)
+            left_parts = left_anchor.split(":", 2)
+            if len(left_parts) != 3:
+                continue
+            function = left_parts[0]
+            candidates = (
+                (
+                    "right",
+                    right_anchor,
+                    patch.right_text,
+                    patch.left_start == patch.left_end,
+                    patch.right_start,
+                ),
+                (
+                    "left",
+                    left_parts[2],
+                    patch.left_text,
+                    patch.right_start == patch.right_end,
+                    patch.left_start,
+                ),
+            )
+            for side, path, text, opposite_empty, position in candidates:
+                if not opposite_empty or not path.endswith("/compound_statement"):
+                    continue
+                stripped = text.strip()
+                opens = stripped.startswith("{")
+                closes = stripped.endswith("}")
+                if opens:
+                    boundaries[(side, path)]["open"].append(atom.atom_id)
+                if closes:
+                    boundaries[(side, path)]["close"].append(atom.atom_id)
+                if opens or closes:
+                    streams[(side, function)].append((position, atom.atom_id, opens, closes))
+
+    for (side, path), sides in sorted(boundaries.items()):
+        selected = tuple(dict.fromkeys((*sides["open"], *sides["close"])))
+        if not sides["open"] or not sides["close"] or len(selected) < 2:
+            continue
+        _union_ids(groups, selected)
+        semantic_labels[selected[0]].append(f"{side} compound wrapper {path}")
+
+    # Tree differencing may anchor a closing brace to the final nested
+    # statement rather than to the compound opened by an earlier patch.  A
+    # lexical balance over compound-boundary patches supplies the missing
+    # relationship without coupling unrelated expression braces.
+    for (side, function), events in sorted(streams.items()):
+        stack: list[str] = []
+        for _position, atom_id, opens, closes in sorted(events):
+            if opens:
+                stack.append(atom_id)
+            if closes and stack:
+                opening = stack.pop()
+                if opening != atom_id:
+                    _union_ids(groups, (opening, atom_id))
+                    semantic_labels[opening].append(f"{side} compound wrapper {function}")
 
 
 def _pair_functions(left_index: BindingIndex, right_index: BindingIndex):
@@ -874,6 +949,34 @@ def _couple_local_binding_changes(
     right_index: BindingIndex,
     semantic_labels: dict[str, list[str]],
 ) -> None:
+    left_groups = _group_local_bindings(left_index.locals)
+    right_groups = _group_local_bindings(right_index.locals)
+    ambiguous: list[dict[str, object]] = []
+    for key in sorted(left_groups.keys() | right_groups.keys()):
+        left_values = left_groups.get(key, ())
+        right_values = right_groups.get(key, ())
+        if max(len(left_values), len(right_values)) < 2:
+            continue
+        left_spans = [span for binding in left_values for span in (binding.declaration_span, *binding.use_spans)]
+        right_spans = [span for binding in right_values for span in (binding.declaration_span, *binding.use_spans)]
+        touched = bool(
+            _atoms_for_directional_spans(atoms, left_spans, side="left")
+            or _atoms_for_directional_spans(atoms, right_spans, side="right")
+        )
+        if len(left_values) != len(right_values) or touched:
+            function, name = key
+            spans = [binding.declaration_span for binding in (*left_values, *right_values)]
+            ambiguous.append(
+                {
+                    "symbol": name,
+                    "function": function,
+                    "reason": "ambiguous-local-binding",
+                    "span": min(spans) if spans else (0, 0),
+                }
+            )
+    if ambiguous:
+        raise DeltaMinimizeError("unsupported-semantic-binding", {"blockers": ambiguous})
+
     left = _unique_local_bindings(left_index.locals)
     right = _unique_local_bindings(right_index.locals)
     for side, bindings, other in (
@@ -902,10 +1005,17 @@ def _couple_local_binding_changes(
 def _unique_local_bindings(
     bindings: Sequence[LocalBinding],
 ) -> dict[tuple[str, str], LocalBinding]:
+    grouped = _group_local_bindings(bindings)
+    return {key: values[0] for key, values in grouped.items() if len(values) == 1}
+
+
+def _group_local_bindings(
+    bindings: Sequence[LocalBinding],
+) -> dict[tuple[str, str], tuple[LocalBinding, ...]]:
     grouped: dict[tuple[str, str], list[LocalBinding]] = defaultdict(list)
     for binding in bindings:
         grouped[(binding.function, binding.name)].append(binding)
-    return {key: values[0] for key, values in grouped.items() if len(values) == 1}
+    return {key: tuple(values) for key, values in grouped.items()}
 
 
 def _atoms_for_directional_spans(

@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from copy import deepcopy
 from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 
 import src.search.delta_minimize.evaluator as evaluator_module
+import src.search.delta_minimize.objectives as objectives_module
 from src.mwcc_debug.colorgraph_profile import ColorGraphProfile
 from src.mwcc_debug.role_descriptor import Compile, build_descriptors, build_target_spec
 from src.search.delta_minimize.contracts import DeltaMinimizeError
@@ -282,6 +284,69 @@ def test_derived_target_uses_correlated_exact_allocator_namespace(
     )
 
 
+def test_derived_target_does_not_reuse_raw_namespace_when_role_semantics_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pcdump_text = (FIXTURES / "mnVibration_matched_pcdump.txt").read_text(encoding="utf-8")
+    donor_compile = Compile.from_text(pcdump_text, FUNCTION, "")
+    candidate_compile = deepcopy(donor_compile)
+    donor_descriptors = build_descriptors(donor_compile, 0)
+    candidate_descriptors = deepcopy(donor_descriptors)
+    changed_ig = next(iter(candidate_descriptors))
+    candidate_descriptors[changed_ig] = replace(
+        candidate_descriptors[changed_ig],
+        first_def_sig=f"changed:{candidate_descriptors[changed_ig].first_def_sig}",
+    )
+    desired = {changed_ig: 22}
+    target = build_target_spec(
+        donor_compile,
+        desired,
+        0,
+        "force_proof_proxy",
+        {"inference": "parent-register-diff"},
+    )
+    objective = replace(
+        _objective_stub(),
+        target_spec=asdict(target),
+        desired_phys=desired,
+    )
+    donor = _raw_stub()
+    donor = replace(donor, candidate_id="left", source_hash="left")
+    candidate = replace(donor, candidate_id="candidate", source_hash="candidate")
+    parents = ParentEvidenceBundle(
+        donor,
+        replace(donor, candidate_id="right", source_hash="right"),
+        "cflags",
+        "compiler",
+        "object",
+        "inspector-v1",
+        "parsers",
+    )
+    monkeypatch.setattr(
+        evaluator_module,
+        "_compile",
+        lambda raw, _function: candidate_compile if raw.candidate_id == "candidate" else donor_compile,
+    )
+    original_build = objectives_module.role_descriptor.build_descriptors
+
+    def descriptors(compile: Compile, class_id: int):
+        if compile is candidate_compile:
+            return candidate_descriptors
+        if compile is donor_compile:
+            return donor_descriptors
+        return original_build(compile, class_id)
+
+    monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", descriptors)
+    monkeypatch.setattr(
+        evaluator_module.role_reanchor,
+        "reanchor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("semantic-reanchor-required")),
+    )
+
+    with pytest.raises(ValueError, match="^semantic-reanchor-required$"):
+        evaluator_module._color_axis(candidate, objective, parents)
+
+
 def test_stack_inputs_build_real_frame_and_explicit_empty_bridge(monkeypatch, tmp_path: Path) -> None:
     pcdump = tmp_path / "candidate.pcdump"
     source = tmp_path / "candidate.c"
@@ -425,7 +490,7 @@ def test_compile_rejection_is_nonviable_not_incomplete(tmp_path: Path) -> None:
     assert profile.axes is None
 
 
-def test_compiled_candidate_missing_target_function_is_nonviable(
+def test_compiled_candidate_missing_target_function_is_run_level_incomplete(
     tmp_path: Path,
 ) -> None:
     candidate = _candidate(tmp_path)
@@ -442,18 +507,22 @@ def test_compiled_candidate_missing_target_function_is_nonviable(
         "terminal_safe": True,
     }
 
-    evidence = capture_candidate(
-        candidate,
-        _config(tmp_path),
-        backends=EvaluationBackends(
-            lambda _rows, _config: [row],
-            lambda *_args, **_kwargs: pytest.fail(),
-        ),
-        store=_store(tmp_path),
-    )
-
-    assert evidence.compile_status == "rejected"
-    assert evidence.viable is False
+    store = _store(tmp_path)
+    config = _config(tmp_path)
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="^candidate-target-function-missing$",
+    ):
+        capture_candidate(
+            candidate,
+            config,
+            backends=EvaluationBackends(
+                lambda _rows, _config: [row],
+                lambda *_args, **_kwargs: pytest.fail(),
+            ),
+            store=store,
+        )
+    assert store.load_evidence(store.evidence_key(candidate, config)) is None
 
 
 @pytest.mark.parametrize("stderr", ["", "candidate failed"])
@@ -526,7 +595,7 @@ def test_inspector_timeout_is_run_level_incomplete_and_not_cached(tmp_path: Path
     assert store.load_evidence(store.evidence_key(candidate, _config(tmp_path))) is None
 
 
-def test_inspector_compile_error_is_cached_as_nonviable_candidate(
+def test_inspector_compile_error_is_run_level_and_retried(
     tmp_path: Path,
 ) -> None:
     candidate = _candidate(tmp_path)
@@ -548,14 +617,18 @@ def test_inspector_compile_error_is_cached_as_nonviable_candidate(
         lambda _rows, _config: [_score_row(candidate, pcdump)],
         rejected_inspection,
     )
-    first = capture_candidate(candidate, _config(tmp_path), backends=backends, store=store)
-    second = capture_candidate(candidate, _config(tmp_path), backends=backends, store=store)
+    config = _config(tmp_path)
+    for _attempt in range(2):
+        with pytest.raises(DeltaMinimizeError, match="^inspector-failed$"):
+            capture_candidate(
+                candidate,
+                config,
+                backends=backends,
+                store=store,
+            )
+        assert store.load_evidence(store.evidence_key(candidate, config)) is None
 
-    assert first.viable is False
-    assert first.compile_status == "rejected"
-    assert "Error:" in first.compiler_stderr
-    assert second == first
-    assert calls == {"inspect": 1}
+    assert calls == {"inspect": 2}
 
 
 def test_complete_inspector_artifact_is_recovered_after_wrapper_failure(
@@ -857,6 +930,114 @@ def test_stack_axis_scores_absolute_expected_truth_not_wholesale_donor(tmp_path:
     assert profile.complete is True
     assert profile.axes is not None
     assert profile.axes.stack_homes == (0, 0, 0, 0)
+
+
+def test_stack_proxy_donor_reconstructs_retained_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "candidate.c"
+    source.write_text("", encoding="utf-8")
+    pcdump = tmp_path / "candidate.pcdump"
+    pcdump.write_text("retained pcdump", encoding="utf-8")
+
+    def frame(offset: int) -> dict[str, object]:
+        return {
+            "function": FUNCTION,
+            "current": {
+                "frame_size": 32,
+                "stack_home_assignment_status": "resolved-symbolic-homes",
+                "stack_home_assignments": [
+                    {
+                        "assignment_order": 0,
+                        "symbol": "home",
+                        "offset": offset,
+                        "size": 4,
+                        "kind": "local-or-temporary",
+                        "access_count": 1,
+                        "opcodes": ["stw"],
+                        "first_access": {
+                            "opcode": "stw",
+                            "operands": "r3,home(r1)",
+                            "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+                            "block_idx": 0,
+                            "instr_idx": 1,
+                        },
+                    }
+                ],
+            },
+            "expected": {"frame_size": 32},
+        }
+
+    base_checkdiff = {
+        "function": FUNCTION,
+        "match": False,
+        "target_asm": ["+000: 38 60 00 00 li r3,0"],
+        "current_asm": ["+000: 38 60 00 00 li r3,0"],
+        "classification": {"primary": "instruction-identical"},
+    }
+    candidate = RawCandidateEvidence(
+        "candidate",
+        1,
+        str(source),
+        "candidate",
+        "compiled",
+        True,
+        str(pcdump),
+        {**base_checkdiff, "frame_report": frame(12)},
+        f"FUNCTION: {FUNCTION}\nFrontend: OBJOBJECTS\n",
+        "",
+    )
+    donor = replace(candidate, candidate_id="left", source_hash="left", checkdiff_evidence=base_checkdiff)
+    parents = ParentEvidenceBundle(
+        donor,
+        replace(donor, candidate_id="right", source_hash="right"),
+        "cflags",
+        "compiler",
+        "object",
+        "inspector-v1",
+        "parsers",
+    )
+    objective = replace(
+        _objective_stub(),
+        stack_home_donor="left",
+        references={
+            **dict(_objective_stub().references),
+            "stack-homes": AxisReference(
+                "proxy",
+                "retained parent evidence",
+                "left",
+                "unresolved symbolic home",
+                True,
+                ("symbol:home",),
+            ),
+        },
+    )
+    calls: list[str] = []
+
+    stack_report = {
+        "status": "no-candidates",
+        "function": FUNCTION,
+        "candidate_count": 0,
+        "candidates": [],
+    }
+
+    def reconstruct(evidence: RawCandidateEvidence, function: str):
+        calls.append(evidence.candidate_id)
+        if evidence.candidate_id == "left":
+            return frame(8), stack_report
+        assert evidence.candidate_id == "candidate"
+        return frame(12), stack_report
+
+    monkeypatch.setattr(evaluator_module, "_evidence_frame_and_stack", reconstruct)
+    monkeypatch.setattr(
+        evaluator_module,
+        "_frame_and_stack",
+        lambda *_args, **_kwargs: pytest.fail("legacy payload-only stack extraction used"),
+    )
+
+    assert evaluator_module._stack_axis(candidate, objective, parents) == (1, 0, 0, 0)
+    assert calls == ["candidate", "left"]
 
 
 def _raw_stub() -> RawCandidateEvidence:

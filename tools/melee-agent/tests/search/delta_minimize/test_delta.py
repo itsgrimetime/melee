@@ -92,6 +92,80 @@ void f(void* header, float spacing, int i) {
     assert "sink(i + 1);" in hybrid
 
 
+def test_changed_shadowed_local_name_fails_closed():
+    left = """\
+int f(int value) {
+    {
+        int temporary = 1;
+        value += temporary;
+    }
+    return value;
+}
+"""
+    right = """\
+int f(int value) {
+    int temporary = 2;
+    {
+        int temporary = 1;
+        value += temporary;
+    }
+    return value + temporary;
+}
+"""
+
+    with pytest.raises(DeltaMinimizeError, match="^unsupported-semantic-binding$") as exc:
+        extract_delta_manifest(left, right, function="f")
+
+    assert any(
+        blocker["symbol"] == "temporary" and blocker["reason"] == "ambiguous-local-binding"
+        for blocker in exc.value.details["blockers"]
+    )
+
+
+def test_structural_wrapper_delimiters_are_one_composite_atom():
+    left = """\
+void use(int);
+void f(int value) {
+    int i;
+    for (i = 0; i < 2; i++) {
+        if (value > i) {
+            use(value);
+        }
+    }
+}
+"""
+    right = """\
+void use(int);
+void f(int value) {
+    {
+        int i;
+        for (i = 0; i < 2; i++) {
+            if (value > i) {
+                use(value + 1);
+            }
+        }
+    }
+}
+"""
+
+    manifest = extract_delta_manifest(left, right, function="f")
+    semantic_atoms = tuple(atom for atom in manifest.atoms if atom.kind != "presentation-only")
+
+    assert len(semantic_atoms) == 2
+    wrapper = next(
+        atom
+        for atom in semantic_atoms
+        if any("{" in patch.right_text or "}" in patch.right_text for patch in atom.patches)
+    )
+    wrapper_text = "".join(patch.right_text for patch in wrapper.patches)
+    assert "{" in wrapper_text and "}" in wrapper_text
+    hybrid = materialize_mask(left, manifest, 1 << manifest.atoms.index(wrapper))
+    assert "use(value);" in hybrid
+    assert "{\n        int i;" in hybrid
+    assert hybrid.rstrip().endswith("    }\n}")
+    assert hybrid.count("{") == hybrid.count("}")
+
+
 def test_budget_fails_before_returning_partial_masks():
     manifest = manifest_with_independent_atoms(7)
 

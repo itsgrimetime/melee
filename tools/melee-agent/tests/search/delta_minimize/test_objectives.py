@@ -65,6 +65,59 @@ def test_explicit_baseline_self_check_uses_exact_ig_identity(
     assert result.matched == {ig: ig for ig in desired_phys}
 
 
+def test_exact_ig_identity_rejects_changed_semantic_role(
+    monkeypatch: pytest.MonkeyPatch,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    target = role_descriptor.build_target_spec(
+        baseline_compile,
+        desired_phys,
+        0,
+        "force_proof_proxy",
+        {"inference": "parent-register-diff"},
+    )
+    descriptors = build_descriptors(baseline_compile, 0)
+    changed_ig = next(iter(desired_phys))
+    changed = {
+        **descriptors,
+        changed_ig: replace(
+            descriptors[changed_ig],
+            first_def_sig=f"changed:{descriptors[changed_ig].first_def_sig}",
+        ),
+    }
+    monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", lambda *_args: changed)
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        objectives_module._require_complete_reanchor(
+            target,
+            baseline_compile,
+            0,
+            desired_phys,
+            exact_identity=True,
+        )
+
+
+def test_allocator_namespace_witness_includes_semantic_role_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    baseline_compile: Compile,
+) -> None:
+    original = objectives_module._allocator_namespace_witness(baseline_compile, 0)
+    assert original is not None
+    descriptors = build_descriptors(baseline_compile, 0)
+    changed_ig = next(iter(descriptors))
+    changed = {
+        **descriptors,
+        changed_ig: replace(
+            descriptors[changed_ig],
+            use_site_multiset=(("semantically-different", 1),),
+        ),
+    }
+    monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", lambda *_args: changed)
+
+    assert objectives_module._allocator_namespace_witness(baseline_compile, 0) != original
+
+
 def _write_target(
     root: Path,
     baseline: Path,

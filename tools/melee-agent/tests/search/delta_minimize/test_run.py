@@ -443,6 +443,23 @@ def test_resume_revalidates_stale_parent_artifacts(tmp_path: Path) -> None:
     assert fixture.score_calls == 4
 
 
+def test_parent_cache_can_require_retained_checkdiff_evidence(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+
+    strict = replace(fixture.backends(), parent_requires_checkdiff=True)
+    second = run_delta_minimize(config, backends=strict)
+
+    assert second.to_dict() == first.to_dict()
+    assert fixture.parent_calls == 4
+    assert fixture.score_calls == 4
+
+
+def test_production_parent_cache_requires_checkdiff_evidence() -> None:
+    assert default_delta_minimize_backends().parent_requires_checkdiff is True
+
+
 def test_production_objective_adapter_supplies_real_register_diff_deriver(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -938,6 +955,62 @@ def test_infrastructure_failure_writes_resumable_incomplete_result(tmp_path: Pat
     assert "candidate-score-infrastructure" in result.blockers
     assert (config.out_dir / "candidates.json").is_file()
     assert (config.out_dir / "result.json").is_file()
+
+
+def test_missing_target_function_stops_exact_publication(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    base = fixture.backends()
+
+    def score_rows(rows, config):
+        scored = base.evaluation.score_rows(rows, config)
+        if rows[0]["candidate_id"] == "mask-10":
+            scored[0].update(
+                {
+                    "error": "function 'f' not in compiled pcdump",
+                    "score_error_kind": "candidate",
+                    "terminal_safe": True,
+                }
+            )
+        return scored
+
+    backends = replace(
+        base,
+        evaluation=replace(base.evaluation, score_rows=score_rows),
+    )
+    result = run_delta_minimize(_config(tmp_path), backends=backends)
+
+    assert result.status == "incomplete"
+    assert result.candidate_counts["legal"] == 4
+    assert result.pareto is None
+    assert "candidate-target-function-missing" in result.blockers
+
+
+def test_inspector_compile_error_stops_publication_and_retries(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+    calls = 0
+
+    def inspect_source(_source, _function, output, **_kwargs):
+        nonlocal calls
+        calls += 1
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            "### mwcceppc.exe Compiler:\n# Error: broken\nCompilation finished.\n",
+            encoding="utf-8",
+        )
+        raise DeltaMinimizeError("inspector-failed")
+
+    backends = replace(
+        base,
+        evaluation=replace(base.evaluation, inspect_source=inspect_source),
+    )
+    for attempt in range(2):
+        result = run_delta_minimize(config, backends=backends)
+        assert result.status == "incomplete"
+        assert result.pareto is None
+        assert "inspector-failed" in result.blockers
+        assert calls == attempt + 1
 
 
 def test_parent_infrastructure_failure_writes_early_incomplete_result(tmp_path: Path) -> None:
