@@ -11,6 +11,8 @@ from src.common.tree_sitter_c import get_parser
 
 from .contracts import DeltaMinimizeError
 
+DELTA_MANIFEST_SCHEMA = "delta-manifest.v2"
+
 
 @dataclass(frozen=True)
 class DeltaPatch:
@@ -139,7 +141,7 @@ def extract_primitive_manifest(
         )
     )
     manifest = DeltaManifest(
-        schema_version="delta-manifest.v1",
+        schema_version=DELTA_MANIFEST_SCHEMA,
         function=function,
         left_hash=_source_hash(left),
         right_hash=_source_hash(right),

@@ -647,3 +647,8 @@ class DeltaRunStore:
 
     def write_result(self, payload: Mapping[str, Any]) -> Path:
         return self.write_json("result.json", payload)
+
+    def invalidate_publications(self) -> None:
+        """Remove outputs derived from a superseded delta manifest."""
+        for name in ("candidates.json", "result.json"):
+            self._invalidate_evidence_path(self._safe_path(name))

@@ -22,6 +22,7 @@ from ...mwcc_debug.source_candidate_scoring import ScoreSourceConfig
 from ...mwcc_debug.stack_home_profile import build_stack_home_profile, stack_home_distance
 from .contracts import CandidateProfile, DeltaMinimizeError, ParetoSummary
 from .delta import (
+    DELTA_MANIFEST_SCHEMA,
     DeltaAtom,
     DeltaManifest,
     DeltaPatch,
@@ -60,7 +61,7 @@ from .objectives import (
 from .pareto import reduce_pareto
 from .store import DeltaRunStore
 
-PARSER_SCHEMA_HASH = "opcode.v1+color.v1+objobjects.v1+stack-homes.v1"
+PARSER_SCHEMA_HASH = "opcode.v1+color.v1+objobjects.v1+stack-homes.v1+delta-extractor.v2+candidate-evidence.v2"
 RESULT_SCHEMA = "delta-minimize-result.v1"
 OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v2"
 _OBJECTIVE_AXES = frozenset({"opcode", "color", "objobjects", "stack-homes"})
@@ -267,7 +268,7 @@ def _manifest_from_dict(payload: Mapping[str, Any]) -> DeltaManifest:
         if set(payload) != _DELTA_MANIFEST_FIELDS:
             raise ValueError
         if (
-            payload["schema_version"] != "delta-manifest.v1"
+            payload["schema_version"] not in {"delta-manifest.v1", DELTA_MANIFEST_SCHEMA}
             or not isinstance(payload["function"], str)
             or not payload["function"]
             or not _is_digest(payload["left_hash"])
@@ -746,6 +747,14 @@ def _capture_parents(
                 or not raw.viable
             ):
                 raise DeltaMinimizeError("invalid-parent-evidence")
+            if not _validate_cached_artifacts(
+                raw,
+                candidate.source_path,
+                candidate.source_hash,
+                include_objobjects=config.include_objobjects,
+                require_checkdiff=active.parent_requires_checkdiff,
+            ):
+                raise DeltaMinimizeError("invalid-parent-evidence")
             store.write_parent_evidence(key, raw.to_dict())
             stats["parent_misses"] += 1
         else:
@@ -958,7 +967,13 @@ def _load_or_extract_manifest(
         return canonical
 
     cached = _manifest_from_dict(old)
-    if cached.function != config.function or cached.left_hash != left_hash or cached.right_hash != right_hash:
+    if (
+        cached.schema_version != canonical.schema_version
+        or cached.function != config.function
+        or cached.left_hash != left_hash
+        or cached.right_hash != right_hash
+    ):
+        store.invalidate_publications()
         store.write_delta_manifest(_manifest_to_dict(canonical))
         return canonical
     if _manifest_to_dict(cached) != _manifest_to_dict(canonical):
@@ -1134,17 +1149,17 @@ def run_delta_minimize(
         return result
     objective = _load_or_infer_objective(config, parents, store, active)
     objective_hash = _hash_json(objective.to_dict())
+    manifest = _load_or_extract_manifest(config, store, active, left_source, right_source)
     store.bind_provenance(
         {
             "cflags_hash": parents.cflags_hash,
             "compiler_fingerprint": parents.compiler_fingerprint,
             "expected_object_hash": parents.expected_object_hash,
             "objective_manifest_hash": objective_hash,
-            "parser_schema_hash": parents.parser_schema_hash,
+            "parser_schema_hash": f"{parents.parser_schema_hash}+{manifest.schema_version}",
             "inspector_version": parents.inspector_version,
         }
     )
-    manifest = _load_or_extract_manifest(config, store, active, left_source, right_source)
     masks = enumerate_legal_masks(manifest, max_candidates=config.max_candidates)
     candidates = _materialize_candidates(left_source, right_source, manifest, masks, store)
     store.write_color_target(objective.target_spec)

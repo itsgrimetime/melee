@@ -253,6 +253,16 @@ def test_derived_target_uses_correlated_exact_allocator_namespace(
         "parsers",
     )
     stable_roles = tuple(desired)
+    descriptors = build_descriptors(compile, 0)
+    unique_descriptors = {
+        ig_idx: replace(descriptor, first_def_sig=f"ig:{ig_idx}:{descriptor.first_def_sig}")
+        for ig_idx, descriptor in descriptors.items()
+    }
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_descriptors",
+        lambda *_args: unique_descriptors,
+    )
     monkeypatch.setattr(
         evaluator_module,
         "build_colorgraph_profile",

@@ -147,6 +147,7 @@ class _CountingFixture:
         self.score_calls = 0
         self.inspect_calls = 0
         self.parent_generation = 1
+        self.parent_checkdiff = False
         self.expected_object_hash = "expected-object"
         self.objective_physical = 3
         self.captured_sources: dict[int, bytes] = {}
@@ -178,7 +179,7 @@ class _CountingFixture:
             compile_status="compiled",
             viable=True,
             pcdump_path=str(pcdump),
-            checkdiff_evidence=None,
+            checkdiff_evidence={"function": config.function} if self.parent_checkdiff else None,
             inspect_text="FUNCTION: f\nFrontend: OBJOBJECTS\n" if config.include_objobjects else None,
             compiler_stderr="",
             inspection_mode="objobjects" if config.include_objobjects else "no-objobjects",
@@ -418,6 +419,53 @@ def test_unchanged_delta_manifest_rederives_locally_without_external_resume_work
     assert fixture.score_calls == 4
 
 
+def test_extractor_schema_upgrade_rekeys_candidates_with_changed_atom_order(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+
+    def old_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        return replace(base.extract_manifest(left, right, function=function), schema_version="delta-manifest.v1")
+
+    first = run_delta_minimize(config, backends=replace(base, extract_manifest=old_extract))
+    assert first.candidate_counts == {"legal": 4, "viable": 4, "complete": 4}
+
+    def new_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        manifest = base.extract_manifest(left, right, function=function)
+        return replace(manifest, atoms=tuple(reversed(manifest.atoms)))
+
+    second = run_delta_minimize(config, backends=replace(base, extract_manifest=new_extract))
+
+    assert second.candidate_counts == first.candidate_counts
+    assert fixture.score_calls == 8
+    manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "delta-manifest.v2"
+
+
+def test_extractor_schema_upgrade_removes_stale_publications_before_enumeration(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+
+    def old_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        return replace(base.extract_manifest(left, right, function=function), schema_version="delta-manifest.v1")
+
+    run_delta_minimize(config, backends=replace(base, extract_manifest=old_extract))
+    assert (config.out_dir / "result.json").is_file()
+    assert (config.out_dir / "candidates.json").is_file()
+
+    with pytest.raises(DeltaMinimizeError, match="^candidate-budget-exceeded$"):
+        run_delta_minimize(
+            replace(config, max_candidates=1),
+            backends=base,
+        )
+
+    assert not (config.out_dir / "result.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+    manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "delta-manifest.v2"
+
+
 def test_run_materializes_only_parent_deltas_and_reproduces_both_endpoints(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
 
@@ -448,12 +496,23 @@ def test_parent_cache_can_require_retained_checkdiff_evidence(tmp_path: Path) ->
     config = _config(tmp_path)
     first = run_delta_minimize(config, backends=fixture.backends())
 
+    fixture.parent_checkdiff = True
     strict = replace(fixture.backends(), parent_requires_checkdiff=True)
     second = run_delta_minimize(config, backends=strict)
 
     assert second.to_dict() == first.to_dict()
     assert fixture.parent_calls == 4
     assert fixture.score_calls == 4
+
+
+def test_parent_checkdiff_requirement_validates_fresh_capture(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-parent-evidence$"):
+        run_delta_minimize(
+            _config(tmp_path),
+            backends=replace(fixture.backends(), parent_requires_checkdiff=True),
+        )
 
 
 def test_production_parent_cache_requires_checkdiff_evidence() -> None:
