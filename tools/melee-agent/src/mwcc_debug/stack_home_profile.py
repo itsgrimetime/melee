@@ -344,7 +344,21 @@ def _named_homes(
             continue
         assignment_orders.append(int(order))
         if symbol.startswith("@"):
-            anonymous_assignments.append(raw)
+            expected_offset = raw.get("expected_offset")
+            kind = _normalize_identity_text(raw.get("kind"))
+            if _is_int(expected_offset) and kind:
+                opcode_identity = ",".join(_normalize_text(opcode).lower() for opcode in opcodes)
+                homes.append(
+                    _PendingHome(
+                        identity=(f"absolute-home:{int(expected_offset)}:{kind}:{opcode_identity}"),
+                        offset=int(offset),
+                        reference_kind="absolute",
+                        sequence_key=_assignment_sequence_key(raw, int(order)),
+                        origin="symbol",
+                    )
+                )
+            else:
+                anonymous_assignments.append(raw)
             continue
         named_assignments.append(raw)
         homes.append(

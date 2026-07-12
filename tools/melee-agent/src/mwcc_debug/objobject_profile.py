@@ -38,6 +38,7 @@ _SPACE_RE = re.compile(r"\s+")
 _STRUCTURAL_SPACE_RE = re.compile(r"\s*([()[\]{},;:])\s*")
 _OPERATOR_SPACE_RE = re.compile(r"\s*([+*/%&|^=<>?!~-]+)\s*")
 _TYPE_POINTER_SPACE_RE = re.compile(r"\s*\*")
+_REAL_ORDER_RE = re.compile(rf"^\s*\[(?P<order>\d+)\]\s+(?P<address>{_ADDRESS})\s+(?P<name>\S.*?)\s*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +193,60 @@ def _parse_records(snapshot_text: str, function: str) -> tuple[list[_ObjectRecor
     return records, saw_unparsed_content
 
 
+def _parse_real_inspector_records(
+    inspect_text: str,
+    function: str,
+) -> tuple[list[_ObjectRecord], bool]:
+    start = re.search(rf"(?m)^FUNCTION:\s*{re.escape(function)}\s*$", inspect_text)
+    if start is None:
+        return [], False
+    next_function = re.search(r"(?m)^FUNCTION:\s*", inspect_text[start.end() :])
+    end = start.end() + next_function.start() if next_function is not None else len(inspect_text)
+    section = inspect_text[start.start() : end]
+
+    by_name: dict[str, set[tuple[str, str]]] = {}
+    for line in section.splitlines():
+        match = _REAL_OBJECT_RE.match(line)
+        if match is not None:
+            by_name.setdefault(match.group("name").strip(), set()).add(
+                (match.group("kind").strip(), match.group("type").strip())
+            )
+
+    marker = "LOCAL VARIABLES (first appearance order, with ObjObject addresses):"
+    marker_index = section.find(marker)
+    if marker_index < 0:
+        return [], False
+    ordered: list[tuple[int, str]] = []
+    for line in section[marker_index + len(marker) :].splitlines():
+        if line.startswith("LOCAL VARIABLES (sorted by ObjObject address):"):
+            break
+        match = _REAL_ORDER_RE.match(line)
+        if match is not None:
+            ordered.append((int(match.group("order")), match.group("name").strip()))
+    if not ordered or [order for order, _name in ordered] != list(range(len(ordered))):
+        return [], True
+
+    records: list[_ObjectRecord] = []
+    for order, name in ordered:
+        matches = by_name.get(name)
+        if matches is None or len(matches) != 1:
+            return records, True
+        kind, type_name = next(iter(matches))
+        records.append(
+            _ObjectRecord(
+                fields={
+                    "kind": kind,
+                    "source_name": name,
+                    "type_name": type_name,
+                    "scope": function,
+                    "expression": name,
+                },
+                occurrence=str(order),
+            )
+        )
+    return records, False
+
+
 def parse_objobject_profile(inspect_text: str, function: str) -> ObjObjectProfile:
     """Parse the final ObjObject snapshot for exactly ``function``."""
 
@@ -200,10 +255,12 @@ def parse_objobject_profile(inspect_text: str, function: str) -> ObjObjectProfil
         for snapshot in parse_inspect_snapshots(inspect_text, function=function)
         if snapshot.name == "Frontend: OBJOBJECTS"
     ]
-    if not snapshots:
-        return ObjObjectProfile((), False, "missing-objobject-snapshot")
-
-    records, saw_unparsed_content = _parse_records(snapshots[-1].text, function)
+    if snapshots:
+        records, saw_unparsed_content = _parse_records(snapshots[-1].text, function)
+    else:
+        records, saw_unparsed_content = _parse_real_inspector_records(inspect_text, function)
+        if not records and not saw_unparsed_content:
+            return ObjObjectProfile((), False, "missing-objobject-snapshot")
     identities: list[ObjObjectIdentity] = []
     occurrences: list[str | None] = []
     required = {"kind", "source_name", "type_name", "scope", "expression"}
@@ -233,7 +290,7 @@ def parse_objobject_profile(inspect_text: str, function: str) -> ObjObjectProfil
             else None
         )
 
-    if saw_unparsed_content or (not records and len(snapshots[-1].text.splitlines()) > 1):
+    if saw_unparsed_content or (snapshots and not records and len(snapshots[-1].text.splitlines()) > 1):
         return ObjObjectProfile(tuple(identities), False, "incomplete-objobject-entry")
 
     counts = Counter(identities)

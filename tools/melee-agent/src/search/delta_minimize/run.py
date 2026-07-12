@@ -38,6 +38,7 @@ from .evaluator import (
     _candidate_blockers,
     _compile_diagnostics,
     _compile_rejected,
+    _evidence_frame_and_stack,
     _file_hash,
     _frame_and_stack,
     _invoke_inspector,
@@ -727,6 +728,7 @@ def _capture_parents(
                     candidate.source_path,
                     candidate.source_hash,
                     include_objobjects=config.include_objobjects,
+                    require_checkdiff=False,
                 )
             except DeltaMinimizeError:
                 reusable = False
@@ -891,6 +893,13 @@ def _load_or_infer_objective(
         try:
             objective = _infer_validated_objective(config, parents, active)
         except DeltaMinimizeError as error:
+            if error.reason in {
+                "ambiguous-color-target",
+                "ambiguous-color-donor",
+                "ambiguous-objobject-donor",
+                "ambiguous-stack-home-donor",
+            }:
+                raise
             raise DeltaMinimizeError("invalid-objective-manifest") from error
         objective_payload = objective.to_dict()
         store.write_objective_manifest(objective_payload)
@@ -1137,7 +1146,8 @@ def run_delta_minimize(
     manifest = _load_or_extract_manifest(config, store, active, left_source, right_source)
     masks = enumerate_legal_masks(manifest, max_candidates=config.max_candidates)
     candidates = _materialize_candidates(left_source, right_source, manifest, masks, store)
-    target = store.write_color_target(objective.target_spec)
+    store.write_color_target(objective.target_spec)
+    target = store.write_score_target(objective.function, objective.desired_phys)
     evaluation = CandidateEvaluationConfig(
         melee_root=config.melee_root,
         function=config.function,
@@ -1359,6 +1369,7 @@ def _default_capture_parent(
                 config.function,
                 store.inspect_output_path(candidate.candidate_id),
                 180,
+                config.melee_root,
             )
         except (subprocess.TimeoutExpired, TimeoutError) as error:
             raise DeltaMinimizeError("inspector-timeout", {"candidate_id": candidate.candidate_id}) from error
@@ -1372,8 +1383,12 @@ def _default_capture_parent(
     return evidence
 
 
-def _expected_stack_profile(payload: Mapping[str, Any], function: str):
-    frame, stack = _frame_and_stack(payload, function)
+def _expected_stack_profile(
+    payload: Mapping[str, Any],
+    function: str,
+    inputs: tuple[Mapping[str, Any], Mapping[str, Any] | None] | None = None,
+):
+    frame, stack = inputs or _frame_and_stack(payload, function)
     expected_frame, expected_stack = deepcopy((frame, stack))
     raw_expected = expected_frame.get("expected")
     expected_size = raw_expected.get("frame_size") if isinstance(raw_expected, Mapping) else None
@@ -1412,6 +1427,15 @@ def _expected_stack_profile(payload: Mapping[str, Any], function: str):
     return profile
 
 
+def _validated_asm_lines(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or any(not isinstance(line, str) for line in value):
+        raise ValueError("invalid assembly evidence")
+    lines = tuple(line for line in value if line.strip())
+    if not lines:
+        raise ValueError("empty assembly evidence")
+    return lines
+
+
 def _default_parent_objective(
     raw: RawCandidateEvidence,
     side: str,
@@ -1420,16 +1444,10 @@ def _default_parent_objective(
     payload = raw.checkdiff_evidence
     if raw.pcdump_path is None or payload is None:
         raise DeltaMinimizeError("incomplete-parent-evidence", {"side": side})
-    target_asm = payload.get("target_asm")
-    current_asm = payload.get("current_asm")
-    if (
-        not isinstance(target_asm, (list, tuple))
-        or not target_asm
-        or any(not isinstance(line, str) or not line for line in target_asm)
-        or not isinstance(current_asm, (list, tuple))
-        or not current_asm
-        or any(not isinstance(line, str) or not line for line in current_asm)
-    ):
+    try:
+        target_asm = _validated_asm_lines(payload.get("target_asm"))
+        current_asm = _validated_asm_lines(payload.get("current_asm"))
+    except ValueError:
         raise DeltaMinimizeError("incomplete-parent-opcode-evidence")
     try:
         source = Path(raw.source_path).read_text(encoding="utf-8")
@@ -1443,9 +1461,9 @@ def _default_parent_objective(
             parse_opcode_graph(list(current_asm)),
             structural_status=_structural_status(payload),
         )
-        stack_inputs = _frame_and_stack(payload, config.function)
+        stack_inputs = _evidence_frame_and_stack(raw, config.function)
         stack_profile = build_stack_home_profile(*stack_inputs)
-        absolute_stack = _expected_stack_profile(payload, config.function)
+        absolute_stack = _expected_stack_profile(payload, config.function, stack_inputs)
         stack_distance = stack_home_distance(stack_profile, absolute_stack).as_tuple()
     except (OSError, UnicodeError, TypeError, ValueError) as error:
         raise DeltaMinimizeError("incomplete-parent-evidence", {"side": side}) from error

@@ -12,15 +12,19 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from src.common.tree_sitter_c import get_parser
+
 from ...mwcc_debug import role_descriptor, role_reanchor
 from ...mwcc_debug.colorgraph_profile import build_colorgraph_profile, colorgraph_distance
 from ...mwcc_debug.diff_capture import DiffInput, read_inspect_input_if_available
+from ...mwcc_debug.frame_reservations import analyze_frame_reservations
 from ...mwcc_debug.objobject_profile import objobject_order_distance, parse_objobject_profile
 from ...mwcc_debug.opcode_graph import opcode_graph_distance, parse_opcode_graph
 from ...mwcc_debug.source_candidate_scoring import ScoreSourceConfig, score_retained_source_rows
 from ...mwcc_debug.stack_home_profile import build_stack_home_profile
+from ...mwcc_debug.stack_slot_bridge import explain_stack_slot_localizer
 from .contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
-from .objectives import ObjectiveManifest
+from .objectives import ObjectiveManifest, _allocator_namespace_witness
 
 
 def _is_int(value: object) -> bool:
@@ -268,12 +272,13 @@ def _default_inspect_source(
     output: Path,
     *,
     timeout: int,
+    melee_root: Path | None = None,
 ) -> str:
-    melee_root = Path(__file__).resolve().parents[5]
+    active_root = melee_root or Path(__file__).resolve().parents[5]
     text = read_inspect_input_if_available(
         DiffInput("delta-candidate", str(source), "source", source),
         function=function,
-        melee_root=melee_root,
+        melee_root=active_root,
         timeout=timeout,
         output_path=output,
     )
@@ -304,7 +309,12 @@ def _compile_diagnostics(row: Mapping[str, Any]) -> str:
 
 
 def _compile_rejected(row: Mapping[str, Any]) -> bool:
-    if row.get("score_error_kind") != "candidate" or row.get("pcdump_path"):
+    if row.get("score_error_kind") != "candidate":
+        return False
+    error = str(row.get("error") or "").lower()
+    if row.get("terminal_safe") is True and "not in compiled pcdump" in error:
+        return True
+    if row.get("pcdump_path"):
         return False
     diagnostics = _compile_diagnostics(row).lower()
     return "mwcceppc_debug.exe compiler" in diagnostics and "error:" in diagnostics
@@ -327,12 +337,15 @@ def _validate_cached_artifacts(
     source_hash: str,
     *,
     include_objobjects: bool,
+    require_checkdiff: bool = True,
 ) -> bool:
     try:
         if _file_hash(candidate_source) != source_hash:
             return False
         if evidence.viable:
             if evidence.pcdump_path is None or evidence.pcdump_hash is None:
+                return False
+            if require_checkdiff and not isinstance(evidence.checkdiff_evidence, Mapping):
                 return False
             if _file_hash(Path(evidence.pcdump_path)) != evidence.pcdump_hash:
                 return False
@@ -345,26 +358,99 @@ def _validate_cached_artifacts(
     return True
 
 
+def _source_token_digest(path: Path) -> str | None:
+    try:
+        source = path.read_bytes()
+        root = get_parser().parse(source).root_node
+    except (OSError, ValueError):
+        return None
+    if root.has_error:
+        return None
+    digest = hashlib.sha256()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.child_count:
+            stack.extend(reversed(node.children))
+            continue
+        if node.type == "comment":
+            continue
+        digest.update(node.type.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(source[node.start_byte : node.end_byte])
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _complete_objobject_text(text: str, function: str) -> bool:
+    try:
+        return parse_objobject_profile(text, function).complete
+    except (TypeError, ValueError):
+        return False
+
+
+def _inspection_cache(store: Any) -> dict[str, str]:
+    cache = getattr(store, "_delta_inspection_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(store, "_delta_inspection_cache", cache)
+    return cache
+
+
+def _remember_inspection(store: Any, source: Path, function: str, text: str | None) -> None:
+    if text is None or not _complete_objobject_text(text, function):
+        return
+    digest = _source_token_digest(source)
+    if digest is not None:
+        _inspection_cache(store).setdefault(digest, text)
+
+
 def _invoke_inspector(
     backend: Callable[..., str],
     source: Path,
     function: str,
     output: Path,
     timeout: int,
+    melee_root: Path | None = None,
 ) -> str:
     try:
         parameters = inspect.signature(backend).parameters
     except (TypeError, ValueError):
         parameters = {}
-    if "timeout" in parameters or any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
-    ):
-        result = backend(source, function, output, timeout=timeout)
-    else:
-        result = backend(source, function, output)
+    has_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
+    kwargs: dict[str, Any] = {}
+    if "timeout" in parameters or has_kwargs:
+        kwargs["timeout"] = timeout
+    if melee_root is not None and ("melee_root" in parameters or has_kwargs):
+        kwargs["melee_root"] = melee_root
+    result = backend(source, function, output, **kwargs)
     if not isinstance(result, str) or not result:
         raise DeltaMinimizeError("inspector-failed", {"source": str(source)})
     return result
+
+
+def _inspector_compile_rejection(output: Path) -> str | None:
+    try:
+        text = output.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    if "Compiler:" in text and "Error:" in text and "Compilation finished." in text:
+        return text
+    return None
+
+
+def _recover_complete_inspector_output(output: Path, function: str) -> str | None:
+    try:
+        text = output.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    if "Compilation finished." not in text or "Error:" in text:
+        return None
+    try:
+        profile = parse_objobject_profile(text, function)
+    except (TypeError, ValueError):
+        return None
+    return text if profile.complete else None
 
 
 def capture_candidate(
@@ -411,6 +497,7 @@ def capture_candidate(
             source_hash,
             include_objobjects=config.include_objobjects,
         ):
+            _remember_inspection(store, source_path, config.function, evidence.inspect_text)
             return evidence
         store.invalidate_evidence(key)
     if store.evidence_path(key).exists():
@@ -476,23 +563,60 @@ def capture_candidate(
         pcdump_hash=pcdump_hash,
     )
     if evidence.viable and config.include_objobjects:
+        token_digest = _source_token_digest(source_path)
+        cached_inspection = _inspection_cache(store).get(token_digest) if token_digest is not None else None
+        if cached_inspection is not None and _complete_objobject_text(
+            cached_inspection,
+            config.function,
+        ):
+            evidence = RawCandidateEvidence(
+                **{
+                    **evidence.to_dict(),
+                    "blockers": evidence.blockers,
+                    "inspect_text": cached_inspection,
+                }
+            )
+            store.write_evidence(key, evidence.to_dict())
+            return evidence
+        inspect_output = store.inspect_output_path(candidate_id)
         try:
             inspect_text = _invoke_inspector(
                 active.inspect_source,
                 source_path,
                 config.function,
-                store.inspect_output_path(candidate_id),
+                inspect_output,
                 config.inspect_timeout,
+                config.melee_root,
             )
         except (subprocess.TimeoutExpired, TimeoutError) as error:
             raise DeltaMinimizeError("inspector-timeout", {"candidate_id": candidate_id}) from error
-        except DeltaMinimizeError:
-            raise
+        except DeltaMinimizeError as error:
+            diagnostics = _inspector_compile_rejection(inspect_output) if error.reason == "inspector-failed" else None
+            if diagnostics is not None:
+                evidence = RawCandidateEvidence(
+                    **{
+                        **evidence.to_dict(),
+                        "compile_status": "rejected",
+                        "viable": False,
+                        "compiler_stderr": "\n".join(item for item in (evidence.compiler_stderr, diagnostics) if item),
+                        "blockers": tuple(dict.fromkeys((*evidence.blockers, "inspector-compile-rejected"))),
+                    }
+                )
+                store.write_evidence(key, evidence.to_dict())
+                return evidence
+            inspect_text = (
+                _recover_complete_inspector_output(inspect_output, config.function)
+                if error.reason == "inspector-failed"
+                else None
+            )
+            if inspect_text is None:
+                raise
         except Exception as error:
             raise DeltaMinimizeError("inspector-failed", {"candidate_id": candidate_id}) from error
         evidence = RawCandidateEvidence(
             **{**evidence.to_dict(), "blockers": evidence.blockers, "inspect_text": inspect_text}
         )
+        _remember_inspection(store, source_path, config.function, inspect_text)
 
     store.write_evidence(key, evidence.to_dict())
     return evidence
@@ -505,19 +629,19 @@ def _add(blockers: list[str], reason: str) -> None:
 
 def _asm_lines(payload: Mapping[str, Any], key: str) -> list[str] | None:
     value = payload.get(key)
-    if (
-        not isinstance(value, (list, tuple))
-        or not value
-        or any(not isinstance(item, str) or not item for item in value)
-    ):
+    if not isinstance(value, (list, tuple)) or not value or any(not isinstance(item, str) for item in value):
         return None
-    return list(value)
+    lines = [item for item in value if item.strip()]
+    return lines or None
 
 
 def _structural_status(payload: Mapping[str, Any]) -> str:
     if payload.get("match") is True:
         return "structural-match"
     classification = payload.get("classification")
+    truth_gate = classification.get("structural_truth_gate") if isinstance(classification, Mapping) else None
+    if isinstance(truth_gate, Mapping) and truth_gate.get("status") == "structural-match":
+        return "structural-match"
     primary = classification.get("primary") if isinstance(classification, Mapping) else None
     if primary in {"instruction-identical", "relocation-label-only", "normalized-structural-match"}:
         return "structural-match"
@@ -628,6 +752,29 @@ def _color_axis(
     candidate_compile = _compile(evidence, objective.function)
     donor_compile = _compile(donor_raw, objective.function)
     target = _target_spec(objective.target_spec)
+    candidate_witness = _allocator_namespace_witness(candidate_compile, objective.class_id)
+    donor_witness = _allocator_namespace_witness(donor_compile, objective.class_id)
+    if (
+        target.provenance.get("inference") == "parent-register-diff"
+        and candidate_witness is not None
+        and candidate_witness == donor_witness
+    ):
+        role_map = {ig_idx: ig_idx for ig_idx in range(candidate_witness[0])}
+        candidate_profile = build_colorgraph_profile(
+            _load_text(evidence.pcdump_path),
+            objective.function,
+            objective.class_id,
+            role_map,
+            required_roles=frozenset(desired),
+        )
+        donor_profile = build_colorgraph_profile(
+            _load_text(donor_raw.pcdump_path),
+            objective.function,
+            objective.class_id,
+            role_map,
+            required_roles=frozenset(desired),
+        )
+        return tuple(colorgraph_distance(candidate_profile, donor_profile, desired).as_tuple())  # type: ignore[return-value]
 
     candidate_target = role_reanchor.reanchor(target, candidate_compile, class_id=objective.class_id)
     donor_target = role_reanchor.reanchor(target, donor_compile, class_id=objective.class_id)
@@ -724,6 +871,63 @@ def _frame_and_stack(payload: Mapping[str, Any], function: str) -> tuple[Mapping
     return frame, stack if isinstance(stack, Mapping) else None
 
 
+def _evidence_frame_and_stack(
+    evidence: RawCandidateEvidence,
+    function: str,
+) -> tuple[Mapping[str, Any], Mapping[str, Any] | None]:
+    payload = evidence.checkdiff_evidence
+    if payload is None:
+        raise ValueError("missing checkdiff evidence")
+    if isinstance(payload.get("frame_report"), Mapping):
+        return _frame_and_stack(payload, function)
+    if evidence.pcdump_path is None:
+        raise ValueError("missing pcdump")
+    pcdump_text = _load_text(evidence.pcdump_path)
+    source_text = _load_text(evidence.source_path)
+
+    def asm_text(key: str) -> str:
+        raw = payload.get(key)
+        if not isinstance(raw, (list, tuple)) or any(not isinstance(line, str) for line in raw):
+            raise ValueError("invalid assembly evidence")
+        lines = [line for line in raw if line.strip()]
+        if not lines:
+            raise ValueError("empty assembly evidence")
+        return "\n".join(lines)
+
+    frame = analyze_frame_reservations(
+        pcdump_text,
+        function,
+        expected_asm_text=asm_text("target_asm"),
+        current_asm_text=asm_text("current_asm"),
+        source_text=source_text,
+        source_path=evidence.source_path,
+    )
+    classification = payload.get("classification")
+    classification = classification if isinstance(classification, Mapping) else {}
+    localizer = classification.get("stack_slot_localizer")
+    if isinstance(localizer, Mapping):
+        bridge = explain_stack_slot_localizer(
+            pcdump_text,
+            function,
+            dict(localizer),
+            source_text=source_text,
+            source_file=evidence.source_path,
+        )
+    elif isinstance(classification.get("offset_discrepancies"), (list, tuple)) and not classification.get(
+        "offset_discrepancies"
+    ):
+        bridge = {
+            "status": "no-candidates",
+            "function": function,
+            "frame_size": frame["current"].get("frame_size"),
+            "candidate_count": 0,
+            "candidates": [],
+        }
+    else:
+        bridge = None
+    return frame, bridge
+
+
 def _stack_axis(
     evidence: RawCandidateEvidence,
     objective: ObjectiveManifest,
@@ -731,7 +935,7 @@ def _stack_axis(
 ) -> tuple[int, int, int, int]:
     if evidence.checkdiff_evidence is None:
         raise ValueError("missing checkdiff")
-    candidate_inputs = _frame_and_stack(evidence.checkdiff_evidence, objective.function)
+    candidate_inputs = _evidence_frame_and_stack(evidence, objective.function)
     candidate = build_stack_home_profile(*candidate_inputs)
     if not candidate.complete:
         raise ValueError("incomplete candidate stack profile")

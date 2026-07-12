@@ -594,6 +594,48 @@ class DeltaRunStore:
             )
         return path
 
+    def write_score_target(self, function: str, virtuals: Mapping[int, int]) -> Path:
+        """Write the legacy target projection consumed by score-source.
+
+        The objective's rich role-descriptor target remains a separate,
+        immutable artifact.  Candidate compilation only needs this exact IG
+        to physical-register projection, and it must also be content-addressed
+        so a changed objective starts a new evidence-cache epoch.
+        """
+        if not isinstance(function, str) or not function or not virtuals:
+            raise DeltaMinimizeError("invalid-score-target")
+        normalized_virtuals: dict[int, int] = {}
+        for ig_idx, physical in virtuals.items():
+            if (
+                type(ig_idx) is not int
+                or ig_idx < 0
+                or type(physical) is not int
+                or not 0 <= physical <= 31
+                or ig_idx in normalized_virtuals
+            ):
+                raise DeltaMinimizeError("invalid-score-target")
+            normalized_virtuals[ig_idx] = physical
+        normalized = _json_value(
+            {
+                "function": function,
+                "virtuals": dict(sorted(normalized_virtuals.items())),
+            }
+        )
+        digest = hashlib.sha256(_canonical_json_bytes(normalized)).hexdigest()
+        path = self._safe_path("objective", "score-targets", f"{digest}.json")
+        with _exclusive_file_lock(path):
+            existing_blob = _read_regular_bytes(path, corruption="corrupt-score-target-artifact")
+            if existing_blob is not None:
+                try:
+                    existing = json.loads(existing_blob)
+                except (UnicodeError, json.JSONDecodeError) as error:
+                    raise DeltaMinimizeError("corrupt-score-target-artifact") from error
+                if existing != normalized or hashlib.sha256(_canonical_json_bytes(existing)).hexdigest() != digest:
+                    raise DeltaMinimizeError("corrupt-score-target-artifact")
+            else:
+                write_json_atomic(path, normalized)
+        return path
+
     def write_objective_manifest(self, payload: Mapping[str, Any]) -> Path:
         return self.write_json("objective-manifest.json", payload)
 

@@ -507,7 +507,30 @@ def _require_complete_reanchor(
     compile: role_descriptor.Compile,
     class_id: int,
     desired_phys: Mapping[int, int],
+    *,
+    exact_identity: bool = False,
 ) -> role_reanchor.ReanchorResult:
+    if exact_identity:
+        descriptors = role_descriptor.build_descriptors(compile, class_id)
+        target_roles = {
+            role.original_ig: role
+            for role in target.roles
+            if role.class_id == class_id and role.original_ig in desired_phys
+        }
+        if (
+            target.function != compile.name
+            or set(target_roles) != set(desired_phys)
+            or set(desired_phys) - set(descriptors)
+            or any(target_roles[ig].desired_phys != physical for ig, physical in desired_phys.items())
+        ):
+            raise DeltaMinimizeError("ambiguous-color-target")
+        exact = dict(desired_phys)
+        return role_reanchor.ReanchorResult(
+            class_id=class_id,
+            force_phys=exact,
+            diagnostics={},
+            matched={ig: ig for ig in exact},
+        )
     result = role_reanchor.reanchor(target, compile, class_id=class_id)
     landed: dict[int, tuple[int, int]] = {}
     for new_ig, original_ig in result.matched.items():
@@ -741,18 +764,32 @@ def _derive_target_spec(
             {"inference": "parent-register-diff", "parent": parent.side},
             False,
         )
-        _require_complete_reanchor(spec, parent.compile, parent.class_id, force_phys)
+        _require_complete_reanchor(
+            spec,
+            parent.compile,
+            parent.class_id,
+            force_phys,
+            exact_identity=True,
+        )
         derived.append(force_phys)
         specs.append(spec)
 
-    left_to_right = _require_complete_reanchor(specs[0], right.compile, left.class_id, derived[0])
-    right_to_left = _require_complete_reanchor(specs[1], left.compile, right.class_id, derived[1])
-    if left.class_id != right.class_id:
+    if left.class_id != right.class_id or dict(derived[0]) != dict(derived[1]):
         raise DeltaMinimizeError("ambiguous-color-target")
-    if dict(left_to_right.force_phys) != dict(derived[1]):
-        raise DeltaMinimizeError("ambiguous-color-target")
-    if dict(right_to_left.force_phys) != dict(derived[0]):
-        raise DeltaMinimizeError("ambiguous-color-target")
+    _require_complete_reanchor(
+        specs[0],
+        right.compile,
+        left.class_id,
+        derived[0],
+        exact_identity=True,
+    )
+    _require_complete_reanchor(
+        specs[1],
+        left.compile,
+        right.class_id,
+        derived[1],
+        exact_identity=True,
+    )
     target = LoadedColorTarget(
         function=left.function,
         class_id=left.class_id,
@@ -795,6 +832,8 @@ def _complete_profile_role_map(
     reference_compile: role_descriptor.Compile,
     parent_compile: role_descriptor.Compile,
     class_id: int,
+    *,
+    allow_exact_namespace: bool = False,
 ) -> Mapping[int, int]:
     """Reanchor every structurally stable allocator role into one parent.
 
@@ -804,6 +843,12 @@ def _complete_profile_role_map(
     comparable across parents.  The color-profile parser will fail closed if
     genuinely ambiguous roles leave evidence unmapped.
     """
+    if allow_exact_namespace:
+        reference_witness = _allocator_namespace_witness(reference_compile, class_id)
+        parent_witness = _allocator_namespace_witness(parent_compile, class_id)
+        if reference_witness is not None and reference_witness == parent_witness:
+            return {ig_idx: ig_idx for ig_idx in range(reference_witness[0])}
+
     descriptors = role_descriptor.build_descriptors(reference_compile, class_id)
     if not descriptors:
         raise DeltaMinimizeError("ambiguous-color-donor")
@@ -822,6 +867,65 @@ def _complete_profile_role_map(
         ).matched
     except Exception as error:
         raise DeltaMinimizeError("ambiguous-color-donor") from error
+
+
+def _allocator_namespace_witness(
+    compile: role_descriptor.Compile,
+    class_id: int,
+) -> tuple[Any, ...] | None:
+    """Prove two dumps use the same complete raw allocator IG namespace.
+
+    Assignment registers and interference edges are intentionally excluded:
+    those are objective lanes.  The namespace witness instead requires the
+    same virtual count, decision/simplify traversal identities, and coalesce
+    projection.  This is strong enough to use raw IGs as stable roles while
+    still allowing the graph facts that the minimizer is meant to compare to
+    differ.
+    """
+    decisions = [section for section in compile.fev.colorgraph_sections if section.class_id == class_id]
+    simplify = [section for section in compile.fev.simplify_sections if section.class_id == class_id]
+    coalesce = [section for section in compile.fev.coalesce_sections if section.class_id == class_id]
+    if not decisions or not simplify or not coalesce:
+        return None
+    decision_section = decisions[-1]
+    simplify_section = simplify[-1]
+    coalesce_section = coalesce[-1]
+    n_virtuals = coalesce_section.n_virtuals
+    if (
+        n_virtuals <= 0
+        or decision_section.result != 1
+        or decision_section.n_nodes < len(decision_section.decisions)
+        or len(decision_section.decisions) != len(simplify_section.entries)
+        or simplify_section.n_class_regs != n_virtuals
+        or coalesce_section.distinct_roots is None
+        or coalesce_section.truncated
+        or not coalesce_section.exit_valid
+    ):
+        return None
+
+    decision_order = tuple(
+        row.ig_idx for row in sorted(decision_section.decisions, key=lambda item: item.iter_idx) if row.ig_idx >= 0
+    )
+    simplify_order = tuple(
+        row.ig_idx for row in sorted(simplify_section.entries, key=lambda item: item.iter_idx) if row.ig_idx >= 0
+    )
+    evidence_igs = set(decision_order) | set(simplify_order)
+    evidence_igs.update(
+        ig_idx for row in decision_section.decisions for ig_idx, _physical in row.interferers if ig_idx >= 0
+    )
+    evidence_igs.update(ig_idx for mapping in coalesce_section.mappings for ig_idx in mapping if ig_idx >= 0)
+    evidence_igs.update(ig_idx for override in coalesce_section.forced_overrides for ig_idx in override if ig_idx >= 0)
+    if not evidence_igs or any(ig_idx >= n_virtuals for ig_idx in evidence_igs):
+        return None
+    return (
+        n_virtuals,
+        decision_order,
+        simplify_order,
+        frozenset(evidence_igs),
+        tuple(coalesce_section.mappings),
+        tuple(coalesce_section.forced_overrides),
+        coalesce_section.distinct_roots,
+    )
 
 
 def _assignment_distance(profile: ColorGraphProfile, desired_phys: Mapping[int, int]) -> int:
@@ -904,6 +1008,7 @@ def infer_objective_manifest(
         raise DeltaMinimizeError("invalid-parent-stack-evidence")
     overrides = _validate_overrides(donor_overrides)
 
+    derived_exact_identity = target_path is None
     if target_path is None:
         loaded, target_spec = _derive_target_spec(left, right, derive_force_target)
         profile_reference_compile = left.compile
@@ -935,6 +1040,7 @@ def infer_objective_manifest(
             baseline_compile,
             loaded.class_id,
             loaded.force_phys,
+            exact_identity=True,
         )
         color_target_artifact = str(target_path.resolve())
         target_reason = "explicit-versioned-color-target"
@@ -944,23 +1050,39 @@ def infer_objective_manifest(
         left.compile,
         loaded.class_id,
         loaded.force_phys,
+        exact_identity=(derived_exact_identity or loaded.baseline_dump.resolve() == left.pcdump_path.resolve()),
     )
     _require_complete_reanchor(
         target_spec,
         right.compile,
         loaded.class_id,
         loaded.force_phys,
+        exact_identity=(derived_exact_identity or loaded.baseline_dump.resolve() == right.pcdump_path.resolve()),
     )
     left_profile_roles = _complete_profile_role_map(
         profile_reference_compile,
         left.compile,
         loaded.class_id,
+        allow_exact_namespace=derived_exact_identity,
     )
     right_profile_roles = _complete_profile_role_map(
         profile_reference_compile,
         right.compile,
         loaded.class_id,
+        allow_exact_namespace=derived_exact_identity,
     )
+    if derived_exact_identity:
+        desired_roles = set(loaded.force_phys)
+        left_profile_roles = {
+            ig: role for ig, role in left_profile_roles.items() if ig not in desired_roles and role not in desired_roles
+        }
+        right_profile_roles = {
+            ig: role
+            for ig, role in right_profile_roles.items()
+            if ig not in desired_roles and role not in desired_roles
+        }
+        left_profile_roles.update({ig: ig for ig in desired_roles})
+        right_profile_roles.update({ig: ig for ig in desired_roles})
     left_color = _profile_for_parent(left, left_profile_roles, loaded.force_phys)
     right_color = _profile_for_parent(right, right_profile_roles, loaded.force_phys)
 

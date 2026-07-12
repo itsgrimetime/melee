@@ -6,6 +6,7 @@ from src.search.delta_minimize.delta import (
     DeltaManifest,
     DeltaPatch,
     enumerate_legal_masks,
+    extract_delta_manifest,
     extract_primitive_manifest,
     materialize_mask,
 )
@@ -34,7 +35,7 @@ def test_endpoints_are_byte_exact_and_formatting_is_one_atom():
     left = "int f(int x) {\n    return x + 1;\n}\n"
     right = "int f(int x){\n  return x + 2;\n}\n"
 
-    manifest = extract_primitive_manifest(left, right, function="f")
+    manifest = extract_delta_manifest(left, right, function="f")
     masks = enumerate_legal_masks(manifest, max_candidates=64)
 
     assert materialize_mask(left, manifest, 0) == left
@@ -55,6 +56,40 @@ def test_primitive_expression_atoms_materialize_each_observed_hybrid_once():
         "int f(int x) { return (x + 1) * 4; }\n",
     }
     assert len(set(enumerate_legal_masks(manifest, max_candidates=4))) == 4
+
+
+def test_local_temporary_wrapper_is_one_composite_atom():
+    left = """\
+void use(void*, float);
+void sink(int);
+void f(void* header, float spacing, int i) {
+    use(header, spacing * i);
+    sink(i + 1);
+}
+"""
+    right = """\
+void use(void*, float);
+void sink(int);
+void f(void* header, float spacing, int i) {
+    {
+        float ll_probe_arg_0 = spacing * i;
+        use(header, ll_probe_arg_0);
+    }
+    sink(i + 2);
+}
+"""
+
+    manifest = extract_delta_manifest(left, right, function="f")
+    semantic_atoms = tuple(atom for atom in manifest.atoms if atom.kind != "presentation-only")
+
+    assert len(semantic_atoms) == 2
+    wrapper = next(
+        atom for atom in semantic_atoms if any("ll_probe_arg_0" in patch.right_text for patch in atom.patches)
+    )
+    wrapper_mask = 1 << manifest.atoms.index(wrapper)
+    hybrid = materialize_mask(left, manifest, wrapper_mask)
+    assert "use(header, ll_probe_arg_0);" in hybrid
+    assert "sink(i + 1);" in hybrid
 
 
 def test_budget_fails_before_returning_partial_masks():

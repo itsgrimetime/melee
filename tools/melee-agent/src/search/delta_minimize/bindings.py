@@ -56,9 +56,20 @@ class BindingBlocker:
 
 
 @dataclass(frozen=True)
+class LocalBinding:
+    function: str
+    name: str
+    declaration_span: tuple[int, int]
+    use_spans: tuple[tuple[int, int], ...]
+    scope_span: tuple[int, int]
+    scope_is_compound: bool
+
+
+@dataclass(frozen=True)
 class BindingIndex:
     functions: Mapping[str, FunctionBinding]
     blockers: tuple[BindingBlocker, ...]
+    locals: tuple[LocalBinding, ...] = ()
 
 
 class UnionFind:
@@ -199,7 +210,14 @@ def build_binding_index(source: str) -> BindingIndex:
                 )
             continue
         if callee not in unique_nodes:
-            blockers.append(BindingBlocker(callee, "unresolved-external-call", call_span))
+            blockers.append(
+                BindingBlocker(
+                    callee,
+                    "unresolved-external-call",
+                    call_span,
+                    _span(callee_node, to_char),
+                )
+            )
             continue
 
         calls_by_name[callee].append(
@@ -309,8 +327,17 @@ def build_binding_index(source: str) -> BindingIndex:
             for node, _, _, _ in declaration_nodes[name]
         )
 
+    local_bindings = _build_local_bindings(
+        unique_nodes,
+        source_bytes,
+        to_char,
+    )
     blockers = sorted(set(blockers), key=lambda item: (item.span, item.symbol, item.reason))
-    return BindingIndex(functions=functions, blockers=tuple(blockers))
+    return BindingIndex(
+        functions=functions,
+        blockers=tuple(blockers),
+        locals=local_bindings,
+    )
 
 
 def validate_supported_bindings(
@@ -418,6 +445,13 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
             if coupled:
                 semantic_labels[coupled[0]].append(f"{left_function.name} to {right_function.name} rename")
 
+    _couple_local_binding_changes(
+        groups,
+        atoms,
+        left_index,
+        right_index,
+        semantic_labels,
+    )
     _union_dependency_cycles(groups, atoms)
 
     # Semantic unions can change roots, so attach labels to their final roots.
@@ -781,6 +815,117 @@ def _materialize_composite_atoms(groups, atoms, labels_by_root, reclassified):
             )
         )
     return tuple(result)
+
+
+def _build_local_bindings(
+    functions,
+    source_bytes: bytes,
+    to_char: list[int],
+) -> tuple[LocalBinding, ...]:
+    result: list[LocalBinding] = []
+    for function, (definition, _name, _parameters, _declarator) in functions.items():
+        body = definition.child_by_field_name("body")
+        if body is None:
+            continue
+        declaration_names = {
+            (identifier.start_byte, identifier.end_byte)
+            for declaration in _walk_type(body, "declaration")
+            for identifier, _scope_start in _local_declaration_entries(declaration)
+        }
+        for declaration in _walk_type(body, "declaration"):
+            scope = _local_declaration_scope(declaration)
+            if scope is None:
+                continue
+            for identifier, _scope_start in _local_declaration_entries(declaration):
+                name = node_text(source_bytes, identifier)
+                uses = tuple(
+                    _span(candidate, to_char)
+                    for candidate in _walk_type(scope, "identifier")
+                    if node_text(source_bytes, candidate) == name
+                    and (candidate.start_byte, candidate.end_byte) not in declaration_names
+                    and candidate.start_byte >= identifier.end_byte
+                )
+                result.append(
+                    LocalBinding(
+                        function=function,
+                        name=name,
+                        declaration_span=_span(declaration, to_char),
+                        use_spans=uses,
+                        scope_span=_span(scope, to_char),
+                        scope_is_compound=scope.type == "compound_statement",
+                    )
+                )
+    return tuple(
+        sorted(
+            result,
+            key=lambda item: (
+                item.function,
+                item.declaration_span,
+                item.name,
+            ),
+        )
+    )
+
+
+def _couple_local_binding_changes(
+    groups: UnionFind,
+    atoms,
+    left_index: BindingIndex,
+    right_index: BindingIndex,
+    semantic_labels: dict[str, list[str]],
+) -> None:
+    left = _unique_local_bindings(left_index.locals)
+    right = _unique_local_bindings(right_index.locals)
+    for side, bindings, other in (
+        ("left", left, right),
+        ("right", right, left),
+    ):
+        for key in sorted(bindings.keys() - other.keys()):
+            binding = bindings[key]
+            spans = [binding.declaration_span, *binding.use_spans]
+            if binding.scope_is_compound:
+                start, end = binding.scope_span
+                if start < end:
+                    spans.extend(((start, start + 1), (end - 1, end)))
+            selected = _atoms_for_directional_spans(
+                atoms,
+                spans,
+                side=side,
+            )
+            _union_ids(groups, selected)
+            if selected:
+                semantic_labels[selected[0]].append(
+                    f"{binding.function} local {binding.name} {'removal' if side == 'left' else 'introduction'}"
+                )
+
+
+def _unique_local_bindings(
+    bindings: Sequence[LocalBinding],
+) -> dict[tuple[str, str], LocalBinding]:
+    grouped: dict[tuple[str, str], list[LocalBinding]] = defaultdict(list)
+    for binding in bindings:
+        grouped[(binding.function, binding.name)].append(binding)
+    return {key: values[0] for key, values in grouped.items() if len(values) == 1}
+
+
+def _atoms_for_directional_spans(
+    atoms,
+    spans: Sequence[tuple[int, int]],
+    *,
+    side: str,
+) -> tuple[str, ...]:
+    selected: list[str] = []
+    for atom in atoms:
+        if any(
+            _spans_touch(
+                ((patch.left_start, patch.left_end) if side == "left" else (patch.right_start, patch.right_end)),
+                span,
+            )
+            for patch in atom.patches
+            for span in spans
+        ):
+            selected.append(atom.atom_id)
+    return tuple(dict.fromkeys(selected))
 
 
 def _stable_composite_id(group) -> str:

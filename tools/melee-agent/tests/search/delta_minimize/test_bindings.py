@@ -1221,3 +1221,32 @@ def test_unchanged_generic_preprocessor_directives_do_not_block_coupling():
 def test_unsupported_changed_binding_fails_closed(left, right):
     with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
         delta.extract_delta_manifest(left, right, function="draw")
+
+
+def test_unchanged_external_callee_allows_argument_delta() -> None:
+    left = "int draw(int x) { external(x + 1); return x; }\n"
+    right = "int draw(int x) { external(x + 2); return x; }\n"
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, (1 << len(manifest.atoms)) - 1) == right
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            "int draw(int x) { external(x); return x; }\n",
+            "int draw(int x) { replacement(x); return x; }\n",
+        ),
+        (
+            "int draw(int x) { return x; }\n",
+            "int draw(int x) { external(x); return x; }\n",
+        ),
+    ],
+    ids=("renamed", "inserted"),
+)
+def test_changed_external_call_binding_still_fails_closed(left: str, right: str) -> None:
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
+        delta.extract_delta_manifest(left, right, function="draw")

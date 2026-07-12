@@ -55,6 +55,37 @@ INSPECT_AMBIGUOUS_DUPLICATES = _inspect(
     _record("0x20", "copy", "copy"),
 )
 
+REAL_INSPECT = """FUNCTION: f
+  Type: function()[returns void]
+
+STATEMENTS (IR):
+  [EOBJREF] beta
+    -> ObjObject @ 0x00AA20: beta (DataType: DLOCAL, Type: float*)
+  [EOBJREF] alpha
+    -> ObjObject @ 0x00AA10: alpha (DataType: DLOCAL, Type: int)
+
+LOCAL VARIABLES (first appearance order, with ObjObject addresses):
+--------------------------------------------------------------------------------
+  [0] 0x00AA10  alpha
+  [1] 0x00AA20  beta
+
+LOCAL VARIABLES (sorted by ObjObject address):
+--------------------------------------------------------------------------------
+  [0] 0x00AA10  alpha
+  [1] 0x00AA20  beta
+================================================================================
+Compilation finished.
+"""
+
+
+def test_real_inspector_local_variable_order_builds_profile() -> None:
+    profile = parse_objobject_profile(REAL_INSPECT, "f")
+
+    assert profile.complete is True
+    assert [identity.source_name for identity in profile.identities] == ["alpha", "beta"]
+    assert profile.identities[0].type_name == "int"
+    assert profile.identities[1].type_name == "float*"
+
 
 def test_addresses_do_not_change_identity_or_order() -> None:
     a = parse_objobject_profile(INSPECT_A, "f")

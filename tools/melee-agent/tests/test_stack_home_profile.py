@@ -141,6 +141,22 @@ def test_anonymous_frame_assignment_uses_matching_bridge_owner() -> None:
     assert "@810" not in profile.homes[0].identity
 
 
+def test_absolutely_mapped_anonymous_home_does_not_require_proxy_owner() -> None:
+    left_assignment = _assignment("@810", 0x30, 0, "stfs")
+    left_assignment["expected_offset"] = 0x34
+    right_assignment = _assignment("@910", 0x34, 0, "stfs")
+    right_assignment["expected_offset"] = 0x34
+
+    left = build_stack_home_profile(_frame(64, left_assignment), _bridge())
+    right = build_stack_home_profile(_frame(64, right_assignment), _bridge())
+
+    assert left.complete is True
+    assert left.homes[0].reference_kind == "absolute"
+    assert left.homes[0].identity == right.homes[0].identity
+    assert "@810" not in left.homes[0].identity
+    assert stack_home_distance(left, right).as_tuple() == (1, 4, 0, 0)
+
+
 def test_anonymous_frame_assignment_without_bridge_owner_is_unresolved() -> None:
     profile = build_stack_home_profile(
         _frame(64, _assignment("@810", 0x30, 0, "stfs")),

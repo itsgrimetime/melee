@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+import src.search.delta_minimize.objectives as objectives_module
+from src.mwcc_debug import role_descriptor
 from src.mwcc_debug.colorgraph_profile import ColorGraphProfile
 from src.mwcc_debug.objobject_profile import ObjObjectIdentity, ObjObjectProfile
 from src.mwcc_debug.role_descriptor import Compile, build_descriptors
@@ -33,6 +35,34 @@ def desired_phys(baseline_compile: Compile) -> dict[int, int]:
     roles = [ig for ig, descriptor in build_descriptors(baseline_compile, 0).items() if descriptor.first_def_sig][:2]
     assert len(roles) == 2
     return {roles[0]: 22, roles[1]: 21}
+
+
+def test_explicit_baseline_self_check_uses_exact_ig_identity(
+    monkeypatch, baseline_compile: Compile, desired_phys: dict[int, int]
+) -> None:
+    target = role_descriptor.build_target_spec(
+        baseline_compile,
+        desired_phys,
+        0,
+        "force_proof_proxy",
+        {"schema_version": "delta-minimize-color-target.v1"},
+    )
+    monkeypatch.setattr(
+        objectives_module.role_reanchor,
+        "reanchor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("self-check should not descriptor-reanchor")),
+    )
+
+    result = objectives_module._require_complete_reanchor(
+        target,
+        baseline_compile,
+        0,
+        desired_phys,
+        exact_identity=True,
+    )
+
+    assert result.force_phys == desired_phys
+    assert result.matched == {ig: ig for ig in desired_phys}
 
 
 def _write_target(
@@ -515,6 +545,75 @@ def test_conflicting_parent_role_targets_require_explicit_target(
             derive_force_target=derive,
         )
     assert calls == ["left", "right"]
+
+
+def test_identical_independent_parent_targets_use_exact_ig_identity(
+    monkeypatch,
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    dump = tmp_path / "baseline.pcdump"
+    dump.write_text("unused", encoding="utf-8")
+    left = _parent("left", baseline_compile, dump, desired_phys)
+    right = _parent("right", baseline_compile, dump, desired_phys)
+    monkeypatch.setattr(
+        objectives_module.role_reanchor,
+        "reanchor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("independently agreed IG targets should use exact identity")
+        ),
+    )
+
+    loaded, _target = objectives_module._derive_target_spec(
+        left,
+        right,
+        lambda *_args: _derivation_payload(desired_phys),
+    )
+
+    assert dict(loaded.force_phys) == desired_phys
+
+
+def test_correlated_allocator_orders_allow_complete_exact_graph_namespace(
+    baseline_compile: Compile,
+) -> None:
+    peer_compile = deepcopy(baseline_compile)
+
+    role_map = objectives_module._complete_profile_role_map(
+        baseline_compile,
+        peer_compile,
+        0,
+        allow_exact_namespace=True,
+    )
+
+    coalesce = [section for section in baseline_compile.fev.coalesce_sections if section.class_id == 0][-1]
+    assert role_map == {ig_idx: ig_idx for ig_idx in range(coalesce.n_virtuals)}
+
+
+def test_divergent_allocator_order_rejects_exact_graph_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    baseline_compile: Compile,
+) -> None:
+    peer_compile = deepcopy(baseline_compile)
+    simplify = [section for section in peer_compile.fev.simplify_sections if section.class_id == 0][-1]
+    positive = [(index, entry) for index, entry in enumerate(simplify.entries) if entry.ig_idx >= 0]
+    (first_index, first), (second_index, second) = positive[:2]
+    simplify.entries[first_index] = replace(first, ig_idx=second.ig_idx)
+    simplify.entries[second_index] = replace(second, ig_idx=first.ig_idx)
+    monkeypatch.setattr(
+        objectives_module.role_reanchor,
+        "reanchor",
+        lambda *_args, **_kwargs: type("Partial", (), {"matched": {}})(),
+    )
+
+    role_map = objectives_module._complete_profile_role_map(
+        baseline_compile,
+        peer_compile,
+        0,
+        allow_exact_namespace=True,
+    )
+
+    assert role_map == {}
 
 
 def test_missing_derived_parent_target_is_reported_as_ambiguous(

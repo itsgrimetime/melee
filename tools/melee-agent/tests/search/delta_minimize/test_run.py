@@ -23,6 +23,10 @@ LEFT = "int f(void) {\n int a = 1;\n int b = 2;\n return a+b;\n}\n"
 RIGHT = "int f(void) {\n int a = 3;\n int b = 4;\n return a+b;\n}\n"
 
 
+def test_parent_opcode_evidence_ignores_blank_checkdiff_terminators() -> None:
+    assert run_module._validated_asm_lines(["+000: 38 60 00 00 li r3,0", ""]) == ("+000: 38 60 00 00 li r3,0",)
+
+
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -299,6 +303,17 @@ def test_run_evaluates_every_legal_mask_and_resumes(tmp_path: Path) -> None:
     assert second.cache_stats == {"parent_entries": 2, "candidate_entries": 4}
 
 
+def test_run_preserves_actionable_objective_ambiguity(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    backends = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(DeltaMinimizeError("ambiguous-color-target")),
+    )
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        run_delta_minimize(_config(tmp_path), backends=backends)
+
+
 def test_resume_rejects_valid_shape_delta_dependency_cache_mutation(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
     config = _config(tmp_path)
@@ -499,17 +514,17 @@ def test_changed_valid_objective_starts_a_new_target_epoch(tmp_path: Path) -> No
     assert first.objective_manifest["desired_phys"] == {"1": 3}
     assert second.objective_manifest["desired_phys"] == {"1": 4}
     assert first_target != second_target
-    assert json.loads(first_target.read_text(encoding="utf-8"))["roles"][0]["desired_phys"] == 3
-    assert json.loads(second_target.read_text(encoding="utf-8"))["roles"][0]["desired_phys"] == 4
+    assert json.loads(first_target.read_text(encoding="utf-8"))["virtuals"] == {"1": 3}
+    assert json.loads(second_target.read_text(encoding="utf-8"))["virtuals"] == {"1": 4}
     assert fixture.score_calls == 8
     assert len(set(fixture.target_paths[:4])) == 1
     assert len(set(fixture.target_paths[4:])) == 1
 
     current = json.loads((config.out_dir / "objective" / "color-target-current.json").read_text())
-    assert current == {
-        "artifact": str(second_target.relative_to(config.out_dir)),
-        "sha256": second_target.stem,
-    }
+    current_target = config.out_dir / current["artifact"]
+    assert current_target.parent.name == "color-targets"
+    assert current["sha256"] == current_target.stem
+    assert json.loads(current_target.read_text(encoding="utf-8"))["roles"][0]["desired_phys"] == 4
 
     unchanged = run_delta_minimize(config, backends=fixture.backends())
     assert unchanged.to_dict() == second.to_dict()

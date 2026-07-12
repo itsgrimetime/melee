@@ -210,7 +210,12 @@ def score_retained_source_rows(
         payload = _parse_score_source_stdout(proc.stdout)
         merged = dict(row)
         merged.update(payload)
-        merged.setdefault("candidate_id", candidate_id)
+        if candidate_id is not None:
+            # The CLI derives an ID from the retained filename.  The caller's
+            # manifest ID is authoritative for cache keys and mask identity.
+            merged["candidate_id"] = candidate_id
+        else:
+            merged.setdefault("candidate_id", candidate_id)
         merged.setdefault("source_file", str(candidate_path))
         merged.setdefault("source_retained", str(candidate_path))
         merged["full_unit_source"] = row_full_unit

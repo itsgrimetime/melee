@@ -1109,9 +1109,9 @@ def test_out_of_range_forced_override_is_not_role_projected(rows: str) -> None:
             id="missing-node-count",
         ),
         pytest.param(
-            SINGLE_ROLE_PCDUMP.replace("n_nodes=1", "n_nodes=2"),
+            SINGLE_ROLE_PCDUMP.replace("n_nodes=1", "n_nodes=0"),
             {58: 1},
-            id="node-count-mismatch",
+            id="node-count-smaller-than-emitted-decisions",
         ),
         pytest.param(
             SINGLE_ROLE_PCDUMP.replace(
@@ -1193,6 +1193,18 @@ def test_negative_ig_sentinels_count_as_rows_but_not_roles() -> None:
     assert profile.assignments == ((1, 22),)
     assert profile.simplify_order == (1,)
     assert profile.select_order == (1,)
+
+
+def test_total_graph_node_count_may_exceed_emitted_virtual_decisions() -> None:
+    profile = build_colorgraph_profile(
+        SINGLE_ROLE_PCDUMP.replace("n_nodes=1", "n_nodes=80"),
+        "f",
+        0,
+        {58: 1},
+        required_roles={1},
+    )
+
+    assert profile.complete is True
 
 
 def test_positive_simplify_only_role_is_reported_incomplete() -> None:

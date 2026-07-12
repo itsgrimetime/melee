@@ -143,7 +143,7 @@ def build_colorgraph_profile(
     incomplete = incomplete or (
         decision_section.result != 1
         or decision_section.n_nodes < 0
-        or decision_section.n_nodes != len(decision_section.decisions)
+        or decision_section.n_nodes < len(decision_section.decisions)
         or not _has_coherent_iterations(decision_section.decisions)
         or any(
             decision.n_interferers < 0 or decision.n_interferers != len(decision.interferers)

@@ -356,6 +356,45 @@ def test_score_source_patch_candidate_error_row_is_preserved(
     )
 
 
+def test_retained_candidate_identity_overrides_scorer_filename_identity(
+    tmp_path: Path,
+) -> None:
+    def fake_run(cmd, *, cwd, env, **kwargs):
+        del cwd, env, kwargs
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps(
+                {
+                    "candidate_id": "filename-derived-id",
+                    "score": 0,
+                    "pcdump_path": str(tmp_path / "candidate.pcdump.txt"),
+                }
+            ),
+            stderr="",
+        )
+
+    config = ScoreSourceConfig(
+        repo_root=tmp_path,
+        function="fn_test",
+        target=tmp_path / "target.json",
+        cflags_from=Path("src/melee/test.c"),
+        expression_source=Path("src/melee/test.c"),
+        expression_baseline=None,
+        expression_reg_class="gpr",
+        output_dir=tmp_path / "retained",
+        timeout=5.0,
+    )
+
+    row = score_source_candidates(
+        [SourceCandidate(candidate_id="manifest-mask-000", source_text="void fn_test(void) {}\n")],
+        config,
+        runner=fake_run,
+    )[0]
+
+    assert row["candidate_id"] == "manifest-mask-000"
+
+
 def test_score_source_candidates_can_retain_and_score_without_target(
     tmp_path: Path,
 ) -> None:

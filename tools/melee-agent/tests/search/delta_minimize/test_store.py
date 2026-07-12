@@ -399,6 +399,20 @@ def test_color_target_is_content_addressed_and_normalizes_force_keys(tmp_path: P
     }
 
 
+def test_score_target_is_content_addressed_legacy_projection(tmp_path: Path) -> None:
+    store = DeltaRunStore(tmp_path)
+
+    path = store.write_score_target("draw", {3: 29, 4: 30})
+
+    assert path.parent == tmp_path / "objective" / "score-targets"
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "function": "draw",
+        "virtuals": {"3": 29, "4": 30},
+    }
+    assert store.write_score_target("draw", {4: 30, 3: 29}) == path
+    assert store.write_score_target("draw", {3: 28, 4: 30}) != path
+
+
 def test_phase_and_result_paths_use_atomic_store_writes(tmp_path: Path) -> None:
     store = DeltaRunStore(tmp_path)
 

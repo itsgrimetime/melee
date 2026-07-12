@@ -3331,36 +3331,17 @@ def score_source(
         if expression_score is not None:
             payload["expression_score"] = expression_score
         if checkdiff_guard:
-            candidate_path = Path(c_file)
-            if not candidate_path.is_absolute():
-                candidate_path = melee_root / src_rel
-            real_score = _score_source_candidate_real_tree(
-                candidate_path,
-                function=function,
+            _apply_score_source_checkdiff_guard(
+                payload,
+                c_file=c_file,
+                source_rel=src_rel,
                 melee_root=melee_root,
+                function=function,
                 timeout=active_timeout,
                 deadline=command_deadline,
-                include_structural_guard=True,
                 full_unit_source=effective_full_unit_source,
+                score_real_tree=_score_source_candidate_real_tree,
             )
-            payload["structural_guard"] = real_score.structural_guard
-            payload["structural_guard_error"] = (
-                real_score.structural_guard_error
-                or real_score.match_percent_error
-            )
-            guard = (
-                real_score.structural_guard
-                if isinstance(real_score.structural_guard, dict)
-                else {}
-            )
-            _apply_score_source_target_verdict(payload)
-            payload["checkdiff_guard"] = {
-                "match_percent": getattr(real_score, "match_percent", None),
-                "classification_primary": guard.get("classification_primary"),
-                "normalized_diff_lines": guard.get("normalized_diff_lines"),
-                "hunk_count": guard.get("hunk_count"),
-                "accepted": guard.get("accepted"),
-            }
         _emit_score_source_result(payload, state="completed")
         return
     _emit_score_source_result(payload, state="completed")
