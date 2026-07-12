@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
@@ -202,6 +203,59 @@ def test_empty_rep_is_invalid_without_repair(setup_env) -> None:
     assert caught.value.details["cause"] == "ghidra-process-failed"
     assert rep.exists()
     assert len(runner.calls) == 1
+
+
+def test_broken_canonical_symlink_is_invalid_existing_project(setup_env) -> None:
+    setup_env["project_dir"].mkdir(parents=True)
+    gpr = setup_env["project_dir"] / "mwcceppc.gpr"
+    gpr.symlink_to("missing-project.gpr")
+    runner = ScriptedRunner(completed("", returncode=1))
+
+    with pytest.raises(MwccGhidraSetupError) as caught:
+        invoke(setup_env, runner)
+
+    assert caught.value.reason == "invalid-existing-project"
+    assert caught.value.details["cause"] == "ghidra-process-failed"
+    assert gpr.is_symlink()
+    assert len(runner.calls) == 1
+
+
+def test_repair_retains_broken_canonical_symlink(setup_env) -> None:
+    setup_env["project_dir"].mkdir(parents=True)
+    gpr = setup_env["project_dir"] / "mwcceppc.gpr"
+    gpr.symlink_to("missing-project.gpr")
+    runner = ScriptedRunner(
+        completed("", returncode=1),
+        completed(ANALYSIS_SUCCEEDED),
+        completed(STATUS_MARKER),
+    )
+
+    result = invoke(setup_env, runner, repair=True)
+
+    retained = Path(f"{gpr}.invalid-20260712T123456Z")
+    assert result.status == "repaired"
+    assert result.quarantined_paths == (retained,)
+    assert not os.path.lexists(gpr)
+    assert retained.is_symlink()
+    assert os.readlink(retained) == "missing-project.gpr"
+
+
+def test_repair_rejects_broken_destination_symlink_collision(setup_env) -> None:
+    setup_env["project_dir"].mkdir(parents=True)
+    gpr = setup_env["project_dir"] / "mwcceppc.gpr"
+    gpr.write_text("invalid", encoding="utf-8")
+    retained = Path(f"{gpr}.invalid-20260712T123456Z")
+    retained.symlink_to("missing-retained.gpr")
+    runner = ScriptedRunner(completed("", returncode=1))
+
+    with pytest.raises(MwccGhidraSetupError) as caught:
+        invoke(setup_env, runner, repair=True)
+
+    assert caught.value.reason == "repair-destination-exists"
+    assert caught.value.details == {"path": str(retained)}
+    assert gpr.is_file()
+    assert retained.is_symlink()
+    assert os.readlink(retained) == "missing-retained.gpr"
 
 
 def test_repair_retains_all_artifacts_under_one_utc_suffix(setup_env) -> None:

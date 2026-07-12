@@ -196,6 +196,10 @@ def _canonical_project_artifacts(project_dir: Path) -> tuple[Path, ...]:
     return tuple(project_dir / f"{PROJECT_NAME}{suffix}" for suffix in _PROJECT_SUFFIXES)
 
 
+def _lexists(path: Path) -> bool:
+    return os.path.lexists(path)
+
+
 def _validate_project(
     *,
     headless: Path,
@@ -260,9 +264,9 @@ def _quarantine_project(
     now: Callable[[], datetime],
 ) -> tuple[Path, ...]:
     stamp = now().astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
-    present = tuple(path for path in artifacts if path.exists())
+    present = tuple(path for path in artifacts if _lexists(path))
     destinations = tuple(Path(f"{path}.invalid-{stamp}") for path in present)
-    collision = next((path for path in destinations if path.exists()), None)
+    collision = next((path for path in destinations if _lexists(path)), None)
     if collision is not None:
         raise MwccGhidraSetupError("repair-destination-exists", {"path": str(collision)})
     try:
@@ -330,7 +334,7 @@ def setup_mwcc_ghidra(
     except OSError as error:
         raise MwccGhidraSetupError("project-directory-failed", {"error": str(error)}) from error
     artifacts = _canonical_project_artifacts(project_dir)
-    existing = any(path.exists() for path in artifacts)
+    existing = any(_lexists(path) for path in artifacts)
     quarantined: tuple[Path, ...] = ()
 
     if existing:
