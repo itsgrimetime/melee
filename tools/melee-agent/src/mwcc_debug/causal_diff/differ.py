@@ -13,6 +13,7 @@ _MATERIAL_NODE_KINDS = frozenset(
     {
         "allocator-node",
         "allocator-decision",
+        "compiler-object",
         "statement",
         "enode",
         "objobject",
@@ -64,14 +65,10 @@ def _unique_role_pairs(
     right_by_key: dict[tuple[str, str, str], list[EvidenceNode]] = {}
     for node in left_nodes:
         if node.role_key:
-            left_by_key.setdefault(
-                (node.kind, node.role_key, str(node.attributes.get("side") or "")), []
-            ).append(node)
+            left_by_key.setdefault((node.kind, node.role_key, str(node.attributes.get("side") or "")), []).append(node)
     for node in right_nodes:
         if node.role_key:
-            right_by_key.setdefault(
-                (node.kind, node.role_key, str(node.attributes.get("side") or "")), []
-            ).append(node)
+            right_by_key.setdefault((node.kind, node.role_key, str(node.attributes.get("side") or "")), []).append(node)
     return tuple(
         (left_by_key[key][0], right_by_key[key][0])
         for key in sorted(left_by_key.keys() & right_by_key.keys())
@@ -140,7 +137,10 @@ def diff_frontiers(
     right_by_id = {node.record_id: node for node in right_nodes}
     aligned: dict[str, str] = {}
     for comparison in comparison_records:
-        if comparison.relation_kind != "role-corresponds-to":
+        if comparison.relation_kind not in {
+            "role-corresponds-to",
+            "backend-owner-corresponds-to",
+        }:
             continue
         if comparison.left_record_id in left_by_id and comparison.right_record_id in right_by_id:
             aligned[comparison.left_record_id] = comparison.right_record_id
@@ -218,9 +218,7 @@ def diff_frontiers(
         mapped_target = aligned.get(left.target_id)
         if mapped_source is None or mapped_target is None:
             missing_endpoints = tuple(
-                endpoint
-                for endpoint in (left.source_id, left.target_id)
-                if endpoint in unaligned_left_material
+                endpoint for endpoint in (left.source_id, left.target_id) if endpoint in unaligned_left_material
             )
             if missing_endpoints:
                 deltas.append(
@@ -282,9 +280,7 @@ def diff_frontiers(
         if right.record_id in matched_right_edges:
             continue
         missing_endpoints = tuple(
-            endpoint
-            for endpoint in (right.source_id, right.target_id)
-            if endpoint in unaligned_right_material
+            endpoint for endpoint in (right.source_id, right.target_id) if endpoint in unaligned_right_material
         )
         aligned_material_edge = (
             right.source_id in material_right_ids

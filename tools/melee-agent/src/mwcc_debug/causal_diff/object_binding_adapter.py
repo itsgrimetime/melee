@@ -37,6 +37,47 @@ _OBJECT_FRAME = "object-to-frame"
 _PCODE_RANGE = "pcode-to-code-range"
 _REQUIRED_OWNER_CAPABILITIES = frozenset({_COMPILER_OBJECT, _OBJECT_VIRTUAL, _OBJECT_FRAME, _PCODE_RANGE})
 _PROOF_CONFIDENCES = frozenset({Confidence.OBSERVED, Confidence.DERIVED_UNIQUE})
+_OWNER_NODE_CAPABILITIES = {
+    "assembly-operand-anchor": _PCODE_RANGE,
+    "retail-pcode": _PCODE_RANGE,
+    "pcode-operand": _PCODE_RANGE,
+    "retail-virtual-register": _PCODE_RANGE,
+    "compiler-object": _COMPILER_OBJECT,
+    "allocator-node": _OBJECT_VIRTUAL,
+    "stack-object": _OBJECT_FRAME,
+}
+_OWNER_EDGE_SCHEMAS = {
+    "assembly-anchor-emitted-by-pcode": (
+        _PCODE_RANGE,
+        frozenset({"assembly-operand-anchor"}),
+        frozenset({"retail-pcode"}),
+    ),
+    "pcode-operand-lineage": (
+        _PCODE_RANGE,
+        frozenset({"retail-pcode", "pcode-operand"}),
+        frozenset({"pcode-operand"}),
+    ),
+    "pcode-operand-uses-virtual": (
+        _PCODE_RANGE,
+        frozenset({"pcode-operand"}),
+        frozenset({"retail-virtual-register"}),
+    ),
+    "object-materializes-virtual": (
+        _OBJECT_VIRTUAL,
+        frozenset({"compiler-object"}),
+        frozenset({"retail-virtual-register"}),
+    ),
+    "maps-to-allocator-node": (
+        _OBJECT_VIRTUAL,
+        frozenset({"retail-virtual-register"}),
+        frozenset({"allocator-node"}),
+    ),
+    "object-has-stack-home": (
+        _OBJECT_FRAME,
+        frozenset({"compiler-object"}),
+        frozenset({"stack-object"}),
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +136,7 @@ def _node(
     attributes: Mapping[str, object],
     role_key: str | None = None,
     rule: str = "normalize-verified-retail-record",
+    support: tuple[EvidenceNode | EvidenceEdge, ...] = (),
 ) -> EvidenceNode:
     return EvidenceNode.create(
         compile_id=source.compile_id,
@@ -104,7 +146,8 @@ def _node(
         role_key=role_key,
         producer_confidence=confidence,
         adapter_confidence=Confidence.OBSERVED,
-        provenance=_provenance(source, rule),
+        provenance=_provenance(source, rule, support),
+        input_confidences=tuple(record.confidence for record in support),
         attributes={"capture_run_id": source.capture_run_id, **attributes},
     )
 
@@ -203,23 +246,86 @@ def emit_object_binding_evidence(
         raise BundleInputError("object binding capture run mismatch")
 
     capabilities = frozenset(source.capabilities)
+    if not capabilities:
+        return ObjectBindingEvidence(
+            (),
+            (),
+            capabilities,
+            source.capture_run_id,
+            "backend-owner-path-incomplete",
+        )
     nodes: list[EvidenceNode] = []
     edges: list[EvidenceEdge] = []
     by_object: dict[str, EvidenceNode] = {}
     by_pcode: dict[str, EvidenceNode] = {}
     by_lineage: dict[str, EvidenceNode] = {}
     by_virtual: dict[tuple[int, int], EvidenceNode] = {}
+    pcode_generation_support: dict[str, EvidenceNode] = {}
+    pcode_range_support: dict[tuple[str, int], EvidenceNode] = {}
+    emission_support: dict[tuple[str, str, int, str], tuple[EvidenceNode, ...]] = {}
+    rewrite_support: dict[tuple[object, ...], EvidenceNode] = {}
+    lineage_support: dict[str, list[EvidenceNode]] = {}
+
+    def support_node(
+        capability: str,
+        support_kind: str,
+        local_id: object,
+        attributes: Mapping[str, object],
+        confidence: Confidence = Confidence.OBSERVED,
+    ) -> EvidenceNode | None:
+        if capability not in capabilities:
+            return None
+        node = _node(
+            source,
+            kind="backend-support-record",
+            local_id=("support", support_kind, local_id),
+            confidence=confidence,
+            attributes={
+                "verified_capability": capability,
+                "support_kind": support_kind,
+                **attributes,
+            },
+            rule="retain-exact-verified-backend-record",
+        )
+        nodes.append(node)
+        return node
 
     if _COMPILER_OBJECT in capabilities:
         for row in _rows(source.object_validation.normalized.get("objects")):
             object_id = row.get("object_id")
             if not isinstance(object_id, str) or not object_id:
                 continue
+            snapshots = _rows(row.get("stage_snapshots"))
+            if not snapshots:
+                continue
+            snapshot_support = tuple(
+                support
+                for index, snapshot in enumerate(snapshots)
+                if (
+                    support := support_node(
+                        _COMPILER_OBJECT,
+                        "object-stage-snapshot",
+                        (object_id, index, snapshot.get("stage")),
+                        {
+                            "object_id": object_id,
+                            "stage": snapshot.get("stage"),
+                            "allocation_generation": snapshot.get("allocation_generation"),
+                            "lifecycle_sequence_at_capture": snapshot.get("lifecycle_sequence_at_capture"),
+                        },
+                    )
+                )
+                is not None
+            )
+            confidence = (
+                Confidence.DERIVED_UNIQUE
+                if len(snapshots) == 2 and row.get("cross_stage_identity_confidence") == Confidence.DERIVED_UNIQUE
+                else Confidence.OBSERVED
+            )
             node = _node(
                 source,
                 kind="compiler-object",
                 local_id=("object", object_id),
-                confidence=Confidence.OBSERVED,
+                confidence=confidence,
                 attributes={
                     "object_id": object_id,
                     "allocation_generation": row.get("allocation_generation"),
@@ -228,37 +334,128 @@ def emit_object_binding_evidence(
                     "areas": tuple(row.get("areas", ())),
                     "stage_snapshots": tuple(row.get("stage_snapshots", ())),
                 },
+                support=snapshot_support,
             )
             nodes.append(node)
             by_object[object_id] = node
 
-    for lineage_id in _lineage_ids(source.pcode_validation):
-        lineage = _node(
-            source,
-            kind="pcode-operand",
-            local_id=("lineage", lineage_id),
-            confidence=Confidence.OBSERVED,
-            attributes={"operand_lineage_id": lineage_id},
-        )
-        nodes.append(lineage)
-        by_lineage[lineage_id] = lineage
-
     if _PCODE_RANGE in capabilities:
+        for event_index, event in enumerate(
+            _rows(source.pcode_validation.normalized.get("pcode_operand_lineage_events"))
+        ):
+            for side in ("inputs", "outputs"):
+                for state in _rows(event.get(side)):
+                    for operand in _rows(state.get("operands")):
+                        lineage_id = operand.get("operand_lineage_id")
+                        if not isinstance(lineage_id, str) or not lineage_id:
+                            continue
+                        support = support_node(
+                            _PCODE_RANGE,
+                            "pcode-lineage-event",
+                            (event_index, side, lineage_id),
+                            {
+                                "event_index": event_index,
+                                "side": side,
+                                "mutation_kind": event.get("mutation_kind"),
+                                "operand_lineage_id": lineage_id,
+                                "parent_lineage_ids": tuple(operand.get("parent_lineage_ids", ())),
+                            },
+                        )
+                        if support is not None:
+                            lineage_support.setdefault(lineage_id, []).append(support)
+
+        for lineage_id in _lineage_ids(source.pcode_validation):
+            lineage = _node(
+                source,
+                kind="pcode-operand",
+                local_id=("lineage", lineage_id),
+                confidence=Confidence.OBSERVED,
+                attributes={"operand_lineage_id": lineage_id},
+                support=tuple(lineage_support.get(lineage_id, ())),
+            )
+            nodes.append(lineage)
+            by_lineage[lineage_id] = lineage
+
         for row in _rows(source.pcode_validation.normalized.get("pcode_instructions")):
             pcode_id = row.get("pcode_id")
             if not isinstance(pcode_id, str) or not pcode_id:
                 continue
+            generation = support_node(
+                _PCODE_RANGE,
+                "pcode-generation",
+                (pcode_id, row.get("allocation_generation")),
+                {
+                    "pcode_id": pcode_id,
+                    "allocation_generation": row.get("allocation_generation"),
+                },
+            )
+            if generation is not None:
+                pcode_generation_support[pcode_id] = generation
+            for range_index, code_range in enumerate(_rows(row.get("code_ranges"))):
+                range_support = support_node(
+                    _PCODE_RANGE,
+                    "pcode-code-range",
+                    (pcode_id, range_index, code_range.get("start"), code_range.get("end_exclusive")),
+                    {
+                        "pcode_id": pcode_id,
+                        "start": code_range.get("start"),
+                        "end_exclusive": code_range.get("end_exclusive"),
+                    },
+                )
+                if range_support is not None and isinstance(code_range.get("start"), int):
+                    pcode_range_support[(pcode_id, code_range["start"])] = range_support
+                for mapping_index, mapping in enumerate(_rows(code_range.get("machine_operand_mappings"))):
+                    operand_key = mapping.get("machine_operand_key")
+                    lineage_id = mapping.get("operand_lineage_id")
+                    offset = code_range.get("start")
+                    if (
+                        not isinstance(operand_key, str)
+                        or not isinstance(lineage_id, str)
+                        or not isinstance(offset, int)
+                    ):
+                        continue
+                    emission = support_node(
+                        _PCODE_RANGE,
+                        "pcode-emission",
+                        (pcode_id, range_index, mapping_index, operand_key),
+                        {
+                            "pcode_id": pcode_id,
+                            "code_offset": offset,
+                            "machine_operand_key": operand_key,
+                            "operand_lineage_id": lineage_id,
+                        },
+                        Confidence.DERIVED_UNIQUE,
+                    )
+                    direct_lineage = support_node(
+                        _PCODE_RANGE,
+                        "pcode-lineage-event",
+                        (pcode_id, range_index, mapping_index, lineage_id),
+                        {
+                            "pcode_id": pcode_id,
+                            "code_offset": offset,
+                            "operand_lineage_id": lineage_id,
+                            "event_kind": "emission-lineage",
+                        },
+                        Confidence.DERIVED_UNIQUE,
+                    )
+                    emission_support[(pcode_id, lineage_id, offset, operand_key)] = tuple(
+                        item for item in (emission, direct_lineage) if item is not None
+                    )
             node = _node(
                 source,
                 kind="retail-pcode",
                 local_id=("pcode", pcode_id),
-                confidence=Confidence.DERIVED_UNIQUE,
+                confidence=_confidence(
+                    row.get("cross_stage_identity_confidence"),
+                    Confidence.DERIVED_UNIQUE,
+                ),
                 attributes={
                     "pcode_id": pcode_id,
                     "allocation_generation": row.get("allocation_generation"),
                     "runtime_address": row.get("runtime_address"),
                     "code_ranges": tuple(row.get("code_ranges", ())),
                 },
+                support=(() if generation is None else (generation,)),
             )
             nodes.append(node)
             by_pcode[pcode_id] = node
@@ -273,6 +470,21 @@ def emit_object_binding_evidence(
             ): row
             for row in rewrite_rows
         }
+        for rewrite_key, rewrite in rewrites.items():
+            support = support_node(
+                _PCODE_RANGE,
+                "pcode-rewrite",
+                rewrite_key,
+                {
+                    "pcode_id": rewrite.get("pcode_id"),
+                    "operand_lineage_id": rewrite.get("operand_lineage_id"),
+                    "class_id": rewrite.get("class_id"),
+                    "virtual": rewrite.get("virtual"),
+                },
+                _confidence(rewrite.get("confidence"), Confidence.HEURISTIC),
+            )
+            if support is not None:
+                rewrite_support[rewrite_key] = support
         for ordinal, ((offset, operand_key), binding) in enumerate(
             sorted(source.pcode_validation.anchor_bindings.items())
         ):
@@ -292,6 +504,23 @@ def emit_object_binding_evidence(
                     "physical_register": binding.physical_register,
                 },
                 rule="verified-candidate-range-machine-operand-anchor",
+                support=tuple(
+                    item
+                    for item in (
+                        pcode_range_support.get((binding.pcode_id, offset)),
+                        pcode_generation_support.get(binding.pcode_id),
+                        *emission_support.get(
+                            (
+                                binding.pcode_id,
+                                binding.operand_lineage_id,
+                                offset,
+                                operand_key,
+                            ),
+                            (),
+                        ),
+                    )
+                    if item is not None
+                ),
             )
             nodes.append(anchor)
             edges.append(
@@ -308,6 +537,23 @@ def emit_object_binding_evidence(
                         "code_offset": offset,
                         "machine_operand_key": operand_key,
                     },
+                    support=tuple(
+                        item
+                        for item in (
+                            pcode_range_support.get((binding.pcode_id, offset)),
+                            pcode_generation_support.get(binding.pcode_id),
+                            *emission_support.get(
+                                (
+                                    binding.pcode_id,
+                                    binding.operand_lineage_id,
+                                    offset,
+                                    operand_key,
+                                ),
+                                (),
+                            ),
+                        )
+                        if item is not None
+                    ),
                 )
             )
             edges.append(
@@ -324,6 +570,15 @@ def emit_object_binding_evidence(
                         "code_offset": offset,
                         "machine_operand_key": operand_key,
                     },
+                    support=emission_support.get(
+                        (
+                            binding.pcode_id,
+                            binding.operand_lineage_id,
+                            offset,
+                            operand_key,
+                        ),
+                        (),
+                    ),
                 )
             )
             virtual_key = (binding.class_id, binding.virtual)
@@ -367,6 +622,28 @@ def emit_object_binding_evidence(
                             "operand_lineage_id": binding.operand_lineage_id,
                             "machine_operand_key": operand_key,
                         },
+                        support=(
+                            ()
+                            if rewrite_support.get(
+                                (
+                                    binding.pcode_id,
+                                    binding.operand_lineage_id,
+                                    binding.class_id,
+                                    binding.virtual,
+                                )
+                            )
+                            is None
+                            else (
+                                rewrite_support[
+                                    (
+                                        binding.pcode_id,
+                                        binding.operand_lineage_id,
+                                        binding.class_id,
+                                        binding.virtual,
+                                    )
+                                ],
+                            )
+                        ),
                     )
                 )
 
@@ -400,6 +677,15 @@ def emit_object_binding_evidence(
                                     "parent_lineage_id": parent_id,
                                     "operand_lineage_id": child_id,
                                 },
+                                support=tuple(
+                                    {
+                                        support.record_id: support
+                                        for support in (
+                                            *lineage_support.get(str(parent_id), ()),
+                                            *lineage_support.get(child_id, ()),
+                                        )
+                                    }.values()
+                                ),
                             )
                         )
                         lineage_ordinal += 1
@@ -418,6 +704,18 @@ def emit_object_binding_evidence(
             ):
                 continue
             key = (class_id, virtual_number)
+            binding_support = support_node(
+                _OBJECT_VIRTUAL,
+                "object-virtual-binding",
+                (row.get("object_id"), class_id, virtual_number, row.get("ig_id")),
+                {
+                    "object_id": row.get("object_id"),
+                    "class_id": class_id,
+                    "virtual": virtual_number,
+                    "ig_id": row.get("ig_id"),
+                },
+                _confidence(row.get("confidence"), Confidence.HEURISTIC),
+            )
             virtual = by_virtual.get(key)
             if virtual is None:
                 virtual = _node(
@@ -430,6 +728,7 @@ def emit_object_binding_evidence(
                         "class": row.get("virtual_kind"),
                         "virtual": virtual_number,
                     },
+                    support=(() if binding_support is None else (binding_support,)),
                 )
                 nodes.append(virtual)
                 by_virtual[key] = virtual
@@ -451,6 +750,7 @@ def emit_object_binding_evidence(
                         "ig_id": row.get("ig_id"),
                         "ignode_runtime_address": row.get("ignode_runtime_address"),
                     },
+                    support=(() if binding_support is None else (binding_support,)),
                 )
             )
             allocator = _node(
@@ -464,6 +764,7 @@ def emit_object_binding_evidence(
                     "virtual": virtual_number,
                     "assigned_phys": virtual.attributes.get("physical_register"),
                 },
+                support=(() if binding_support is None else (binding_support,)),
             )
             nodes.append(allocator)
             edges.append(
@@ -477,6 +778,7 @@ def emit_object_binding_evidence(
                     adapter_confidence=Confidence.DERIVED_UNIQUE,
                     rule="unique-verified-object-virtual-ig-binding",
                     attributes={"class_id": class_id, "ig_id": row.get("ig_id")},
+                    support=(() if binding_support is None else (binding_support,)),
                 )
             )
 
@@ -487,6 +789,18 @@ def emit_object_binding_evidence(
                 continue
             area = str(row.get("area"))
             role = str(row.get("semantic_stack_role") or row.get("object_id"))
+            frame_support = support_node(
+                _OBJECT_FRAME,
+                "object-frame-binding",
+                (row.get("object_id"), area),
+                {
+                    "object_id": row.get("object_id"),
+                    "area": area,
+                    "semantic_stack_role": role,
+                    "final_r1_offset": row.get("final_r1_offset"),
+                },
+                _confidence(row.get("confidence"), Confidence.HEURISTIC),
+            )
             stack = _node(
                 source,
                 kind="stack-object",
@@ -502,6 +816,7 @@ def emit_object_binding_evidence(
                     "size": row.get("size"),
                     "list_node_runtime_address": row.get("list_node_runtime_address"),
                 },
+                support=(() if frame_support is None else (frame_support,)),
             )
             nodes.append(stack)
             edges.append(
@@ -515,6 +830,7 @@ def emit_object_binding_evidence(
                     adapter_confidence=Confidence.DERIVED_UNIQUE,
                     rule="unique-verified-final-frame-home",
                     attributes={"area": area, "semantic_stack_role": role},
+                    support=(() if frame_support is None else (frame_support,)),
                 )
             )
 
@@ -591,6 +907,8 @@ def adapt_object_bindings(bundle: ValidatedBundle) -> ObjectBindingEvidence:
         raise
     except (
         OSError,
+        OverflowError,
+        RecursionError,
         UnicodeError,
         json.JSONDecodeError,
         KeyError,
@@ -633,12 +951,7 @@ def proof_complete(evidence: ObjectBindingEvidence) -> bool:
     if not required <= by_kind:
         return False
     eligible = tuple(
-        edge
-        for edge in evidence.edges
-        if edge.kind in required
-        and edge.confidence in _PROOF_CONFIDENCES
-        and edge.provenance.parser == _PARSER
-        and edge.attributes.get("capture_run_id") == evidence.capture_run_id
+        edge for edge in evidence.edges if edge.kind in required and exact_owner_path_record(evidence, edge)
     )
     if len(eligible) < len(required):
         return False
@@ -647,15 +960,25 @@ def proof_complete(evidence: ObjectBindingEvidence) -> bool:
         kind: tuple(edge for edge in eligible if edge.kind == kind) for kind in required
     }
     for anchor_edge in by_kind["assembly-anchor-emitted-by-pcode"]:
-        if nodes.get(anchor_edge.source_id, None) is None:
+        anchor = nodes.get(anchor_edge.source_id)
+        pcode = nodes.get(anchor_edge.target_id)
+        if anchor is None or pcode is None:
+            continue
+        if not all(exact_owner_path_record(evidence, node) for node in (anchor, pcode)):
             continue
         for lineage_edge in by_kind["pcode-operand-lineage"]:
             if lineage_edge.source_id != anchor_edge.target_id:
+                continue
+            lineage = nodes.get(lineage_edge.target_id)
+            if lineage is None or not exact_owner_path_record(evidence, lineage):
                 continue
             for virtual_edge in by_kind["pcode-operand-uses-virtual"]:
                 if virtual_edge.source_id != lineage_edge.target_id:
                     continue
                 virtual_id = virtual_edge.target_id
+                virtual = nodes.get(virtual_id)
+                if virtual is None or not exact_owner_path_record(evidence, virtual):
+                    continue
                 object_edges = tuple(
                     edge for edge in by_kind["object-materializes-virtual"] if edge.target_id == virtual_id
                 )
@@ -663,11 +986,64 @@ def proof_complete(evidence: ObjectBindingEvidence) -> bool:
                     edge for edge in by_kind["maps-to-allocator-node"] if edge.source_id == virtual_id
                 )
                 for object_edge in object_edges:
-                    if allocator_edges and any(
-                        frame_edge.source_id == object_edge.source_id for frame_edge in by_kind["object-has-stack-home"]
+                    owner = nodes.get(object_edge.source_id)
+                    valid_allocators = tuple(nodes.get(edge.target_id) for edge in allocator_edges)
+                    frame_edges = tuple(
+                        frame_edge
+                        for frame_edge in by_kind["object-has-stack-home"]
+                        if frame_edge.source_id == object_edge.source_id
+                    )
+                    valid_stacks = tuple(nodes.get(edge.target_id) for edge in frame_edges)
+                    if (
+                        owner is not None
+                        and exact_owner_path_record(evidence, owner)
+                        and any(
+                            node is not None and exact_owner_path_record(evidence, node) for node in valid_allocators
+                        )
+                        and any(node is not None and exact_owner_path_record(evidence, node) for node in valid_stacks)
                     ):
                         return True
     return False
+
+
+def exact_owner_path_record(
+    evidence: ObjectBindingEvidence,
+    record: EvidenceNode | EvidenceEdge,
+) -> bool:
+    """Validate one compile-local v2 ownership record at the shared trust gate."""
+
+    records = (*evidence.nodes, *evidence.edges)
+    scopes = {(item.compile_id, item.function) for item in records}
+    if len(scopes) != 1 or (record.compile_id, record.function) not in scopes:
+        return False
+    if (
+        record.confidence not in _PROOF_CONFIDENCES
+        or record.provenance.parser != _PARSER
+        or record.attributes.get("capture_run_id") != evidence.capture_run_id
+    ):
+        return False
+    nodes = {node.record_id: node for node in evidence.nodes}
+    all_record_ids = {item.record_id for item in records}
+    if isinstance(record, EvidenceNode):
+        capability = _OWNER_NODE_CAPABILITIES.get(record.kind)
+        return capability is not None and capability in evidence.capabilities
+    schema = _OWNER_EDGE_SCHEMAS.get(record.kind)
+    if schema is None:
+        return False
+    capability, source_kinds, target_kinds = schema
+    source = nodes.get(record.source_id)
+    target = nodes.get(record.target_id)
+    return (
+        capability in evidence.capabilities
+        and source is not None
+        and target is not None
+        and source.kind in source_kinds
+        and target.kind in target_kinds
+        and exact_owner_path_record(evidence, source)
+        and exact_owner_path_record(evidence, target)
+        and {source.record_id, target.record_id}.issubset(record.provenance.input_record_ids)
+        and set(record.provenance.input_record_ids) <= all_record_ids
+    )
 
 
 def bilateral_source_object_records(
@@ -703,5 +1079,6 @@ __all__ = [
     "bilateral_source_object_records",
     "derive_backend_frame_recommendation",
     "emit_object_binding_evidence",
+    "exact_owner_path_record",
     "proof_complete",
 ]

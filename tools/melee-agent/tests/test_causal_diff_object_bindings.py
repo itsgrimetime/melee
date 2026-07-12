@@ -32,9 +32,15 @@ from src.mwcc_debug.causal_diff.alignment import (
 from src.mwcc_debug.causal_diff.backend_adapter import adapt_backends
 from src.mwcc_debug.causal_diff.bundles import BundleInputError, load_bundle
 from src.mwcc_debug.causal_diff.canonical import canonical_bytes
-from src.mwcc_debug.causal_diff.effects import DerivedEffects, _reachable_records
-from src.mwcc_debug.causal_diff.inference import _PATH_EDGE_KINDS, build_report
-from src.mwcc_debug.causal_diff.models import Confidence
+from src.mwcc_debug.causal_diff.differ import diff_frontiers
+from src.mwcc_debug.causal_diff.effects import DerivedEffects, _reachable_records, derive_effects
+from src.mwcc_debug.causal_diff.inference import (
+    _PATH_EDGE_KINDS,
+    VerdictStatus,
+    _all_simple_paths,
+    build_report,
+)
+from src.mwcc_debug.causal_diff.models import BackendArtifactRef, Confidence
 from src.mwcc_debug.causal_diff.object_binding_adapter import (
     ObjectBindingAdapterInput,
     ObjectBindingEvidence,
@@ -66,6 +72,7 @@ def _object_result(
     capture_run_id: str = "a" * 64,
     virtual: int = 66,
     semantic_stack_role: str = "row-home",
+    final_r1_offset: int = 0x44,
 ) -> ObjectBindingValidation:
     return ObjectBindingValidation(
         MappingProxyType(
@@ -79,7 +86,25 @@ def _object_result(
                             "allocation_generation": 1,
                             "type_size": 4,
                             "areas": ("locals",),
-                            "stage_snapshots": (),
+                            "stage_snapshots": (
+                                MappingProxyType(
+                                    {
+                                        "stage": "colorgraph_return",
+                                        "lifecycle_sequence_at_capture": 1,
+                                        "runtime_address": 0x1000,
+                                        "allocation_generation": 1,
+                                    }
+                                ),
+                                MappingProxyType(
+                                    {
+                                        "stage": "final_scheduler",
+                                        "lifecycle_sequence_at_capture": 2,
+                                        "runtime_address": 0x1000,
+                                        "allocation_generation": 1,
+                                    }
+                                ),
+                            ),
+                            "cross_stage_identity_confidence": "derived-unique",
                         }
                     ),
                 ),
@@ -104,7 +129,7 @@ def _object_result(
                             "semantic_stack_role": semantic_stack_role,
                             "area": "locals",
                             "list_node_runtime_address": 0x5000,
-                            "final_r1_offset": 0x44,
+                            "final_r1_offset": final_r1_offset,
                             "size": 4,
                             "confidence": "derived-unique",
                         }
@@ -119,7 +144,7 @@ def _object_result(
     )
 
 
-def _pcode_result(*, virtual: int = 66) -> PCodeLineageValidation:
+def _pcode_result(*, virtual: int = 66, physical_register: int = 21) -> PCodeLineageValidation:
     normalized = MappingProxyType(
         {
             "pcode_instructions": (
@@ -159,7 +184,7 @@ def _pcode_result(*, virtual: int = 66) -> PCodeLineageValidation:
                         "virtual_kind": "r",
                         "virtual": virtual,
                         "ig_id": virtual,
-                        "allocated_physical": 21,
+                        "allocated_physical": physical_register,
                         "runtime_address": 0x6000,
                         "confidence": "observed",
                     }
@@ -216,7 +241,7 @@ def _pcode_result(*, virtual: int = 66) -> PCodeLineageValidation:
                     "ol-1",
                     0,
                     virtual,
-                    21,
+                    physical_register,
                     "derived-unique",
                 )
             }
@@ -233,6 +258,7 @@ def _adapter_input(
     compile_id: str = "compile-a",
     function: str = "fn",
     virtual: int = 66,
+    physical_register: int = 21,
     object_result: ObjectBindingValidation | None = None,
 ) -> ObjectBindingAdapterInput:
     return ObjectBindingAdapterInput(
@@ -243,7 +269,10 @@ def _adapter_input(
         artifact_size=4096,
         capabilities=capabilities,
         object_validation=object_result or _object_result(capture_run_id=capture_run_id, virtual=virtual),
-        pcode_validation=_pcode_result(virtual=virtual),
+        pcode_validation=_pcode_result(
+            virtual=virtual,
+            physical_register=physical_register,
+        ),
     )
 
 
@@ -281,6 +310,60 @@ def test_each_edge_family_requires_its_exact_verified_capability(
 
     assert forbidden not in {edge.kind for edge in evidence.edges}
     assert not proof_complete(evidence)
+
+
+def test_zero_capabilities_emit_no_object_binding_records() -> None:
+    evidence = emit_object_binding_evidence(_adapter_input(capabilities=frozenset()))
+
+    assert evidence.nodes == ()
+    assert evidence.edges == ()
+
+
+def test_emitter_preserves_confidence_and_exact_support_record_provenance() -> None:
+    evidence = emit_object_binding_evidence(_adapter_input())
+    support_records = tuple(node for node in evidence.nodes if node.kind == "backend-support-record")
+    support_nodes = {
+        kind: tuple(node for node in support_records if node.attributes.get("support_kind") == kind)
+        for kind in {node.attributes.get("support_kind") for node in support_records}
+    }
+
+    assert {
+        "object-stage-snapshot",
+        "pcode-generation",
+        "pcode-code-range",
+        "pcode-emission",
+        "pcode-rewrite",
+        "pcode-lineage-event",
+        "object-virtual-binding",
+        "object-frame-binding",
+    } <= set(support_nodes)
+    compiler_object = next(node for node in evidence.nodes if node.kind == "compiler-object")
+    assert compiler_object.confidence is Confidence.DERIVED_UNIQUE
+    assert {node.record_id for node in support_nodes["object-stage-snapshot"]} & set(
+        compiler_object.provenance.input_record_ids
+    )
+
+    expected_support = {
+        "assembly-anchor-emitted-by-pcode": {
+            "pcode-code-range",
+            "pcode-emission",
+            "pcode-generation",
+        },
+        "pcode-operand-lineage": {"pcode-emission", "pcode-lineage-event"},
+        "pcode-operand-uses-virtual": {"pcode-rewrite"},
+        "object-materializes-virtual": {"object-virtual-binding"},
+        "maps-to-allocator-node": {"object-virtual-binding"},
+        "object-has-stack-home": {"object-frame-binding"},
+    }
+    support_kind_by_id = {node.record_id: node.attributes.get("support_kind") for node in support_records}
+    for edge_kind, required_support in expected_support.items():
+        edge = next(edge for edge in evidence.edges if edge.kind == edge_kind)
+        cited = {
+            support_kind_by_id[record_id]
+            for record_id in edge.provenance.input_record_ids
+            if record_id in support_kind_by_id
+        }
+        assert required_support <= cited
 
 
 def test_runtime_pointer_changes_never_change_stable_record_ids() -> None:
@@ -408,6 +491,91 @@ def test_proof_complete_requires_one_connected_owner_path() -> None:
     assert not proof_complete(disconnected)
 
 
+def _replace_evidence_record(
+    evidence: ObjectBindingEvidence,
+    kind: str,
+    mutate,
+) -> ObjectBindingEvidence:
+    nodes = tuple(mutate(node) if node.kind == kind else node for node in evidence.nodes)
+    edges = tuple(mutate(edge) if edge.kind == kind else edge for edge in evidence.edges)
+    return replace(evidence, nodes=nodes, edges=edges)
+
+
+@pytest.mark.parametrize(
+    "poison",
+    (
+        lambda evidence: replace(
+            evidence,
+            capabilities=evidence.capabilities - {"object-to-frame"},
+        ),
+        lambda evidence: _replace_evidence_record(
+            evidence,
+            "pcode-operand-lineage",
+            lambda edge: replace(
+                edge,
+                provenance=replace(edge.provenance, parser="mwcc-debug-pcdump.v1"),
+            ),
+        ),
+        lambda evidence: _replace_evidence_record(
+            evidence,
+            "compiler-object",
+            lambda node: replace(
+                node,
+                provenance=replace(node.provenance, parser="mwcc-debug-pcdump.v1"),
+            ),
+        ),
+        lambda evidence: _replace_evidence_record(
+            evidence,
+            "retail-pcode",
+            lambda node: replace(node, compile_id="foreign-compile"),
+        ),
+        lambda evidence: _replace_evidence_record(
+            evidence,
+            "allocator-node",
+            lambda node: replace(
+                node,
+                attributes=MappingProxyType({**node.attributes, "capture_run_id": "f" * 64}),
+            ),
+        ),
+        lambda evidence: _replace_evidence_record(
+            evidence,
+            "object-has-stack-home",
+            lambda edge: replace(edge, source_id=edge.target_id, target_id=edge.source_id),
+        ),
+        lambda evidence: _replace_evidence_record(
+            evidence,
+            "maps-to-allocator-node",
+            lambda edge: replace(
+                edge,
+                provenance=replace(edge.provenance, input_record_ids=()),
+            ),
+        ),
+        lambda evidence: _replace_evidence_record(
+            evidence,
+            "stack-object",
+            lambda node: replace(
+                node,
+                producer_confidence=Confidence.HEURISTIC,
+                confidence=Confidence.HEURISTIC,
+            ),
+        ),
+    ),
+)
+def test_owner_resolution_rejects_every_poisoned_exact_path_record(poison) -> None:
+    left = poison(emit_object_binding_evidence(_adapter_input()))
+    right = emit_object_binding_evidence(
+        _adapter_input(
+            compile_id="compile-b",
+            capture_run_id="b" * 64,
+            virtual=91,
+        )
+    )
+    role = BackendOwnerRoleTuple("use:0", "gpr", "row-home", 4, "locals")
+
+    assert not proof_complete(left)
+    assert resolve_backend_owner_candidates((left, right), role) == ()
+
+
 def test_build_role_comparisons_integrates_unique_semantic_backend_owner() -> None:
     left = emit_object_binding_evidence(_adapter_input())
     right = emit_object_binding_evidence(
@@ -440,6 +608,83 @@ def test_build_role_comparisons_integrates_unique_semantic_backend_owner() -> No
 
     assert len(comparisons) == 1
     assert comparisons[0].relation_kind == "backend-owner-corresponds-to"
+
+
+def test_future_complete_owner_pipeline_reaches_mandatory_source_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.mwcc_debug.causal_diff.alignment.role_descriptor.build_descriptors",
+        lambda compile_, class_id: compile_[class_id],
+    )
+    graphs = []
+    for label, capture_run_id, virtual, physical, stack_start in (
+        ("direct", "a" * 64, 66, 21, 36),
+        ("paired", "b" * 64, 91, 19, 32),
+    ):
+        original = _graph(label, missing_use=True)
+        evidence = emit_object_binding_evidence(
+            _adapter_input(
+                compile_id=original.bundle.compile_id,
+                function="fn_test",
+                capture_run_id=capture_run_id,
+                virtual=virtual,
+                physical_register=physical,
+                object_result=_object_result(
+                    capture_run_id=capture_run_id,
+                    virtual=virtual,
+                    semantic_stack_role="row",
+                    final_r1_offset=stack_start,
+                ),
+            )
+        )
+        store = InMemoryEvidenceStore()
+        original_nodes = tuple(
+            node for node in original.store.find_nodes(original.bundle.compile_id) if node.kind != "stack-object"
+        )
+        original_node_ids = {node.record_id for node in original_nodes}
+        original_edges = tuple(
+            edge
+            for edge in original.store.find_edges(original.bundle.compile_id)
+            if {edge.source_id, edge.target_id} <= original_node_ids
+        )
+        store.add_nodes((*original_nodes, *evidence.nodes))
+        store.add_edges((*original_edges, *evidence.edges))
+        stack = next(node for node in evidence.nodes if node.kind == "stack-object")
+        graphs.append(
+            replace(
+                original,
+                store=store,
+                backend=replace(original.backend, object_bindings=evidence),
+                frame=replace(
+                    original.frame,
+                    result=replace(original.frame.result, nodes=(stack,), edges=()),
+                    current_stack_nodes=MappingProxyType({"row": stack.record_id}),
+                ),
+            )
+        )
+
+    graph_pair = tuple(graphs)
+    alignment = align_anchor(graph_pair, 0x234, ())
+    comparisons = build_role_comparisons(alignment, graph_pair)
+    effects = derive_effects(alignment, graph_pair)
+    effects = replace(
+        effects,
+        pairs=tuple(pair for pair in effects.pairs if pair.allocator.operand_key == "use:0"),
+    )
+    deltas = diff_frontiers(graph_pair, comparisons)
+    report = build_report(graph_pair, effects, (*comparisons, *deltas))
+
+    assert any(
+        comparison.relation_kind == "node-changed" and comparison.attributes.get("kind") == "compiler-object"
+        for comparison in deltas
+    )
+    assert report.verdicts
+    assert all(verdict.status is VerdictStatus.ABSTAIN for verdict in report.verdicts), [
+        (verdict.status, verdict.failed_gates, verdict.rejected_alternatives) for verdict in report.verdicts
+    ]
+    assert all("gate-9-source-object-binding" in verdict.failed_gates for verdict in report.verdicts)
+    assert "source-object-binding-missing" in report.missing_evidence
 
 
 def test_future_verified_anchor_path_replaces_ambiguous_v1_backend_role(
@@ -483,7 +728,10 @@ def test_effect_traversal_reaches_stack_only_over_exact_owner_edges() -> None:
     store = InMemoryEvidenceStore()
     store.add_nodes(evidence.nodes)
     store.add_edges(evidence.edges)
-    graph = SimpleNamespace(store=store)
+    graph = SimpleNamespace(
+        store=store,
+        backend=SimpleNamespace(object_bindings=evidence),
+    )
     allocator = next(node for node in evidence.nodes if node.kind == "allocator-node")
     stack = next(node for node in evidence.nodes if node.kind == "stack-object")
 
@@ -502,6 +750,59 @@ def test_effect_traversal_reaches_stack_only_over_exact_owner_edges() -> None:
     } <= traversed_edges
 
 
+def test_effect_traversal_rejects_parser_poisoned_owner_edge() -> None:
+    evidence = emit_object_binding_evidence(_adapter_input())
+    poisoned = _replace_evidence_record(
+        evidence,
+        "object-has-stack-home",
+        lambda edge: replace(
+            edge,
+            provenance=replace(edge.provenance, parser="mwcc-debug-pcdump.v1"),
+        ),
+    )
+    store = InMemoryEvidenceStore()
+    store.add_nodes(poisoned.nodes)
+    store.add_edges(poisoned.edges)
+    graph = SimpleNamespace(
+        store=store,
+        backend=SimpleNamespace(object_bindings=poisoned),
+    )
+    allocator = next(node for node in poisoned.nodes if node.kind == "allocator-node")
+    stack = next(node for node in poisoned.nodes if node.kind == "stack-object")
+
+    reachable, traversed_edges = _reachable_records(graph, (allocator.record_id,))
+
+    assert stack.record_id not in reachable
+    assert not any(
+        edge.record_id in traversed_edges and edge.kind == "object-has-stack-home" for edge in poisoned.edges
+    )
+
+
+def test_effect_traversal_rejects_parser_poisoned_owner_endpoint() -> None:
+    evidence = emit_object_binding_evidence(_adapter_input())
+    poisoned = _replace_evidence_record(
+        evidence,
+        "stack-object",
+        lambda node: replace(
+            node,
+            provenance=replace(node.provenance, parser="mwcc-debug-pcdump.v1"),
+        ),
+    )
+    store = InMemoryEvidenceStore()
+    store.add_nodes(poisoned.nodes)
+    store.add_edges(poisoned.edges)
+    graph = SimpleNamespace(
+        store=store,
+        backend=SimpleNamespace(object_bindings=poisoned),
+    )
+    allocator = next(node for node in poisoned.nodes if node.kind == "allocator-node")
+    stack = next(node for node in poisoned.nodes if node.kind == "stack-object")
+
+    reachable, _traversed_edges = _reachable_records(graph, (allocator.record_id,))
+
+    assert stack.record_id not in reachable
+
+
 def test_inference_traverses_the_same_exact_owner_path_vocabulary() -> None:
     assert {
         "assembly-anchor-emitted-by-pcode",
@@ -510,6 +811,29 @@ def test_inference_traverses_the_same_exact_owner_path_vocabulary() -> None:
         "object-materializes-virtual",
         "object-has-stack-home",
     } <= _PATH_EDGE_KINDS
+
+
+def test_inference_path_search_rejects_capability_stripped_owner_edges() -> None:
+    evidence = emit_object_binding_evidence(_adapter_input())
+    stripped = replace(
+        evidence,
+        capabilities=evidence.capabilities - {"object-to-frame"},
+    )
+    store = InMemoryEvidenceStore()
+    store.add_nodes(stripped.nodes)
+    store.add_edges(stripped.edges)
+    allocator = next(node for node in stripped.nodes if node.kind == "allocator-node")
+    stack = next(node for node in stripped.nodes if node.kind == "stack-object")
+
+    result = _all_simple_paths(
+        store,
+        allocator.record_id,
+        stack.record_id,
+        8,
+        owner_evidence_by_compile={allocator.compile_id: stripped},
+    )
+
+    assert result.paths == ()
 
 
 def test_report_names_current_verified_backend_owner_path_incompleteness() -> None:
@@ -674,6 +998,45 @@ def test_backend_adapter_merges_only_genuinely_reverified_v2_evidence(
     }.isdisjoint(edge.kind for edge in backend.result.edges)
 
 
+def test_backend_adapter_rejects_mixed_process_local_and_v2_identity_spaces(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _verified_bundle(tmp_path, monkeypatch)
+    pcdump = tmp_path / "legacy-pcdump.txt"
+    pcdump.write_text(
+        "Starting function target\nBEFORE REGISTER COLORING\ntarget\nB0: Succ={} Pred={} Labels={}\n    mr r66,r66\n",
+        encoding="utf-8",
+    )
+    legacy = BackendArtifactRef.model_validate(
+        {
+            "path": pcdump.name,
+            "sha256": _sha256(pcdump.read_bytes()),
+            "format": "mwcc-debug-pcdump",
+            "capabilities": (),
+        }
+    )
+    manifest = bundle.manifest.model_copy(
+        update={
+            "artifacts": bundle.manifest.artifacts.model_copy(
+                update={"backend": (*bundle.manifest.artifacts.backend, legacy)}
+            ),
+            "producer_versions": {
+                **bundle.manifest.producer_versions,
+                "mwcc_debug": "mwcc-debug-pcdump.v1",
+            },
+        }
+    )
+    mixed = replace(
+        bundle,
+        manifest=manifest,
+        artifact_paths=MappingProxyType({**bundle.artifact_paths, "backend[1]": pcdump}),
+    )
+
+    with pytest.raises(BundleInputError, match="incompatible process-local backend"):
+        adapt_backends(mixed)
+
+
 def test_adapter_rejects_hostile_trace_multiple_v2_inputs_and_missing_candidate(
     tmp_path: Path,
 ) -> None:
@@ -697,3 +1060,25 @@ def test_adapter_rejects_hostile_trace_multiple_v2_inputs_and_missing_candidate(
     missing = SimpleNamespace(**{**base.__dict__, "candidate_object_path": None})
     with pytest.raises(BundleInputError, match="candidate object"):
         adapt_object_bindings(missing)
+
+
+def test_adapter_converts_deep_json_recursion_to_bundle_input_error(
+    tmp_path: Path,
+) -> None:
+    hostile = tmp_path / "deep.json"
+    depth = 2000
+    hostile.write_text(
+        '{"deep":' * depth + "null" + "}" * depth,
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.o"
+    candidate.write_bytes(b"object")
+    bundle = SimpleNamespace(
+        compile_id="compile",
+        manifest=SimpleNamespace(function="fn"),
+        candidate_object_path=candidate,
+        backend_paths=lambda _format: (hostile,),
+    )
+
+    with pytest.raises(BundleInputError, match="invalid backend trace v2"):
+        adapt_object_bindings(bundle)

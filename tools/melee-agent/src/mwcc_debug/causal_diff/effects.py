@@ -14,6 +14,7 @@ from .alignment import (
 from .canonical import stable_id
 from .graph import FrontierGraph
 from .models import EvidenceNode
+from .object_binding_adapter import exact_owner_path_record
 
 EffectDirection = Literal[
     "first-exact-second-mismatch",
@@ -38,6 +39,15 @@ _OWNERSHIP_EDGE_KINDS = frozenset(
         "bridge-candidate-materializes-stack-object",
         "bridge-has-stack-access",
         "bridge-has-source-expression",
+        "assembly-anchor-emitted-by-pcode",
+        "pcode-operand-lineage",
+        "pcode-operand-uses-virtual",
+        "object-materializes-virtual",
+        "object-has-stack-home",
+    }
+)
+_EXACT_OWNER_EDGE_KINDS = frozenset(
+    {
         "assembly-anchor-emitted-by-pcode",
         "pcode-operand-lineage",
         "pcode-operand-uses-virtual",
@@ -177,6 +187,15 @@ def _reachable_records(graph: FrontierGraph, roots: Iterable[str]) -> tuple[froz
     while frontier:
         current = frontier.pop(0)
         for edge in graph.store.neighbors(current, _OWNERSHIP_EDGE_KINDS, "both"):
+            object_bindings = getattr(
+                getattr(graph, "backend", None),
+                "object_bindings",
+                None,
+            )
+            if (edge.kind in _EXACT_OWNER_EDGE_KINDS or "capture_run_id" in edge.attributes) and (
+                object_bindings is None or not exact_owner_path_record(object_bindings, edge)
+            ):
+                continue
             edge_ids.add(edge.record_id)
             other = edge.target_id if edge.source_id == current else edge.source_id
             if other not in visited:

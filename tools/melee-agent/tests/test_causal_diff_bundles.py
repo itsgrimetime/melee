@@ -467,6 +467,37 @@ def test_bundle_v2_rejects_non_utf8_backend_as_bundle_input_error(
         load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
 
 
+def test_bundle_rejects_deep_manifest_as_bundle_input_error(tmp_path: Path) -> None:
+    manifest = tmp_path / "deep-manifest.json"
+    depth = 2000
+    manifest.write_text(
+        '{"deep":' * depth + "null" + "}" * depth,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BundleInputError, match="invalid bundle manifest"):
+        load_bundle(manifest, cli_label="paired", function="fn")
+
+
+def test_bundle_v2_rejects_deep_backend_as_bundle_input_error(
+    bundle_v2: BundleV2Fixture,
+) -> None:
+    depth = 2000
+    bundle_v2.backend.write_text(
+        '{"deep":' * depth + "null" + "}" * depth,
+        encoding="utf-8",
+    )
+    _rewrite_manifest(
+        bundle_v2.manifest,
+        lambda payload: payload["artifacts"]["backend"][0].__setitem__(
+            "sha256", _sha256(bundle_v2.backend.read_bytes())
+        ),
+    )
+
+    with pytest.raises(BundleInputError, match=r"invalid backend\[0\] trace"):
+        load_bundle(bundle_v2.manifest, cli_label="paired", function="fn")
+
+
 def test_bundle_v2_rejects_noncanonical_unicode_as_bundle_input_error(
     bundle_v2: BundleV2Fixture,
 ) -> None:

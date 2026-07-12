@@ -14,7 +14,11 @@ from .backend_adapter import _operand_roles
 from .canonical import stable_id
 from .graph import FrontierGraph
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance, min_confidence
-from .object_binding_adapter import ObjectBindingEvidence, proof_complete
+from .object_binding_adapter import (
+    ObjectBindingEvidence,
+    exact_owner_path_record,
+    proof_complete,
+)
 
 _REGISTER = re.compile(r"\b([rf])\d+\b")
 _ADDI_ZERO_COPY = re.compile(
@@ -181,9 +185,7 @@ def _proof_edge(
         if edge.kind == kind
         and edge.source_id == source_id
         and edge.target_id == target_id
-        and edge.confidence in {Confidence.OBSERVED, Confidence.DERIVED_UNIQUE}
-        and edge.provenance.parser == "mwcc-retro-backend-trace.v2"
-        and edge.attributes.get("capture_run_id") == evidence.capture_run_id
+        and exact_owner_path_record(evidence, edge)
     )
 
 
@@ -191,13 +193,17 @@ def _local_backend_owner_paths(
     evidence: ObjectBindingEvidence,
     role: BackendOwnerRoleTuple,
 ) -> tuple[BackendOwnerPath, ...]:
+    if not proof_complete(evidence):
+        return ()
     nodes = {node.record_id: node for node in evidence.nodes}
     register_class_id = 1 if role.register_class in {"f", "fpr"} else 0
     paths: list[BackendOwnerPath] = []
     anchors = tuple(
         node
         for node in evidence.nodes
-        if node.kind == "assembly-operand-anchor" and node.attributes.get("machine_operand_key") == role.operand_key
+        if node.kind == "assembly-operand-anchor"
+        and node.attributes.get("machine_operand_key") == role.operand_key
+        and exact_owner_path_record(evidence, node)
     )
     owners = tuple(
         node
@@ -205,36 +211,47 @@ def _local_backend_owner_paths(
         if node.kind == "compiler-object"
         and node.attributes.get("type_size") == role.type_size
         and role.frame_area in node.attributes.get("areas", ())
+        and exact_owner_path_record(evidence, node)
     )
     for anchor in anchors:
+        # Preserve every exact alternative rather than selecting by numeric identity.
         anchor_edges = tuple(
             edge
             for edge in evidence.edges
             if edge.kind == "assembly-anchor-emitted-by-pcode"
             and edge.source_id == anchor.record_id
             and edge.target_id in nodes
+            and exact_owner_path_record(evidence, edge)
         )
         for anchor_edge in anchor_edges:
             pcode = nodes[anchor_edge.target_id]
+            if not exact_owner_path_record(evidence, pcode):
+                continue
             lineage_edges = tuple(
                 edge
                 for edge in evidence.edges
                 if edge.kind == "pcode-operand-lineage"
                 and edge.source_id == pcode.record_id
                 and edge.target_id in nodes
+                and exact_owner_path_record(evidence, edge)
             )
             for lineage_edge in lineage_edges:
                 lineage = nodes[lineage_edge.target_id]
+                if not exact_owner_path_record(evidence, lineage):
+                    continue
                 virtual_edges = tuple(
                     edge
                     for edge in evidence.edges
                     if edge.kind == "pcode-operand-uses-virtual"
                     and edge.source_id == lineage.record_id
                     and edge.target_id in nodes
+                    and exact_owner_path_record(evidence, edge)
                 )
                 for virtual_edge in virtual_edges:
                     virtual = nodes[virtual_edge.target_id]
-                    if virtual.attributes.get("class_id") != register_class_id:
+                    if virtual.attributes.get("class_id") != register_class_id or not exact_owner_path_record(
+                        evidence, virtual
+                    ):
                         continue
                     allocator_edges = tuple(
                         edge
@@ -242,6 +259,7 @@ def _local_backend_owner_paths(
                         if edge.kind == "maps-to-allocator-node"
                         and edge.source_id == virtual.record_id
                         and edge.target_id in nodes
+                        and exact_owner_path_record(evidence, edge)
                     )
                     for owner in owners:
                         object_edges = _proof_edge(
@@ -258,12 +276,17 @@ def _local_backend_owner_paths(
                             and edge.target_id in nodes
                             and edge.attributes.get("area") == role.frame_area
                             and edge.attributes.get("semantic_stack_role") == role.semantic_stack_role
+                            and exact_owner_path_record(evidence, edge)
                         )
                         for object_edge in object_edges:
                             for allocator_edge in allocator_edges:
                                 allocator = nodes[allocator_edge.target_id]
+                                if not exact_owner_path_record(evidence, allocator):
+                                    continue
                                 for stack_edge in stack_edges:
                                     stack = nodes[stack_edge.target_id]
+                                    if not exact_owner_path_record(evidence, stack):
+                                        continue
                                     supporting = (
                                         anchor,
                                         anchor_edge,
@@ -279,14 +302,7 @@ def _local_backend_owner_paths(
                                         stack_edge,
                                         stack,
                                     )
-                                    if all(
-                                        record.confidence
-                                        in {
-                                            Confidence.OBSERVED,
-                                            Confidence.DERIVED_UNIQUE,
-                                        }
-                                        for record in supporting
-                                    ):
+                                    if all(exact_owner_path_record(evidence, record) for record in supporting):
                                         paths.append(
                                             BackendOwnerPath(
                                                 evidence,

@@ -107,7 +107,14 @@ def _parse_manifest(manifest_path: Path) -> BundleManifest:
         if schema_version == "causal-frontier-bundle.v2":
             return FrontierBundleManifestV2.model_validate(payload)
         raise ValueError(f"unsupported bundle schema_version {schema_version!r}")
-    except (OSError, json.JSONDecodeError, ValidationError, ValueError) as error:
+    except (
+        OSError,
+        OverflowError,
+        RecursionError,
+        json.JSONDecodeError,
+        ValidationError,
+        ValueError,
+    ) as error:
         raise BundleInputError(f"invalid bundle manifest {manifest_path}: {error}") from error
 
 
@@ -115,7 +122,13 @@ def _capture_identity_from_trace(path: Path, *, function: str, backend_index: in
     label = f"backend[{backend_index}]"
     try:
         trace = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    except (
+        OSError,
+        OverflowError,
+        RecursionError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as error:
         raise BundleInputError(f"invalid {label} trace: {error}") from error
     if not isinstance(trace, dict):
         raise BundleInputError(f"invalid {label} trace: payload must be an object")

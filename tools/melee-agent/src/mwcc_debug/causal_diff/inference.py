@@ -11,6 +11,7 @@ from .canonical import canonical_bytes, stable_id
 from .effects import DerivedEffects, EffectPair
 from .graph import FrontierGraph
 from .models import AdapterResult, ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode
+from .object_binding_adapter import ObjectBindingEvidence, exact_owner_path_record
 from .store import EvidenceQuery
 
 _PATH_EDGE_KINDS = frozenset(
@@ -307,6 +308,8 @@ def _all_simple_paths(
     source_id: str,
     target_id: str,
     max_depth: int,
+    *,
+    owner_evidence_by_compile: Mapping[str, ObjectBindingEvidence] | None = None,
 ) -> _PathEnumeration:
     """Enumerate simple paths up to ``max_depth`` evidence edges."""
 
@@ -324,6 +327,20 @@ def _all_simple_paths(
         nonlocal truncated
         neighbors: list[tuple[str, EvidenceEdge]] = []
         for edge in query.neighbors(node_id, _PATH_EDGE_KINDS, "both"):
+            if (
+                edge.kind
+                in {
+                    "assembly-anchor-emitted-by-pcode",
+                    "pcode-operand-lineage",
+                    "pcode-operand-uses-virtual",
+                    "object-materializes-virtual",
+                    "object-has-stack-home",
+                }
+                or "capture_run_id" in edge.attributes
+            ):
+                evidence = (owner_evidence_by_compile or {}).get(edge.compile_id)
+                if evidence is None or not exact_owner_path_record(evidence, edge):
+                    continue
             other = edge.target_id if edge.source_id == node_id else edge.source_id
             if other in visited:
                 continue
@@ -475,6 +492,7 @@ def _owner_alternatives(
     query: EvidenceQuery,
     comparisons: tuple[ComparisonRecord, ...],
     evidence_depth: int,
+    owner_evidence_by_compile: Mapping[str, ObjectBindingEvidence] | None = None,
 ) -> _OwnerEnumeration:
     allocator_by_compile = {
         pair.allocator.role_correspondence.left.compile_id: pair.allocator.role_correspondence.left,
@@ -521,12 +539,14 @@ def _owner_alternatives(
                 owner.record_id,
                 allocator.record_id,
                 evidence_depth,
+                owner_evidence_by_compile=owner_evidence_by_compile,
             )
             stack_search = _all_simple_paths(
                 query,
                 owner.record_id,
                 stack_target.record_id,
                 evidence_depth,
+                owner_evidence_by_compile=owner_evidence_by_compile,
             )
             truncated |= allocator_search.truncated or stack_search.truncated
             if not allocator_search.paths or not stack_search.paths:
@@ -715,6 +735,7 @@ def infer_pair(
     comparisons: Iterable[ComparisonRecord],
     *,
     evidence_depth: int = 4,
+    owner_evidence_by_compile: Mapping[str, ObjectBindingEvidence] | None = None,
 ) -> CausalVerdict:
     """Apply the normative strict-inference table to one eligible effect pair."""
 
@@ -753,7 +774,13 @@ def infer_pair(
     allocator_delta_proven = all(comparison.confidence in _PROOF_CONFIDENCES for comparison in allocator_deltas)
     stack_delta_proven = all(comparison.confidence in _PROOF_CONFIDENCES for comparison in stack_deltas)
 
-    owner_enumeration = _owner_alternatives(pair, query, records, evidence_depth)
+    owner_enumeration = _owner_alternatives(
+        pair,
+        query,
+        records,
+        evidence_depth,
+        owner_evidence_by_compile,
+    )
     alternatives = owner_enumeration.alternatives
     rejected = owner_enumeration.rejected
     source_bindings = (
@@ -1032,6 +1059,18 @@ def build_report(
         },
     )
     analysis_id = _analysis_id(effects, comparison_records, fallback_analysis_id)
+    owner_evidence_by_compile = {
+        str(graph.bundle.compile_id): evidence
+        for graph in graph_pair
+        if (
+            evidence := getattr(
+                getattr(graph, "backend", None),
+                "object_bindings",
+                None,
+            )
+        )
+        is not None
+    }
     inferred_verdicts = tuple(
         sorted(
             (
@@ -1040,6 +1079,7 @@ def build_report(
                     query,
                     comparison_records,
                     evidence_depth=evidence_depth,
+                    owner_evidence_by_compile=owner_evidence_by_compile,
                 )
                 for pair in sorted(effects.pairs, key=lambda item: item.pair_id)
             ),

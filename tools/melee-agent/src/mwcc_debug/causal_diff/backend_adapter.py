@@ -563,6 +563,10 @@ def _deduplicate_edges(edges: list[EvidenceEdge]) -> tuple[EvidenceEdge, ...]:
 def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
     """Normalize every captured backend artifact without compiling or writing."""
 
+    backend_formats = {reference.format for reference in bundle.manifest.artifacts.backend}
+    if "backend-trace.v2" in backend_formats and backend_formats != {"backend-trace.v2"}:
+        raise BundleInputError("incompatible process-local backend evidence cannot be mixed with backend-trace.v2")
+
     nodes: list[EvidenceNode] = []
     edges: list[EvidenceEdge] = []
     nodes_by_class_ig: dict[tuple[int, int], EvidenceNode] = {}
