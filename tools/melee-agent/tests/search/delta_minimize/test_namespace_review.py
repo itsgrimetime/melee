@@ -369,6 +369,17 @@ def _anchor_moving_map() -> dict[int, int]:
     return mapping
 
 
+def _request_with_parent_content_alias() -> NamespaceReviewRequest:
+    request = _request()
+    alias = _artifact(
+        "candidate:mask-111",
+        source_sha256=SHA["right"],
+        pcdump_sha256=SHA["right_dump"],
+        automatically_resolved=False,
+    )
+    return replace(request, artifacts=(*request.artifacts, alias))
+
+
 def _write_map(path: Path, mapping: object) -> Path:
     _write_yaml(path, mapping)
     return path
@@ -414,6 +425,68 @@ def test_seal_rejects_parent_binding_that_conflicts_with_reviewed_anchors(
             _request(),
             identity_ids=("candidate:mask-100",),
             map_paths={"parent:right": _write_map(tmp_path / "parent.yaml", _anchor_moving_map())},
+        )
+
+
+def test_seal_rejects_anchor_moving_candidate_alias_of_parent_content(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(DeltaMinimizeError):
+        seal_namespace_review(
+            _request_with_parent_content_alias(),
+            identity_ids=("candidate:mask-100",),
+            map_paths={"candidate:mask-111": _write_map(tmp_path / "alias.yaml", _anchor_moving_map())},
+        )
+
+
+def test_loader_rejects_anchor_moving_candidate_alias_of_parent_content(
+    tmp_path: Path,
+) -> None:
+    request = _request_with_parent_content_alias()
+    reviewed = seal_namespace_review(
+        request,
+        identity_ids=("parent:right", "candidate:mask-100"),
+        map_paths={},
+    )
+    payload = reviewed.to_dict()
+    parent_binding = next(binding for binding in payload["bindings"] if binding["artifact_id"] == "parent:right")
+    parent_binding["artifact_id"] = "candidate:mask-111"
+    parent_binding["canonical_to_artifact"] = _anchor_moving_map()
+    path = tmp_path / "reviewed.yaml"
+    _write_yaml(path, payload)
+
+    with pytest.raises(DeltaMinimizeError):
+        load_reviewed_namespaces(path, request=request)
+
+
+def test_resolver_revalidates_parent_content_group_through_candidate_alias(
+    tmp_path: Path,
+) -> None:
+    request = _request_with_parent_content_alias()
+    reviewed = seal_namespace_review(
+        request,
+        identity_ids=("parent:right", "candidate:mask-100"),
+        map_paths={},
+    )
+    alias_binding = ReviewedNamespaceBinding(
+        artifact_id="candidate:mask-111",
+        source_sha256=SHA["right"],
+        pcdump_sha256=SHA["right_dump"],
+        canonical_to_artifact=_anchor_moving_map(),
+    )
+    object.__setattr__(
+        reviewed,
+        "bindings",
+        tuple(alias_binding if binding.artifact_id == "parent:right" else binding for binding in reviewed.bindings),
+    )
+
+    with pytest.raises(DeltaMinimizeError):
+        resolve_reviewed_map(
+            reviewed,
+            request,
+            artifact_id="candidate:mask-111",
+            source_sha256=SHA["right"],
+            pcdump_sha256=SHA["right_dump"],
         )
 
 

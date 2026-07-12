@@ -475,35 +475,40 @@ def _validate_full_map(
 ) -> None:
     mapping = binding.canonical_to_artifact
     domain = request.domain
-    artifact = next(
-        (candidate for candidate in request.artifacts if candidate.artifact_id == binding.artifact_id),
-        None,
-    )
+    content = (binding.source_sha256, binding.pcdump_sha256)
+    group = _content_groups(request).get(content, ())
     if (
-        artifact is None
+        not group
+        or all(artifact.artifact_id != binding.artifact_id for artifact in group)
         or set(mapping) != set(domain)
         or set(mapping.values()) != set(domain)
         or any(mapping[role] != role for role in range(32))
         or (
-            artifact.kind == "parent"
+            any(artifact.kind == "parent" for artifact in group)
             and any(mapping[role] != artifact_role for role, artifact_role in request.reviewed_anchors.items())
         )
     ):
         raise DeltaMinimizeError("invalid-reviewed-namespace-map")
 
 
-def _unresolved_content_groups(
+def _content_groups(
     request: NamespaceReviewRequest,
 ) -> Mapping[tuple[str, str], tuple[NamespaceArtifact, ...]]:
     groups: dict[tuple[str, str], list[NamespaceArtifact]] = {}
     for artifact in request.artifacts:
         key = (artifact.source_sha256, artifact.pcdump_sha256)
         groups.setdefault(key, []).append(artifact)
+    return MappingProxyType({key: tuple(artifacts) for key, artifacts in groups.items()})
+
+
+def _unresolved_content_groups(
+    request: NamespaceReviewRequest,
+) -> Mapping[tuple[str, str], tuple[NamespaceArtifact, ...]]:
     unresolved: dict[tuple[str, str], tuple[NamespaceArtifact, ...]] = {}
-    for key, artifacts in groups.items():
+    for key, artifacts in _content_groups(request).items():
         if any(artifact.automatically_resolved for artifact in artifacts):
             continue
-        unresolved[key] = tuple(artifacts)
+        unresolved[key] = artifacts
     return MappingProxyType(unresolved)
 
 
