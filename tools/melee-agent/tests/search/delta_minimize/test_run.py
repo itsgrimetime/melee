@@ -466,6 +466,49 @@ def test_extractor_schema_upgrade_removes_stale_publications_before_enumeration(
     assert manifest["schema_version"] == "delta-manifest.v2"
 
 
+def test_extractor_schema_upgrade_removes_stale_publications_before_objective_failure(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+
+    def old_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        return replace(base.extract_manifest(left, right, function=function), schema_version="delta-manifest.v1")
+
+    run_delta_minimize(config, backends=replace(base, extract_manifest=old_extract))
+    assert (config.out_dir / "result.json").is_file()
+    assert (config.out_dir / "candidates.json").is_file()
+
+    fixture.expected_object_hash = "new-parent-epoch"
+    ambiguous = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(DeltaMinimizeError("ambiguous-color-target")),
+    )
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        run_delta_minimize(config, backends=ambiguous)
+
+    assert not (config.out_dir / "result.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+    manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "delta-manifest.v2"
+
+
+def test_objective_context_change_removes_stale_publications_before_ambiguity(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+
+    fixture.expected_object_hash = "new-parent-epoch"
+    ambiguous = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(DeltaMinimizeError("ambiguous-color-target")),
+    )
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        run_delta_minimize(config, backends=ambiguous)
+
+    assert not (config.out_dir / "result.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+
+
 def test_run_materializes_only_parent_deltas_and_reproduces_both_endpoints(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
 

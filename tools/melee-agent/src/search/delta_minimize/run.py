@@ -890,6 +890,8 @@ def _load_or_infer_objective(
     )
     if (old_context is None) != (old_manifest is None):
         raise DeltaMinimizeError("corrupt-objective-cache-context")
+    if old_context != context:
+        store.invalidate_publications()
     if old_context == context and old_manifest is not None:
         objective = _objective_from_dict(old_manifest, function=config.function)
         _validate_objective_donor_context(objective, config.donor_overrides)
@@ -1147,9 +1149,9 @@ def run_delta_minimize(
         )
         store.write_result(result.to_dict())
         return result
+    manifest = _load_or_extract_manifest(config, store, active, left_source, right_source)
     objective = _load_or_infer_objective(config, parents, store, active)
     objective_hash = _hash_json(objective.to_dict())
-    manifest = _load_or_extract_manifest(config, store, active, left_source, right_source)
     store.bind_provenance(
         {
             "cflags_hash": parents.cflags_hash,
