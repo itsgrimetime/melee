@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import os
@@ -9,8 +10,10 @@ import posixpath
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import tomllib
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -19,10 +22,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple
 
 from . import candidate_audit
+from .diff_capture import _run_with_process_group_timeout
 from .permuter_config import DEFAULT_OBJDUMP_COMMAND
 
 CONFIG_PATH = Path.home() / ".config" / "decomp-me" / "permuter-remotes.toml"
 JOBS_DIR = Path.home() / ".config" / "decomp-me" / "permuter-jobs"
+DEFAULT_REMOTE_DOCTOR_TIMEOUT = 60.0
 
 CONFIG_EXAMPLE = """
 [target.coder64]
@@ -123,6 +128,35 @@ class OrphanedWiboProcess:
 
 
 @dataclass(frozen=True)
+class OrphanedPermuterProcess:
+    pid: int
+    ppid: int
+    pgid: int
+    stat: str
+    elapsed: str
+    command: str
+    cwd: Path
+    kind: str
+
+
+@dataclass(frozen=True)
+class OrphanCleanupReport:
+    terminated_pids: tuple[int, ...]
+    surviving_pids: tuple[int, ...]
+    skipped_groups: dict[int, str]
+
+
+@dataclass(frozen=True)
+class _ProcessSnapshot:
+    pid: int
+    ppid: int
+    pgid: int
+    stat: str
+    elapsed: str
+    command: str
+
+
+@dataclass(frozen=True)
 class DoctorCheck:
     name: str
     ok: bool
@@ -191,21 +225,33 @@ def run_command(
 ) -> CommandResult:
     """Run a local command, returning captured output."""
     try:
-        completed = subprocess.run(
-            argv,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        if timeout is None:
+            completed = subprocess.run(
+                argv,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            completed = _run_with_process_group_timeout(
+                argv,
+                cwd=cwd or Path.cwd(),
+                timeout=timeout,
+            )
     except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        timeout_message = f"timed out after {timeout:g}s running {shlex.join(argv)}"
+        if timeout_message not in stderr:
+            stderr = f"{timeout_message}\n{stderr}" if stderr else timeout_message
         result = CommandResult(
             returncode=124,
-            stdout=exc.stdout or "",
-            stderr=(
-                exc.stderr or ""
-                or f"timed out after {timeout:g}s running {shlex.join(argv)}"
-            ),
+            stdout=stdout,
+            stderr=stderr,
         )
         if check:
             raise RemoteJobError(result.stderr)
@@ -220,6 +266,30 @@ def run_command(
         detail = f": {stderr}" if stderr else ""
         raise RemoteJobError(f"Command failed ({result.returncode}): {shlex.join(argv)}{detail}")
     return result
+
+
+def _runner_accepts_timeout(runner: Callable[..., CommandResult]) -> bool:
+    try:
+        parameters = inspect.signature(runner).parameters.values()
+    except (TypeError, ValueError):
+        return runner is run_command
+    return any(
+        parameter.name == "timeout"
+        or parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _run_bounded_command(
+    runner: Callable[..., CommandResult],
+    argv: list[str],
+    *,
+    check: bool,
+    timeout: float,
+) -> CommandResult:
+    if _runner_accepts_timeout(runner):
+        return runner(argv, check=check, timeout=timeout)
+    return runner(argv, check=check)
 
 
 def load_targets(config_path: Path = CONFIG_PATH) -> dict[str, RemoteTarget]:
@@ -550,40 +620,309 @@ def sanitize_log_tail(text: str, *, lines: int) -> str:
     return "\n".join(cleaned_lines) + "\n"
 
 
-def detect_orphaned_wibo_processes(
-    runner: Callable[[list[str]], CommandResult] = run_command,
-) -> list[OrphanedWiboProcess]:
-    """Find orphaned local wibo/MWCC processes that likely need operator action."""
-    result = runner(
-        ["ps", "-axo", "pid=,ppid=,stat=,etime=,command="],
-        check=False,
-    )
+_RESOURCE_TRACKER_RE = re.compile(
+    r"(?:^|\s)(?:\S*/)?python(?:\d+(?:\.\d+)*)?\s+-c\s+['\"]?"
+    r"from multiprocessing\.resource_tracker import main;main\(\d+\)"
+    r"['\"]?\s*$"
+)
+_SPAWN_WORKER_RE = re.compile(
+    r"(?:^|\s)(?:\S*/)?python(?:\d+(?:\.\d+)*)?\s+-c\s+['\"]?"
+    r"from multiprocessing\.spawn import spawn_main;\s*spawn_main\([^\r\n]*\)"
+    r"['\"]?\s+--multiprocessing-fork\s*$"
+)
+
+
+def _process_kind(command: str) -> str | None:
+    command_lower = command.lower()
+    if "wibo" in command_lower and "mwcceppc" in command_lower:
+        return "wibo-mwcc"
+    if _RESOURCE_TRACKER_RE.search(command):
+        return "python-resource-tracker"
+    if _SPAWN_WORKER_RE.search(command):
+        return "python-spawn-worker"
+    return None
+
+
+def _read_process_table(
+    runner: Callable[..., CommandResult],
+) -> list[_ProcessSnapshot] | None:
+    try:
+        result = runner(
+            ["ps", "-axo", "pid=,ppid=,pgid=,stat=,etime=,command="],
+            check=False,
+        )
+    except OSError:
+        return None
     if result.returncode != 0:
-        return []
-    orphans: list[OrphanedWiboProcess] = []
+        return None
+    processes: list[_ProcessSnapshot] = []
     for raw in result.stdout.splitlines():
-        parts = raw.strip().split(None, 4)
-        if len(parts) != 5:
+        parts = raw.strip().split(None, 5)
+        if len(parts) < 5:
             continue
-        pid_s, ppid_s, stat, elapsed, command = parts
-        command_lower = command.lower()
-        if "wibo" not in command_lower or "mwcceppc" not in command_lower:
-            continue
+        pid_s, ppid_s, pgid_s, stat, elapsed = parts[:5]
+        command = parts[5] if len(parts) == 6 else ""
         try:
             pid = int(pid_s)
             ppid = int(ppid_s)
+            pgid = int(pgid_s)
         except ValueError:
             continue
-        if ppid != 1:
-            continue
-        orphans.append(OrphanedWiboProcess(
+        processes.append(_ProcessSnapshot(
             pid=pid,
             ppid=ppid,
+            pgid=pgid,
             stat=stat,
             elapsed=elapsed,
             command=command,
         ))
-    return orphans
+    return processes
+
+
+def _resolve_process_cwd(
+    pid: int,
+    runner: Callable[..., CommandResult],
+) -> Path | None:
+    proc_cwd = Path(f"/proc/{pid}/cwd")
+    if proc_cwd.exists():
+        try:
+            return proc_cwd.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return None
+    try:
+        result = runner(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    cwd_text = next(
+        (line[1:] for line in result.stdout.splitlines() if line.startswith("n")),
+        None,
+    )
+    if not cwd_text:
+        return None
+    try:
+        return Path(cwd_text).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _classify_orphaned_permuter_processes(
+    processes: list[_ProcessSnapshot],
+    *,
+    perm_root: Path,
+    runner: Callable[..., CommandResult],
+    current_pgid: int,
+) -> dict[int, OrphanedPermuterProcess]:
+    found: dict[int, OrphanedPermuterProcess] = {}
+    for proc in processes:
+        kind = _process_kind(proc.command)
+        if (
+            kind is None
+            or proc.ppid != 1
+            or proc.pgid <= 1
+            or proc.pgid == current_pgid
+        ):
+            continue
+        cwd = _resolve_process_cwd(proc.pid, runner)
+        if cwd is None or not _is_within(cwd, perm_root):
+            continue
+        found[proc.pid] = OrphanedPermuterProcess(
+            pid=proc.pid,
+            ppid=proc.ppid,
+            pgid=proc.pgid,
+            stat=proc.stat,
+            elapsed=proc.elapsed,
+            command=proc.command,
+            cwd=cwd,
+            kind=kind,
+        )
+    return found
+
+
+def detect_orphaned_permuter_processes(
+    *,
+    perm_root: Path = Path("~/code/decomp-permuter"),
+    runner: Callable[..., CommandResult] = run_command,
+    current_pgid: int | None = None,
+) -> list[OrphanedPermuterProcess]:
+    """Find only proven abandoned compiler and multiprocessing helpers."""
+    try:
+        resolved_root = perm_root.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return []
+    processes = _read_process_table(runner)
+    if processes is None:
+        return []
+    pgid = os.getpgrp() if current_pgid is None else current_pgid
+    return list(_classify_orphaned_permuter_processes(
+        processes,
+        perm_root=resolved_root,
+        runner=runner,
+        current_pgid=pgid,
+    ).values())
+
+
+def detect_orphaned_wibo_processes(
+    runner: Callable[..., CommandResult] = run_command,
+) -> list[OrphanedWiboProcess]:
+    """Compatibility report for PPID-1 wibo/MWCC processes."""
+    processes = _read_process_table(runner)
+    if processes is None:
+        return []
+    return [
+        OrphanedWiboProcess(
+            pid=proc.pid,
+            ppid=proc.ppid,
+            stat=proc.stat,
+            elapsed=proc.elapsed,
+            command=proc.command,
+        )
+        for proc in processes
+        if proc.ppid == 1 and _process_kind(proc.command) == "wibo-mwcc"
+    ]
+
+
+def terminate_orphaned_permuter_processes(
+    candidates: list[OrphanedPermuterProcess],
+    *,
+    perm_root: Path,
+    runner: Callable[..., CommandResult] = run_command,
+    killpg: Callable[[int, int], None] = os.killpg,
+    current_pgid: int | None = None,
+    grace_seconds: float = 2.0,
+) -> OrphanCleanupReport:
+    """Revalidate and terminate safe, homogeneous orphan process groups."""
+    try:
+        resolved_root = perm_root.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return OrphanCleanupReport(
+            terminated_pids=(),
+            surviving_pids=tuple(sorted(proc.pid for proc in candidates)),
+            skipped_groups={proc.pgid: "permuter root could not be resolved" for proc in candidates},
+        )
+    own_pgid = os.getpgrp() if current_pgid is None else current_pgid
+    original_by_group: dict[int, list[OrphanedPermuterProcess]] = {}
+    for candidate in candidates:
+        original_by_group.setdefault(candidate.pgid, []).append(candidate)
+
+    terminated: set[int] = set()
+    survivors: set[int] = set()
+    skipped: dict[int, str] = {}
+    for pgid, originals in sorted(original_by_group.items()):
+        if pgid <= 1 or pgid == own_pgid:
+            skipped[pgid] = "unsafe process group"
+            survivors.update(proc.pid for proc in originals)
+            continue
+        processes = _read_process_table(runner)
+        if processes is None:
+            skipped[pgid] = "could not re-scan process table"
+            survivors.update(proc.pid for proc in originals)
+            continue
+        members = [proc for proc in processes if proc.pgid == pgid]
+        if not members:
+            terminated.update(proc.pid for proc in originals)
+            continue
+        recognized = _classify_orphaned_permuter_processes(
+            members,
+            perm_root=resolved_root,
+            runner=runner,
+            current_pgid=own_pgid,
+        )
+        if any(member.pid not in recognized for member in members):
+            skipped[pgid] = "process group contains an unrecognized member"
+            survivors.update(proc.pid for proc in originals)
+            continue
+        changed = False
+        for original in originals:
+            current = recognized.get(original.pid)
+            if current is None or (
+                current.pgid != original.pgid
+                or current.command != original.command
+                or current.cwd != original.cwd
+                or current.kind != original.kind
+            ):
+                changed = True
+                break
+        if changed:
+            skipped[pgid] = "candidate changed during PID reuse revalidation"
+            survivors.update(proc.pid for proc in originals)
+            continue
+        if any("U" in member.stat for member in members):
+            skipped[pgid] = "uninterruptible process; restart the host"
+            survivors.update(member.pid for member in members)
+            continue
+        try:
+            killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            terminated.update(member.pid for member in members)
+            continue
+        except PermissionError:
+            skipped[pgid] = "permission denied while signaling process group"
+            survivors.update(member.pid for member in members)
+            continue
+        time.sleep(max(0.0, grace_seconds))
+        remaining = _read_process_table(runner)
+        if remaining is None:
+            skipped[pgid] = "could not verify termination"
+            survivors.update(member.pid for member in members)
+            continue
+        live = [proc for proc in remaining if proc.pgid == pgid]
+        if live:
+            live_recognized = _classify_orphaned_permuter_processes(
+                live,
+                perm_root=resolved_root,
+                runner=runner,
+                current_pgid=own_pgid,
+            )
+            group_changed = any(
+                proc.pid not in live_recognized
+                or proc.pid not in recognized
+                or live_recognized[proc.pid].command != recognized[proc.pid].command
+                or live_recognized[proc.pid].cwd != recognized[proc.pid].cwd
+                or live_recognized[proc.pid].kind != recognized[proc.pid].kind
+                for proc in live
+            )
+            if group_changed:
+                skipped[pgid] = "process group changed before SIGKILL revalidation"
+                survivors.update(proc.pid for proc in live)
+                terminated.update(
+                    proc.pid for proc in members if proc.pid not in survivors
+                )
+                continue
+            try:
+                killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                live = []
+            except PermissionError:
+                skipped[pgid] = "permission denied while escalating process group"
+                survivors.update(proc.pid for proc in live)
+                continue
+            if live:
+                time.sleep(min(max(0.0, grace_seconds), 0.1))
+                final = _read_process_table(runner)
+                if final is None:
+                    survivors.update(proc.pid for proc in live)
+                else:
+                    live = [proc for proc in final if proc.pgid == pgid]
+        survivors.update(proc.pid for proc in live)
+        terminated.update(proc.pid for proc in members if proc.pid not in survivors)
+    return OrphanCleanupReport(
+        terminated_pids=tuple(sorted(terminated)),
+        surviving_pids=tuple(sorted(survivors)),
+        skipped_groups=skipped,
+    )
 
 
 def fetch_job(
@@ -791,6 +1130,7 @@ def doctor_target(
     local_perm_dir: Path | None = None,
     runner: Callable[..., CommandResult] = run_command,
     require_remote_scorer_target: bool = True,
+    timeout: float = DEFAULT_REMOTE_DOCTOR_TIMEOUT,
 ) -> DoctorReport:
     """Run read-only checks for a remote permuter target."""
     checks: list[DoctorCheck] = [
@@ -827,7 +1167,19 @@ def doctor_target(
         objdump_info=objdump_info,
         require_remote_scorer_target=require_remote_scorer_target,
     )
-    result = runner(["ssh", target.ssh, _remote_sh(script)], check=False)
+    if timeout <= 0:
+        checks.append(DoctorCheck(
+            "remote ssh",
+            False,
+            "doctor timeout must be positive",
+        ))
+        return DoctorReport(target=target.name, checks=checks)
+    result = _run_bounded_command(
+        runner,
+        ["ssh", target.ssh, _remote_sh(script)],
+        check=False,
+        timeout=timeout,
+    )
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "ssh command failed"
         checks.append(DoctorCheck("remote ssh", False, detail))

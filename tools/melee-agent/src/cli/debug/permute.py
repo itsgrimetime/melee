@@ -110,22 +110,44 @@ __all__ = [
 ]
 
 
-def _signal_process_group(proc: subprocess.Popen[Any], sig: int) -> None:
+def _process_group_exists(pgid: int) -> bool:
+    if pgid <= 1 or pgid == os.getpgrp():
+        return False
     try:
-        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, 0)
     except ProcessLookupError:
-        return
+        return False
     except PermissionError:
-        pgid = proc.pid
+        return True
+    return True
+
+
+def _signal_captured_process_group(
+    pgid: int,
+    sig: int,
+    proc: subprocess.Popen[Any] | None = None,
+) -> None:
+    if pgid <= 1 or pgid == os.getpgrp():
+        return
     try:
         os.killpg(pgid, sig)
     except ProcessLookupError:
         return
     except PermissionError:
-        if sig == signal.SIGKILL:
-            proc.kill()
-        else:
-            proc.terminate()
+        if proc is not None and proc.poll() is None:
+            if sig == signal.SIGKILL:
+                proc.kill()
+            else:
+                proc.terminate()
+
+
+def _wait_for_process_group_exit(pgid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while _process_group_exists(pgid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+    return True
 
 
 class _LocalPermuterInterrupted(BaseException):
@@ -137,21 +159,23 @@ class _LocalPermuterInterrupted(BaseException):
 def _terminate_local_permuter_group(
     proc: subprocess.Popen[Any],
     *,
+    pgid: int,
     sigterm_sent: bool = False,
+    grace_seconds: float = 1.0,
 ) -> None:
-    if not sigterm_sent:
-        _signal_process_group(proc, signal.SIGTERM)
-    try:
-        proc.wait(timeout=5)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    _signal_process_group(proc, signal.SIGKILL)
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+    safe_group = pgid > 1 and pgid != os.getpgrp()
+    if safe_group and _process_group_exists(pgid):
+        if not sigterm_sent:
+            _signal_captured_process_group(pgid, signal.SIGTERM, proc)
+        if not _wait_for_process_group_exit(pgid, grace_seconds):
+            _signal_captured_process_group(pgid, signal.SIGKILL, proc)
+            _wait_for_process_group_exit(pgid, min(grace_seconds, 0.1))
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
 
 def _run_local_permuter(
@@ -166,6 +190,10 @@ def _run_local_permuter(
         cwd=cwd,
         start_new_session=True,
     )
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError):
+        pgid = proc.pid
     signals = [signal.SIGINT, signal.SIGTERM]
     if hasattr(signal, "SIGHUP"):
         signals.append(signal.SIGHUP)
@@ -178,7 +206,7 @@ def _run_local_permuter(
         if termination_requested:
             return
         termination_requested = True
-        _signal_process_group(proc, signal.SIGTERM)
+        _signal_captured_process_group(pgid, signal.SIGTERM, proc)
 
     def finish_termination() -> None:
         nonlocal termination_finished
@@ -187,6 +215,7 @@ def _run_local_permuter(
         termination_finished = True
         _terminate_local_permuter_group(
             proc,
+            pgid=pgid,
             sigterm_sent=termination_requested,
         )
 
@@ -203,8 +232,7 @@ def _run_local_permuter(
             finish_termination()
             raise SystemExit(128 + exc.signum)
         finally:
-            if proc.poll() is None:
-                finish_termination()
+            finish_termination()
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
@@ -568,6 +596,14 @@ def remote_doctor(
         bool,
         typer.Option("--repair", help="Bootstrap/repair project-owned remote tooling before checking."),
     ] = False,
+    timeout: Annotated[
+        float,
+        typer.Option(
+            "--timeout",
+            min=0.001,
+            help="Total deadline for repair plus the final remote probe, in seconds.",
+        ),
+    ] = permuter_remote.DEFAULT_REMOTE_DOCTOR_TIMEOUT,
 ) -> None:
     """Check whether a remote target is ready to run decomp-permuter."""
     from src.cli.debug import DEFAULT_MELEE_ROOT  # noqa: PLC0415
@@ -575,6 +611,30 @@ def remote_doctor(
         _resolve_decomp_permuter_root,
         _resolve_permuter_function_dir,
     )
+    deadline = time.monotonic() + timeout
+
+    def deadline_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> permuter_remote.CommandResult:
+        remaining = deadline - time.monotonic()
+        if timeout is not None:
+            remaining = min(remaining, timeout)
+        if remaining <= 0:
+            message = "remote doctor total deadline expired"
+            if check:
+                raise permuter_remote.RemoteJobError(message)
+            return permuter_remote.CommandResult(124, "", message)
+        return permuter_remote.run_command(
+            argv,
+            cwd=cwd,
+            check=check,
+            timeout=remaining,
+        )
+
     try:
         targets = _remote_load_targets()
         target = targets.get(target_name)
@@ -599,12 +659,15 @@ def remote_doctor(
                 local_perm_root=repair_perm_root,
                 function=function,
                 local_perm_dir=local_perm_dir,
+                runner=deadline_runner,
             )
             for action in repair_report.actions:
                 print(f"REPAIR\t{action}")
         report = permuter_remote.doctor_target(
             target,
             local_perm_dir=local_perm_dir,
+            runner=deadline_runner,
+            timeout=timeout,
         )
     except (permuter_remote.RemoteConfigError, permuter_remote.RemoteJobError) as exc:
         _remote_error(exc)
@@ -1128,25 +1191,96 @@ def remote_tail(
 
 
 @permute_app.command(name="local-orphans")
-def permute_local_orphans() -> None:
-    """Detect orphaned local wibo/MWCC compile processes."""
-    orphans = permuter_remote.detect_orphaned_wibo_processes()
-    if not orphans:
-        print("No orphaned local wibo/MWCC processes detected.")
+def permute_local_orphans(
+    perm_root: Annotated[
+        Path,
+        typer.Option(
+            "--perm-root",
+            help="Resolved decomp-permuter root used to prove process ownership.",
+        ),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    terminate: Annotated[
+        bool,
+        typer.Option(
+            "--terminate",
+            help="Revalidate and terminate safe orphan process groups.",
+        ),
+    ] = False,
+    grace_seconds: Annotated[
+        float,
+        typer.Option(
+            "--grace-seconds",
+            min=0.0,
+            help="Seconds to wait between TERM and KILL.",
+        ),
+    ] = 2.0,
+) -> None:
+    """Detect abandoned local permuter compiler and Python worker processes."""
+    orphans = permuter_remote.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+    )
+    strict_pids = {proc.pid for proc in orphans}
+    legacy_wibo = [
+        proc
+        for proc in permuter_remote.detect_orphaned_wibo_processes()
+        if proc.pid not in strict_pids
+    ]
+    if not orphans and not legacy_wibo:
+        print("No orphaned local permuter processes detected.")
         return
-    print("Orphaned local wibo/MWCC processes:")
-    for proc in orphans:
-        state_note = (
-            " uninterruptible; kill may not work, restart host if it blocks builds"
-            if "U" in proc.stat
-            else ""
-        )
+    if orphans:
+        print("Orphaned local permuter processes:")
+        for proc in orphans:
+            state_note = (
+                " uninterruptible; kill may not work, restart host if it blocks builds"
+                if "U" in proc.stat
+                else ""
+            )
+            print(
+                f"PID={proc.pid}\tPPID={proc.ppid}\tPGID={proc.pgid}\t"
+                f"STAT={proc.stat}\tELAPSED={proc.elapsed}\tKIND={proc.kind}"
+                f"{state_note}"
+            )
+            print(f"  cwd={proc.cwd}")
+            print(f"  {proc.command}")
+    if legacy_wibo:
         print(
-            f"PID={proc.pid}\tPPID={proc.ppid}\tSTAT={proc.stat}\t"
-            f"ELAPSED={proc.elapsed}{state_note}"
+            "Legacy wibo/MWCC orphans outside --perm-root "
+            "(report-only; restart the host for uninterruptible processes):"
         )
-        print(f"  {proc.command}")
-    raise typer.Exit(1)
+        for proc in legacy_wibo:
+            state_note = " uninterruptible" if "U" in proc.stat else ""
+            print(
+                f"PID={proc.pid}\tPPID={proc.ppid}\tSTAT={proc.stat}\t"
+                f"ELAPSED={proc.elapsed}{state_note}"
+            )
+            print(f"  {proc.command}")
+    if not terminate:
+        raise typer.Exit(1)
+
+    if not orphans:
+        raise typer.Exit(1)
+
+    report = permuter_remote.terminate_orphaned_permuter_processes(
+        orphans,
+        perm_root=perm_root,
+        grace_seconds=grace_seconds,
+    )
+    if report.terminated_pids:
+        print(
+            "Terminated orphan PID(s): "
+            + ", ".join(str(pid) for pid in report.terminated_pids)
+        )
+    for pgid, reason in sorted(report.skipped_groups.items()):
+        print(f"Skipped PGID={pgid}: {reason}")
+    if report.surviving_pids:
+        print(
+            "Surviving orphan PID(s): "
+            + ", ".join(str(pid) for pid in report.surviving_pids)
+        )
+        raise typer.Exit(1)
+    if legacy_wibo:
+        raise typer.Exit(1)
 
 
 @remote_app.command(name="stop")

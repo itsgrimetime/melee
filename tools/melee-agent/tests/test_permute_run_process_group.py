@@ -53,7 +53,18 @@ def test_run_local_permuter_terminates_process_group_on_sigterm(monkeypatch):
     monkeypatch.setattr(permute_cli.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(permute_cli.signal, "signal", fake_signal)
     monkeypatch.setattr(permute_cli.os, "getpgid", lambda pid: 9876)
-    monkeypatch.setattr(permute_cli.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    group_alive = True
+
+    def fake_killpg(pgid, sig):
+        nonlocal group_alive
+        if sig == 0:
+            if not group_alive:
+                raise ProcessLookupError
+            return
+        killed.append((pgid, sig))
+        group_alive = False
+
+    monkeypatch.setattr(permute_cli.os, "killpg", fake_killpg)
 
     with pytest.raises(SystemExit) as exc:
         permute_cli._run_local_permuter(
@@ -67,6 +78,106 @@ def test_run_local_permuter_terminates_process_group_on_sigterm(monkeypatch):
     assert calls["popen_kwargs"]["env"] == {"KEY": "value"}
     assert calls["popen_kwargs"]["cwd"] == Path("/tmp/permuter")
     assert killed == [(9876, signal.SIGTERM)]
+
+
+def test_run_local_permuter_reaps_group_after_leader_exits(monkeypatch):
+    import src.cli.debug.permute as permute_cli
+
+    handlers = {}
+    group_alive = True
+    leader_waited = False
+    signals_sent = []
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            nonlocal leader_waited
+            leader_waited = True
+            self.returncode = 0
+            return 0
+
+        def kill(self):
+            raise AssertionError("the dead group leader must not be killed")
+
+    def fake_signal(signum, handler):
+        previous = handlers.get(signum)
+        handlers[signum] = handler
+        return previous
+
+    def fake_getpgid(pid):
+        assert pid == 4321
+        assert not leader_waited, "PGID must be captured while the leader is alive"
+        return 9876
+
+    def fake_killpg(pgid, signum):
+        nonlocal group_alive
+        assert pgid == 9876
+        if signum == 0:
+            if not group_alive:
+                raise ProcessLookupError
+            return
+        signals_sent.append(signum)
+        if signum == signal.SIGTERM:
+            group_alive = False
+
+    monkeypatch.setattr(permute_cli.subprocess, "Popen", lambda *args, **kwargs: FakeProc())
+    monkeypatch.setattr(permute_cli.signal, "signal", fake_signal)
+    monkeypatch.setattr(permute_cli.os, "getpgid", fake_getpgid)
+    monkeypatch.setattr(permute_cli.os, "getpgrp", lambda: 111)
+    monkeypatch.setattr(permute_cli.os, "killpg", fake_killpg)
+
+    rc = permute_cli._run_local_permuter(
+        ["python", "wrapper.py"],
+        env={"KEY": "value"},
+        cwd=Path("/tmp/permuter"),
+    )
+
+    assert rc == 0
+    assert signals_sent == [signal.SIGTERM]
+
+
+def test_terminate_local_permuter_group_escalates_surviving_group(monkeypatch):
+    import src.cli.debug.permute as permute_cli
+
+    signals_sent = []
+
+    class FakeProc:
+        pid = 4321
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            raise AssertionError("the dead group leader must not be killed")
+
+    def fake_group_exists(pgid):
+        return not signals_sent or signals_sent[-1] != signal.SIGKILL
+
+    monkeypatch.setattr(permute_cli, "_process_group_exists", fake_group_exists, raising=False)
+    monkeypatch.setattr(
+        permute_cli,
+        "_signal_captured_process_group",
+        lambda pgid, signum, proc=None: signals_sent.append(signum),
+        raising=False,
+    )
+    monkeypatch.setattr(permute_cli.time, "sleep", lambda _seconds: None)
+
+    permute_cli._terminate_local_permuter_group(
+        FakeProc(),
+        pgid=9876,
+        grace_seconds=0,
+    )
+
+    assert signals_sent == [signal.SIGTERM, signal.SIGKILL]
 
 
 def test_run_local_permuter_sigint_does_not_deadlock_inside_wait(tmp_path):

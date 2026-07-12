@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 from dataclasses import replace
@@ -521,25 +522,185 @@ def test_run_command_returns_timeout_result_when_check_disabled() -> None:
     assert "timed out after 0.01s" in result.stderr
 
 
+def test_run_command_timeout_uses_process_group_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_group_runner(
+        cmd: list[str],
+        *,
+        cwd: Path,
+        timeout: float,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        seen.update(cmd=cmd, cwd=cwd, timeout=timeout, env=env)
+        return subprocess.CompletedProcess(cmd, 0, "ok\n", "")
+
+    monkeypatch.setattr(pr, "_run_with_process_group_timeout", fake_group_runner, raising=False)
+
+    result = pr.run_command(["ssh", "coder", "true"], cwd=tmp_path, timeout=3.5)
+
+    assert result == pr.CommandResult(returncode=0, stdout="ok\n", stderr="")
+    assert seen == {
+        "cmd": ["ssh", "coder", "true"],
+        "cwd": tmp_path,
+        "timeout": 3.5,
+        "env": None,
+    }
+
+
+def test_detect_orphaned_permuter_processes_requires_exact_helpers_and_proven_cwd(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    worker_cwd = perm_root / "nonmatchings" / "fn_80000000"
+    worker_cwd.mkdir(parents=True)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    ps_stdout = "\n".join(
+        [
+            "101 1 501 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)",
+            "102 1 502 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=7, pipe_handle=9) --multiprocessing-fork",
+            "103 1 503 S 2-00:00:00 /usr/bin/python3 -c import time; time.sleep(999)",
+            "104 1 504 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(8)",
+            "105 44 505 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(9)",
+            "106 1 0 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(10)",
+        ]
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[0] == "ps":
+            return pr.CommandResult(0, ps_stdout, "")
+        pid = int(argv[argv.index("-p") + 1])
+        cwd = outside if pid == 104 else worker_cwd
+        return pr.CommandResult(0, f"p{pid}\nfcwd\nn{cwd}\n", "")
+
+    found = pr.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+        runner=fake_runner,
+        current_pgid=999,
+    )
+
+    assert [(proc.pid, proc.pgid, proc.kind) for proc in found] == [
+        (101, 501, "python-resource-tracker"),
+        (102, 502, "python-spawn-worker"),
+    ]
+    assert all(proc.cwd == worker_cwd.resolve() for proc in found)
+
+
+def test_terminate_orphaned_permuter_processes_refuses_mixed_group(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    ps_stdout = "\n".join(
+        [
+            f"101 1 501 S 2-00:00:00 {command}",
+            "102 1 501 S 2-00:00:00 /usr/bin/python3 -c import time;time.sleep(999)",
+        ]
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[0] == "ps":
+            return pr.CommandResult(0, ps_stdout, "")
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="2-00:00:00",
+        command=command,
+        cwd=perm_root.resolve(),
+        kind="python-resource-tracker",
+    )
+    signals: list[tuple[int, int]] = []
+
+    report = pr.terminate_orphaned_permuter_processes(
+        [candidate],
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda pgid, signum: signals.append((pgid, signum)),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert signals == []
+    assert report.surviving_pids == (101,)
+    assert "unrecognized" in report.skipped_groups[501]
+
+
+def test_terminate_orphaned_permuter_processes_revalidates_before_sigkill(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    snapshots = iter(
+        [
+            f"101 1 501 S 2-00:00:00 {command}",
+            "202 1 501 S 00:00:01 /usr/bin/python3 -c import time;time.sleep(999)",
+        ]
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[0] == "ps":
+            return pr.CommandResult(0, next(snapshots), "")
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="2-00:00:00",
+        command=command,
+        cwd=perm_root.resolve(),
+        kind="python-resource-tracker",
+    )
+    signals: list[int] = []
+
+    report = pr.terminate_orphaned_permuter_processes(
+        [candidate],
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda _pgid, signum: signals.append(signum),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert signals == [signal.SIGTERM]
+    assert report.surviving_pids == (202,)
+    assert "changed" in report.skipped_groups[501]
+
+
 def test_permute_local_orphans_cli_reports_uninterruptible_wibo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         pr,
-        "detect_orphaned_wibo_processes",
-        lambda: [
-            pr.OrphanedWiboProcess(
+        "detect_orphaned_permuter_processes",
+        lambda **_: [
+            pr.OrphanedPermuterProcess(
                 pid=24276,
                 ppid=1,
+                pgid=24276,
                 stat="UE",
                 elapsed="40:01:02",
                 command=(
                     "build/tools/wibo build/compilers/GC/1.2.5n/"
                     "mwcceppc.exe -c src/melee/ft/ftdynamics.c"
                 ),
+                cwd=Path("/Users/mike/code/decomp-permuter"),
+                kind="wibo-mwcc",
             )
         ],
     )
+    monkeypatch.setattr(pr, "detect_orphaned_wibo_processes", lambda: [])
 
     result = CliRunner().invoke(app, ["debug", "permute", "local-orphans"])
 
@@ -548,6 +709,113 @@ def test_permute_local_orphans_cli_reports_uninterruptible_wibo(
     assert "STAT=UE" in result.stdout
     assert "uninterruptible" in result.stdout
     assert "restart" in result.stdout.lower()
+
+
+def test_permute_local_orphans_cli_terminate_exits_zero_after_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="2-00:00:00",
+        command="/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)",
+        cwd=tmp_path,
+        kind="python-resource-tracker",
+    )
+    seen: dict[str, object] = {}
+
+    def fake_detect(**kwargs: object) -> list[pr.OrphanedPermuterProcess]:
+        seen["detect"] = kwargs
+        return [candidate]
+
+    monkeypatch.setattr(pr, "detect_orphaned_permuter_processes", fake_detect)
+    monkeypatch.setattr(pr, "detect_orphaned_wibo_processes", lambda: [])
+
+    def fake_terminate(candidates: list[pr.OrphanedPermuterProcess], **kwargs: object):
+        seen["candidates"] = candidates
+        seen["terminate"] = kwargs
+        return pr.OrphanCleanupReport(
+            terminated_pids=(101,),
+            surviving_pids=(),
+            skipped_groups={},
+        )
+
+    monkeypatch.setattr(pr, "terminate_orphaned_permuter_processes", fake_terminate)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "local-orphans",
+            "--perm-root", str(tmp_path),
+            "--terminate",
+            "--grace-seconds", "0.25",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Terminated orphan PID(s): 101" in result.stdout
+    assert seen["candidates"] == [candidate]
+    assert seen["terminate"] == {"perm_root": tmp_path, "grace_seconds": 0.25}
+
+
+def test_permute_local_orphans_cli_keeps_legacy_wibo_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pr,
+        "detect_orphaned_permuter_processes",
+        lambda **_: [],
+    )
+    monkeypatch.setattr(
+        pr,
+        "detect_orphaned_wibo_processes",
+        lambda: [
+            pr.OrphanedWiboProcess(
+                pid=2699,
+                ppid=1,
+                stat="UE",
+                elapsed="02-06:55:50",
+                command="build/tools/wibo build/compilers/GC/1.2.5n/mwcceppc.exe",
+            )
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["debug", "permute", "local-orphans"])
+
+    assert result.exit_code == 1
+    assert "PID=2699" in result.stdout
+    assert "Legacy wibo/MWCC" in result.stdout
+    assert "report-only" in result.stdout
+
+
+def test_doctor_target_defaults_to_bounded_probe() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    seen: list[float] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        check: bool = True,
+        timeout: float,
+    ) -> pr.CommandResult:
+        seen.append(timeout)
+        return pr.CommandResult(124, "", "timed out")
+
+    report = pr.doctor_target(target, runner=fake_runner)
+
+    assert not report.ok
+    assert seen == [60.0]
+    assert any(check.name == "remote ssh" and not check.ok for check in report.checks)
 
 
 def test_remote_doctor_cli_reports_failed_checks(
@@ -566,7 +834,7 @@ def test_remote_doctor_cli_reports_failed_checks(
     monkeypatch.setattr(
         pr,
         "doctor_target",
-        lambda loaded_target, local_perm_dir=None: pr.DoctorReport(
+        lambda loaded_target, local_perm_dir=None, **_: pr.DoctorReport(
             target=loaded_target.name,
             checks=[
                 pr.DoctorCheck("remote tmux", True, "/usr/bin/tmux"),
@@ -583,6 +851,45 @@ def test_remote_doctor_cli_reports_failed_checks(
     assert result.exit_code == 2
     assert "PASS\tremote tmux\trequired - /usr/bin/tmux" in result.stdout
     assert "FAIL\tremote python3 toml\trequired - No module named toml" in result.stdout
+
+
+def test_remote_doctor_cli_timeout_fails_readiness_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    monkeypatch.setattr(
+        pr,
+        "load_targets",
+        lambda config_path=pr.CONFIG_PATH: {"coder64": target},
+    )
+    monkeypatch.setattr(
+        pr,
+        "run_command",
+        lambda argv, cwd=None, check=True, timeout=None: pr.CommandResult(
+            124,
+            "",
+            f"timed out after {timeout:g}s",
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "remote", "doctor",
+            "--target", "coder64",
+            "--timeout", "0.25",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "FAIL\tremote ssh\trequired - timed out" in result.stdout
 
 
 def test_remote_submit_cli_suggests_healthy_target_after_preflight_failure(
@@ -681,6 +988,7 @@ def test_remote_doctor_cli_repair_runs_before_final_report(
         local_perm_root: Path,
         function: str | None = None,
         local_perm_dir: Path | None = None,
+        **_: object,
     ) -> pr.RepairReport:
         nonlocal repaired
         repaired = True
@@ -693,6 +1001,7 @@ def test_remote_doctor_cli_repair_runs_before_final_report(
     def fake_doctor_target(
         loaded_target: pr.RemoteTarget,
         local_perm_dir: Path | None = None,
+        **_: object,
     ) -> pr.DoctorReport:
         assert repaired
         assert loaded_target == target
@@ -721,6 +1030,93 @@ def test_remote_doctor_cli_repair_runs_before_final_report(
     assert result.exit_code == 0
     assert "REPAIR\tsynced tooling" in result.stdout
     assert "PASS\tremote tmux\trequired - /usr/bin/tmux" in result.stdout
+
+
+def test_remote_doctor_cli_uses_one_total_deadline_for_repair_and_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.cli.debug.permute as permute_cli
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    decomp_root = tmp_path / "decomp-permuter"
+    (decomp_root / "src").mkdir(parents=True)
+    (decomp_root / "permuter.py").write_text("#!/usr/bin/env python3\n")
+    (decomp_root / "src" / "compiler.py").write_text("# compiler\n")
+    time_values = iter([100.0, 100.0, 110.0])
+    observed_timeouts: list[float] = []
+
+    def fake_run_command(
+        argv: list[str],
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        assert timeout is not None
+        observed_timeouts.append(timeout)
+        return pr.CommandResult(0, _remote_doctor_ok_stdout(), "")
+
+    def fake_repair_target(
+        loaded_target: pr.RemoteTarget,
+        **kwargs: object,
+    ) -> pr.RepairReport:
+        runner = kwargs["runner"]
+        assert callable(runner)
+        runner(["ssh", "coder64", "repair"], check=True)
+        return pr.RepairReport(target=loaded_target.name, actions=["repaired"])
+
+    def fake_doctor_target(
+        loaded_target: pr.RemoteTarget,
+        **kwargs: object,
+    ) -> pr.DoctorReport:
+        runner = kwargs["runner"]
+        assert callable(runner)
+        runner(["ssh", "coder64", "doctor"], check=False)
+        return pr.DoctorReport(
+            target=loaded_target.name,
+            checks=[pr.DoctorCheck("remote ssh", True, "ready")],
+        )
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {"coder64": target})
+    monkeypatch.setattr(pr, "run_command", fake_run_command)
+    monkeypatch.setattr(pr, "repair_target", fake_repair_target)
+    monkeypatch.setattr(pr, "doctor_target", fake_doctor_target)
+    monkeypatch.setattr(permute_cli.time, "monotonic", lambda: next(time_values))
+    monkeypatch.setenv("MELEE_DECOMP_PERMUTER_ROOT", str(decomp_root))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "remote", "doctor",
+            "--target", "coder64",
+            "--repair",
+            "--timeout", "60",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert observed_timeouts == [60.0, 50.0]
+
+
+def test_remote_doctor_cli_rejects_nonpositive_timeout() -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "remote", "doctor",
+            "--target", "coder64",
+            "--timeout", "0",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "timeout" in result.output.lower()
 
 
 def test_load_targets_uses_conservative_defaults(tmp_path: Path) -> None:
