@@ -1701,6 +1701,59 @@ def test_apply_post_rename_protection_restores_original(
     assert not result.actions[0].quarantine_path.exists()
 
 
+def test_apply_same_size_post_validation_winner_change_restores_original(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    source = _add_candidate(run, sidecar=_triage_status(delta=0.0))
+    status_path = source.parent / lrr.CANDIDATE_STATUS_FILENAME
+    original_size = status_path.stat().st_size
+
+    def make_winner(_container: Path, child: Path, _fd: int) -> None:
+        quarantined_status = (
+            child / source.parent.name / lrr.CANDIDATE_STATUS_FILENAME
+        )
+        text = quarantined_status.read_text()
+        assert '"delta": 0.0' in text
+        quarantined_status.write_text(text.replace('"delta": 0.0', '"delta": 1.0'))
+        assert quarantined_status.stat().st_size == original_size
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+        quarantine_hook=make_winner,
+    )
+
+    assert result.removed_count == 0
+    assert result.skipped_count == 1
+    assert "winner" in result.actions[0].reasons
+    assert "restored" in result.actions[0].reasons
+    assert run.is_dir()
+    assert json.loads(status_path.read_text())["delta"] == 1.0
+
+
+def test_apply_success_removes_private_quarantine_skeleton(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    remote_runs = run.parent
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.removed_count == 1
+    assert not run.exists()
+    assert not list(remote_runs.glob(f"{lrr.QUARANTINE_PREFIX}*"))
+
+
 def test_apply_quarantine_identity_mismatch_is_not_restored_or_removed(
     tmp_path: Path,
 ) -> None:

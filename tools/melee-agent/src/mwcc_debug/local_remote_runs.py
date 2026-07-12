@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import errno
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -2752,18 +2753,366 @@ def _scan_tree_descriptor(root_fd: int) -> _TreeFacts:
     )
 
 
-def _descriptor_marker_present(run_fd: int) -> tuple[bool, bool]:
+def _descriptor_content_fingerprint(root_fd: int) -> tuple[str | None, str]:
+    digest = hashlib.sha256()
+    pending: list[tuple[int, tuple[str, ...]]] = [(os.dup(root_fd), ())]
     try:
-        marker_stat = os.stat(
-            RETENTION_MARKER_FILENAME,
-            dir_fd=run_fd,
-            follow_symlinks=False,
-        )
-    except FileNotFoundError:
-        return False, False
+        while pending:
+            directory_fd, relative = pending.pop()
+            try:
+                with os.scandir(directory_fd) as entries:
+                    ordered = sorted(entries, key=lambda entry: entry.name)
+            except OSError as exc:
+                os.close(directory_fd)
+                return None, _bounded_detail(exc)
+            for entry in ordered:
+                path = (*relative, entry.name)
+                encoded_path = "/".join(path).encode()
+                try:
+                    before = os.stat(
+                        entry.name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                except OSError as exc:
+                    os.close(directory_fd)
+                    return None, _bounded_detail(exc)
+                if stat.S_ISDIR(before.st_mode):
+                    child, detail = _open_directory_child(directory_fd, entry.name)
+                    if child is None:
+                        os.close(directory_fd)
+                        return None, detail
+                    digest.update(b"D\0" + encoded_path + b"\0")
+                    pending.append((child.fd, path))
+                    continue
+                if not stat.S_ISREG(before.st_mode):
+                    os.close(directory_fd)
+                    return None, "nonregular entry in content fingerprint"
+                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                file_fd = -1
+                try:
+                    file_fd = os.open(entry.name, flags, dir_fd=directory_fd)
+                    opened = os.fstat(file_fd)
+                    if not _same_stat_identity(before, opened):
+                        os.close(directory_fd)
+                        return None, "file changed during content fingerprint"
+                    digest.update(b"F\0" + encoded_path + b"\0")
+                    while True:
+                        chunk = os.read(file_fd, 64 * 1024)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                    after = os.fstat(file_fd)
+                except OSError as exc:
+                    os.close(directory_fd)
+                    return None, _bounded_detail(exc)
+                finally:
+                    if file_fd >= 0:
+                        os.close(file_fd)
+                if (
+                    not _same_stat_identity(opened, after)
+                    or opened.st_size != after.st_size
+                    or opened.st_mtime_ns != after.st_mtime_ns
+                ):
+                    os.close(directory_fd)
+                    return None, "file changed during content fingerprint"
+            os.close(directory_fd)
+    finally:
+        for directory_fd, _ in pending:
+            try:
+                os.close(directory_fd)
+            except OSError:
+                pass
+    return digest.hexdigest(), ""
+
+
+def _descriptor_candidate_names(run_fd: int) -> tuple[tuple[str, ...], bool]:
+    names: list[str] = []
+    try:
+        with os.scandir(run_fd) as entries:
+            ordered = sorted(entries, key=lambda entry: entry.name)
     except OSError:
-        return False, True
-    return True, not stat.S_ISREG(marker_stat.st_mode)
+        return (), True
+    failed = False
+    for entry in ordered:
+        if not entry.name.startswith("output-"):
+            continue
+        candidate, _ = _open_directory_child(run_fd, entry.name)
+        if candidate is None:
+            try:
+                entry_stat = os.stat(
+                    entry.name,
+                    dir_fd=run_fd,
+                    follow_symlinks=False,
+                )
+            except OSError:
+                failed = True
+            else:
+                failed = failed or stat.S_ISDIR(entry_stat.st_mode)
+            continue
+        try:
+            try:
+                source_stat = os.stat(
+                    "source.c",
+                    dir_fd=candidate.fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                continue
+            except OSError:
+                failed = True
+                continue
+            if stat.S_ISREG(source_stat.st_mode):
+                names.append(entry.name)
+        finally:
+            os.close(candidate.fd)
+    return tuple(names), failed
+
+
+def _descriptor_candidate_audit(
+    run_fd: int,
+    planned: LocalRemoteRunSummary,
+    candidate_names: tuple[str, ...],
+) -> tuple[bool, bool]:
+    payload, _ = _read_json_regular_at(run_fd, CANDIDATE_AUDIT_FILENAME)
+    if payload is None:
+        return False, False
+    candidates = payload.get("candidates")
+    total = payload.get("total")
+    if (
+        payload.get("function") != planned.function
+        or not _is_nonbool_int(total)
+        or total != len(candidate_names)
+        or not isinstance(candidates, list)
+        or len(candidates) != len(candidate_names)
+    ):
+        return False, False
+    logical_root = planned.path.absolute()
+    audit_root = payload.get("root")
+    if not isinstance(audit_root, str) or not Path(audit_root).is_absolute():
+        return False, False
+    normalized_root = Path(os.path.abspath(audit_root))
+    if normalized_root != logical_root:
+        return False, not _within(normalized_root, logical_root)
+    expected = {
+        str((logical_root / name / "source.c").absolute())
+        for name in candidate_names
+    }
+    actual: list[str] = []
+    for item in candidates:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            return False, False
+        candidate = Path(str(item["path"]))
+        if not candidate.is_absolute():
+            return False, False
+        normalized = Path(os.path.abspath(candidate))
+        if not _within(normalized, logical_root):
+            return False, True
+        actual.append(str(normalized))
+    return len(set(actual)) == len(actual) and set(actual) == expected, False
+
+
+def _descriptor_candidate_status(
+    run_fd: int,
+    planned: LocalRemoteRunSummary,
+    candidate_name: str,
+) -> tuple[bool, bool, bool]:
+    candidate, _ = _open_directory_child(run_fd, candidate_name)
+    if candidate is None:
+        return False, False, True
+    try:
+        payload, detail = _read_json_regular_at(
+            candidate.fd,
+            CANDIDATE_STATUS_FILENAME,
+        )
+    finally:
+        os.close(candidate.fd)
+    if payload is None:
+        return False, False, detail != "missing"
+    if payload.get("source") not in {"triage", "verify"}:
+        return False, False, False
+    logical_source = (planned.path / candidate_name / "source.c").absolute()
+    raw_candidate = payload.get("candidate")
+    if not isinstance(raw_candidate, str) or not Path(raw_candidate).is_absolute():
+        return False, False, True
+    normalized = Path(os.path.abspath(raw_candidate))
+    if (
+        normalized != logical_source
+        or not _within(normalized, planned.path.absolute())
+        or payload.get("function") != planned.function
+        or not isinstance(payload.get("status"), str)
+        or not str(payload["status"]).strip()
+    ):
+        return False, False, True
+    kept = payload.get("kept", False)
+    if "kept" in payload and not isinstance(kept, bool):
+        return False, False, True
+    winner = kept is True
+    for key, threshold in (("delta", 0.0), ("match_pct", 100.0)):
+        value = payload.get(key)
+        if value is None:
+            continue
+        if not _is_finite_number(value):
+            return False, False, True
+        winner = winner or (
+            float(value) > threshold
+            if key == "delta"
+            else float(value) >= threshold
+        )
+    return True, winner, False
+
+
+def _descriptor_semantic_state(
+    run_fd: int,
+    planned: LocalRemoteRunSummary,
+) -> tuple[tuple[str, ...], str | None]:
+    tree = _scan_tree_descriptor(os.dup(run_fd))
+    candidate_names, candidate_scan_failed = _descriptor_candidate_names(run_fd)
+    audit_valid, audit_escape = _descriptor_candidate_audit(
+        run_fd,
+        planned,
+        candidate_names,
+    )
+    all_triaged = audit_valid
+    winner = False
+    status_invalid = False
+    for candidate_name in candidate_names:
+        triaged, candidate_winner, invalid = _descriptor_candidate_status(
+            run_fd,
+            planned,
+            candidate_name,
+        )
+        all_triaged = all_triaged and triaged
+        winner = winner or candidate_winner
+        status_invalid = status_invalid or invalid
+
+    metadata_payload: dict[str, Any] | None = None
+    remote_run, _ = _open_directory_child(run_fd, "remote-run")
+    if remote_run is not None:
+        try:
+            metadata_payload, _ = _read_json_regular_at(
+                remote_run.fd,
+                "metadata.json",
+            )
+        finally:
+            os.close(remote_run.fd)
+    metadata_valid = (
+        metadata_payload is not None
+        and planned.identity is not None
+        and all(
+            isinstance(metadata_payload.get(field), str)
+            and bool(str(metadata_payload[field]).strip())
+            for field in (
+                "job_id",
+                "function",
+                "target",
+                "ssh",
+                "remote_perm_dir",
+                "remote_run_dir",
+                "local_perm_dir",
+                "tmux_session",
+                "mode",
+                "created_at",
+            )
+        )
+        and _valid_ssh_target(metadata_payload.get("ssh"))
+        and _is_nonbool_int(metadata_payload.get("threads"))
+        and int(metadata_payload["threads"]) > 0
+        and _valid_timestamp(metadata_payload.get("created_at"))
+        and _identity_matches(metadata_payload, planned.identity)
+    )
+
+    manifest_payload, manifest_detail = _read_json_regular_at(
+        run_fd,
+        FETCH_MANIFEST_FILENAME,
+    )
+    manifest_status = "absent"
+    if manifest_payload is not None:
+        audit = manifest_payload.get("candidate_audit")
+        manifest_status = str(manifest_payload.get("state"))
+        if (
+            planned.identity is None
+            or manifest_payload.get("kind") != FETCH_MANIFEST_KIND
+            or not _is_nonbool_int(manifest_payload.get("version"))
+            or manifest_payload["version"] != FETCH_MANIFEST_VERSION
+            or not _identity_matches(manifest_payload, planned.identity)
+            or not _valid_timestamp(manifest_payload.get("fetched_at"))
+            or manifest_status not in {"complete", "partial"}
+            or not isinstance(audit, dict)
+            or not _is_nonbool_int(audit.get("total"))
+            or audit.get("total") != len(candidate_names)
+        ):
+            manifest_status = "invalid"
+    elif manifest_detail != "missing":
+        manifest_status = "invalid"
+
+    warning_payload, warning_detail = _read_json_regular_at(
+        run_fd,
+        REMOTE_FETCH_WARNING_FILENAME,
+    )
+    warning_status = "absent"
+    if warning_payload is not None:
+        warning_status = (
+            "partial"
+            if warning_payload.get("status") == "partial"
+            and warning_payload.get("job_id") == planned.job_id
+            else "invalid"
+        )
+    elif warning_detail != "missing":
+        warning_status = "invalid"
+
+    retention_payload, retention_detail = _read_json_regular_at(
+        run_fd,
+        RETENTION_MARKER_FILENAME,
+    )
+    retention_status = "absent"
+    if retention_payload is not None:
+        retention_status = (
+            "valid"
+            if retention_payload.get("kind") == RETENTION_MARKER_KIND
+            and _is_nonbool_int(retention_payload.get("version"))
+            and retention_payload["version"] == RETENTION_MARKER_VERSION
+            and retention_payload.get("job_id") == planned.job_id
+            and retention_payload.get("function") == planned.function
+            and isinstance(retention_payload.get("reason"), str)
+            and str(retention_payload["reason"]).strip()
+            and _valid_timestamp(retention_payload.get("created_at"))
+            else "invalid"
+        )
+    elif retention_detail != "missing":
+        retention_status = "invalid"
+
+    flags = RunProtectionFlags(
+        filesystem_error=tree.filesystem_error or candidate_scan_failed,
+        nested_symlink=tree.nested_symlink,
+        nonregular_entry=tree.nonregular_entry,
+        path_escape=audit_escape,
+        metadata_invalid=not metadata_valid,
+        fetch_manifest_invalid=manifest_status == "invalid",
+        fetch_partial=manifest_status == "partial" or warning_status == "partial",
+        fetch_warning=warning_status == "partial",
+        fetch_warning_invalid=warning_status == "invalid",
+        candidate_audit_invalid=not audit_valid,
+        candidate_untriaged=not all_triaged,
+        candidate_status_invalid=status_invalid,
+        winner=winner,
+        retention_marker_invalid=retention_status == "invalid",
+        explicitly_retained=retention_status == "valid",
+    )
+    reasons = list(_reasons(flags))
+    if "nested-symlink" in reasons:
+        reasons.append("quarantine-nested-symlink")
+    if "nonregular-entry" in reasons:
+        reasons.append("quarantine-nonregular-entry")
+    if retention_status != "absent":
+        reasons.append("quarantine-retention-marker")
+    if tree.total_bytes != planned.total_bytes:
+        reasons.append("run-changed")
+    fingerprint, _ = _descriptor_content_fingerprint(run_fd)
+    if fingerprint is None:
+        reasons.append("filesystem-error")
+    return tuple(sorted(set(reasons))), fingerprint
 
 
 def _rmtree_expected(directory_fd: int, expected_stat: os.stat_result) -> str | None:
@@ -2827,6 +3176,47 @@ def _create_quarantine_container(
     return None
 
 
+def _remove_empty_quarantine_skeleton(
+    parent_fd: int,
+    container_name: str,
+    container: _DirectoryHandle,
+    held: _DirectoryHandle,
+) -> bool:
+    try:
+        child_stat = os.stat(
+            QUARANTINE_CHILD_NAME,
+            dir_fd=container.fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISDIR(child_stat.st_mode)
+            or (child_stat.st_dev, child_stat.st_ino) != (held.device, held.inode)
+        ):
+            return False
+        with os.scandir(held.fd) as entries:
+            if next(entries, None) is not None:
+                return False
+        os.rmdir(QUARANTINE_CHILD_NAME, dir_fd=container.fd)
+        with os.scandir(container.fd) as entries:
+            if next(entries, None) is not None:
+                return False
+        container_stat = os.stat(
+            container_name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISDIR(container_stat.st_mode)
+            or (container_stat.st_dev, container_stat.st_ino)
+            != (container.device, container.inode)
+        ):
+            return False
+        os.rmdir(container_name, dir_fd=parent_fd)
+    except OSError:
+        return False
+    return True
+
+
 def _quarantine_and_remove_descriptor(
     perm_root: Path,
     planned: LocalRemoteRunSummary,
@@ -2875,21 +3265,10 @@ def _quarantine_and_remove_descriptor(
                         quarantine_path,
                         held.fd,
                     )
-                tree = _scan_tree_descriptor(os.dup(held.fd))
-                marker_present, marker_unsafe = _descriptor_marker_present(held.fd)
-                reasons: list[str] = []
-                if tree.filesystem_error:
-                    reasons.append("quarantine-filesystem-error")
-                if tree.nested_symlink:
-                    reasons.append("quarantine-nested-symlink")
-                if tree.nonregular_entry:
-                    reasons.append("quarantine-nonregular-entry")
-                if tree.total_bytes != planned.total_bytes:
-                    reasons.append("run-changed")
-                if marker_present:
-                    reasons.append("quarantine-retention-marker")
-                if marker_unsafe:
-                    reasons.append("quarantine-marker-state-unknown")
+                reasons, baseline_fingerprint = _descriptor_semantic_state(
+                    held.fd,
+                    planned,
+                )
                 if reasons:
                     restored = _restore_descriptor_child(
                         handles.remote_runs.fd,
@@ -2901,13 +3280,33 @@ def _quarantine_and_remove_descriptor(
                     return (
                         "skipped",
                         quarantine_path,
-                        tuple(reasons) + (("restored",) if restored else ("quarantine-retained",)),
+                        reasons + (("restored",) if restored else ("quarantine-retained",)),
                     )
                 if quarantine_hook is not None:
                     quarantine_hook(
                         planned.path.parent / container_name,
                         quarantine_path,
                         held.fd,
+                    )
+                final_reasons, final_fingerprint = _descriptor_semantic_state(
+                    held.fd,
+                    planned,
+                )
+                if final_fingerprint != baseline_fingerprint:
+                    final_reasons = tuple(sorted(set((*final_reasons, "run-changed"))))
+                if final_reasons:
+                    restored = _restore_descriptor_child(
+                        handles.remote_runs.fd,
+                        planned.job_id,
+                        container.fd,
+                        QUARANTINE_CHILD_NAME,
+                        planned,
+                    )
+                    return (
+                        "skipped",
+                        quarantine_path,
+                        final_reasons
+                        + (("restored",) if restored else ("quarantine-retained",)),
                     )
                 remover = descriptor_remover or _rmtree_expected
                 removal_reason = remover(held.fd, expected_stat)
@@ -2950,6 +3349,12 @@ def _quarantine_and_remove_descriptor(
                         return "skipped", quarantine_path, ("quarantine-child-replaced",)
                 finally:
                     os.close(named.fd)
+                _remove_empty_quarantine_skeleton(
+                    handles.remote_runs.fd,
+                    container_name,
+                    container,
+                    held,
+                )
                 return "removed", quarantine_path, ()
             finally:
                 os.close(held.fd)
