@@ -227,7 +227,7 @@ def _parse_real_inspector_records(
         return [], True
 
     records: list[_ObjectRecord] = []
-    for order, name in ordered:
+    for _order, name in ordered:
         matches = by_name.get(name)
         if matches is None or len(matches) != 1:
             return records, True
@@ -241,7 +241,6 @@ def _parse_real_inspector_records(
                     "scope": function,
                     "expression": name,
                 },
-                occurrence=str(order),
             )
         )
     return records, False

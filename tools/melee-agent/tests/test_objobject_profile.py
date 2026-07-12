@@ -87,6 +87,36 @@ def test_real_inspector_local_variable_order_builds_profile() -> None:
     assert profile.identities[1].type_name == "float*"
 
 
+def test_real_inspector_duplicate_order_is_not_occurrence_identity() -> None:
+    text = """FUNCTION: f
+  Type: function()[returns void]
+
+STATEMENTS (IR):
+  [EOBJREF] copy
+    -> ObjObject @ 0x00AA10: copy (DataType: DLOCAL, Type: int)
+  [EOBJREF] copy
+    -> ObjObject @ 0x00AA20: copy (DataType: DLOCAL, Type: int)
+
+LOCAL VARIABLES (first appearance order, with ObjObject addresses):
+--------------------------------------------------------------------------------
+  [0] 0x00AA10  copy
+  [1] 0x00AA20  copy
+
+LOCAL VARIABLES (sorted by ObjObject address):
+--------------------------------------------------------------------------------
+  [0] 0x00AA10  copy
+  [1] 0x00AA20  copy
+================================================================================
+Compilation finished.
+"""
+
+    profile = parse_objobject_profile(text, "f")
+
+    assert profile.complete is False
+    assert profile.blocker == "ambiguous-objobject-identity"
+    assert profile.occurrence_evidence == (None, None)
+
+
 def test_addresses_do_not_change_identity_or_order() -> None:
     a = parse_objobject_profile(INSPECT_A, "f")
     b = parse_objobject_profile(INSPECT_SAME_OBJECTS_NEW_ADDRESSES, "f")
