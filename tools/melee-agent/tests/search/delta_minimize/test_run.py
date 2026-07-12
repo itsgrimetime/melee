@@ -568,6 +568,26 @@ def test_extractor_schema_upgrade_removes_stale_publications_before_enumeration(
     assert manifest["schema_version"] == "delta-manifest.v2"
 
 
+def test_lower_candidate_budget_removes_stale_exact_publications(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+    assert first.exact_four_axis is True
+    assert (config.out_dir / "result.json").is_file()
+    assert (config.out_dir / "candidates.json").is_file()
+
+    with pytest.raises(DeltaMinimizeError, match="^candidate-budget-exceeded$"):
+        run_delta_minimize(
+            replace(config, max_candidates=1),
+            backends=fixture.backends(),
+        )
+
+    assert not (config.out_dir / "result.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
 def test_extractor_schema_upgrade_removes_stale_publications_before_objective_failure(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
     config = _config(tmp_path)

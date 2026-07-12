@@ -1190,6 +1190,7 @@ def run_delta_minimize(
         raise DeltaMinimizeError("invalid-delta-minimize-config")
     active = backends or default_delta_minimize_backends()
     store = DeltaRunStore(config.out_dir)
+    store.invalidate_publications()
     left_source = _read_source(config.left, side="left")
     right_source = _read_source(config.right, side="right")
 
