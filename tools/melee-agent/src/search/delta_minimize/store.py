@@ -699,3 +699,4 @@ class DeltaRunStore:
 
         for name in ("objective-inputs.json", "objective-manifest.json"):
             self._invalidate_evidence_path(self._safe_path(name))
+        self._invalidate_evidence_path(self._safe_path("objective", "color-target-current.json"))

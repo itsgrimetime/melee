@@ -466,6 +466,12 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
         encoding="utf-8",
     )
     config = replace(config, target_path=target)
+    stale_current = config.out_dir / "objective" / "color-target-current.json"
+    stale_current.parent.mkdir(parents=True)
+    stale_current.write_text(
+        json.dumps({"artifact": "objective/color-targets/stale.yaml", "sha256": "0" * 64}),
+        encoding="utf-8",
+    )
     expected_request: NamespaceReviewRequest | None = None
 
     def discover(_config, parents, candidates, raw_candidates, manifest):
@@ -576,6 +582,7 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
     assert result.blockers == ("namespace-review-required",)
     assert not (config.out_dir / "objective-manifest.json").exists()
     assert not (config.out_dir / "objective-inputs.json").exists()
+    assert not stale_current.exists()
     assert not (config.out_dir / "candidates.json").exists()
 
 

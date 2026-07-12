@@ -235,6 +235,18 @@ def _namespace_compile() -> Compile:
     return _with_complete_virtual_identity(_raw_namespace_compile())
 
 
+def _review_namespace_compile() -> Compile:
+    compile = _namespace_compile()
+    coalesce = compile.fev.coalesce_sections[-1]
+    simplify = compile.fev.simplify_sections[-1]
+    added_virtuals = 110 - coalesce.n_virtuals
+    coalesce.n_virtuals = 110
+    coalesce.exit_n_virtuals = 110
+    coalesce.distinct_roots += added_virtuals
+    simplify.n_class_regs = 110
+    return compile
+
+
 def _raw_namespace_compile() -> Compile:
     text = (FIXTURES / "mnVibration_matched_pcdump.txt").read_text(encoding="utf-8")
     return Compile.from_text(text, FUNCTION, "")
@@ -756,7 +768,7 @@ def _reviewed_resolution_context(
 def test_namespace_resolver_inherits_only_exact_two_hash_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    compile = _namespace_compile()
+    compile = _review_namespace_compile()
     domain = tuple(range(110))
     inherited = NamespaceMapResolution(
         artifact_id="parent:left",
@@ -801,7 +813,7 @@ def test_namespace_resolver_inherits_only_exact_two_hash_content(
 def test_namespace_resolver_automatic_v5_precedes_review_and_rejects_conflict(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    compile = _namespace_compile()
+    compile = _review_namespace_compile()
     domain = tuple(range(110))
     request, reviewed = _reviewed_resolution_context(domain)
     monkeypatch.setattr(
@@ -841,7 +853,7 @@ def test_namespace_resolver_automatic_v5_precedes_review_and_rejects_conflict(
 def test_namespace_resolver_uses_reviewed_fallback_and_fails_closed_on_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    compile = _namespace_compile()
+    compile = _review_namespace_compile()
     domain = tuple(range(110))
     request, reviewed = _reviewed_resolution_context(domain)
     monkeypatch.setattr(

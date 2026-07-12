@@ -21,6 +21,7 @@ from src.search.delta_minimize.objectives import (
     ParentRoleBinding,
     infer_objective_manifest,
     load_color_target,
+    resolve_namespace_map,
 )
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "role_identity"
@@ -143,6 +144,46 @@ def test_allocator_namespace_witness_includes_semantic_role_identity(
     )
 
     assert objectives_module._allocator_namespace_witness(baseline_compile, 0) != original
+
+
+def test_reviewed_namespace_cannot_authorize_a_different_allocator_domain(
+    monkeypatch: pytest.MonkeyPatch,
+    baseline_compile: Compile,
+) -> None:
+    artifact_compile = deepcopy(baseline_compile)
+    canonical_count = baseline_compile.fev.coalesce_sections[-1].n_virtuals
+    artifact_coalesce = artifact_compile.fev.coalesce_sections[-1]
+    artifact_simplify = artifact_compile.fev.simplify_sections[-1]
+    artifact_coalesce.n_virtuals = canonical_count + 1
+    artifact_coalesce.exit_n_virtuals = canonical_count + 1
+    artifact_coalesce.distinct_roots += 1
+    artifact_simplify.n_class_regs = canonical_count + 1
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "prove_virtual_namespace_map",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.search.delta_minimize.namespace_review.resolve_reviewed_map",
+        lambda *_args, **_kwargs: {ig_idx: ig_idx for ig_idx in range(canonical_count)},
+    )
+
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="^invalid-namespace-artifact-domain$",
+    ):
+        resolve_namespace_map(
+            artifact_id="candidate:mask-100",
+            source_sha256="1" * 64,
+            pcdump_sha256="2" * 64,
+            artifact_compile=artifact_compile,
+            canonical_compile=baseline_compile,
+            class_id=0,
+            domain=tuple(range(canonical_count)),
+            resolved=(),
+            request=object(),
+            reviewed=object(),
+        )
 
 
 def _write_target(

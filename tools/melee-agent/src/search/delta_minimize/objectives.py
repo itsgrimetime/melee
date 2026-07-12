@@ -291,6 +291,28 @@ class NamespaceMapResolution:
         }
 
 
+def _coherent_allocator_domain(
+    compile: role_descriptor.Compile,
+    class_id: int,
+) -> tuple[int, ...] | None:
+    decisions = [section for section in compile.fev.colorgraph_sections if section.class_id == class_id]
+    simplify = [section for section in compile.fev.simplify_sections if section.class_id == class_id]
+    coalesce = [section for section in compile.fev.coalesce_sections if section.class_id == class_id]
+    if (
+        not decisions
+        or not simplify
+        or not coalesce
+        or not _allocator_sections_are_coherent(
+            decisions[-1],
+            simplify[-1],
+            coalesce[-1],
+            class_id,
+        )
+    ):
+        return None
+    return tuple(range(coalesce[-1].n_virtuals))
+
+
 def resolve_namespace_map(
     *,
     artifact_id: str,
@@ -318,6 +340,13 @@ def resolve_namespace_map(
         or any(not isinstance(item, NamespaceMapResolution) for item in resolved)
     ):
         raise DeltaMinimizeError("invalid-namespace-resolution")
+
+    canonical_domain = _coherent_allocator_domain(canonical_compile, class_id)
+    if canonical_domain != domain:
+        raise DeltaMinimizeError("invalid-canonical-namespace-domain")
+    artifact_domain = _coherent_allocator_domain(artifact_compile, class_id)
+    if artifact_domain != domain:
+        raise DeltaMinimizeError("invalid-namespace-artifact-domain")
 
     exact = [
         item
