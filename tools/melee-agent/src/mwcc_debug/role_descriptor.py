@@ -71,6 +71,50 @@ def _use_multiset(vf) -> tuple:
     return tuple(sorted(c.items()))
 
 
+def build_virtual_semantic_identities(
+    c: Compile,
+    class_id: int,
+    virtual_count: int,
+) -> dict[int, tuple] | None:
+    """Return normalized, allocator-independent identity for every raw IG.
+
+    A complete namespace witness is stronger than the decision-role view used
+    by ordinary semantic reanchoring.  It may therefore be emitted only when
+    the pre-color IR has untruncated semantic evidence for every raw index.
+    """
+    reg_kind = _reg_kind_for_class(class_id)
+    bindings_by_virtual: dict[int, list] = {}
+    if reg_kind == "r":
+        for binding in c.ir_facts.bindings:
+            bindings_by_virtual.setdefault(binding.virtual, []).append(binding)
+    identities: dict[int, tuple] = {}
+    for ig_idx in range(virtual_count):
+        facts = c.ir_facts.by_reg.get((reg_kind, ig_idx))
+        if facts is None or facts.use_sites_truncated:
+            return None
+        bindings = bindings_by_virtual.get(ig_idx, [])
+        strong_names = {
+            binding.var_name
+            for binding in bindings
+            if binding.var_name
+            and binding.confidence in {"best-guess", "verified"}
+        }
+        if len(strong_names) > 1:
+            return None
+        identity = (
+            normalize_first_def(facts.first_def),
+            _use_multiset(facts),
+            facts.is_param,
+            next(iter(strong_names), None),
+        )
+        if not any(identity):
+            return None
+        identities[ig_idx] = identity
+    if len(set(identities.values())) != virtual_count:
+        return None
+    return identities
+
+
 def build_descriptors(c: Compile, class_id: int) -> dict:
     """One RoleDescriptor per class-`class_id` decision node (ig >= 0)."""
     section = select_class_section(c.fev, class_id)

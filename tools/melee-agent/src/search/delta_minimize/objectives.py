@@ -23,7 +23,7 @@ from .contracts import DeltaMinimizeError
 
 COLOR_TARGET_SCHEMA = "delta-minimize-color-target.v1"
 COLOR_TARGET_SCHEMA_V2 = "delta-minimize-color-target.v2"
-ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v1"
+ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v2"
 OBJECTIVE_MANIFEST_SCHEMA = "delta-minimize-objectives.v2"
 _TARGET_FIELDS = frozenset(
     {
@@ -1213,12 +1213,14 @@ def _allocator_namespace_witness(
     descriptors = role_descriptor.build_descriptors(compile, class_id)
     if set(descriptors) != set(decision_order):
         return None
-    semantic_roles = tuple((ig_idx, _role_identity_witness(descriptors[ig_idx])) for ig_idx in sorted(descriptors))
-    semantic_witnesses = [witness for _ig_idx, witness in semantic_roles]
-    if any(not any(witness) for witness in semantic_witnesses) or len(set(semantic_witnesses)) != len(
-        semantic_witnesses
-    ):
+    full_semantic_identities = role_descriptor.build_virtual_semantic_identities(
+        compile,
+        class_id,
+        n_virtuals,
+    )
+    if full_semantic_identities is None:
         return None
+    semantic_roles = tuple(sorted(full_semantic_identities.items()))
     return (
         n_virtuals,
         semantic_roles,
@@ -1299,6 +1301,13 @@ def _structural_namespace_witness(
     descriptors = role_descriptor.build_descriptors(compile, class_id)
     if set(descriptors) != set(decision_order):
         return None
+    full_semantic_identities = role_descriptor.build_virtual_semantic_identities(
+        compile,
+        class_id,
+        n_virtuals,
+    )
+    if full_semantic_identities is None:
+        return None
 
     mappings = tuple(tuple(mapping) for mapping in coalesce_section.mappings)
     overrides = tuple(tuple(override) for override in coalesce_section.forced_overrides)
@@ -1317,21 +1326,13 @@ def _structural_namespace_witness(
         (
             ig_idx,
             MappingProxyType({
-                "first_def_sig": descriptors[ig_idx].first_def_sig,
-                "use_site_multiset": tuple(
-                    tuple(item) for item in descriptors[ig_idx].use_site_multiset
-                ),
-                "is_param": descriptors[ig_idx].is_param,
-                "strong_name": (
-                    descriptors[ig_idx].var_name
-                    if descriptors[ig_idx].var_name
-                    and descriptors[ig_idx].var_confidence
-                    in {"best-guess", "verified"}
-                    else None
-                ),
+                "first_def_sig": identity[0],
+                "use_site_multiset": tuple(tuple(item) for item in identity[1]),
+                "is_param": identity[2],
+                "strong_name": identity[3],
             }),
         )
-        for ig_idx in sorted(descriptors)
+        for ig_idx, identity in sorted(full_semantic_identities.items())
     )
     return MappingProxyType(
         {

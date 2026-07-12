@@ -63,7 +63,7 @@ from .objectives import (
 from .pareto import reduce_pareto
 from .store import DeltaRunStore
 
-PARSER_SCHEMA_HASH = "opcode.v1+color.v1+objobjects.v1+stack-homes.v1+delta-extractor.v2+candidate-evidence.v3"
+PARSER_SCHEMA_HASH = "opcode.v1+color.v2+objobjects.v1+stack-homes.v1+delta-extractor.v2+candidate-evidence.v3"
 RESULT_SCHEMA = "delta-minimize-result.v1"
 OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v3"
 _OBJECTIVE_AXES = frozenset({"opcode", "color", "objobjects", "stack-homes"})

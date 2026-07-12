@@ -12,8 +12,10 @@ import pytest
 
 import src.search.delta_minimize.evaluator as evaluator_module
 import src.search.delta_minimize.objectives as objectives_module
+from src.mwcc_debug.coalesce_ir_facts import VirtualFacts
 from src.mwcc_debug.colorgraph_profile import ColorGraphProfile
 from src.mwcc_debug.role_descriptor import Compile, RoleDescriptor, build_descriptors, build_target_spec
+from src.mwcc_debug.symbol_bridge import FirstDef
 from src.search.delta_minimize.contracts import DeltaMinimizeError
 from src.search.delta_minimize.delta import MaterializedCandidate
 from src.search.delta_minimize.evaluator import (
@@ -220,7 +222,29 @@ def test_asm_lines_ignores_checkdiff_blank_terminator() -> None:
 
 def _namespace_compile() -> Compile:
     text = (FIXTURES / "mnVibration_matched_pcdump.txt").read_text(encoding="utf-8")
-    return Compile.from_text(text, FUNCTION, "")
+    return _with_complete_virtual_identity(Compile.from_text(text, FUNCTION, ""))
+
+
+def _with_complete_virtual_identity(compile: Compile) -> Compile:
+    virtual_count = compile.fev.coalesce_sections[-1].n_virtuals
+    for ig_idx in range(virtual_count):
+        facts = VirtualFacts(
+            virtual=ig_idx,
+            first_def=FirstDef(
+                block_idx=0,
+                opcode=f"semantic_{ig_idx}",
+                operands=f"r{ig_idx},r{ig_idx}",
+                annotations=[],
+                regs=[("r", ig_idx), ("r", ig_idx)],
+            ),
+            use_sites=[],
+            use_sites_truncated=False,
+            is_param=False,
+            is_phys=False,
+        )
+        compile.ir_facts.by_reg[("r", ig_idx)] = facts
+        compile.ir_facts.by_virtual[ig_idx] = facts
+    return compile
 
 
 def _namespace_descriptors(compile: Compile) -> dict[int, RoleDescriptor]:
@@ -275,6 +299,28 @@ def test_structural_namespace_witness_excludes_allocator_outcome_lanes(
     ]
 
 
+def test_structural_namespace_witness_covers_coalesced_virtual_identity() -> None:
+    baseline = _namespace_compile()
+    changed = deepcopy(baseline)
+    decision_igs = set(_namespace_descriptors(baseline))
+    coalesced_ig = next(
+        alias
+        for alias, _root in baseline.fev.coalesce_sections[-1].mappings
+        if alias not in decision_igs
+    )
+    facts = changed.ir_facts.by_reg[("r", coalesced_ig)]
+    assert facts.first_def is not None
+    facts.first_def = replace(
+        facts.first_def,
+        opcode=f"changed_{facts.first_def.opcode}",
+    )
+
+    baseline_witness = objectives_module._structural_namespace_witness(baseline, 0)
+    changed_witness = objectives_module._structural_namespace_witness(changed, 0)
+
+    assert baseline_witness is None or changed_witness != baseline_witness
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -298,9 +344,11 @@ def test_structural_namespace_witness_distinguishes_identity_facts(
         changed.fev.coalesce_sections[-1].n_virtuals += 1
     elif mutation == "semantic-identity":
         ig_idx = next(iter(changed_descriptors))
-        changed_descriptors[ig_idx] = replace(
-            changed_descriptors[ig_idx],
-            first_def_sig=f"changed:{changed_descriptors[ig_idx].first_def_sig}",
+        facts = changed.ir_facts.by_reg[("r", ig_idx)]
+        assert facts.first_def is not None
+        facts.first_def = replace(
+            facts.first_def,
+            opcode=f"changed_{facts.first_def.opcode}",
         )
     elif mutation == "decision-traversal":
         first, second = changed.fev.colorgraph_sections[-1].decisions[:2]
@@ -422,7 +470,9 @@ def _v2_color_case(
             compiler_stderr="",
             pcdump_hash=hashlib.sha256(pcdump.read_bytes()).hexdigest(),
         )
-        compiles[side] = Compile.from_text(emitted_pcdump, FUNCTION, source_text)
+        compiles[side] = _with_complete_virtual_identity(
+            Compile.from_text(emitted_pcdump, FUNCTION, source_text)
+        )
     descriptors = _namespace_descriptors(compiles["left"])
     desired = {ig_idx: 0 for ig_idx in descriptors}
     target = build_target_spec(
