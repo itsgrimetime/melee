@@ -1,10 +1,133 @@
 """One-pass GC/1.2.5n backend trace hook.
 
-This hook writes a single ``backend-events.v1.jsonl`` stream for the requested
-function. The full ``debug retro backend`` command uses it behind the
-``backend_reader.complete`` gate; ``backend-candidate --one-pass`` reuses it for
-candidate-only diagnostics.
+This hook writes the legacy ``backend-events.v1.jsonl`` stream plus a raw
+``backend-object-events.v1.jsonl`` identity sidecar for the requested function.
+The full ``debug retro backend`` command uses it behind the
+``backend_reader.complete`` gate; ``backend-candidate --one-pass`` reuses it
+for candidate-only diagnostics.
 """
+
+_OBJECT_EVENT_KINDS = frozenset(
+    {"objobject_snapshot", "object_virtual_binding", "object_frame_binding"}
+)
+_OBJECT_STAGE_ORDER = {"colorgraph_return": 0, "final_scheduler": 1}
+_FRAME_AREA_ORDER = {"arguments": 0, "locals": 1, "temps": 2}
+
+
+def _stopped_lifecycle_inputs(lifecycle):
+    """Sample one lifecycle position while the compiler process is stopped."""
+
+    if lifecycle is None:
+        return {}
+    sequence_reader = getattr(lifecycle, "sequence_at_stop", None)
+    generation_for = getattr(lifecycle, "generation", None)
+    if not callable(sequence_reader) or not callable(generation_for):
+        raise ValueError("lifecycle capture lacks stopped sequence/generation readers")
+    sequence = sequence_reader()
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < -1:
+        raise ValueError(
+            "lifecycle sequence at stopped capture must be an integer at least -1"
+        )
+    return {"lifecycle_sequence": sequence, "generation_for": generation_for}
+
+
+def _canonical_object_events(events):
+    """Return deterministic raw Task 5 events, deduplicating snapshots only."""
+
+    snapshots = {}
+    other = []
+    for raw in events:
+        if not isinstance(raw, dict) or raw.get("event") not in _OBJECT_EVENT_KINDS:
+            raise ValueError(f"malformed object capture event: {raw!r}")
+        row = dict(raw)
+        if row["event"] == "objobject_snapshot":
+            key = (
+                row.get("runtime_address"),
+                row.get("allocation_generation"),
+                row.get("stage"),
+            )
+            previous = snapshots.get(key)
+            if previous is not None and previous != row:
+                raise ValueError(f"conflicting ObjObject snapshots for {key!r}")
+            snapshots[key] = row
+        else:
+            if row in other:
+                raise ValueError(f"duplicate object capture event: {row!r}")
+            other.append(row)
+
+    ordered_snapshots = sorted(
+        snapshots.values(),
+        key=lambda row: (
+            row.get("runtime_address"),
+            row.get("allocation_generation"),
+            _OBJECT_STAGE_ORDER.get(row.get("stage"), -1),
+        ),
+    )
+
+    def binding_key(row):
+        if row["event"] == "object_virtual_binding":
+            return (
+                0,
+                row.get("objobject_ptr"),
+                row.get("allocation_generation"),
+                row.get("class_id"),
+                row.get("virtual_kind"),
+                row.get("virtual"),
+                row.get("ig_id"),
+                row.get("ignode_runtime_address"),
+            )
+        return (
+            1,
+            row.get("objobject_ptr"),
+            row.get("allocation_generation"),
+            _FRAME_AREA_ORDER.get(row.get("area"), -1),
+            row.get("list_node_runtime_address"),
+            row.get("final_r1_offset"),
+        )
+
+    return [*ordered_snapshots, *sorted(other, key=binding_key)]
+
+
+def _object_capture_status(events, *, errors, cap_reached):
+    canonical_errors = sorted(str(error) for error in errors)
+    return {
+        "status": "partial",
+        "events_seen": len(events),
+        "cap_reached": bool(cap_reached),
+        "errors": canonical_errors,
+        # Task 4 intentionally withholds virtual/frame capabilities here.
+        "capabilities": [],
+    }
+
+
+def _frame_object_events(frame_event):
+    events = []
+    for row in frame_event.get("objects", []):
+        snapshot = row.get("object_snapshot")
+        if not isinstance(snapshot, dict):
+            continue
+        events.append({"event": "objobject_snapshot", **snapshot})
+        events.append(
+            {
+                "event": "object_frame_binding",
+                "source_stage": frame_event.get("source_stage"),
+                "objobject_ptr": row.get("objobject_ptr"),
+                "allocation_generation": row.get("allocation_generation"),
+                "lifecycle_sequence_at_capture": snapshot.get(
+                    "lifecycle_sequence_at_capture"
+                ),
+                "area": row.get("area"),
+                "list_node_runtime_address": row.get("list_node_runtime_address"),
+                "raw_object_stack_offset": row.get("raw_object_stack_offset"),
+                "frame_base_size": row.get("frame_base_size"),
+                "frame_call_args_size": row.get("frame_call_args_size"),
+                "final_r1_offset": row.get("final_r1_offset"),
+                "size": row.get("size"),
+                "confidence": row.get("frame_binding_confidence"),
+                "provenance": row.get("frame_binding_provenance"),
+            }
+        )
+    return events
 
 
 def _try_capture_pcode_stage(state, stage, capture_pcode, *, fallback_stage):
@@ -30,19 +153,23 @@ def intervene(ctx):
     import json
     import os
 
-    from tools.mwcc_retro import backend_colorgraph_trace
-    from tools.mwcc_retro import backend_frame_state
-    from tools.mwcc_retro import backend_ig_snapshot
-    from tools.mwcc_retro import backend_pcode_snapshot
-    from tools.mwcc_retro import backend_trace_assembler
+    from tools.mwcc_retro import (
+        backend_colorgraph_trace,
+        backend_frame_state,
+        backend_ig_snapshot,
+        backend_pcode_snapshot,
+        backend_trace_assembler,
+    )
 
     gdb = ctx.gdb
     cad = ctx.cad
     entries = ctx.table.get("entries", {})
     out_events = ctx.out_dir + "/backend-events.v1.jsonl"
+    out_object_events = ctx.out_dir + "/backend-object-events.v1.jsonl"
     out_summary = ctx.out_dir + "/backend-onepass-candidate.json"
     source_file = os.environ.get("RETRO_SOURCE", "")
     requested = os.environ.get("RETRO_FUNCTION", ctx.fn)
+    lifecycle_capture = getattr(ctx, "lifecycle_capture", None)
 
     def parse_aliases():
         try:
@@ -205,6 +332,7 @@ def intervene(ctx):
         "decisions_seen": [],
         "errors": [],
         "warnings": [],
+        "object_events": [],
     }
 
     def emit_function_start():
@@ -252,6 +380,7 @@ def intervene(ctx):
         if state["frame_captured"]:
             return
         try:
+            lifecycle_inputs = _stopped_lifecycle_inputs(lifecycle_capture)
             event = backend_frame_state.snapshot_frame_state(
                 read_u32,
                 read_s32,
@@ -260,6 +389,7 @@ def intervene(ctx):
                 frame_base_size_va=frame_base_size_va,
                 frame_call_args_size_va=frame_call_args_size_va,
                 source_stage=stage,
+                **lifecycle_inputs,
             )
         except Exception as exc:  # noqa: BLE001 - fall back to probe-shaped names
             state["warnings"].append(
@@ -276,6 +406,7 @@ def intervene(ctx):
             event = backend_trace_assembler.frame_events_from_map_probe_payload(
                 {"events": [{"stage": stage, "frame_state": probe_frame}]}
             )[0]
+        state["object_events"].extend(_frame_object_events(event))
         append_event(event)
         state["frame_captured"] = True
 
@@ -294,6 +425,7 @@ def intervene(ctx):
         state["class_iters"] = {}
         state["exact_decisions_by_class"] = {}
         state["matched_function_name"] = None
+        state["object_events"] = []
 
     class CodegenStart(gdb.Breakpoint):
         def stop(self):
@@ -390,11 +522,19 @@ def intervene(ctx):
                                 class_id=class_id,
                                 class_name=class_name,
                                 function_name=ctx.fn,
+                                read_s32=read_s32,
+                                **_stopped_lifecycle_inputs(lifecycle_capture),
+                            )
+                            state["object_events"].extend(
+                                event
+                                for event in events
+                                if event.get("event") in _OBJECT_EVENT_KINDS
                             )
                             filtered = [
                                 event
                                 for event in events
                                 if event.get("event") != "color_decision"
+                                and event.get("event") not in _OBJECT_EVENT_KINDS
                             ]
                             for event in filtered:
                                 append_event(event)
@@ -723,6 +863,8 @@ def intervene(ctx):
 
     if os.path.exists(out_events):
         os.remove(out_events)
+    if os.path.exists(out_object_events):
+        os.remove(out_object_events)
 
     if missing:
         print("[retro] ABORT: one-pass backend candidate missing entries " + ", ".join(missing))
@@ -739,6 +881,33 @@ def intervene(ctx):
     try:
         ctx.cont()
     finally:
+        try:
+            object_events = _canonical_object_events(state["object_events"])
+        except Exception as exc:  # noqa: BLE001 - sidecar failure withholds capability
+            object_events = []
+            state["errors"].append(
+                {"stage": "object_capture_finalize", "error": str(exc)}
+            )
+        with open(out_object_events, "w", encoding="utf-8") as f:
+            for event in object_events:
+                f.write(json.dumps(event, sort_keys=True) + "\n")
+        object_errors = [
+            str(row.get("error"))
+            for row in state["errors"]
+            if isinstance(row, dict)
+            and row.get("stage")
+            in {
+                "colorgraph",
+                "colorgraph_return",
+                "final_scheduler",
+                "object_capture_finalize",
+            }
+        ]
+        cap_reached = any(
+            token in error
+            for error in object_errors
+            for token in ("max_nodes", "max_objects", "exceeds", "exceeded")
+        )
         payload = {
             "schema_version": "mwcc-retro-backend-onepass-candidate.v1",
             "compiler": {"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
@@ -751,6 +920,11 @@ def intervene(ctx):
             "internal_breakpoints": internal_pcs,
             "errors": state["errors"],
             "warnings": state["warnings"],
+            "object_capture": _object_capture_status(
+                object_events,
+                errors=object_errors,
+                cap_reached=cap_reached,
+            ),
             "notes": [
                 "One-pass retail backend event stream.",
                 "Diagnostic sidecar for trace assembly and completeness checks.",

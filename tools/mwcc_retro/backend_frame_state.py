@@ -1,12 +1,16 @@
 """Build backend frame/stack-local map events from retail MWCC globals."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from tools.mwcc_retro import backend_object_snapshot
+
 ReadU32 = Callable[[int], int]
 ReadS32 = Callable[[int], int]
 ReadCString = Callable[[int, int], str]
+GenerationFor = Callable[[str, int], int | None]
 
 POINTER_LOW = 0x600000
 POINTER_HIGH = 0x2000000
@@ -34,6 +38,11 @@ def snapshot_frame_state(
     frame_call_args_size_va: int,
     source_stage: str,
     max_objects: int = MAX_OBJECTS,
+    lifecycle_sequence: int | None = None,
+    generation_for: GenerationFor | None = None,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets = (
+        backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS
+    ),
 ) -> dict[str, Any]:
     """Return one ``frame_state`` backend event.
 
@@ -43,6 +52,17 @@ def snapshot_frame_state(
 
     if max_objects <= 0:
         raise ValueError(f"max_objects must be positive, got {max_objects}")
+    capture_objects = _validate_object_capture_inputs(
+        lifecycle_sequence, generation_for
+    )
+    if capture_objects and source_stage != "final_scheduler":
+        raise ValueError(
+            "lifecycle-aware ObjObject frame capture requires final_scheduler"
+        )
+    base_size = _read_s32(read_s32, frame_base_size_va, "frame_base_size")
+    call_args_size = _read_s32(
+        read_s32, frame_call_args_size_va, "frame_call_args_size"
+    )
 
     objects: list[dict[str, Any]] = []
     for area in ("locals", "arguments", "temps"):
@@ -57,21 +77,25 @@ def snapshot_frame_state(
                 area=area,
                 list_va=list_va,
                 max_objects=max_objects,
+                frame_base_size=base_size,
+                frame_call_args_size=call_args_size,
+                lifecycle_sequence=lifecycle_sequence,
+                generation_for=generation_for,
+                object_offsets=object_offsets,
             )
         )
 
-    return {
+    event = {
         "event": "frame_state",
         "source_stage": source_stage,
         "provenance": "frame_locals",
-        "base_size_bytes": _read_s32(
-            read_s32, frame_base_size_va, "frame_base_size"
-        ),
-        "call_args_size_bytes": _read_s32(
-            read_s32, frame_call_args_size_va, "frame_call_args_size"
-        ),
+        "base_size_bytes": base_size,
+        "call_args_size_bytes": call_args_size,
         "objects": objects,
     }
+    if capture_objects:
+        event["object_binding_capabilities"] = []
+    return event
 
 
 def snapshot_probe_frame_state(
@@ -183,6 +207,11 @@ def _snapshot_object_list(
     area: str,
     list_va: int,
     max_objects: int,
+    frame_base_size: int,
+    frame_call_args_size: int,
+    lifecycle_sequence: int | None,
+    generation_for: GenerationFor | None,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets,
 ) -> list[dict[str, Any]]:
     head = _read_u32(read_u32, list_va, f"{area} frame object list head")
     if head == 0:
@@ -211,19 +240,52 @@ def _snapshot_object_list(
         if not _bounded_ptr(obj):
             raise ValueError(f"invalid {area} ObjObject pointer 0x{obj:x}")
 
-        type_ptr = _read_u32(read_u32, obj + OBJECT_TYPE, f"{area} ObjObject type")
-        if not _readable_ptr(type_ptr):
-            raise ValueError(f"invalid {area} ObjObject type pointer 0x{type_ptr:x}")
-        size = _read_s32(read_s32, type_ptr + TYPE_SIZE, f"{area} ObjObject type size")
-        if size < 0:
-            raise ValueError(f"negative {area} ObjObject size {size}")
+        object_snapshot: dict[str, object] | None = None
+        generation: int | None = None
+        if lifecycle_sequence is not None and generation_for is not None:
+            generation = generation_for("objobject", obj)
+            if not _is_positive_int(generation):
+                raise ValueError(
+                    f"no active ObjObject generation for 0x{obj:x} "
+                    f"at lifecycle sequence {lifecycle_sequence}"
+                )
+            object_snapshot = dict(
+                backend_object_snapshot.snapshot_objobject(
+                    ptr=obj,
+                    stage="final_scheduler",
+                    lifecycle_sequence=lifecycle_sequence,
+                    generation=generation,
+                    read_u32=read_u32,
+                    read_s32=read_s32,
+                    offsets=object_offsets,
+                )
+            )
+            type_ptr = object_snapshot["type_pointer"]
+            size = object_snapshot["type_size"]
+        else:
+            type_ptr = _read_u32(
+                read_u32, obj + OBJECT_TYPE, f"{area} ObjObject type"
+            )
+            if not _readable_ptr(type_ptr):
+                raise ValueError(f"invalid {area} ObjObject type pointer 0x{type_ptr:x}")
+            size = _read_s32(
+                read_s32, type_ptr + TYPE_SIZE, f"{area} ObjObject type size"
+            )
+            if size < 0:
+                raise ValueError(f"negative {area} ObjObject size {size}")
         stack_offset = _read_s32(
             read_s32,
-            obj + OBJECT_STACK_OFFSET,
+            obj + object_offsets.stack_offset,
             f"{area} ObjObject stack offset",
         )
-        name_record = _read_u32(
-            read_u32, obj + OBJECT_NAME_RECORD, f"{area} ObjObject name record"
+        name_record = (
+            object_snapshot["name_record_pointer"]
+            if object_snapshot is not None
+            else _read_u32(
+                read_u32,
+                obj + OBJECT_NAME_RECORD,
+                f"{area} ObjObject name record",
+            )
         )
         name, confidence = _frame_object_name(
             read_cstr,
@@ -232,17 +294,41 @@ def _snapshot_object_list(
             name_record=name_record,
         )
 
-        objects.append(
-            {
-                "area": area,
-                "name": name,
-                "stack_offset": stack_offset,
-                "size": size,
-                "type": f"type@0x{type_ptr:x}",
-                "confidence": confidence,
-                "provenance": f"frame_{area}",
-            }
-        )
+        row = {
+            "area": area,
+            "name": name,
+            "stack_offset": stack_offset,
+            "size": size,
+            "type": (
+                f"type@0x{type_ptr:x}"
+                if isinstance(type_ptr, int)
+                else "unreadable"
+            ),
+            "confidence": confidence,
+            "provenance": f"frame_{area}",
+        }
+        if object_snapshot is not None:
+            row.update(
+                {
+                    "list_node_runtime_address": current,
+                    "objobject_ptr": obj,
+                    "allocation_generation": generation,
+                    "raw_object_stack_offset": stack_offset,
+                    "frame_base_size": frame_base_size,
+                    "frame_call_args_size": frame_call_args_size,
+                    "final_r1_offset": (
+                        frame_base_size + frame_call_args_size + stack_offset
+                    ),
+                    "frame_binding_confidence": "derived-unique",
+                    "frame_binding_provenance": [
+                        "retail-frame-layout-formula.v1",
+                        "retail-frame-list.object",
+                        "retail-objobject.stack-offset",
+                    ],
+                    "object_snapshot": object_snapshot,
+                }
+            )
+        objects.append(row)
         current = next_node
     raise ValueError(f"{area} frame object list exceeded max_objects {max_objects}")
 
@@ -252,9 +338,9 @@ def _frame_object_name(
     *,
     area: str,
     stack_offset: int,
-    name_record: int,
+    name_record: int | None,
 ) -> tuple[str, str]:
-    if _readable_ptr(name_record):
+    if isinstance(name_record, int) and _readable_ptr(name_record):
         try:
             name = read_cstr(name_record + NAME_RECORD_TEXT, 96)
         except Exception:  # noqa: BLE001 - unnamed frame slots are still useful facts
@@ -285,3 +371,23 @@ def _read_s32(read_s32: ReadS32, addr: int, label: str) -> int:
         return read_s32(addr)
     except Exception as exc:  # noqa: BLE001 - reader failures become controlled facts
         raise ValueError(f"failed to read {label} at 0x{addr:x}: {exc}") from exc
+
+
+def _validate_object_capture_inputs(
+    lifecycle_sequence: int | None, generation_for: GenerationFor | None
+) -> bool:
+    if (lifecycle_sequence is None) != (generation_for is None):
+        raise ValueError(
+            "lifecycle_sequence and generation_for must be supplied together"
+        )
+    if lifecycle_sequence is None:
+        return False
+    if isinstance(lifecycle_sequence, bool) or not isinstance(lifecycle_sequence, int):
+        raise ValueError("lifecycle_sequence must be an integer at least -1")
+    if lifecycle_sequence < -1:
+        raise ValueError("lifecycle_sequence must be an integer at least -1")
+    return True
+
+
+def _is_positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0

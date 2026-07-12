@@ -9,10 +9,15 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
+from tools.mwcc_retro import backend_object_snapshot
+
 ReadU32 = Callable[[int], int]
 ReadS16 = Callable[[int], int]
+ReadS32 = Callable[[int], int]
+GenerationFor = Callable[[str, int], int | None]
 
 IGNODE_NEXT = 0x00
+IGNODE_OBJ_ADDR = 0x04
 IGNODE_IG_IDX = 0x0C
 IGNODE_DEGREE = 0x0E
 IGNODE_ASSIGNED_REG = 0x10
@@ -84,6 +89,12 @@ def snapshot_interference_graph(
     source_stage: str,
     function_name: str | None = None,
     max_nodes: int = DEFAULT_MAX_NODES,
+    read_s32: ReadS32 | None = None,
+    lifecycle_sequence: int | None = None,
+    generation_for: GenerationFor | None = None,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets = (
+        backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS
+    ),
 ) -> list[dict[str, Any]]:
     """Return normalized backend events for one retail interference graph.
 
@@ -99,7 +110,14 @@ def snapshot_interference_graph(
     node_events: list[dict[str, Any]] = []
     coalesce_events: list[dict[str, Any]] = []
     edge_pairs: set[tuple[int, int]] = set()
+    object_snapshots: dict[tuple[int, int], dict[str, Any]] = {}
+    object_bindings: list[dict[str, Any]] = []
     neighbor_cap = min(max_nodes, MAX_NEIGHBORS_PER_NODE)
+    capture_objects = _validate_object_capture_inputs(
+        read_s32=read_s32,
+        lifecycle_sequence=lifecycle_sequence,
+        generation_for=generation_for,
+    )
 
     for ig_id in range(n_ignodes):
         node_ptr = _read_u32(read_u32, graph_va + ig_id * 4, f"node pointer for ig_id {ig_id}")
@@ -107,6 +125,11 @@ def snapshot_interference_graph(
             raise ValueError(f"null node pointer for ig_id {ig_id}")
 
         next_ptr = _read_u32(read_u32, node_ptr + IGNODE_NEXT, f"IGNode[{ig_id}].next")
+        objobject_ptr = _read_u32(
+            read_u32,
+            node_ptr + IGNODE_OBJ_ADDR,
+            f"IGNode[{ig_id}].obj_addr",
+        )
         observed_ig_id = _read_s16(read_s16, node_ptr + IGNODE_IG_IDX, f"IGNode[{ig_id}].ig_idx")
         if observed_ig_id != ig_id:
             raise ValueError(
@@ -136,6 +159,7 @@ def snapshot_interference_graph(
                 ig_id=ig_id,
                 node_ptr=node_ptr,
                 next_ptr=next_ptr,
+                objobject_ptr=objobject_ptr,
                 degree=degree,
                 assigned_reg=assigned_reg,
                 flags=flags,
@@ -144,6 +168,47 @@ def snapshot_interference_graph(
                 function_name=function_name,
             )
         )
+
+        if capture_objects and objobject_ptr > 0:
+            assert read_s32 is not None
+            assert lifecycle_sequence is not None
+            assert generation_for is not None
+            generation = generation_for("objobject", objobject_ptr)
+            if not _is_positive_int(generation):
+                raise ValueError(
+                    f"no active ObjObject generation for 0x{objobject_ptr:x} "
+                    f"at lifecycle sequence {lifecycle_sequence}"
+                )
+            snapshot = backend_object_snapshot.snapshot_objobject(
+                ptr=objobject_ptr,
+                stage=source_stage,
+                lifecycle_sequence=lifecycle_sequence,
+                generation=generation,
+                read_u32=read_u32,
+                read_s32=read_s32,
+                offsets=object_offsets,
+            )
+            object_snapshots.setdefault(
+                (objobject_ptr, generation),
+                {"event": "objobject_snapshot", **dict(snapshot)},
+            )
+            object_bindings.append(
+                {
+                    "event": "object_virtual_binding",
+                    "source_stage": source_stage,
+                    "objobject_ptr": objobject_ptr,
+                    "allocation_generation": generation,
+                    "lifecycle_sequence_at_capture": lifecycle_sequence,
+                    "class_id": class_id,
+                    "class_name": class_name,
+                    "virtual_kind": class_info["virtual_kind"],
+                    "virtual": ig_id,
+                    "ig_id": ig_id,
+                    "ignode_runtime_address": node_ptr,
+                    "confidence": "observed",
+                    "provenance": "retail-ignode.obj_addr",
+                }
+            )
 
         flag_byte = flags & 0xFF
         if flag_byte & 0x04:
@@ -211,6 +276,19 @@ def snapshot_interference_graph(
             )
             for a, b in sorted(edge_pairs)
         ],
+        *[object_snapshots[key] for key in sorted(object_snapshots)],
+        *sorted(
+            object_bindings,
+            key=lambda row: (
+                row["objobject_ptr"],
+                row["allocation_generation"],
+                row["class_id"],
+                row["virtual_kind"],
+                row["virtual"],
+                row["ig_id"],
+                row["ignode_runtime_address"],
+            ),
+        ),
     ]
 
 
@@ -383,6 +461,12 @@ def post_colorgraph_class_events(
     class_name: str,
     function_name: str | None = None,
     max_nodes: int = DEFAULT_MAX_NODES,
+    read_s32: ReadS32 | None = None,
+    lifecycle_sequence: int | None = None,
+    generation_for: GenerationFor | None = None,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets = (
+        backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS
+    ),
 ) -> list[dict[str, Any]]:
     """Return one post-colorgraph class snapshot event batch.
 
@@ -410,6 +494,10 @@ def post_colorgraph_class_events(
         source_stage=source_stage,
         function_name=function_name,
         max_nodes=max_nodes,
+        read_s32=read_s32,
+        lifecycle_sequence=lifecycle_sequence,
+        generation_for=generation_for,
+        object_offsets=object_offsets,
     )
     events = enrich_post_colorgraph_coalesce_mappings(
         events,
@@ -536,6 +624,7 @@ def _node_event(
     ig_id: int,
     node_ptr: int,
     next_ptr: int,
+    objobject_ptr: int,
     degree: int,
     assigned_reg: int,
     flags: int,
@@ -556,6 +645,8 @@ def _node_event(
         "class_id": class_id,
         "class_name": class_name,
         "ig_id": ig_id,
+        "objobject_ptr": objobject_ptr,
+        "object_binding_confidence": "observed" if objobject_ptr > 0 else None,
         "virtual": {"kind": virtual_kind, "number": ig_id},
         "first_def": {
             "status": "unavailable",
@@ -593,12 +684,41 @@ def _node_event(
         "retail_ignode": {
             "ptr": node_ptr,
             "next": next_ptr,
+            "obj_addr": objobject_ptr,
             "assignedReg": assigned_reg,
             "flags": flag_byte,
             "arraySize": array_size,
         },
         "source_stage": source_stage,
     }
+
+
+def _validate_object_capture_inputs(
+    *,
+    read_s32: ReadS32 | None,
+    lifecycle_sequence: int | None,
+    generation_for: GenerationFor | None,
+) -> bool:
+    supplied = (
+        read_s32 is not None,
+        lifecycle_sequence is not None,
+        generation_for is not None,
+    )
+    if any(supplied) and not all(supplied):
+        raise ValueError(
+            "read_s32, lifecycle_sequence, and generation_for must be supplied together"
+        )
+    if lifecycle_sequence is not None and (
+        not isinstance(lifecycle_sequence, int)
+        or isinstance(lifecycle_sequence, bool)
+        or lifecycle_sequence < -1
+    ):
+        raise ValueError("lifecycle_sequence must be an integer at least -1")
+    return all(supplied)
+
+
+def _is_positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _flag_facts(flags: int) -> list[dict[str, int]]:

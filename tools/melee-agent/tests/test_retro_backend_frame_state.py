@@ -307,6 +307,135 @@ def test_snapshot_frame_state_rejects_cycles_and_bad_pointers() -> None:
             source_stage="codegen_end",
         )
 
+
+def test_frame_row_retains_raw_object_pointer_snapshot_and_stack_inputs() -> None:
+    mem = Memory()
+    mem.u32(0x700000, 0x710000)
+    mem.s32(0x70000C, 84)
+    mem.s32(0x700010, 8)
+    add_frame_object(
+        mem,
+        list_node=0x710000,
+        obj=0x711000,
+        name_record=0x712000,
+        name="tmp_a",
+        stack_offset=-12,
+        type_ptr=0x713000,
+        size=4,
+    )
+
+    event = backend_frame_state.snapshot_frame_state(
+        mem.read_u32,
+        mem.read_s32,
+        mem.read_cstr,
+        list_vas={"locals": 0x700000},
+        frame_base_size_va=0x70000C,
+        frame_call_args_size_va=0x700010,
+        source_stage="final_scheduler",
+        lifecycle_sequence=11,
+        generation_for=lambda kind, ptr: (4 if (kind, ptr) == ("objobject", 0x711000) else None),
+    )
+
+    row = event["objects"][0]
+    assert row["list_node_runtime_address"] == 0x710000
+    assert row["objobject_ptr"] == 0x711000
+    assert row["raw_object_stack_offset"] == -12
+    assert row["frame_base_size"] == 84
+    assert row["frame_call_args_size"] == 8
+    assert row["final_r1_offset"] == 80
+    assert row["frame_binding_confidence"] == "derived-unique"
+    assert row["object_snapshot"] == {
+        "stage": "final_scheduler",
+        "runtime_address": 0x711000,
+        "allocation_generation": 4,
+        "lifecycle_sequence_at_capture": 11,
+        "name_record_pointer": 0x712000,
+        "type_pointer": 0x713000,
+        "type_size": 4,
+        "readable": True,
+    }
+    assert event["object_binding_capabilities"] == []
+
+
+def test_frame_positive_object_without_active_generation_fails_closed() -> None:
+    mem = Memory()
+    mem.u32(0x700000, 0x710000)
+    mem.s32(0x70000C, 84)
+    mem.s32(0x700010, 8)
+    add_frame_object(
+        mem,
+        list_node=0x710000,
+        obj=0x711000,
+        name_record=0x712000,
+        name="tmp_a",
+        stack_offset=-12,
+        type_ptr=0x713000,
+        size=4,
+    )
+
+    with pytest.raises(ValueError, match="no active ObjObject generation"):
+        backend_frame_state.snapshot_frame_state(
+            mem.read_u32,
+            mem.read_s32,
+            mem.read_cstr,
+            list_vas={"locals": 0x700000},
+            frame_base_size_va=0x70000C,
+            frame_call_args_size_va=0x700010,
+            source_stage="final_scheduler",
+            lifecycle_sequence=11,
+            generation_for=lambda _kind, _ptr: None,
+        )
+
+
+def test_frame_retains_controlled_unreadable_positive_snapshot() -> None:
+    mem = Memory()
+    mem.u32(0x700000, 0x710000)
+    mem.u32(0x710000, 0)
+    mem.u32(0x710004, 0x711000)
+    mem.s32(0x70000C, 84)
+    mem.s32(0x700010, 8)
+    mem.s32(0x71102A, -12)
+
+    event = backend_frame_state.snapshot_frame_state(
+        mem.read_u32,
+        mem.read_s32,
+        mem.read_cstr,
+        list_vas={"locals": 0x700000},
+        frame_base_size_va=0x70000C,
+        frame_call_args_size_va=0x700010,
+        source_stage="final_scheduler",
+        lifecycle_sequence=11,
+        generation_for=lambda _kind, _ptr: 4,
+    )
+
+    row = event["objects"][0]
+    assert row["objobject_ptr"] == 0x711000
+    assert row["raw_object_stack_offset"] == -12
+    assert row["object_snapshot"]["readable"] is False
+    assert row["object_snapshot"]["name_record_pointer"] is None
+    assert row["confidence"] == "observed-unnamed"
+    assert event["object_binding_capabilities"] == []
+
+
+def test_lifecycle_aware_frame_capture_requires_final_scheduler_stage() -> None:
+    mem = Memory()
+    mem.u32(0x700000, 0)
+    mem.s32(0x70000C, 84)
+    mem.s32(0x700010, 8)
+
+    with pytest.raises(ValueError, match="requires final_scheduler"):
+        backend_frame_state.snapshot_frame_state(
+            mem.read_u32,
+            mem.read_s32,
+            mem.read_cstr,
+            list_vas={"locals": 0x700000},
+            frame_base_size_va=0x70000C,
+            frame_call_args_size_va=0x700010,
+            source_stage="codegen_end",
+            lifecycle_sequence=11,
+            generation_for=lambda _kind, _ptr: 4,
+        )
+
     mem.u32(0x700000, 0x1234)
     with pytest.raises(ValueError, match="invalid locals frame object pointer"):
         backend_frame_state.snapshot_frame_state(

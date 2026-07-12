@@ -40,6 +40,7 @@ class Memory:
     def __init__(self) -> None:
         self._u32 = {}
         self._s16 = {}
+        self._s32 = {}
 
     def u32(self, addr: int, value: int) -> None:
         self._u32[addr] = value
@@ -47,11 +48,17 @@ class Memory:
     def s16(self, addr: int, value: int) -> None:
         self._s16[addr] = value
 
+    def s32(self, addr: int, value: int) -> None:
+        self._s32[addr] = value
+
     def read_u32(self, addr: int) -> int:
         return self._u32[addr]
 
     def read_s16(self, addr: int) -> int:
         return self._s16[addr]
+
+    def read_s32(self, addr: int) -> int:
+        return self._s32[addr]
 
 
 def add_node(
@@ -64,10 +71,12 @@ def add_node(
     assigned_reg: int = -1,
     flags: int = 0,
     neighbors: list[int] | None = None,
+    objobject_ptr: int = 0,
 ) -> None:
     neighbors = neighbors or []
     mem.u32(graph_va + ig_id * 4, ptr)
     mem.u32(ptr + 0x00, 0)
+    mem.u32(ptr + 0x04, objobject_ptr)
     mem.s16(ptr + 0x0C, ig_id)
     mem.s16(ptr + 0x0E, degree)
     mem.s16(ptr + 0x10, assigned_reg)
@@ -75,6 +84,140 @@ def add_node(
     mem.s16(ptr + 0x14, len(neighbors))
     for index, neighbor in enumerate(neighbors):
         mem.s16(ptr + 0x16 + index * 2, neighbor)
+
+
+def add_objobject(mem: Memory, ptr: int, *, type_size: int = 4) -> None:
+    mem.u32(ptr + 0x0A, ptr + 0x100)
+    mem.u32(ptr + 0x0E, ptr + 0x200)
+    mem.s32(ptr + 0x202, type_size)
+
+
+def test_ig_node_emits_observed_objobject_snapshot_and_binding() -> None:
+    mem = Memory()
+    add_node(mem, graph_va=0x1000, ig_id=0, ptr=0x2000, objobject_ptr=0x1200)
+    add_objobject(mem, 0x1200)
+
+    events = backend_ig_snapshot.snapshot_interference_graph(
+        mem.read_u32,
+        mem.read_s16,
+        0x1000,
+        1,
+        class_id=0,
+        class_name="gpr",
+        source_stage="colorgraph_return",
+        read_s32=mem.read_s32,
+        lifecycle_sequence=7,
+        generation_for=lambda kind, ptr: (
+            3 if (kind, ptr) == ("objobject", 0x1200) else None
+        ),
+    )
+
+    node = next(event for event in events if event["event"] == "node")
+    assert node["objobject_ptr"] == 0x1200
+    assert node["object_binding_confidence"] == "observed"
+    assert node["retail_ignode"]["obj_addr"] == 0x1200
+    assert next(event for event in events if event["event"] == "objobject_snapshot") == {
+        "event": "objobject_snapshot",
+        "stage": "colorgraph_return",
+        "runtime_address": 0x1200,
+        "allocation_generation": 3,
+        "lifecycle_sequence_at_capture": 7,
+        "name_record_pointer": 0x1300,
+        "type_pointer": 0x1400,
+        "type_size": 4,
+        "readable": True,
+    }
+    assert next(event for event in events if event["event"] == "object_virtual_binding") == {
+        "event": "object_virtual_binding",
+        "source_stage": "colorgraph_return",
+        "objobject_ptr": 0x1200,
+        "allocation_generation": 3,
+        "lifecycle_sequence_at_capture": 7,
+        "class_id": 0,
+        "class_name": "gpr",
+        "virtual_kind": "r",
+        "virtual": 0,
+        "ig_id": 0,
+        "ignode_runtime_address": 0x2000,
+        "confidence": "observed",
+        "provenance": "retail-ignode.obj_addr",
+    }
+
+
+def test_ig_keeps_null_object_node_without_emitting_positive_binding() -> None:
+    mem = Memory()
+    add_node(mem, graph_va=0x1000, ig_id=0, ptr=0x2000)
+
+    events = backend_ig_snapshot.snapshot_interference_graph(
+        mem.read_u32,
+        mem.read_s16,
+        0x1000,
+        1,
+        class_id=0,
+        class_name="gpr",
+        source_stage="colorgraph_return",
+        read_s32=mem.read_s32,
+        lifecycle_sequence=7,
+        generation_for=lambda _kind, _ptr: None,
+    )
+
+    node = next(event for event in events if event["event"] == "node")
+    assert node["objobject_ptr"] == 0
+    assert node["object_binding_confidence"] is None
+    assert not [event for event in events if event["event"] == "object_virtual_binding"]
+    assert not [event for event in events if event["event"] == "objobject_snapshot"]
+
+
+def test_ig_retains_one_to_many_and_spill_owned_positive_bindings_canonically() -> None:
+    mem = Memory()
+    add_node(mem, graph_va=0x1000, ig_id=0, ptr=0x2000, objobject_ptr=0x1200)
+    add_node(
+        mem,
+        graph_va=0x1000,
+        ig_id=1,
+        ptr=0x2040,
+        objobject_ptr=0x1200,
+        flags=0x01,
+    )
+    add_objobject(mem, 0x1200)
+
+    events = backend_ig_snapshot.snapshot_interference_graph(
+        mem.read_u32,
+        mem.read_s16,
+        0x1000,
+        2,
+        class_id=0,
+        class_name="gpr",
+        source_stage="colorgraph_return",
+        read_s32=mem.read_s32,
+        lifecycle_sequence=0,
+        generation_for=lambda _kind, _ptr: 1,
+    )
+
+    snapshots = [event for event in events if event["event"] == "objobject_snapshot"]
+    bindings = [event for event in events if event["event"] == "object_virtual_binding"]
+    assert len(snapshots) == 1
+    assert [(row["virtual"], row["ig_id"]) for row in bindings] == [(0, 0), (1, 1)]
+    assert next(event for event in events if event.get("ig_id") == 1)["spill"]["spilled"]
+
+
+def test_ig_positive_object_without_active_generation_fails_closed() -> None:
+    mem = Memory()
+    add_node(mem, graph_va=0x1000, ig_id=0, ptr=0x2000, objobject_ptr=0x1200)
+
+    with pytest.raises(ValueError, match="no active ObjObject generation"):
+        backend_ig_snapshot.snapshot_interference_graph(
+            mem.read_u32,
+            mem.read_s16,
+            0x1000,
+            1,
+            class_id=0,
+            class_name="gpr",
+            source_stage="colorgraph_return",
+            read_s32=mem.read_s32,
+            lifecycle_sequence=0,
+            generation_for=lambda _kind, _ptr: None,
+        )
 
 
 def test_walk_colorgraph_head_reads_ignode_next_order() -> None:
