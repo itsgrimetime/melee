@@ -15,6 +15,10 @@ from tools.mwcc_retro import (  # noqa: E402
 )
 
 OBJECT_OFFSETS = backend_object_snapshot.ObjObjectOffsets(0x0A, 0x0E, 0x02, 0x2A)
+ATTEMPT = {
+    "capture_attempt_id": "a" * 32,
+    "function_identity": {"requested": "fn", "symbol_name": "fn"},
+}
 
 
 def test_snapshot_objobject_reads_validated_offsets_once_and_is_immutable() -> None:
@@ -170,6 +174,34 @@ def test_hook_samples_lifecycle_sequence_once_from_stopped_process() -> None:
     assert lifecycle.calls == 1
 
 
+def test_hook_lifecycle_absent_calls_ig_reader_without_snapshot_trio() -> None:
+    captured: dict[str, object] = {}
+
+    def reader(_read_u32, _read_s16, **kwargs):
+        captured.update(kwargs)
+        return [{"event": "regclass"}, {"event": "node"}]
+
+    events = backend_onepass_trace_hook._capture_ig_class_events(
+        reader,
+        lambda _addr: 0,
+        lambda _addr: 0,
+        read_s32=lambda _addr: pytest.fail("legacy capture must not read s32"),
+        lifecycle=None,
+        ignode_obj_addr_offset=0x04,
+        object_offsets=OBJECT_OFFSETS,
+        graph_va=0x1000,
+        head_ptr=0,
+        n_ignodes=1,
+        class_id=0,
+        class_name="gpr",
+    )
+
+    assert events == [{"event": "regclass"}, {"event": "node"}]
+    assert captured["ignode_obj_addr_offset"] == 0x04
+    for key in ("read_s32", "lifecycle_sequence", "generation_for", "object_offsets"):
+        assert key not in captured
+
+
 @pytest.mark.parametrize("sequence", [None, True, -2])
 def test_hook_rejects_missing_or_malformed_stopped_generation_sequence(sequence) -> None:
     class Lifecycle:
@@ -248,10 +280,24 @@ def test_hook_keeps_later_identical_cross_class_snapshot_and_resets_between_runs
     with pytest.raises(ValueError, match="conflicting ObjObject snapshots"):
         backend_onepass_trace_hook._canonical_object_events([first, {**later, "type_size": 8}])
 
-    state = {"object_events": [later]}
-    backend_onepass_trace_hook._reset_object_capture_state(state)
+    state = {
+        "object_events": [later],
+        "object_capture_errors": ["old error"],
+        "object_capture_warnings": ["old warning"],
+    }
+    backend_onepass_trace_hook._reset_object_capture_state(
+        state,
+        function_identity={"requested": "next"},
+        capture_attempt_id="b" * 32,
+    )
     state["object_events"].append(first)
     assert backend_onepass_trace_hook._canonical_object_events(state["object_events"]) == [first]
+    assert state["object_capture_errors"] == []
+    assert state["object_capture_warnings"] == []
+    assert state["object_capture_attempt"] == {
+        "capture_attempt_id": "b" * 32,
+        "function_identity": {"requested": "next"},
+    }
 
 
 def test_hook_retains_partial_exception_facts_and_marks_capture_partial() -> None:
@@ -266,7 +312,7 @@ def test_hook_retains_partial_exception_facts_and_marks_capture_partial() -> Non
         "ignode_runtime_address": 0x2010,
     }
     error = backend_object_snapshot.PartialObjectCaptureError("late read", [fact])
-    state = {"object_events": [], "errors": []}
+    state = {"object_events": [], "errors": [], "object_capture_errors": []}
 
     backend_onepass_trace_hook._retain_partial_object_facts(state, error, stage="colorgraph_return")
 
@@ -278,6 +324,17 @@ def test_hook_retains_partial_exception_facts_and_marks_capture_partial() -> Non
             "object_capture_partial": True,
         }
     ]
+    assert state["object_capture_errors"] == ["late read"]
+
+
+def test_capture_attempt_ids_are_fresh_128_bit_hex_tokens() -> None:
+    first = backend_onepass_trace_hook._new_capture_attempt_id()
+    second = backend_onepass_trace_hook._new_capture_attempt_id()
+
+    assert first != second
+    assert len(first) == len(second) == 32
+    assert int(first, 16) >= 0
+    assert int(second, 16) >= 0
 
 
 def test_atomic_sidecar_is_deterministic_and_marks_partial(tmp_path) -> None:
@@ -296,13 +353,14 @@ def test_atomic_sidecar_is_deterministic_and_marks_partial(tmp_path) -> None:
     ]
     status = backend_onepass_trace_hook._object_capture_status(events, errors=["late read"], cap_reached=False)
 
-    backend_onepass_trace_hook._publish_object_sidecar(path, events, status)
+    backend_onepass_trace_hook._publish_object_sidecar(path, events, status, ATTEMPT)
     first = path.read_bytes()
-    backend_onepass_trace_hook._publish_object_sidecar(path, events, status)
+    backend_onepass_trace_hook._publish_object_sidecar(path, events, status, ATTEMPT)
 
     assert path.read_bytes() == first
     assert json.loads(first) == {
         "schema_version": "mwcc-retro-object-events.v1",
+        "capture_attempt": ATTEMPT,
         "capture_status": status,
         "events": events,
         "publication_complete": True,
@@ -323,6 +381,7 @@ def test_atomic_sidecar_replace_failure_preserves_previous_valid_file(tmp_path, 
             path,
             [],
             backend_onepass_trace_hook._object_capture_status([], errors=["partial"], cap_reached=False),
+            ATTEMPT,
         )
 
     assert path.read_bytes() == previous
@@ -358,7 +417,67 @@ def test_atomic_sidecar_write_failure_preserves_previous_valid_file(tmp_path, mo
             path,
             [],
             backend_onepass_trace_hook._object_capture_status([], errors=["partial"], cap_reached=False),
+            ATTEMPT,
         )
 
     assert path.read_bytes() == previous
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_finalize_sidecar_and_summary_attempt_ids_match_and_ignore_stale_globals(tmp_path) -> None:
+    path = tmp_path / "backend-object-events.v1.json"
+    state = {
+        "object_events": [],
+        "object_capture_errors": [],
+        "object_capture_warnings": [],
+        "errors": [{"stage": "stale-global", "error": "unrelated"}],
+        "object_capture_attempt": ATTEMPT,
+    }
+
+    result = backend_onepass_trace_hook._finalize_object_capture(state, path)
+    envelope = json.loads(path.read_bytes())
+
+    assert envelope["capture_attempt"] == ATTEMPT
+    assert result["capture_attempt"] == ATTEMPT
+    assert envelope["capture_status"] == result["capture_status"]
+    assert result["capture_status"]["errors"] == []
+
+
+def test_finalize_failure_keeps_old_attempt_envelope_and_reports_current_failure(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "backend-object-events.v1.json"
+    old_attempt = {
+        "capture_attempt_id": "c" * 32,
+        "function_identity": {"requested": "old"},
+    }
+    old_status = backend_onepass_trace_hook._object_capture_status(
+        [], errors=[], cap_reached=False
+    )
+    backend_onepass_trace_hook._publish_object_sidecar(
+        path, [], old_status, old_attempt
+    )
+    old_bytes = path.read_bytes()
+    current_attempt = {
+        "capture_attempt_id": "d" * 32,
+        "function_identity": {"requested": "current"},
+    }
+    state = {
+        "object_events": [],
+        "object_capture_errors": [],
+        "object_capture_warnings": [],
+        "errors": [],
+        "object_capture_attempt": current_attempt,
+    }
+
+    monkeypatch.setattr(
+        backend_onepass_trace_hook.os,
+        "replace",
+        lambda _source, _target: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+    result = backend_onepass_trace_hook._finalize_object_capture(state, path)
+
+    assert path.read_bytes() == old_bytes
+    assert json.loads(old_bytes)["capture_attempt"] == old_attempt
+    assert result["capture_attempt"] == current_attempt
+    assert result["capture_status"]["errors"] == ["replace failed"]

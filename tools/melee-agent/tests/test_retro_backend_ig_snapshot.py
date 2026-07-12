@@ -178,6 +178,31 @@ def test_ig_keeps_null_object_node_without_emitting_positive_binding() -> None:
     assert not [event for event in events if event["event"] == "objobject_snapshot"]
 
 
+def test_legacy_reader_signature_retains_raw_obj_addr_without_lifecycle_facts() -> None:
+    mem = Memory()
+    add_node(mem, graph_va=0x1000, ig_id=0, ptr=0x2000, objobject_ptr=0x1200)
+
+    events = backend_ig_snapshot.snapshot_interference_graph(
+        mem.read_u32,
+        mem.read_s16,
+        0x1000,
+        1,
+        class_id=0,
+        class_name="gpr",
+        source_stage="colorgraph_return",
+        ignode_obj_addr_offset=0x04,
+    )
+
+    assert [event["event"] for event in events] == [
+        "regclass",
+        "node",
+        "coalesce_mapping_empty",
+    ]
+    node = next(event for event in events if event["event"] == "node")
+    assert node["objobject_ptr"] == 0x1200
+    assert node["retail_ignode"]["obj_addr"] == 0x1200
+
+
 def test_ig_retains_one_to_many_and_spill_owned_positive_bindings_canonically() -> None:
     mem = Memory()
     add_node(mem, graph_va=0x1000, ig_id=0, ptr=0x2000, objobject_ptr=0x1200)

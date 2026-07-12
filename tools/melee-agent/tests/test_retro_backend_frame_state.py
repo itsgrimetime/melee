@@ -517,3 +517,37 @@ def test_frame_late_generation_failure_carries_positive_prefix_facts() -> None:
             **CAPTURE_LAYOUT_KWARGS,
             source_stage="codegen_end",
         )
+
+
+def test_frame_stack_read_failure_retains_completed_snapshot_without_binding() -> None:
+    mem = Memory()
+    mem.u32(0x700000, 0x710000)
+    mem.s32(0x70000C, 84)
+    mem.s32(0x700010, 8)
+    mem.u32(0x710000, 0)
+    mem.u32(0x710004, 0x711000)
+    mem.u32(0x71100A, 0x712000)
+    mem.u32(0x71100E, 0x713000)
+    mem.s32(0x713002, 4)
+
+    with pytest.raises(
+        backend_frame_state.PartialObjectCaptureError,
+        match="failed to read locals ObjObject stack offset",
+    ) as caught:
+        backend_frame_state.snapshot_frame_state(
+            mem.read_u32,
+            mem.read_s32,
+            mem.read_cstr,
+            list_vas={"locals": 0x700000},
+            frame_base_size_va=0x70000C,
+            frame_call_args_size_va=0x700010,
+            **CAPTURE_LAYOUT_KWARGS,
+            source_stage="final_scheduler",
+            lifecycle_sequence=11,
+            generation_for=lambda _kind, ptr: 4 if ptr == 0x711000 else None,
+        )
+
+    assert [fact["event"] for fact in caught.value.partial_facts] == [
+        "objobject_snapshot"
+    ]
+    assert caught.value.partial_facts[0]["runtime_address"] == 0x711000

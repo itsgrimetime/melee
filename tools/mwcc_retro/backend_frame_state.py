@@ -325,6 +325,7 @@ def _snapshot_object_list(
                     offsets=object_offsets,
                 )
             )
+            partial_facts.append({"event": "objobject_snapshot", **object_snapshot})
             type_ptr = object_snapshot["type_pointer"]
             size = object_snapshot["type_size"]
         else:
@@ -401,7 +402,7 @@ def _snapshot_object_list(
         objects.append(row)
         if object_snapshot is not None:
             partial_facts.extend(
-                _frame_object_facts(row, source_stage="final_scheduler")
+                _frame_object_facts(row, source_stage="final_scheduler")[1:]
             )
         current = next_node
     raise ValueError(f"{area} frame object list exceeded max_objects {max_objects}")
