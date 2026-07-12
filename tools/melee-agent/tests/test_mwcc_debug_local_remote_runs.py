@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -22,10 +24,7 @@ def _metadata(function_dir: Path, function: str, job_id: str) -> dict[str, objec
         "function": function,
         "target": "coder64",
         "ssh": "coder.example",
-        "remote_perm_dir": (
-            f"/home/coder/decomp-permuter/remote-runs/{job_id}/"
-            f"nonmatchings/{function}"
-        ),
+        "remote_perm_dir": (f"/home/coder/decomp-permuter/remote-runs/{job_id}/nonmatchings/{function}"),
         "remote_run_dir": f"/home/coder/decomp-permuter/remote-runs/{job_id}",
         "local_perm_dir": str(function_dir),
         "tmux_session": f"melee-perm-{job_id}",
@@ -75,13 +74,15 @@ def _add_candidate(
     source.write_text("void candidate(void) {}\n")
     audit = json.loads((run / "candidate_audit.json").read_text())
     audit["total"] = int(audit["total"]) + 1
-    audit["candidates"].append({
-        "path": str(source),
-        "status": "ok",
-        "semantic_risk_bucket": "plausible-C-shape",
-        "first_diag": None,
-        "source_risks": [],
-    })
+    audit["candidates"].append(
+        {
+            "path": str(source),
+            "status": "ok",
+            "semantic_risk_bucket": "plausible-C-shape",
+            "first_diag": None,
+            "source_risks": [],
+        }
+    )
     _write_json(run / "candidate_audit.json", audit)
     if sidecar is not None:
         bound_sidecar = dict(sidecar)
@@ -132,9 +133,7 @@ def _tmux_result(
     returncode: int = 0,
     stderr: str = "",
 ) -> subprocess.CompletedProcess[str]:
-    stdout = "\n".join(
-        [lrr.REMOTE_SESSION_HEADER, *sessions, lrr.REMOTE_SESSION_TRAILER]
-    ) + "\n"
+    stdout = "\n".join([lrr.REMOTE_SESSION_HEADER, *sessions, lrr.REMOTE_SESSION_TRAILER]) + "\n"
     return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
 
 
@@ -142,10 +141,7 @@ def _replace_inventory_runs(
     inventory: lrr.LocalRemoteRunInventory,
     **updates: dict[str, object],
 ) -> lrr.LocalRemoteRunInventory:
-    runs = tuple(
-        replace(run, **updates.get(run.job_id, {}))
-        for run in inventory.runs
-    )
+    runs = tuple(replace(run, **updates.get(run.job_id, {})) for run in inventory.runs)
     return replace(inventory, runs=runs)
 
 
@@ -215,9 +211,7 @@ def test_nonmatchings_owner_symlink_is_not_traversed(tmp_path: Path) -> None:
     inventory = _inventory(perm_root)
 
     assert inventory.runs == ()
-    assert inventory.issues == (
-        lrr.InventoryIssue(perm_root / "nonmatchings", "owner-symlink"),
-    )
+    assert inventory.issues == (lrr.InventoryIssue(perm_root / "nonmatchings", "owner-symlink"),)
 
 
 def test_nonmatchings_owner_non_directory_is_rejected(tmp_path: Path) -> None:
@@ -228,9 +222,7 @@ def test_nonmatchings_owner_non_directory_is_rejected(tmp_path: Path) -> None:
     inventory = _inventory(perm_root)
 
     assert inventory.runs == ()
-    assert inventory.issues == (
-        lrr.InventoryIssue(perm_root / "nonmatchings", "owner-not-directory"),
-    )
+    assert inventory.issues == (lrr.InventoryIssue(perm_root / "nonmatchings", "owner-not-directory"),)
 
 
 def test_legacy_metadata_is_strict_and_manifest_absence_is_allowed(
@@ -269,8 +261,7 @@ def test_legacy_metadata_is_strict_and_manifest_absence_is_allowed(
         ),
         (
             "remote_perm_dir",
-            "remote-runs/fn_80000000-coder64-20260701-120000/"
-            "nonmatchings/fn_80000000",
+            "remote-runs/fn_80000000-coder64-20260701-120000/nonmatchings/fn_80000000",
         ),
     ],
 )
@@ -379,11 +370,7 @@ def test_regular_file_bytes_activity_and_filesystem_identity_are_stable(
     for path in [item for item in run.rglob("*") if item.is_file()]:
         os.utime(path, (100.0, 100.0))
     os.utime(run / "nested" / "b.bin", (200.0, 200.0))
-    expected_bytes = sum(
-        path.stat().st_size
-        for path in run.rglob("*")
-        if path.is_file() and not path.is_symlink()
-    )
+    expected_bytes = sum(path.stat().st_size for path in run.rglob("*") if path.is_file() and not path.is_symlink())
 
     summary = _summary(perm_root)
     stat_result = run.lstat()
@@ -421,10 +408,7 @@ def test_tracked_files_and_git_failures_are_distinct_protections(
     perm_root = tmp_path / "decomp-permuter"
     _make_run(perm_root)
 
-    tracked_path = (
-        "nonmatchings/fn_80000000/remote-runs/"
-        "fn_80000000-coder64-20260701-120000/tracked.txt"
-    )
+    tracked_path = "nonmatchings/fn_80000000/remote-runs/fn_80000000-coder64-20260701-120000/tracked.txt"
 
     def tracked(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 0, tracked_path + "\0", "")
@@ -1060,9 +1044,7 @@ def test_retention_plan_protected_bytes_can_make_cap_unattainable(
     assert plan.selected_bytes == 10
     assert plan.projected_total_bytes == 20
     assert not plan.cap_satisfied
-    protected_item = next(
-        item for item in plan.items if item.summary.job_id == "protected-job"
-    )
+    protected_item = next(item for item in plan.items if item.summary.job_id == "protected-job")
     assert protected_item.disposition == "protected"
     assert "remote-active" in protected_item.reasons
 
@@ -1094,7 +1076,9 @@ def test_retention_plan_only_zero_reason_stopped_runs_are_eligible(
 
     assert [item.summary.job_id for item in plan.eligible] == ["stopped"]
     assert {item.summary.job_id for item in plan.protected} == {
-        "active", "unknown", "local-protected",
+        "active",
+        "unknown",
+        "local-protected",
     }
 
 
@@ -1184,10 +1168,7 @@ def test_unexpected_direct_remote_run_entry_makes_inventory_incomplete(
 
     inventory = _inventory(perm_root)
 
-    assert any(
-        issue.path == unexpected and issue.code == "unexpected-run-entry"
-        for issue in inventory.issues
-    )
+    assert any(issue.path == unexpected and issue.code == "unexpected-run-entry" for issue in inventory.issues)
     plan = lrr.plan_local_remote_run_retention(
         inventory,
         max_total_bytes=10**12,
@@ -1201,11 +1182,7 @@ def test_probe_and_plan_are_read_only(tmp_path: Path) -> None:
     perm_root = tmp_path / "decomp-permuter"
     run = _make_run(perm_root)
     _set_remote_identity(run, ssh="host", session="session")
-    before = {
-        str(path.relative_to(perm_root)): path.read_bytes()
-        for path in perm_root.rglob("*")
-        if path.is_file()
-    }
+    before = {str(path.relative_to(perm_root)): path.read_bytes() for path in perm_root.rglob("*") if path.is_file()}
     inventory = _inventory(perm_root)
 
     probed = lrr.probe_remote_run_activity(
@@ -1216,10 +1193,582 @@ def test_probe_and_plan_are_read_only(tmp_path: Path) -> None:
         probed,
         clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
     )
-    after = {
-        str(path.relative_to(perm_root)): path.read_bytes()
-        for path in perm_root.rglob("*")
-        if path.is_file()
-    }
+    after = {str(path.relative_to(perm_root)): path.read_bytes() for path in perm_root.rglob("*") if path.is_file()}
 
     assert after == before
+
+
+def test_apply_recomputes_inside_lock_and_removes_selected_run(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    calls = 0
+
+    def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        return _tmux_result(argv)
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_age_days=99999,
+        max_total_bytes=0,
+        remote_runner=runner,
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.status == "completed"
+    assert result.plan is not None
+    assert result.planned_count == 1
+    assert result.removed_count == 1
+    assert result.skipped_count == 0
+    assert result.planned == result.actions
+    assert result.removed == result.actions
+    assert result.skipped == ()
+    assert result.reclaimed_bytes == result.plan.selected_bytes
+    assert result.projected_total_bytes == 0
+    assert result.actions[0].original_path == run
+    assert result.actions[0].status == "removed"
+    assert result.actions[0].reclaimed_bytes == result.plan.selected_bytes
+    assert calls == 2
+    assert not run.exists()
+
+
+def test_apply_with_no_selected_runs_does_not_remove_anything(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_age_days=99999,
+        max_total_bytes=10**12,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.status == "completed"
+    assert result.actions == ()
+    assert result.reclaimed_bytes == 0
+    assert result.plan is not None
+    assert result.projected_total_bytes == result.plan.total_bytes
+    assert run.is_dir()
+
+
+def test_apply_busy_lock_fails_closed_without_probe_or_deletion(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    lock_path = perm_root / lrr.LIFECYCLE_LOCK_FILENAME
+    lock_path.touch(mode=0o600)
+    descriptor = os.open(lock_path, os.O_RDWR)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    called = False
+    try:
+
+        def runner(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+            nonlocal called
+            called = True
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        result = lrr.apply_local_remote_run_retention(
+            perm_root,
+            remote_runner=runner,
+            git_runner=_untracked_git,
+        )
+    finally:
+        os.close(descriptor)
+
+    assert result.status == "lock-busy"
+    assert result.plan is None
+    assert result.actions == ()
+    assert not called
+    assert run.is_dir()
+
+
+def test_apply_ignores_prior_plan_and_recomputes_new_retention_marker(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    stale = _inventory(perm_root)
+    stale = lrr.probe_remote_run_activity(
+        stale,
+        runner=lambda argv, **_: _tmux_result(argv),
+    )
+    stale_plan = lrr.plan_local_remote_run_retention(
+        stale,
+        max_total_bytes=0,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+    assert len(stale_plan.selected) == 1
+    _write_json(
+        run / lrr.RETENTION_MARKER_FILENAME,
+        {
+            "kind": lrr.RETENTION_MARKER_KIND,
+            "version": lrr.RETENTION_MARKER_VERSION,
+            "job_id": run.name,
+            "function": run.parent.parent.name,
+            "reason": "new decision",
+            "created_at": "2026-07-11T12:00:00Z",
+        },
+    )
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.actions == ()
+    assert result.plan is not None
+    assert result.plan.selected == ()
+    assert run.is_dir()
+
+
+@pytest.mark.parametrize("second_state", ["active", "unknown"])
+def test_apply_second_probe_remote_change_skips_selected_run(
+    tmp_path: Path,
+    second_state: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    calls = 0
+
+    def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _tmux_result(argv)
+        if second_state == "active":
+            return _tmux_result(argv, _metadata(run.parent.parent, run.parent.parent.name, run.name)["tmux_session"])
+        raise RuntimeError("second probe failed")
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=runner,
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert calls == 2
+    assert result.removed_count == 0
+    assert result.skipped_count == 1
+    assert any(reason.startswith("remote-") for reason in result.actions[0].reasons)
+    assert run.is_dir()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("retained", "explicitly-retained"),
+        ("winner", "winner"),
+        ("untriaged", "candidate-untriaged"),
+        ("tracked", "tracked-files"),
+        ("symlink", "nested-symlink"),
+        ("nonregular", "nonregular-entry"),
+        ("replaced", "run-changed"),
+        ("root-symlink", "run-changed"),
+        ("root-nonregular", "filesystem-error"),
+        ("owner-symlink", "ownership-changed"),
+        ("git-failed", "git-check-failed"),
+    ],
+)
+def test_apply_revalidation_skips_new_local_protection_or_replacement(
+    tmp_path: Path,
+    mutation: str,
+    expected_reason: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    candidate = _add_candidate(run, sidecar=_triage_status())
+    git_calls = 0
+
+    def git_runner(
+        argv: list[str],
+        **_: object,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal git_calls
+        git_calls += 1
+        if len(argv) == 5:
+            if mutation == "retained":
+                _write_json(
+                    run / lrr.RETENTION_MARKER_FILENAME,
+                    {
+                        "kind": lrr.RETENTION_MARKER_KIND,
+                        "version": lrr.RETENTION_MARKER_VERSION,
+                        "job_id": run.name,
+                        "function": run.parent.parent.name,
+                        "reason": "keep now",
+                        "created_at": "2026-07-11T12:00:00Z",
+                    },
+                )
+            elif mutation == "winner":
+                _write_json(
+                    candidate.parent / lrr.CANDIDATE_STATUS_FILENAME,
+                    _triage_status(
+                        kept=True,
+                        candidate=str(candidate),
+                        function=run.parent.parent.name,
+                    ),
+                )
+            elif mutation == "untriaged":
+                (candidate.parent / lrr.CANDIDATE_STATUS_FILENAME).unlink()
+            elif mutation == "symlink":
+                (run / "new-link").symlink_to(tmp_path)
+            elif mutation == "nonregular":
+                os.mkfifo(run / "new-fifo")
+            elif mutation == "replaced":
+                moved = tmp_path / "original-run"
+                run.rename(moved)
+                shutil.copytree(moved, run)
+            elif mutation == "root-symlink":
+                moved = tmp_path / "original-run"
+                run.rename(moved)
+                run.symlink_to(moved, target_is_directory=True)
+            elif mutation == "root-nonregular":
+                moved = tmp_path / "original-run"
+                run.rename(moved)
+                run.write_text("replacement")
+            elif mutation == "owner-symlink":
+                remote_runs = run.parent
+                moved = tmp_path / "moved-remote-runs"
+                remote_runs.rename(moved)
+                remote_runs.symlink_to(moved, target_is_directory=True)
+            if mutation == "tracked":
+                tracked = run.relative_to(perm_root) / "candidate_audit.json"
+                return subprocess.CompletedProcess(argv, 0, f"{tracked}\0", "")
+            if mutation == "git-failed":
+                return subprocess.CompletedProcess(argv, 1, "", "git failed")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=git_runner,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert git_calls == 2
+    assert result.removed_count == 0
+    assert result.skipped_count == 1
+    assert expected_reason in result.actions[0].reasons
+    assert run.exists()
+
+
+def test_apply_unsafe_lock_path_fails_closed(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    outside = tmp_path / "outside-lock"
+    outside.write_text("do not touch")
+    (perm_root / lrr.LIFECYCLE_LOCK_FILENAME).symlink_to(outside)
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        remote_runner=lambda *_args, **_kwargs: pytest.fail("must not probe"),
+        git_runner=_untracked_git,
+    )
+
+    assert result.status == "lock-unavailable"
+    assert result.actions == ()
+    assert outside.read_text() == "do not touch"
+    assert run.is_dir()
+
+
+def test_inventory_reports_quarantine_without_treating_it_as_run(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    quarantine = run.parent / f"{lrr.QUARANTINE_PREFIX}leftover"
+    quarantine.mkdir()
+
+    inventory = _inventory(perm_root)
+
+    assert [summary.path for summary in inventory.runs] == [run]
+    assert (
+        lrr.InventoryIssue(
+            quarantine,
+            "quarantine-present",
+            "leftover quarantine is not a deletion candidate",
+        )
+        in inventory.issues
+    )
+
+
+def test_apply_quarantine_collision_never_renames_or_overwrites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    fixed_uuid = lrr.uuid.UUID(int=0)
+    quarantine = run.parent / f"{lrr.QUARANTINE_PREFIX}{fixed_uuid.hex}"
+    quarantine.mkdir()
+    sentinel = quarantine / "sentinel"
+    sentinel.write_text("untouched")
+    monkeypatch.setattr(lrr.uuid, "uuid4", lambda: fixed_uuid)
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.actions[0].reasons == ("quarantine-collision",)
+    assert run.is_dir()
+    assert sentinel.read_text() == "untouched"
+
+
+def test_apply_rename_failure_keeps_original(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+        rename=lambda _source, _destination: (_ for _ in ()).throw(OSError("rename denied")),
+    )
+
+    assert result.actions[0].reasons[0] == "rename-failed"
+    assert result.reclaimed_bytes == 0
+    assert run.is_dir()
+
+
+@pytest.mark.parametrize(
+    ("post_rename_mutation", "expected_reason"),
+    [
+        ("symlink", "quarantine-nested-symlink"),
+        ("marker", "quarantine-retention-marker"),
+    ],
+)
+def test_apply_post_rename_protection_restores_original(
+    tmp_path: Path,
+    post_rename_mutation: str,
+    expected_reason: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    first = True
+
+    def rename(source: Path, destination: Path) -> None:
+        nonlocal first
+        os.rename(source, destination)
+        if first:
+            first = False
+            if post_rename_mutation == "symlink":
+                (destination / "late-link").symlink_to(tmp_path)
+            else:
+                (destination / lrr.RETENTION_MARKER_FILENAME).write_text("late")
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+        rename=rename,
+    )
+
+    assert expected_reason in result.actions[0].reasons
+    assert "restored" in result.actions[0].reasons
+    assert run.is_dir()
+    assert result.actions[0].quarantine_path is not None
+    assert not result.actions[0].quarantine_path.exists()
+
+
+def test_apply_quarantine_identity_mismatch_is_not_restored_or_removed(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    displaced = tmp_path / "displaced-original"
+    rename_calls = 0
+
+    def rename(source: Path, destination: Path) -> None:
+        nonlocal rename_calls
+        rename_calls += 1
+        os.rename(source, destination)
+        os.rename(destination, displaced)
+        destination.mkdir()
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+        rename=rename,
+    )
+
+    action = result.actions[0]
+    assert "quarantine-identity-mismatch" in action.reasons
+    assert "restored" not in action.reasons
+    assert rename_calls == 1
+    assert action.quarantine_path is not None
+    assert action.quarantine_path.is_dir()
+    assert displaced.is_dir()
+    assert not run.exists()
+
+
+def test_apply_restore_failure_leaves_visible_quarantine(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    calls = 0
+
+    def rename(source: Path, destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("restore denied")
+        os.rename(source, destination)
+        (destination / lrr.RETENTION_MARKER_FILENAME).write_text("late")
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+        rename=rename,
+    )
+
+    action = result.actions[0]
+    assert "restore-failed" in action.reasons
+    assert action.quarantine_path is not None
+    assert action.quarantine_path.is_dir()
+    assert not run.exists()
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_apply_removal_failure_reclaims_no_bytes_and_leaves_quarantine(
+    tmp_path: Path,
+    partial: bool,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+
+    def remover(quarantine: Path) -> None:
+        if partial:
+            next(path for path in quarantine.rglob("*") if path.is_file()).unlink()
+        raise OSError("rmtree failed")
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+        remover=remover,
+    )
+
+    action = result.actions[0]
+    assert action.reasons[0] == "removal-failed"
+    assert result.reclaimed_bytes == 0
+    assert result.plan is not None
+    assert result.projected_total_bytes == result.plan.total_bytes
+    assert action.quarantine_path is not None
+    assert action.quarantine_path.is_dir()
+
+
+def test_apply_remover_returning_with_quarantine_present_is_incomplete(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    _make_run(perm_root)
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+        remover=lambda _quarantine: None,
+    )
+
+    assert result.actions[0].reasons == ("removal-incomplete",)
+    assert result.reclaimed_bytes == 0
+
+
+def test_apply_batches_two_probe_rounds_for_mixed_selected_and_active_runs(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    selected = _make_run(perm_root, function="fn_a", job_id="selected")
+    active = _make_run(perm_root, function="fn_b", job_id="active")
+    _set_remote_identity(selected, ssh="same-host", session="selected-session")
+    _set_remote_identity(active, ssh="same-host", session="active-session")
+    calls = 0
+
+    def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        return _tmux_result(argv, "active-session")
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=runner,
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert calls == 2
+    assert result.removed_count == 1
+    assert result.skipped_count == 0
+    assert result.actions[0].job_id == "selected"
+    assert not selected.exists()
+    assert active.is_dir()
+    assert not result.cap_satisfied
+
+
+def test_apply_deletes_proven_run_but_reports_unrelated_inventory_issue(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    unexpected = run.parent / "unexpected.txt"
+    unexpected.write_text("unknown")
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda argv, **_: _tmux_result(argv),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.removed_count == 1
+    assert not result.inventory_complete
+    assert not result.cap_satisfied
+    assert unexpected.read_text() == "unknown"
+
+
+def test_apply_initial_remote_runner_exception_protects_run(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+
+    result = lrr.apply_local_remote_run_retention(
+        perm_root,
+        max_total_bytes=0,
+        remote_runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ssh exploded")),
+        git_runner=_untracked_git,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.status == "completed"
+    assert result.actions == ()
+    assert result.reclaimed_bytes == 0
+    assert run.is_dir()

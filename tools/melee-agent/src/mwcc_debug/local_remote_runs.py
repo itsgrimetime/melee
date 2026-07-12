@@ -1,18 +1,24 @@
-"""Read-only inventory and retention policy for fetched remote permuter runs.
+"""Local lifecycle policy for fetched remote permuter runs.
 
-This module deliberately stops at read-only evidence classification, remote
-activity probing, and retention planning. Deletion, manifest production, and
-CLI integration belong to later lifecycle layers.
+Inventory and planning are read-only. Applying a plan always recomputes it
+under a lifecycle lock and removes only revalidated, quarantined runs. Manifest
+production and CLI integration belong to later lifecycle layers.
 """
 
 from __future__ import annotations
 
+import ctypes
+import errno
+import fcntl
 import json
 import math
 import os
 import shlex
+import shutil
 import stat
 import subprocess
+import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -35,6 +41,8 @@ REMOTE_DETAIL_LIMIT = 500
 REMOTE_SESSION_HEADER = "__MELEE_TMUX_SESSIONS_V1_BEGIN__"
 REMOTE_SESSION_TRAILER = "__MELEE_TMUX_SESSIONS_V1_END__"
 REMOTE_TMUX_MISSING_SENTINEL = "__MELEE_TMUX_MISSING__"
+LIFECYCLE_LOCK_FILENAME = ".melee-agent-local-remote-runs.lock"
+QUARANTINE_PREFIX = ".melee-agent-local-remote-run-quarantine-"
 
 REMOTE_FETCH_WARNING_FILENAME = "remote-fetch-warning.json"
 CANDIDATE_AUDIT_FILENAME = "candidate_audit.json"
@@ -180,24 +188,64 @@ class LocalRemoteRunRetentionPlan:
 
     @property
     def protected(self) -> tuple[RetentionPlanItem, ...]:
-        return tuple(
-            item for item in self.items if item.disposition == "protected"
-        )
+        return tuple(item for item in self.items if item.disposition == "protected")
 
     @property
     def eligible(self) -> tuple[RetentionPlanItem, ...]:
-        return tuple(
-            item
-            for item in self.items
-            if item.disposition in {"eligible", "selected"}
-        )
+        return tuple(item for item in self.items if item.disposition in {"eligible", "selected"})
 
     @property
     def selected(self) -> tuple[RetentionPlanItem, ...]:
-        selected = [
-            item for item in self.items if item.disposition == "selected"
-        ]
+        selected = [item for item in self.items if item.disposition == "selected"]
         return tuple(sorted(selected, key=_plan_item_sort_key))
+
+
+@dataclass(frozen=True)
+class RetentionApplyAction:
+    original_path: Path
+    quarantine_path: Path | None
+    function: str
+    job_id: str
+    status: Literal["removed", "skipped"]
+    reasons: tuple[str, ...]
+    planned_bytes: int
+    reclaimed_bytes: int
+
+
+@dataclass(frozen=True)
+class LocalRemoteRunRetentionResult:
+    status: Literal["completed", "lock-busy", "lock-unavailable"]
+    plan: LocalRemoteRunRetentionPlan | None
+    actions: tuple[RetentionApplyAction, ...]
+    reclaimed_bytes: int
+    projected_total_bytes: int
+    inventory_complete: bool
+    cap_satisfied: bool
+    detail: str = ""
+
+    @property
+    def planned(self) -> tuple[RetentionApplyAction, ...]:
+        return self.actions
+
+    @property
+    def removed(self) -> tuple[RetentionApplyAction, ...]:
+        return tuple(action for action in self.actions if action.status == "removed")
+
+    @property
+    def skipped(self) -> tuple[RetentionApplyAction, ...]:
+        return tuple(action for action in self.actions if action.status == "skipped")
+
+    @property
+    def planned_count(self) -> int:
+        return len(self.planned)
+
+    @property
+    def removed_count(self) -> int:
+        return len(self.removed)
+
+    @property
+    def skipped_count(self) -> int:
+        return len(self.skipped)
 
 
 @dataclass(frozen=True)
@@ -215,11 +263,7 @@ def _is_nonbool_int(value: object) -> bool:
 
 
 def _is_finite_number(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
 def _valid_timestamp(value: object) -> bool:
@@ -237,10 +281,7 @@ def _valid_ssh_target(value: object) -> bool:
     if not isinstance(value, str) or not value or value.startswith("-"):
         return False
     return all(
-        not character.isspace()
-        and character != "\x00"
-        and ord(character) >= 32
-        and ord(character) != 127
+        not character.isspace() and character != "\x00" and ord(character) >= 32 and ord(character) != 127
         for character in value
     )
 
@@ -354,10 +395,7 @@ def read_legacy_metadata(
         "mode",
         "created_at",
     )
-    if any(
-        not isinstance(payload.get(key), str) or not str(payload[key]).strip()
-        for key in string_fields
-    ):
+    if any(not isinstance(payload.get(key), str) or not str(payload[key]).strip() for key in string_fields):
         return None, "metadata string fields are missing or invalid"
     if not _valid_ssh_target(payload["ssh"]):
         return None, "metadata ssh target is not a safe single token"
@@ -582,9 +620,7 @@ def _candidate_status(
         or payload.get("function") != function
     ):
         return False, False, True
-    if not isinstance(payload.get("status"), str) or not str(
-        payload["status"]
-    ).strip():
+    if not isinstance(payload.get("status"), str) or not str(payload["status"]).strip():
         return False, False, True
 
     kept = payload.get("kept", False)
@@ -597,11 +633,7 @@ def _candidate_status(
             continue
         if not _is_finite_number(value):
             return False, False, True
-        is_winner = (
-            float(value) > threshold
-            if key == "delta"
-            else float(value) >= threshold
-        )
+        is_winner = float(value) > threshold if key == "delta" else float(value) >= threshold
         if is_winner:
             winner = True
     return True, winner, False
@@ -646,9 +678,7 @@ def _tracked_paths(
         return (), True
     if returncode != 0:
         return (), True
-    stdout = raw_stdout.decode(errors="replace") if isinstance(
-        raw_stdout, bytes
-    ) else raw_stdout
+    stdout = raw_stdout.decode(errors="replace") if isinstance(raw_stdout, bytes) else raw_stdout
     if not isinstance(stdout, str):
         return (), True
     tracked: list[Path] = []
@@ -682,9 +712,7 @@ def _reasons(flags: RunProtectionFlags) -> tuple[str, ...]:
         "retention_marker_invalid": "retention-marker-invalid",
         "explicitly_retained": "explicitly-retained",
     }
-    return tuple(sorted(
-        reason for field, reason in mapping.items() if getattr(flags, field)
-    ))
+    return tuple(sorted(reason for field, reason in mapping.items() if getattr(flags, field)))
 
 
 def _summarize_run(
@@ -743,9 +771,7 @@ def _summarize_run(
         git_check_failed=git_failed,
         metadata_invalid=not metadata_valid,
         fetch_manifest_invalid=fetch_manifest.status == "invalid",
-        fetch_partial=(
-            fetch_manifest.status == "partial" or warning == "partial"
-        ),
+        fetch_partial=(fetch_manifest.status == "partial" or warning == "partial"),
         fetch_warning=warning == "partial",
         fetch_warning_invalid=warning == "invalid",
         candidate_audit_invalid=not audit_valid,
@@ -845,10 +871,7 @@ def inventory_local_remote_runs(
             (),
             (InventoryIssue(nonmatchings, "owner-unreadable", str(exc)),),
         )
-    if (
-        not _within(resolved_nonmatchings, resolved_root)
-        or resolved_nonmatchings != nonmatchings
-    ):
+    if not _within(resolved_nonmatchings, resolved_root) or resolved_nonmatchings != nonmatchings:
         return LocalRemoteRunInventory(
             resolved_root,
             (),
@@ -916,23 +939,36 @@ def inventory_local_remote_runs(
             continue
         for job_entry in job_entries:
             job_path = Path(job_entry.path)
+            if job_entry.name.startswith(QUARANTINE_PREFIX):
+                issues.append(
+                    InventoryIssue(
+                        job_path,
+                        "quarantine-present",
+                        "leftover quarantine is not a deletion candidate",
+                    )
+                )
+                continue
             if job_entry.is_symlink():
                 issues.append(InventoryIssue(job_path, "owner-symlink"))
                 continue
             if not job_entry.is_dir(follow_symlinks=False):
-                issues.append(InventoryIssue(
-                    job_path,
-                    "unexpected-run-entry",
-                    "direct remote-runs entry is not a directory",
-                ))
+                issues.append(
+                    InventoryIssue(
+                        job_path,
+                        "unexpected-run-entry",
+                        "direct remote-runs entry is not a directory",
+                    )
+                )
                 continue
             try:
-                runs.append(_summarize_run(
-                    job_path,
-                    function=function_entry.name,
-                    job_id=job_entry.name,
-                    tracked_state=tracked_state,
-                ))
+                runs.append(
+                    _summarize_run(
+                        job_path,
+                        function=function_entry.name,
+                        job_id=job_entry.name,
+                        tracked_state=tracked_state,
+                    )
+                )
             except OSError as exc:
                 issues.append(InventoryIssue(job_path, "run-unreadable", str(exc)))
     runs.sort(key=lambda run: (run.function, run.job_id, str(run.path)))
@@ -962,41 +998,36 @@ def _production_remote_runner(
 
 
 def _bounded_detail(*values: object) -> str:
-    text = " ".join(
-        part
-        for value in values
-        if value is not None
-        for part in [" ".join(str(value).split())]
-        if part
-    )
+    text = " ".join(part for value in values if value is not None for part in [" ".join(str(value).split())] if part)
     if not text:
         text = "remote activity probe failed without diagnostic output"
     return text[:REMOTE_DETAIL_LIMIT]
 
 
 def _remote_tmux_inventory_argv(ssh: str) -> list[str]:
-    script = "\n".join([
-        "set +e",
-        "export LC_ALL=C",
-        "if ! command -v tmux >/dev/null 2>&1; then",
-        f"  printf '%s\\n' {shlex.quote(REMOTE_TMUX_MISSING_SENTINEL)} >&2",
-        "  exit 127",
-        "fi",
-        "tmux_output=$(tmux list-sessions -F '#S' 2>&1)",
-        "tmux_status=$?",
-        "if [ \"$tmux_status\" -ne 0 ]; then",
-        "  if printf '%s\\n' \"$tmux_output\" | "
-        "grep -Eiq 'no server running|no sessions'; then",
-        "    tmux_output=''",
-        "  else",
-        "    printf '%s\\n' \"$tmux_output\" >&2",
-        "    exit \"$tmux_status\"",
-        "  fi",
-        "fi",
-        f"printf '%s\\n' {shlex.quote(REMOTE_SESSION_HEADER)}",
-        "if [ -n \"$tmux_output\" ]; then printf '%s\\n' \"$tmux_output\"; fi",
-        f"printf '%s\\n' {shlex.quote(REMOTE_SESSION_TRAILER)}",
-    ])
+    script = "\n".join(
+        [
+            "set +e",
+            "export LC_ALL=C",
+            "if ! command -v tmux >/dev/null 2>&1; then",
+            f"  printf '%s\\n' {shlex.quote(REMOTE_TMUX_MISSING_SENTINEL)} >&2",
+            "  exit 127",
+            "fi",
+            "tmux_output=$(tmux list-sessions -F '#S' 2>&1)",
+            "tmux_status=$?",
+            'if [ "$tmux_status" -ne 0 ]; then',
+            "  if printf '%s\\n' \"$tmux_output\" | grep -Eiq 'no server running|no sessions'; then",
+            "    tmux_output=''",
+            "  else",
+            "    printf '%s\\n' \"$tmux_output\" >&2",
+            '    exit "$tmux_status"',
+            "  fi",
+            "fi",
+            f"printf '%s\\n' {shlex.quote(REMOTE_SESSION_HEADER)}",
+            'if [ -n "$tmux_output" ]; then printf \'%s\\n\' "$tmux_output"; fi',
+            f"printf '%s\\n' {shlex.quote(REMOTE_SESSION_TRAILER)}",
+        ]
+    )
     return ["ssh", "--", ssh, "sh -lc " + shlex.quote(script)]
 
 
@@ -1004,11 +1035,7 @@ def _parse_remote_sessions(stdout: object) -> tuple[frozenset[str] | None, str]:
     if not isinstance(stdout, str):
         return None, "remote tmux output was not text"
     lines = stdout.splitlines()
-    if (
-        len(lines) < 2
-        or lines[0] != REMOTE_SESSION_HEADER
-        or lines[-1] != REMOTE_SESSION_TRAILER
-    ):
+    if len(lines) < 2 or lines[0] != REMOTE_SESSION_HEADER or lines[-1] != REMOTE_SESSION_TRAILER:
         return None, "malformed remote tmux inventory"
     sessions = lines[1:-1]
     if any(
@@ -1067,11 +1094,7 @@ def probe_remote_run_activity(
     """Return an inventory with active/stopped/unknown remote states."""
     if not _valid_positive_number(timeout):
         raise ValueError("timeout must be a positive finite number")
-    if (
-        not _is_nonbool_int(max_workers)
-        or max_workers <= 0
-        or max_workers > 64
-    ):
+    if not _is_nonbool_int(max_workers) or max_workers <= 0 or max_workers > 64:
         raise ValueError("max_workers must be an integer from 1 through 64")
 
     hosts: dict[str, list[LocalRemoteRunSummary]] = {}
@@ -1106,16 +1129,20 @@ def probe_remote_run_activity(
     updated: list[LocalRemoteRunSummary] = []
     for run in inventory.runs:
         if run.identity is None:
-            updated.append(run.with_remote_state(
-                "unknown",
-                "missing valid remote job identity",
-            ))
+            updated.append(
+                run.with_remote_state(
+                    "unknown",
+                    "missing valid remote job identity",
+                )
+            )
             continue
         if not _valid_ssh_target(run.identity.ssh):
-            updated.append(run.with_remote_state(
-                "unknown",
-                "invalid ssh target in remote job identity",
-            ))
+            updated.append(
+                run.with_remote_state(
+                    "unknown",
+                    "invalid ssh target in remote job identity",
+                )
+            )
             continue
         sessions, detail = host_results.get(
             run.identity.ssh,
@@ -1164,10 +1191,7 @@ def _validate_plan_inputs(
         or float(max_age_days) < 0
     ):
         raise ValueError("max_age_days must be a nonnegative finite number")
-    if (
-        not _is_nonbool_int(max_total_bytes)
-        or int(max_total_bytes) < 0
-    ):
+    if not _is_nonbool_int(max_total_bytes) or int(max_total_bytes) < 0:
         raise ValueError("max_total_bytes must be a nonnegative integer")
     if not callable(clock):
         raise ValueError("clock must be callable")
@@ -1204,11 +1228,7 @@ def plan_local_remote_run_retention(
         clock=clock,
     )
     for run in inventory.runs:
-        if (
-            not _is_nonbool_int(run.total_bytes)
-            or run.total_bytes < 0
-            or not _is_finite_number(run.latest_activity)
-        ):
+        if not _is_nonbool_int(run.total_bytes) or run.total_bytes < 0 or not _is_finite_number(run.latest_activity):
             raise ValueError(f"invalid run summary accounting: {run.path}")
 
     total_bytes = sum(run.total_bytes for run in inventory.runs)
@@ -1221,11 +1241,7 @@ def plan_local_remote_run_retention(
     for run in ordered_eligible:
         if run.latest_activity < cutoff:
             selected_reasons[run.path] = ("age",)
-    reclaimed = sum(
-        run.total_bytes
-        for run in ordered_eligible
-        if run.path in selected_reasons
-    )
+    reclaimed = sum(run.total_bytes for run in ordered_eligible if run.path in selected_reasons)
     projected = total_bytes - reclaimed
     if projected > byte_cap:
         for run in ordered_eligible:
@@ -1242,18 +1258,16 @@ def plan_local_remote_run_retention(
         if run.reasons:
             items.append(RetentionPlanItem(run, "protected", run.reasons))
         elif run.path in selected_reasons:
-            items.append(RetentionPlanItem(
-                run,
-                "selected",
-                selected_reasons[run.path],
-            ))
+            items.append(
+                RetentionPlanItem(
+                    run,
+                    "selected",
+                    selected_reasons[run.path],
+                )
+            )
         else:
             items.append(RetentionPlanItem(run, "eligible", ()))
-    selected_bytes = sum(
-        item.summary.total_bytes
-        for item in items
-        if item.disposition == "selected"
-    )
+    selected_bytes = sum(item.summary.total_bytes for item in items if item.disposition == "selected")
     return LocalRemoteRunRetentionPlan(
         generated_at=now,
         max_age_days=age_days,
@@ -1265,9 +1279,550 @@ def plan_local_remote_run_retention(
         projected_total_bytes=total_bytes - selected_bytes,
         reclaimed_bytes=selected_bytes,
         inventory_complete=not inventory.issues,
-        cap_satisfied=(
-            not inventory.issues
-            and total_bytes - selected_bytes <= byte_cap
-        ),
+        cap_satisfied=(not inventory.issues and total_bytes - selected_bytes <= byte_cap),
         items=tuple(items),
     )
+
+
+def _targeted_tracked_state(
+    perm_root: Path,
+    run: Path,
+    git_runner: GitRunner,
+) -> tuple[bool, bool]:
+    try:
+        relative = run.relative_to(perm_root)
+    except ValueError:
+        return False, True
+    argv = ["git", "ls-files", "-z", "--", str(relative)]
+    try:
+        result = git_runner(
+            argv,
+            cwd=perm_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        returncode = result.returncode
+        stdout = result.stdout
+    except Exception:
+        return False, True
+    if returncode != 0:
+        return False, True
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode(errors="replace")
+    if not isinstance(stdout, str):
+        return False, True
+    for raw in stdout.split("\0"):
+        if not raw:
+            continue
+        tracked = Path(raw)
+        if tracked.is_absolute() or ".." in tracked.parts:
+            return False, True
+        if _within(perm_root / tracked, run):
+            return True, False
+    return False, False
+
+
+def _same_planned_run(
+    planned: LocalRemoteRunSummary,
+    current: LocalRemoteRunSummary,
+) -> bool:
+    return (
+        current.path == planned.path
+        and current.function == planned.function
+        and current.job_id == planned.job_id
+        and current.identity == planned.identity
+        and current.device == planned.device
+        and current.inode == planned.inode
+        and current.total_bytes == planned.total_bytes
+        and current.latest_activity == planned.latest_activity
+        and not current.local_reasons
+    )
+
+
+def _owned_parents_are_safe(
+    perm_root: Path,
+    root_identity: tuple[int, int],
+    summary: LocalRemoteRunSummary,
+) -> bool:
+    expected_parent = perm_root / "nonmatchings" / summary.function / "remote-runs"
+    if summary.path != expected_parent / summary.job_id:
+        return False
+    for index, owner in enumerate(
+        (
+            perm_root,
+            perm_root / "nonmatchings",
+            perm_root / "nonmatchings" / summary.function,
+            expected_parent,
+        )
+    ):
+        try:
+            owner_stat = owner.lstat()
+            resolved = owner.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return False
+        if (
+            stat.S_ISLNK(owner_stat.st_mode)
+            or not stat.S_ISDIR(owner_stat.st_mode)
+            or resolved != owner
+            or not _within(owner, perm_root)
+        ):
+            return False
+        if index == 0 and (owner_stat.st_dev, owner_stat.st_ino) != root_identity:
+            return False
+    return True
+
+
+def _validate_quarantine(
+    original: Path,
+    quarantine: Path,
+    planned: LocalRemoteRunSummary,
+    perm_root: Path,
+    root_identity: tuple[int, int],
+) -> tuple[bool, tuple[str, ...]]:
+    reasons: list[str] = []
+    try:
+        original.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        reasons.append("original-state-unknown")
+    else:
+        reasons.append("original-still-present")
+    try:
+        quarantine_stat = quarantine.lstat()
+    except OSError:
+        reasons.append("quarantine-unavailable")
+        return False, tuple(sorted(set(reasons)))
+    if not stat.S_ISDIR(quarantine_stat.st_mode):
+        reasons.append("quarantine-not-directory")
+    if quarantine_stat.st_dev != planned.device or quarantine_stat.st_ino != planned.inode:
+        reasons.append("quarantine-identity-mismatch")
+    if quarantine.parent != original.parent or not _owned_parents_are_safe(perm_root, root_identity, planned):
+        reasons.append("quarantine-owner-mismatch")
+    tree = _scan_tree(quarantine)
+    if tree.filesystem_error:
+        reasons.append("quarantine-filesystem-error")
+    if tree.nested_symlink:
+        reasons.append("quarantine-nested-symlink")
+    if tree.nonregular_entry:
+        reasons.append("quarantine-nonregular-entry")
+    if tree.path_escape:
+        reasons.append("quarantine-path-escape")
+    marker = quarantine / RETENTION_MARKER_FILENAME
+    try:
+        marker.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        reasons.append("quarantine-marker-state-unknown")
+    else:
+        reasons.append("quarantine-retention-marker")
+    return not reasons, tuple(sorted(set(reasons)))
+
+
+def _restore_quarantine(
+    original: Path,
+    quarantine: Path,
+    rename: Callable[[Path, Path], Any],
+) -> tuple[str, ...]:
+    try:
+        original.lstat()
+    except FileNotFoundError:
+        try:
+            rename(quarantine, original)
+        except Exception as exc:
+            return ("restore-failed", _bounded_detail(type(exc).__name__, exc))
+        return ("restored",)
+    except OSError as exc:
+        return ("restore-unsafe", _bounded_detail(type(exc).__name__, exc))
+    return ("restore-original-present",)
+
+
+def _rename_no_replace(source: Path, destination: Path) -> None:
+    """Atomically rename a directory without replacing an existing path."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    encoded_source = os.fsencode(source)
+    encoded_destination = os.fsencode(destination)
+    if sys.platform == "darwin":
+        rename_exclusive = 0x00000004
+        renamex = libc.renamex_np
+        renamex.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex.restype = ctypes.c_int
+        result = renamex(
+            encoded_source,
+            encoded_destination,
+            rename_exclusive,
+        )
+    elif sys.platform.startswith("linux"):
+        at_fdcwd = -100
+        rename_noreplace = 1
+        renameat2 = libc.renameat2
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            at_fdcwd,
+            encoded_source,
+            at_fdcwd,
+            encoded_destination,
+            rename_noreplace,
+        )
+    else:
+        raise OSError(
+            errno.ENOTSUP,
+            "atomic no-replace rename is unavailable",
+            str(destination),
+        )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(destination))
+
+
+def _lock_failure(
+    status: Literal["lock-busy", "lock-unavailable"],
+    detail: str,
+) -> LocalRemoteRunRetentionResult:
+    return LocalRemoteRunRetentionResult(
+        status=status,
+        plan=None,
+        actions=(),
+        reclaimed_bytes=0,
+        projected_total_bytes=0,
+        inventory_complete=False,
+        cap_satisfied=False,
+        detail=detail,
+    )
+
+
+def apply_local_remote_run_retention(
+    perm_root: Path,
+    *,
+    max_age_days: float = DEFAULT_MAX_AGE_DAYS,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+    status_timeout: float = DEFAULT_REMOTE_STATUS_TIMEOUT,
+    max_workers: int = DEFAULT_REMOTE_PROBE_WORKERS,
+    remote_runner: Callable[..., Any] = _production_remote_runner,
+    git_runner: GitRunner = _run_git,
+    clock: Callable[[], object] = _utcnow,
+    rename: Callable[[Path, Path], Any] | None = None,
+    remover: Callable[[Path], Any] = shutil.rmtree,
+) -> LocalRemoteRunRetentionResult:
+    """Recompute and safely apply local remote-run retention under a lock."""
+    rename_operation = _rename_no_replace if rename is None else rename
+    requested_root = perm_root.expanduser().absolute()
+    try:
+        root_stat = requested_root.lstat()
+        if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+            return _lock_failure("lock-unavailable", "unsafe perm root")
+        resolved_root = requested_root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return _lock_failure("lock-unavailable", _bounded_detail(exc))
+    if resolved_root != requested_root:
+        return _lock_failure("lock-unavailable", "perm root path is not canonical")
+    root_identity = (root_stat.st_dev, root_stat.st_ino)
+
+    lock_path = resolved_root / LIFECYCLE_LOCK_FILENAME
+    flags = os.O_RDWR | os.O_CREAT
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        return _lock_failure("lock-unavailable", _bounded_detail(exc))
+    try:
+        lock_stat = os.fstat(descriptor)
+        try:
+            lock_path_stat = lock_path.lstat()
+        except OSError as exc:
+            return _lock_failure("lock-unavailable", _bounded_detail(exc))
+        if (
+            not stat.S_ISREG(lock_stat.st_mode)
+            or stat.S_ISLNK(lock_path_stat.st_mode)
+            or (lock_path_stat.st_dev, lock_path_stat.st_ino) != (lock_stat.st_dev, lock_stat.st_ino)
+            or lock_stat.st_nlink != 1
+            or lock_stat.st_uid != os.geteuid()
+            or lock_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            return _lock_failure("lock-unavailable", "unsafe lifecycle lock file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            return _lock_failure("lock-busy", _bounded_detail(exc))
+        except OSError as exc:
+            return _lock_failure("lock-unavailable", _bounded_detail(exc))
+
+        inventory = inventory_local_remote_runs(resolved_root, git_runner=git_runner)
+        probed = probe_remote_run_activity(
+            inventory,
+            runner=remote_runner,
+            timeout=status_timeout,
+            max_workers=max_workers,
+        )
+        plan = plan_local_remote_run_retention(
+            probed,
+            max_age_days=max_age_days,
+            max_total_bytes=max_total_bytes,
+            clock=clock,
+        )
+        selected = tuple(item.summary for item in plan.selected)
+        selected_inventory = LocalRemoteRunInventory(
+            perm_root=resolved_root,
+            runs=selected,
+            issues=(),
+        )
+        rechecked = (
+            probe_remote_run_activity(
+                selected_inventory,
+                runner=remote_runner,
+                timeout=status_timeout,
+                max_workers=max_workers,
+            )
+            if selected
+            else selected_inventory
+        )
+        rechecked_by_path = {run.path: run for run in rechecked.runs}
+
+        actions: list[RetentionApplyAction] = []
+        reclaimed = 0
+        for planned in selected:
+            second = rechecked_by_path.get(planned.path)
+            if second is None or second.identity != planned.identity or second.remote_state != "stopped":
+                reasons = second.reasons if second is not None else ("remote-missing",)
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        None,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        reasons or ("remote-mismatch",),
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+                continue
+
+            try:
+                targeted_tracked = _targeted_tracked_state(
+                    resolved_root,
+                    planned.path,
+                    git_runner,
+                )
+                if not _owned_parents_are_safe(
+                    resolved_root,
+                    root_identity,
+                    planned,
+                ):
+                    actions.append(
+                        RetentionApplyAction(
+                            planned.path,
+                            None,
+                            planned.function,
+                            planned.job_id,
+                            "skipped",
+                            ("ownership-changed",),
+                            planned.total_bytes,
+                            0,
+                        )
+                    )
+                    continue
+                current = _summarize_run(
+                    planned.path,
+                    function=planned.function,
+                    job_id=planned.job_id,
+                    tracked_state=lambda _run: targeted_tracked,
+                )
+            except OSError as exc:
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        None,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        ("revalidation-failed", _bounded_detail(exc)),
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+                continue
+            if not _same_planned_run(planned, current):
+                reasons = current.local_reasons or ("run-changed",)
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        None,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        reasons,
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+                continue
+
+            quarantine = planned.path.parent / f"{QUARANTINE_PREFIX}{uuid.uuid4().hex}"
+            try:
+                quarantine.lstat()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        quarantine,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        ("quarantine-state-unknown", _bounded_detail(exc)),
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+                continue
+            else:
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        quarantine,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        ("quarantine-collision",),
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+                continue
+            try:
+                rename_operation(planned.path, quarantine)
+            except Exception as exc:
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        quarantine,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        ("rename-failed", _bounded_detail(type(exc).__name__, exc)),
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+                continue
+
+            quarantine_valid, reasons = _validate_quarantine(
+                planned.path,
+                quarantine,
+                planned,
+                resolved_root,
+                root_identity,
+            )
+            if not quarantine_valid:
+                ambiguous = {
+                    "original-state-unknown",
+                    "original-still-present",
+                    "quarantine-unavailable",
+                    "quarantine-not-directory",
+                    "quarantine-identity-mismatch",
+                    "quarantine-owner-mismatch",
+                }
+                restore = (
+                    ("restore-skipped-ambiguous",)
+                    if ambiguous.intersection(reasons)
+                    else _restore_quarantine(
+                        planned.path,
+                        quarantine,
+                        rename_operation,
+                    )
+                )
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        quarantine,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        reasons + restore,
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+                continue
+            try:
+                remover(quarantine)
+            except Exception as exc:
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        quarantine,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        ("removal-failed", _bounded_detail(type(exc).__name__, exc)),
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+                continue
+            try:
+                quarantine.lstat()
+            except FileNotFoundError:
+                reclaimed += planned.total_bytes
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        quarantine,
+                        planned.function,
+                        planned.job_id,
+                        "removed",
+                        (),
+                        planned.total_bytes,
+                        planned.total_bytes,
+                    )
+                )
+            except OSError as exc:
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        quarantine,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        ("removal-state-unknown", _bounded_detail(exc)),
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+            else:
+                actions.append(
+                    RetentionApplyAction(
+                        planned.path,
+                        quarantine,
+                        planned.function,
+                        planned.job_id,
+                        "skipped",
+                        ("removal-incomplete",),
+                        planned.total_bytes,
+                        0,
+                    )
+                )
+
+        projected = plan.total_bytes - reclaimed
+        return LocalRemoteRunRetentionResult(
+            status="completed",
+            plan=plan,
+            actions=tuple(actions),
+            reclaimed_bytes=reclaimed,
+            projected_total_bytes=projected,
+            inventory_complete=plan.inventory_complete,
+            cap_satisfied=(plan.inventory_complete and projected <= plan.max_total_bytes),
+        )
+    finally:
+        os.close(descriptor)
