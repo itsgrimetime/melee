@@ -178,6 +178,10 @@ def test_v2_objective_provenance_round_trips_with_exact_bindings() -> None:
     assert provenance["namespace_schema"] == ROLE_NAMESPACE_SCHEMA
 
 
+def test_parser_epoch_tracks_complete_occurrence_namespace_proof() -> None:
+    assert "color.v5" in run_module.PARSER_SCHEMA_HASH
+
+
 @pytest.mark.parametrize(
     "mutation",
     (

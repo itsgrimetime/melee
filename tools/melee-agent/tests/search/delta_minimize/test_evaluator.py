@@ -15,7 +15,7 @@ import src.search.delta_minimize.evaluator as evaluator_module
 import src.search.delta_minimize.objectives as objectives_module
 from src.mwcc_debug.coalesce_ir_facts import VirtualFacts
 from src.mwcc_debug.colorgraph_profile import ColorGraphProfile
-from src.mwcc_debug.parser import Instruction
+from src.mwcc_debug.parser import Block, Instruction
 from src.mwcc_debug.role_descriptor import Compile, RoleDescriptor, build_descriptors, build_target_spec
 from src.mwcc_debug.symbol_bridge import FirstDef
 from src.search.delta_minimize.contracts import DeltaMinimizeError
@@ -392,6 +392,167 @@ def test_early_ir_semantic_change_changes_full_identity() -> None:
         changed,
         0,
         virtual_count,
+    )
+
+    assert role_map is None
+
+
+def test_pairwise_namespace_rejects_swapped_block_instruction_lists() -> None:
+    baseline = _raw_namespace_compile()
+    changed = deepcopy(baseline)
+    virtual_count = baseline.fev.coalesce_sections[-1].n_virtuals
+    semantic_pass = changed.fn.passes[0]
+    blocks = {block.index: block for block in semantic_pass.blocks}
+    blocks[5].instructions, blocks[6].instructions = (
+        blocks[6].instructions,
+        blocks[5].instructions,
+    )
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        changed,
+        0,
+        virtual_count,
+    )
+
+    assert role_map is None
+
+
+def _symmetric_diamond_compile() -> Compile:
+    compile = _raw_namespace_compile()
+    compile.fev.coalesce_sections[-1].n_virtuals = 34
+    compile.fn.passes[0].blocks = [
+        Block(index=0, pred=[], succ=[1, 2], labels=["entry"]),
+        Block(
+            index=1,
+            pred=[0],
+            succ=[3],
+            labels=["left"],
+            instructions=[
+                Instruction("li", "r32,0", [], [("r", 32)]),
+            ],
+        ),
+        Block(
+            index=2,
+            pred=[0],
+            succ=[3],
+            labels=["right"],
+            instructions=[
+                Instruction("li", "r33,0", [], [("r", 33)]),
+            ],
+        ),
+        Block(index=3, pred=[1, 2], succ=[], labels=["exit"]),
+    ]
+    return compile
+
+
+def test_pairwise_namespace_rejects_ambiguous_symmetric_block_pairing() -> None:
+    baseline = _symmetric_diamond_compile()
+    peer = deepcopy(baseline)
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        peer,
+        0,
+        34,
+        {32: 32, 33: 33},
+    )
+
+    assert role_map is None
+
+
+def test_pairwise_namespace_validates_seeded_role_second_occurrence() -> None:
+    baseline = _raw_namespace_compile()
+    changed = deepcopy(baseline)
+    virtual_count = baseline.fev.coalesce_sections[-1].n_virtuals
+    occurrences = [
+        instruction
+        for block in changed.fn.passes[0].blocks
+        for instruction in block.instructions
+        if ("r", 32) in instruction.regs
+    ]
+    assert len(occurrences) == 3
+    occurrences[-1].operands = f"{occurrences[-1].operands}+semantic-change"
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        changed,
+        0,
+        virtual_count,
+    )
+
+    assert role_map is None
+
+
+def _reviewed_seed_compile() -> Compile:
+    compile = _raw_namespace_compile()
+    compile.fev.coalesce_sections[-1].n_virtuals = 61
+    instructions = [
+        Instruction("mr", f"r{virtual},r3", [], [("r", virtual), ("r", 3)])
+        for virtual in range(32, 61)
+        for _occurrence in range(2)
+    ]
+    compile.fn.passes[0].blocks = [
+        Block(
+            index=0,
+            pred=[],
+            succ=[],
+            labels=["entry"],
+            instructions=instructions,
+        )
+    ]
+    return compile
+
+
+def test_pairwise_namespace_rejects_unproved_full_reviewed_swap() -> None:
+    baseline = _reviewed_seed_compile()
+    peer = deepcopy(baseline)
+    reviewed = {virtual: virtual for virtual in range(32, 61)}
+    reviewed[55], reviewed[60] = reviewed[60], reviewed[55]
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        peer,
+        0,
+        61,
+        reviewed,
+    )
+
+    assert role_map is None
+
+
+def test_pairwise_namespace_separates_same_index_cross_class_dependencies() -> None:
+    baseline = _raw_namespace_compile()
+    baseline.fev.coalesce_sections[-1].n_virtuals = 35
+    baseline.fn.passes[0].blocks = [
+        Block(
+            index=0,
+            pred=[],
+            succ=[],
+            labels=["entry"],
+            instructions=[
+                Instruction("li", "r32,1", [], [("r", 32)]),
+                Instruction("li", "r33,2", [], [("r", 33)]),
+                Instruction("fmr", "f32,f1", [], [("f", 32), ("f", 1)]),
+                Instruction("fmr", "f33,f2", [], [("f", 33), ("f", 2)]),
+                Instruction("mix", "r34,r32,f32", [], [("r", 34), ("r", 32), ("f", 32)]),
+            ],
+        )
+    ]
+    changed = deepcopy(baseline)
+    changed_instructions = changed.fn.passes[0].blocks[0].instructions
+    changed_instructions[0].operands = "r33,1"
+    changed_instructions[0].regs = [("r", 33)]
+    changed_instructions[1].operands = "r32,2"
+    changed_instructions[1].regs = [("r", 32)]
+    changed_instructions[-1].operands = "r34,r33,f33"
+    changed_instructions[-1].regs = [("r", 34), ("r", 33), ("f", 33)]
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        changed,
+        0,
+        35,
     )
 
     assert role_map is None

@@ -23,7 +23,7 @@ from .contracts import DeltaMinimizeError
 
 COLOR_TARGET_SCHEMA = "delta-minimize-color-target.v1"
 COLOR_TARGET_SCHEMA_V2 = "delta-minimize-color-target.v2"
-ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v4"
+ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v5"
 OBJECTIVE_MANIFEST_SCHEMA = "delta-minimize-objectives.v2"
 _TARGET_FIELDS = frozenset(
     {
