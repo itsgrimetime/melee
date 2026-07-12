@@ -973,8 +973,10 @@ def _freeze(value: object, active: set[int] | None = None) -> object:
         identity = id(value)
         if identity in seen:
             raise ValueError("recursive value")
-        if any(not isinstance(key, str) for key in value):
-            raise ValueError("JSON object keys must be strings")
+        for key in value:
+            if type(key) is not str:
+                raise ValueError("JSON object keys must be exact strings")
+            key.encode("utf-8")
         seen.add(identity)
         result = MappingProxyType({key: _freeze(item, seen) for key, item in value.items()})
         seen.remove(identity)

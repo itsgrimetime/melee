@@ -822,6 +822,17 @@ def test_non_json_or_deferred_mutable_values_are_rejected(bad_value):
     assert result.capabilities == frozenset()
 
 
+def test_deferred_mapping_rejects_unpaired_surrogate_key_without_capability():
+    payload = minimal_object_bindings()
+    payload["pcode_instructions"] = [{"deferred": {"\ud800": "value"}}]
+    payload["coverage"]["pcode_instructions_seen"] = 1
+
+    result = validate_object_bindings(payload, trusted_proof())
+
+    assert any("diagnostic normalization failed" in error for error in result.errors)
+    assert result.capabilities == frozenset()
+
+
 def test_deferred_json_collections_are_deeply_frozen():
     payload = minimal_object_bindings()
     payload["pcode_instructions"] = [{"operands": [{"metadata": ["stable", {"value": 7}]}]}]
