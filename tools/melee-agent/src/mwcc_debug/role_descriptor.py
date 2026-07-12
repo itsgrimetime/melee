@@ -412,7 +412,7 @@ def _normalized_occurrences(
                         normalized_instruction,
                     )
                 )
-    return {role: tuple(items) for role, items in occurrences.items()}
+    return {role: tuple(sorted(items)) for role, items in occurrences.items()}
 
 
 def prove_virtual_namespace_map(

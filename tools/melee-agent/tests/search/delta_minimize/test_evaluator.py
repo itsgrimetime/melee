@@ -418,6 +418,22 @@ def test_pairwise_namespace_rejects_swapped_block_instruction_lists() -> None:
     assert role_map is None
 
 
+def test_pairwise_namespace_uses_canonical_identity_after_block_list_reorder() -> None:
+    baseline = _raw_namespace_compile()
+    reordered = deepcopy(baseline)
+    virtual_count = baseline.fev.coalesce_sections[-1].n_virtuals
+    reordered.fn.passes[0].blocks.reverse()
+
+    role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
+        baseline,
+        reordered,
+        0,
+        virtual_count,
+    )
+
+    assert role_map == {virtual: virtual for virtual in range(virtual_count)}
+
+
 def _symmetric_diamond_compile() -> Compile:
     compile = _raw_namespace_compile()
     compile.fev.coalesce_sections[-1].n_virtuals = 34
