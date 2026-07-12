@@ -73,7 +73,6 @@ class BackendCandidateV2Outcome:
     exit_code: int
     trace: dict | None = None
     candidate_object: Path | None = None
-    capabilities: frozenset[str] = frozenset()
 
 
 def _looks_like_melee_root(path: Path) -> bool:
@@ -203,7 +202,7 @@ def _write_backend_candidate_outputs(out_dir: Path, trace: dict) -> None:
     )
 
 
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
+def _stage_bytes(path: Path, data: bytes) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -218,41 +217,51 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        result = temporary
         temporary = None
+        return result
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _load_backend_v2_struct_map(melee_root: Path) -> dict:
+    table_path = _retro_tables_dir(melee_root) / "gc_125n.json"
+    return json.loads(table_path.read_text(encoding="utf-8"))
 
 
 def _write_backend_v2_outputs(
     out_dir: Path,
     trace: dict,
     candidate_object: Path,
-    capabilities: frozenset[str],
-) -> None:
-    """Validate the complete pair before atomically publishing either artifact."""
+    *,
+    function: str,
+    melee_root: Path,
+) -> backend_trace_assembler.BackendTraceV2Verification:
+    """Independently verify, then durably publish one immutable artifact pair."""
 
-    import hashlib
-
-    from tools.mwcc_retro import backend_schema
-
-    errors = backend_schema.validate_backend_trace(trace)
-    if errors:
-        raise RuntimeError("backend trace v2 schema errors: " + "; ".join(errors))
-    if trace.get("capabilities") != sorted(capabilities):
-        raise RuntimeError("backend trace v2 capability result mismatch")
-    functions = trace.get("functions")
-    bindings = None
-    if isinstance(functions, list) and len(functions) == 1 and isinstance(functions[0], dict):
-        bindings = functions[0].get("object_bindings")
-    identity = bindings.get("capture_identity") if isinstance(bindings, dict) else None
     candidate_bytes = Path(candidate_object).read_bytes()
-    candidate_digest = hashlib.sha256(candidate_bytes).hexdigest()
-    if not isinstance(identity, dict) or identity.get("candidate_object_sha256") != candidate_digest:
-        raise RuntimeError("backend trace v2 candidate object digest mismatch")
+    try:
+        verification = backend_trace_assembler.verify_backend_trace_v2(
+            trace,
+            candidate_bytes=candidate_bytes,
+            function=function,
+            struct_map=_load_backend_v2_struct_map(melee_root),
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
 
-    encoded_trace = (json.dumps(trace, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    encoded_trace = (
+        json.dumps(verification.payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
     candidate_path = out_dir / "candidate-object.o"
     trace_path = out_dir / "backend-trace.v2.json"
 
@@ -260,15 +269,53 @@ def _write_backend_v2_outputs(
     # replaced with different bytes. A retry may reuse an identical artifact.
     if candidate_path.exists() and candidate_path.read_bytes() != candidate_bytes:
         raise RuntimeError("candidate-object.o is immutable and already contains different bytes")
+    out_dir.mkdir(parents=True, exist_ok=True)
     created_candidate = not candidate_path.exists()
-    if not candidate_path.exists():
-        _atomic_write_bytes(candidate_path, candidate_bytes)
+    candidate_stage: Path | None = None
+    trace_stage: Path | None = None
+    candidate_published = False
+    trace_published = False
     try:
-        _atomic_write_bytes(trace_path, encoded_trace)
-    except Exception:
+        # Both complete files reach durable staging before either final name is
+        # replaced, so no trace can refer to a partially written candidate.
+        candidate_stage = _stage_bytes(candidate_path, candidate_bytes)
+        trace_stage = _stage_bytes(trace_path, encoded_trace)
         if created_candidate:
-            candidate_path.unlink(missing_ok=True)
+            os.replace(candidate_stage, candidate_path)
+            candidate_stage = None
+            candidate_published = True
+            _fsync_directory(out_dir)
+        os.replace(trace_stage, trace_path)
+        trace_stage = None
+        trace_published = True
+        _fsync_directory(out_dir)
+    except Exception as original:
+        rollback_errors: list[str] = []
+        if candidate_published and not trace_published:
+            try:
+                candidate_path.unlink(missing_ok=True)
+            except Exception as exc:  # noqa: BLE001 - preserve rollback diagnostics
+                rollback_errors.append(str(exc))
+            try:
+                _fsync_directory(out_dir)
+            except Exception as exc:  # noqa: BLE001 - preserve rollback diagnostics
+                rollback_errors.append(str(exc))
+        if rollback_errors:
+            raise RuntimeError(
+                f"v2 publication failed: {original}; rollback failed: "
+                + "; ".join(rollback_errors)
+            ) from original
         raise
+    finally:
+        for temporary in (candidate_stage, trace_stage):
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    # Never hide the publication or rollback exception with
+                    # best-effort staging cleanup.
+                    pass
+    return verification
 
 
 def _tail_text(value, *, limit: int = 2000) -> str:
@@ -2462,13 +2509,19 @@ def backend_candidate_cmd(
                 out_dir=out_dir,
                 melee_root=active_root,
             )
+            if v2_outcome.exit_code != 0:
+                raise RuntimeError(
+                    "backend trace v2 runner returned nonzero exit "
+                    f"{v2_outcome.exit_code}"
+                )
             if v2_outcome.trace is None or v2_outcome.candidate_object is None:
                 raise RuntimeError("backend trace v2 runner returned success without trace and candidate object")
-            _write_backend_v2_outputs(
+            v2_verification = _write_backend_v2_outputs(
                 out_dir,
                 v2_outcome.trace,
                 v2_outcome.candidate_object,
-                v2_outcome.capabilities,
+                function=fn,
+                melee_root=active_root,
             )
         else:
             outcome = _run_backend_candidate_trace(
@@ -2494,7 +2547,10 @@ def backend_candidate_cmd(
     if trace_version == "v2":
         typer.echo(f"backend trace v2: {out_dir / 'backend-trace.v2.json'}")
         typer.echo(f"candidate object: {out_dir / 'candidate-object.o'}")
-        typer.echo("verified capabilities: " + (", ".join(sorted(v2_outcome.capabilities)) or "none"))
+        typer.echo(
+            "verified capabilities: "
+            + (", ".join(sorted(v2_verification.capabilities)) or "none")
+        )
         raise typer.Exit(v2_outcome.exit_code)
 
     typer.echo(f"backend candidate trace: {out_dir / 'backend-trace.candidate.v1.json'}")

@@ -25,6 +25,20 @@ _V2_TOP_FIELDS = frozenset(
         "capabilities",
     }
 )
+_V2_COMPILER_FIELDS = frozenset(
+    {"family", "version", "retail", "executable_sha256"}
+)
+_V2_SOURCE_FIELDS = frozenset(
+    {
+        "tu",
+        "function",
+        "mwcc_command",
+        "mwcc_command_hash",
+        "source_sha256",
+        "mwcc_command_sha256",
+        "environment_digest",
+    }
+)
 _V1_FUNCTION_FIELDS = frozenset({"name", "identity", "blocks", "pcode", "frame", "regalloc"})
 _V2_FUNCTION_FIELDS = _V1_FUNCTION_FIELDS | frozenset({"object_bindings"})
 _V2_BINDING_FIELDS = frozenset(
@@ -232,6 +246,10 @@ def validate_backend_trace_v2(payload: dict[str, Any]) -> list[str]:
 
     errors: list[str] = []
     _closed_fields(payload, _V2_TOP_FIELDS, "v2 top-level", errors)
+    compiler = payload.get("compiler")
+    _closed_fields(compiler, _V2_COMPILER_FIELDS, "v2 compiler", errors)
+    source = payload.get("source")
+    _closed_fields(source, _V2_SOURCE_FIELDS, "v2 source", errors)
 
     capabilities = payload.get("capabilities")
     if type(capabilities) is not list:
@@ -301,6 +319,41 @@ def validate_backend_trace_v2(payload: dict[str, Any]) -> list[str]:
                 errors.append(f"function {function_name} capture identity function mismatch")
             if bindings.get("capture_run_id") != identity.get("capture_run_id"):
                 errors.append(f"function {function_name} capture_run_id must equal capture_identity")
+            if type(compiler) is dict and (
+                compiler.get("executable_sha256")
+                != identity.get("compiler_executable_sha256")
+            ):
+                errors.append(
+                    f"function {function_name} compiler executable SHA contradicts capture identity"
+                )
+            if type(source) is dict:
+                if source.get("source_sha256") != identity.get("source_sha256"):
+                    errors.append(
+                        f"function {function_name} source SHA contradicts capture identity"
+                    )
+                if (
+                    source.get("mwcc_command_sha256")
+                    != identity.get("mwcc_command_sha256")
+                ):
+                    errors.append(
+                        f"function {function_name} command SHA contradicts capture identity"
+                    )
+                if (
+                    source.get("environment_digest")
+                    != identity.get("environment_digest")
+                ):
+                    errors.append(
+                        f"function {function_name} environment digest contradicts capture identity"
+                    )
+                if source.get("function") != function_name:
+                    errors.append(
+                        f"function {function_name} source function contradiction"
+                    )
+                command_digest = source.get("mwcc_command_sha256")
+                if source.get("mwcc_command_hash") != f"sha256:{command_digest}":
+                    errors.append(
+                        f"function {function_name} source command SHA contradicts mwcc_command_hash"
+                    )
         if bindings.get("source_bindings") != []:
             errors.append(f"function {function_name} source_bindings must be empty in Phase 1")
         if bindings.get("source_capture") is not None:
@@ -311,6 +364,17 @@ def validate_backend_trace_v2(payload: dict[str, Any]) -> list[str]:
     legacy = copy.deepcopy(payload)
     legacy["schema_version"] = SCHEMA_VERSION_V1
     legacy.pop("capabilities", None)
+    legacy_compiler = legacy.get("compiler")
+    if isinstance(legacy_compiler, dict):
+        legacy_compiler.pop("executable_sha256", None)
+    legacy_source = legacy.get("source")
+    if isinstance(legacy_source, dict):
+        for field in (
+            "source_sha256",
+            "mwcc_command_sha256",
+            "environment_digest",
+        ):
+            legacy_source.pop(field, None)
     legacy_functions = legacy.get("functions")
     if isinstance(legacy_functions, list):
         for function in legacy_functions:

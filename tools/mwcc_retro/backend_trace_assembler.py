@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,12 @@ FRAME_AREAS = ("locals", "arguments", "temps")
 
 @dataclass(frozen=True, slots=True)
 class BackendTraceV2Assembly:
+    payload: dict[str, Any]
+    capabilities: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class BackendTraceV2Verification:
     payload: dict[str, Any]
     capabilities: frozenset[str]
 
@@ -57,17 +65,49 @@ def _load_sidecar(path: Path, *, schema_version: str, label: str) -> dict[str, A
 
 def _attempt_identifies_function(attempt: dict[str, Any], function: str) -> bool:
     identity = attempt.get("function_identity")
-    if type(identity) is not dict:
-        return False
-    names = {
-        identity.get(field)
-        for field in ("requested", "canonical_name", "symbol_name", "source_name")
-        if type(identity.get(field)) is str
+    expected = {
+        "requested",
+        "canonical_name",
+        "symbol_name",
+        "source_name",
+        "aliases",
+        "source_file",
     }
+    if type(identity) is not dict or set(identity) != expected:
+        raise ValueError("capture function_identity fields differ from exact schema")
+    for field in expected - {"aliases"}:
+        if type(identity.get(field)) is not str:
+            raise ValueError(f"capture function_identity {field} must be string")
     aliases = identity.get("aliases")
-    if type(aliases) is list:
-        names.update(alias for alias in aliases if type(alias) is str)
-    return function in names
+    if (
+        type(aliases) is not list
+        or any(type(alias) is not str or not alias for alias in aliases)
+        or len(aliases) != len(set(aliases))
+    ):
+        raise ValueError(
+            "capture function_identity aliases must be canonical unique strings"
+        )
+    if identity.get("requested") != function:
+        raise ValueError(
+            f"capture requested function mismatch: {identity.get('requested')!r} != {function!r}"
+        )
+    return True
+
+
+def _validate_attempt(attempt: object, *, function: str) -> str:
+    if type(attempt) is not dict:
+        raise ValueError("capture_attempt must be an object")
+    if set(attempt) != {"capture_attempt_id", "function_identity"}:
+        raise ValueError("capture_attempt fields differ from exact schema")
+    attempt_id = attempt.get("capture_attempt_id")
+    if not (
+        type(attempt_id) is str
+        and len(attempt_id) == 32
+        and all(character in "0123456789abcdef" for character in attempt_id)
+    ):
+        raise ValueError("capture attempt ID must be 32 lowercase hex characters")
+    _attempt_identifies_function(attempt, function)
+    return attempt_id
 
 
 def load_correlated_v2_sidecars(
@@ -92,24 +132,214 @@ def load_correlated_v2_sidecars(
     pcode_attempt = pcode_payload["capture_attempt"]
     if object_attempt != pcode_attempt:
         raise ValueError("object/PCode capture attempt mismatch")
-    attempt_id = object_attempt.get("capture_attempt_id")
-    if not (
-        type(attempt_id) is str
-        and len(attempt_id) == 32
-        and all(character in "0123456789abcdef" for character in attempt_id)
-    ):
-        raise ValueError("capture attempt ID must be 32 lowercase hex characters")
-    if not _attempt_identifies_function(object_attempt, function):
-        raise ValueError(f"capture attempt does not identify function {function!r}")
+    attempt_id = _validate_attempt(object_attempt, function=function)
     return CorrelatedV2Sidecars(attempt_id, object_payload, pcode_payload)
+
+
+_OBJECT_RECORD_EVENTS = {
+    "lifecycle_record": "lifecycle_events",
+    "object_record": "objects",
+    "virtual_binding_record": "virtual_bindings",
+    "frame_binding_record": "frame_bindings",
+}
+_PCODE_RECORD_EVENTS = {
+    "pcode_instruction_record": "pcode_instructions",
+    "pcode_occurrence_record": "pcode_occurrences",
+    "pcode_lineage_record": "pcode_operand_lineage_events",
+}
+
+
+def _derive_sidecar_object_bindings(
+    sidecars: CorrelatedV2Sidecars,
+) -> dict[str, Any]:
+    proof: object | None = None
+    coverage: object | None = None
+    collections: dict[str, list[object]] = {
+        "lifecycle_events": [],
+        "objects": [],
+        "virtual_bindings": [],
+        "frame_bindings": [],
+        "pcode_instructions": [],
+        "pcode_occurrences": [],
+        "pcode_operand_lineage_events": [],
+    }
+
+    for label, payload, record_events in (
+        ("object", sidecars.object_payload, _OBJECT_RECORD_EVENTS),
+        ("PCode", sidecars.pcode_payload, _PCODE_RECORD_EVENTS),
+    ):
+        for index, event in enumerate(payload["events"]):
+            if type(event) is not dict:
+                raise ValueError(f"{label} sidecar event {index} must be object")
+            kind = event.get("event")
+            if label == "object" and kind == "lifetime_proof":
+                if set(event) != {"event", "proof"} or proof is not None:
+                    raise ValueError("object sidecar lifetime_proof event is malformed or duplicated")
+                proof = event["proof"]
+                continue
+            if label == "object" and kind == "coverage":
+                if set(event) != {"event", "coverage"} or coverage is not None:
+                    raise ValueError("object sidecar coverage event is malformed or duplicated")
+                coverage = event["coverage"]
+                continue
+            collection = record_events.get(kind)
+            if collection is None:
+                raise ValueError(f"unsupported {label} v2 raw sidecar event {kind!r}")
+            if set(event) != {"event", "record"} or type(event.get("record")) is not dict:
+                raise ValueError(f"{label} sidecar {kind} event must contain one record")
+            collections[collection].append(event["record"])
+
+    if proof is None:
+        raise ValueError("object sidecar missing lifetime_proof raw family")
+    if coverage is None:
+        raise ValueError("object sidecar missing coverage raw family")
+    return {
+        "schema_version": "mwcc-retro-object-bindings.v1",
+        "lifetime_proof": proof,
+        "coverage": coverage,
+        **collections,
+        "source_bindings": [],
+        "source_capture": None,
+    }
+
+
+def _find_v2_bindings(trace: dict[str, Any], function: str) -> dict[str, Any]:
+    functions = trace.get("functions")
+    matches = [
+        row
+        for row in functions
+        if type(row) is dict and row.get("name") == function
+    ] if type(functions) is list else []
+    if len(matches) != 1 or type(matches[0].get("object_bindings")) is not dict:
+        raise ValueError(f"expected one v2 object_bindings function {function!r}")
+    return matches[0]["object_bindings"]
+
+
+def _verify_backend_trace_v2_components(
+    trace: object,
+    *,
+    candidate_bytes: bytes,
+    function: str,
+    struct_map: object,
+) -> tuple[dict[str, Any], frozenset[str]]:
+    from tools.mwcc_retro import backend_schema
+    from tools.mwcc_retro import struct_map as struct_map_validation
+    from tools.mwcc_retro.backend_capture_identity import (
+        finalize_capture_identity_from_bytes,
+    )
+    from tools.mwcc_retro.backend_instrumentation_proof import trusted_proof_from_trace
+    from tools.mwcc_retro.backend_object_bindings import validate_object_bindings
+    from tools.mwcc_retro.backend_pcode_lineage import validate_pcode_lineage
+
+    try:
+        detached = struct_map_validation.materialize_json_safe(trace)
+        detached_struct_map = struct_map_validation.materialize_json_safe(struct_map)
+    except Exception as exc:
+        raise ValueError(f"backend trace v2 trust materialization failed: {exc}") from exc
+    if type(detached) is not dict:
+        raise ValueError("backend trace v2 must be object")
+    if type(candidate_bytes) is not bytes or not candidate_bytes:
+        raise ValueError("candidate bytes must be nonempty exact bytes")
+    schema_errors = backend_schema.validate_backend_trace(detached)
+    if schema_errors:
+        raise ValueError("backend trace v2 schema errors: " + "; ".join(schema_errors))
+
+    bindings = _find_v2_bindings(detached, function)
+    identity = bindings["capture_identity"]
+    recomputed_identity = finalize_capture_identity_from_bytes(
+        nonce=identity["nonce"],
+        compiler_executable_sha256=identity["compiler_executable_sha256"],
+        source_sha256=identity["source_sha256"],
+        mwcc_command_sha256=identity["mwcc_command_sha256"],
+        environment_digest=identity["environment_digest"],
+        function=function,
+        candidate_object_bytes=candidate_bytes,
+    )
+    if identity != recomputed_identity or bindings.get("capture_run_id") != recomputed_identity["capture_run_id"]:
+        raise ValueError("capture identity does not match exact candidate bytes and pins")
+
+    object_gate_errors = struct_map_validation.validate_object_capture_capability(
+        detached_struct_map
+    )
+    if object_gate_errors:
+        raise ValueError(
+            "object capture gate failed: " + "; ".join(object_gate_errors)
+        )
+    proof_payload = bindings.get("lifetime_proof")
+    pcode_gate_errors = struct_map_validation.validate_pcode_instrumentation_capability(
+        detached_struct_map,
+        proof=proof_payload if type(proof_payload) is dict else None,
+    )
+    if pcode_gate_errors:
+        raise ValueError(
+            "backend trace v2 proof gate failed: " + "; ".join(pcode_gate_errors)
+        )
+    proof = trusted_proof_from_trace(detached, function, detached_struct_map)
+    object_result = validate_object_bindings(bindings, proof)
+    if object_result.errors:
+        raise ValueError(
+            "object binding validation failed: " + "; ".join(object_result.errors)
+        )
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".o", delete=False) as stream:
+            temporary_path = Path(stream.name)
+            stream.write(candidate_bytes)
+            stream.flush()
+            os.fsync(stream.fileno())
+        lineage_result = validate_pcode_lineage(
+            bindings, proof, temporary_path, function
+        )
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    if lineage_result.errors:
+        raise ValueError(
+            "PCode lineage validation failed: " + "; ".join(lineage_result.errors)
+        )
+    supported = frozenset(
+        {
+            "compiler-object-bindings",
+            "object-to-virtual",
+            "object-to-frame",
+            "pcode-to-code-range",
+        }
+    )
+    return detached, frozenset(
+        (object_result.capabilities | lineage_result.capabilities) & supported
+    )
+
+
+def verify_backend_trace_v2(
+    trace: object,
+    *,
+    candidate_bytes: bytes,
+    function: str,
+    struct_map: object,
+) -> BackendTraceV2Verification:
+    """Independently revalidate one detached trace/candidate pair."""
+
+    detached, capabilities = _verify_backend_trace_v2_components(
+        trace,
+        candidate_bytes=candidate_bytes,
+        function=function,
+        struct_map=struct_map,
+    )
+    if detached.get("capabilities") != sorted(capabilities):
+        raise ValueError(
+            "payload capabilities do not equal independently verified capabilities"
+        )
+    return BackendTraceV2Verification(detached, capabilities)
 
 
 def assemble_candidate_trace_v2(
     *,
     base_trace: dict[str, Any],
     object_bindings: dict[str, Any],
+    object_sidecar: Path,
+    pcode_sidecar: Path,
     candidate_object: Path,
-    nonce: str,
     compiler_executable_sha256: str,
     source_sha256: str,
     mwcc_command_sha256: str,
@@ -120,11 +350,9 @@ def assemble_candidate_trace_v2(
     """Assemble one complete proof-bearing trace and independently validate it."""
 
     from tools.mwcc_retro import backend_schema
-    from tools.mwcc_retro import struct_map as struct_map_validation
-    from tools.mwcc_retro.backend_capture_identity import finalize_capture_identity
-    from tools.mwcc_retro.backend_instrumentation_proof import trusted_proof_from_trace
-    from tools.mwcc_retro.backend_object_bindings import validate_object_bindings
-    from tools.mwcc_retro.backend_pcode_lineage import validate_pcode_lineage
+    from tools.mwcc_retro.backend_capture_identity import (
+        finalize_capture_identity_from_bytes,
+    )
 
     legacy_errors = backend_schema.validate_backend_trace(base_trace)
     if legacy_errors:
@@ -136,18 +364,31 @@ def assemble_candidate_trace_v2(
     if not candidate_bytes:
         raise ValueError("candidate object is empty")
 
-    # The run ID cannot exist until all compile pins and the exact raw object
-    # bytes are final. No producer status field participates in this identity.
-    identity = finalize_capture_identity(
-        nonce=nonce,
+    sidecars = load_correlated_v2_sidecars(
+        object_sidecar, pcode_sidecar, function=function
+    )
+    derived = backend_events.canonicalize_v2_object_bindings(
+        _derive_sidecar_object_bindings(sidecars)
+    )
+    supplied = copy.deepcopy(object_bindings)
+    supplied.pop("capture_identity", None)
+    supplied.pop("capture_run_id", None)
+    supplied = backend_events.canonicalize_v2_object_bindings(supplied)
+    if supplied != derived:
+        raise ValueError("sidecar-derived object_bindings mismatch")
+
+    # The sidecar attempt is the capture nonce. Identity is finalized only
+    # after one detached read of the exact candidate bytes and all outer pins.
+    identity = finalize_capture_identity_from_bytes(
+        nonce=sidecars.capture_attempt_id,
         compiler_executable_sha256=compiler_executable_sha256,
         source_sha256=source_sha256,
         mwcc_command_sha256=mwcc_command_sha256,
         environment_digest=environment_digest,
         function=function,
-        candidate_object=candidate_path,
+        candidate_object_bytes=candidate_bytes,
     )
-    bindings = copy.deepcopy(object_bindings)
+    bindings = derived
     bindings["capture_identity"] = identity
     bindings["capture_run_id"] = identity["capture_run_id"]
     bindings = backend_events.canonicalize_v2_object_bindings(bindings)
@@ -155,42 +396,33 @@ def assemble_candidate_trace_v2(
     trace = copy.deepcopy(base_trace)
     trace["schema_version"] = backend_schema.SCHEMA_VERSION_V2
     trace["capabilities"] = []
+    trace["compiler"]["executable_sha256"] = compiler_executable_sha256
+    trace["source"].update(
+        {
+            "source_sha256": source_sha256,
+            "mwcc_command_sha256": mwcc_command_sha256,
+            "environment_digest": environment_digest,
+        }
+    )
     matches = [row for row in trace.get("functions", []) if isinstance(row, dict) and row.get("name") == function]
     if len(matches) != 1:
         raise ValueError(f"expected one function {function!r}, found {len(matches)}")
     matches[0]["object_bindings"] = bindings
 
-    proof_payload = bindings.get("lifetime_proof")
-    gate_errors = struct_map_validation.validate_pcode_instrumentation_capability(
-        struct_map,
-        proof=proof_payload if isinstance(proof_payload, dict) else None,
+    _detached, capabilities = _verify_backend_trace_v2_components(
+        trace,
+        candidate_bytes=candidate_bytes,
+        function=function,
+        struct_map=struct_map,
     )
-    if gate_errors:
-        raise ValueError("backend trace v2 proof gate failed: " + "; ".join(gate_errors))
-    proof = trusted_proof_from_trace(trace, function, struct_map)
-
-    object_result = validate_object_bindings(bindings, proof)
-    if object_result.errors:
-        raise ValueError("object binding validation failed: " + "; ".join(object_result.errors))
-    lineage_result = validate_pcode_lineage(bindings, proof, candidate_path, function)
-    if lineage_result.errors:
-        raise ValueError("PCode lineage validation failed: " + "; ".join(lineage_result.errors))
-
-    independently_verified = object_result.capabilities | lineage_result.capabilities
-    supported = frozenset(
-        {
-            "compiler-object-bindings",
-            "object-to-virtual",
-            "object-to-frame",
-            "pcode-to-code-range",
-        }
-    )
-    capabilities = frozenset(independently_verified & supported)
     trace["capabilities"] = sorted(capabilities)
-    schema_errors = backend_schema.validate_backend_trace(trace)
-    if schema_errors:
-        raise ValueError("backend trace v2 schema validation failed: " + "; ".join(schema_errors))
-    return BackendTraceV2Assembly(trace, capabilities)
+    verified = verify_backend_trace_v2(
+        trace,
+        candidate_bytes=candidate_bytes,
+        function=function,
+        struct_map=struct_map,
+    )
+    return BackendTraceV2Assembly(verified.payload, verified.capabilities)
 
 
 def assemble_candidate_trace(
