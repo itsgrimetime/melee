@@ -1,5 +1,6 @@
 import hashlib
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -230,22 +231,134 @@ def _complete_coverage_proof():
     }
 
 
+def _coverage_operand(
+    *,
+    kind=7,
+    digest="a" * 64,
+    parents=None,
+):
+    row = {
+        "operand_index": 0,
+        "operand_lineage_id": "ol-0",
+        "raw_arg_kind_id": kind,
+        "raw_payload_sha256": digest,
+    }
+    if parents is not None:
+        row["parent_lineage_ids"] = parents
+    return row
+
+
+def _coverage_state(*, output=False):
+    return {
+        "pcode_id": "pc-0",
+        "runtime_address": 0x610000,
+        "allocation_generation": 3,
+        "lifecycle_sequence_at_capture": 12,
+        "opcode_id": 42,
+        "arg_count": 1,
+        "operands": [
+            _coverage_operand(
+                kind=8 if output else 7,
+                digest=("b" if output else "a") * 64,
+            )
+        ],
+    }
+
+
+def _coverage_emission_snapshot():
+    return {
+        "stage": "code_emission",
+        "lifecycle_sequence_at_capture": 12,
+        "runtime_address": 0x610000,
+        "allocation_generation": 3,
+        "opcode_id": 42,
+        "opcode": "ADDI",
+        "arg_count": 1,
+        "parsed_register_operands": [
+            {
+                "operand_index": 0,
+                "role": "use",
+                "class_id": 0,
+                "raw_arg_kind_id": 8,
+                "raw_register_flags": 0,
+                "allocation_requirement": "fixed-physical",
+                "operand_lineage_id": "ol-0",
+                "virtual_kind": None,
+                "virtual": None,
+                "physical_register": 3,
+            }
+        ],
+        "operand_lineage_inventory": [
+            _coverage_operand(kind=8, digest="b" * 64)
+        ],
+    }
+
+
 def _complete_coverage_events():
     return [
         {
             "event": "operand_rewrite",
             "pcode_event_sequence": 0,
             "instrumented_site_id": "rewrite-1",
+            "pcode_id": "pc-0",
+            "operand_index": 0,
+            "operand_lineage_id": "ol-0",
+            "role": "use",
+            "class_id": 0,
+            "class_name": "gpr",
+            "virtual_kind": "r",
+            "virtual": 67,
+            "ig_id": 67,
+            "allocated_physical": 3,
+            "runtime_address": 0x610000,
+            "allocation_generation": 3,
+            "lifecycle_sequence_at_capture": 12,
+            "source_stage": "allocator_operand_rewrite",
+            "confidence": "observed",
         },
         {
             "event": "pcode_mutation",
             "pcode_event_sequence": 1,
             "instrumented_site_id": "mutation-1",
+            "mutation_kind": "update",
+            "inputs": [_coverage_state()],
+            "outputs": [_coverage_state(output=True)],
         },
         {
             "event": "code_emission",
             "pcode_event_sequence": 2,
             "instrumented_site_id": "emit-1",
+            "pcode_id": "pc-0",
+            "runtime_address": 0x610000,
+            "allocation_generation": 3,
+            "lifecycle_sequence_at_capture": 12,
+            "emission_snapshot": _coverage_emission_snapshot(),
+            "code_ranges": [
+                {
+                    "start": 0,
+                    "end_exclusive": 4,
+                    "bytes": "7c000000",
+                    "relocations": [
+                        {
+                            "offset_within_range": 0,
+                            "relocation_type_id": 1,
+                            "target_symbol_table_index": 2,
+                            "target_symbol": "target",
+                            "addend": 0,
+                        }
+                    ],
+                    "machine_operand_mappings": [
+                        {
+                            "instruction_offset_within_range": 0,
+                            "machine_operand_position": 0,
+                            "machine_operand_key": "use:0",
+                            "emission_pcode_operand_index": 0,
+                            "operand_lineage_id": "ol-0",
+                            "physical_register": 3,
+                        }
+                    ],
+                }
+            ],
         },
     ]
 
@@ -267,12 +380,82 @@ def _coverage_status(**overrides):
     )
 
 
+class _HostileMapping(Mapping):
+    def __getitem__(self, key):
+        raise RuntimeError("hostile nested mapping")
+
+    def __iter__(self):
+        raise RuntimeError("hostile nested mapping")
+
+    def __len__(self):
+        return 1
+
+
+class _HostileList(list):
+    def __iter__(self):
+        raise RuntimeError("hostile nested list")
+
+
 def test_runtime_marks_only_exact_complete_instrumentation_complete():
     coverage = _coverage_status()
 
     assert coverage["status"] == "complete"
     assert coverage["errors"] == []
     assert coverage["capabilities"] == []
+
+
+def test_runtime_fails_closed_on_hostile_nested_coverage_proof_site():
+    proof = _complete_coverage_proof()
+    proof["operand_rewrite_sites"][0] = _HostileMapping()
+
+    coverage = _coverage_status(proof=proof)
+
+    assert coverage["status"] == "partial"
+    assert any(
+        "PCode coverage proof could not be materialized" in error
+        for error in coverage["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda events: events.__setitem__(0, _HostileMapping()),
+        lambda events: events[1]["inputs"].__setitem__(
+            0, _HostileMapping()
+        ),
+        lambda events: events[2]["code_ranges"][0][
+            "machine_operand_mappings"
+        ].__setitem__(0, _HostileMapping()),
+        lambda events: events[1].update(
+            {"outputs": _HostileList(events[1]["outputs"])}
+        ),
+    ],
+)
+def test_runtime_fails_closed_on_hostile_nested_event_containers(mutate):
+    events = _complete_coverage_events()
+    mutate(events)
+
+    coverage = _coverage_status(events=events)
+
+    assert coverage["status"] == "partial"
+    assert any(
+        "PCode events could not be materialized" in error
+        for error in coverage["errors"]
+    )
+
+
+def test_runtime_fails_closed_on_recursive_event_container():
+    events = _complete_coverage_events()
+    events[2]["code_ranges"][0]["recursive"] = events
+
+    coverage = _coverage_status(events=events)
+
+    assert coverage["status"] == "partial"
+    assert any(
+        "PCode events could not be materialized" in error
+        for error in coverage["errors"]
+    )
 
 
 def test_runtime_rejects_empty_expected_site_family():
@@ -339,6 +522,82 @@ def test_runtime_rejects_malformed_or_misclassified_events(mutate, expected):
 
     assert coverage["status"] == "partial"
     assert expected in coverage["errors"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (
+            lambda events: events[0].pop("pcode_id"),
+            "operand_rewrite event 0 fields differ from exact schema",
+        ),
+        (
+            lambda events: events[0].update({"operand_index": True}),
+            "operand_rewrite event 0 operand_index must be nonnegative integer",
+        ),
+        (
+            lambda events: events[0].update({"role": "read"}),
+            "operand_rewrite event 0 role is invalid",
+        ),
+        (
+            lambda events: events[0].update({"role": []}),
+            "operand_rewrite event 0 role is invalid",
+        ),
+        (
+            lambda events: events[1]["inputs"][0].pop("opcode_id"),
+            "pcode_mutation event 1 input 0 fields differ from exact schema",
+        ),
+        (
+            lambda events: events[1]["outputs"][0]["operands"][0].update(
+                {"raw_payload_sha256": "not-a-digest"}
+            ),
+            "pcode_mutation event 1 output 0 operand 0 raw payload digest is invalid",
+        ),
+        (
+            lambda events: events[2]["emission_snapshot"].pop("opcode"),
+            "code_emission event 2 emission snapshot fields differ from exact schema",
+        ),
+        (
+            lambda events: events[2]["emission_snapshot"][
+                "parsed_register_operands"
+            ][0].update({"allocation_requirement": []}),
+            "code_emission event 2 emission snapshot parsed operand 0 allocation_requirement is invalid",
+        ),
+        (
+            lambda events: events[2]["code_ranges"][0][
+                "machine_operand_mappings"
+            ][0].pop("physical_register"),
+            "code_emission event 2 range 0 mapping 0 fields differ from exact schema",
+        ),
+        (
+            lambda events: events[2]["code_ranges"][0]["relocations"][0].update(
+                {"target_symbol": 9}
+            ),
+            "code_emission event 2 range 0 relocation 0 target_symbol must be string",
+        ),
+    ],
+)
+def test_runtime_requires_complete_closed_event_shapes(mutate, expected):
+    events = _complete_coverage_events()
+    mutate(events)
+
+    coverage = _coverage_status(events=events)
+
+    assert coverage["status"] == "partial"
+    assert any(expected in error for error in coverage["errors"])
+
+
+def test_runtime_rejects_equal_float_before_event_validation():
+    events = _complete_coverage_events()
+    events[0]["operand_index"] = 0.0
+
+    coverage = _coverage_status(events=events)
+
+    assert coverage["status"] == "partial"
+    assert any(
+        "PCode events could not be materialized" in error
+        for error in coverage["errors"]
+    )
 
 
 def test_runtime_rejects_malformed_hook_and_coverage_scalars():

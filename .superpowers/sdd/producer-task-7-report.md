@@ -194,3 +194,60 @@ file's pre-remediation `HEAD` content; no repository-wide legacy formatting
 churn was introduced. The installed registry remains empty and
 `pcode_instrumentation.validated` remains false. No live probe or static audit
 was rerun during remediation.
+
+## Second important review remediation
+
+The next review found that the prior proof copy was shallow and that event
+coverage checked only unexpected top-level fields. The first materialization
+RED matrix reported `6 failed, 1 passed`: hostile nested mappings/lists raised,
+while recursive, surrogate-containing, and equal-float proof values bypassed
+the requested boundary diagnostic. The corresponding coverage/schema RED
+matrix reported `15 failed, 1 passed`: nested executable containers either
+raised or were accepted, and missing identity/state/snapshot/range fields plus
+invalid scalar and enum values still reported complete. Two additional RED
+cases reproduced unhashable list values escaping through role and allocation
+requirement membership tests.
+
+A single recursive `materialize_json_safe()` trust boundary now serves both the
+table/proof gate and raw coverage proof/events. It accepts only exact builtin
+dicts, lists, strings, booleans, nulls, and integers within the interoperable
+JSON range. It rejects subclasses before invoking their behavior, detects
+cycles, rejects floats and invalid Unicode surrogates, and produces detached
+containers before any downstream lookup, membership check, hashing, or row
+iteration. All materialization and canonicalization failures remain explicit
+gate errors or partial coverage diagnostics.
+
+Producer coverage now requires exact field equality and complete structural
+shapes derived from the Task 6 schemas:
+
+- rewrite events require every occurrence identity and allocator field with
+  exact scalar, role, GPR/FPR class-kind coupling, physical-register domain,
+  source, and confidence values;
+- mutation events require a known kind with exact cardinality and complete
+  closed input/output states, contiguous operand inventories, raw digests, and
+  output-only optional parent lineage lists; and
+- emission events require exact identity, a complete closed emission snapshot,
+  parsed-register and lineage inventories, and closed code-range, relocation,
+  and machine-operand mapping rows.
+
+These checks establish producer structural completeness only. Task 6 still
+independently proves lifecycle semantics, trusted opcode rules, candidate
+bytes, relocations, and machine-register bindings, and producer capabilities
+remain unconditionally empty.
+
+Fresh post-remediation evidence:
+
+```text
+Task 7 focused: 155 passed
+Task 2 proof/registry: 51 passed
+Task 5 selected object/IG/frame/one-pass/PCode: 131 passed, 78 deselected
+Task 6 lineage plus adjacent proof/object/identity/bundle: 422 passed
+```
+
+A supplemental type-substitution sweep replaced every top-level event field
+and every nested state, operand, snapshot, parsed operand, code range,
+relocation, and mapping field with representative JSON-safe scalar/container
+types; it found zero exception paths. Scoped Ruff, `py_compile`, JSON parsing,
+and `git diff --check` exit zero. The installed registry/table is unchanged:
+proofs and site lists remain empty and `pcode_instrumentation.validated`
+remains false. No live probe or static audit was rerun.

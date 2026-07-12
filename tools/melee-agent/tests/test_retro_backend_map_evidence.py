@@ -2,6 +2,8 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
@@ -142,6 +144,11 @@ class _BrokenProofMapping(Mapping):
         return 1
 
 
+class _BrokenList(list):
+    def __iter__(self):
+        raise RuntimeError("broken proof list")
+
+
 def test_pcode_instrumentation_gate_rejects_unpromoted_and_partial_site_inventory():
     table = struct_map.load_gc125n_struct_map()
     assert table["instrumentation_proofs"] == []
@@ -184,6 +191,76 @@ def test_validated_pcode_instrumentation_fails_closed_on_broken_proof_mapping():
     )
 
     assert "PCode instrumentation proof could not be materialized" in errors
+
+
+def test_validated_pcode_instrumentation_fails_closed_on_hostile_nested_table():
+    table = _validated_instrumentation_table()
+    table["instrumentation_proofs"][0] = _BrokenProofMapping()
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=_valid_instrumentation_proof()
+    )
+
+    assert any(
+        "PCode instrumentation table could not be materialized" in error
+        for error in errors
+    )
+
+
+def test_validated_pcode_instrumentation_fails_closed_on_hostile_nested_proof_site():
+    proof = _valid_instrumentation_proof()
+    table = _validated_instrumentation_table(proof)
+    proof["operand_rewrite_sites"][0] = _BrokenProofMapping()
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+
+    assert any(
+        "PCode instrumentation proof could not be materialized" in error
+        for error in errors
+    )
+
+
+def test_validated_pcode_instrumentation_fails_closed_on_hostile_nested_proof_list():
+    proof = _valid_instrumentation_proof()
+    table = _validated_instrumentation_table(proof)
+    proof["operand_rewrite_sites"] = _BrokenList(
+        proof["operand_rewrite_sites"]
+    )
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+
+    assert any(
+        "PCode instrumentation proof could not be materialized" in error
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize("malformation", ["recursive", "surrogate", "float"])
+def test_validated_pcode_instrumentation_rejects_non_json_safe_nested_proof(
+    malformation,
+):
+    proof = _valid_instrumentation_proof()
+    table = _validated_instrumentation_table(proof)
+    site = proof["operand_rewrite_sites"][0]
+    if malformation == "recursive":
+        site["recursive"] = proof
+    elif malformation == "surrogate":
+        site["site_id"] = "bad-\ud800"
+    else:
+        site["address"] = 0x500300 + 0.0
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+
+    assert any(
+        "PCode instrumentation proof could not be materialized" in error
+        for error in errors
+    )
 
 
 def test_validated_pcode_instrumentation_accepts_exact_canonical_proof():

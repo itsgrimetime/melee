@@ -177,6 +177,64 @@ def _is_lower_sha256(value: object) -> bool:
     )
 
 
+_MAX_JSON_SAFE_INTEGER = (1 << 53) - 1
+
+
+def materialize_json_safe(value: object) -> object:
+    """Recursively copy an exact, finite I-JSON-shaped value.
+
+    The trust gates call this before inspecting attacker-controlled containers.
+    Exact builtin types prevent Mapping/list subclasses from running code during
+    later validation, while the active-container set rejects recursive values.
+    """
+
+    active: set[int] = set()
+
+    def visit(item: object, path: str) -> object:
+        item_type = type(item)
+        if item is None or item_type is bool:
+            return item
+        if item_type is int:
+            if not -_MAX_JSON_SAFE_INTEGER <= item <= _MAX_JSON_SAFE_INTEGER:
+                raise ValueError(f"{path} integer is outside the JSON-safe range")
+            return item
+        if item_type is str:
+            try:
+                item.encode("utf-8", "strict")
+            except UnicodeEncodeError as exc:
+                raise ValueError(f"{path} contains an invalid Unicode surrogate") from exc
+            return item
+        if item_type not in (dict, list):
+            raise ValueError(f"{path} has unsupported non-JSON type")
+
+        marker = id(item)
+        if marker in active:
+            raise ValueError(f"{path} contains a recursive container")
+        active.add(marker)
+        try:
+            if item_type is list:
+                return [
+                    visit(child, f"{path}[{index}]")
+                    for index, child in enumerate(item)
+                ]
+            result: dict[str, object] = {}
+            for key, child in item.items():
+                if type(key) is not str:
+                    raise ValueError(f"{path} object key must be exact string")
+                try:
+                    key.encode("utf-8", "strict")
+                except UnicodeEncodeError as exc:
+                    raise ValueError(
+                        f"{path} object key contains an invalid Unicode surrogate"
+                    ) from exc
+                result[key] = visit(child, f"{path}.{key}")
+            return result
+        finally:
+            active.remove(marker)
+
+    return visit(value, "$")
+
+
 def validate_instrumentation_proof_registry(table: object) -> list[str]:
     """Validate the independent proof trust registry without promoting entries."""
     if not isinstance(table, Mapping):
@@ -455,8 +513,12 @@ def validate_pcode_instrumentation_capability(
 ) -> list[str]:
     """Require one promoted tuple and an exactly matching installed hook set."""
 
+    try:
+        table = materialize_json_safe(table)
+    except Exception as exc:  # noqa: BLE001 - trust boundary must fail closed
+        return [f"PCode instrumentation table could not be materialized: {exc}"]
     errors = list(validate_instrumentation_proof_registry(table))
-    if not isinstance(table, Mapping):
+    if type(table) is not dict:
         errors.append("PCode instrumentation table must be object")
         return errors
     rows = table.get("instrumentation_proofs")
@@ -484,13 +546,14 @@ def validate_pcode_instrumentation_capability(
         errors.append("pcode instrumentation gate is not validated")
         gate = None
 
-    if not isinstance(proof, Mapping):
-        errors.append("PCode instrumentation proof must be object")
-        return errors
     try:
-        proof = dict(proof)
-    except Exception:  # noqa: BLE001 - malformed proof must fail closed
+        proof = materialize_json_safe(proof)
+    except Exception as exc:  # noqa: BLE001 - trust boundary must fail closed
         errors.append("PCode instrumentation proof could not be materialized")
+        errors.append(f"PCode instrumentation proof materialization error: {exc}")
+        return errors
+    if type(proof) is not dict:
+        errors.append("PCode instrumentation proof must be object")
         return errors
 
     from .backend_instrumentation_proof import proof_sha256, validate_proof_shape

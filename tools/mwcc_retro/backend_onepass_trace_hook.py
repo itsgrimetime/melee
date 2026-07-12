@@ -11,7 +11,6 @@ import json
 import os
 import secrets
 import tempfile
-from collections.abc import Mapping
 from pathlib import Path
 
 from tools.mwcc_retro import backend_object_snapshot, struct_map
@@ -183,20 +182,661 @@ _PCODE_SITE_LABEL = {
     "code_emission_sites": "code emission",
 }
 
+_PCODE_ROLES = frozenset({"use", "def", "use-def"})
+_PCODE_CLASS_SHAPES = {0: ("gpr", "r"), 1: ("fpr", "f")}
+_PCODE_REQUIREMENTS = frozenset(
+    {"allocator-rewrite-required", "fixed-physical"}
+)
+_PCODE_MUTATION_KINDS = frozenset(
+    {"update", "clone", "replace", "delete", "create"}
+)
+_PCODE_STATE_FIELDS = frozenset(
+    {
+        "pcode_id",
+        "runtime_address",
+        "allocation_generation",
+        "lifecycle_sequence_at_capture",
+        "opcode_id",
+        "arg_count",
+        "operands",
+    }
+)
+_PCODE_OPERAND_FIELDS = frozenset(
+    {
+        "operand_index",
+        "operand_lineage_id",
+        "raw_arg_kind_id",
+        "raw_payload_sha256",
+    }
+)
+_PCODE_OPERAND_FIELDS_WITH_PARENTS = _PCODE_OPERAND_FIELDS | frozenset(
+    {"parent_lineage_ids"}
+)
+_PCODE_SNAPSHOT_FIELDS = frozenset(
+    {
+        "stage",
+        "lifecycle_sequence_at_capture",
+        "runtime_address",
+        "allocation_generation",
+        "opcode_id",
+        "opcode",
+        "arg_count",
+        "parsed_register_operands",
+        "operand_lineage_inventory",
+    }
+)
+_PCODE_PARSED_FIELDS = frozenset(
+    {
+        "operand_index",
+        "role",
+        "class_id",
+        "raw_arg_kind_id",
+        "raw_register_flags",
+        "allocation_requirement",
+        "operand_lineage_id",
+        "virtual_kind",
+        "virtual",
+        "physical_register",
+    }
+)
+_PCODE_RANGE_FIELDS = frozenset(
+    {
+        "start",
+        "end_exclusive",
+        "bytes",
+        "relocations",
+        "machine_operand_mappings",
+    }
+)
+_PCODE_RELOCATION_FIELDS = frozenset(
+    {
+        "offset_within_range",
+        "relocation_type_id",
+        "target_symbol_table_index",
+        "target_symbol",
+        "addend",
+    }
+)
+_PCODE_MAPPING_FIELDS = frozenset(
+    {
+        "instruction_offset_within_range",
+        "machine_operand_position",
+        "machine_operand_key",
+        "emission_pcode_operand_index",
+        "operand_lineage_id",
+        "physical_register",
+    }
+)
+
+
+def _pcode_nonnegative(value):
+    return type(value) is int and value >= 0
+
+
+def _pcode_positive(value):
+    return type(value) is int and value > 0
+
+
+def _pcode_lifecycle_position(value):
+    return type(value) is int and value >= -1
+
+
+def _pcode_physical(value):
+    return type(value) is int and 0 <= value <= 31
+
+
+def _pcode_nonempty_string(value):
+    return type(value) is str and bool(value)
+
+
+def _pcode_sha256(value):
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _pcode_exact_fields(row, fields, label, diagnostics):
+    if type(row) is not dict:
+        diagnostics.append(f"{label} must be object")
+        return False
+    actual = set(row)
+    if actual == fields:
+        return True
+    missing = sorted(fields - actual)
+    unexpected = sorted(actual - fields)
+    details = []
+    if missing:
+        details.append(f"missing {missing!r}")
+    if unexpected:
+        details.append(f"unexpected {unexpected!r}")
+    diagnostics.append(
+        f"{label} fields differ from exact schema ({', '.join(details)})"
+    )
+    return False
+
+
+def _validate_pcode_identity(row, label, diagnostics):
+    if not _pcode_nonempty_string(row.get("pcode_id")):
+        diagnostics.append(f"{label} pcode_id must be nonempty string")
+    if not _pcode_positive(row.get("runtime_address")):
+        diagnostics.append(f"{label} runtime_address must be positive integer")
+    if not _pcode_positive(row.get("allocation_generation")):
+        diagnostics.append(
+            f"{label} allocation_generation must be positive integer"
+        )
+    if not _pcode_lifecycle_position(
+        row.get("lifecycle_sequence_at_capture")
+    ):
+        diagnostics.append(
+            f"{label} lifecycle_sequence_at_capture must be integer at least -1"
+        )
+
+
+def _validate_pcode_operands(
+    value,
+    arg_count,
+    label,
+    diagnostics,
+    *,
+    allow_parents,
+):
+    if type(value) is not list:
+        diagnostics.append(f"{label} operands must be list")
+        return []
+    indexes = []
+    rows = []
+    for index, row in enumerate(value):
+        row_label = f"{label} operand {index}"
+        expected = (
+            _PCODE_OPERAND_FIELDS_WITH_PARENTS
+            if type(row) is dict and "parent_lineage_ids" in row
+            else _PCODE_OPERAND_FIELDS
+        )
+        _pcode_exact_fields(row, expected, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        operand_index = row.get("operand_index")
+        if not _pcode_nonnegative(operand_index):
+            diagnostics.append(
+                f"{row_label} operand_index must be nonnegative integer"
+            )
+        else:
+            indexes.append(operand_index)
+        if not _pcode_nonempty_string(row.get("operand_lineage_id")):
+            diagnostics.append(
+                f"{row_label} operand_lineage_id must be nonempty string"
+            )
+        if not _pcode_nonnegative(row.get("raw_arg_kind_id")):
+            diagnostics.append(
+                f"{row_label} raw_arg_kind_id must be nonnegative integer"
+            )
+        if not _pcode_sha256(row.get("raw_payload_sha256")):
+            diagnostics.append(f"{row_label} raw payload digest is invalid")
+        if "parent_lineage_ids" in row:
+            parents = row.get("parent_lineage_ids")
+            if not allow_parents:
+                diagnostics.append(f"{row_label} must omit parent_lineage_ids")
+            if type(parents) is not list:
+                diagnostics.append(f"{row_label} parent_lineage_ids must be list")
+            elif any(
+                not _pcode_nonempty_string(parent) for parent in parents
+            ):
+                diagnostics.append(
+                    f"{row_label} parent_lineage_ids must contain nonempty strings"
+                )
+            elif parents != sorted(set(parents)):
+                diagnostics.append(
+                    f"{row_label} parent_lineage_ids must be sorted and unique"
+                )
+        rows.append(row)
+    if _pcode_nonnegative(arg_count) and len(value) != arg_count:
+        diagnostics.append(f"{label} operand count must equal arg_count")
+    if indexes != list(range(len(value))):
+        diagnostics.append(f"{label} operand indexes must be contiguous from zero")
+    return rows
+
+
+def _validate_pcode_state(row, label, diagnostics, *, allow_parents):
+    _pcode_exact_fields(row, _PCODE_STATE_FIELDS, label, diagnostics)
+    if type(row) is not dict:
+        return
+    _validate_pcode_identity(row, label, diagnostics)
+    if not _pcode_nonnegative(row.get("opcode_id")):
+        diagnostics.append(f"{label} opcode_id must be nonnegative integer")
+    arg_count = row.get("arg_count")
+    if not _pcode_nonnegative(arg_count):
+        diagnostics.append(f"{label} arg_count must be nonnegative integer")
+    _validate_pcode_operands(
+        row.get("operands"),
+        arg_count,
+        label,
+        diagnostics,
+        allow_parents=allow_parents,
+    )
+
+
+def _validate_pcode_parsed_operands(value, inventory, label, diagnostics):
+    if type(value) is not list:
+        diagnostics.append(f"{label} parsed_register_operands must be list")
+        return
+    keys = []
+    for index, row in enumerate(value):
+        row_label = f"{label} parsed operand {index}"
+        _pcode_exact_fields(row, _PCODE_PARSED_FIELDS, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        operand_index = row.get("operand_index")
+        if not _pcode_nonnegative(operand_index):
+            diagnostics.append(
+                f"{row_label} operand_index must be nonnegative integer"
+            )
+        elif operand_index >= len(inventory):
+            diagnostics.append(f"{row_label} operand_index is outside inventory")
+        else:
+            inventory_row = inventory[operand_index]
+            if (
+                inventory_row.get("operand_lineage_id")
+                != row.get("operand_lineage_id")
+                or inventory_row.get("raw_arg_kind_id")
+                != row.get("raw_arg_kind_id")
+            ):
+                diagnostics.append(
+                    f"{row_label} identity differs from operand inventory"
+                )
+        role = row.get("role")
+        if type(role) is not str or role not in _PCODE_ROLES:
+            diagnostics.append(f"{row_label} role is invalid")
+        class_id = row.get("class_id")
+        shape = (
+            _PCODE_CLASS_SHAPES.get(class_id)
+            if _pcode_nonnegative(class_id)
+            else None
+        )
+        if shape is None:
+            diagnostics.append(f"{row_label} class_id must be 0 or 1")
+        if not _pcode_nonnegative(row.get("raw_arg_kind_id")):
+            diagnostics.append(
+                f"{row_label} raw_arg_kind_id must be nonnegative integer"
+            )
+        if not _pcode_nonnegative(row.get("raw_register_flags")):
+            diagnostics.append(
+                f"{row_label} raw_register_flags must be nonnegative integer"
+            )
+        if not _pcode_nonempty_string(row.get("operand_lineage_id")):
+            diagnostics.append(
+                f"{row_label} operand_lineage_id must be nonempty string"
+            )
+        requirement = row.get("allocation_requirement")
+        if type(requirement) is not str or requirement not in _PCODE_REQUIREMENTS:
+            diagnostics.append(f"{row_label} allocation_requirement is invalid")
+        elif requirement == "allocator-rewrite-required":
+            if (
+                shape is None
+                or row.get("virtual_kind") != shape[1]
+                or not _pcode_nonnegative(row.get("virtual"))
+                or row.get("physical_register") is not None
+            ):
+                diagnostics.append(f"{row_label} virtual register shape is invalid")
+        elif (
+            row.get("virtual_kind") is not None
+            or row.get("virtual") is not None
+            or not _pcode_physical(row.get("physical_register"))
+        ):
+            diagnostics.append(f"{row_label} physical register shape is invalid")
+        keys.append(
+            (
+                operand_index,
+                row.get("role"),
+                class_id,
+                row.get("raw_arg_kind_id"),
+                row.get("raw_register_flags"),
+            )
+        )
+    try:
+        if keys != sorted(keys):
+            diagnostics.append(
+                f"{label} parsed register operands must be canonically ordered"
+            )
+    except TypeError:
+        diagnostics.append(f"{label} parsed register operands are not sortable")
+    try:
+        if len(keys) != len(set(keys)):
+            diagnostics.append(f"{label} parsed register operands must be unique")
+    except TypeError:
+        diagnostics.append(f"{label} parsed register operand keys are invalid")
+
+
+def _validate_pcode_emission_snapshot(row, event, label, diagnostics):
+    _pcode_exact_fields(row, _PCODE_SNAPSHOT_FIELDS, label, diagnostics)
+    if type(row) is not dict:
+        return
+    if row.get("stage") != "code_emission":
+        diagnostics.append(f"{label} stage must be code_emission")
+    if not _pcode_lifecycle_position(
+        row.get("lifecycle_sequence_at_capture")
+    ):
+        diagnostics.append(
+            f"{label} lifecycle_sequence_at_capture must be integer at least -1"
+        )
+    if not _pcode_positive(row.get("runtime_address")):
+        diagnostics.append(f"{label} runtime_address must be positive integer")
+    if not _pcode_positive(row.get("allocation_generation")):
+        diagnostics.append(
+            f"{label} allocation_generation must be positive integer"
+        )
+    for field in (
+        "runtime_address",
+        "allocation_generation",
+        "lifecycle_sequence_at_capture",
+    ):
+        if row.get(field) != event.get(field):
+            diagnostics.append(f"{label} {field} differs from emission identity")
+    if not _pcode_nonnegative(row.get("opcode_id")):
+        diagnostics.append(f"{label} opcode_id must be nonnegative integer")
+    if not _pcode_nonempty_string(row.get("opcode")):
+        diagnostics.append(f"{label} opcode must be nonempty string")
+    arg_count = row.get("arg_count")
+    if not _pcode_nonnegative(arg_count):
+        diagnostics.append(f"{label} arg_count must be nonnegative integer")
+    inventory = _validate_pcode_operands(
+        row.get("operand_lineage_inventory"),
+        arg_count,
+        label,
+        diagnostics,
+        allow_parents=False,
+    )
+    _validate_pcode_parsed_operands(
+        row.get("parsed_register_operands"),
+        inventory,
+        label,
+        diagnostics,
+    )
+
+
+def _validate_pcode_rewrite(row, label, diagnostics):
+    _validate_pcode_identity(row, label, diagnostics)
+    if not _pcode_nonnegative(row.get("operand_index")):
+        diagnostics.append(
+            f"{label} operand_index must be nonnegative integer"
+        )
+    if not _pcode_nonempty_string(row.get("operand_lineage_id")):
+        diagnostics.append(
+            f"{label} operand_lineage_id must be nonempty string"
+        )
+    role = row.get("role")
+    if type(role) is not str or role not in _PCODE_ROLES:
+        diagnostics.append(f"{label} role is invalid")
+    class_id = row.get("class_id")
+    shape = (
+        _PCODE_CLASS_SHAPES.get(class_id)
+        if _pcode_nonnegative(class_id)
+        else None
+    )
+    if shape is None:
+        diagnostics.append(f"{label} class_id must be 0 or 1")
+    elif (
+        row.get("class_name") != shape[0]
+        or row.get("virtual_kind") != shape[1]
+    ):
+        diagnostics.append(f"{label} class/name/virtual-kind shape is invalid")
+    if not _pcode_nonnegative(row.get("virtual")):
+        diagnostics.append(f"{label} virtual must be nonnegative integer")
+    if not _pcode_nonnegative(row.get("ig_id")):
+        diagnostics.append(f"{label} ig_id must be nonnegative integer")
+    elif row.get("ig_id") != row.get("virtual"):
+        diagnostics.append(f"{label} ig_id must equal virtual")
+    if not _pcode_physical(row.get("allocated_physical")):
+        diagnostics.append(f"{label} allocated_physical must be in 0..31")
+    if row.get("source_stage") != "allocator_operand_rewrite":
+        diagnostics.append(f"{label} source_stage is invalid")
+    if row.get("confidence") != "observed":
+        diagnostics.append(f"{label} confidence is invalid")
+
+
+def _validate_pcode_mutation(row, label, diagnostics):
+    kind = row.get("mutation_kind")
+    if type(kind) is not str or kind not in _PCODE_MUTATION_KINDS:
+        diagnostics.append(f"{label} mutation_kind is invalid")
+    inputs = row.get("inputs")
+    outputs = row.get("outputs")
+    if type(inputs) is not list:
+        diagnostics.append(f"{label} inputs must be list")
+        inputs = []
+    if type(outputs) is not list:
+        diagnostics.append(f"{label} outputs must be list")
+        outputs = []
+    for index, state in enumerate(inputs):
+        _validate_pcode_state(
+            state,
+            f"{label} input {index}",
+            diagnostics,
+            allow_parents=False,
+        )
+    for index, state in enumerate(outputs):
+        _validate_pcode_state(
+            state,
+            f"{label} output {index}",
+            diagnostics,
+            allow_parents=True,
+        )
+    if kind == "update" and (len(inputs), len(outputs)) != (1, 1):
+        diagnostics.append(f"{label} update requires exactly one input and output")
+    elif kind == "clone" and (len(inputs) != 1 or len(outputs) < 2):
+        diagnostics.append(
+            f"{label} clone requires one input and two or more outputs"
+        )
+    elif kind == "replace" and (not inputs or not outputs):
+        diagnostics.append(f"{label} replace requires nonempty inputs and outputs")
+    elif kind == "delete" and (not inputs or outputs):
+        diagnostics.append(f"{label} delete requires inputs and no outputs")
+    elif kind == "create" and (inputs or not outputs):
+        diagnostics.append(f"{label} create requires no inputs and outputs")
+
+
+def _validate_pcode_relocations(value, range_size, label, diagnostics):
+    if type(value) is not list:
+        diagnostics.append(f"{label} relocations must be list")
+        return
+    keys = []
+    for index, row in enumerate(value):
+        row_label = f"{label} relocation {index}"
+        _pcode_exact_fields(row, _PCODE_RELOCATION_FIELDS, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        offset = row.get("offset_within_range")
+        for field in (
+            "offset_within_range",
+            "relocation_type_id",
+            "target_symbol_table_index",
+        ):
+            if not _pcode_nonnegative(row.get(field)):
+                diagnostics.append(
+                    f"{row_label} {field} must be nonnegative integer"
+                )
+        if _pcode_nonnegative(offset) and offset >= range_size:
+            diagnostics.append(f"{row_label} offset lies outside code range")
+        if type(row.get("target_symbol")) is not str:
+            diagnostics.append(f"{row_label} target_symbol must be string")
+        if type(row.get("addend")) is not int:
+            diagnostics.append(f"{row_label} addend must be integer")
+        keys.append(
+            (
+                offset,
+                row.get("relocation_type_id"),
+                row.get("target_symbol_table_index"),
+                row.get("target_symbol"),
+                row.get("addend"),
+            )
+        )
+    try:
+        if keys != sorted(keys):
+            diagnostics.append(f"{label} relocations must be canonically ordered")
+        if len(keys) != len(set(keys)):
+            diagnostics.append(f"{label} relocations must be unique")
+    except TypeError:
+        diagnostics.append(f"{label} relocation keys are invalid")
+
+
+def _validate_pcode_mappings(
+    value,
+    range_size,
+    arg_count,
+    label,
+    diagnostics,
+):
+    if type(value) is not list:
+        diagnostics.append(f"{label} machine_operand_mappings must be list")
+        return
+    keys = []
+    for index, row in enumerate(value):
+        row_label = f"{label} mapping {index}"
+        _pcode_exact_fields(row, _PCODE_MAPPING_FIELDS, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        instruction_offset = row.get("instruction_offset_within_range")
+        operand_position = row.get("machine_operand_position")
+        emission_index = row.get("emission_pcode_operand_index")
+        for field in (
+            "instruction_offset_within_range",
+            "machine_operand_position",
+            "emission_pcode_operand_index",
+        ):
+            if not _pcode_nonnegative(row.get(field)):
+                diagnostics.append(
+                    f"{row_label} {field} must be nonnegative integer"
+                )
+        if (
+            _pcode_nonnegative(instruction_offset)
+            and instruction_offset >= range_size
+        ):
+            diagnostics.append(
+                f"{row_label} instruction offset lies outside code range"
+            )
+        if (
+            _pcode_nonnegative(emission_index)
+            and _pcode_nonnegative(arg_count)
+            and emission_index >= arg_count
+        ):
+            diagnostics.append(
+                f"{row_label} emission operand index lies outside snapshot"
+            )
+        if not _pcode_nonempty_string(row.get("machine_operand_key")):
+            diagnostics.append(
+                f"{row_label} machine_operand_key must be nonempty string"
+            )
+        if not _pcode_nonempty_string(row.get("operand_lineage_id")):
+            diagnostics.append(
+                f"{row_label} operand_lineage_id must be nonempty string"
+            )
+        if not _pcode_physical(row.get("physical_register")):
+            diagnostics.append(f"{row_label} physical_register must be in 0..31")
+        keys.append(
+            (
+                instruction_offset,
+                operand_position,
+                emission_index,
+                row.get("operand_lineage_id"),
+            )
+        )
+    try:
+        if keys != sorted(keys):
+            diagnostics.append(
+                f"{label} machine operand mappings must be canonically ordered"
+            )
+        if len(keys) != len(set(keys)):
+            diagnostics.append(f"{label} machine operand mappings must be unique")
+    except TypeError:
+        diagnostics.append(f"{label} machine operand mapping keys are invalid")
+
+
+def _validate_pcode_code_ranges(value, snapshot, label, diagnostics):
+    if type(value) is not list or not value:
+        diagnostics.append(f"{label} code_ranges must be nonempty list")
+        return
+    keys = []
+    prior_end = None
+    arg_count = snapshot.get("arg_count") if type(snapshot) is dict else None
+    for index, row in enumerate(value):
+        row_label = f"{label} range {index}"
+        _pcode_exact_fields(row, _PCODE_RANGE_FIELDS, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        start = row.get("start")
+        end = row.get("end_exclusive")
+        valid_bounds = (
+            _pcode_nonnegative(start)
+            and _pcode_nonnegative(end)
+            and start < end
+        )
+        if not valid_bounds:
+            diagnostics.append(
+                f"{row_label} must be ordered nonempty half-open range"
+            )
+            range_size = 0
+        else:
+            range_size = end - start
+            if prior_end is not None and start < prior_end:
+                diagnostics.append(f"{row_label} overlaps prior code range")
+            prior_end = end
+            keys.append((start, end, row.get("bytes")))
+        bytes_hex = row.get("bytes")
+        if (
+            type(bytes_hex) is not str
+            or bytes_hex.lower() != bytes_hex
+            or len(bytes_hex) != 2 * range_size
+        ):
+            diagnostics.append(f"{row_label} bytes must be exact lowercase hex")
+        else:
+            try:
+                bytes.fromhex(bytes_hex)
+            except ValueError:
+                diagnostics.append(f"{row_label} bytes must be exact lowercase hex")
+        _validate_pcode_relocations(
+            row.get("relocations"), range_size, row_label, diagnostics
+        )
+        _validate_pcode_mappings(
+            row.get("machine_operand_mappings"),
+            range_size,
+            arg_count,
+            row_label,
+            diagnostics,
+        )
+    try:
+        if keys != sorted(keys):
+            diagnostics.append(f"{label} code_ranges must be canonically ordered")
+    except TypeError:
+        diagnostics.append(f"{label} code range keys are invalid")
+
+
+def _validate_pcode_emission(row, label, diagnostics):
+    _validate_pcode_identity(row, label, diagnostics)
+    snapshot = row.get("emission_snapshot")
+    _validate_pcode_emission_snapshot(
+        snapshot,
+        row,
+        f"{label} emission snapshot",
+        diagnostics,
+    )
+    _validate_pcode_code_ranges(
+        row.get("code_ranges"), snapshot, label, diagnostics
+    )
+
 
 def _coverage_site_ids(proof, collection, diagnostics):
     label = _PCODE_SITE_LABEL[collection]
-    rows = proof.get(collection) if isinstance(proof, Mapping) else None
-    if not isinstance(rows, list) or not rows:
+    rows = proof.get(collection) if type(proof) is dict else None
+    if type(rows) is not list or not rows:
         diagnostics.append(f"{label} proof site inventory must be nonempty")
         return set()
     result = []
     for index, row in enumerate(rows):
-        if not isinstance(row, Mapping):
+        if type(row) is not dict:
             diagnostics.append(f"{label} proof site {index} must be object")
             continue
         site_id = row.get("site_id")
-        if not isinstance(site_id, str) or not site_id:
+        if not _pcode_nonempty_string(site_id):
             diagnostics.append(
                 f"{label} proof site {index} ID must be nonempty string"
             )
@@ -220,9 +860,28 @@ def _pcode_instrumentation_status(
     """Report raw producer coverage without trusting a declared status."""
 
     diagnostics = []
-    if isinstance(errors, list):
+    try:
+        proof = struct_map.materialize_json_safe(proof)
+    except Exception as exc:  # noqa: BLE001 - raw coverage must fail closed
+        diagnostics.append(
+            f"PCode coverage proof could not be materialized: {exc}"
+        )
+        proof = {}
+    if type(proof) is not dict:
+        diagnostics.append("PCode coverage proof must be object")
+        proof = {}
+    try:
+        events = struct_map.materialize_json_safe(events)
+    except Exception as exc:  # noqa: BLE001 - raw coverage must fail closed
+        diagnostics.append(f"PCode events could not be materialized: {exc}")
+        events = []
+    if type(events) is not list:
+        diagnostics.append("PCode events must be list")
+        events = []
+
+    if type(errors) is list:
         for index, error in enumerate(errors):
-            if isinstance(error, str):
+            if type(error) is str:
                 diagnostics.append(error)
             else:
                 diagnostics.append(
@@ -247,11 +906,11 @@ def _pcode_instrumentation_status(
     }
     expected_sites = rewrite_sites | mutation_sites | emission_sites
 
-    if not isinstance(hooked_site_ids, set):
+    if type(hooked_site_ids) is not set:
         diagnostics.append("hooked site IDs must be set")
         hooked = set()
     elif any(
-        not isinstance(site_id, str) or not site_id
+        not _pcode_nonempty_string(site_id)
         for site_id in hooked_site_ids
     ):
         diagnostics.append("hooked site IDs must contain nonempty strings")
@@ -261,24 +920,25 @@ def _pcode_instrumentation_status(
     if hooked != expected_sites:
         diagnostics.append("hooked site IDs differ from exact proof inventory")
 
-    if not isinstance(events, list):
-        diagnostics.append("PCode events must be list")
-        event_rows = []
-    else:
-        event_rows = events
+    event_rows = events
     sequences = []
     for index, row in enumerate(event_rows):
-        if not isinstance(row, Mapping):
+        if type(row) is not dict:
             diagnostics.append(f"PCode event {index} must be object")
             continue
         kind = row.get("event")
-        if not isinstance(kind, str) or kind not in _PCODE_EVENT_FIELDS:
+        if type(kind) is not str or kind not in _PCODE_EVENT_FIELDS:
             diagnostics.append(f"unknown PCode event kind {kind!r}")
             continue
-        unexpected = sorted(
-            set(row) - _PCODE_EVENT_FIELDS[kind], key=repr
+        expected_fields = _PCODE_EVENT_FIELDS[kind]
+        exact_fields = _pcode_exact_fields(
+            row,
+            expected_fields,
+            f"{kind} event {index}",
+            diagnostics,
         )
-        if unexpected:
+        unexpected = sorted(set(row) - expected_fields, key=repr)
+        if not exact_fields and unexpected:
             diagnostics.append(f"{kind} event {index} has unexpected fields")
         sequence = row.get("pcode_event_sequence")
         if (
@@ -294,30 +954,40 @@ def _pcode_instrumentation_status(
         site_id = row.get("instrumented_site_id")
         collection = _PCODE_EVENT_SITE_COLLECTION[kind]
         if (
-            not isinstance(site_id, str)
+            type(site_id) is not str
             or site_id not in site_families[collection]
         ):
             diagnostics.append(
                 f"{kind} event site {site_id!r} not in matching proof family"
             )
+        if kind == "operand_rewrite":
+            _validate_pcode_rewrite(
+                row, f"operand_rewrite event {index}", diagnostics
+            )
+        elif kind == "pcode_mutation":
+            _validate_pcode_mutation(
+                row, f"pcode_mutation event {index}", diagnostics
+            )
+        else:
+            _validate_pcode_emission(
+                row, f"code_emission event {index}", diagnostics
+            )
     if sequences != list(range(len(event_rows))):
         diagnostics.append("PCode event sequences must be contiguous from zero")
 
     valid_cap = (
-        isinstance(event_cap, int)
-        and not isinstance(event_cap, bool)
+        type(event_cap) is int
         and event_cap > 0
     )
     if not valid_cap:
         diagnostics.append("PCode event cap must be positive integer")
     valid_dropped = (
-        isinstance(dropped_events, int)
-        and not isinstance(dropped_events, bool)
+        type(dropped_events) is int
         and dropped_events >= 0
     )
     if not valid_dropped:
         diagnostics.append("PCode dropped events must be nonnegative integer")
-    if not isinstance(truncated, bool):
+    if type(truncated) is not bool:
         diagnostics.append("PCode truncated must be boolean")
 
     complete = (
