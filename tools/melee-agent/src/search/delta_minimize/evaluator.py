@@ -308,13 +308,17 @@ def _compile_diagnostics(row: Mapping[str, Any]) -> str:
     ).strip()
 
 
+def _concrete_mwcc_compile_diagnostics(diagnostics: str) -> bool:
+    lowered = diagnostics.lower()
+    return "mwcceppc_debug.exe compiler" in lowered and "error:" in lowered
+
+
 def _compile_rejected(row: Mapping[str, Any]) -> bool:
     if row.get("score_error_kind") != "candidate":
         return False
     if row.get("pcdump_path"):
         return False
-    diagnostics = _compile_diagnostics(row).lower()
-    return "mwcceppc_debug.exe compiler" in diagnostics and "error:" in diagnostics
+    return _concrete_mwcc_compile_diagnostics(_compile_diagnostics(row))
 
 
 def _file_hash(path: Path) -> str:
@@ -348,7 +352,11 @@ def _validate_cached_artifacts(
                 return False
             if include_objobjects and not evidence.inspect_text:
                 return False
-        elif not evidence.compiler_stderr.strip():
+        elif (
+            evidence.pcdump_path is not None
+            or evidence.pcdump_hash is not None
+            or not _concrete_mwcc_compile_diagnostics(evidence.compiler_stderr)
+        ):
             return False
     except (OSError, UnicodeError, ValueError):
         return False
@@ -571,6 +579,13 @@ def capture_candidate(
             store.write_evidence(key, evidence.to_dict())
             return evidence
         inspect_output = store.inspect_output_path(candidate_id)
+        try:
+            inspect_output.unlink(missing_ok=True)
+        except OSError as error:
+            raise DeltaMinimizeError(
+                "inspector-output-reset-failed",
+                {"candidate_id": candidate_id, "path": str(inspect_output)},
+            ) from error
         try:
             inspect_text = _invoke_inspector(
                 active.inspect_source,

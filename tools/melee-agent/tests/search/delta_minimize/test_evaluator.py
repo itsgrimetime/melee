@@ -454,6 +454,112 @@ def test_capture_candidate_rebuilds_cached_viable_evidence_without_checkdiff(
     assert calls == {"score": 2, "inspect": 1}
 
 
+@pytest.mark.parametrize(
+    ("stale_pcdump", "stale_diagnostics"),
+    [
+        pytest.param(
+            True,
+            f"function '{FUNCTION}' not in compiled pcdump",
+            id="missing-target-function",
+        ),
+        pytest.param(
+            True,
+            "### mwcceppc.exe Compiler:\n#   Error: broken declaration\nCompilation finished.\n",
+            id="inspector-compile-rejection",
+        ),
+        pytest.param(
+            False,
+            "candidate failed",
+            id="non-mwcc-diagnostics",
+        ),
+    ],
+)
+def test_capture_candidate_rebuilds_untrusted_cached_nonviable_evidence(
+    tmp_path: Path,
+    stale_pcdump: bool,
+    stale_diagnostics: str,
+) -> None:
+    candidate = _candidate(tmp_path)
+    config = _config(tmp_path)
+    store = _store(tmp_path)
+    pcdump = tmp_path / "stale.pcdump"
+    pcdump.write_text("Starting function other\n", encoding="utf-8")
+    stale = RawCandidateEvidence(
+        candidate_id=candidate.candidate_id,
+        mask=candidate.mask,
+        source_path=str(candidate.source_path),
+        source_hash=candidate.source_hash,
+        compile_status="rejected",
+        viable=False,
+        pcdump_path=str(pcdump) if stale_pcdump else None,
+        checkdiff_evidence=None,
+        inspect_text=None,
+        compiler_stderr=stale_diagnostics,
+        inspection_mode="objobjects",
+        pcdump_hash=(hashlib.sha256(pcdump.read_bytes()).hexdigest() if stale_pcdump else None),
+    )
+    store.write_evidence(store.evidence_key(candidate, config), stale.to_dict())
+    calls = {"score": 0}
+
+    def compile_rejected(_rows, _config):
+        calls["score"] += 1
+        return [
+            {
+                "candidate_id": candidate.candidate_id,
+                "error": "pcdump missing",
+                "score_error_kind": "candidate",
+                "score_returncode": 0,
+                "score_stderr": "mwcceppc_debug.exe compiler error: syntax error",
+            }
+        ]
+
+    rebuilt = capture_candidate(
+        candidate,
+        config,
+        backends=EvaluationBackends(
+            compile_rejected,
+            lambda *_args, **_kwargs: pytest.fail(),
+        ),
+        store=store,
+    )
+
+    assert rebuilt.viable is False
+    assert rebuilt.pcdump_path is None
+    assert rebuilt.compiler_stderr == "mwcceppc_debug.exe compiler error: syntax error"
+    assert calls == {"score": 1}
+
+
+def test_capture_candidate_reuses_cached_concrete_compile_rejection(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(tmp_path)
+    config = _config(tmp_path)
+    store = _store(tmp_path)
+    calls = {"score": 0}
+
+    def compile_rejected(_rows, _config):
+        calls["score"] += 1
+        return [
+            {
+                "candidate_id": candidate.candidate_id,
+                "error": "pcdump missing",
+                "score_error_kind": "candidate",
+                "score_returncode": 0,
+                "score_stderr": "mwcceppc_debug.exe compiler error: syntax error",
+            }
+        ]
+
+    backends = EvaluationBackends(
+        compile_rejected,
+        lambda *_args, **_kwargs: pytest.fail(),
+    )
+    first = capture_candidate(candidate, config, backends=backends, store=store)
+    second = capture_candidate(candidate, config, backends=backends, store=store)
+
+    assert second == first
+    assert calls == {"score": 1}
+
+
 def test_evidence_key_includes_inspector_invocation_mode(tmp_path: Path) -> None:
     candidate = _candidate(tmp_path)
     store = _store(tmp_path)
@@ -664,6 +770,44 @@ def test_complete_inspector_artifact_is_recovered_after_wrapper_failure(
     assert evidence.viable is True
     assert evidence.inspect_text is not None
     assert "Compilation finished." in evidence.inspect_text
+
+
+def test_inspector_failure_does_not_recover_preexisting_stable_output(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(tmp_path)
+    pcdump = tmp_path / "candidate.pcdump"
+    pcdump.write_text("pcdump", encoding="utf-8")
+    store = _store(tmp_path)
+    inspect_output = store.inspect_output_path(candidate.candidate_id)
+    inspect_output.parent.mkdir(parents=True, exist_ok=True)
+    inspect_output.write_text(
+        f"FUNCTION: {FUNCTION}\nFrontend: OBJOBJECTS\n"
+        "ObjObject @ 0x10\n  Kind: DLOCAL\n  Name: stale\n"
+        f"  Type: int\n  Scope: {FUNCTION}\n  Expression: stale\n"
+        "Compilation finished.\n",
+        encoding="utf-8",
+    )
+    invocation = {"saw_preexisting_output": None}
+
+    def failed_inspection(_source, _function, output, **_kwargs):
+        invocation["saw_preexisting_output"] = output.exists()
+        raise DeltaMinimizeError("inspector-failed")
+
+    config = _config(tmp_path)
+    with pytest.raises(DeltaMinimizeError, match="^inspector-failed$"):
+        capture_candidate(
+            candidate,
+            config,
+            backends=EvaluationBackends(
+                lambda _rows, _config: [_score_row(candidate, pcdump)],
+                failed_inspection,
+            ),
+            store=store,
+        )
+
+    assert invocation == {"saw_preexisting_output": False}
+    assert store.load_evidence(store.evidence_key(candidate, config)) is None
 
 
 def test_raw_evidence_roundtrip_rejects_malformed_data() -> None:
