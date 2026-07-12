@@ -24,6 +24,7 @@ PROJECT_NAME = "mwcceppc"
 PROGRAM_PATH = "/mwcceppc.exe"
 RESULT_SCHEMA = "mwcc-ghidra-setup.v1"
 _STATUS_PREFIX = "MWCC_AUDIT_STATUS "
+_GHIDRA_SCRIPT_LOG_SUFFIX = " (GhidraScript)"
 _PROJECT_SUFFIXES = (".gpr", ".rep", ".lock")
 
 
@@ -172,8 +173,11 @@ def _parse_status(process: subprocess.CompletedProcess[str]) -> int:
     ]
     if len(markers) != 1:
         raise MwccGhidraSetupError("invalid-status-marker", {"count": len(markers)})
+    marker = markers[0].strip()
+    if marker.endswith(_GHIDRA_SCRIPT_LOG_SUFFIX):
+        marker = marker.removesuffix(_GHIDRA_SCRIPT_LOG_SUFFIX)
     try:
-        payload = json.loads(markers[0])
+        payload = json.loads(marker)
     except (TypeError, ValueError) as error:
         raise MwccGhidraSetupError("invalid-status-marker") from error
     if not isinstance(payload, dict) or set(payload) != {"sha256", "function_count"}:

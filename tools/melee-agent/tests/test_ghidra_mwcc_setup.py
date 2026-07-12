@@ -190,6 +190,35 @@ def test_validation_accepts_ghidra_decorated_status_marker(setup_env) -> None:
     assert result.function_count == 3248
 
 
+def test_validation_accepts_real_ghidra_script_log_suffix(setup_env) -> None:
+    setup_env["project_dir"].mkdir(parents=True)
+    (setup_env["project_dir"] / "mwcceppc.gpr").touch()
+    runner = ScriptedRunner(
+        completed(
+            "INFO  MwccAuditStatus.java> "
+            + STATUS_MARKER.rstrip("\n")
+            + " (GhidraScript)  \n"
+        )
+    )
+
+    result = invoke(setup_env, runner)
+
+    assert result.status == "ready"
+    assert result.function_count == 3248
+
+
+def test_validation_rejects_unknown_status_marker_suffix(setup_env) -> None:
+    setup_env["project_dir"].mkdir(parents=True)
+    (setup_env["project_dir"] / "mwcceppc.gpr").touch()
+    runner = ScriptedRunner(completed(STATUS_MARKER.rstrip("\n") + " unexpected\n"))
+
+    with pytest.raises(MwccGhidraSetupError) as caught:
+        invoke(setup_env, runner)
+
+    assert caught.value.reason == "invalid-existing-project"
+    assert caught.value.details["cause"] == "invalid-status-marker"
+
+
 def test_empty_rep_is_invalid_without_repair(setup_env) -> None:
     rep = setup_env["project_dir"] / "mwcceppc.rep"
     (rep / "idata").mkdir(parents=True)
