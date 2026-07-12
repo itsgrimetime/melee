@@ -194,3 +194,45 @@ python -m pytest \
 explicit optional C901 audit reports the 12 unsuppressed helpers summarized
 above and no longer reports the ELF or decoder helpers refactored during this
 review cycle.
+
+## Final blocker remediation
+
+The final review blockers were resolved in a third focused RED/GREEN cycle.
+Before implementation, the new adversarial selection produced 18 failures with
+107 existing tests passing. The completed suite now proves these additional
+gates:
+
+1. Emission makes a `pcode_id` terminal in the shared chronological replay.
+   Every later rewrite or mutation input/output touching that ID is rejected,
+   including no-op updates, deletion, replacement output, and delete/recreate
+   sequences. A control case confirms that a different, not-yet-emitted PCode
+   may continue to evolve.
+2. Lifecycle position is observation time, not PCode state identity. Mutation
+   inputs share one pre-position, outputs share one post-position, pre cannot
+   exceed post, every state must be active at its side's position, and create
+   or delete takes its interval from the existing side. Rewrite and emission
+   are point events, and every shared event starts at or after the prior event's
+   end. Tests cover later observations of unchanged state, clone atomicity,
+   create/delete one-sided intervals, rewrite/emission ordering, and generation
+   reuse after free.
+3. Raw PowerPC update-form legality is checked before semantic-role inference.
+   Every update form requires nonzero `RA`; integer D/X update loads additionally
+   require `RT != RA`. Exact negative controls cover `lwzu`, `lwzux`, `lbzux`,
+   and `lhzux`, while legal controls include `stwu r1, displacement(r1)`.
+
+Final focused and adjacent verification:
+
+```text
+python -m pytest \
+  tests/test_retro_backend_pcode_lineage.py \
+  tests/test_retro_backend_instrumentation_proof.py \
+  tests/test_retro_struct_map.py \
+  tests/test_retro_backend_object_bindings.py \
+  tests/test_retro_backend_identity.py \
+  tests/test_causal_diff_bundles.py -q -o addopts=''
+409 passed
+```
+
+`ruff format --check`, default `ruff check`, and `git diff --check` pass. The
+optional C901 audit remains informational at the same 12 unsuppressed helpers;
+no complexity warning was suppressed.

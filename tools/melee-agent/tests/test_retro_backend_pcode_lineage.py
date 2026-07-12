@@ -601,6 +601,7 @@ def test_non_emitted_deleted_pcode_may_not_claim_code_ranges(candidate_object: P
 
 def test_delete_consumes_complete_state_and_allows_empty_final_set(candidate_object: Path) -> None:
     payload = minimal_payload()
+    _add_lifecycle_observation(payload)
     instruction = payload["pcode_instructions"][0]
     instruction["stage_snapshots"].pop()
     instruction.update(
@@ -616,6 +617,7 @@ def test_delete_consumes_complete_state_and_allows_empty_final_set(candidate_obj
     )
     mutation = payload["pcode_operand_lineage_events"][0]
     mutation.update({"mutation_kind": "delete", "outputs": []})
+    mutation["inputs"][0]["lifecycle_sequence_at_capture"] = 1
     payload["coverage"]["pcode_instrumentation"].update(
         {"last_event_sequence": 2, "final_pcodes": 0, "emission_events": 0}
     )
@@ -629,12 +631,16 @@ def test_delete_consumes_complete_state_and_allows_empty_final_set(candidate_obj
 
 def test_create_defines_fresh_parentless_lineages(candidate_object: Path) -> None:
     payload = minimal_payload()
+    _add_lifecycle_observation(payload)
     instruction = payload["pcode_instructions"][0]
     emission = copy.deepcopy(instruction["stage_snapshots"][1])
     first = copy.deepcopy(emission)
     first["stage"] = "mutation_output"
+    first["lifecycle_sequence_at_capture"] = 1
+    emission["lifecycle_sequence_at_capture"] = 1
     instruction["stage_snapshots"] = [first, emission]
     instruction["emission_event_sequence"] = 1
+    instruction["emission_lifecycle_sequence_at_capture"] = 1
     final_operands = copy.deepcopy(emission["operand_lineage_inventory"])
     created_operands = [{**item, "parent_lineage_ids": []} for item in final_operands]
     payload["pcode_occurrences"] = []
@@ -644,7 +650,7 @@ def test_create_defines_fresh_parentless_lineages(candidate_object: Path) -> Non
             "instrumented_site_id": "mutation-1",
             "mutation_kind": "create",
             "inputs": [],
-            "outputs": [state(created_operands)],
+            "outputs": [state(created_operands, sequence=1)],
         }
     ]
     payload["coverage"]["pcode_occurrences_seen"] = 0
@@ -702,8 +708,11 @@ def cloned_payload() -> dict[str, object]:
     clone["stage_snapshots"] = [first, emission]
     clone["code_ranges"][0].update({"start": 4, "end_exclusive": 8})
     original["emission_event_sequence"] = 3
+    original["emission_lifecycle_sequence_at_capture"] = 1
+    original["stage_snapshots"][1]["lifecycle_sequence_at_capture"] = 1
     payload["pcode_instructions"].append(clone)
     mutation = payload["pcode_operand_lineage_events"][0]
+    mutation["outputs"][0]["lifecycle_sequence_at_capture"] = 1
     mutation.update(
         {
             "mutation_kind": "clone",
@@ -1147,3 +1156,259 @@ def test_memory_base_mapping_rejects_missing_or_extra_register(tmp_path: Path, c
     result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
     assert any("exactly one mapping for every decoded register operand" in error for error in result.errors)
     assert result.capabilities == frozenset()
+
+
+def _append_noop_update(payload: dict[str, object], sequence: int, *, pcode_id: str = "pc-0") -> None:
+    row = payload["pcode_instructions"][int(pcode_id.removeprefix("pc-"))]
+    emission = row["stage_snapshots"][-1]
+    observed = state(
+        copy.deepcopy(emission["operand_lineage_inventory"]),
+        sequence=emission["lifecycle_sequence_at_capture"],
+        pcode_id=pcode_id,
+        address=row["runtime_address"],
+        generation=row["allocation_generation"],
+    )
+    payload["pcode_operand_lineage_events"].append(
+        {
+            "pcode_event_sequence": sequence,
+            "instrumented_site_id": "mutation-1",
+            "mutation_kind": "update",
+            "inputs": [copy.deepcopy(observed)],
+            "outputs": [copy.deepcopy(observed)],
+        }
+    )
+    payload["coverage"]["pcode_instrumentation"]["mutation_events"] += 1
+    payload["coverage"]["pcode_instrumentation"]["last_event_sequence"] = sequence
+
+
+def test_noop_update_after_emission_is_forbidden(candidate_object: Path) -> None:
+    payload = minimal_payload()
+    _append_noop_update(payload, 4)
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any("terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
+def test_rewrite_after_emission_is_forbidden(candidate_object: Path) -> None:
+    payload = minimal_payload()
+    payload["pcode_occurrences"][1]["pcode_event_sequence"] = 4
+    payload["coverage"]["pcode_instrumentation"]["last_event_sequence"] = 4
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any("rewrite touches terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
+
+
+@pytest.mark.parametrize("kind", ["delete", "replace"])
+def test_delete_or_replace_input_after_emission_is_forbidden(candidate_object: Path, kind: str) -> None:
+    payload = minimal_payload()
+    emission = payload["pcode_instructions"][0]["stage_snapshots"][1]
+    observed = state(copy.deepcopy(emission["operand_lineage_inventory"]))
+    payload["pcode_operand_lineage_events"].append(
+        {
+            "pcode_event_sequence": 4,
+            "instrumented_site_id": "mutation-1",
+            "mutation_kind": kind,
+            "inputs": [observed],
+            "outputs": [] if kind == "delete" else [copy.deepcopy(observed)],
+        }
+    )
+    payload["coverage"]["pcode_instrumentation"].update(
+        {"mutation_events": 2, "last_event_sequence": 4, "final_pcodes": 0 if kind == "delete" else 1}
+    )
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any("terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
+
+
+def test_same_id_recreate_after_emission_is_forbidden(candidate_object: Path) -> None:
+    payload = minimal_payload()
+    emission = payload["pcode_instructions"][0]["stage_snapshots"][1]
+    observed = state(copy.deepcopy(emission["operand_lineage_inventory"]))
+    payload["pcode_operand_lineage_events"].extend(
+        [
+            {
+                "pcode_event_sequence": 4,
+                "instrumented_site_id": "mutation-1",
+                "mutation_kind": "delete",
+                "inputs": [copy.deepcopy(observed)],
+                "outputs": [],
+            },
+            {
+                "pcode_event_sequence": 5,
+                "instrumented_site_id": "mutation-1",
+                "mutation_kind": "create",
+                "inputs": [],
+                "outputs": [copy.deepcopy(observed)],
+            },
+        ]
+    )
+    payload["coverage"]["pcode_instrumentation"].update({"mutation_events": 3, "last_event_sequence": 5})
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any("terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
+
+
+def test_replace_output_after_emission_is_forbidden(tmp_path: Path) -> None:
+    candidate = tmp_path / "replace-terminal.o"
+    candidate.write_bytes(_candidate_elf(bytes.fromhex("3ad500003ad50000")))
+    payload = cloned_payload()
+    original = payload["pcode_instructions"][0]
+    clone = payload["pcode_instructions"][1]
+    original_state = state(
+        copy.deepcopy(original["stage_snapshots"][1]["operand_lineage_inventory"]),
+        sequence=1,
+    )
+    clone_state = state(
+        copy.deepcopy(clone["stage_snapshots"][1]["operand_lineage_inventory"]),
+        sequence=1,
+        pcode_id="pc-1",
+        address=0x3000,
+    )
+    payload["pcode_operand_lineage_events"].append(
+        {
+            "pcode_event_sequence": 4,
+            "instrumented_site_id": "mutation-1",
+            "mutation_kind": "replace",
+            "inputs": [clone_state],
+            "outputs": [original_state],
+        }
+    )
+    clone["emission_event_sequence"] = 5
+    payload["coverage"]["pcode_instrumentation"].update(
+        {"mutation_events": 2, "last_event_sequence": 5, "final_pcodes": 1}
+    )
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    assert any("mutation touches terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
+
+
+def test_unrelated_nonemitted_pcode_may_evolve(tmp_path: Path) -> None:
+    candidate = tmp_path / "nonterminal-update.o"
+    candidate.write_bytes(_candidate_elf(bytes.fromhex("3ad500003ad50000")))
+    payload = cloned_payload()
+    clone = payload["pcode_instructions"][1]
+    clone["emission_event_sequence"] = 5
+    _append_noop_update(payload, 4, pcode_id="pc-1")
+    payload["coverage"]["pcode_instrumentation"]["last_event_sequence"] = 5
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    assert result.errors == ()
+    assert result.capabilities == frozenset({"pcode-to-code-range"})
+
+
+def _add_lifecycle_observation(payload: dict[str, object]) -> None:
+    payload["lifecycle_events"].append(
+        {
+            "sequence": 1,
+            "event": "allocate",
+            "entity_kind": "pcode",
+            "runtime_address": 0x3000,
+            "allocation_generation": 1,
+            "instrumented_site_id": "pcode-alloc-1",
+            "compiler_stage": "backend-lowering",
+        }
+    )
+
+
+def test_same_state_may_be_observed_at_later_lifecycle_position(candidate_object: Path) -> None:
+    payload = minimal_payload()
+    _add_lifecycle_observation(payload)
+    mutation = payload["pcode_operand_lineage_events"][0]
+    mutation["inputs"][0]["lifecycle_sequence_at_capture"] = 1
+    mutation["outputs"][0]["lifecycle_sequence_at_capture"] = 1
+    payload["pcode_occurrences"][1]["lifecycle_sequence_at_capture"] = 1
+    emission = payload["pcode_instructions"][0]["stage_snapshots"][1]
+    emission["lifecycle_sequence_at_capture"] = 1
+    payload["pcode_instructions"][0]["emission_lifecycle_sequence_at_capture"] = 1
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert result.errors == ()
+    assert result.capabilities == frozenset({"pcode-to-code-range"})
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda p: p["pcode_operand_lineage_events"][0]["outputs"][0].update({"lifecycle_sequence_at_capture": -1}),
+            "mutation pre-state lifecycle position exceeds post-state",
+        ),
+        (
+            lambda p: p["pcode_instructions"][0].update({"emission_lifecycle_sequence_at_capture": -1}),
+            "moves backward in lifecycle time",
+        ),
+        (
+            lambda p: p["pcode_occurrences"][1].update({"lifecycle_sequence_at_capture": -1}),
+            "moves backward in lifecycle time",
+        ),
+    ],
+)
+def test_shared_events_reject_backward_lifecycle_time(candidate_object: Path, mutate, message: str) -> None:
+    payload = minimal_payload()
+    mutate(payload)
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any(message in error for error in result.errors), result.errors
+
+
+def test_clone_outputs_require_one_atomic_post_position(tmp_path: Path) -> None:
+    candidate = tmp_path / "clone.o"
+    candidate.write_bytes(_candidate_elf(bytes.fromhex("3ad500003ad50000")))
+    payload = cloned_payload()
+    payload["pcode_operand_lineage_events"][0]["outputs"][1]["lifecycle_sequence_at_capture"] = 0
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    assert any("mutation outputs must share one lifecycle position" in error for error in result.errors), result.errors
+
+
+def test_reused_generation_cannot_survive_past_free(candidate_object: Path) -> None:
+    payload = minimal_payload()
+    payload["lifecycle_events"].extend(
+        [
+            {
+                "sequence": 1,
+                "event": "free",
+                "entity_kind": "pcode",
+                "runtime_address": PC_ADDRESS,
+                "allocation_generation": 1,
+                "instrumented_site_id": "pcode-free-1",
+                "compiler_stage": "backend-finalize",
+            },
+            {
+                "sequence": 2,
+                "event": "allocate",
+                "entity_kind": "pcode",
+                "runtime_address": PC_ADDRESS,
+                "allocation_generation": 2,
+                "instrumented_site_id": "pcode-alloc-1",
+                "compiler_stage": "backend-lowering",
+            },
+        ]
+    )
+    payload["pcode_operand_lineage_events"][0]["outputs"][0]["lifecycle_sequence_at_capture"] = 2
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any("active PCode generation" in error for error in result.errors), result.errors
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (_d_form(33, 3, 0), "RA must be nonzero"),
+        (_d_form(33, 3, 3), "RT must differ from RA"),
+        (_x_form(3, 0, 5, 55), "RA must be nonzero"),
+        (_x_form(3, 3, 5, 55), "RT must differ from RA"),
+        (_x_form(3, 0, 5, 119), "RA must be nonzero"),
+        (_x_form(3, 3, 5, 119), "RT must differ from RA"),
+        (_x_form(3, 0, 5, 311), "RA must be nonzero"),
+        (_x_form(3, 3, 5, 311), "RT must differ from RA"),
+    ],
+)
+def test_integer_update_load_raw_legality(code: bytes, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _decode_registers(code, 0)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        _d_form(33, 3, 4),
+        _x_form(3, 4, 5, 55),
+        _x_form(3, 4, 5, 119),
+        _x_form(3, 4, 5, 311),
+        _d_form(37, 1, 1),
+    ],
+)
+def test_legal_update_forms_remain_decodable(code: bytes) -> None:
+    assert _decode_registers(code, 0)

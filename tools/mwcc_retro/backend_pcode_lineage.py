@@ -515,7 +515,13 @@ _PARSED_FIELDS = frozenset(
     }
 )
 _OPERAND_FIELDS = frozenset(
-    {"operand_index", "operand_lineage_id", "raw_arg_kind_id", "raw_payload_sha256", "parent_lineage_ids"}
+    {
+        "operand_index",
+        "operand_lineage_id",
+        "raw_arg_kind_id",
+        "raw_payload_sha256",
+        "parent_lineage_ids",
+    }
 )
 _OPERAND_REQUIRED = _OPERAND_FIELDS - {"parent_lineage_ids"}
 _STATE_FIELDS = frozenset(
@@ -550,7 +556,15 @@ _REWRITE_FIELDS = frozenset(
         "confidence",
     }
 )
-_MUTATION_FIELDS = frozenset({"pcode_event_sequence", "instrumented_site_id", "mutation_kind", "inputs", "outputs"})
+_MUTATION_FIELDS = frozenset(
+    {
+        "pcode_event_sequence",
+        "instrumented_site_id",
+        "mutation_kind",
+        "inputs",
+        "outputs",
+    }
+)
 
 
 def _rule(
@@ -592,7 +606,13 @@ def _validate_operands(
     result: list[Mapping[str, object]] = []
     indexes: list[int] = []
     for index, raw in enumerate(rows):
-        row = _closed(raw, _OPERAND_FIELDS, f"{label} operand {index}", ctx.errors, required=_OPERAND_REQUIRED)
+        row = _closed(
+            raw,
+            _OPERAND_FIELDS,
+            f"{label} operand {index}",
+            ctx.errors,
+            required=_OPERAND_REQUIRED,
+        )
         if row is None:
             continue
         operand_index = row.get("operand_index")
@@ -609,7 +629,11 @@ def _validate_operands(
         if "parent_lineage_ids" in row:
             if not allow_parents:
                 ctx.errors.append(f"{label} operand {index} must omit parent_lineage_ids")
-            parents = _rows(row.get("parent_lineage_ids"), f"{label} operand {index} parents", ctx.errors)
+            parents = _rows(
+                row.get("parent_lineage_ids"),
+                f"{label} operand {index} parents",
+                ctx.errors,
+            )
             if any(not isinstance(parent, str) or not parent for parent in parents):
                 ctx.errors.append(f"{label} operand {index} parents must be non-empty strings")
             elif parents != sorted(set(parents)):
@@ -746,11 +770,72 @@ def _state_signature(row: Mapping[str, object]) -> tuple[object, ...]:
         row.get("pcode_id"),
         row.get("runtime_address"),
         row.get("allocation_generation"),
-        row.get("lifecycle_sequence_at_capture"),
         row.get("opcode_id"),
         row.get("arg_count"),
         operand_signature,
     )
+
+
+def _state_lifecycle_positions(raw: object) -> list[int]:
+    if not isinstance(raw, list):
+        return []
+    return [
+        position
+        for state in raw
+        if isinstance(state, Mapping) and _int(position := state.get("lifecycle_sequence_at_capture"))
+    ]
+
+
+def _shared_lifecycle_position(
+    raw: object,
+    side: str,
+    ctx: _Context,
+) -> int | None:
+    positions = _state_lifecycle_positions(raw)
+    if not positions:
+        return None
+    if len(set(positions)) != 1:
+        ctx.errors.append(f"PCode mutation {side} must share one lifecycle position")
+        return None
+    return positions[0]
+
+
+def _event_lifecycle_interval(
+    kind: str,
+    row: Mapping[str, object],
+    ctx: _Context,
+) -> tuple[int, int] | None:
+    if kind == "rewrite":
+        position = row.get("lifecycle_sequence_at_capture")
+        return (position, position) if _int(position) else None
+    if kind == "emission":
+        position = row.get("emission_lifecycle_sequence_at_capture")
+        return (position, position) if _int(position) else None
+    pre = _shared_lifecycle_position(row.get("inputs"), "inputs", ctx)
+    post = _shared_lifecycle_position(row.get("outputs"), "outputs", ctx)
+    if pre is not None and post is not None and pre > post:
+        ctx.errors.append("PCode mutation pre-state lifecycle position exceeds post-state")
+    if pre is None:
+        pre = post
+    if post is None:
+        post = pre
+    return (pre, post) if pre is not None and post is not None else None
+
+
+def _event_pcode_ids(kind: str, row: Mapping[str, object]) -> set[str]:
+    if kind in {"rewrite", "emission"}:
+        pcode_id = row.get("pcode_id")
+        return {pcode_id} if isinstance(pcode_id, str) else set()
+    result: set[str] = set()
+    for side in (row.get("inputs"), row.get("outputs")):
+        if not isinstance(side, list):
+            continue
+        result.update(
+            pcode_id
+            for state in side
+            if isinstance(state, Mapping) and isinstance((pcode_id := state.get("pcode_id")), str)
+        )
+    return result
 
 
 def _validate_instructions(
@@ -789,7 +874,11 @@ def _validate_instructions(
             ctx.errors.append(f"PCode instruction {index} section_name must be non-empty string")
         if row.get("coordinate_space") != "function-relative-bytes":
             ctx.errors.append(f"PCode instruction {index} coordinate space must be function-relative-bytes")
-        snapshots = _rows(row.get("stage_snapshots"), f"PCode instruction {index} stage_snapshots", ctx.errors)
+        snapshots = _rows(
+            row.get("stage_snapshots"),
+            f"PCode instruction {index} stage_snapshots",
+            ctx.errors,
+        )
         if len(snapshots) not in (1, 2):
             ctx.errors.append(f"PCode instruction {index} must have one first-observed and optional emission snapshot")
         expected_stages: list[str] = []
@@ -824,9 +913,18 @@ def _validate_instructions(
             if not _nonnegative(snapshot.get("arg_count")):
                 ctx.errors.append(f"{label} arg_count must be nonnegative integer")
             inventory = _validate_operands(
-                snapshot.get("operand_lineage_inventory"), snapshot.get("arg_count"), label, ctx
+                snapshot.get("operand_lineage_inventory"),
+                snapshot.get("arg_count"),
+                label,
+                ctx,
             )
-            parsed_rows = _validate_parsed(snapshot.get("parsed_register_operands"), opcode_id, inventory, label, ctx)
+            parsed_rows = _validate_parsed(
+                snapshot.get("parsed_register_operands"),
+                opcode_id,
+                inventory,
+                label,
+                ctx,
+            )
             parsed_by_stage[str(stage)] = parsed_rows
             if snap_index == 0:
                 ctx.allocatable_lineages.update(
@@ -840,7 +938,11 @@ def _validate_instructions(
                         operand_row.get("operand_index")
                     ):
                         initial_inventory.append(
-                            (pcode_id, operand_row["operand_index"], operand_row["operand_lineage_id"])
+                            (
+                                pcode_id,
+                                operand_row["operand_index"],
+                                operand_row["operand_lineage_id"],
+                            )
                         )
                 ctx.current[pcode_id] = _state_from_snapshot(row, snapshot)
         if len(set(expected_stages)) != len(expected_stages):
@@ -857,7 +959,11 @@ def _validate_instructions(
         ctx.errors.append("duplicate PCode runtime address/generation")
     sorted_rows = sorted(
         (
-            (row.get("runtime_address"), row.get("allocation_generation"), row.get("pcode_id"))
+            (
+                row.get("runtime_address"),
+                row.get("allocation_generation"),
+                row.get("pcode_id"),
+            )
             for row in valid_rows
             if _positive(row.get("runtime_address")) and _positive(row.get("allocation_generation"))
         ),
@@ -901,7 +1007,13 @@ def _validate_state(
         ctx.errors.append(f"{label} references unknown opcode_id")
     if not _nonnegative(row.get("arg_count")):
         ctx.errors.append(f"{label} arg_count must be nonnegative integer")
-    _validate_operands(row.get("operands"), row.get("arg_count"), label, ctx, allow_parents=allow_parents)
+    _validate_operands(
+        row.get("operands"),
+        row.get("arg_count"),
+        label,
+        ctx,
+        allow_parents=allow_parents,
+    )
     pcode = ctx.pcode_rows.get(row.get("pcode_id")) if isinstance(row.get("pcode_id"), str) else None
     if pcode is None:
         ctx.errors.append(f"{label} references unknown pcode_id")
@@ -979,11 +1091,22 @@ def _validate_rewrite(
         row.get("lifecycle_sequence_at_capture"),
         label,
     )
-    parsed = _first_parsed(ctx, snapshots, str(pcode_id), int(operand_index) if _nonnegative(operand_index) else -1)
+    parsed = _first_parsed(
+        ctx,
+        snapshots,
+        str(pcode_id),
+        int(operand_index) if _nonnegative(operand_index) else -1,
+    )
     if parsed is None:
         ctx.errors.append(f"{label} has no parsed register occurrence")
     else:
-        for field in ("operand_lineage_id", "role", "class_id", "virtual_kind", "virtual"):
+        for field in (
+            "operand_lineage_id",
+            "role",
+            "class_id",
+            "virtual_kind",
+            "virtual",
+        ):
             if row.get(field) != parsed.get(field):
                 ctx.errors.append(f"{label} {field} disagrees with parsed occurrence")
         if parsed.get("allocation_requirement") != "allocator-rewrite-required":
@@ -1057,7 +1180,11 @@ def _validate_mutation(
     output_ids = [state.get("pcode_id") for state in outputs]
     for side, states in (("inputs", inputs), ("outputs", outputs)):
         identity_keys = [
-            (state.get("pcode_id"), state.get("runtime_address"), state.get("allocation_generation"))
+            (
+                state.get("pcode_id"),
+                state.get("runtime_address"),
+                state.get("allocation_generation"),
+            )
             for state in states
         ]
         try:
@@ -1206,7 +1333,11 @@ def _replay_pcode_events(
     list[_EmissionObservation],
 ]:
     rewrite_raw = _rows(payload.get("pcode_occurrences"), "pcode_occurrences", ctx.errors)
-    mutation_raw = _rows(payload.get("pcode_operand_lineage_events"), "pcode_operand_lineage_events", ctx.errors)
+    mutation_raw = _rows(
+        payload.get("pcode_operand_lineage_events"),
+        "pcode_operand_lineage_events",
+        ctx.errors,
+    )
     rewrites: list[Mapping[str, object]] = []
     mutations: list[Mapping[str, object]] = []
     emissions: list[_EmissionObservation] = []
@@ -1244,8 +1375,18 @@ def _replay_pcode_events(
     mutation_outputs_seen: Counter[str] = Counter()
     rewrite_indexes = {id(row): index for index, row in enumerate(rewrite_raw)}
     mutation_indexes = {id(row): index for index, row in enumerate(mutation_raw)}
+    terminal_ids: set[str] = set()
+    prior_lifecycle_end: int | None = None
     for sequence, kind, row in sorted(events, key=lambda item: item[0]):
         del sequence
+        interval = _event_lifecycle_interval(kind, row, ctx)
+        if interval is not None:
+            start, end = interval
+            if prior_lifecycle_end is not None and start < prior_lifecycle_end:
+                ctx.errors.append(f"PCode {kind} event moves backward in lifecycle time")
+            prior_lifecycle_end = end if prior_lifecycle_end is None else max(prior_lifecycle_end, end)
+        for pcode_id in sorted(_event_pcode_ids(kind, row) & terminal_ids):
+            ctx.errors.append(f"PCode {kind} touches terminal emitted pcode_id {pcode_id}")
         if kind == "rewrite":
             validated = _validate_rewrite(row, rewrite_indexes[id(row)], snapshots, ctx)
             if validated is not None:
@@ -1265,6 +1406,7 @@ def _replay_pcode_events(
             observation = _observe_emission(row, snapshots, ctx)
             if observation is not None:
                 emissions.append(observation)
+            terminal_ids.update(_event_pcode_ids(kind, row))
     if raw_rewrite_keys != sorted(raw_rewrite_keys):
         ctx.errors.append("pcode_occurrences must be canonically ordered")
     if raw_mutation_sequences != sorted(raw_mutation_sequences):
@@ -1277,7 +1419,13 @@ def _replay_pcode_events(
 
 _RANGE_FIELDS = frozenset({"start", "end_exclusive", "bytes", "relocations", "machine_operand_mappings"})
 _RELOCATION_FIELDS = frozenset(
-    {"offset_within_range", "relocation_type_id", "target_symbol_table_index", "target_symbol", "addend"}
+    {
+        "offset_within_range",
+        "relocation_type_id",
+        "target_symbol_table_index",
+        "target_symbol",
+        "addend",
+    }
 )
 _MAPPING_FIELDS = frozenset(
     {
@@ -1327,7 +1475,11 @@ def _lineage_origins(
     stack.remove(lineage)
     unique: dict[tuple[object, ...], Mapping[str, object]] = {}
     for origin in result:
-        key = (origin.get("pcode_id"), origin.get("operand_index"), origin.get("pcode_event_sequence"))
+        key = (
+            origin.get("pcode_id"),
+            origin.get("operand_index"),
+            origin.get("pcode_event_sequence"),
+        )
         unique[key] = origin
     return list(unique.values())
 
@@ -1371,6 +1523,10 @@ _INDEXED_STORES = frozenset(
     }
 )
 _INDEXED_STORE_UPDATES = frozenset({"stbux", "sthux", "stwux", "stfsux", "stfdux"})
+_D_FORM_UPDATES = frozenset({33, 35, 37, 39, 41, 43, 45, 49, 51, 53, 55, 57, 61})
+_D_FORM_INTEGER_UPDATE_LOADS = frozenset({33, 35, 41, 43})
+_X_FORM_UPDATES = frozenset({55, 119, 183, 247, 311, 375, 439, 567, 631, 695, 759})
+_X_FORM_INTEGER_UPDATE_LOADS = frozenset({55, 119, 311, 375})
 _INTEGER_RESULTS = frozenset(
     {
         "add",
@@ -1564,6 +1720,19 @@ def _paired_single_registers(word: int, offset: int) -> list[tuple[int, int, str
     return result
 
 
+def _validate_raw_update_form(word: int) -> None:
+    primary = word >> 26
+    target = (word >> 21) & 31
+    base = (word >> 16) & 31
+    indexed_opcode = (word >> 1) & 0x3FF if primary == 31 else None
+    is_update = primary in _D_FORM_UPDATES or indexed_opcode in _X_FORM_UPDATES
+    is_integer_load = primary in _D_FORM_INTEGER_UPDATE_LOADS or indexed_opcode in _X_FORM_INTEGER_UPDATE_LOADS
+    if is_update and base == 0:
+        raise _Malformed("PowerPC update form RA must be nonzero")
+    if is_integer_load and target == base:
+        raise _Malformed("PowerPC integer update load RT must differ from RA")
+
+
 def _standard_instruction_registers(
     decoder: object,
     raw: bytes,
@@ -1616,6 +1785,7 @@ def _decode_registers(code: bytes, base: int) -> list[tuple[int, int, str, int, 
     for offset in range(0, len(code), 4):
         raw = code[offset : offset + 4]
         word = int.from_bytes(raw, "big")
+        _validate_raw_update_form(word)
         primary = word >> 26
         if primary in {56, 57, 60, 61}:
             result.extend(_paired_single_registers(word, offset))
@@ -1690,10 +1860,17 @@ def _validate_ranges(
         actual_relocations: list[tuple[object, ...]] = []
         for relocation_index, raw_relocation in enumerate(relocation_rows):
             relocation = _closed(
-                raw_relocation, _RELOCATION_FIELDS, f"{label} relocation {relocation_index}", ctx.errors
+                raw_relocation,
+                _RELOCATION_FIELDS,
+                f"{label} relocation {relocation_index}",
+                ctx.errors,
             )
             if relocation is not None:
-                for field in ("offset_within_range", "relocation_type_id", "target_symbol_table_index"):
+                for field in (
+                    "offset_within_range",
+                    "relocation_type_id",
+                    "target_symbol_table_index",
+                ):
                     if not _nonnegative(relocation.get(field)):
                         ctx.errors.append(f"{label} relocation {relocation_index} {field} must be nonnegative integer")
                 if not _int(relocation.get("addend")):
@@ -1719,11 +1896,20 @@ def _validate_ranges(
         except (OverflowError, TypeError, ValueError) as exc:
             ctx.errors.append(f"{label} PowerPC decode failed: {exc}")
             decoded = []
-        mapping_rows = _rows(code_range.get("machine_operand_mappings"), f"{label} machine mappings", ctx.errors)
+        mapping_rows = _rows(
+            code_range.get("machine_operand_mappings"),
+            f"{label} machine mappings",
+            ctx.errors,
+        )
         mappings_by_position: dict[tuple[int, int], list[Mapping[str, object]]] = {}
         mapping_keys: list[tuple[object, ...]] = []
         for mapping_index, raw_mapping in enumerate(mapping_rows):
-            mapping = _closed(raw_mapping, _MAPPING_FIELDS, f"{label} mapping {mapping_index}", ctx.errors)
+            mapping = _closed(
+                raw_mapping,
+                _MAPPING_FIELDS,
+                f"{label} mapping {mapping_index}",
+                ctx.errors,
+            )
             if mapping is None:
                 continue
             offset = mapping.get("instruction_offset_within_range")
@@ -1741,7 +1927,12 @@ def _validate_ranges(
                 ctx.errors.append(f"{label} mapping {mapping_index} physical register must be in 0..31")
             mappings_by_position.setdefault((offset, position), []).append(mapping)
             mapping_keys.append(
-                (offset, position, mapping.get("emission_pcode_operand_index"), mapping.get("operand_lineage_id"))
+                (
+                    offset,
+                    position,
+                    mapping.get("emission_pcode_operand_index"),
+                    mapping.get("operand_lineage_id"),
+                )
             )
         if mapping_keys != sorted(mapping_keys):
             ctx.errors.append(f"{label} machine mappings must be canonically ordered")
@@ -1919,10 +2110,22 @@ _COVERAGE_ALLOWED = frozenset(
     }
 )
 _COVERAGE_REQUIRED = frozenset(
-    {"pcode_instrumentation", "pcode_instructions_seen", "pcode_occurrences_seen", "caps", "truncated", "errors"}
+    {
+        "pcode_instrumentation",
+        "pcode_instructions_seen",
+        "pcode_occurrences_seen",
+        "caps",
+        "truncated",
+        "errors",
+    }
 )
 _CAP_ALLOWED = frozenset(
-    {"max_ig_nodes", "max_frame_objects_per_area", "max_pcode_instructions", "max_pcode_operands_per_instruction"}
+    {
+        "max_ig_nodes",
+        "max_frame_objects_per_area",
+        "max_pcode_instructions",
+        "max_pcode_operands_per_instruction",
+    }
 )
 _CAP_REQUIRED = frozenset({"max_pcode_instructions", "max_pcode_operands_per_instruction"})
 
@@ -1970,7 +2173,12 @@ def _validate_coverage(
     )
     if coverage is None:
         return
-    pcode = _closed(coverage.get("pcode_instrumentation"), _PCODE_COVERAGE_FIELDS, "pcode instrumentation", ctx.errors)
+    pcode = _closed(
+        coverage.get("pcode_instrumentation"),
+        _PCODE_COVERAGE_FIELDS,
+        "pcode instrumentation",
+        ctx.errors,
+    )
     if pcode is None:
         return
     if pcode.get("status") != "complete":
