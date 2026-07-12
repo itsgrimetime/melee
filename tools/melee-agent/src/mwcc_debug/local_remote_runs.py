@@ -1,8 +1,8 @@
 """Read-only inventory and retention policy for fetched remote permuter runs.
 
-This module deliberately stops at local evidence classification.  Remote
-activity probing, retention selection, deletion, manifest production, and CLI
-integration belong to later lifecycle layers.
+This module deliberately stops at read-only evidence classification, remote
+activity probing, and retention planning. Deletion, manifest production, and
+CLI integration belong to later lifecycle layers.
 """
 
 from __future__ import annotations
@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
 import stat
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal
 
@@ -24,6 +26,15 @@ FETCH_MANIFEST_VERSION = 1
 RETENTION_MARKER_FILENAME = "melee-agent-local-retention.json"
 RETENTION_MARKER_KIND = "melee-agent-local-remote-retention"
 RETENTION_MARKER_VERSION = 1
+
+DEFAULT_MAX_AGE_DAYS = 30
+DEFAULT_MAX_TOTAL_BYTES = 5 * 1024**3
+DEFAULT_REMOTE_STATUS_TIMEOUT = 15.0
+DEFAULT_REMOTE_PROBE_WORKERS = 8
+REMOTE_DETAIL_LIMIT = 500
+REMOTE_SESSION_HEADER = "__MELEE_TMUX_SESSIONS_V1_BEGIN__"
+REMOTE_SESSION_TRAILER = "__MELEE_TMUX_SESSIONS_V1_END__"
+REMOTE_TMUX_MISSING_SENTINEL = "__MELEE_TMUX_MISSING__"
 
 REMOTE_FETCH_WARNING_FILENAME = "remote-fetch-warning.json"
 CANDIDATE_AUDIT_FILENAME = "candidate_audit.json"
@@ -143,6 +154,49 @@ class LocalRemoteRunInventory:
     @property
     def total_bytes(self) -> int:
         return sum(run.total_bytes for run in self.runs)
+
+
+@dataclass(frozen=True)
+class RetentionPlanItem:
+    summary: LocalRemoteRunSummary
+    disposition: Literal["protected", "eligible", "selected"]
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LocalRemoteRunRetentionPlan:
+    generated_at: datetime
+    max_age_days: float
+    max_total_bytes: int
+    total_bytes: int
+    protected_bytes: int
+    eligible_bytes: int
+    selected_bytes: int
+    projected_total_bytes: int
+    reclaimed_bytes: int
+    cap_satisfied: bool
+    items: tuple[RetentionPlanItem, ...]
+
+    @property
+    def protected(self) -> tuple[RetentionPlanItem, ...]:
+        return tuple(
+            item for item in self.items if item.disposition == "protected"
+        )
+
+    @property
+    def eligible(self) -> tuple[RetentionPlanItem, ...]:
+        return tuple(
+            item
+            for item in self.items
+            if item.disposition in {"eligible", "selected"}
+        )
+
+    @property
+    def selected(self) -> tuple[RetentionPlanItem, ...]:
+        selected = [
+            item for item in self.items if item.disposition == "selected"
+        ]
+        return tuple(sorted(selected, key=_plan_item_sort_key))
 
 
 @dataclass(frozen=True)
@@ -867,4 +921,323 @@ def inventory_local_remote_runs(
         perm_root=resolved_root,
         runs=tuple(runs),
         issues=tuple(issues),
+    )
+
+
+def _production_remote_runner(
+    argv: list[str],
+    *,
+    check: bool,
+    timeout: float,
+) -> Any:
+    # Import lazily so the future fetch-manifest producer can depend on this
+    # lifecycle module without creating an import cycle.
+    from . import permuter_remote  # noqa: PLC0415
+
+    return permuter_remote.run_command(
+        argv,
+        check=check,
+        timeout=timeout,
+    )
+
+
+def _bounded_detail(*values: object) -> str:
+    text = " ".join(
+        part
+        for value in values
+        if value is not None
+        for part in [" ".join(str(value).split())]
+        if part
+    )
+    if not text:
+        text = "remote activity probe failed without diagnostic output"
+    return text[:REMOTE_DETAIL_LIMIT]
+
+
+def _remote_tmux_inventory_argv(ssh: str) -> list[str]:
+    script = "\n".join([
+        "set +e",
+        "export LC_ALL=C",
+        "if ! command -v tmux >/dev/null 2>&1; then",
+        f"  printf '%s\\n' {shlex.quote(REMOTE_TMUX_MISSING_SENTINEL)} >&2",
+        "  exit 127",
+        "fi",
+        "tmux_output=$(tmux list-sessions -F '#S' 2>&1)",
+        "tmux_status=$?",
+        "if [ \"$tmux_status\" -ne 0 ]; then",
+        "  if printf '%s\\n' \"$tmux_output\" | "
+        "grep -Eiq 'no server running|no sessions'; then",
+        "    tmux_output=''",
+        "  else",
+        "    printf '%s\\n' \"$tmux_output\" >&2",
+        "    exit \"$tmux_status\"",
+        "  fi",
+        "fi",
+        f"printf '%s\\n' {shlex.quote(REMOTE_SESSION_HEADER)}",
+        "if [ -n \"$tmux_output\" ]; then printf '%s\\n' \"$tmux_output\"; fi",
+        f"printf '%s\\n' {shlex.quote(REMOTE_SESSION_TRAILER)}",
+    ])
+    return ["ssh", ssh, "sh -lc " + shlex.quote(script)]
+
+
+def _parse_remote_sessions(stdout: object) -> tuple[frozenset[str] | None, str]:
+    if not isinstance(stdout, str):
+        return None, "remote tmux output was not text"
+    lines = stdout.splitlines()
+    if (
+        len(lines) < 2
+        or lines[0] != REMOTE_SESSION_HEADER
+        or lines[-1] != REMOTE_SESSION_TRAILER
+    ):
+        return None, "malformed remote tmux inventory"
+    sessions = lines[1:-1]
+    if any(
+        not session
+        or session != session.strip()
+        or any(character.isspace() for character in session)
+        or session in {REMOTE_SESSION_HEADER, REMOTE_SESSION_TRAILER}
+        for session in sessions
+    ):
+        return None, "malformed remote tmux session name"
+    if len(set(sessions)) != len(sessions):
+        return None, "duplicate remote tmux session name"
+    return frozenset(sessions), ""
+
+
+def _probe_one_host(
+    ssh: str,
+    *,
+    runner: Callable[..., Any],
+    timeout: float,
+) -> tuple[frozenset[str] | None, str]:
+    argv = _remote_tmux_inventory_argv(ssh)
+    try:
+        result = runner(argv, check=False, timeout=timeout)
+        returncode = result.returncode
+        stdout = result.stdout
+        stderr = result.stderr
+    except Exception as exc:
+        return None, _bounded_detail(type(exc).__name__, exc)
+    if returncode != 0:
+        detail = _bounded_detail(stderr, stdout)
+        if REMOTE_TMUX_MISSING_SENTINEL in detail:
+            detail = "remote tmux tooling is unavailable"
+        return None, detail
+    if stderr:
+        return None, _bounded_detail("unexpected remote probe stderr", stderr)
+    return _parse_remote_sessions(stdout)
+
+
+def _valid_positive_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) > 0
+    )
+
+
+def probe_remote_run_activity(
+    inventory: LocalRemoteRunInventory,
+    *,
+    runner: Callable[..., Any] = _production_remote_runner,
+    timeout: float = DEFAULT_REMOTE_STATUS_TIMEOUT,
+    max_workers: int = DEFAULT_REMOTE_PROBE_WORKERS,
+) -> LocalRemoteRunInventory:
+    """Return an inventory with active/stopped/unknown remote states."""
+    if not _valid_positive_number(timeout):
+        raise ValueError("timeout must be a positive finite number")
+    if (
+        not _is_nonbool_int(max_workers)
+        or max_workers <= 0
+        or max_workers > 64
+    ):
+        raise ValueError("max_workers must be an integer from 1 through 64")
+
+    hosts: dict[str, list[LocalRemoteRunSummary]] = {}
+    for run in inventory.runs:
+        if run.identity is not None:
+            hosts.setdefault(run.identity.ssh, []).append(run)
+
+    host_results: dict[str, tuple[frozenset[str] | None, str]] = {}
+    sorted_hosts = sorted(hosts)
+    if sorted_hosts:
+        worker_count = min(max_workers, len(sorted_hosts))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(
+                    _probe_one_host,
+                    ssh,
+                    runner=runner,
+                    timeout=float(timeout),
+                ): ssh
+                for ssh in sorted_hosts
+            }
+            for future in as_completed(futures):
+                ssh = futures[future]
+                try:
+                    host_results[ssh] = future.result()
+                except Exception as exc:
+                    host_results[ssh] = (
+                        None,
+                        _bounded_detail(type(exc).__name__, exc),
+                    )
+
+    updated: list[LocalRemoteRunSummary] = []
+    for run in inventory.runs:
+        if run.identity is None:
+            updated.append(run.with_remote_state(
+                "unknown",
+                "missing valid remote job identity",
+            ))
+            continue
+        sessions, detail = host_results.get(
+            run.identity.ssh,
+            (None, "remote host probe did not complete"),
+        )
+        if sessions is None:
+            updated.append(run.with_remote_state("unknown", detail))
+        elif run.identity.tmux_session in sessions:
+            updated.append(run.with_remote_state("active"))
+        else:
+            updated.append(run.with_remote_state("stopped"))
+    return replace(inventory, runs=tuple(updated))
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _retention_sort_key(
+    summary: LocalRemoteRunSummary,
+) -> tuple[float, str, str, str]:
+    return (
+        summary.latest_activity,
+        summary.function,
+        summary.job_id,
+        str(summary.path),
+    )
+
+
+def _plan_item_sort_key(
+    item: RetentionPlanItem,
+) -> tuple[float, str, str, str]:
+    return _retention_sort_key(item.summary)
+
+
+def _validate_plan_inputs(
+    *,
+    max_age_days: object,
+    max_total_bytes: object,
+    clock: Callable[[], object],
+) -> tuple[float, int, datetime]:
+    if (
+        not isinstance(max_age_days, (int, float))
+        or isinstance(max_age_days, bool)
+        or not math.isfinite(float(max_age_days))
+        or float(max_age_days) < 0
+    ):
+        raise ValueError("max_age_days must be a nonnegative finite number")
+    if (
+        not _is_nonbool_int(max_total_bytes)
+        or int(max_total_bytes) < 0
+    ):
+        raise ValueError("max_total_bytes must be a nonnegative integer")
+    if not callable(clock):
+        raise ValueError("clock must be callable")
+    try:
+        now = clock()
+    except Exception as exc:
+        raise ValueError(f"clock failed: {exc}") from exc
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        raise ValueError("clock must return a timezone-aware datetime")
+    try:
+        offset = now.utcoffset()
+    except Exception as exc:
+        raise ValueError(f"clock timezone failed: {exc}") from exc
+    if offset is None:
+        raise ValueError("clock must return a timezone-aware datetime")
+    try:
+        now.timestamp()
+    except (OSError, OverflowError, ValueError) as exc:
+        raise ValueError(f"clock returned an invalid datetime: {exc}") from exc
+    return float(max_age_days), int(max_total_bytes), now
+
+
+def plan_local_remote_run_retention(
+    inventory: LocalRemoteRunInventory,
+    *,
+    max_age_days: float = DEFAULT_MAX_AGE_DAYS,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+    clock: Callable[[], object] = _utcnow,
+) -> LocalRemoteRunRetentionPlan:
+    """Build a deterministic, read-only retention plan for local run evidence."""
+    age_days, byte_cap, now = _validate_plan_inputs(
+        max_age_days=max_age_days,
+        max_total_bytes=max_total_bytes,
+        clock=clock,
+    )
+    for run in inventory.runs:
+        if (
+            not _is_nonbool_int(run.total_bytes)
+            or run.total_bytes < 0
+            or not _is_finite_number(run.latest_activity)
+        ):
+            raise ValueError(f"invalid run summary accounting: {run.path}")
+
+    total_bytes = sum(run.total_bytes for run in inventory.runs)
+    protected = [run for run in inventory.runs if run.reasons]
+    eligible = [run for run in inventory.runs if not run.reasons]
+    ordered_eligible = sorted(eligible, key=_retention_sort_key)
+    cutoff = now.timestamp() - age_days * 86400
+
+    selected_reasons: dict[Path, tuple[str, ...]] = {}
+    for run in ordered_eligible:
+        if run.latest_activity < cutoff:
+            selected_reasons[run.path] = ("age",)
+    reclaimed = sum(
+        run.total_bytes
+        for run in ordered_eligible
+        if run.path in selected_reasons
+    )
+    projected = total_bytes - reclaimed
+    if projected > byte_cap:
+        for run in ordered_eligible:
+            if run.path in selected_reasons:
+                continue
+            selected_reasons[run.path] = ("cap",)
+            reclaimed += run.total_bytes
+            projected = total_bytes - reclaimed
+            if projected <= byte_cap:
+                break
+
+    items: list[RetentionPlanItem] = []
+    for run in inventory.runs:
+        if run.reasons:
+            items.append(RetentionPlanItem(run, "protected", run.reasons))
+        elif run.path in selected_reasons:
+            items.append(RetentionPlanItem(
+                run,
+                "selected",
+                selected_reasons[run.path],
+            ))
+        else:
+            items.append(RetentionPlanItem(run, "eligible", ()))
+    selected_bytes = sum(
+        item.summary.total_bytes
+        for item in items
+        if item.disposition == "selected"
+    )
+    return LocalRemoteRunRetentionPlan(
+        generated_at=now,
+        max_age_days=age_days,
+        max_total_bytes=byte_cap,
+        total_bytes=total_bytes,
+        protected_bytes=sum(run.total_bytes for run in protected),
+        eligible_bytes=sum(run.total_bytes for run in eligible),
+        selected_bytes=selected_bytes,
+        projected_total_bytes=total_bytes - selected_bytes,
+        reclaimed_bytes=selected_bytes,
+        cap_satisfied=total_bytes - selected_bytes <= byte_cap,
+        items=tuple(items),
     )

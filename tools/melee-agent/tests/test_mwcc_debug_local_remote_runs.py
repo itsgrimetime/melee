@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -114,6 +116,37 @@ def _summary(perm_root: Path, **kwargs: object) -> lrr.LocalRemoteRunSummary:
     inventory = _inventory(perm_root, **kwargs)
     assert len(inventory.runs) == 1
     return inventory.runs[0]
+
+
+def _set_remote_identity(run: Path, *, ssh: str, session: str) -> None:
+    metadata_path = run / "remote-run" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["ssh"] = ssh
+    metadata["tmux_session"] = session
+    _write_json(metadata_path, metadata)
+
+
+def _tmux_result(
+    argv: list[str],
+    *sessions: str,
+    returncode: int = 0,
+    stderr: str = "",
+) -> subprocess.CompletedProcess[str]:
+    stdout = "\n".join(
+        [lrr.REMOTE_SESSION_HEADER, *sessions, lrr.REMOTE_SESSION_TRAILER]
+    ) + "\n"
+    return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
+
+
+def _replace_inventory_runs(
+    inventory: lrr.LocalRemoteRunInventory,
+    **updates: dict[str, object],
+) -> lrr.LocalRemoteRunInventory:
+    runs = tuple(
+        replace(run, **updates.get(run.job_id, {}))
+        for run in inventory.runs
+    )
+    return replace(inventory, runs=runs)
 
 
 def _fetch_manifest(summary: lrr.LocalRemoteRunSummary, *, state: str = "complete") -> dict[str, object]:
@@ -628,3 +661,464 @@ def test_inventory_summary_order_and_remote_state_hook_are_deterministic(
     assert "remote-unknown" not in stopped.reasons
     assert unknown.remote_detail == "ssh timeout"
     assert "remote-unknown" in unknown.reasons
+
+
+def test_remote_activity_probe_batches_once_per_host_and_matches_exact_sessions(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run_a = _make_run(perm_root, function="fn_a", job_id="job-a")
+    run_b = _make_run(perm_root, function="fn_b", job_id="job-b")
+    run_c = _make_run(perm_root, function="fn_c", job_id="job-c")
+    _set_remote_identity(run_a, ssh="host-one", session="session-a")
+    _set_remote_identity(run_b, ssh="host-one", session="session-b")
+    _set_remote_identity(run_c, ssh="host-two", session="session-c")
+    inventory = _inventory(perm_root)
+    calls: list[tuple[str, float]] = []
+
+    def runner(
+        argv: list[str],
+        *,
+        check: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((argv[1], timeout))
+        sessions = ("session-a", "session-b-extra") if argv[1] == "host-one" else ()
+        return _tmux_result(argv, *sessions)
+
+    probed = lrr.probe_remote_run_activity(
+        inventory,
+        runner=runner,
+        timeout=3.5,
+        max_workers=2,
+    )
+
+    assert sorted(calls) == [("host-one", 3.5), ("host-two", 3.5)]
+    assert {run.job_id: run.remote_state for run in probed.runs} == {
+        "job-a": "active",
+        "job-b": "stopped",
+        "job-c": "stopped",
+    }
+
+
+def test_remote_activity_probe_accepts_explicit_empty_tmux_inventory(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    _set_remote_identity(run, ssh="empty-host", session="session-a")
+    inventory = _inventory(perm_root)
+
+    def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        assert "no server running|no sessions" in argv[2]
+        assert lrr.REMOTE_TMUX_MISSING_SENTINEL in argv[2]
+        return _tmux_result(argv)
+
+    probed = lrr.probe_remote_run_activity(
+        inventory,
+        runner=runner,
+    )
+
+    assert probed.runs[0].remote_state == "stopped"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["nonzero", "timeout", "exception", "malformed", "masked"],
+)
+def test_remote_activity_probe_failures_are_unknown_for_entire_host(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    first = _make_run(perm_root, function="fn_a", job_id="job-a")
+    second = _make_run(perm_root, function="fn_b", job_id="job-b")
+    _set_remote_identity(first, ssh="bad-host", session="session-a")
+    _set_remote_identity(second, ssh="bad-host", session="session-b")
+    inventory = _inventory(perm_root)
+
+    def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if failure == "nonzero":
+            return subprocess.CompletedProcess(argv, 255, "", "ssh failed\n" * 200)
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, 1.0)
+        if failure == "exception":
+            raise RuntimeError("runner exploded")
+        if failure == "masked":
+            result = _tmux_result(argv)
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                result.stdout,
+                "ssh transport warning/failure",
+            )
+        return subprocess.CompletedProcess(argv, 0, "unexpected output\n", "")
+
+    probed = lrr.probe_remote_run_activity(inventory, runner=runner, timeout=1.0)
+
+    assert {run.remote_state for run in probed.runs} == {"unknown"}
+    assert all(run.remote_detail for run in probed.runs)
+    assert all(len(run.remote_detail) <= lrr.REMOTE_DETAIL_LIMIT for run in probed.runs)
+
+
+def test_remote_activity_probe_missing_tmux_is_unknown_not_stopped(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    _set_remote_identity(run, ssh="host", session="session")
+    inventory = _inventory(perm_root)
+
+    probed = lrr.probe_remote_run_activity(
+        inventory,
+        runner=lambda argv, **_: subprocess.CompletedProcess(
+            argv,
+            127,
+            "",
+            lrr.REMOTE_TMUX_MISSING_SENTINEL,
+        ),
+    )
+
+    assert probed.runs[0].remote_state == "unknown"
+    assert "tmux" in probed.runs[0].remote_detail.lower()
+
+
+def test_remote_activity_probe_missing_identity_skips_runner_and_stays_unknown(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    (run / "remote-run" / "metadata.json").write_text("not-json")
+    inventory = _inventory(perm_root)
+
+    def runner(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("missing identity must not be probed")
+
+    probed = lrr.probe_remote_run_activity(inventory, runner=runner)
+
+    assert probed.runs[0].remote_state == "unknown"
+    assert "identity" in probed.runs[0].remote_detail
+
+
+def test_remote_activity_probe_mixed_hosts_isolates_failure(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    good = _make_run(perm_root, function="fn_a", job_id="good-job")
+    bad = _make_run(perm_root, function="fn_b", job_id="bad-job")
+    _set_remote_identity(good, ssh="good-host", session="good-session")
+    _set_remote_identity(bad, ssh="bad-host", session="bad-session")
+    inventory = _inventory(perm_root)
+
+    def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if argv[1] == "good-host":
+            return _tmux_result(argv, "good-session")
+        return subprocess.CompletedProcess(argv, 255, "", "ssh failed")
+
+    probed = lrr.probe_remote_run_activity(inventory, runner=runner)
+
+    assert {run.job_id: run.remote_state for run in probed.runs} == {
+        "good-job": "active",
+        "bad-job": "unknown",
+    }
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_age_days": True},
+        {"max_age_days": -1},
+        {"max_age_days": float("inf")},
+        {"max_age_days": "30"},
+        {"max_total_bytes": True},
+        {"max_total_bytes": -1},
+        {"max_total_bytes": 1.5},
+    ],
+)
+def test_retention_plan_rejects_invalid_nonnegative_limits(
+    tmp_path: Path,
+    kwargs: dict[str, object],
+) -> None:
+    inventory = _inventory(tmp_path / "missing")
+
+    with pytest.raises(ValueError):
+        lrr.plan_local_remote_run_retention(inventory, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "clock",
+    [
+        lambda: "not a datetime",
+        lambda: datetime(2026, 7, 11),
+        lambda: (_ for _ in ()).throw(RuntimeError("clock failed")),
+    ],
+)
+def test_retention_plan_rejects_invalid_or_failed_clock(
+    tmp_path: Path,
+    clock: object,
+) -> None:
+    inventory = _inventory(tmp_path / "missing")
+
+    with pytest.raises(ValueError):
+        lrr.plan_local_remote_run_retention(inventory, clock=clock)
+
+
+def test_retention_plan_selects_old_runs_before_cutoff(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    _make_run(perm_root, function="fn_a", job_id="old-job")
+    _make_run(perm_root, function="fn_b", job_id="new-job")
+    inventory = _inventory(perm_root)
+    now = datetime(2026, 7, 11, tzinfo=UTC)
+    inventory = _replace_inventory_runs(
+        inventory,
+        **{
+            "old-job": {
+                "remote_state": "stopped",
+                "latest_activity": now.timestamp() - 31 * 86400,
+                "total_bytes": 10,
+            },
+            "new-job": {
+                "remote_state": "stopped",
+                "latest_activity": now.timestamp() - 29 * 86400,
+                "total_bytes": 10,
+            },
+        },
+    )
+
+    plan = lrr.plan_local_remote_run_retention(
+        inventory,
+        max_age_days=30,
+        max_total_bytes=100,
+        clock=lambda: now,
+    )
+
+    assert [(item.summary.job_id, item.reasons) for item in plan.selected] == [
+        ("old-job", ("age",)),
+    ]
+    assert plan.total_bytes == 20
+    assert plan.reclaimed_bytes == 10
+    assert plan.projected_total_bytes == 10
+    assert plan.cap_satisfied
+
+
+def test_retention_plan_selects_oldest_remaining_until_global_cap(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    for job_id in ("job-a", "job-b", "job-c"):
+        _make_run(perm_root, function=f"fn_{job_id[-1]}", job_id=job_id)
+    inventory = _inventory(perm_root)
+    now = datetime(2026, 7, 11, tzinfo=UTC)
+    updates = {
+        run.job_id: {
+            "remote_state": "stopped",
+            "latest_activity": now.timestamp() - (3 - index) * 3600,
+            "total_bytes": 10,
+        }
+        for index, run in enumerate(inventory.runs)
+    }
+    inventory = _replace_inventory_runs(inventory, **updates)
+
+    plan = lrr.plan_local_remote_run_retention(
+        inventory,
+        max_age_days=365,
+        max_total_bytes=15,
+        clock=lambda: now,
+    )
+
+    assert [item.summary.job_id for item in plan.selected] == ["job-a", "job-b"]
+    assert all(item.reasons == ("cap",) for item in plan.selected)
+    assert plan.projected_total_bytes == 10
+    assert plan.cap_satisfied
+
+
+def test_retention_plan_age_and_cap_selection_deduplicates_runs(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    _make_run(perm_root, function="fn_a", job_id="old-job")
+    _make_run(perm_root, function="fn_b", job_id="next-job")
+    inventory = _inventory(perm_root)
+    now = datetime(2026, 7, 11, tzinfo=UTC)
+    inventory = _replace_inventory_runs(
+        inventory,
+        **{
+            "old-job": {
+                "remote_state": "stopped",
+                "latest_activity": now.timestamp() - 40 * 86400,
+                "total_bytes": 10,
+            },
+            "next-job": {
+                "remote_state": "stopped",
+                "latest_activity": now.timestamp() - 2 * 86400,
+                "total_bytes": 10,
+            },
+        },
+    )
+
+    plan = lrr.plan_local_remote_run_retention(
+        inventory,
+        max_age_days=30,
+        max_total_bytes=5,
+        clock=lambda: now,
+    )
+
+    assert [(item.summary.job_id, item.reasons) for item in plan.selected] == [
+        ("old-job", ("age",)),
+        ("next-job", ("cap",)),
+    ]
+    assert len({item.summary.path for item in plan.selected}) == 2
+
+
+def test_retention_plan_protected_bytes_can_make_cap_unattainable(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    _make_run(perm_root, function="fn_a", job_id="protected-job")
+    _make_run(perm_root, function="fn_b", job_id="eligible-job")
+    inventory = _inventory(perm_root)
+    now = datetime(2026, 7, 11, tzinfo=UTC)
+    inventory = _replace_inventory_runs(
+        inventory,
+        **{
+            "protected-job": {
+                "remote_state": "active",
+                "total_bytes": 20,
+                "latest_activity": now.timestamp() - 100 * 86400,
+            },
+            "eligible-job": {
+                "remote_state": "stopped",
+                "total_bytes": 10,
+                "latest_activity": now.timestamp() - 100 * 86400,
+            },
+        },
+    )
+
+    plan = lrr.plan_local_remote_run_retention(
+        inventory,
+        max_age_days=30,
+        max_total_bytes=5,
+        clock=lambda: now,
+    )
+
+    assert plan.protected_bytes == 20
+    assert plan.selected_bytes == 10
+    assert plan.projected_total_bytes == 20
+    assert not plan.cap_satisfied
+    protected_item = next(
+        item for item in plan.items if item.summary.job_id == "protected-job"
+    )
+    assert protected_item.disposition == "protected"
+    assert "remote-active" in protected_item.reasons
+
+
+def test_retention_plan_only_zero_reason_stopped_runs_are_eligible(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    for job_id in ("stopped", "active", "unknown", "local-protected"):
+        _make_run(perm_root, function=f"fn_{job_id}", job_id=job_id)
+    inventory = _inventory(perm_root)
+    updates = {
+        "stopped": {"remote_state": "stopped", "local_reasons": ()},
+        "active": {"remote_state": "active", "local_reasons": ()},
+        "unknown": {"remote_state": "unknown", "local_reasons": ()},
+        "local-protected": {
+            "remote_state": "stopped",
+            "local_reasons": ("explicitly-retained",),
+        },
+    }
+    inventory = _replace_inventory_runs(inventory, **updates)
+
+    plan = lrr.plan_local_remote_run_retention(
+        inventory,
+        max_age_days=99999,
+        max_total_bytes=10**12,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert [item.summary.job_id for item in plan.eligible] == ["stopped"]
+    assert {item.summary.job_id for item in plan.protected} == {
+        "active", "unknown", "local-protected",
+    }
+
+
+def test_retention_plan_zero_byte_ties_are_deterministic_and_do_not_fake_cap(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    for job_id in ("job-b", "job-a"):
+        _make_run(perm_root, function="fn_same", job_id=job_id)
+    _make_run(perm_root, function="fn_protected", job_id="protected")
+    inventory = _inventory(perm_root)
+    timestamp = datetime(2026, 7, 11, tzinfo=UTC).timestamp()
+    inventory = _replace_inventory_runs(
+        inventory,
+        **{
+            "job-a": {
+                "remote_state": "stopped",
+                "local_reasons": (),
+                "total_bytes": 0,
+                "latest_activity": timestamp,
+            },
+            "job-b": {
+                "remote_state": "stopped",
+                "local_reasons": (),
+                "total_bytes": 0,
+                "latest_activity": timestamp,
+            },
+            "protected": {
+                "remote_state": "active",
+                "local_reasons": (),
+                "total_bytes": 10,
+                "latest_activity": timestamp,
+            },
+        },
+    )
+
+    first = lrr.plan_local_remote_run_retention(
+        inventory,
+        max_age_days=1,
+        max_total_bytes=5,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+    second = lrr.plan_local_remote_run_retention(
+        inventory,
+        max_age_days=1,
+        max_total_bytes=5,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert first == second
+    assert [item.summary.job_id for item in first.selected] == ["job-a", "job-b"]
+    assert first.reclaimed_bytes == 0
+    assert first.projected_total_bytes == 10
+    assert not first.cap_satisfied
+
+
+def test_probe_and_plan_are_read_only(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    _set_remote_identity(run, ssh="host", session="session")
+    before = {
+        str(path.relative_to(perm_root)): path.read_bytes()
+        for path in perm_root.rglob("*")
+        if path.is_file()
+    }
+    inventory = _inventory(perm_root)
+
+    probed = lrr.probe_remote_run_activity(
+        inventory,
+        runner=lambda argv, **_: _tmux_result(argv),
+    )
+    lrr.plan_local_remote_run_retention(
+        probed,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+    after = {
+        str(path.relative_to(perm_root)): path.read_bytes()
+        for path in perm_root.rglob("*")
+        if path.is_file()
+    }
+
+    assert after == before
