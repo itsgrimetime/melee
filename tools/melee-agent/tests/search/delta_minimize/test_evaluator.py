@@ -710,7 +710,9 @@ def test_derived_target_uses_correlated_exact_allocator_namespace(
     pcdump.write_text(pcdump_text, encoding="utf-8")
     source = tmp_path / "same.c"
     source.write_text("", encoding="utf-8")
-    compile = Compile.from_text(pcdump_text, FUNCTION, "")
+    compile = _with_complete_virtual_identity(
+        Compile.from_text(pcdump_text, FUNCTION, "")
+    )
     desired_roles = list(build_descriptors(compile, 0))[:2]
     desired = {desired_roles[0]: 22, desired_roles[1]: 21}
     target = build_target_spec(
@@ -753,6 +755,7 @@ def test_derived_target_uses_correlated_exact_allocator_namespace(
         "build_descriptors",
         lambda *_args: unique_descriptors,
     )
+    monkeypatch.setattr(evaluator_module, "_compile", lambda *_args: compile)
     monkeypatch.setattr(
         evaluator_module,
         "build_colorgraph_profile",

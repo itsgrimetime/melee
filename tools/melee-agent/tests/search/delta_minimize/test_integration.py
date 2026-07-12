@@ -270,6 +270,15 @@ def test_reviewed_v2_roles_publish_complete_reproducible_frontier(
         )
 
     monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", fixture_descriptors)
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_virtual_semantic_identities",
+        lambda _compile, class_id, virtual_count: (
+            {ig_idx: (f"fixture-virtual:{ig_idx}", (), False, None) for ig_idx in range(virtual_count)}
+            if class_id == 0
+            else None
+        ),
+    )
     monkeypatch.setattr(objectives_module, "build_colorgraph_profile", fixture_color_profile)
     monkeypatch.setattr(evaluator_module, "build_colorgraph_profile", fixture_color_profile)
     monkeypatch.setattr(evaluator_module, "_stack_axis", lambda *_args: (0, 0, 0, 0))

@@ -27,6 +27,19 @@ FIXTURES = Path(__file__).parents[2] / "fixtures" / "role_identity"
 FUNCTION = "mnVibration_80248644"
 
 
+def _complete_semantic_identities(
+    _compile: Compile,
+    class_id: int,
+    virtual_count: int,
+) -> dict[int, tuple] | None:
+    if class_id != 0:
+        return None
+    return {
+        ig_idx: (f"fixture-virtual:{ig_idx}", (), False, None)
+        for ig_idx in range(virtual_count)
+    }
+
+
 @pytest.fixture(scope="module")
 def baseline_compile() -> Compile:
     dump = (FIXTURES / "mnVibration_matched_pcdump.txt").read_text(encoding="utf-8")
@@ -105,23 +118,29 @@ def test_allocator_namespace_witness_includes_semantic_role_identity(
     monkeypatch: pytest.MonkeyPatch,
     baseline_compile: Compile,
 ) -> None:
-    descriptors = build_descriptors(baseline_compile, 0)
-    unique = {
-        ig_idx: replace(descriptor, first_def_sig=f"ig:{ig_idx}:{descriptor.first_def_sig}")
-        for ig_idx, descriptor in descriptors.items()
-    }
-    monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", lambda *_args: unique)
+    identities = _complete_semantic_identities(
+        baseline_compile,
+        0,
+        baseline_compile.fev.coalesce_sections[-1].n_virtuals,
+    )
+    assert identities is not None
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_virtual_semantic_identities",
+        lambda *_args: identities,
+    )
     original = objectives_module._allocator_namespace_witness(baseline_compile, 0)
     assert original is not None
-    changed_ig = next(iter(unique))
+    changed_ig = next(iter(identities))
     changed = {
-        **unique,
-        changed_ig: replace(
-            unique[changed_ig],
-            use_site_multiset=(("semantically-different", 1),),
-        ),
+        **identities,
+        changed_ig: ("semantically-different", (), False, None),
     }
-    monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", lambda *_args: changed)
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_virtual_semantic_identities",
+        lambda *_args: changed,
+    )
 
     assert objectives_module._allocator_namespace_witness(baseline_compile, 0) != original
 
@@ -920,7 +939,7 @@ def test_v2_reviewed_parent_bindings_resolve_duplicate_semantic_roles(
     assert seen_role_maps == {"left": expected, "right": expected}
     provenance = manifest.target_spec["provenance"]
     assert provenance["schema_version"] == "delta-minimize-color-target.v2"
-    assert provenance["namespace_schema"] == "delta-minimize-role-namespace.v1"
+    assert provenance["namespace_schema"] == "delta-minimize-role-namespace.v2"
     assert tuple(provenance["parent_role_bindings"]) == ("left", "right")
 
 
@@ -1067,6 +1086,11 @@ def test_correlated_allocator_orders_allow_complete_exact_graph_namespace(
         for ig_idx, descriptor in descriptors.items()
     }
     monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", lambda *_args: unique)
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_virtual_semantic_identities",
+        _complete_semantic_identities,
+    )
 
     role_map = objectives_module._complete_profile_role_map(
         baseline_compile,
@@ -1080,11 +1104,18 @@ def test_correlated_allocator_orders_allow_complete_exact_graph_namespace(
 
 
 def test_duplicate_semantic_roles_reject_exact_allocator_namespace(
+    monkeypatch: pytest.MonkeyPatch,
     baseline_compile: Compile,
 ) -> None:
-    descriptors = build_descriptors(baseline_compile, 0)
-    semantic_witnesses = [objectives_module._role_identity_witness(descriptor) for descriptor in descriptors.values()]
-    assert len(set(semantic_witnesses)) < len(semantic_witnesses)
+    virtual_count = baseline_compile.fev.coalesce_sections[-1].n_virtuals
+    identities = _complete_semantic_identities(baseline_compile, 0, virtual_count)
+    assert identities is not None
+    identities[1] = identities[0]
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_virtual_semantic_identities",
+        lambda *_args: None if len(set(identities.values())) != virtual_count else identities,
+    )
 
     assert objectives_module._allocator_namespace_witness(baseline_compile, 0) is None
 
@@ -1103,6 +1134,11 @@ def test_divergent_allocator_order_rejects_exact_graph_namespace(
         objectives_module.role_reanchor,
         "reanchor",
         lambda *_args, **_kwargs: type("Partial", (), {"matched": {}})(),
+    )
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "build_virtual_semantic_identities",
+        _complete_semantic_identities,
     )
 
     role_map = objectives_module._complete_profile_role_map(
