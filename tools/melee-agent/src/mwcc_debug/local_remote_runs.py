@@ -174,6 +174,7 @@ class LocalRemoteRunRetentionPlan:
     selected_bytes: int
     projected_total_bytes: int
     reclaimed_bytes: int
+    inventory_complete: bool
     cap_satisfied: bool
     items: tuple[RetentionPlanItem, ...]
 
@@ -230,6 +231,18 @@ def _valid_timestamp(value: object) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _valid_ssh_target(value: object) -> bool:
+    if not isinstance(value, str) or not value or value.startswith("-"):
+        return False
+    return all(
+        not character.isspace()
+        and character != "\x00"
+        and ord(character) >= 32
+        and ord(character) != 127
+        for character in value
+    )
 
 
 def _read_json_regular(path: Path) -> tuple[dict[str, Any] | None, str]:
@@ -346,6 +359,8 @@ def read_legacy_metadata(
         for key in string_fields
     ):
         return None, "metadata string fields are missing or invalid"
+    if not _valid_ssh_target(payload["ssh"]):
+        return None, "metadata ssh target is not a safe single token"
     threads = payload.get("threads")
     if not _is_nonbool_int(threads) or int(threads) <= 0:
         return None, "metadata threads must be a positive integer"
@@ -905,6 +920,11 @@ def inventory_local_remote_runs(
                 issues.append(InventoryIssue(job_path, "owner-symlink"))
                 continue
             if not job_entry.is_dir(follow_symlinks=False):
+                issues.append(InventoryIssue(
+                    job_path,
+                    "unexpected-run-entry",
+                    "direct remote-runs entry is not a directory",
+                ))
                 continue
             try:
                 runs.append(_summarize_run(
@@ -977,7 +997,7 @@ def _remote_tmux_inventory_argv(ssh: str) -> list[str]:
         "if [ -n \"$tmux_output\" ]; then printf '%s\\n' \"$tmux_output\"; fi",
         f"printf '%s\\n' {shlex.quote(REMOTE_SESSION_TRAILER)}",
     ])
-    return ["ssh", ssh, "sh -lc " + shlex.quote(script)]
+    return ["ssh", "--", ssh, "sh -lc " + shlex.quote(script)]
 
 
 def _parse_remote_sessions(stdout: object) -> tuple[frozenset[str] | None, str]:
@@ -1056,7 +1076,7 @@ def probe_remote_run_activity(
 
     hosts: dict[str, list[LocalRemoteRunSummary]] = {}
     for run in inventory.runs:
-        if run.identity is not None:
+        if run.identity is not None and _valid_ssh_target(run.identity.ssh):
             hosts.setdefault(run.identity.ssh, []).append(run)
 
     host_results: dict[str, tuple[frozenset[str] | None, str]] = {}
@@ -1089,6 +1109,12 @@ def probe_remote_run_activity(
             updated.append(run.with_remote_state(
                 "unknown",
                 "missing valid remote job identity",
+            ))
+            continue
+        if not _valid_ssh_target(run.identity.ssh):
+            updated.append(run.with_remote_state(
+                "unknown",
+                "invalid ssh target in remote job identity",
             ))
             continue
         sessions, detail = host_results.get(
@@ -1238,6 +1264,10 @@ def plan_local_remote_run_retention(
         selected_bytes=selected_bytes,
         projected_total_bytes=total_bytes - selected_bytes,
         reclaimed_bytes=selected_bytes,
-        cap_satisfied=total_bytes - selected_bytes <= byte_cap,
+        inventory_complete=not inventory.issues,
+        cap_satisfied=(
+            not inventory.issues
+            and total_bytes - selected_bytes <= byte_cap
+        ),
         items=tuple(items),
     )

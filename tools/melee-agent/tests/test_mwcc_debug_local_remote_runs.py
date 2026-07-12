@@ -309,6 +309,33 @@ def test_metadata_remote_paths_must_share_the_same_job_root(tmp_path: Path) -> N
     assert "metadata-invalid" in summary.local_reasons
 
 
+@pytest.mark.parametrize(
+    "forged_ssh",
+    [
+        "-oProxyCommand=touch /tmp/pwned",
+        "host other",
+        "host\n-oBatchMode=no",
+        "host\x00suffix",
+        "host\tother",
+    ],
+)
+def test_metadata_rejects_ssh_option_and_token_injection(
+    tmp_path: Path,
+    forged_ssh: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    metadata_path = run / "remote-run" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["ssh"] = forged_ssh
+    _write_json(metadata_path, metadata)
+
+    summary = _summary(perm_root)
+
+    assert not summary.metadata_valid
+    assert "metadata-invalid" in summary.local_reasons
+
+
 def test_fetch_manifest_version_identity_and_partial_state_fail_closed(
     tmp_path: Path,
 ) -> None:
@@ -682,8 +709,8 @@ def test_remote_activity_probe_batches_once_per_host_and_matches_exact_sessions(
         check: bool,
         timeout: float,
     ) -> subprocess.CompletedProcess[str]:
-        calls.append((argv[1], timeout))
-        sessions = ("session-a", "session-b-extra") if argv[1] == "host-one" else ()
+        calls.append((argv[2], timeout))
+        sessions = ("session-a", "session-b-extra") if argv[2] == "host-one" else ()
         return _tmux_result(argv, *sessions)
 
     probed = lrr.probe_remote_run_activity(
@@ -710,8 +737,9 @@ def test_remote_activity_probe_accepts_explicit_empty_tmux_inventory(
     inventory = _inventory(perm_root)
 
     def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        assert "no server running|no sessions" in argv[2]
-        assert lrr.REMOTE_TMUX_MISSING_SENTINEL in argv[2]
+        assert argv[:3] == ["ssh", "--", "empty-host"]
+        assert "no server running|no sessions" in argv[3]
+        assert lrr.REMOTE_TMUX_MISSING_SENTINEL in argv[3]
         return _tmux_result(argv)
 
     probed = lrr.probe_remote_run_activity(
@@ -800,6 +828,33 @@ def test_remote_activity_probe_missing_identity_skips_runner_and_stays_unknown(
     assert "identity" in probed.runs[0].remote_detail
 
 
+def test_remote_activity_probe_defensively_rejects_forged_identity_ssh(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    _make_run(perm_root)
+    inventory = _inventory(perm_root)
+    summary = inventory.runs[0]
+    assert summary.identity is not None
+    forged = replace(
+        summary,
+        identity=replace(summary.identity, ssh="-F/tmp/attacker-config"),
+    )
+    inventory = replace(inventory, runs=(forged,))
+    called = False
+
+    def runner(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+        nonlocal called
+        called = True
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    probed = lrr.probe_remote_run_activity(inventory, runner=runner)
+
+    assert probed.runs[0].remote_state == "unknown"
+    assert "ssh" in probed.runs[0].remote_detail.lower()
+    assert not called
+
+
 def test_remote_activity_probe_mixed_hosts_isolates_failure(
     tmp_path: Path,
 ) -> None:
@@ -811,7 +866,7 @@ def test_remote_activity_probe_mixed_hosts_isolates_failure(
     inventory = _inventory(perm_root)
 
     def runner(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        if argv[1] == "good-host":
+        if argv[2] == "good-host":
             return _tmux_result(argv, "good-session")
         return subprocess.CompletedProcess(argv, 255, "", "ssh failed")
 
@@ -1094,6 +1149,52 @@ def test_retention_plan_zero_byte_ties_are_deterministic_and_do_not_fake_cap(
     assert first.reclaimed_bytes == 0
     assert first.projected_total_bytes == 10
     assert not first.cap_satisfied
+
+
+@pytest.mark.parametrize("issue_code", ["owner-symlink", "owner-unreadable"])
+def test_retention_plan_incomplete_inventory_never_satisfies_cap(
+    tmp_path: Path,
+    issue_code: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    _make_run(perm_root)
+    inventory = _inventory(perm_root)
+    inventory = replace(
+        inventory,
+        issues=(lrr.InventoryIssue(perm_root / "unknown", issue_code),),
+    )
+
+    plan = lrr.plan_local_remote_run_retention(
+        inventory,
+        max_total_bytes=10**12,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert not plan.inventory_complete
+    assert not plan.cap_satisfied
+
+
+def test_unexpected_direct_remote_run_entry_makes_inventory_incomplete(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    unexpected = run.parent / "unexpected.bin"
+    unexpected.write_bytes(b"unknown ownership")
+
+    inventory = _inventory(perm_root)
+
+    assert any(
+        issue.path == unexpected and issue.code == "unexpected-run-entry"
+        for issue in inventory.issues
+    )
+    plan = lrr.plan_local_remote_run_retention(
+        inventory,
+        max_total_bytes=10**12,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+    assert not plan.inventory_complete
+    assert not plan.cap_satisfied
 
 
 def test_probe_and_plan_are_read_only(tmp_path: Path) -> None:
