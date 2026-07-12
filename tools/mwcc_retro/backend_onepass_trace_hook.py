@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 from tools.mwcc_retro import backend_object_snapshot, struct_map
@@ -122,15 +123,88 @@ def _emit_pcode_mutation_event(
     return row
 
 
-def _site_ids(proof, collection):
-    rows = proof.get(collection) if isinstance(proof, dict) else None
-    if not isinstance(rows, list):
+_PCODE_EVENT_FIELDS = {
+    "operand_rewrite": frozenset(
+        {
+            "event",
+            "pcode_event_sequence",
+            "instrumented_site_id",
+            "pcode_id",
+            "operand_index",
+            "operand_lineage_id",
+            "role",
+            "class_id",
+            "class_name",
+            "virtual_kind",
+            "virtual",
+            "ig_id",
+            "allocated_physical",
+            "runtime_address",
+            "allocation_generation",
+            "lifecycle_sequence_at_capture",
+            "source_stage",
+            "confidence",
+        }
+    ),
+    "pcode_mutation": frozenset(
+        {
+            "event",
+            "pcode_event_sequence",
+            "instrumented_site_id",
+            "mutation_kind",
+            "inputs",
+            "outputs",
+        }
+    ),
+    "code_emission": frozenset(
+        {
+            "event",
+            "pcode_event_sequence",
+            "instrumented_site_id",
+            "pcode_id",
+            "runtime_address",
+            "allocation_generation",
+            "lifecycle_sequence_at_capture",
+            "emission_snapshot",
+            "code_ranges",
+        }
+    ),
+}
+
+_PCODE_EVENT_SITE_COLLECTION = {
+    "operand_rewrite": "operand_rewrite_sites",
+    "pcode_mutation": "operand_mutation_sites",
+    "code_emission": "code_emission_sites",
+}
+
+_PCODE_SITE_LABEL = {
+    "operand_rewrite_sites": "operand rewrite",
+    "operand_mutation_sites": "operand mutation",
+    "code_emission_sites": "code emission",
+}
+
+
+def _coverage_site_ids(proof, collection, diagnostics):
+    label = _PCODE_SITE_LABEL[collection]
+    rows = proof.get(collection) if isinstance(proof, Mapping) else None
+    if not isinstance(rows, list) or not rows:
+        diagnostics.append(f"{label} proof site inventory must be nonempty")
         return set()
-    return {
-        row["site_id"]
-        for row in rows
-        if isinstance(row, dict) and isinstance(row.get("site_id"), str)
-    }
+    result = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            diagnostics.append(f"{label} proof site {index} must be object")
+            continue
+        site_id = row.get("site_id")
+        if not isinstance(site_id, str) or not site_id:
+            diagnostics.append(
+                f"{label} proof site {index} ID must be nonempty string"
+            )
+            continue
+        result.append(site_id)
+    if len(result) != len(set(result)):
+        diagnostics.append(f"{label} proof site IDs must be unique")
+    return set(result)
 
 
 def _pcode_instrumentation_status(
@@ -145,27 +219,113 @@ def _pcode_instrumentation_status(
 ):
     """Report raw producer coverage without trusting a declared status."""
 
-    hooked = set(hooked_site_ids)
-    rewrite_sites = _site_ids(proof, "operand_rewrite_sites")
-    mutation_sites = _site_ids(proof, "operand_mutation_sites")
-    emission_sites = _site_ids(proof, "code_emission_sites")
-    sequences = [
-        row.get("pcode_event_sequence")
-        for row in events
-        if isinstance(row, dict) and "pcode_event_sequence" in row
-    ]
-    gap_free = sequences == list(range(len(sequences)))
-    all_sites_hooked = all(
-        sites <= hooked for sites in (rewrite_sites, mutation_sites, emission_sites)
+    diagnostics = []
+    if isinstance(errors, list):
+        for index, error in enumerate(errors):
+            if isinstance(error, str):
+                diagnostics.append(error)
+            else:
+                diagnostics.append(
+                    f"PCode instrumentation error {index} must be string"
+                )
+    else:
+        diagnostics.append("PCode instrumentation errors must be list")
+
+    rewrite_sites = _coverage_site_ids(
+        proof, "operand_rewrite_sites", diagnostics
     )
+    mutation_sites = _coverage_site_ids(
+        proof, "operand_mutation_sites", diagnostics
+    )
+    emission_sites = _coverage_site_ids(
+        proof, "code_emission_sites", diagnostics
+    )
+    site_families = {
+        "operand_rewrite_sites": rewrite_sites,
+        "operand_mutation_sites": mutation_sites,
+        "code_emission_sites": emission_sites,
+    }
+    expected_sites = rewrite_sites | mutation_sites | emission_sites
+
+    if not isinstance(hooked_site_ids, set):
+        diagnostics.append("hooked site IDs must be set")
+        hooked = set()
+    elif any(
+        not isinstance(site_id, str) or not site_id
+        for site_id in hooked_site_ids
+    ):
+        diagnostics.append("hooked site IDs must contain nonempty strings")
+        hooked = set()
+    else:
+        hooked = hooked_site_ids
+    if hooked != expected_sites:
+        diagnostics.append("hooked site IDs differ from exact proof inventory")
+
+    if not isinstance(events, list):
+        diagnostics.append("PCode events must be list")
+        event_rows = []
+    else:
+        event_rows = events
+    sequences = []
+    for index, row in enumerate(event_rows):
+        if not isinstance(row, Mapping):
+            diagnostics.append(f"PCode event {index} must be object")
+            continue
+        kind = row.get("event")
+        if not isinstance(kind, str) or kind not in _PCODE_EVENT_FIELDS:
+            diagnostics.append(f"unknown PCode event kind {kind!r}")
+            continue
+        unexpected = sorted(
+            set(row) - _PCODE_EVENT_FIELDS[kind], key=repr
+        )
+        if unexpected:
+            diagnostics.append(f"{kind} event {index} has unexpected fields")
+        sequence = row.get("pcode_event_sequence")
+        if (
+            not isinstance(sequence, int)
+            or isinstance(sequence, bool)
+            or sequence < 0
+        ):
+            diagnostics.append(
+                f"PCode event {index} sequence must be nonnegative integer"
+            )
+        else:
+            sequences.append(sequence)
+        site_id = row.get("instrumented_site_id")
+        collection = _PCODE_EVENT_SITE_COLLECTION[kind]
+        if (
+            not isinstance(site_id, str)
+            or site_id not in site_families[collection]
+        ):
+            diagnostics.append(
+                f"{kind} event site {site_id!r} not in matching proof family"
+            )
+    if sequences != list(range(len(event_rows))):
+        diagnostics.append("PCode event sequences must be contiguous from zero")
+
+    valid_cap = (
+        isinstance(event_cap, int)
+        and not isinstance(event_cap, bool)
+        and event_cap > 0
+    )
+    if not valid_cap:
+        diagnostics.append("PCode event cap must be positive integer")
+    valid_dropped = (
+        isinstance(dropped_events, int)
+        and not isinstance(dropped_events, bool)
+        and dropped_events >= 0
+    )
+    if not valid_dropped:
+        diagnostics.append("PCode dropped events must be nonnegative integer")
+    if not isinstance(truncated, bool):
+        diagnostics.append("PCode truncated must be boolean")
+
     complete = (
-        all_sites_hooked
-        and gap_free
-        and bool(events)
+        not diagnostics
+        and bool(event_rows)
         and dropped_events == 0
         and truncated is False
-        and not errors
-        and len(events) < event_cap
+        and len(event_rows) < event_cap
     )
     return {
         "status": "complete" if complete else "partial",
@@ -180,7 +340,7 @@ def _pcode_instrumentation_status(
         "event_cap": event_cap,
         "dropped_events": dropped_events,
         "truncated": truncated,
-        "errors": list(errors),
+        "errors": diagnostics,
         # Task 6 performs the final independent replay before this can be set.
         "capabilities": [],
     }

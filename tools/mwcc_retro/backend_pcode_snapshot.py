@@ -197,11 +197,16 @@ def _read_operand_inventory(
     for operand_index in range(arg_count):
         address = pcode_ptr + PCODE_ARGS + operand_index * PCODE_ARG_SIZE
         try:
-            raw = bytes(read_bytes(address, PCODE_ARG_SIZE))
+            value = read_bytes(address, PCODE_ARG_SIZE)
         except Exception as exc:  # noqa: BLE001 - controlled diagnostic failure
             raise ValueError(
                 f"failed to read PCodeArg[{operand_index}] at 0x{address:x}: {exc}"
             ) from exc
+        if not isinstance(value, (bytes, bytearray, memoryview)):
+            raise ValueError(
+                f"PCodeArg[{operand_index}] reader must return bytes-like"
+            )
+        raw = bytes(value)
         if len(raw) != PCODE_ARG_SIZE:
             raise ValueError(
                 f"short PCodeArg[{operand_index}] read at 0x{address:x}: "

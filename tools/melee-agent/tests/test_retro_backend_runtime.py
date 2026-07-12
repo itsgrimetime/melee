@@ -97,8 +97,59 @@ def test_finalize_pcode_sidecar_preserves_partial_attempt_correlation(tmp_path) 
     assert result["capture_status"]["errors"] == [
         "layout unvalidated",
         "proof unpromoted",
+        "operand rewrite proof site inventory must be nonempty",
+        "operand mutation proof site inventory must be nonempty",
+        "code emission proof site inventory must be nonempty",
     ]
     assert json.loads(path.read_bytes())["capture_attempt"] == attempt
+
+
+def test_pcode_sidecar_replace_failure_preserves_old_attempt_and_reports_current(
+    tmp_path, monkeypatch
+) -> None:
+    from tools.mwcc_retro import backend_onepass_trace_hook
+
+    path = tmp_path / "backend-pcode-events.v1.json"
+    old_attempt = {
+        "capture_attempt_id": "a" * 32,
+        "function_identity": {"canonical_name": "old_fn"},
+    }
+    current_attempt = {
+        "capture_attempt_id": "b" * 32,
+        "function_identity": {"canonical_name": "current_fn"},
+    }
+    backend_onepass_trace_hook._publish_pcode_sidecar(
+        path,
+        [],
+        {"status": "partial", "capabilities": [], "errors": ["old"]},
+        old_attempt,
+    )
+    old_bytes = path.read_bytes()
+
+    def fail_replace(_source, _target):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(backend_onepass_trace_hook.os, "replace", fail_replace)
+    result = backend_onepass_trace_hook._finalize_pcode_capture(
+        {
+            "pcode_events": [],
+            "object_capture_attempt": current_attempt,
+            "errors": [],
+        },
+        path,
+        proof={
+            "operand_rewrite_sites": [],
+            "operand_mutation_sites": [],
+            "code_emission_sites": [],
+        },
+        hooked_site_ids=set(),
+        gate_errors=["proof unpromoted"],
+    )
+
+    assert path.read_bytes() == old_bytes
+    assert json.loads(old_bytes)["capture_attempt"] == old_attempt
+    assert result["capture_attempt"] == current_attempt
+    assert "replace failed" in result["capture_status"]["errors"]
 
 
 def _stub_backend_mwcc_command(monkeypatch, retro, command: str | None = None) -> None:

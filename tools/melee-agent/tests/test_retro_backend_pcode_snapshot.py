@@ -222,6 +222,167 @@ def test_runtime_drops_capability_when_mutation_site_is_unhooked() -> None:
     assert coverage["capabilities"] == []
 
 
+def _complete_coverage_proof():
+    return {
+        "operand_rewrite_sites": [{"site_id": "rewrite-1"}],
+        "operand_mutation_sites": [{"site_id": "mutation-1"}],
+        "code_emission_sites": [{"site_id": "emit-1"}],
+    }
+
+
+def _complete_coverage_events():
+    return [
+        {
+            "event": "operand_rewrite",
+            "pcode_event_sequence": 0,
+            "instrumented_site_id": "rewrite-1",
+        },
+        {
+            "event": "pcode_mutation",
+            "pcode_event_sequence": 1,
+            "instrumented_site_id": "mutation-1",
+        },
+        {
+            "event": "code_emission",
+            "pcode_event_sequence": 2,
+            "instrumented_site_id": "emit-1",
+        },
+    ]
+
+
+def _coverage_status(**overrides):
+    values = {
+        "proof": _complete_coverage_proof(),
+        "hooked_site_ids": {"rewrite-1", "mutation-1", "emit-1"},
+        "events": _complete_coverage_events(),
+        "event_cap": 64,
+        "dropped_events": 0,
+        "truncated": False,
+        "errors": [],
+    }
+    values.update(overrides)
+    proof = values.pop("proof")
+    return backend_onepass_trace_hook._pcode_instrumentation_status(
+        proof, **values
+    )
+
+
+def test_runtime_marks_only_exact_complete_instrumentation_complete():
+    coverage = _coverage_status()
+
+    assert coverage["status"] == "complete"
+    assert coverage["errors"] == []
+    assert coverage["capabilities"] == []
+
+
+def test_runtime_rejects_empty_expected_site_family():
+    proof = _complete_coverage_proof()
+    proof["operand_mutation_sites"] = []
+
+    coverage = _coverage_status(proof=proof)
+
+    assert coverage["status"] == "partial"
+    assert "operand mutation proof site inventory must be nonempty" in coverage[
+        "errors"
+    ]
+
+
+def test_runtime_rejects_extra_hooked_site():
+    coverage = _coverage_status(
+        hooked_site_ids={"rewrite-1", "mutation-1", "emit-1", "extra-1"}
+    )
+
+    assert coverage["status"] == "partial"
+    assert "hooked site IDs differ from exact proof inventory" in coverage["errors"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (
+            lambda events: events[0].update({"event": "unknown"}),
+            "unknown PCode event kind 'unknown'",
+        ),
+        (
+            lambda events: events[0].update(
+                {"instrumented_site_id": "mutation-1"}
+            ),
+            "operand_rewrite event site 'mutation-1' not in matching proof family",
+        ),
+        (
+            lambda events: events[0].update({"pcode_event_sequence": True}),
+            "PCode event 0 sequence must be nonnegative integer",
+        ),
+        (
+            lambda events: events[1].update({"pcode_event_sequence": 0}),
+            "PCode event sequences must be contiguous from zero",
+        ),
+        (
+            lambda events: events[0].update({"unexpected": 1}),
+            "operand_rewrite event 0 has unexpected fields",
+        ),
+        (
+            lambda events: events.__setitem__(0, 7),
+            "PCode event 0 must be object",
+        ),
+        (
+            lambda events: events[0].update({"event": []}),
+            "unknown PCode event kind []",
+        ),
+    ],
+)
+def test_runtime_rejects_malformed_or_misclassified_events(mutate, expected):
+    events = _complete_coverage_events()
+    mutate(events)
+
+    coverage = _coverage_status(events=events)
+
+    assert coverage["status"] == "partial"
+    assert expected in coverage["errors"]
+
+
+def test_runtime_rejects_malformed_hook_and_coverage_scalars():
+    coverage = _coverage_status(
+        hooked_site_ids="rewrite-1",
+        event_cap=True,
+        dropped_events=False,
+        truncated=0,
+        errors="bad",
+    )
+
+    assert coverage["status"] == "partial"
+    assert "hooked site IDs must be set" in coverage["errors"]
+    assert "PCode event cap must be positive integer" in coverage["errors"]
+    assert "PCode dropped events must be nonnegative integer" in coverage["errors"]
+    assert "PCode truncated must be boolean" in coverage["errors"]
+    assert "PCode instrumentation errors must be list" in coverage["errors"]
+
+
+@pytest.mark.parametrize(
+    ("reader", "match"),
+    [
+        (lambda _addr, _size: bytes(11), "short PCodeArg\\[0\\] read"),
+        (lambda _addr, _size: 12, "PCodeArg\\[0\\] reader must return bytes-like"),
+    ],
+)
+def test_snapshot_rejects_short_or_malformed_raw_pcodearg_reads(reader, match):
+    mem = Memory()
+    add_block(mem, ptr=0x600000, first_pcode=0x610000, block_index=0)
+    add_pcode(mem, ptr=0x610000, opcode=62, arg_count=1)
+
+    with pytest.raises(ValueError, match=match):
+        backend_pcode_snapshot.snapshot_pcode_blocks(
+            mem.read_u32,
+            mem.read_s16,
+            0x600000,
+            read_bytes=reader,
+            pass_id="pcode_snapshot",
+            pass_name="PCode Snapshot",
+            opcode_names={62: "addi"},
+            source_stage="allocator_input",
+        )
+
+
 def test_onepass_snapshot_forwards_full_raw_memory_reader() -> None:
     calls = []
 

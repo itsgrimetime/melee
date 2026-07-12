@@ -1,10 +1,14 @@
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
 from tools.mwcc_retro import backend_map_probe_hook, struct_map  # noqa: E402
+from tools.mwcc_retro.backend_instrumentation_proof import (  # noqa: E402
+    proof_sha256,
+)
 from tools.mwcc_retro.backend_map_evidence import classify_probe_evidence  # noqa: E402
 
 PROMOTABLE_FROM_LIVE_PROBE = {
@@ -32,6 +36,112 @@ NOT_PROMOTABLE_FROM_CURRENT_PROBE = {
 }
 
 
+def _valid_instrumentation_proof():
+    return {
+        "schema_version": "mwcc-retro-lifetime-proof.v1",
+        "proof_id": "proof",
+        "compiler_executable_sha256": "a" * 64,
+        "mode": "allocation-generation",
+        "allocation_sites": [
+            {
+                "site_id": "pcode-alloc-1",
+                "address": 0x500100,
+                "entity_kind": "pcode",
+                "compiler_stage": "backend-lowering",
+            }
+        ],
+        "free_sites": [
+            {
+                "site_id": "pcode-free-1",
+                "address": 0x500200,
+                "entity_kind": "pcode",
+                "compiler_stage": "backend-finalize",
+            }
+        ],
+        "operand_rewrite_sites": [
+            {
+                "site_id": "rewrite-1",
+                "address": 0x500300,
+                "compiler_stage": "colorgraph",
+            },
+            {
+                "site_id": "rewrite-2",
+                "address": 0x500310,
+                "compiler_stage": "colorgraph",
+            },
+        ],
+        "operand_mutation_sites": [
+            {
+                "site_id": "mutation-1",
+                "address": 0x500400,
+                "compiler_stage": "optimizer",
+            }
+        ],
+        "code_emission_sites": [
+            {
+                "site_id": "emit-1",
+                "address": 0x500500,
+                "compiler_stage": "backend-finalize",
+            }
+        ],
+        "operand_rules": [
+            {
+                "opcode_id": 42,
+                "operand_index": 0,
+                "raw_arg_kind_id": 0,
+                "register_flags_mask": 1,
+                "register_flags_value": 0,
+                "role": "use",
+                "class_id": 0,
+                "allocation_requirement": "allocator-rewrite-required",
+            }
+        ],
+        "opcode_table": [{"opcode_id": 42, "mnemonic": "ADDI"}],
+        "initialization_address": 0x401000,
+        "proof_basis": "exhaustive-static-callgraph-and-disassembly",
+    }
+
+
+def _validated_instrumentation_table(proof=None):
+    proof = _valid_instrumentation_proof() if proof is None else proof
+    digest = proof_sha256(proof)
+    return {
+        "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs": [
+            {
+                "compiler_executable_sha256": proof["compiler_executable_sha256"],
+                "proof_id": proof["proof_id"],
+                "proof_sha256": digest,
+                "promoted": True,
+            }
+        ],
+        "backend_reader": {
+            "pcode_instrumentation": {
+                "validated": True,
+                "compiler_executable_sha256": proof[
+                    "compiler_executable_sha256"
+                ],
+                "proof_id": proof["proof_id"],
+                "proof_sha256": digest,
+                "operand_rewrite_site_ids": ["rewrite-1", "rewrite-2"],
+                "operand_mutation_site_ids": ["mutation-1"],
+                "code_emission_site_ids": ["emit-1"],
+            }
+        },
+    }
+
+
+class _BrokenProofMapping(Mapping):
+    def __getitem__(self, key):
+        raise RuntimeError("broken proof mapping")
+
+    def __iter__(self):
+        raise RuntimeError("broken proof mapping")
+
+    def __len__(self):
+        return 1
+
+
 def test_pcode_instrumentation_gate_rejects_unpromoted_and_partial_site_inventory():
     table = struct_map.load_gc125n_struct_map()
     assert table["instrumentation_proofs"] == []
@@ -47,44 +157,123 @@ def test_pcode_instrumentation_gate_rejects_unpromoted_and_partial_site_inventor
 
 
 def test_pcode_instrumentation_gate_fails_closed_on_altered_site_inventory():
-    table = {
-        "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
-        "instrumentation_proofs": [
-            {
-                "compiler_executable_sha256": "a" * 64,
-                "proof_id": "proof",
-                "proof_sha256": "b" * 64,
-                "promoted": True,
-            }
-        ],
-        "backend_reader": {
-            "pcode_instrumentation": {
-                "validated": True,
-                "compiler_executable_sha256": "a" * 64,
-                "proof_id": "proof",
-                "proof_sha256": "b" * 64,
-                "operand_rewrite_site_ids": ["rewrite-1"],
-                "operand_mutation_site_ids": ["mutation-1"],
-                "code_emission_site_ids": ["emit-1"],
-            }
-        },
-    }
-    proof = {
-        "compiler_executable_sha256": "a" * 64,
-        "proof_id": "proof",
-        "operand_rewrite_sites": [{"site_id": "rewrite-1"}],
-        "operand_mutation_sites": [
-            {"site_id": "mutation-1"},
-            {"site_id": "mutation-2"},
-        ],
-        "code_emission_sites": [{"site_id": "emit-1"}],
-    }
+    proof = _valid_instrumentation_proof()
+    table = _validated_instrumentation_table(proof)
+    table["backend_reader"]["pcode_instrumentation"][
+        "operand_mutation_site_ids"
+    ] = ["mutation-2"]
 
     errors = struct_map.validate_pcode_instrumentation_capability(
         table, proof=proof
     )
 
     assert errors == ["operand mutation site inventory differs from proof"]
+
+
+def test_validated_pcode_instrumentation_requires_proof_mapping():
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        _validated_instrumentation_table()
+    )
+
+    assert "PCode instrumentation proof must be object" in errors
+
+
+def test_validated_pcode_instrumentation_fails_closed_on_broken_proof_mapping():
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        _validated_instrumentation_table(), proof=_BrokenProofMapping()
+    )
+
+    assert "PCode instrumentation proof could not be materialized" in errors
+
+
+def test_validated_pcode_instrumentation_accepts_exact_canonical_proof():
+    proof = _valid_instrumentation_proof()
+    assert (
+        struct_map.validate_pcode_instrumentation_capability(
+            _validated_instrumentation_table(proof), proof=proof
+        )
+        == []
+    )
+
+
+def test_validated_pcode_instrumentation_rejects_empty_proof_and_gate():
+    proof = _valid_instrumentation_proof()
+    for collection in (
+        "allocation_sites",
+        "free_sites",
+        "operand_rewrite_sites",
+        "operand_mutation_sites",
+        "code_emission_sites",
+        "opcode_table",
+        "operand_rules",
+    ):
+        proof[collection] = []
+    table = _validated_instrumentation_table(proof)
+    gate = table["backend_reader"]["pcode_instrumentation"]
+    gate["operand_rewrite_site_ids"] = []
+    gate["operand_mutation_site_ids"] = []
+    gate["code_emission_site_ids"] = []
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+
+    assert any("allocation_sites must not be empty" in error for error in errors)
+    assert "operand rewrite site IDs must be nonempty list" in errors
+    assert "operand mutation site IDs must be nonempty list" in errors
+    assert "code emission site IDs must be nonempty list" in errors
+
+
+def test_validated_pcode_instrumentation_rejects_malformed_registry():
+    proof = _valid_instrumentation_proof()
+    table = _validated_instrumentation_table(proof)
+    table["instrumentation_proofs"].append({"promoted": True})
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+
+    assert any("registry row 1" in error for error in errors)
+
+
+def test_validated_pcode_instrumentation_rejects_digest_mismatch():
+    proof = _valid_instrumentation_proof()
+    table = _validated_instrumentation_table(proof)
+    table["instrumentation_proofs"][0]["proof_sha256"] = "b" * 64
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+
+    assert "proof digest differs from promoted registry" in errors
+
+
+def test_validated_pcode_instrumentation_rejects_duplicate_gate_sites():
+    proof = _valid_instrumentation_proof()
+    table = _validated_instrumentation_table(proof)
+    table["backend_reader"]["pcode_instrumentation"][
+        "operand_rewrite_site_ids"
+    ] = ["rewrite-1", "rewrite-1"]
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+
+    assert "operand rewrite site IDs must be unique" in errors
+
+
+def test_validated_pcode_instrumentation_rejects_noncanonical_gate_sites():
+    proof = _valid_instrumentation_proof()
+    table = _validated_instrumentation_table(proof)
+    table["backend_reader"]["pcode_instrumentation"][
+        "operand_rewrite_site_ids"
+    ] = ["rewrite-2", "rewrite-1"]
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+
+    assert "operand rewrite site IDs must be canonically ordered" in errors
 
 
 def test_map_probe_reports_exact_unpromoted_pcode_gates_without_capability():
@@ -101,6 +290,7 @@ def test_map_probe_reports_exact_unpromoted_pcode_gates_without_capability():
     assert status["proof_errors"] == [
         "no promoted instrumentation proof",
         "pcode instrumentation gate is not validated",
+        "PCode instrumentation proof must be object",
     ]
 
 

@@ -426,14 +426,39 @@ def _proof_site_ids(proof: Mapping[str, object], collection: str) -> list[str]:
     ]
 
 
+def _validate_gate_site_ids(
+    gate: Mapping[str, object],
+    *,
+    field: str,
+    label: str,
+    expected: list[str],
+) -> list[str]:
+    errors: list[str] = []
+    value = gate.get(field)
+    if not isinstance(value, list) or not value:
+        return [f"{label} site IDs must be nonempty list"]
+    if any(not isinstance(site_id, str) or not site_id for site_id in value):
+        errors.append(f"{label} site IDs must contain nonempty strings")
+        return errors
+    if len(value) != len(set(value)):
+        errors.append(f"{label} site IDs must be unique")
+    if value != expected:
+        if len(value) == len(expected) and set(value) == set(expected):
+            errors.append(f"{label} site IDs must be canonically ordered")
+        else:
+            errors.append(f"{label} site inventory differs from proof")
+    return errors
+
+
 def validate_pcode_instrumentation_capability(
     table: object, *, proof: Mapping[str, object] | None = None
 ) -> list[str]:
     """Require one promoted tuple and an exactly matching installed hook set."""
 
+    errors = list(validate_instrumentation_proof_registry(table))
     if not isinstance(table, Mapping):
-        return ["PCode instrumentation table must be object"]
-    errors: list[str] = []
+        errors.append("PCode instrumentation table must be object")
+        return errors
     rows = table.get("instrumentation_proofs")
     promoted = (
         [
@@ -457,19 +482,52 @@ def validate_pcode_instrumentation_capability(
     )
     if not isinstance(gate, Mapping) or gate.get("validated") is not True:
         errors.append("pcode instrumentation gate is not validated")
+        gate = None
+
+    if not isinstance(proof, Mapping):
+        errors.append("PCode instrumentation proof must be object")
         return errors
+    try:
+        proof = dict(proof)
+    except Exception:  # noqa: BLE001 - malformed proof must fail closed
+        errors.append("PCode instrumentation proof could not be materialized")
+        return errors
+
+    from .backend_instrumentation_proof import proof_sha256, validate_proof_shape
+
+    try:
+        errors.extend(validate_proof_shape(proof))
+    except Exception:  # noqa: BLE001 - malformed proof must fail closed
+        errors.append("PCode instrumentation proof shape validation failed")
+    digest = None
+    try:
+        digest = proof_sha256(proof)
+    except Exception:  # noqa: BLE001 - malformed proof must fail closed
+        errors.append("PCode instrumentation proof is not canonicalizable")
 
     if len(promoted) == 1:
         row = promoted[0]
-        for field in (
-            "compiler_executable_sha256",
-            "proof_id",
-            "proof_sha256",
+        if proof.get("compiler_executable_sha256") != row.get(
+            "compiler_executable_sha256"
         ):
-            if gate.get(field) != row.get(field):
-                errors.append(f"pcode instrumentation {field} differs from registry")
+            errors.append("proof compiler digest differs from promoted registry")
+        if proof.get("proof_id") != row.get("proof_id"):
+            errors.append("proof ID differs from promoted registry")
+        if digest != row.get("proof_sha256"):
+            errors.append("proof digest differs from promoted registry")
 
-    if proof is not None:
+    if gate is not None:
+        if len(promoted) == 1:
+            row = promoted[0]
+            for field in (
+                "compiler_executable_sha256",
+                "proof_id",
+                "proof_sha256",
+            ):
+                if gate.get(field) != row.get(field):
+                    errors.append(
+                        f"pcode instrumentation {field} differs from registry"
+                    )
         if gate.get("compiler_executable_sha256") != proof.get(
             "compiler_executable_sha256"
         ):
@@ -489,8 +547,14 @@ def validate_pcode_instrumentation_capability(
             ),
             ("code_emission_sites", "code_emission_site_ids", "code emission"),
         ):
-            if gate.get(gate_field) != _proof_site_ids(proof, collection):
-                errors.append(f"{label} site inventory differs from proof")
+            errors.extend(
+                _validate_gate_site_ids(
+                    gate,
+                    field=gate_field,
+                    label=label,
+                    expected=_proof_site_ids(proof, collection),
+                )
+            )
     return errors
 
 

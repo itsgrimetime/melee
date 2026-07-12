@@ -152,3 +152,45 @@ The diagnostic event APIs and atomic sidecar are ready for exact promoted sites,
 but they deliberately remain dormant for proof-capable capture. Promotion
 requires resolving #1239/#1240 and independently reviewing the complete static
 and bounded-live proof chain; weakening any validator would violate the design.
+
+## Important review remediation
+
+The Task 7 review identified two fail-open surfaces in the unpromoted
+diagnostic implementation. A new strict RED run reported `16 failed, 114
+passed`: the capability gate accepted a promoted registry/gate without an
+embedded proof, and producer coverage normalized malformed hook/event input
+instead of proving exact coverage. A later adversarial RED case reproduced an
+uncaught `TypeError` for a list-valued event kind, and a final RED case
+reproduced a hostile `Mapping.get()` exception escaping the proof gate.
+
+The remediation now:
+
+- always validates the independent proof registry, requires and safely
+  materializes a proof mapping, reuses Task 2 closed-shape validation and RFC
+  8785 proof hashing, and binds the exact compiler/proof/digest tuple;
+- requires every proof and installed-gate site inventory to be nonempty,
+  unique, canonically ordered, and byte-for-byte equal;
+- reports producer coverage complete only for the exact set of string hook
+  IDs and a nonempty, closed event list with known kinds, family-correct sites,
+  and non-boolean contiguous sequence integers;
+- converts malformed errors, caps, drops, truncation flags, nested event
+  values, short/non-byte PCodeArg reads, and publication failures into explicit
+  partial diagnostics while always returning `capabilities: []`; and
+- preserves the prior valid sidecar if atomic replacement fails.
+
+Fresh post-remediation verification:
+
+```text
+Task 7 focused: 132 passed
+Task 2 proof/registry: 51 passed
+Task 5 selected object/IG/frame/one-pass/PCode: 114 passed, 78 deselected
+Task 6 lineage plus adjacent proof/object/identity/bundle: 422 passed
+```
+
+Scoped Ruff checks, legacy-runtime `E,F,W`, `py_compile`, JSON parsing, and
+`git diff --check` all exit zero. The current Ruff formatter would reformat the
+five touched non-runtime files, but it also reports the same result for each
+file's pre-remediation `HEAD` content; no repository-wide legacy formatting
+churn was introduced. The installed registry remains empty and
+`pcode_instrumentation.validated` remains false. No live probe or static audit
+was rerun during remediation.
