@@ -21,6 +21,7 @@ if str(TOOLS_ROOT) not in sys.path:
 
 worktrees = importlib.import_module("worktree_doctor.worktrees")
 retained_evidence = importlib.import_module("worktree_doctor.retained_evidence")
+worktree_doctor = importlib.import_module("worktree_doctor")
 
 MELEE_AGENT_ROOT = TOOLS_ROOT / "melee-agent"
 if str(MELEE_AGENT_ROOT) not in sys.path:
@@ -1245,6 +1246,364 @@ def _retirement_report(
         records=records,
         global_errors=global_errors,
     )
+
+
+def test_worktrees_report_emits_exact_versioned_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    item = _retirement_record(
+        tmp_path / "agent",
+        branch="codex/json-report",
+        estimated_disk_bytes=8192,
+        last_activity=100.0,
+    )
+    report = replace(_retirement_report(tmp_path, (item,)), min_idle_hours=12.0)
+    calls: list[tuple[Path, Path, float]] = []
+
+    def inspect(repo_root: Path, *, current_worktree: Path, min_idle_hours: float):
+        calls.append((repo_root, current_worktree, min_idle_hours))
+        return report
+
+    monkeypatch.setattr(worktree_doctor, "ROOT", report.repo_root)
+    monkeypatch.setattr(worktree_doctor.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(worktrees, "inspect_worktrees", inspect)
+    monkeypatch.setattr(
+        worktrees,
+        "retire_worktrees",
+        lambda *_args, **_kwargs: pytest.fail("report created a retirement plan"),
+    )
+
+    status = worktree_doctor.main(
+        ["worktrees", "report", "--min-idle-hours", "12", "--json"]
+    )
+
+    assert status == 0
+    assert calls == [(report.repo_root, report.repo_root, 12.0)]
+    assert json.loads(capsys.readouterr().out) == {
+        "schema_version": 1,
+        "resource": "worktrees",
+        "mode": "report",
+        "thresholds": {"min_idle_hours": 12.0},
+        "repository": {
+            "root": str(report.repo_root),
+            "common_git_dir": str(report.common_git_dir),
+            "current_worktree": str(report.current_worktree),
+        },
+        "worktrees": [
+            {
+                "path": str(item.path),
+                "head": item.head,
+                "branch": "codex/json-report",
+                "estimated_disk_bytes": 8192,
+                "last_activity": 100.0,
+                "idle_seconds": 900.0,
+                "dirty": False,
+                "active_pids": [],
+                "merged_into_master": None,
+                "ignored_path_count": 0,
+                "unapproved_ignored_paths": [],
+                "eligible": True,
+                "skip_reasons": [],
+            }
+        ],
+        "planned": [],
+        "removed": [],
+        "skipped": [],
+        "errors": [],
+        "summary": {
+            "eligible_count": 1,
+            "estimated_planned_bytes": 0,
+            "removed_count": 0,
+            "estimated_reclaimed_bytes": 0,
+        },
+    }
+
+
+def test_worktrees_retire_dry_run_emits_planned_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    item = _retirement_record(tmp_path / "agent", branch="codex/dry-run")
+    report = _retirement_report(tmp_path, (item,))
+    planned = worktrees.RetirementCandidate(
+        path=item.path,
+        branch=item.branch,
+        head=item.head,
+        estimated_disk_bytes=item.estimated_disk_bytes,
+        last_activity=item.last_activity,
+    )
+    result = worktrees.RetirementResult((planned,), (), (), ())
+    apply_values: list[bool] = []
+    monkeypatch.setattr(worktree_doctor, "ROOT", report.repo_root)
+    monkeypatch.setattr(worktree_doctor.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(worktrees, "inspect_worktrees", lambda *_args, **_kwargs: report)
+
+    def retire(_report, *, apply: bool):
+        apply_values.append(apply)
+        return result
+
+    monkeypatch.setattr(worktrees, "retire_worktrees", retire)
+
+    status = worktree_doctor.main(["worktrees", "retire", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == 0
+    assert apply_values == [False]
+    assert payload["mode"] == "dry-run"
+    assert payload["thresholds"] == {"min_idle_hours": 24.0}
+    assert payload["planned"] == [
+        {
+            "path": str(item.path),
+            "branch": "codex/dry-run",
+            "head": item.head,
+            "estimated_disk_bytes": 4096,
+            "last_activity": 1.0,
+        }
+    ]
+    assert payload["removed"] == []
+    assert payload["skipped"] == []
+    assert payload["errors"] == []
+    assert payload["summary"] == {
+        "eligible_count": 1,
+        "estimated_planned_bytes": 4096,
+        "removed_count": 0,
+        "estimated_reclaimed_bytes": 0,
+    }
+
+
+def test_worktrees_apply_emits_exact_result_shapes_and_status_two(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first = _retirement_record(
+        tmp_path / "first", branch="codex/first", estimated_disk_bytes=4096
+    )
+    second = _retirement_record(
+        tmp_path / "second", branch="codex/second", estimated_disk_bytes=8192
+    )
+    report = _retirement_report(tmp_path, (first, second))
+    planned = tuple(
+        worktrees.RetirementCandidate(
+            item.path,
+            item.branch,
+            item.head,
+            item.estimated_disk_bytes,
+            item.last_activity,
+        )
+        for item in (first, second)
+    )
+    result = worktrees.RetirementResult(
+        planned=planned,
+        removed=(
+            worktrees.RetirementRemoval(
+                first.path, first.branch, first.head, first.head, 4096
+            ),
+        ),
+        skipped=(
+            worktrees.RetirementSkip(
+                second.path,
+                second.branch,
+                second.head,
+                "revalidate",
+                "changed-during-retirement",
+            ),
+        ),
+        errors=(
+            worktrees.RetirementError(
+                "process-query-failed", "late process inspection failed"
+            ),
+        ),
+    )
+    monkeypatch.setattr(worktree_doctor, "ROOT", report.repo_root)
+    monkeypatch.setattr(worktree_doctor.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(worktrees, "inspect_worktrees", lambda *_args, **_kwargs: report)
+    monkeypatch.setattr(worktrees, "retire_worktrees", lambda _report, *, apply: result)
+
+    status = worktree_doctor.main(
+        ["worktrees", "retire", "--apply", "--json"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == 2
+    assert payload["mode"] == "apply"
+    assert payload["planned"] == [
+        {
+            "path": str(item.path),
+            "branch": item.branch,
+            "head": item.head,
+            "estimated_disk_bytes": item.estimated_disk_bytes,
+            "last_activity": item.last_activity,
+        }
+        for item in (first, second)
+    ]
+    assert payload["removed"] == [
+        {
+            "path": str(first.path),
+            "branch": first.branch,
+            "head": first.head,
+            "branch_head_after": first.head,
+            "estimated_reclaimed_bytes": 4096,
+        }
+    ]
+    assert payload["skipped"] == [
+        {
+            "path": str(second.path),
+            "branch": second.branch,
+            "head": second.head,
+            "phase": "revalidate",
+            "reason": "changed-during-retirement",
+        }
+    ]
+    assert payload["errors"] == [
+        {
+            "reason": "process-query-failed",
+            "detail": "late process inspection failed",
+        }
+    ]
+    assert payload["summary"] == {
+        "eligible_count": 2,
+        "estimated_planned_bytes": 12288,
+        "removed_count": 1,
+        "estimated_reclaimed_bytes": 4096,
+    }
+
+
+def test_worktrees_apply_preflight_error_returns_status_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    report = _retirement_report(tmp_path, ())
+    result = worktrees.RetirementResult(
+        (),
+        (),
+        (),
+        (worktrees.RetirementError("process-query-failed", "preflight failed"),),
+    )
+    monkeypatch.setattr(worktree_doctor, "ROOT", report.repo_root)
+    monkeypatch.setattr(worktrees, "inspect_worktrees", lambda *_args, **_kwargs: report)
+    monkeypatch.setattr(worktrees, "retire_worktrees", lambda _report, *, apply: result)
+
+    status = worktree_doctor.main(
+        ["worktrees", "retire", "--apply", "--json"]
+    )
+
+    assert status == 1
+    assert json.loads(capsys.readouterr().out)["errors"] == [
+        {"reason": "process-query-failed", "detail": "preflight failed"}
+    ]
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+def test_worktrees_rejects_negative_or_nonfinite_idle_hours(
+    value: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        worktree_doctor.main(
+            ["worktrees", "report", "--min-idle-hours", value, "--json"]
+        )
+
+    assert raised.value.code == 2
+    assert "--min-idle-hours must be finite and non-negative" in capsys.readouterr().err
+
+
+def test_worktrees_human_output_contains_same_ordered_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    item = replace(
+        _retirement_record(
+            tmp_path / "agent",
+            branch="codex/human",
+            head="0123456789abcdef" * 2 + "01234567",
+            estimated_disk_bytes=12288,
+            last_activity=100.0,
+        ),
+        eligible=False,
+        skip_reasons=("dirty-worktree", "below-min-idle"),
+    )
+    report = _retirement_report(tmp_path, (item,))
+    monkeypatch.setattr(worktree_doctor, "ROOT", report.repo_root)
+    monkeypatch.setattr(worktree_doctor.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(worktrees, "inspect_worktrees", lambda *_args, **_kwargs: report)
+
+    assert worktree_doctor.main(["worktrees", "report"]) == 0
+    output = capsys.readouterr().out
+
+    assert "branch=codex/human" in output
+    assert "head=0123456789ab" in output
+    assert "estimated_disk_bytes=12288" in output
+    assert "idle_seconds=900" in output
+    assert "eligibility=ineligible" in output
+    assert "reasons=dirty-worktree,below-min-idle" in output
+    assert "estimated_planned_bytes=0" in output
+    assert "estimated_reclaimed_bytes=0" in output
+
+
+def test_report_and_dry_run_preserve_index_and_use_exact_status_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    admin = _age_worktree_activity(linked, time.time())
+    index = admin / "index"
+    before = index.stat().st_mtime_ns
+    status_args: list[tuple[str, ...]] = []
+    real_git_bytes = worktrees._git_bytes
+
+    def recording_git_bytes(path: Path, args: tuple[str, ...]):
+        if "status" in args:
+            status_args.append(args)
+        return real_git_bytes(path, args)
+
+    monkeypatch.setattr(worktree_doctor, "ROOT", repo)
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    monkeypatch.setattr(worktrees, "_git_bytes", recording_git_bytes)
+
+    assert worktree_doctor.main(["worktrees", "report", "--json"]) == 0
+    report_payload = json.loads(capsys.readouterr().out)
+    assert worktree_doctor.main(["worktrees", "retire", "--json"]) == 0
+    dry_run_payload = json.loads(capsys.readouterr().out)
+
+    assert index.stat().st_mtime_ns == before
+    assert status_args
+    assert set(status_args) == {
+        (
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        )
+    }
+    assert report_payload["thresholds"] == {"min_idle_hours": 24.0}
+    linked_payload = next(
+        item for item in report_payload["worktrees"] if item["path"] == str(linked)
+    )
+    assert linked_payload["eligible"] is False
+    assert "below-min-idle" in linked_payload["skip_reasons"]
+    assert dry_run_payload["planned"] == []
+
+
+@pytest.mark.parametrize("merged", [True, False, None])
+def test_merge_information_does_not_change_eligibility(
+    tmp_path: Path, merged: bool | None
+) -> None:
+    item = replace(
+        _retirement_record(tmp_path / str(merged), branch=f"codex/{merged}"),
+        merged_into_master=merged,
+    )
+
+    assert item.eligible is True
+    assert item.skip_reasons == ()
 
 
 def test_retirement_dry_run_is_canonical_ordered_and_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
