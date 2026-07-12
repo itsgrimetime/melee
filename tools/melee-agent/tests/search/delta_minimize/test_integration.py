@@ -321,14 +321,20 @@ def test_reviewed_v2_roles_publish_complete_reproducible_frontier(
     assert second.exit_code == 0, second.output
     assert second.stdout == first.stdout
     result = json.loads(first.stdout)
+    expected_candidate_ids = ["mask-00", "mask-01", "mask-10", "mask-11"]
     assert result["status"] in {"matched", "joint-zero", "frontier"}
     assert result["exact_four_axis"] is True
     assert result["candidate_counts"] == {"complete": 4, "legal": 4, "viable": 4}
+    assert [candidate["candidate_id"] for candidate in result["candidates"]] == (
+        expected_candidate_ids
+    )
     assert all(
         candidate["profile"]["complete"]
         for candidate in result["candidates"]
         if candidate["profile"]["viable"]
     )
-    assert result["pareto"]["candidate_ids"]
+    assert result["pareto"]["candidate_ids"] == expected_candidate_ids
+    assert json.loads(second.stdout) == result
+    assert json.loads((tmp_path / "v2" / "result.json").read_text()) == result
     assert fixture.captured_sources[0] == left.read_bytes()
     assert fixture.captured_sources[3] == right.read_bytes()

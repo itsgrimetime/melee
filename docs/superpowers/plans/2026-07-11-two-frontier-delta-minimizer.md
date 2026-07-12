@@ -1453,29 +1453,51 @@ pytest tests/search/test_cli_smoke.py \
 
 Expected: PASS.
 
-- [ ] **Step 4: Recover the wrapper frontier and run the real command**
+- [ ] **Step 4: Verify the frozen frontiers and run the retained real case**
 
-Run from the matcher worktree:
+The accepted frontiers are retained local build artifacts. Do not regenerate
+the wrapper with `scratch recover-best` or substitute the tracked
+`src/melee/mn/mndiagram.c`: v2 binds the reviewed roles to the exact source and
+pcdump bytes. Verify all four retained artifacts before running:
 
 ```bash
-melee-agent scratch recover-best mnDiagram_DrawFighterHeaders \
-  --output build/delta-minimize/fighter-wrapper.c
+shasum -a 256 \
+  /Users/mike/.codex/worktrees/828b/melee/build/delta-minimize/fighter-wrapper.c \
+  /Users/mike/.codex/worktrees/eeff/melee/build/delta-minimize/fighter-direct.c \
+  /Users/mike/.codex/worktrees/eeff/melee/build/diagnostics/runs/20260712T015915.099362Z-44080d9db0ec4821a7653709d4637f5d/evidence/pcdump/candidate.txt \
+  /Users/mike/.codex/worktrees/eeff/melee/build/diagnostics/runs/20260712T020158.920176Z-8bcae09dab93481f9aee42382130e4b9/evidence/pcdump/candidate.txt
+```
 
-cd tools/melee-agent
+Expected hashes, in the same order:
+
+```text
+0f38bf2740123c3bbf6b9c18ad10123cc0db3f6e14bd5041057d49921eaec7e2
+e7f3a66ab56c14b8841591ade19425c4cb45df614795ef15e4d9fa983967af96
+db41d64051334cace6e38b2db91ade6d6addfff0a4ab06b689b5cc1384578333
+433e4954aa3b4402dedb61ef9830ac6aa03a393b1147217654f62e0350196598
+```
+
+The retained target is the ignored local artifact
+`/Users/mike/code/melee/.claude/worktrees/codex-delta-cross-parent-role-map/build/delta-minimize/issue-1238-real-v2/target.yaml`.
+It must bind the source and pcdump hashes above and contain reviewed identity
+bindings for canonical IGs 64 and 78 on both parents. Run from the frozen direct
+frontier's worktree while loading the branch-local CLI implementation:
+
+```bash
+cd /Users/mike/.codex/worktrees/eeff/melee
+PYTHONPATH=/Users/mike/code/melee/.claude/worktrees/codex-delta-cross-parent-role-map/tools/melee-agent \
 python -m src.cli debug search delta-minimize \
   --function mnDiagram_DrawFighterHeaders \
-  --left ../../build/delta-minimize/fighter-wrapper.c \
-  --right /Users/mike/.codex/worktrees/eeff/melee/src/melee/mn/mndiagram.c \
-  --target ../../build/delta-minimize/fighter-role-target-v2.yaml \
+  --left /Users/mike/.codex/worktrees/828b/melee/build/delta-minimize/fighter-wrapper.c \
+  --right /Users/mike/.codex/worktrees/eeff/melee/build/delta-minimize/fighter-direct.c \
+  --target /Users/mike/code/melee/.claude/worktrees/codex-delta-cross-parent-role-map/build/delta-minimize/issue-1238-real-v2/target.yaml \
   --donor color=left \
   --donor stack-homes=right \
-  --out-dir ../../build/delta-minimize/fighter-real \
+  --out-dir build/delta-minimize/fighter-real-v2-task3 \
   --max-candidates 64 \
   --json
 ```
 
-`fighter-role-target-v2.yaml` is the reviewed v2 target bound to both retained
-source and pcdump hashes, with identity bindings for canonical IGs 64 and 78.
 The explicit donor selections preserve the reviewed left allocator target and
 the expected-object-backed right stack-home reference used for acceptance.
 Keep that target, the frozen parent sources, and retained pcdumps untracked.
