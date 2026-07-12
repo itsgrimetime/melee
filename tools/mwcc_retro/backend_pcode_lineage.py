@@ -15,8 +15,9 @@ from elftools.elf.sections import SymbolTableSection
 from .backend_instrumentation_proof import (
     InstrumentationProof,
     proof_sha256,
-    validate_proof_shape,
+    validate_embedded_proof,
 )
+from .struct_map import load_gc125n_struct_map
 
 CAPABILITY = "pcode-to-code-range"
 _SAFE_INT = (1 << 53) - 1
@@ -255,12 +256,22 @@ def _proof_inventory(
     return result
 
 
-def _context(proof: object, errors: list[str]) -> _Context | None:
+def _context(
+    proof: object,
+    promotion_registry: object,
+    errors: list[str],
+) -> _Context | None:
     if not isinstance(proof, InstrumentationProof) or not isinstance(proof.payload, Mapping):
         errors.append("trusted proof must be InstrumentationProof")
         return None
-    shape_errors = validate_proof_shape(proof.payload)
-    errors.extend(f"trusted proof: {error}" for error in shape_errors)
+    trust_errors = validate_embedded_proof(
+        proof.payload,
+        promotion_registry,
+        proof.compiler_executable_sha256,
+    )
+    errors.extend(f"trusted proof: {error}" for error in trust_errors)
+    if trust_errors:
+        return None
     try:
         digest = proof_sha256(proof.payload)
     except (OverflowError, RecursionError, TypeError, ValueError):
@@ -2366,8 +2377,13 @@ def validate_pcode_lineage(
     proof: InstrumentationProof,
     candidate_object: Path,
     function: str,
+    promotion_registry: object | None = None,
 ) -> PCodeLineageValidation:
-    """Validate a capture without ever granting capability on partial evidence."""
+    """Validate a capture only under an independently promoted proof tuple.
+
+    The installed registry is authoritative unless a registry is explicitly
+    injected, primarily for validating a not-yet-installed promotion fixture.
+    """
 
     try:
         copied = _copy_json(payload)
@@ -2391,7 +2407,12 @@ def validate_pcode_lineage(
     if top is None:  # pragma: no cover - copied mapping
         return PCodeLineageValidation(normalized, MappingProxyType({}), frozenset(), tuple(errors))
     try:
-        ctx = _context(proof, errors)
+        registry = (
+            load_gc125n_struct_map()
+            if promotion_registry is None
+            else promotion_registry
+        )
+        ctx = _context(proof, registry, errors)
         if ctx is None:
             return PCodeLineageValidation(normalized, MappingProxyType({}), frozenset(), tuple(errors))
         _replay_lifecycle(top, ctx)

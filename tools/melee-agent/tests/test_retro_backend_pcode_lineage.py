@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import struct
 import sys
@@ -20,7 +21,9 @@ from tools.mwcc_retro.backend_pcode_lineage import (  # noqa: E402
     AnchorVirtualBinding,
     PCodeLineageValidation,
     _decode_registers,
-    validate_pcode_lineage,
+)
+from tools.mwcc_retro.backend_pcode_lineage import (
+    validate_pcode_lineage as _validate_pcode_lineage,
 )
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "retro" / "pcode_lineage"
@@ -197,6 +200,37 @@ def proof_payload() -> dict[str, object]:
 def trusted_proof() -> InstrumentationProof:
     payload = proof_payload()
     return InstrumentationProof(str(payload["proof_id"]), "a" * 64, payload, proof_sha256(payload))
+
+
+def promoted_registry() -> dict[str, object]:
+    proof = trusted_proof()
+    return {
+        "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs": [
+            {
+                "compiler_executable_sha256": proof.compiler_executable_sha256,
+                "proof_id": proof.proof_id,
+                "proof_sha256": proof.sha256,
+                "promoted": True,
+            }
+        ],
+    }
+
+
+def validate_promoted_lineage(
+    payload: object,
+    proof: object,
+    candidate_object: Path,
+    function: str,
+) -> PCodeLineageValidation:
+    """Exercise lineage behavior with an explicit independent promotion fixture."""
+    return _validate_pcode_lineage(
+        payload,
+        proof,
+        candidate_object,
+        function,
+        promotion_registry=promoted_registry(),
+    )
 
 
 def operand(
@@ -410,7 +444,7 @@ def minimal_payload(*, reordered: bool = False) -> dict[str, object]:
 def test_valid_reorder_preserves_lineage_not_operand_index(tmp_path: Path) -> None:
     candidate_object = tmp_path / "reordered.o"
     candidate_object.write_bytes(_candidate_elf(bytes.fromhex("3ab60000")))
-    result = validate_pcode_lineage(minimal_payload(reordered=True), trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(minimal_payload(reordered=True), trusted_proof(), candidate_object, "fn")
 
     binding = result.anchor_bindings[(0, "def:0")]
     assert binding.virtual == 66
@@ -420,13 +454,81 @@ def test_valid_reorder_preserves_lineage_not_operand_index(tmp_path: Path) -> No
     assert result.errors == ()
 
 
+def test_installed_empty_promotion_registry_denies_lineage_capability(
+    candidate_object: Path,
+) -> None:
+    result = _validate_pcode_lineage(
+        minimal_payload(), trusted_proof(), candidate_object, "fn"
+    )
+
+    assert result.capabilities == frozenset()
+    assert any(
+        "not independently promoted" in error for error in result.errors
+    ), result.errors
+
+
+def test_lineage_accepts_explicit_promotion_registry() -> None:
+    assert "promotion_registry" in inspect.signature(
+        _validate_pcode_lineage
+    ).parameters
+
+
+def test_explicit_promoted_registry_grants_lineage_capability(
+    candidate_object: Path,
+) -> None:
+    result = _validate_pcode_lineage(
+        minimal_payload(),
+        trusted_proof(),
+        candidate_object,
+        "fn",
+        promotion_registry=promoted_registry(),
+    )
+
+    assert result.errors == ()
+    assert result.capabilities == frozenset({"pcode-to-code-range"})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("instrumentation_proofs", []),
+        ("compiler_executable_sha256", "b" * 64),
+        ("proof_id", "wrong-proof"),
+        ("proof_sha256", "b" * 64),
+    ],
+)
+def test_explicit_registry_requires_exact_promoted_tuple(
+    candidate_object: Path,
+    field: str,
+    value: object,
+) -> None:
+    registry = promoted_registry()
+    if field == "instrumentation_proofs":
+        registry[field] = value
+    else:
+        registry["instrumentation_proofs"][0][field] = value
+
+    result = _validate_pcode_lineage(
+        minimal_payload(),
+        trusted_proof(),
+        candidate_object,
+        "fn",
+        promotion_registry=registry,
+    )
+
+    assert result.capabilities == frozenset()
+    assert any(
+        "not independently promoted" in error for error in result.errors
+    ), result.errors
+
+
 def test_zero_byte_pseudo_op_accepts_complete_emission_with_no_code_ranges(
     candidate_object: Path,
 ) -> None:
     payload = minimal_payload()
     payload["pcode_instructions"][0]["code_ranges"] = []
 
-    result = validate_pcode_lineage(
+    result = validate_promoted_lineage(
         payload, trusted_proof(), candidate_object, "fn"
     )
 
@@ -437,7 +539,7 @@ def test_zero_byte_pseudo_op_accepts_complete_emission_with_no_code_ranges(
 
 def test_result_and_normalized_payload_are_deeply_immutable(candidate_object: Path) -> None:
     payload = minimal_payload()
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     payload["pcode_instructions"][0]["pcode_id"] = "attacker"
 
     assert isinstance(result.normalized, MappingProxyType)
@@ -453,7 +555,7 @@ def test_noncanonical_numeric_or_text_values_fail_closed(candidate_object: Path,
     payload = minimal_payload()
     payload["pcode_instructions"][0]["block_order"] = hostile
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert result.capabilities == frozenset()
     assert result.errors
@@ -463,7 +565,7 @@ def test_recursive_or_mutable_shapes_never_raise(candidate_object: Path) -> None
     payload = minimal_payload()
     payload["pcode_instructions"].append(payload)
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert result.capabilities == frozenset()
     assert any("malformed" in error or "normalization" in error for error in result.errors)
@@ -481,7 +583,7 @@ def test_recursive_or_mutable_shapes_never_raise(candidate_object: Path) -> None
 )
 def test_invalid_lineage_fixtures_fail_closed(fixture_name: str, message: str, candidate_object: Path) -> None:
     fixture = json.loads((FIXTURE_ROOT / fixture_name).read_text())
-    result = validate_pcode_lineage(fixture, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(fixture, trusted_proof(), candidate_object, "fn")
 
     assert any(message in error for error in result.errors)
     assert result.capabilities == frozenset()
@@ -531,7 +633,7 @@ def test_replay_and_coverage_negative_matrix(candidate_object: Path, mutate, mes
     payload = minimal_payload()
     mutate(payload)
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert any(message in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
@@ -546,7 +648,7 @@ def test_multi_parent_lineage_retains_diagnostics_but_abstains(candidate_object:
     emission["parsed_register_operands"][0]["operand_lineage_id"] = "ol-3"
     payload["pcode_instructions"][0]["code_ranges"][0]["machine_operand_mappings"][0]["operand_lineage_id"] = "ol-3"
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert any("multiple allocator origins" in error for error in result.errors)
     assert result.anchor_bindings == {}
@@ -582,7 +684,7 @@ def test_fixed_physical_operand_needs_no_allocator_rewrite(candidate_object: Pat
     )
     payload["coverage"]["pcode_occurrences_seen"] = 1
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert result.errors == ()
     assert (0, "use:0") not in result.anchor_bindings
@@ -608,7 +710,7 @@ def test_non_emitted_deleted_pcode_may_not_claim_code_ranges(candidate_object: P
     coverage = payload["coverage"]["pcode_instrumentation"]
     coverage.update({"last_event_sequence": 2, "final_pcodes": 0, "emission_events": 0})
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert any("non-emitted PCode must have no code ranges" in error for error in result.errors)
     assert result.capabilities == frozenset()
@@ -637,7 +739,7 @@ def test_delete_consumes_complete_state_and_allows_empty_final_set(candidate_obj
         {"last_event_sequence": 2, "final_pcodes": 0, "emission_events": 0}
     )
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert result.errors == ()
     assert result.anchor_bindings == {}
@@ -678,7 +780,7 @@ def test_create_defines_fresh_parentless_lineages(candidate_object: Path) -> Non
         }
     )
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert result.errors == ()
     assert result.anchor_bindings == {}
@@ -759,7 +861,7 @@ def test_clone_may_preserve_input_and_reuse_lineages_in_new_output(tmp_path: Pat
     candidate = tmp_path / "clone.o"
     candidate.write_bytes(_candidate_elf(bytes.fromhex("3ad500003ad50000")))
 
-    result = validate_pcode_lineage(cloned_payload(), trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(cloned_payload(), trusted_proof(), candidate, "fn")
 
     assert result.errors == ()
     assert set(result.anchor_bindings) == {
@@ -796,7 +898,7 @@ def test_replace_requires_disjoint_ids_and_consumes_input(tmp_path: Path) -> Non
         {"last_event_sequence": 3, "final_pcodes": 1, "emission_events": 1}
     )
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate, "fn")
 
     assert result.errors == ()
     assert set(result.anchor_bindings) == {(4, "def:0"), (4, "use:0")}
@@ -809,7 +911,7 @@ def test_mutation_states_require_canonical_identity_order(tmp_path: Path) -> Non
     payload = cloned_payload()
     payload["pcode_operand_lineage_events"][0]["outputs"].reverse()
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate, "fn")
 
     assert any("outputs must be canonically ordered" in error for error in result.errors)
     assert result.capabilities == frozenset()
@@ -842,7 +944,7 @@ def test_candidate_elf_negative_matrix(
     if payload_mutation:
         payload_mutation(payload)
 
-    result = validate_pcode_lineage(payload, trusted_proof(), path, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), path, "fn")
 
     assert any(message in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
@@ -861,11 +963,11 @@ def test_exact_relocation_tuple_is_required(tmp_path: Path) -> None:
     }
     payload["pcode_instructions"][0]["code_ranges"][0]["relocations"] = [relocation]
 
-    valid = validate_pcode_lineage(payload, trusted_proof(), path, "fn")
+    valid = validate_promoted_lineage(payload, trusted_proof(), path, "fn")
     assert valid.errors == ()
 
     payload["pcode_instructions"][0]["code_ranges"][0]["relocations"][0]["addend"] = -3
-    invalid = validate_pcode_lineage(payload, trusted_proof(), path, "fn")
+    invalid = validate_promoted_lineage(payload, trusted_proof(), path, "fn")
     assert any("relocations disagree" in error for error in invalid.errors)
     assert invalid.capabilities == frozenset()
 
@@ -884,7 +986,7 @@ def test_machine_mapping_negative_matrix(candidate_object: Path, field: str, val
     payload = minimal_payload()
     payload["pcode_instructions"][0]["code_ranges"][0]["machine_operand_mappings"][0][field] = value
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert any(message in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
@@ -899,7 +1001,7 @@ def test_overlapping_ranges_retain_rejected_alternatives(tmp_path: Path) -> None
     payload["pcode_instructions"].append(duplicate)
     payload["coverage"]["pcode_instructions_seen"] = 2
 
-    result = validate_pcode_lineage(payload, trusted_proof(), path, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), path, "fn")
 
     assert any("overlap" in error for error in result.errors)
     assert result.capabilities == frozenset()
@@ -913,7 +1015,7 @@ def test_api_never_raises_for_bad_payload_proof_path_or_function(tmp_path: Path)
     ]
 
     for args in cases:
-        result = validate_pcode_lineage(*args)
+        result = validate_promoted_lineage(*args)
         assert isinstance(result, PCodeLineageValidation)
         assert result.capabilities == frozenset()
         assert result.errors
@@ -944,7 +1046,7 @@ def test_every_raw_event_is_closed_and_counted_before_merge(
     payload["coverage"]["pcode_instrumentation"][coverage_field] += 1
     payload["coverage"]["pcode_occurrences_seen"] = len(payload["pcode_occurrences"])
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert any(message in error for error in result.errors), result.errors
     assert len(result.normalized[collection]) == len(payload[collection])
@@ -964,7 +1066,7 @@ def test_malformed_raw_event_still_counts_toward_event_cap(candidate_object: Pat
     )
     payload["coverage"]["pcode_occurrences_seen"] = 3
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert any("event cap was reached" in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
@@ -977,7 +1079,7 @@ def test_emission_cannot_use_allocator_origin_observed_later(candidate_object: P
     payload["pcode_occurrences"][0]["pcode_event_sequence"] = 2
     payload["pcode_occurrences"][1]["pcode_event_sequence"] = 3
 
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
 
     assert any("no allocator origins at emission" in error for error in result.errors), result.errors
     assert result.anchor_bindings == {}
@@ -1070,7 +1172,7 @@ def test_unknown_semantic_form_rejects_instead_of_guessing() -> None:
 def test_register_class_and_physical_domains_fail_closed(candidate_object: Path, mutate, message: str) -> None:
     payload = minimal_payload()
     mutate(payload)
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any(message in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
 
@@ -1093,7 +1195,7 @@ def test_coverage_scalars_require_exact_non_bool_safe_integers(
     for key in path[:-1]:
         target = target[key]
     target[path[-1]] = value
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any(message in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
 
@@ -1114,7 +1216,7 @@ def test_candidate_object_requires_exact_powerpc_relocatable_elf(
 ) -> None:
     candidate = tmp_path / "wrong.o"
     candidate.write_bytes(_candidate_elf(**elf_kwargs))
-    result = validate_pcode_lineage(minimal_payload(), trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(minimal_payload(), trusted_proof(), candidate, "fn")
     assert any(message in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
 
@@ -1122,7 +1224,7 @@ def test_candidate_object_requires_exact_powerpc_relocatable_elf(
 def test_mutation_input_may_not_declare_parent_lineages(candidate_object: Path) -> None:
     payload = minimal_payload()
     payload["pcode_operand_lineage_events"][0]["inputs"][0]["operands"][0]["parent_lineage_ids"] = []
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any("input 0 operand 0 must omit parent_lineage_ids" in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
 
@@ -1144,7 +1246,7 @@ def _lwz_payload() -> dict[str, object]:
 def test_memory_base_mapping_uses_flattened_position(tmp_path: Path) -> None:
     candidate = tmp_path / "lwz.o"
     candidate.write_bytes(_candidate_elf(_d_form(32, 3, 4)))
-    result = validate_pcode_lineage(_lwz_payload(), trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(_lwz_payload(), trusted_proof(), candidate, "fn")
     assert result.errors == ()
     assert set(result.anchor_bindings) == {(0, "def:0"), (0, "use:0")}
 
@@ -1168,7 +1270,7 @@ def test_memory_base_mapping_rejects_missing_or_extra_register(tmp_path: Path, c
                 "physical_register": 4,
             }
         )
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate, "fn")
     assert any("exactly one mapping for every decoded register operand" in error for error in result.errors)
     assert result.capabilities == frozenset()
 
@@ -1199,7 +1301,7 @@ def _append_noop_update(payload: dict[str, object], sequence: int, *, pcode_id: 
 def test_noop_update_after_emission_is_forbidden(candidate_object: Path) -> None:
     payload = minimal_payload()
     _append_noop_update(payload, 4)
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any("terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
 
@@ -1208,7 +1310,7 @@ def test_rewrite_after_emission_is_forbidden(candidate_object: Path) -> None:
     payload = minimal_payload()
     payload["pcode_occurrences"][1]["pcode_event_sequence"] = 4
     payload["coverage"]["pcode_instrumentation"]["last_event_sequence"] = 4
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any("rewrite touches terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
 
 
@@ -1229,7 +1331,7 @@ def test_delete_or_replace_input_after_emission_is_forbidden(candidate_object: P
     payload["coverage"]["pcode_instrumentation"].update(
         {"mutation_events": 2, "last_event_sequence": 4, "final_pcodes": 0 if kind == "delete" else 1}
     )
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any("terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
 
 
@@ -1256,7 +1358,7 @@ def test_same_id_recreate_after_emission_is_forbidden(candidate_object: Path) ->
         ]
     )
     payload["coverage"]["pcode_instrumentation"].update({"mutation_events": 3, "last_event_sequence": 5})
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any("terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
 
 
@@ -1289,7 +1391,7 @@ def test_replace_output_after_emission_is_forbidden(tmp_path: Path) -> None:
     payload["coverage"]["pcode_instrumentation"].update(
         {"mutation_events": 2, "last_event_sequence": 5, "final_pcodes": 1}
     )
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate, "fn")
     assert any("mutation touches terminal emitted pcode_id pc-0" in error for error in result.errors), result.errors
 
 
@@ -1301,7 +1403,7 @@ def test_unrelated_nonemitted_pcode_may_evolve(tmp_path: Path) -> None:
     clone["emission_event_sequence"] = 5
     _append_noop_update(payload, 4, pcode_id="pc-1")
     payload["coverage"]["pcode_instrumentation"]["last_event_sequence"] = 5
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate, "fn")
     assert result.errors == ()
     assert result.capabilities == frozenset({"pcode-to-code-range"})
 
@@ -1330,7 +1432,7 @@ def test_same_state_may_be_observed_at_later_lifecycle_position(candidate_object
     emission = payload["pcode_instructions"][0]["stage_snapshots"][1]
     emission["lifecycle_sequence_at_capture"] = 1
     payload["pcode_instructions"][0]["emission_lifecycle_sequence_at_capture"] = 1
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert result.errors == ()
     assert result.capabilities == frozenset({"pcode-to-code-range"})
 
@@ -1355,7 +1457,7 @@ def test_same_state_may_be_observed_at_later_lifecycle_position(candidate_object
 def test_shared_events_reject_backward_lifecycle_time(candidate_object: Path, mutate, message: str) -> None:
     payload = minimal_payload()
     mutate(payload)
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any(message in error for error in result.errors), result.errors
 
 
@@ -1364,7 +1466,7 @@ def test_clone_outputs_require_one_atomic_post_position(tmp_path: Path) -> None:
     candidate.write_bytes(_candidate_elf(bytes.fromhex("3ad500003ad50000")))
     payload = cloned_payload()
     payload["pcode_operand_lineage_events"][0]["outputs"][1]["lifecycle_sequence_at_capture"] = 0
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate, "fn")
     assert any("mutation outputs must share one lifecycle position" in error for error in result.errors), result.errors
 
 
@@ -1393,7 +1495,7 @@ def test_reused_generation_cannot_survive_past_free(candidate_object: Path) -> N
         ]
     )
     payload["pcode_operand_lineage_events"][0]["outputs"][0]["lifecycle_sequence_at_capture"] = 2
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any("active PCode generation" in error for error in result.errors), result.errors
 
 
@@ -1508,7 +1610,7 @@ def _replacement_payload() -> dict[str, object]:
 def test_reviewer_probe_allocator_snapshot_cannot_postdate_rewrite(candidate_object: Path) -> None:
     payload = _allocator_bound_payload()
     payload["pcode_occurrences"][0]["lifecycle_sequence_at_capture"] = 0
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any("rewrite event for pc-0 precedes first-observed" in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
 
@@ -1517,7 +1619,7 @@ def test_reviewer_probe_emission_snapshot_must_match_event(candidate_object: Pat
     payload = minimal_payload()
     _add_lifecycle_observation(payload)
     payload["pcode_instructions"][0]["emission_lifecycle_sequence_at_capture"] = 1
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any("code_emission snapshot lifecycle position disagrees" in error for error in result.errors), result.errors
     assert result.capabilities == frozenset()
 
@@ -1538,12 +1640,12 @@ def test_allocator_first_observed_bound_applies_to_every_touching_event(
         instruction = payload["pcode_instructions"][0]
         instruction["stage_snapshots"][1]["lifecycle_sequence_at_capture"] = 0
         instruction["emission_lifecycle_sequence_at_capture"] = 0
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any(f"{kind} event for pc-0 precedes first-observed" in error for error in result.errors), result.errors
 
 
 def test_allocator_first_observed_bound_accepts_equal_event_positions(candidate_object: Path) -> None:
-    result = validate_pcode_lineage(_allocator_bound_payload(), trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(_allocator_bound_payload(), trusted_proof(), candidate_object, "fn")
     assert result.errors == ()
     assert result.capabilities == frozenset({"pcode-to-code-range"})
 
@@ -1551,7 +1653,7 @@ def test_allocator_first_observed_bound_accepts_equal_event_positions(candidate_
 def test_unrelated_pcode_event_may_precede_later_first_observed_bound(tmp_path: Path) -> None:
     candidate = tmp_path / "independent-bound.o"
     candidate.write_bytes(_candidate_elf(bytes.fromhex("3ad500003ad50000")))
-    result = validate_pcode_lineage(cloned_payload(), trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(cloned_payload(), trusted_proof(), candidate, "fn")
     assert result.errors == ()
     assert result.capabilities == frozenset({"pcode-to-code-range"})
 
@@ -1567,7 +1669,7 @@ def test_clone_mutation_output_snapshot_must_equal_defining_post_position(tmp_pa
     for instruction in payload["pcode_instructions"]:
         instruction["stage_snapshots"][-1]["lifecycle_sequence_at_capture"] = 2
         instruction["emission_lifecycle_sequence_at_capture"] = 2
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate, "fn")
     assert any("mutation_output snapshot lifecycle position disagrees" in error for error in result.errors), (
         result.errors
     )
@@ -1581,7 +1683,7 @@ def test_create_mutation_output_snapshot_must_equal_defining_post_position(candi
     instruction = payload["pcode_instructions"][0]
     instruction["stage_snapshots"][1]["lifecycle_sequence_at_capture"] = 2
     instruction["emission_lifecycle_sequence_at_capture"] = 2
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate_object, "fn")
     assert any("mutation_output snapshot lifecycle position disagrees" in error for error in result.errors), (
         result.errors
     )
@@ -1597,7 +1699,7 @@ def test_replace_mutation_output_snapshot_must_equal_defining_post_position(tmp_
     clone = payload["pcode_instructions"][1]
     clone["stage_snapshots"][1]["lifecycle_sequence_at_capture"] = 2
     clone["emission_lifecycle_sequence_at_capture"] = 2
-    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(payload, trusted_proof(), candidate, "fn")
     assert any("mutation_output snapshot lifecycle position disagrees" in error for error in result.errors), (
         result.errors
     )
@@ -1611,6 +1713,6 @@ def test_mutation_output_snapshot_accepts_equal_defining_post_position(
     candidate = tmp_path / "equal-first-observed.o"
     code = bytes.fromhex("3ad500003ad50000") if payload_factory is not _created_payload else bytes.fromhex("3ad50000")
     candidate.write_bytes(_candidate_elf(code))
-    result = validate_pcode_lineage(payload_factory(), trusted_proof(), candidate, "fn")
+    result = validate_promoted_lineage(payload_factory(), trusted_proof(), candidate, "fn")
     assert result.errors == ()
     assert result.capabilities == frozenset({"pcode-to-code-range"})
