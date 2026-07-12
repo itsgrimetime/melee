@@ -102,14 +102,19 @@ def test_allocator_namespace_witness_includes_semantic_role_identity(
     monkeypatch: pytest.MonkeyPatch,
     baseline_compile: Compile,
 ) -> None:
+    descriptors = build_descriptors(baseline_compile, 0)
+    unique = {
+        ig_idx: replace(descriptor, first_def_sig=f"ig:{ig_idx}:{descriptor.first_def_sig}")
+        for ig_idx, descriptor in descriptors.items()
+    }
+    monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", lambda *_args: unique)
     original = objectives_module._allocator_namespace_witness(baseline_compile, 0)
     assert original is not None
-    descriptors = build_descriptors(baseline_compile, 0)
-    changed_ig = next(iter(descriptors))
+    changed_ig = next(iter(unique))
     changed = {
-        **descriptors,
+        **unique,
         changed_ig: replace(
-            descriptors[changed_ig],
+            unique[changed_ig],
             use_site_multiset=(("semantically-different", 1),),
         ),
     }
@@ -600,8 +605,8 @@ def test_conflicting_parent_role_targets_require_explicit_target(
     assert calls == ["left", "right"]
 
 
-def test_identical_independent_parent_targets_use_exact_ig_identity(
-    monkeypatch,
+def test_independent_parent_targets_use_cross_parent_semantic_reanchor(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     baseline_compile: Compile,
     desired_phys: dict[int, int],
@@ -609,28 +614,57 @@ def test_identical_independent_parent_targets_use_exact_ig_identity(
     dump = tmp_path / "baseline.pcdump"
     dump.write_text("unused", encoding="utf-8")
     left = _parent("left", baseline_compile, dump, desired_phys)
-    right = _parent("right", baseline_compile, dump, desired_phys)
-    monkeypatch.setattr(
-        objectives_module.role_reanchor,
-        "reanchor",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("independently agreed IG targets should use exact identity")
-        ),
-    )
+    right_compile = deepcopy(baseline_compile)
+    right = _parent("right", right_compile, dump, desired_phys)
+    left_ig, right_ig = list(desired_phys)[:2]
+    left_force = {left_ig: 22}
+    right_force = {right_ig: 22}
+    derivations = iter((_derivation_payload(left_force), _derivation_payload(right_force)))
+    reanchors: list[str] = []
+
+    def semantic_reanchor(target, compile, *, class_id):
+        assert class_id == 0
+        side = target.provenance["parent"]
+        reanchors.append(side)
+        if side == "left" and compile is right_compile:
+            return objectives_module.role_reanchor.ReanchorResult(
+                class_id=0,
+                force_phys=right_force,
+                diagnostics={},
+                matched={right_ig: left_ig},
+            )
+        if side == "right" and compile is baseline_compile:
+            return objectives_module.role_reanchor.ReanchorResult(
+                class_id=0,
+                force_phys=left_force,
+                diagnostics={},
+                matched={left_ig: right_ig},
+            )
+        raise AssertionError("unexpected semantic reanchor")
+
+    monkeypatch.setattr(objectives_module.role_reanchor, "reanchor", semantic_reanchor)
 
     loaded, _target = objectives_module._derive_target_spec(
         left,
         right,
-        lambda *_args: _derivation_payload(desired_phys),
+        lambda *_args: next(derivations),
     )
 
-    assert dict(loaded.force_phys) == desired_phys
+    assert dict(loaded.force_phys) == left_force
+    assert reanchors == ["left", "right"]
 
 
 def test_correlated_allocator_orders_allow_complete_exact_graph_namespace(
+    monkeypatch: pytest.MonkeyPatch,
     baseline_compile: Compile,
 ) -> None:
     peer_compile = deepcopy(baseline_compile)
+    descriptors = build_descriptors(baseline_compile, 0)
+    unique = {
+        ig_idx: replace(descriptor, first_def_sig=f"ig:{ig_idx}:{descriptor.first_def_sig}")
+        for ig_idx, descriptor in descriptors.items()
+    }
+    monkeypatch.setattr(objectives_module.role_descriptor, "build_descriptors", lambda *_args: unique)
 
     role_map = objectives_module._complete_profile_role_map(
         baseline_compile,
@@ -641,6 +675,16 @@ def test_correlated_allocator_orders_allow_complete_exact_graph_namespace(
 
     coalesce = [section for section in baseline_compile.fev.coalesce_sections if section.class_id == 0][-1]
     assert role_map == {ig_idx: ig_idx for ig_idx in range(coalesce.n_virtuals)}
+
+
+def test_duplicate_semantic_roles_reject_exact_allocator_namespace(
+    baseline_compile: Compile,
+) -> None:
+    descriptors = build_descriptors(baseline_compile, 0)
+    semantic_witnesses = [objectives_module._role_identity_witness(descriptor) for descriptor in descriptors.values()]
+    assert len(set(semantic_witnesses)) < len(semantic_witnesses)
+
+    assert objectives_module._allocator_namespace_witness(baseline_compile, 0) is None
 
 
 def test_divergent_allocator_order_rejects_exact_graph_namespace(
@@ -945,6 +989,75 @@ def test_raw_color_profile_uses_roles_beyond_partial_force_target(
 
     assert len(seen_role_maps) == 2
     assert all(set(role_map.values()) > set(desired_phys) for role_map in seen_role_maps)
+
+
+def test_derived_profile_preserves_semantically_reanchored_target_roles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    baseline_compile: Compile,
+    desired_phys: dict[int, int],
+) -> None:
+    dump = tmp_path / "baseline.pcdump"
+    dump.write_text("unused", encoding="utf-8")
+    left_ig, right_ig = list(desired_phys)[:2]
+    desired = {left_ig: 22}
+    left = _parent("left", baseline_compile, dump, desired)
+    right_compile = deepcopy(baseline_compile)
+    right = _parent("right", right_compile, dump, desired)
+    target_spec = role_descriptor.build_target_spec(
+        baseline_compile,
+        desired,
+        0,
+        "force_proof_proxy",
+        {"inference": "parent-register-diff", "parent": "left"},
+    )
+    loaded = objectives_module.LoadedColorTarget(
+        function=FUNCTION,
+        class_id=0,
+        baseline_dump=dump,
+        force_phys=desired,
+        coalesce_preservation=False,
+    )
+    monkeypatch.setattr(objectives_module, "_derive_target_spec", lambda *_args: (loaded, target_spec))
+    exact_checks: list[tuple[Compile, bool]] = []
+
+    def check_target(_target, compile, _class_id, _desired, *, exact_identity=False):
+        exact_checks.append((compile, exact_identity))
+        return objectives_module.role_reanchor.ReanchorResult(0, {}, {}, {})
+
+    monkeypatch.setattr(
+        objectives_module,
+        "_require_complete_reanchor",
+        check_target,
+    )
+    monkeypatch.setattr(
+        objectives_module,
+        "_complete_profile_role_map",
+        lambda _reference, parent, _class_id, **_kwargs: (
+            {left_ig: left_ig} if parent is baseline_compile else {right_ig: left_ig}
+        ),
+    )
+    seen: dict[str, dict[int, int]] = {}
+
+    def profile(parent, role_map, _desired):
+        seen[parent.side] = dict(role_map)
+        return _color_profile(desired)
+
+    monkeypatch.setattr(objectives_module, "_profile_for_parent", profile)
+
+    infer_objective_manifest(
+        left,
+        right,
+        target_path=None,
+        donor_overrides={"objobjects": "left"},
+        derive_force_target=lambda *_args: {},
+    )
+
+    assert seen == {
+        "left": {left_ig: left_ig},
+        "right": {right_ig: left_ig},
+    }
+    assert exact_checks == [(baseline_compile, True), (right_compile, False)]
 
 
 def test_equal_assignment_distance_with_different_graphs_requires_color_donor(

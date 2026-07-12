@@ -797,22 +797,24 @@ def _derive_target_spec(
         derived.append(force_phys)
         specs.append(spec)
 
-    if left.class_id != right.class_id or dict(derived[0]) != dict(derived[1]):
+    if left.class_id != right.class_id:
         raise DeltaMinimizeError("ambiguous-color-target")
-    _require_complete_reanchor(
+    left_to_right = _require_complete_reanchor(
         specs[0],
         right.compile,
         left.class_id,
         derived[0],
-        exact_identity=True,
     )
-    _require_complete_reanchor(
+    right_to_left = _require_complete_reanchor(
         specs[1],
         left.compile,
         right.class_id,
         derived[1],
-        exact_identity=True,
     )
+    if dict(left_to_right.force_phys) != dict(derived[1]):
+        raise DeltaMinimizeError("ambiguous-color-target")
+    if dict(right_to_left.force_phys) != dict(derived[0]):
+        raise DeltaMinimizeError("ambiguous-color-target")
     target = LoadedColorTarget(
         function=left.function,
         class_id=left.class_id,
@@ -944,6 +946,11 @@ def _allocator_namespace_witness(
     if set(descriptors) != set(decision_order):
         return None
     semantic_roles = tuple((ig_idx, _role_identity_witness(descriptors[ig_idx])) for ig_idx in sorted(descriptors))
+    semantic_witnesses = [witness for _ig_idx, witness in semantic_roles]
+    if any(not any(witness) for witness in semantic_witnesses) or len(set(semantic_witnesses)) != len(
+        semantic_witnesses
+    ):
+        return None
     return (
         n_virtuals,
         semantic_roles,
@@ -1078,14 +1085,14 @@ def infer_objective_manifest(
         left.compile,
         loaded.class_id,
         loaded.force_phys,
-        exact_identity=(derived_exact_identity or loaded.baseline_dump.resolve() == left.pcdump_path.resolve()),
+        exact_identity=profile_reference_compile is left.compile,
     )
     _require_complete_reanchor(
         target_spec,
         right.compile,
         loaded.class_id,
         loaded.force_phys,
-        exact_identity=(derived_exact_identity or loaded.baseline_dump.resolve() == right.pcdump_path.resolve()),
+        exact_identity=profile_reference_compile is right.compile,
     )
     left_profile_roles = _complete_profile_role_map(
         profile_reference_compile,
@@ -1099,18 +1106,6 @@ def infer_objective_manifest(
         loaded.class_id,
         allow_exact_namespace=derived_exact_identity,
     )
-    if derived_exact_identity:
-        desired_roles = set(loaded.force_phys)
-        left_profile_roles = {
-            ig: role for ig, role in left_profile_roles.items() if ig not in desired_roles and role not in desired_roles
-        }
-        right_profile_roles = {
-            ig: role
-            for ig, role in right_profile_roles.items()
-            if ig not in desired_roles and role not in desired_roles
-        }
-        left_profile_roles.update({ig: ig for ig in desired_roles})
-        right_profile_roles.update({ig: ig for ig in desired_roles})
     left_color = _profile_for_parent(left, left_profile_roles, loaded.force_phys)
     right_color = _profile_for_parent(right, right_profile_roles, loaded.force_phys)
 
