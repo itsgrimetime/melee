@@ -249,6 +249,46 @@ class LocalRemoteRunRetentionResult:
 
 
 @dataclass(frozen=True)
+class ManifestWriteResult:
+    status: Literal[
+        "written",
+        "updated",
+        "idempotent",
+        "invalid",
+        "unsafe-existing",
+        "publish-failed",
+    ]
+    path: Path
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status in {"written", "updated", "idempotent"}
+
+
+@dataclass(frozen=True)
+class RetentionMarkerWriteResult:
+    status: Literal[
+        "written",
+        "idempotent",
+        "conflict",
+        "not-found",
+        "duplicate",
+        "invalid",
+        "unsafe",
+        "lock-busy",
+        "lock-unavailable",
+        "publish-failed",
+    ]
+    path: Path | None = None
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status in {"written", "idempotent"}
+
+
+@dataclass(frozen=True)
 class _TreeFacts:
     total_bytes: int
     latest_activity: float
@@ -495,6 +535,280 @@ def read_fetch_manifest(
     if not _is_nonbool_int(total) or total != candidate_count:
         return ManifestRead("invalid", payload, "manifest audit total invalid")
     return ManifestRead(state, payload)
+
+
+def _utc_timestamp(clock: Callable[[], object]) -> tuple[str | None, str]:
+    if not callable(clock):
+        return None, "clock must be callable"
+    try:
+        value = clock()
+    except Exception as exc:
+        return None, f"clock failed: {exc}"
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        return None, "clock must return a timezone-aware datetime"
+    try:
+        utc = value.astimezone(UTC)
+    except (OSError, OverflowError, ValueError) as exc:
+        return None, f"clock returned an invalid datetime: {exc}"
+    return utc.isoformat().replace("+00:00", "Z"), ""
+
+
+def _manifest_owned_run_root(
+    run: Path,
+    identity: RemoteRunIdentity,
+) -> tuple[Path | None, str]:
+    local_raw = Path(identity.local_perm_dir).expanduser()
+    if not local_raw.is_absolute():
+        return None, "identity local permuter path is not absolute"
+    function_dir = local_raw.absolute()
+    if (
+        function_dir.name != identity.function
+        or function_dir.parent.name != "nonmatchings"
+    ):
+        return None, "identity local permuter path is outside nonmatchings"
+    perm_root = function_dir.parent.parent
+    expected = function_dir / "remote-runs" / identity.job_id
+    if run.expanduser().absolute() != expected:
+        return None, "run path contradicts identity"
+    for owner in (
+        perm_root,
+        function_dir.parent,
+        function_dir,
+        function_dir / "remote-runs",
+        expected,
+    ):
+        try:
+            owner_stat = owner.lstat()
+            resolved = owner.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            return None, f"owned path unavailable: {exc}"
+        if (
+            stat.S_ISLNK(owner_stat.st_mode)
+            or not stat.S_ISDIR(owner_stat.st_mode)
+            or resolved != owner
+            or not _within(owner, perm_root)
+        ):
+            return None, f"unsafe owned path: {owner}"
+    return perm_root, ""
+
+
+def _normalized_audit_summary(
+    run: Path,
+    candidate_audit: object,
+) -> tuple[dict[str, object] | None, str]:
+    if not isinstance(candidate_audit, dict):
+        return None, "candidate audit must be an object"
+    total = candidate_audit.get("total")
+    if not _is_nonbool_int(total) or total < 0:
+        return None, "candidate audit total must be a nonnegative integer"
+    sources, scan_failed = _actual_candidate_sources(run)
+    if scan_failed or len(sources) != total:
+        return None, "candidate audit total does not match local sources"
+    candidates = candidate_audit.get("candidates")
+    if candidates is not None and (
+        not isinstance(candidates, list) or len(candidates) != total
+    ):
+        return None, "candidate audit entries do not match total"
+
+    compact: dict[str, object] = {"total": total}
+    for source_key, target_key in (
+        ("by_status", "by_status"),
+        ("by_semantic_risk_bucket", "by_semantic_risk_bucket"),
+    ):
+        raw_counts = candidate_audit.get(source_key)
+        if raw_counts is None:
+            continue
+        if not isinstance(raw_counts, dict) or any(
+            not isinstance(key, str)
+            or not key
+            or not _is_nonbool_int(value)
+            or value < 0
+            for key, value in raw_counts.items()
+        ):
+            return None, f"candidate audit {source_key} is invalid"
+        if sum(raw_counts.values()) != total:
+            return None, f"candidate audit {source_key} does not match total"
+        compact[target_key] = dict(sorted(raw_counts.items()))
+    return compact, ""
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def write_local_fetch_manifest(
+    run: Path,
+    *,
+    identity: RemoteRunIdentity,
+    state: Literal["complete", "partial"],
+    candidate_audit: object,
+    clock: Callable[[], object] | None = None,
+) -> ManifestWriteResult:
+    """Atomically publish fetched-run provenance under its owned run path."""
+    manifest = run.expanduser().absolute() / FETCH_MANIFEST_FILENAME
+    if state not in {"complete", "partial"}:
+        return ManifestWriteResult("invalid", manifest, "invalid fetch state")
+    _, detail = _manifest_owned_run_root(run, identity)
+    if detail:
+        return ManifestWriteResult("invalid", manifest, detail)
+    try:
+        run_stat = run.lstat()
+    except OSError as exc:
+        return ManifestWriteResult("invalid", manifest, _bounded_detail(exc))
+    run_identity = (run_stat.st_dev, run_stat.st_ino)
+    compact_audit, detail = _normalized_audit_summary(run, candidate_audit)
+    if compact_audit is None:
+        return ManifestWriteResult("invalid", manifest, detail)
+    fetched_at, detail = _utc_timestamp(_utcnow if clock is None else clock)
+    if fetched_at is None:
+        return ManifestWriteResult("invalid", manifest, detail)
+    payload: dict[str, object] = {
+        "kind": FETCH_MANIFEST_KIND,
+        "version": FETCH_MANIFEST_VERSION,
+        **{
+            field: getattr(identity, field)
+            for field in (
+                "job_id",
+                "function",
+                "target",
+                "ssh",
+                "remote_perm_dir",
+                "remote_run_dir",
+                "local_perm_dir",
+                "tmux_session",
+                "threads",
+                "mode",
+                "created_at",
+            )
+        },
+        "fetched_at": fetched_at,
+        "state": state,
+        "candidate_audit": compact_audit,
+    }
+
+    existing_stat: os.stat_result | None = None
+    existing, existing_detail = _read_json_regular(manifest)
+    if existing is not None:
+        try:
+            existing_stat = manifest.lstat()
+        except OSError as exc:
+            return ManifestWriteResult("unsafe-existing", manifest, str(exc))
+        if existing == payload:
+            return ManifestWriteResult("idempotent", manifest)
+        existing_read = read_fetch_manifest(
+            run,
+            identity=identity,
+            candidate_count=int(compact_audit["total"]),
+        )
+        if existing_read.status not in {"complete", "partial"}:
+            return ManifestWriteResult(
+                "unsafe-existing",
+                manifest,
+                "existing manifest identity or schema conflicts",
+            )
+    elif existing_detail != "missing":
+        return ManifestWriteResult("unsafe-existing", manifest, existing_detail)
+
+    temp = run / f".melee-agent-local-fetch.{uuid.uuid4().hex}.tmp"
+    descriptor: int | None = None
+    temp_identity: tuple[int, int] | None = None
+    published = False
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(temp, flags, 0o600)
+        temp_stat = os.fstat(descriptor)
+        temp_identity = (temp_stat.st_dev, temp_stat.st_ino)
+        encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        written, written_detail = _read_json_regular(temp)
+        if written != payload:
+            return ManifestWriteResult(
+                "publish-failed",
+                manifest,
+                written_detail or "temporary manifest readback mismatch",
+            )
+        _, ownership_detail = _manifest_owned_run_root(run, identity)
+        current_run = run.lstat()
+        if (
+            ownership_detail
+            or (current_run.st_dev, current_run.st_ino) != run_identity
+        ):
+            return ManifestWriteResult(
+                "publish-failed",
+                manifest,
+                ownership_detail or "owned run changed before publication",
+            )
+        if existing_stat is None:
+            _rename_no_replace(temp, manifest)
+            status: Literal["written", "updated"] = "written"
+        else:
+            current = manifest.lstat()
+            if (
+                not stat.S_ISREG(current.st_mode)
+                or (current.st_dev, current.st_ino)
+                != (existing_stat.st_dev, existing_stat.st_ino)
+            ):
+                return ManifestWriteResult(
+                    "publish-failed",
+                    manifest,
+                    "existing manifest changed before update",
+                )
+            os.replace(temp, manifest)
+            status = "updated"
+        published = True
+        _fsync_directory(run)
+        readback = read_fetch_manifest(
+            run,
+            identity=identity,
+            candidate_count=int(compact_audit["total"]),
+        )
+        if readback.payload != payload:
+            raise RuntimeError("published manifest readback mismatch")
+        return ManifestWriteResult(status, manifest)
+    except Exception as exc:
+        if published and temp_identity is not None:
+            try:
+                published_stat = manifest.lstat()
+                if (
+                    stat.S_ISREG(published_stat.st_mode)
+                    and (published_stat.st_dev, published_stat.st_ino)
+                    == temp_identity
+                ):
+                    manifest.unlink()
+                    _fsync_directory(run)
+            except OSError:
+                pass
+        return ManifestWriteResult(
+            "publish-failed",
+            manifest,
+            _bounded_detail(type(exc).__name__, exc),
+        )
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            leftover = temp.lstat()
+        except OSError:
+            pass
+        else:
+            if (
+                temp_identity is not None
+                and stat.S_ISREG(leftover.st_mode)
+                and (leftover.st_dev, leftover.st_ino) == temp_identity
+            ):
+                try:
+                    temp.unlink()
+                except OSError:
+                    pass
 
 
 def read_retention_marker(
@@ -1484,6 +1798,325 @@ def _rename_no_replace(source: Path, destination: Path) -> None:
         raise OSError(error, os.strerror(error), str(destination))
 
 
+@dataclass
+class _LifecycleLock:
+    perm_root: Path
+    root_identity: tuple[int, int]
+    descriptor: int
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+
+def _acquire_lifecycle_lock(
+    perm_root: Path,
+) -> tuple[
+    _LifecycleLock | None,
+    Literal["locked", "lock-busy", "lock-unavailable"],
+    str,
+]:
+    requested_root = perm_root.expanduser().absolute()
+    try:
+        root_stat = requested_root.lstat()
+        if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+            return None, "lock-unavailable", "unsafe perm root"
+        resolved_root = requested_root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return None, "lock-unavailable", _bounded_detail(exc)
+    if resolved_root != requested_root:
+        return None, "lock-unavailable", "perm root path is not canonical"
+
+    lock_path = resolved_root / LIFECYCLE_LOCK_FILENAME
+    flags = os.O_RDWR | os.O_CREAT
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        return None, "lock-unavailable", _bounded_detail(exc)
+    keep_open = False
+    try:
+        lock_stat = os.fstat(descriptor)
+        try:
+            lock_path_stat = lock_path.lstat()
+        except OSError as exc:
+            return None, "lock-unavailable", _bounded_detail(exc)
+        if (
+            not stat.S_ISREG(lock_stat.st_mode)
+            or stat.S_ISLNK(lock_path_stat.st_mode)
+            or (lock_path_stat.st_dev, lock_path_stat.st_ino)
+            != (lock_stat.st_dev, lock_stat.st_ino)
+            or lock_stat.st_nlink != 1
+            or lock_stat.st_uid != os.geteuid()
+            or lock_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            return None, "lock-unavailable", "unsafe lifecycle lock file"
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            return None, "lock-busy", _bounded_detail(exc)
+        except OSError as exc:
+            return None, "lock-unavailable", _bounded_detail(exc)
+        keep_open = True
+        return (
+            _LifecycleLock(
+                resolved_root,
+                (root_stat.st_dev, root_stat.st_ino),
+                descriptor,
+            ),
+            "locked",
+            "",
+        )
+    finally:
+        if not keep_open:
+            os.close(descriptor)
+
+
+def _locate_owned_job(
+    perm_root: Path,
+    job_id: str,
+) -> tuple[
+    Literal["found", "not-found", "duplicate", "unsafe"],
+    Path | None,
+    str,
+]:
+    nonmatchings = perm_root / "nonmatchings"
+    try:
+        owner_stat = nonmatchings.lstat()
+    except FileNotFoundError:
+        return "not-found", None, "job id was not found"
+    except OSError as exc:
+        return "unsafe", None, _bounded_detail(exc)
+    if stat.S_ISLNK(owner_stat.st_mode) or not stat.S_ISDIR(owner_stat.st_mode):
+        return "unsafe", None, "unsafe nonmatchings owner"
+    try:
+        function_entries = sorted(os.scandir(nonmatchings), key=lambda entry: entry.name)
+    except OSError as exc:
+        return "unsafe", None, _bounded_detail(exc)
+    matches: list[Path] = []
+    unsafe_match = False
+    for function_entry in function_entries:
+        try:
+            if function_entry.is_symlink() or not function_entry.is_dir(follow_symlinks=False):
+                continue
+        except OSError:
+            continue
+        remote_runs = Path(function_entry.path) / "remote-runs"
+        try:
+            remote_stat = remote_runs.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            unsafe_match = True
+            continue
+        if stat.S_ISLNK(remote_stat.st_mode) or not stat.S_ISDIR(remote_stat.st_mode):
+            unsafe_match = True
+            continue
+        candidate = remote_runs / job_id
+        try:
+            candidate_stat = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            unsafe_match = True
+            continue
+        if stat.S_ISLNK(candidate_stat.st_mode) or not stat.S_ISDIR(candidate_stat.st_mode):
+            unsafe_match = True
+            continue
+        matches.append(candidate)
+    if len(matches) > 1:
+        return "duplicate", None, "job id matches multiple owned runs"
+    if len(matches) == 1:
+        return "found", matches[0], ""
+    if unsafe_match:
+        return "unsafe", None, "job ownership could not be proven"
+    return "not-found", None, "job id was not found"
+
+
+def _publish_retention_marker(
+    run: Path,
+    marker: Path,
+    payload: dict[str, object],
+    *,
+    identity: RemoteRunIdentity,
+    run_identity: tuple[int, int],
+) -> tuple[bool, str]:
+    temp = run / f".melee-agent-local-retention.{uuid.uuid4().hex}.tmp"
+    descriptor: int | None = None
+    temp_identity: tuple[int, int] | None = None
+    published = False
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(temp, flags, 0o600)
+        temp_stat = os.fstat(descriptor)
+        temp_identity = (temp_stat.st_dev, temp_stat.st_ino)
+        encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        written, detail = _read_json_regular(temp)
+        if written != payload:
+            return False, detail or "temporary marker readback mismatch"
+        _, detail = _manifest_owned_run_root(run, identity)
+        if detail:
+            return False, detail
+        current = run.lstat()
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino) != run_identity
+        ):
+            return False, "owned run changed before marker publication"
+        try:
+            marker.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            return False, _bounded_detail(exc)
+        else:
+            return False, "retention marker appeared before publication"
+        _rename_no_replace(temp, marker)
+        published = True
+        _fsync_directory(run)
+        readback = read_retention_marker(
+            run,
+            function=identity.function,
+            job_id=identity.job_id,
+        )
+        if readback.status != "valid" or readback.payload != payload:
+            raise RuntimeError("published marker readback mismatch")
+        return True, ""
+    except Exception as exc:
+        if published and temp_identity is not None:
+            try:
+                published_stat = marker.lstat()
+                if (
+                    stat.S_ISREG(published_stat.st_mode)
+                    and (published_stat.st_dev, published_stat.st_ino)
+                    == temp_identity
+                ):
+                    marker.unlink()
+                    _fsync_directory(run)
+            except OSError:
+                pass
+        return False, _bounded_detail(type(exc).__name__, exc)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            leftover = temp.lstat()
+        except OSError:
+            pass
+        else:
+            if (
+                temp_identity is not None
+                and stat.S_ISREG(leftover.st_mode)
+                and (leftover.st_dev, leftover.st_ino) == temp_identity
+            ):
+                try:
+                    temp.unlink()
+                except OSError:
+                    pass
+
+
+def retain_local_remote_run(
+    perm_root: Path,
+    job_id: str,
+    *,
+    reason: str,
+    clock: Callable[[], object] = _utcnow,
+) -> RetentionMarkerWriteResult:
+    """Atomically mark exactly one owned local remote run for retention."""
+    if (
+        not isinstance(job_id, str)
+        or not job_id
+        or job_id in {".", ".."}
+        or any(character.isspace() or ord(character) < 32 for character in job_id)
+        or "/" in job_id
+        or "\\" in job_id
+    ):
+        return RetentionMarkerWriteResult("invalid", detail="invalid job id")
+    if not isinstance(reason, str) or not reason.strip():
+        return RetentionMarkerWriteResult("invalid", detail="reason is required")
+    created_at, detail = _utc_timestamp(clock)
+    if created_at is None:
+        return RetentionMarkerWriteResult("invalid", detail=detail)
+
+    lifecycle_lock, lock_status, lock_detail = _acquire_lifecycle_lock(perm_root)
+    if lifecycle_lock is None:
+        return RetentionMarkerWriteResult(lock_status, detail=lock_detail)
+    try:
+        locate_status, run, detail = _locate_owned_job(
+            lifecycle_lock.perm_root,
+            job_id,
+        )
+        if run is None:
+            return RetentionMarkerWriteResult(locate_status, detail=detail)
+        function = run.parent.parent.name
+        identity, metadata_detail = read_legacy_metadata(
+            run,
+            function=function,
+            job_id=job_id,
+        )
+        marker = run / RETENTION_MARKER_FILENAME
+        if identity is None:
+            return RetentionMarkerWriteResult(
+                "invalid",
+                marker,
+                f"invalid job metadata: {metadata_detail}",
+            )
+        _, ownership_detail = _manifest_owned_run_root(run, identity)
+        if ownership_detail:
+            return RetentionMarkerWriteResult("unsafe", marker, ownership_detail)
+        try:
+            run_stat = run.lstat()
+        except OSError as exc:
+            return RetentionMarkerWriteResult("unsafe", marker, _bounded_detail(exc))
+
+        existing = read_retention_marker(
+            run,
+            function=function,
+            job_id=job_id,
+        )
+        if existing.status == "valid":
+            if existing.payload is not None and existing.payload.get("reason") == reason:
+                return RetentionMarkerWriteResult("idempotent", marker)
+            return RetentionMarkerWriteResult(
+                "conflict",
+                marker,
+                "a different retention marker already exists",
+            )
+        if existing.status != "absent":
+            return RetentionMarkerWriteResult(
+                "invalid",
+                marker,
+                existing.detail or "existing retention marker is invalid",
+            )
+        payload: dict[str, object] = {
+            "kind": RETENTION_MARKER_KIND,
+            "version": RETENTION_MARKER_VERSION,
+            "job_id": job_id,
+            "function": function,
+            "reason": reason,
+            "created_at": created_at,
+        }
+        published, detail = _publish_retention_marker(
+            run,
+            marker,
+            payload,
+            identity=identity,
+            run_identity=(run_stat.st_dev, run_stat.st_ino),
+        )
+        if not published:
+            return RetentionMarkerWriteResult("publish-failed", marker, detail)
+        return RetentionMarkerWriteResult("written", marker)
+    finally:
+        lifecycle_lock.close()
+
+
 def _lock_failure(
     status: Literal["lock-busy", "lock-unavailable"],
     detail: str,
@@ -1515,47 +2148,12 @@ def apply_local_remote_run_retention(
 ) -> LocalRemoteRunRetentionResult:
     """Recompute and safely apply local remote-run retention under a lock."""
     rename_operation = _rename_no_replace if rename is None else rename
-    requested_root = perm_root.expanduser().absolute()
+    lifecycle_lock, lock_status, lock_detail = _acquire_lifecycle_lock(perm_root)
+    if lifecycle_lock is None:
+        return _lock_failure(lock_status, lock_detail)
+    resolved_root = lifecycle_lock.perm_root
+    root_identity = lifecycle_lock.root_identity
     try:
-        root_stat = requested_root.lstat()
-        if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
-            return _lock_failure("lock-unavailable", "unsafe perm root")
-        resolved_root = requested_root.resolve(strict=True)
-    except (OSError, RuntimeError) as exc:
-        return _lock_failure("lock-unavailable", _bounded_detail(exc))
-    if resolved_root != requested_root:
-        return _lock_failure("lock-unavailable", "perm root path is not canonical")
-    root_identity = (root_stat.st_dev, root_stat.st_ino)
-
-    lock_path = resolved_root / LIFECYCLE_LOCK_FILENAME
-    flags = os.O_RDWR | os.O_CREAT
-    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(lock_path, flags, 0o600)
-    except OSError as exc:
-        return _lock_failure("lock-unavailable", _bounded_detail(exc))
-    try:
-        lock_stat = os.fstat(descriptor)
-        try:
-            lock_path_stat = lock_path.lstat()
-        except OSError as exc:
-            return _lock_failure("lock-unavailable", _bounded_detail(exc))
-        if (
-            not stat.S_ISREG(lock_stat.st_mode)
-            or stat.S_ISLNK(lock_path_stat.st_mode)
-            or (lock_path_stat.st_dev, lock_path_stat.st_ino) != (lock_stat.st_dev, lock_stat.st_ino)
-            or lock_stat.st_nlink != 1
-            or lock_stat.st_uid != os.geteuid()
-            or lock_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-        ):
-            return _lock_failure("lock-unavailable", "unsafe lifecycle lock file")
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            return _lock_failure("lock-busy", _bounded_detail(exc))
-        except OSError as exc:
-            return _lock_failure("lock-unavailable", _bounded_detail(exc))
-
         inventory = inventory_local_remote_runs(resolved_root, git_runner=git_runner)
         probed = probe_remote_run_activity(
             inventory,
@@ -1825,4 +2423,4 @@ def apply_local_remote_run_retention(
             cap_satisfied=(plan.inventory_complete and projected <= plan.max_total_bytes),
         )
     finally:
-        os.close(descriptor)
+        lifecycle_lock.close()

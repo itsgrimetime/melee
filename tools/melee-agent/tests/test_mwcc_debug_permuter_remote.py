@@ -12,6 +12,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.cli import app
+from src.mwcc_debug import local_remote_runs as lrr
 from src.mwcc_debug import permuter_remote as pr
 
 PROCESS_BIRTH = "Fri Jul 11 12:34:56 2026"
@@ -284,12 +285,10 @@ def test_remote_status_forwards_timeout_to_status_and_log_probes(
 
 def test_parse_permuter_log_summary_uses_global_min_not_latest() -> None:
     summary = pr.parse_permuter_log_summary(
-        (
-            "[fn_80169900] base score = 1000\n"
-            "iteration 5726, 1 errors, score = 20\r"
-            "iteration 7679, 1 errors, score = 1390\r"
-            "wrote to remote-runs/job/nonmatchings/fn_80169900/output-20-1\n"
-        )
+        "[fn_80169900] base score = 1000\n"
+        "iteration 5726, 1 errors, score = 20\r"
+        "iteration 7679, 1 errors, score = 1390\r"
+        "wrote to remote-runs/job/nonmatchings/fn_80169900/output-20-1\n"
     )
 
     assert summary.global_best_score == 20
@@ -302,11 +301,9 @@ def test_parse_permuter_log_summary_uses_global_min_not_latest() -> None:
 
 def test_parse_permuter_log_summary_detects_zero_match() -> None:
     summary = pr.parse_permuter_log_summary(
-        (
-            "iteration 10, 1 errors, score = 50\r"
-            "iteration 12, 0 errors, score = 0\n"
-            "wrote to remote-runs/job/nonmatchings/fn_8001EBF0/output-0-0\n"
-        )
+        "iteration 10, 1 errors, score = 50\r"
+        "iteration 12, 0 errors, score = 0\n"
+        "wrote to remote-runs/job/nonmatchings/fn_8001EBF0/output-0-0\n"
     )
 
     assert summary.global_best_score == 0
@@ -1489,6 +1486,15 @@ def test_fetch_job_rsyncs_outputs_to_run_dir(tmp_path: Path) -> None:
         "fn_80000000-coder64-20260525-143012/"
     )
     assert calls[1][-1] == str(dest / "remote-run") + "/"
+    manifest = json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert manifest["state"] == "complete"
+    assert manifest["job_id"] == job.job_id
+    assert manifest["function"] == job.function
+    assert manifest["candidate_audit"] == {
+        "total": 0,
+        "by_status": {},
+        "by_semantic_risk_bucket": {},
+    }
 
 
 def test_fetch_job_writes_candidate_audit_summary(tmp_path: Path) -> None:
@@ -1561,6 +1567,9 @@ def test_fetch_job_preserves_stopped_job_rsync_eof_for_triage(
     assert len(warning["rsync_failures"]) == 2
     assert warning["rsync_failures"][0]["returncode"] == 229
     assert "unexpected end of file" in warning["rsync_failures"][0]["stderr"]
+    manifest = json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert manifest["state"] == "partial"
+    assert manifest["candidate_audit"]["total"] == 0
 
 
 def test_fetch_job_rsync_failure_still_raises_for_active_job(
@@ -1588,6 +1597,84 @@ def test_fetch_job_rsync_failure_still_raises_for_active_job(
 
     with pytest.raises(pr.RemoteJobError, match="active job"):
         pr.fetch_job(job, runner=fake_runner)
+
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    assert (dest / "candidate_audit.json").is_file()
+    manifest = json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert manifest["state"] == "partial"
+    assert json.loads((dest / "remote-fetch-warning.json").read_text())["status"] == "partial"
+
+
+def test_fetch_job_audit_failure_is_controlled_and_marks_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    monkeypatch.setattr(
+        pr.candidate_audit,
+        "audit_candidate_tree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("audit failed")),
+    )
+
+    with pytest.raises(pr.RemoteJobError, match="candidate audit"):
+        pr.fetch_job(
+            job,
+            runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+        )
+
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    assert json.loads((dest / "remote-fetch-warning.json").read_text())["status"] == "partial"
+    assert not (dest / lrr.FETCH_MANIFEST_FILENAME).exists()
+
+
+def test_fetch_job_manifest_failure_is_controlled_and_marks_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    monkeypatch.setattr(
+        lrr,
+        "write_local_fetch_manifest",
+        lambda *_args, **_kwargs: lrr.ManifestWriteResult(
+            "publish-failed",
+            Path(job.local_perm_dir) / "remote-runs" / job.job_id / lrr.FETCH_MANIFEST_FILENAME,
+            "disk full",
+        ),
+    )
+
+    with pytest.raises(pr.RemoteJobError, match="fetch manifest"):
+        pr.fetch_job(
+            job,
+            runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+        )
+
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    warning = json.loads((dest / "remote-fetch-warning.json").read_text())
+    assert warning["status"] == "partial"
+    assert "manifest" in warning["message"].lower() or warning["rsync_failures"]
+
+
+def test_fetch_job_refuses_symlinked_owned_destination_before_rsync(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    expected = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    expected.parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    expected.symlink_to(outside, target_is_directory=True)
+    called = False
+
+    def runner(*_args: object, **_kwargs: object) -> pr.CommandResult:
+        nonlocal called
+        called = True
+        return pr.CommandResult(0, "", "")
+
+    with pytest.raises(pr.RemoteJobError, match="destination"):
+        pr.fetch_job(job, runner=runner)
+
+    assert not called
+    assert list(outside.iterdir()) == []
 
 
 def test_cleanup_remote_run_dir_deletes_only_remote_runs_child(tmp_path: Path) -> None:

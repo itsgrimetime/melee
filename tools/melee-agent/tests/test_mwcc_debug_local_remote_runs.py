@@ -1772,3 +1772,326 @@ def test_apply_initial_remote_runner_exception_protects_run(tmp_path: Path) -> N
     assert result.actions == ()
     assert result.reclaimed_bytes == 0
     assert run.is_dir()
+
+
+def test_write_fetch_manifest_binds_identity_audit_and_utc_timestamp(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    candidate = _add_candidate(run, sidecar=_triage_status())
+    summary = _summary(perm_root)
+    assert summary.identity is not None
+    audit = {
+        "total": 1,
+        "by_status": {"ok": 1},
+        "by_semantic_risk_bucket": {"plausible-C-shape": 1},
+        "candidates": [{"path": str(candidate)}],
+    }
+
+    result = lrr.write_local_fetch_manifest(
+        run,
+        identity=summary.identity,
+        state="complete",
+        candidate_audit=audit,
+        clock=lambda: datetime(2026, 7, 11, 5, 30, tzinfo=UTC),
+    )
+
+    assert result.status == "written"
+    assert result.ok
+    payload = json.loads((run / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert payload == {
+        "kind": lrr.FETCH_MANIFEST_KIND,
+        "version": lrr.FETCH_MANIFEST_VERSION,
+        **summary.identity.__dict__,
+        "fetched_at": "2026-07-11T05:30:00Z",
+        "state": "complete",
+        "candidate_audit": {
+            "total": 1,
+            "by_status": {"ok": 1},
+            "by_semantic_risk_bucket": {"plausible-C-shape": 1},
+        },
+    }
+    assert lrr.read_fetch_manifest(
+        run,
+        identity=summary.identity,
+        candidate_count=1,
+    ).status == "complete"
+
+
+def test_write_fetch_manifest_is_idempotent_and_can_promote_partial(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    summary = _summary(perm_root)
+    assert summary.identity is not None
+    audit = {"total": 0, "by_status": {}, "by_semantic_risk_bucket": {}, "candidates": []}
+
+    first = lrr.write_local_fetch_manifest(
+        run,
+        identity=summary.identity,
+        state="partial",
+        candidate_audit=audit,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+    same = lrr.write_local_fetch_manifest(
+        run,
+        identity=summary.identity,
+        state="partial",
+        candidate_audit=audit,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+    promoted = lrr.write_local_fetch_manifest(
+        run,
+        identity=summary.identity,
+        state="complete",
+        candidate_audit=audit,
+        clock=lambda: datetime(2026, 7, 12, tzinfo=UTC),
+    )
+
+    assert first.status == "written"
+    assert same.status == "idempotent"
+    assert promoted.status == "updated"
+    payload = json.loads((run / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert payload["state"] == "complete"
+    assert payload["fetched_at"] == "2026-07-12T00:00:00Z"
+
+
+@pytest.mark.parametrize("existing_kind", ["symlink", "directory"])
+def test_write_fetch_manifest_refuses_nonregular_existing_path(
+    tmp_path: Path,
+    existing_kind: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    summary = _summary(perm_root)
+    assert summary.identity is not None
+    manifest = run / lrr.FETCH_MANIFEST_FILENAME
+    outside = tmp_path / "outside"
+    outside.write_text("untouched")
+    if existing_kind == "symlink":
+        manifest.symlink_to(outside)
+    else:
+        manifest.mkdir()
+
+    result = lrr.write_local_fetch_manifest(
+        run,
+        identity=summary.identity,
+        state="complete",
+        candidate_audit={"total": 0, "candidates": []},
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.status == "unsafe-existing"
+    assert not result.ok
+    assert outside.read_text() == "untouched"
+
+
+def test_write_fetch_manifest_cleans_temp_when_atomic_publish_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    summary = _summary(perm_root)
+    assert summary.identity is not None
+    monkeypatch.setattr(
+        lrr,
+        "_rename_no_replace",
+        lambda _source, _destination: (_ for _ in ()).throw(OSError("collision")),
+    )
+
+    result = lrr.write_local_fetch_manifest(
+        run,
+        identity=summary.identity,
+        state="complete",
+        candidate_audit={"total": 0, "candidates": []},
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.status == "publish-failed"
+    assert not (run / lrr.FETCH_MANIFEST_FILENAME).exists()
+    assert not list(run.glob(".melee-agent-local-fetch.*.tmp"))
+
+
+def test_retain_local_remote_run_writes_bound_marker_and_protects_run(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+
+    result = lrr.retain_local_remote_run(
+        perm_root,
+        run.name,
+        reason="preserve investigation",
+        clock=lambda: datetime(2026, 7, 11, 8, 15, tzinfo=UTC),
+    )
+
+    assert result.status == "written"
+    assert result.ok
+    assert result.path == run / lrr.RETENTION_MARKER_FILENAME
+    assert json.loads(result.path.read_text()) == {
+        "kind": lrr.RETENTION_MARKER_KIND,
+        "version": lrr.RETENTION_MARKER_VERSION,
+        "job_id": run.name,
+        "function": run.parent.parent.name,
+        "reason": "preserve investigation",
+        "created_at": "2026-07-11T08:15:00Z",
+    }
+    assert "explicitly-retained" in _summary(perm_root).local_reasons
+
+
+def test_retain_local_remote_run_is_idempotent_but_preserves_conflict(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+
+    first = lrr.retain_local_remote_run(
+        perm_root,
+        run.name,
+        reason="same reason",
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+    before = first.path.read_bytes()
+    same = lrr.retain_local_remote_run(
+        perm_root,
+        run.name,
+        reason="same reason",
+        clock=lambda: datetime(2026, 7, 12, tzinfo=UTC),
+    )
+    conflict = lrr.retain_local_remote_run(
+        perm_root,
+        run.name,
+        reason="different reason",
+        clock=lambda: datetime(2026, 7, 12, tzinfo=UTC),
+    )
+
+    assert first.status == "written"
+    assert same.status == "idempotent"
+    assert conflict.status == "conflict"
+    assert first.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("job_id", "reason", "clock", "expected"),
+    [
+        ("missing", "reason", lambda: datetime(2026, 7, 11, tzinfo=UTC), "not-found"),
+        ("job", "   ", lambda: datetime(2026, 7, 11, tzinfo=UTC), "invalid"),
+        ("job", "reason", lambda: datetime(2026, 7, 11), "invalid"),
+    ],
+)
+def test_retain_local_remote_run_controlled_input_failures(
+    tmp_path: Path,
+    job_id: str,
+    reason: str,
+    clock: object,
+    expected: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    if job_id == "job":
+        _make_run(perm_root, job_id=job_id)
+    else:
+        perm_root.mkdir()
+
+    result = lrr.retain_local_remote_run(
+        perm_root,
+        job_id,
+        reason=reason,
+        clock=clock,
+    )
+
+    assert result.status == expected
+    assert not result.ok
+
+
+def test_retain_local_remote_run_refuses_duplicate_job_id(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    first = _make_run(perm_root, function="fn_a", job_id="duplicate")
+    second = _make_run(perm_root, function="fn_b", job_id="duplicate")
+
+    result = lrr.retain_local_remote_run(
+        perm_root,
+        "duplicate",
+        reason="ambiguous",
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.status == "duplicate"
+    assert not (first / lrr.RETENTION_MARKER_FILENAME).exists()
+    assert not (second / lrr.RETENTION_MARKER_FILENAME).exists()
+
+
+def test_retain_local_remote_run_uses_apply_lifecycle_lock(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    lock_path = perm_root / lrr.LIFECYCLE_LOCK_FILENAME
+    lock_path.touch(mode=0o600)
+    descriptor = os.open(lock_path, os.O_RDWR)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = lrr.retain_local_remote_run(
+            perm_root,
+            run.name,
+            reason="busy",
+            clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+        )
+    finally:
+        os.close(descriptor)
+
+    assert result.status == "lock-busy"
+    assert not (run / lrr.RETENTION_MARKER_FILENAME).exists()
+
+
+@pytest.mark.parametrize("unsafe", ["metadata", "job-symlink", "marker-symlink"])
+def test_retain_local_remote_run_refuses_invalid_or_symlinked_evidence(
+    tmp_path: Path,
+    unsafe: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if unsafe == "metadata":
+        (run / "remote-run" / "metadata.json").write_text("invalid")
+    elif unsafe == "job-symlink":
+        moved = tmp_path / "moved-run"
+        run.rename(moved)
+        run.symlink_to(moved, target_is_directory=True)
+    else:
+        marker = run / lrr.RETENTION_MARKER_FILENAME
+        target = outside / "marker"
+        target.write_text("untouched")
+        marker.symlink_to(target)
+
+    result = lrr.retain_local_remote_run(
+        perm_root,
+        run.name,
+        reason="unsafe",
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.status in {"invalid", "unsafe"}
+    assert not result.ok
+    assert not (outside / lrr.RETENTION_MARKER_FILENAME).exists()
+
+
+def test_retain_local_remote_run_publish_race_fails_without_marking_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    original_rename = lrr._rename_no_replace
+    moved = tmp_path / "moved-original"
+
+    def raced_rename(source: Path, destination: Path) -> None:
+        run.rename(moved)
+        run.mkdir()
+        original_rename(source, destination)
+
+    monkeypatch.setattr(lrr, "_rename_no_replace", raced_rename)
+
+    result = lrr.retain_local_remote_run(
+        perm_root,
+        run.name,
+        reason="race",
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.status == "publish-failed"
+    assert not (run / lrr.RETENTION_MARKER_FILENAME).exists()
+    assert not (moved / lrr.RETENTION_MARKER_FILENAME).exists()

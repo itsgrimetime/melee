@@ -11,6 +11,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -992,6 +993,75 @@ def terminate_orphaned_permuter_processes(
     )
 
 
+def _local_fetch_identity(job: RemoteJob) -> Any:
+    from . import local_remote_runs  # noqa: PLC0415
+
+    return local_remote_runs.RemoteRunIdentity(**asdict(job))
+
+
+def _prepare_local_fetch_destination(job: RemoteJob, fetch_dest: Path) -> None:
+    from . import local_remote_runs  # noqa: PLC0415
+
+    identity = _local_fetch_identity(job)
+    function_dir = Path(job.local_perm_dir).expanduser()
+    if not function_dir.is_absolute():
+        raise RemoteJobError("remote fetch destination requires an absolute local permuter path")
+    function_dir = function_dir.absolute()
+    expected = function_dir / "remote-runs" / job.job_id
+    if fetch_dest.expanduser().absolute() != expected:
+        raise RemoteJobError(
+            f"remote fetch destination is outside the owned job path: {fetch_dest}"
+        )
+    if function_dir.name != job.function or function_dir.parent.name != "nonmatchings":
+        raise RemoteJobError("remote fetch destination is outside nonmatchings ownership")
+    perm_root = function_dir.parent.parent
+    try:
+        perm_root.mkdir(parents=True, exist_ok=True)
+        for owner in (
+            perm_root,
+            function_dir.parent,
+            function_dir,
+            function_dir / "remote-runs",
+            expected,
+        ):
+            try:
+                owner_stat = owner.lstat()
+            except FileNotFoundError:
+                owner.mkdir(mode=0o700)
+                owner_stat = owner.lstat()
+            if owner.is_symlink() or not stat.S_ISDIR(owner_stat.st_mode):
+                raise RemoteJobError(f"unsafe remote fetch destination owner: {owner}")
+        _, detail = local_remote_runs._manifest_owned_run_root(expected, identity)
+        if detail:
+            raise RemoteJobError(f"unsafe remote fetch destination: {detail}")
+    except RemoteJobError:
+        raise
+    except OSError as exc:
+        raise RemoteJobError(f"unable to prepare remote fetch destination: {exc}") from exc
+
+
+def _mark_local_fetch_failure(
+    fetch_dest: Path,
+    *,
+    job: RemoteJob,
+    label: str,
+    detail: str,
+) -> None:
+    try:
+        _write_remote_fetch_warning(
+            fetch_dest,
+            job=job,
+            remote_status=RemoteStatus(job.job_id, "unknown", detail),
+            rsync_failures=[{
+                "command": label,
+                "returncode": -1,
+                "stderr": detail,
+            }],
+        )
+    except OSError:
+        pass
+
+
 def fetch_job(
     job: RemoteJob,
     runner: Callable[..., CommandResult] = run_command,
@@ -1000,8 +1070,16 @@ def fetch_job(
     """Fetch remote permuter outputs for a job into a local run directory."""
     fetch_dest = dest if dest is not None else Path(job.local_perm_dir) / "remote-runs" / job.job_id
     remote_run_dest = fetch_dest / "remote-run"
-    fetch_dest.mkdir(parents=True, exist_ok=True)
-    remote_run_dest.mkdir(parents=True, exist_ok=True)
+    _prepare_local_fetch_destination(job, fetch_dest)
+    try:
+        remote_run_dest.mkdir(mode=0o700)
+    except FileExistsError:
+        try:
+            remote_stat = remote_run_dest.lstat()
+        except OSError as exc:
+            raise RemoteJobError(f"unsafe remote metadata destination: {exc}") from exc
+        if remote_run_dest.is_symlink() or not stat.S_ISDIR(remote_stat.st_mode):
+            raise RemoteJobError(f"unsafe remote metadata destination: {remote_run_dest}")
     seed_prefix = f"nonmatchings/{job.function}"
     seed_files = [
         "base.c",
@@ -1056,23 +1134,61 @@ def fetch_job(
         result = runner(command, check=False)
         if result.returncode != 0:
             rsync_failures.append(_remote_fetch_rsync_failure(command, result))
+    remote_status: RemoteStatus | None = None
+    active_failure_detail: str | None = None
     if rsync_failures:
-        status = status_job(job, runner=runner)
+        remote_status = status_job(job, runner=runner)
         _write_remote_fetch_warning(
             fetch_dest,
             job=job,
-            remote_status=status,
+            remote_status=remote_status,
             rsync_failures=rsync_failures,
         )
-        if status.state == "active":
-            detail = _format_remote_fetch_failure_detail(
-                status,
+        if remote_status.state == "active":
+            active_failure_detail = _format_remote_fetch_failure_detail(
+                remote_status,
                 rsync_failures,
             )
-            raise RemoteJobError(
-                f"remote fetch failed for active job {job.job_id}: {detail}"
-            )
-    candidate_audit.audit_candidate_tree(fetch_dest, function=job.function)
+    try:
+        audit_summary = candidate_audit.audit_candidate_tree(
+            fetch_dest,
+            function=job.function,
+        )
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        _mark_local_fetch_failure(
+            fetch_dest,
+            job=job,
+            label="local candidate audit",
+            detail=detail,
+        )
+        raise RemoteJobError(
+            f"remote fetch candidate audit failed for {job.job_id}: {detail}"
+        ) from exc
+
+    from . import local_remote_runs  # noqa: PLC0415
+
+    manifest_result = local_remote_runs.write_local_fetch_manifest(
+        fetch_dest,
+        identity=_local_fetch_identity(job),
+        state="partial" if rsync_failures else "complete",
+        candidate_audit=audit_summary,
+    )
+    if not manifest_result.ok:
+        detail = manifest_result.detail or manifest_result.status
+        _mark_local_fetch_failure(
+            fetch_dest,
+            job=job,
+            label="local fetch manifest",
+            detail=detail,
+        )
+        raise RemoteJobError(
+            f"remote fetch manifest publication failed for {job.job_id}: {detail}"
+        )
+    if active_failure_detail is not None:
+        raise RemoteJobError(
+            f"remote fetch failed for active job {job.job_id}: {active_failure_detail}"
+        )
     return fetch_dest
 
 
