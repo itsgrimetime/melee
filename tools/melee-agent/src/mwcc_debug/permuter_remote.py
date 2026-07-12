@@ -134,6 +134,7 @@ class OrphanedPermuterProcess:
     pgid: int
     stat: str
     elapsed: str
+    birth_identity: str
     command: str
     cwd: Path
     kind: str
@@ -153,6 +154,7 @@ class _ProcessSnapshot:
     pgid: int
     stat: str
     elapsed: str
+    birth_identity: str | None
     command: str
 
 
@@ -632,10 +634,7 @@ _SPAWN_WORKER_RE = re.compile(
 )
 
 
-def _process_kind(command: str) -> str | None:
-    command_lower = command.lower()
-    if "wibo" in command_lower and "mwcceppc" in command_lower:
-        return "wibo-mwcc"
+def _python_process_kind(command: str) -> str | None:
     if _RESOURCE_TRACKER_RE.search(command):
         return "python-resource-tracker"
     if _SPAWN_WORKER_RE.search(command):
@@ -643,12 +642,44 @@ def _process_kind(command: str) -> str | None:
     return None
 
 
+def _is_legacy_wibo_command(command: str) -> bool:
+    command_lower = command.lower()
+    return "wibo" in command_lower and "mwcceppc" in command_lower
+
+
+def _parse_birth_identity(tokens: list[str]) -> str | None:
+    if len(tokens) != 5:
+        return None
+    weekday, month, day, clock, year = tokens
+    if weekday not in {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}:
+        return None
+    if month not in {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    }:
+        return None
+    if not day.isdigit() or not 1 <= int(day) <= 31:
+        return None
+    clock_match = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2})", clock)
+    if clock_match is None:
+        return None
+    hour, minute, second = (int(value) for value in clock_match.groups())
+    if hour > 23 or minute > 59 or second > 60:
+        return None
+    if not re.fullmatch(r"\d{4}", year):
+        return None
+    return " ".join(tokens)
+
+
 def _read_process_table(
     runner: Callable[..., CommandResult],
 ) -> list[_ProcessSnapshot] | None:
     try:
         result = runner(
-            ["ps", "-axo", "pid=,ppid=,pgid=,stat=,etime=,command="],
+            [
+                "ps", "-axo",
+                "pid=,ppid=,pgid=,stat=,etime=,lstart=,command=",
+            ],
             check=False,
         )
     except OSError:
@@ -657,11 +688,12 @@ def _read_process_table(
         return None
     processes: list[_ProcessSnapshot] = []
     for raw in result.stdout.splitlines():
-        parts = raw.strip().split(None, 5)
-        if len(parts) < 5:
+        parts = raw.strip().split(None, 10)
+        if len(parts) < 10:
             continue
         pid_s, ppid_s, pgid_s, stat, elapsed = parts[:5]
-        command = parts[5] if len(parts) == 6 else ""
+        birth_identity = _parse_birth_identity(parts[5:10])
+        command = parts[10] if len(parts) == 11 else ""
         try:
             pid = int(pid_s)
             ppid = int(ppid_s)
@@ -674,6 +706,7 @@ def _read_process_table(
             pgid=pgid,
             stat=stat,
             elapsed=elapsed,
+            birth_identity=birth_identity,
             command=command,
         ))
     return processes
@@ -727,9 +760,10 @@ def _classify_orphaned_permuter_processes(
 ) -> dict[int, OrphanedPermuterProcess]:
     found: dict[int, OrphanedPermuterProcess] = {}
     for proc in processes:
-        kind = _process_kind(proc.command)
+        kind = _python_process_kind(proc.command)
         if (
             kind is None
+            or proc.birth_identity is None
             or proc.ppid != 1
             or proc.pgid <= 1
             or proc.pgid == current_pgid
@@ -744,6 +778,7 @@ def _classify_orphaned_permuter_processes(
             pgid=proc.pgid,
             stat=proc.stat,
             elapsed=proc.elapsed,
+            birth_identity=proc.birth_identity,
             command=proc.command,
             cwd=cwd,
             kind=kind,
@@ -790,7 +825,7 @@ def detect_orphaned_wibo_processes(
             command=proc.command,
         )
         for proc in processes
-        if proc.ppid == 1 and _process_kind(proc.command) == "wibo-mwcc"
+        if proc.ppid == 1 and _is_legacy_wibo_command(proc.command)
     ]
 
 
@@ -841,14 +876,31 @@ def terminate_orphaned_permuter_processes(
             current_pgid=own_pgid,
         )
         if any(member.pid not in recognized for member in members):
-            skipped[pgid] = "process group contains an unrecognized member"
+            birth_mismatch = any(
+                member.pid == original.pid
+                and member.birth_identity != original.birth_identity
+                for member in members
+                for original in originals
+            )
+            skipped[pgid] = (
+                "candidate birth identity changed before SIGTERM"
+                if birth_mismatch
+                else "process group contains an unrecognized member"
+            )
             survivors.update(proc.pid for proc in originals)
             continue
         changed = False
+        birth_changed_before_term = False
         for original in originals:
             current = recognized.get(original.pid)
+            if (
+                current is not None
+                and current.birth_identity != original.birth_identity
+            ):
+                birth_changed_before_term = True
             if current is None or (
                 current.pgid != original.pgid
+                or current.birth_identity != original.birth_identity
                 or current.command != original.command
                 or current.cwd != original.cwd
                 or current.kind != original.kind
@@ -856,7 +908,11 @@ def terminate_orphaned_permuter_processes(
                 changed = True
                 break
         if changed:
-            skipped[pgid] = "candidate changed during PID reuse revalidation"
+            skipped[pgid] = (
+                "candidate birth identity changed before SIGTERM"
+                if birth_changed_before_term
+                else "candidate changed during PID reuse revalidation"
+            )
             survivors.update(proc.pid for proc in originals)
             continue
         if any("U" in member.stat for member in members):
@@ -880,6 +936,11 @@ def terminate_orphaned_permuter_processes(
             continue
         live = [proc for proc in remaining if proc.pgid == pgid]
         if live:
+            birth_changed = any(
+                proc.pid in recognized
+                and proc.birth_identity != recognized[proc.pid].birth_identity
+                for proc in live
+            )
             live_recognized = _classify_orphaned_permuter_processes(
                 live,
                 perm_root=resolved_root,
@@ -889,13 +950,19 @@ def terminate_orphaned_permuter_processes(
             group_changed = any(
                 proc.pid not in live_recognized
                 or proc.pid not in recognized
+                or live_recognized[proc.pid].birth_identity
+                != recognized[proc.pid].birth_identity
                 or live_recognized[proc.pid].command != recognized[proc.pid].command
                 or live_recognized[proc.pid].cwd != recognized[proc.pid].cwd
                 or live_recognized[proc.pid].kind != recognized[proc.pid].kind
                 for proc in live
             )
             if group_changed:
-                skipped[pgid] = "process group changed before SIGKILL revalidation"
+                skipped[pgid] = (
+                    "process birth identity changed before SIGKILL"
+                    if birth_changed
+                    else "process group changed before SIGKILL revalidation"
+                )
                 survivors.update(proc.pid for proc in live)
                 terminated.update(
                     proc.pid for proc in members if proc.pid not in survivors

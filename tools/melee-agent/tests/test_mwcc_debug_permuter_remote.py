@@ -14,6 +14,8 @@ from typer.testing import CliRunner
 from src.cli import app
 from src.mwcc_debug import permuter_remote as pr
 
+PROCESS_BIRTH = "Fri Jul 11 12:34:56 2026"
+
 
 def test_load_targets_parses_config(tmp_path: Path) -> None:
     config = tmp_path / "permuter-remotes.toml"
@@ -561,12 +563,12 @@ def test_detect_orphaned_permuter_processes_requires_exact_helpers_and_proven_cw
     outside.mkdir()
     ps_stdout = "\n".join(
         [
-            "101 1 501 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)",
-            "102 1 502 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=7, pipe_handle=9) --multiprocessing-fork",
-            "103 1 503 S 2-00:00:00 /usr/bin/python3 -c import time; time.sleep(999)",
-            "104 1 504 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(8)",
-            "105 44 505 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(9)",
-            "106 1 0 S 2-00:00:00 /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(10)",
+            f"101 1 501 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)",
+            f"102 1 502 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=7, pipe_handle=9) --multiprocessing-fork",
+            f"103 1 503 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c import time; time.sleep(999)",
+            f"104 1 504 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(8)",
+            f"105 44 505 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(9)",
+            f"106 1 0 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(10)",
         ]
     )
 
@@ -590,6 +592,68 @@ def test_detect_orphaned_permuter_processes_requires_exact_helpers_and_proven_cw
     assert all(proc.cwd == worker_cwd.resolve() for proc in found)
 
 
+def test_wibo_substrings_remain_report_only_and_never_gain_kill_authority(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    adversarial = (
+        "/usr/bin/python3 -c \"print('wibo mwcceppc')\""
+    )
+    ps_stdout = (
+        f"101 1 501 S 00:10:00 {PROCESS_BIRTH} {adversarial}"
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[0] == "ps":
+            return pr.CommandResult(0, ps_stdout, "")
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidates = pr.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+        runner=fake_runner,
+        current_pgid=999,
+    )
+    legacy = pr.detect_orphaned_wibo_processes(runner=fake_runner)
+    signals: list[tuple[int, int]] = []
+    report = pr.terminate_orphaned_permuter_processes(
+        candidates,
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda pgid, signum: signals.append((pgid, signum)),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert candidates == []
+    assert [proc.pid for proc in legacy] == [101]
+    assert signals == []
+    assert report.terminated_pids == ()
+
+
+def test_detect_orphaned_permuter_processes_rejects_malformed_birth_identity(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[0] == "ps":
+            return pr.CommandResult(
+                0,
+                f"101 1 501 S 00:00:01 Nope Jul 11 12:34:56 2026 {command}",
+                "",
+            )
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    assert pr.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+        runner=fake_runner,
+        current_pgid=999,
+    ) == []
+
+
 def test_terminate_orphaned_permuter_processes_refuses_mixed_group(
     tmp_path: Path,
 ) -> None:
@@ -598,8 +662,8 @@ def test_terminate_orphaned_permuter_processes_refuses_mixed_group(
     command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
     ps_stdout = "\n".join(
         [
-            f"101 1 501 S 2-00:00:00 {command}",
-            "102 1 501 S 2-00:00:00 /usr/bin/python3 -c import time;time.sleep(999)",
+            f"101 1 501 S 2-00:00:00 {PROCESS_BIRTH} {command}",
+            f"102 1 501 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c import time;time.sleep(999)",
         ]
     )
 
@@ -614,6 +678,7 @@ def test_terminate_orphaned_permuter_processes_refuses_mixed_group(
         pgid=501,
         stat="S",
         elapsed="2-00:00:00",
+        birth_identity=PROCESS_BIRTH,
         command=command,
         cwd=perm_root.resolve(),
         kind="python-resource-tracker",
@@ -634,6 +699,98 @@ def test_terminate_orphaned_permuter_processes_refuses_mixed_group(
     assert "unrecognized" in report.skipped_groups[501]
 
 
+def test_terminate_orphaned_permuter_processes_rejects_birth_identity_change_before_term(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    old_birth = PROCESS_BIRTH
+    new_birth = "Fri Jul 11 13:34:56 2026"
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[0] == "ps":
+            return pr.CommandResult(
+                0,
+                f"101 1 501 S 00:00:01 {new_birth} {command}",
+                "",
+            )
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="00:00:01",
+        birth_identity=old_birth,
+        command=command,
+        cwd=perm_root.resolve(),
+        kind="python-resource-tracker",
+    )
+    signals: list[int] = []
+
+    report = pr.terminate_orphaned_permuter_processes(
+        [candidate],
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda _pgid, signum: signals.append(signum),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert signals == []
+    assert report.surviving_pids == (101,)
+    assert "birth identity" in report.skipped_groups[501]
+
+
+def test_terminate_orphaned_permuter_processes_rejects_birth_identity_change_before_kill(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    old_birth = PROCESS_BIRTH
+    new_birth = "Fri Jul 11 13:34:56 2026"
+    snapshots = iter(
+        [
+            f"101 1 501 S 00:10:00 {old_birth} {command}",
+            f"101 1 501 S 00:00:01 {new_birth} {command}",
+        ]
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[0] == "ps":
+            return pr.CommandResult(0, next(snapshots), "")
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="00:10:00",
+        birth_identity=old_birth,
+        command=command,
+        cwd=perm_root.resolve(),
+        kind="python-resource-tracker",
+    )
+    signals: list[int] = []
+
+    report = pr.terminate_orphaned_permuter_processes(
+        [candidate],
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda _pgid, signum: signals.append(signum),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert signals == [signal.SIGTERM]
+    assert report.surviving_pids == (101,)
+    assert "birth identity" in report.skipped_groups[501]
+
+
 def test_terminate_orphaned_permuter_processes_revalidates_before_sigkill(
     tmp_path: Path,
 ) -> None:
@@ -642,8 +799,8 @@ def test_terminate_orphaned_permuter_processes_revalidates_before_sigkill(
     command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
     snapshots = iter(
         [
-            f"101 1 501 S 2-00:00:00 {command}",
-            "202 1 501 S 00:00:01 /usr/bin/python3 -c import time;time.sleep(999)",
+            f"101 1 501 S 2-00:00:00 {PROCESS_BIRTH} {command}",
+            f"202 1 501 S 00:00:01 {PROCESS_BIRTH} /usr/bin/python3 -c import time;time.sleep(999)",
         ]
     )
 
@@ -658,6 +815,7 @@ def test_terminate_orphaned_permuter_processes_revalidates_before_sigkill(
         pgid=501,
         stat="S",
         elapsed="2-00:00:00",
+        birth_identity=PROCESS_BIRTH,
         command=command,
         cwd=perm_root.resolve(),
         kind="python-resource-tracker",
@@ -678,7 +836,7 @@ def test_terminate_orphaned_permuter_processes_revalidates_before_sigkill(
     assert "changed" in report.skipped_groups[501]
 
 
-def test_permute_local_orphans_cli_reports_uninterruptible_wibo(
+def test_permute_local_orphans_cli_reports_uninterruptible_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -691,12 +849,13 @@ def test_permute_local_orphans_cli_reports_uninterruptible_wibo(
                 pgid=24276,
                 stat="UE",
                 elapsed="40:01:02",
+                birth_identity=PROCESS_BIRTH,
                 command=(
-                    "build/tools/wibo build/compilers/GC/1.2.5n/"
-                    "mwcceppc.exe -c src/melee/ft/ftdynamics.c"
+                    "/usr/bin/python3 -c from multiprocessing.resource_tracker "
+                    "import main;main(7)"
                 ),
                 cwd=Path("/Users/mike/code/decomp-permuter"),
-                kind="wibo-mwcc",
+                kind="python-resource-tracker",
             )
         ],
     )
@@ -721,6 +880,7 @@ def test_permute_local_orphans_cli_terminate_exits_zero_after_cleanup(
         pgid=501,
         stat="S",
         elapsed="2-00:00:00",
+        birth_identity=PROCESS_BIRTH,
         command="/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)",
         cwd=tmp_path,
         kind="python-resource-tracker",
