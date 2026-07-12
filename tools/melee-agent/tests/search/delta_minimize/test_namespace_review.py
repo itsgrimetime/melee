@@ -86,7 +86,7 @@ def _request() -> NamespaceReviewRequest:
         class_id=0,
         register_class="GPR",
         namespace_schema="delta-minimize-role-namespace.v5",
-        parser_schema_hash="opcode.v1+color.v5+candidate-evidence.v3",
+        parser_schema_hash=("opcode.v1+color.v5+objobjects.v2+stack-homes.v1+delta-extractor.v2+candidate-evidence.v3"),
         target_sha256=SHA["target"],
         delta_manifest_sha256=SHA["delta"],
         left_source_sha256=SHA["canonical_source"],
@@ -326,6 +326,18 @@ def test_models_reject_unsupported_schema_and_epoch_directly() -> None:
 
 
 @pytest.mark.parametrize(
+    "parser_epoch",
+    [
+        "opcode.v1+color.v4+objobjects.v2+stack-homes.v1+delta-extractor.v2+candidate-evidence.v3",
+        "opcode.v1+color.v5+objobjects.v2+stack-homes.v1+delta-extractor.v2",
+    ],
+)
+def test_request_rejects_stale_or_truncated_parser_epoch(parser_epoch: str) -> None:
+    with pytest.raises(DeltaMinimizeError):
+        replace(_request(), parser_schema_hash=parser_epoch)
+
+
+@pytest.mark.parametrize(
     "change",
     [
         {"left_source_sha256": "0" * 64},
@@ -347,6 +359,13 @@ def test_request_rejects_incoherent_parent_context_and_anchors(
 def _nonidentity_map() -> dict[int, int]:
     mapping = dict(IDENTITY)
     mapping[40], mapping[41] = mapping[41], mapping[40]
+    return mapping
+
+
+def _anchor_moving_map() -> dict[int, int]:
+    mapping = dict(IDENTITY)
+    mapping[64], mapping[65] = mapping[65], mapping[64]
+    mapping[78], mapping[79] = mapping[79], mapping[78]
     return mapping
 
 
@@ -372,6 +391,32 @@ def test_seal_expands_identity_and_accepts_full_nonidentity_map(tmp_path: Path) 
     assert len(by_id["parent:right"].canonical_to_artifact) == 110
 
 
+def test_seal_allows_candidate_bijection_to_move_parent_anchor_roles(
+    tmp_path: Path,
+) -> None:
+    moved = _anchor_moving_map()
+
+    reviewed = seal_namespace_review(
+        _request(),
+        identity_ids=("parent:right",),
+        map_paths={"candidate:mask-100": _write_map(tmp_path / "candidate.yaml", moved)},
+    )
+
+    binding = next(item for item in reviewed.bindings if item.artifact_id == "candidate:mask-100")
+    assert dict(binding.canonical_to_artifact) == moved
+
+
+def test_seal_rejects_parent_binding_that_conflicts_with_reviewed_anchors(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(DeltaMinimizeError):
+        seal_namespace_review(
+            _request(),
+            identity_ids=("candidate:mask-100",),
+            map_paths={"parent:right": _write_map(tmp_path / "parent.yaml", _anchor_moving_map())},
+        )
+
+
 @pytest.mark.parametrize(
     "malformation",
     [
@@ -383,8 +428,6 @@ def test_seal_expands_identity_and_accepts_full_nonidentity_map(tmp_path: Path) 
         "out-of-range-value",
         "nonidentity-abi",
         "incomplete-virtual-bijection",
-        "anchor-64",
-        "anchor-78",
     ],
 )
 def test_seal_rejects_invalid_full_maps(
@@ -410,10 +453,6 @@ def test_seal_rejects_invalid_full_maps(
     elif malformation == "incomplete-virtual-bijection":
         mapping[40] = 31
         mapping[31] = 40
-    elif malformation == "anchor-64":
-        mapping[64], mapping[65] = mapping[65], mapping[64]
-    else:
-        mapping[78], mapping[79] = mapping[79], mapping[78]
     map_path = _write_map(tmp_path / "map.yaml", mapping)
 
     with pytest.raises(DeltaMinimizeError):

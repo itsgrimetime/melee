@@ -14,6 +14,7 @@ from typing import Any, Mapping
 import yaml
 
 from .contracts import DeltaMinimizeError
+from .epochs import PARSER_SCHEMA_HASH
 from .objectives import ROLE_NAMESPACE_SCHEMA
 
 NAMESPACE_REVIEW_REQUEST_SCHEMA = "delta-minimize-namespace-review-request.v1"
@@ -313,6 +314,8 @@ class NamespaceReviewRequest:
             raise DeltaMinimizeError("unsupported-namespace-review-request-schema")
         if self.namespace_schema != ROLE_NAMESPACE_SCHEMA:
             raise DeltaMinimizeError("unsupported-namespace-review-epoch")
+        if self.parser_schema_hash != PARSER_SCHEMA_HASH:
+            raise DeltaMinimizeError("unsupported-namespace-review-epoch")
         _text(self.function, "invalid-namespace-review-request")
         if self.class_id != 0 or self.register_class != "GPR":
             raise DeltaMinimizeError("invalid-namespace-review-request")
@@ -472,11 +475,19 @@ def _validate_full_map(
 ) -> None:
     mapping = binding.canonical_to_artifact
     domain = request.domain
+    artifact = next(
+        (candidate for candidate in request.artifacts if candidate.artifact_id == binding.artifact_id),
+        None,
+    )
     if (
-        set(mapping) != set(domain)
+        artifact is None
+        or set(mapping) != set(domain)
         or set(mapping.values()) != set(domain)
         or any(mapping[role] != role for role in range(32))
-        or any(mapping[role] != artifact_role for role, artifact_role in request.reviewed_anchors.items())
+        or (
+            artifact.kind == "parent"
+            and any(mapping[role] != artifact_role for role, artifact_role in request.reviewed_anchors.items())
+        )
     ):
         raise DeltaMinimizeError("invalid-reviewed-namespace-map")
 

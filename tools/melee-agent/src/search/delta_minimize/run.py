@@ -31,6 +31,7 @@ from .delta import (
     extract_delta_manifest,
     materialize_mask,
 )
+from .epochs import PARSER_SCHEMA_HASH
 from .evaluator import (
     CandidateEvaluationConfig,
     EvaluationBackends,
@@ -63,7 +64,6 @@ from .objectives import (
 from .pareto import reduce_pareto
 from .store import DeltaRunStore
 
-PARSER_SCHEMA_HASH = "opcode.v1+color.v5+objobjects.v2+stack-homes.v1+delta-extractor.v2+candidate-evidence.v3"
 RESULT_SCHEMA = "delta-minimize-result.v1"
 OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v3"
 _OBJECTIVE_AXES = frozenset({"opcode", "color", "objobjects", "stack-homes"})
