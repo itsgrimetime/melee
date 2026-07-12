@@ -74,6 +74,16 @@ REQUIRED_PCODE_SNAPSHOT_STRUCT_FIELDS = {
     "PCode": REQUIRED_STRUCT_FIELDS["PCode"],
 }
 
+REQUIRED_PCODE_ARG_CAPTURE_STRUCT_FIELDS: dict[str, dict[str, int]] = {
+    "PCode": {**REQUIRED_STRUCT_FIELDS["PCode"], "args": 0x1C},
+    "PCodeArg": {
+        "kind": 0x00,
+        "register_flags": 0x01,
+        "payload": 0x02,
+    },
+}
+PCODE_ARG_SIZE = 0x0C
+
 REQUIRED_OBJECT_CAPTURE_KEYS = (
     "arguments",
     "locals",
@@ -165,6 +175,64 @@ def _is_lower_sha256(value: object) -> bool:
         and len(value) == 64
         and all(char in _LOWER_HEX for char in value)
     )
+
+
+_MAX_JSON_SAFE_INTEGER = (1 << 53) - 1
+
+
+def materialize_json_safe(value: object) -> object:
+    """Recursively copy an exact, finite I-JSON-shaped value.
+
+    The trust gates call this before inspecting attacker-controlled containers.
+    Exact builtin types prevent Mapping/list subclasses from running code during
+    later validation, while the active-container set rejects recursive values.
+    """
+
+    active: set[int] = set()
+
+    def visit(item: object, path: str) -> object:
+        item_type = type(item)
+        if item is None or item_type is bool:
+            return item
+        if item_type is int:
+            if not -_MAX_JSON_SAFE_INTEGER <= item <= _MAX_JSON_SAFE_INTEGER:
+                raise ValueError(f"{path} integer is outside the JSON-safe range")
+            return item
+        if item_type is str:
+            try:
+                item.encode("utf-8", "strict")
+            except UnicodeEncodeError as exc:
+                raise ValueError(f"{path} contains an invalid Unicode surrogate") from exc
+            return item
+        if item_type not in (dict, list):
+            raise ValueError(f"{path} has unsupported non-JSON type")
+
+        marker = id(item)
+        if marker in active:
+            raise ValueError(f"{path} contains a recursive container")
+        active.add(marker)
+        try:
+            if item_type is list:
+                return [
+                    visit(child, f"{path}[{index}]")
+                    for index, child in enumerate(item)
+                ]
+            result: dict[str, object] = {}
+            for key, child in item.items():
+                if type(key) is not str:
+                    raise ValueError(f"{path} object key must be exact string")
+                try:
+                    key.encode("utf-8", "strict")
+                except UnicodeEncodeError as exc:
+                    raise ValueError(
+                        f"{path} object key contains an invalid Unicode surrogate"
+                    ) from exc
+                result[key] = visit(child, f"{path}.{key}")
+            return result
+        finally:
+            active.remove(marker)
+
+    return visit(value, "$")
 
 
 def validate_instrumentation_proof_registry(table: object) -> list[str]:
@@ -369,6 +437,187 @@ def validate_backend_pcode_snapshot_capability(table: dict[str, Any]) -> list[st
                 errors.append(
                     f"struct {name}.{field} expected offset {offset:#x}, got {actual.get(field)!r}"
                 )
+    return errors
+
+
+def validate_pcode_arg_capture_capability(table: object) -> list[str]:
+    """Require the complete inline PCodeArg layout before any raw reads."""
+
+    if not isinstance(table, Mapping):
+        return ["PCodeArg capture table must be object"]
+    errors: list[str] = []
+    structs = table.get("structs")
+    if not isinstance(structs, Mapping):
+        structs = {}
+    for name, fields in REQUIRED_PCODE_ARG_CAPTURE_STRUCT_FIELDS.items():
+        struct = structs.get(name)
+        if not isinstance(struct, Mapping):
+            errors.append(f"missing required {name} struct")
+            continue
+        if struct.get("confidence") not in ACCEPTED_REQUIRED_CONFIDENCE:
+            errors.append(f"struct {name} confidence below required gate")
+        actual = struct.get("fields")
+        if not isinstance(actual, Mapping):
+            actual = {}
+        for field, offset in fields.items():
+            if actual.get(field) != offset:
+                errors.append(
+                    f"{name}.{field} expected offset {offset:#x}, "
+                    f"got {actual.get(field)!r}"
+                )
+        if name == "PCodeArg" and struct.get("size") != PCODE_ARG_SIZE:
+            errors.append(
+                f"PCodeArg size expected {PCODE_ARG_SIZE:#x}, "
+                f"got {struct.get('size')!r}"
+            )
+    return errors
+
+
+def _proof_site_ids(proof: Mapping[str, object], collection: str) -> list[str]:
+    rows = proof.get(collection)
+    if not isinstance(rows, list):
+        return []
+    return [
+        row["site_id"]
+        for row in rows
+        if isinstance(row, Mapping) and isinstance(row.get("site_id"), str)
+    ]
+
+
+def _validate_gate_site_ids(
+    gate: Mapping[str, object],
+    *,
+    field: str,
+    label: str,
+    expected: list[str],
+) -> list[str]:
+    errors: list[str] = []
+    value = gate.get(field)
+    if not isinstance(value, list) or not value:
+        return [f"{label} site IDs must be nonempty list"]
+    if any(not isinstance(site_id, str) or not site_id for site_id in value):
+        errors.append(f"{label} site IDs must contain nonempty strings")
+        return errors
+    if len(value) != len(set(value)):
+        errors.append(f"{label} site IDs must be unique")
+    if value != expected:
+        if len(value) == len(expected) and set(value) == set(expected):
+            errors.append(f"{label} site IDs must be canonically ordered")
+        else:
+            errors.append(f"{label} site inventory differs from proof")
+    return errors
+
+
+def validate_pcode_instrumentation_capability(
+    table: object, *, proof: Mapping[str, object] | None = None
+) -> list[str]:
+    """Require one promoted tuple and an exactly matching installed hook set."""
+
+    try:
+        table = materialize_json_safe(table)
+    except Exception as exc:  # noqa: BLE001 - trust boundary must fail closed
+        return [f"PCode instrumentation table could not be materialized: {exc}"]
+    errors = list(validate_instrumentation_proof_registry(table))
+    if type(table) is not dict:
+        errors.append("PCode instrumentation table must be object")
+        return errors
+    rows = table.get("instrumentation_proofs")
+    promoted = (
+        [
+            row
+            for row in rows
+            if isinstance(row, Mapping) and row.get("promoted") is True
+        ]
+        if isinstance(rows, list)
+        else []
+    )
+    if not promoted:
+        errors.append("no promoted instrumentation proof")
+    elif len(promoted) != 1:
+        errors.append("expected exactly one promoted instrumentation proof")
+
+    reader = table.get("backend_reader")
+    gate = (
+        reader.get("pcode_instrumentation")
+        if isinstance(reader, Mapping)
+        else None
+    )
+    if not isinstance(gate, Mapping) or gate.get("validated") is not True:
+        errors.append("pcode instrumentation gate is not validated")
+        gate = None
+
+    try:
+        proof = materialize_json_safe(proof)
+    except Exception as exc:  # noqa: BLE001 - trust boundary must fail closed
+        errors.append("PCode instrumentation proof could not be materialized")
+        errors.append(f"PCode instrumentation proof materialization error: {exc}")
+        return errors
+    if type(proof) is not dict:
+        errors.append("PCode instrumentation proof must be object")
+        return errors
+
+    from .backend_instrumentation_proof import proof_sha256, validate_proof_shape
+
+    try:
+        errors.extend(validate_proof_shape(proof))
+    except Exception:  # noqa: BLE001 - malformed proof must fail closed
+        errors.append("PCode instrumentation proof shape validation failed")
+    digest = None
+    try:
+        digest = proof_sha256(proof)
+    except Exception:  # noqa: BLE001 - malformed proof must fail closed
+        errors.append("PCode instrumentation proof is not canonicalizable")
+
+    if len(promoted) == 1:
+        row = promoted[0]
+        if proof.get("compiler_executable_sha256") != row.get(
+            "compiler_executable_sha256"
+        ):
+            errors.append("proof compiler digest differs from promoted registry")
+        if proof.get("proof_id") != row.get("proof_id"):
+            errors.append("proof ID differs from promoted registry")
+        if digest != row.get("proof_sha256"):
+            errors.append("proof digest differs from promoted registry")
+
+    if gate is not None:
+        if len(promoted) == 1:
+            row = promoted[0]
+            for field in (
+                "compiler_executable_sha256",
+                "proof_id",
+                "proof_sha256",
+            ):
+                if gate.get(field) != row.get(field):
+                    errors.append(
+                        f"pcode instrumentation {field} differs from registry"
+                    )
+        if gate.get("compiler_executable_sha256") != proof.get(
+            "compiler_executable_sha256"
+        ):
+            errors.append("compiler executable digest differs from proof")
+        if gate.get("proof_id") != proof.get("proof_id"):
+            errors.append("proof ID differs from installed gate")
+        for collection, gate_field, label in (
+            (
+                "operand_rewrite_sites",
+                "operand_rewrite_site_ids",
+                "operand rewrite",
+            ),
+            (
+                "operand_mutation_sites",
+                "operand_mutation_site_ids",
+                "operand mutation",
+            ),
+            ("code_emission_sites", "code_emission_site_ids", "code emission"),
+        ):
+            errors.extend(
+                _validate_gate_site_ids(
+                    gate,
+                    field=gate_field,
+                    label=label,
+                    expected=_proof_site_ids(proof, collection),
+                )
+            )
     return errors
 
 
