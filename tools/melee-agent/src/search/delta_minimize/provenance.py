@@ -72,6 +72,38 @@ def _ninja_tool(root: Path, tool: str, target: str) -> str:
     return result.stdout
 
 
+def _require_ninja_fresh(root: Path, target: str) -> None:
+    """Fail closed unless Ninja's dry run proves the target needs no work."""
+
+    try:
+        result = subprocess.run(
+            ["ninja", "-n", target],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise DeltaMinimizeError(
+            "invalid-compiler-context",
+            {"freshness_target": target},
+        ) from error
+    if (
+        result.returncode != 0
+        or result.stdout.strip() != "ninja: no work to do."
+        or result.stderr.strip()
+    ):
+        raise DeltaMinimizeError(
+            "invalid-compiler-context",
+            {
+                "freshness_target": target,
+                "stdout": result.stdout.strip(),
+                "stderr": result.stderr.strip(),
+            },
+        )
+
+
 def _repo_token(token: str, root: Path) -> str:
     path = Path(token)
     if not path.is_absolute():
@@ -154,8 +186,10 @@ def compiler_provenance(root: Path, source: Path) -> tuple[str, str]:
     try:
         paths = unit_paths(root, source)
         target = paths.our_obj.absolute().relative_to(root.absolute()).as_posix()
+        _require_ninja_fresh(root, target)
         command = _normalized_compile_command(root, source, target)
         dependencies = _dependency_rows(root, source, target)
+        _require_ninja_fresh(root, target)
     except (OSError, ValueError) as error:
         raise DeltaMinimizeError("invalid-compiler-context") from error
     cflags_hash = _canonical_hash(

@@ -19,6 +19,16 @@ def _write_executable(path: Path, text: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def _head_commit(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def test_mwcc_inspect_upload_uses_remote_bash_stdin_for_candidate(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     workflow = repo / "tools" / "workflow"
@@ -42,6 +52,7 @@ def test_mwcc_inspect_upload_uses_remote_bash_stdin_for_candidate(tmp_path: Path
     subprocess.run(["git", "add", "build/GALE01/report.json", "tools/workflow/mwcc-inspect.sh"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
     subprocess.run(["git", "checkout", "-q", "-b", "codex/local-only"], cwd=repo, check=True)
+    exact_commit = _head_commit(repo)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -99,6 +110,7 @@ def test_mwcc_inspect_upload_uses_remote_bash_stdin_for_candidate(tmp_path: Path
         "MWCC_INSPECT_REMOTE_BASH": "bash",
         "MWCC_INSPECT_REMOTE_DIR": "/remote/melee",
         "MWCC_INSPECT_CLI": "/remote/MwccInspectorCLI",
+        "MWCC_INSPECT_REMOTE_REF": "HEAD",
     })
 
     proc = subprocess.run(
@@ -118,7 +130,7 @@ def test_mwcc_inspect_upload_uses_remote_bash_stdin_for_candidate(tmp_path: Path
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "[mwcc-inspect] Remote ref: master" in proc.stdout
+    assert f"[mwcc-inspect] Remote ref: {exact_commit}" in proc.stdout
     assert "FUNCTION: fn_test" in out_file.read_text(encoding="utf-8")
     argv_logs = [path.read_text(encoding="utf-8") for path in sorted(log_dir.glob("*.argv"))]
     assert all("'-lc'" not in argv for argv in argv_logs)
@@ -143,15 +155,15 @@ def test_mwcc_inspect_upload_uses_remote_bash_stdin_for_candidate(tmp_path: Path
     )
     assert headers_copy_log.rstrip().endswith("exit")
     inspector_log = next(log for log in stdin_logs if "MwccInspectorCLI" in log)
-    assert "checkout --quiet 'master'" in inspector_log
+    assert f"checkout --quiet '{exact_commit}'" in inspector_log
     assert "git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'" in inspector_log
-    assert "if ! git rev-parse --verify 'master'" not in inspector_log
-    assert "git cat-file -e 'master^{commit}'" in inspector_log
+    assert "if ! git rev-parse --verify" not in inspector_log
+    assert f"git cat-file -e '{exact_commit}^{{commit}}'" in inspector_log
     assert (
         inspector_log.index("git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'")
-        < inspector_log.index("git cat-file -e 'master^{commit}'")
+        < inspector_log.index(f"git cat-file -e '{exact_commit}^{{commit}}'")
     )
-    assert "remote is missing ref 'master'" in inspector_log
+    assert f"remote is missing ref '{exact_commit}'" in inspector_log
     assert "codex/local-only" not in inspector_log
     assert "REMOTE_DIR='/remote/melee'" in inspector_log
     assert (
@@ -197,6 +209,7 @@ def test_mwcc_inspect_remote_failure_preserves_diagnostics_and_no_empty_output(
         check=True,
     )
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    exact_commit = _head_commit(repo)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -243,6 +256,7 @@ def test_mwcc_inspect_remote_failure_preserves_diagnostics_and_no_empty_output(
         "MWCC_INSPECT_REMOTE_BASH": "bash",
         "MWCC_INSPECT_REMOTE_DIR": "/remote/melee",
         "MWCC_INSPECT_CLI": "/remote/MwccInspectorCLI",
+        "MWCC_INSPECT_REMOTE_REF": "HEAD",
     })
 
     proc = subprocess.run(
@@ -262,6 +276,7 @@ def test_mwcc_inspect_remote_failure_preserves_diagnostics_and_no_empty_output(
     )
 
     assert proc.returncode == 42
+    assert f"[mwcc-inspect] Remote ref: {exact_commit}" in proc.stdout
     assert "[mwcc-inspect] remote command failed" in proc.stderr
     assert "mwcc inspector failed before structured output" in proc.stderr
     assert not out_file.exists() or out_file.stat().st_size > 0
@@ -292,6 +307,7 @@ def test_mwcc_inspect_rejects_empty_remote_candidate_tempdir(tmp_path: Path) -> 
         check=True,
     )
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    exact_commit = _head_commit(repo)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -343,6 +359,7 @@ def test_mwcc_inspect_rejects_empty_remote_candidate_tempdir(tmp_path: Path) -> 
         "MWCC_INSPECT_REMOTE_BASH": "bash",
         "MWCC_INSPECT_REMOTE_DIR": "/remote/melee",
         "MWCC_INSPECT_CLI": "/remote/MwccInspectorCLI",
+        "MWCC_INSPECT_REMOTE_REF": "HEAD",
     })
 
     proc = subprocess.run(
@@ -362,6 +379,7 @@ def test_mwcc_inspect_rejects_empty_remote_candidate_tempdir(tmp_path: Path) -> 
     )
 
     assert proc.returncode != 0
+    assert f"[mwcc-inspect] Remote ref: {exact_commit}" in proc.stdout
     assert "remote candidate tempdir was empty" in proc.stderr
     assert not out_file.exists()
     assert len(list(log_dir.glob("*.stdin"))) == 1
@@ -409,6 +427,7 @@ def test_mwcc_inspect_rejects_invalid_zero_exit_output(
         check=True,
     )
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    exact_commit = _head_commit(repo)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -455,6 +474,7 @@ def test_mwcc_inspect_rejects_invalid_zero_exit_output(
         "MWCC_INSPECT_REMOTE_BASH": "bash",
         "MWCC_INSPECT_REMOTE_DIR": "/remote/melee",
         "MWCC_INSPECT_CLI": "/remote/MwccInspectorCLI",
+        "MWCC_INSPECT_REMOTE_REF": "HEAD",
     })
 
     proc = subprocess.run(
@@ -474,5 +494,6 @@ def test_mwcc_inspect_rejects_invalid_zero_exit_output(
     )
 
     assert proc.returncode != 0
+    assert f"[mwcc-inspect] Remote ref: {exact_commit}" in proc.stdout
     assert out_file.read_text(encoding="utf-8") == inspector_output
     assert expected_diagnostic in proc.stderr

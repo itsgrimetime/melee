@@ -1138,12 +1138,15 @@ def _production_provenance_fixture(
     }
     upstream = {"value": ""}
     ref_commit = {"value": "a" * 40}
+    freshness = {"value": "ninja: no work to do.\n"}
 
     def fake_run(args, **kwargs):
         assert kwargs["cwd"] == root
         assert kwargs["text"] is True
         assert kwargs["capture_output"] is True
         assert kwargs["check"] is False
+        if args[:2] == ["ninja", "-n"]:
+            return subprocess.CompletedProcess(args, 0, freshness["value"], "")
         if args[:3] == ["ninja", "-t", "commands"]:
             return subprocess.CompletedProcess(args, 0, command["value"] + "\n", "")
         if args[:3] == ["ninja", "-t", "deps"]:
@@ -1173,6 +1176,7 @@ def _production_provenance_fixture(
         "dependencies": dependency_rows,
         "upstream": upstream,
         "ref_commit": ref_commit,
+        "freshness": freshness,
     }
 
 
@@ -1302,14 +1306,19 @@ def test_production_provenance_binds_complete_compiler_and_inspector_context(
     assert changed_consumers[2] != baseline_consumers[2]
 
 
-@pytest.mark.parametrize("failure", ("missing-command", "missing-dependencies", "stale-dependencies"))
+@pytest.mark.parametrize(
+    "failure",
+    ("would-rebuild", "missing-command", "missing-dependencies", "stale-dependencies"),
+)
 def test_production_provenance_fails_closed_without_exact_compile_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
 ) -> None:
     config, controls = _production_provenance_fixture(tmp_path, monkeypatch)
-    if failure == "missing-command":
+    if failure == "would-rebuild":
+        controls["freshness"]["value"] = "[1/1] MWCC build/GALE01/src/melee/test.o\n"
+    elif failure == "missing-command":
         controls["command"]["value"] = ""
     elif failure == "missing-dependencies":
         controls["dependencies"]["value"] = "build/GALE01/src/melee/test.o: deps not found"
@@ -1320,6 +1329,46 @@ def test_production_provenance_fails_closed_without_exact_compile_context(
 
     with pytest.raises(DeltaMinimizeError, match="^invalid-compiler-context$"):
         run_module._default_parent_provenance(config)
+
+
+def test_stale_dependency_closure_cannot_authorize_new_header_cache_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, controls = _production_provenance_fixture(tmp_path, monkeypatch)
+    baseline = dict(run_module._default_parent_provenance(config))
+    new_header = config.melee_root / "include/activated.h"
+    new_header.write_text("#define ACTIVATED_VALUE 1\n", encoding="utf-8")
+    config.cflags_from.write_text(
+        '#include "test.h"\n#include "activated.h"\n'
+        "int f(void) { return TEST_VALUE + ACTIVATED_VALUE; }\n",
+        encoding="utf-8",
+    )
+    controls["command"]["value"] = controls["command"]["value"].replace("-O4,p", "-O3")
+    controls["freshness"]["value"] = "[1/1] MWCC build/GALE01/src/melee/test.o\n"
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-compiler-context$"):
+        run_module._default_parent_provenance(config)
+
+    controls["freshness"]["value"] = "ninja: no work to do.\n"
+    controls["dependencies"]["value"] = "\n".join(
+        (
+            "build/GALE01/src/melee/test.o: #deps 3, deps mtime 2 (VALID)",
+            "    src/melee/test.c",
+            "    include/test.h",
+            "    include/activated.h",
+        )
+    )
+    refreshed = dict(run_module._default_parent_provenance(config))
+    new_header.write_text("#define ACTIVATED_VALUE 2\n", encoding="utf-8")
+    header_changed = dict(run_module._default_parent_provenance(config))
+
+    assert refreshed["cflags_hash"] != baseline["cflags_hash"]
+    assert header_changed["cflags_hash"] != refreshed["cflags_hash"]
+    assert _provenance_consumers(tmp_path / "refreshed-store", refreshed) != _provenance_consumers(
+        tmp_path / "header-changed-store",
+        header_changed,
+    )
 
 
 def test_production_objective_adapter_supplies_real_register_diff_deriver(

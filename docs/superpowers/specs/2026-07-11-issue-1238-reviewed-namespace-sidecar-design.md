@@ -135,12 +135,15 @@ or stack-home truth.
 Raw cache reuse is permitted only when the production compiler and inspector
 contexts are exact. The `cflags_hash` lane therefore fingerprints Ninja's
 resolved MWCC command and the SHA-256 of every repo-local dependency reported
-for the translation unit by Ninja's valid dependency database. The compiler
-identity separately includes the selected `mwcceppc.exe` bytes and available
-build-configuration inputs. A missing command, absent dependency closure,
-stale dependency record, external dependency, or unreadable context fails
-closed with `invalid-compiler-context`; users must configure/build the unit
-before retrying.
+for the translation unit by Ninja's valid dependency database. A non-mutating
+`ninja -n` check must report no work both before and after the command/closure
+snapshot, preventing an old dependency row set from authorizing newly active
+headers or flags. The compiler identity separately includes the selected
+`mwcceppc.exe` bytes and available build-configuration inputs. A missing
+command, planned rebuild, absent dependency closure, stale dependency record,
+external dependency, or unreadable context fails closed with
+`invalid-compiler-context`; users must configure/build the unit before
+retrying.
 
 The inspector lane fingerprints both `tools/workflow/mwcc-inspect.sh` and the
 local diff-capture adapter, plus the workflow's effective host, remote root,
