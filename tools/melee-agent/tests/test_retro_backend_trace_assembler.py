@@ -532,6 +532,36 @@ def test_v2_assembler_refuses_diagnostic_sidecars_without_proof_or_raw_records(
         backend_trace_assembler.assemble_candidate_trace_v2(**kwargs)
 
 
+def test_v2_sidecar_load_converts_decoder_recursion_to_controlled_error(
+    tmp_path: Path,
+) -> None:
+    kwargs = _v2_assembly_kwargs(tmp_path)
+    kwargs["object_sidecar"].write_text("[" * 1500 + "0" + "]" * 1500)
+
+    with pytest.raises(ValueError, match="nesting limit|RecursionError"):
+        backend_trace_assembler.load_correlated_v2_sidecars(
+            kwargs["object_sidecar"],
+            kwargs["pcode_sidecar"],
+            function="target",
+        )
+
+
+def test_v2_assembler_converts_deep_sidecar_derivation_to_controlled_error(
+    tmp_path: Path,
+) -> None:
+    kwargs = _v2_assembly_kwargs(tmp_path)
+    object_sidecar = kwargs["object_sidecar"]
+    payload = json.loads(object_sidecar.read_text(encoding="utf-8"))
+    nested: object = 0
+    for _ in range(500):
+        nested = [nested]
+    payload["events"][0]["proof"]["deep"] = nested
+    object_sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="nesting limit"):
+        backend_trace_assembler.assemble_candidate_trace_v2(**kwargs)
+
+
 @pytest.mark.parametrize(
     ("outer_path", "capture_field", "replacement", "message"),
     [

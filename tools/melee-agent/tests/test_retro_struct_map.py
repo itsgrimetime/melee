@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
@@ -11,6 +13,15 @@ from tools.mwcc_retro import struct_map  # noqa: E402
 
 def _load_gc125n_table():
     return json.loads((REPO / "tools/mwcc_retro/tables/gc_125n.json").read_text())
+
+
+def test_json_materialization_converts_deep_recursion_to_controlled_error():
+    nested: object = 0
+    for _ in range(1500):
+        nested = [nested]
+
+    with pytest.raises(ValueError, match="nesting limit"):
+        struct_map.materialize_json_safe(nested)
 
 
 def test_live_gc125n_table_satisfies_required_backend_map_gate():

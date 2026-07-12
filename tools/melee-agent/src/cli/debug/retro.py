@@ -269,10 +269,18 @@ def _write_backend_v2_outputs(
     # replaced with different bytes. A retry may reuse an identical artifact.
     if candidate_path.exists() and candidate_path.read_bytes() != candidate_bytes:
         raise RuntimeError("candidate-object.o is immutable and already contains different bytes")
+    created_out_dir = not out_dir.exists()
     out_dir.mkdir(parents=True, exist_ok=True)
+    if created_out_dir:
+        # Persist the new directory entry before any artifact publication, then
+        # persist the empty directory itself as the transaction container.
+        _fsync_directory(out_dir.parent)
+        _fsync_directory(out_dir)
     created_candidate = not candidate_path.exists()
+    prior_trace_bytes = trace_path.read_bytes() if trace_path.exists() else None
     candidate_stage: Path | None = None
     trace_stage: Path | None = None
+    trace_backup: Path | None = None
     candidate_published = False
     trace_published = False
     try:
@@ -280,6 +288,12 @@ def _write_backend_v2_outputs(
         # replaced, so no trace can refer to a partially written candidate.
         candidate_stage = _stage_bytes(candidate_path, candidate_bytes)
         trace_stage = _stage_bytes(trace_path, encoded_trace)
+        if prior_trace_bytes is not None:
+            trace_backup = _stage_bytes(
+                out_dir / "backend-trace.v2.rollback",
+                prior_trace_bytes,
+            )
+            _fsync_directory(out_dir)
         if created_candidate:
             os.replace(candidate_stage, candidate_path)
             candidate_stage = None
@@ -291,30 +305,81 @@ def _write_backend_v2_outputs(
         _fsync_directory(out_dir)
     except Exception as original:
         rollback_errors: list[str] = []
-        if candidate_published and not trace_published:
-            try:
-                candidate_path.unlink(missing_ok=True)
-            except Exception as exc:  # noqa: BLE001 - preserve rollback diagnostics
-                rollback_errors.append(str(exc))
+        preserve_backup = False
+        if trace_published:
+            if trace_backup is not None:
+                try:
+                    os.replace(trace_backup, trace_path)
+                    trace_backup = None
+                except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                    preserve_backup = True
+                    rollback_errors.append(f"restore trace replace failed: {exc}")
+            else:
+                try:
+                    trace_path.unlink(missing_ok=True)
+                except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                    rollback_errors.append(f"remove new trace failed: {exc}")
             try:
                 _fsync_directory(out_dir)
-            except Exception as exc:  # noqa: BLE001 - preserve rollback diagnostics
-                rollback_errors.append(str(exc))
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"restore trace directory fsync failed: {exc}")
+
+        if candidate_published:
+            try:
+                candidate_path.unlink(missing_ok=True)
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"remove new candidate failed: {exc}")
+            try:
+                _fsync_directory(out_dir)
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"candidate rollback directory fsync failed: {exc}")
+
+        cleanup_attempted = False
+        for label, temporary in (
+            ("candidate stage", candidate_stage),
+            ("trace stage", trace_stage),
+            ("trace backup", None if preserve_backup else trace_backup),
+        ):
+            if temporary is None:
+                continue
+            cleanup_attempted = True
+            try:
+                temporary.unlink(missing_ok=True)
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"remove {label} failed: {exc}")
+        if cleanup_attempted:
+            try:
+                _fsync_directory(out_dir)
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"rollback cleanup directory fsync failed: {exc}")
+
         if rollback_errors:
             raise RuntimeError(
                 f"v2 publication failed: {original}; rollback failed: "
                 + "; ".join(rollback_errors)
             ) from original
         raise
-    finally:
-        for temporary in (candidate_stage, trace_stage):
-            if temporary is not None:
-                try:
-                    temporary.unlink(missing_ok=True)
-                except OSError:
-                    # Never hide the publication or rollback exception with
-                    # best-effort staging cleanup.
-                    pass
+
+    cleanup_errors: list[str] = []
+    for label, temporary in (
+        ("candidate stage", candidate_stage),
+        ("trace backup", trace_backup),
+    ):
+        if temporary is None:
+            continue
+        try:
+            temporary.unlink(missing_ok=True)
+        except Exception as exc:  # noqa: BLE001 - published pair remains valid
+            cleanup_errors.append(f"remove {label} failed: {exc}")
+    try:
+        _fsync_directory(out_dir)
+    except Exception as exc:  # noqa: BLE001 - published pair remains valid
+        cleanup_errors.append(f"publication cleanup directory fsync failed: {exc}")
+    if cleanup_errors:
+        raise RuntimeError(
+            "v2 publication committed but cleanup failed: "
+            + "; ".join(cleanup_errors)
+        )
     return verification
 
 

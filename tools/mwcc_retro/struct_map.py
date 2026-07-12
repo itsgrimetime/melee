@@ -232,7 +232,10 @@ def materialize_json_safe(value: object) -> object:
         finally:
             active.remove(marker)
 
-    return visit(value, "$")
+    try:
+        return visit(value, "$")
+    except RecursionError as exc:
+        raise ValueError("$ exceeds the supported JSON nesting limit") from exc
 
 
 def validate_instrumentation_proof_registry(table: object) -> list[str]:

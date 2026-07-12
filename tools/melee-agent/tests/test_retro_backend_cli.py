@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from src.cli import app
@@ -616,7 +617,195 @@ def test_backend_candidate_v2_fsyncs_directory_after_both_durable_replaces(
     )
 
     assert result.exit_code == 0, result.output
-    assert calls == [out, out]
+    assert calls == [out.parent, out, out, out, out]
+
+
+def test_backend_candidate_v2_final_fsync_failure_restores_prior_trace_and_candidate(
+    monkeypatch, tmp_path
+):
+    import src.cli.debug.retro as retro
+
+    assembly, staging, table = _synthetic_v2_assembly(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    trace_path = out / "backend-trace.v2.json"
+    old_trace = b"old-trace\n"
+    trace_path.write_bytes(old_trace)
+    failed = False
+
+    def fail_final_fsync(path):
+        nonlocal failed
+        if path == out and trace_path.read_bytes() != old_trace and not failed:
+            failed = True
+            raise OSError("final directory fsync failed")
+
+    monkeypatch.setattr(retro, "_fsync_directory", fail_final_fsync)
+    monkeypatch.setattr(retro, "_load_backend_v2_struct_map", lambda _root: table)
+
+    with pytest.raises(OSError, match="final directory fsync failed"):
+        retro._write_backend_v2_outputs(
+            out,
+            assembly.payload,
+            staging,
+            function="target",
+            melee_root=tmp_path,
+        )
+
+    assert failed
+    assert trace_path.read_bytes() == old_trace
+    assert not (out / "candidate-object.o").exists()
+
+
+def test_backend_candidate_v2_final_fsync_failure_removes_new_pair(
+    monkeypatch, tmp_path
+):
+    import src.cli.debug.retro as retro
+
+    assembly, staging, table = _synthetic_v2_assembly(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    trace_path = out / "backend-trace.v2.json"
+    failed = False
+
+    def fail_final_fsync(path):
+        nonlocal failed
+        if path == out and trace_path.exists() and not failed:
+            failed = True
+            raise OSError("final directory fsync failed")
+
+    monkeypatch.setattr(retro, "_fsync_directory", fail_final_fsync)
+    monkeypatch.setattr(retro, "_load_backend_v2_struct_map", lambda _root: table)
+
+    with pytest.raises(OSError, match="final directory fsync failed"):
+        retro._write_backend_v2_outputs(
+            out,
+            assembly.payload,
+            staging,
+            function="target",
+            melee_root=tmp_path,
+        )
+
+    assert failed
+    assert not trace_path.exists()
+    assert not (out / "candidate-object.o").exists()
+
+
+def test_backend_candidate_v2_combines_all_post_replace_rollback_failures(
+    monkeypatch, tmp_path
+):
+    import src.cli.debug.retro as retro
+
+    assembly, staging, table = _synthetic_v2_assembly(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    trace_path = out / "backend-trace.v2.json"
+    trace_path.write_bytes(b"old-trace\n")
+    original_replace = retro.os.replace
+    replace_trace_calls = 0
+    fsync_calls = 0
+
+    def fail_restore_replace(source, destination):
+        nonlocal replace_trace_calls
+        if Path(destination) == trace_path:
+            replace_trace_calls += 1
+            if replace_trace_calls == 2:
+                raise OSError("restore trace replace failed")
+        original_replace(source, destination)
+
+    def fail_final_and_restore_fsync(path):
+        nonlocal fsync_calls
+        if path == out:
+            fsync_calls += 1
+            if fsync_calls == 3:
+                raise OSError("final directory fsync failed")
+            if fsync_calls == 4:
+                raise OSError("restore directory fsync failed")
+
+    original_unlink = Path.unlink
+
+    def fail_candidate_unlink(path, *args, **kwargs):
+        if path.name == "candidate-object.o":
+            raise OSError("candidate unlink failed")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(retro.os, "replace", fail_restore_replace)
+    monkeypatch.setattr(retro, "_fsync_directory", fail_final_and_restore_fsync)
+    monkeypatch.setattr(Path, "unlink", fail_candidate_unlink)
+    monkeypatch.setattr(retro, "_load_backend_v2_struct_map", lambda _root: table)
+
+    with pytest.raises(RuntimeError) as raised:
+        retro._write_backend_v2_outputs(
+            out,
+            assembly.payload,
+            staging,
+            function="target",
+            melee_root=tmp_path,
+        )
+
+    message = str(raised.value)
+    assert "final directory fsync failed" in message
+    assert "restore trace replace failed" in message
+    assert "restore directory fsync failed" in message
+    assert "candidate unlink failed" in message
+
+
+def test_backend_candidate_v2_success_cleans_backup_and_fsyncs_cleanup(
+    monkeypatch, tmp_path
+):
+    import src.cli.debug.retro as retro
+
+    assembly, staging, table = _synthetic_v2_assembly(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "backend-trace.v2.json").write_bytes(b"old-trace\n")
+    calls: list[Path] = []
+    monkeypatch.setattr(retro, "_fsync_directory", lambda path: calls.append(path))
+    monkeypatch.setattr(retro, "_load_backend_v2_struct_map", lambda _root: table)
+
+    retro._write_backend_v2_outputs(
+        out,
+        assembly.payload,
+        staging,
+        function="target",
+        melee_root=tmp_path,
+    )
+
+    assert calls == [out, out, out, out]
+    assert not list(out.glob(".*.tmp"))
+
+
+def test_backend_candidate_v2_reports_cleanup_failure_with_valid_final_pair(
+    monkeypatch, tmp_path
+):
+    import src.cli.debug.retro as retro
+
+    assembly, staging, table = _synthetic_v2_assembly(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "backend-trace.v2.json").write_bytes(b"old-trace\n")
+    original_unlink = Path.unlink
+
+    def fail_backup_cleanup(path, *args, **kwargs):
+        if "rollback" in path.name:
+            raise OSError("backup cleanup failed")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_backup_cleanup)
+    monkeypatch.setattr(retro, "_load_backend_v2_struct_map", lambda _root: table)
+
+    with pytest.raises(RuntimeError, match="committed but cleanup failed.*backup cleanup failed"):
+        retro._write_backend_v2_outputs(
+            out,
+            assembly.payload,
+            staging,
+            function="target",
+            melee_root=tmp_path,
+        )
+
+    assert (out / "candidate-object.o").read_bytes() == staging.read_bytes()
+    assert json.loads((out / "backend-trace.v2.json").read_text())["schema_version"] == (
+        "mwcc-retro-backend-trace.v2"
+    )
 
 
 def test_probe_backend_map_command_writes_probe_without_backend_trace(monkeypatch, tmp_path):

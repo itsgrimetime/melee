@@ -37,6 +37,8 @@ class CorrelatedV2Sidecars:
 def _load_sidecar(path: Path, *, schema_version: str, label: str) -> dict[str, Any]:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except RecursionError as exc:
+        raise ValueError(f"{label} sidecar exceeds the JSON nesting limit") from exc
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} sidecar could not be read: {type(exc).__name__}") from exc
     if type(payload) is not dict:
@@ -130,10 +132,15 @@ def load_correlated_v2_sidecars(
     )
     object_attempt = object_payload["capture_attempt"]
     pcode_attempt = pcode_payload["capture_attempt"]
+    object_attempt_id = _validate_attempt(object_attempt, function=function)
+    pcode_attempt_id = _validate_attempt(pcode_attempt, function=function)
     if object_attempt != pcode_attempt:
         raise ValueError("object/PCode capture attempt mismatch")
-    attempt_id = _validate_attempt(object_attempt, function=function)
-    return CorrelatedV2Sidecars(attempt_id, object_payload, pcode_payload)
+    if object_attempt_id != pcode_attempt_id:
+        raise ValueError("object/PCode capture attempt ID mismatch")
+    return CorrelatedV2Sidecars(
+        object_attempt_id, object_payload, pcode_payload
+    )
 
 
 _OBJECT_RECORD_EVENTS = {
@@ -367,13 +374,18 @@ def assemble_candidate_trace_v2(
     sidecars = load_correlated_v2_sidecars(
         object_sidecar, pcode_sidecar, function=function
     )
-    derived = backend_events.canonicalize_v2_object_bindings(
-        _derive_sidecar_object_bindings(sidecars)
-    )
-    supplied = copy.deepcopy(object_bindings)
-    supplied.pop("capture_identity", None)
-    supplied.pop("capture_run_id", None)
-    supplied = backend_events.canonicalize_v2_object_bindings(supplied)
+    try:
+        derived = backend_events.canonicalize_v2_object_bindings(
+            _derive_sidecar_object_bindings(sidecars)
+        )
+        supplied = copy.deepcopy(object_bindings)
+        supplied.pop("capture_identity", None)
+        supplied.pop("capture_run_id", None)
+        supplied = backend_events.canonicalize_v2_object_bindings(supplied)
+    except RecursionError as exc:
+        raise ValueError(
+            "sidecar binding derivation exceeds the supported nesting limit"
+        ) from exc
     if supplied != derived:
         raise ValueError("sidecar-derived object_bindings mismatch")
 
