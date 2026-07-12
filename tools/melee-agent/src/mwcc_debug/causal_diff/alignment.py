@@ -165,6 +165,16 @@ class BackendOwnerPath:
     def capture_run_id(self) -> str:
         return self.evidence.capture_run_id
 
+    def semantic_state(self, role: BackendOwnerRoleTuple) -> Mapping[str, object]:
+        """Project only cross-capture allocator/frame facts from this exact path."""
+
+        return {
+            "role_tuple": role.values(),
+            "assigned_physical_register": self.allocator.attributes.get("assigned_phys"),
+            "stack_offset": self.stack.attributes.get("offset"),
+            "stack_size": self.stack.attributes.get("size"),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class BackendOwnerCandidate:
@@ -358,6 +368,12 @@ def backend_owner_correspondences(
             *candidate.left.supporting_records,
             *candidate.right.supporting_records,
         )
+        left_path_proof_complete = all(
+            exact_owner_path_record(candidate.left.evidence, record) for record in candidate.left.supporting_records
+        )
+        right_path_proof_complete = all(
+            exact_owner_path_record(candidate.right.evidence, record) for record in candidate.right.supporting_records
+        )
         confidence = min_confidence(*(record.confidence for record in inputs)) if unique else Confidence.HEURISTIC
         comparisons.append(
             ComparisonRecord.create(
@@ -383,8 +399,12 @@ def backend_owner_correspondences(
                 occurrence_ordinal=ordinal,
                 attributes={
                     "role_tuple": candidate.role_tuple.values(),
+                    "left_semantic_state": candidate.left.semantic_state(candidate.role_tuple),
+                    "right_semantic_state": candidate.right.semantic_state(candidate.role_tuple),
                     "alternative_count": len(candidates),
-                    "proof_complete": unique,
+                    "left_path_proof_complete": left_path_proof_complete,
+                    "right_path_proof_complete": right_path_proof_complete,
+                    "proof_complete": unique and left_path_proof_complete and right_path_proof_complete,
                     "scope": "analysis",
                 },
             )
@@ -593,7 +613,6 @@ def _verified_retail_local_role(
     if evidence is None or not proof_complete(evidence):
         return None, AbstentionReason.MISSING_BACKEND_ROLE
     nodes = {node.record_id: node for node in evidence.nodes}
-    proof_confidences = {Confidence.OBSERVED, Confidence.DERIVED_UNIQUE}
 
     def edges(kind: str, source_id: str) -> tuple[EvidenceEdge, ...]:
         return tuple(
@@ -602,9 +621,7 @@ def _verified_retail_local_role(
             if edge.kind == kind
             and edge.source_id == source_id
             and edge.target_id in nodes
-            and edge.confidence in proof_confidences
-            and edge.provenance.parser == "mwcc-retro-backend-trace.v2"
-            and edge.attributes.get("capture_run_id") == evidence.capture_run_id
+            and exact_owner_path_record(evidence, edge)
         )
 
     alternatives: dict[str, list[_LocalRoleResolution]] = {}
@@ -614,6 +631,7 @@ def _verified_retail_local_role(
         if node.kind == "assembly-operand-anchor"
         and node.attributes.get("code_offset") == retail_offset
         and node.attributes.get("machine_operand_key") == role.key
+        and exact_owner_path_record(evidence, node)
     )
     class_id = 1 if role.register_kind == "f" else 0
     for anchor in anchors:
@@ -642,6 +660,14 @@ def _verified_retail_local_role(
                             allocator,
                             *supporting,
                         )
+                        selected_v2_path = tuple(record for record in chain if record is not candidate)
+                        if not all(
+                            exact_owner_path_record(evidence, record) for record in selected_v2_path
+                        ) or not proof_complete(
+                            evidence,
+                            frozenset(record.record_id for record in selected_v2_path),
+                        ):
+                            continue
                         alternatives.setdefault(allocator.record_id, []).append(
                             _LocalRoleResolution(
                                 node=allocator,

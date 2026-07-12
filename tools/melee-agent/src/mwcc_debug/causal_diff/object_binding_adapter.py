@@ -78,6 +78,24 @@ _OWNER_EDGE_SCHEMAS = {
         frozenset({"stack-object"}),
     ),
 }
+_EXACT_V2_OWNER_EDGE_KINDS = frozenset(_OWNER_EDGE_SCHEMAS)
+_SUPPORT_CAPABILITIES = {
+    "object-stage-snapshot": _COMPILER_OBJECT,
+    "pcode-generation": _PCODE_RANGE,
+    "pcode-code-range": _PCODE_RANGE,
+    "pcode-emission": _PCODE_RANGE,
+    "pcode-rewrite": _PCODE_RANGE,
+    "pcode-lineage-event": _PCODE_RANGE,
+    "object-virtual-binding": _OBJECT_VIRTUAL,
+    "object-frame-binding": _OBJECT_FRAME,
+}
+_REQUIRED_EDGE_SUPPORT_KINDS = {
+    "assembly-anchor-emitted-by-pcode": frozenset({"pcode-generation", "pcode-code-range", "pcode-emission"}),
+    "pcode-operand-uses-virtual": frozenset({"pcode-rewrite"}),
+    "object-materializes-virtual": frozenset({"object-virtual-binding"}),
+    "maps-to-allocator-node": frozenset({"object-virtual-binding"}),
+    "object-has-stack-home": frozenset({"object-frame-binding"}),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -934,7 +952,10 @@ def adapt_object_bindings(bundle: ValidatedBundle) -> ObjectBindingEvidence:
     )
 
 
-def proof_complete(evidence: ObjectBindingEvidence) -> bool:
+def proof_complete(
+    evidence: ObjectBindingEvidence,
+    required_record_ids: frozenset[str] = frozenset(),
+) -> bool:
     """Require every positive same-run owner segment and its exact capability."""
 
     if not _REQUIRED_OWNER_CAPABILITIES <= evidence.capabilities:
@@ -987,22 +1008,41 @@ def proof_complete(evidence: ObjectBindingEvidence) -> bool:
                 )
                 for object_edge in object_edges:
                     owner = nodes.get(object_edge.source_id)
-                    valid_allocators = tuple(nodes.get(edge.target_id) for edge in allocator_edges)
                     frame_edges = tuple(
                         frame_edge
                         for frame_edge in by_kind["object-has-stack-home"]
                         if frame_edge.source_id == object_edge.source_id
                     )
-                    valid_stacks = tuple(nodes.get(edge.target_id) for edge in frame_edges)
-                    if (
-                        owner is not None
-                        and exact_owner_path_record(evidence, owner)
-                        and any(
-                            node is not None and exact_owner_path_record(evidence, node) for node in valid_allocators
-                        )
-                        and any(node is not None and exact_owner_path_record(evidence, node) for node in valid_stacks)
-                    ):
-                        return True
+                    if owner is None or not exact_owner_path_record(evidence, owner):
+                        continue
+                    for allocator_edge in allocator_edges:
+                        allocator = nodes.get(allocator_edge.target_id)
+                        if allocator is None or not exact_owner_path_record(evidence, allocator):
+                            continue
+                        for frame_edge in frame_edges:
+                            stack = nodes.get(frame_edge.target_id)
+                            if stack is None or not exact_owner_path_record(evidence, stack):
+                                continue
+                            path_record_ids = {
+                                record.record_id
+                                for record in (
+                                    anchor,
+                                    anchor_edge,
+                                    pcode,
+                                    lineage_edge,
+                                    lineage,
+                                    virtual_edge,
+                                    virtual,
+                                    object_edge,
+                                    owner,
+                                    allocator_edge,
+                                    allocator,
+                                    frame_edge,
+                                    stack,
+                                )
+                            }
+                            if required_record_ids <= path_record_ids:
+                                return True
     return False
 
 
@@ -1013,26 +1053,112 @@ def exact_owner_path_record(
     """Validate one compile-local v2 ownership record at the shared trust gate."""
 
     records = (*evidence.nodes, *evidence.edges)
+    registered = {item.record_id: item for item in records}
+    if registered.get(record.record_id) != record:
+        return False
     scopes = {(item.compile_id, item.function) for item in records}
+    artifacts = {item.provenance.artifact_sha256 for item in records}
     if len(scopes) != 1 or (record.compile_id, record.function) not in scopes:
         return False
     if (
-        record.confidence not in _PROOF_CONFIDENCES
+        len(artifacts) != 1
+        or record.provenance.artifact_sha256 not in artifacts
+        or record.producer_confidence not in _PROOF_CONFIDENCES
+        or record.adapter_confidence not in _PROOF_CONFIDENCES
+        or record.confidence not in _PROOF_CONFIDENCES
         or record.provenance.parser != _PARSER
         or record.attributes.get("capture_run_id") != evidence.capture_run_id
     ):
         return False
     nodes = {node.record_id: node for node in evidence.nodes}
     all_record_ids = {item.record_id for item in records}
+
+    def exact_support_record(
+        support: EvidenceNode,
+        dependent: EvidenceNode | EvidenceEdge,
+    ) -> bool:
+        support_kind = support.attributes.get("support_kind")
+        capability = _SUPPORT_CAPABILITIES.get(support_kind)
+        contexts = [dependent.attributes]
+        if isinstance(dependent, EvidenceEdge):
+            contexts.extend(
+                endpoint.attributes
+                for endpoint_id in (dependent.source_id, dependent.target_id)
+                if (endpoint := nodes.get(endpoint_id)) is not None
+            )
+        shared_semantic_keys = {
+            "object_id",
+            "pcode_id",
+            "operand_lineage_id",
+            "machine_operand_key",
+            "class_id",
+            "virtual",
+            "ig_id",
+            "area",
+            "semantic_stack_role",
+        }
+        support_matches_topology = all(
+            not (expected := tuple(context[key] for context in contexts if key in context))
+            or any(support.attributes[key] == value for value in expected)
+            for key in shared_semantic_keys
+            if key in support.attributes
+        )
+        final_offset = support.attributes.get("final_r1_offset")
+        stack_offsets = tuple(context["offset"] for context in contexts if "offset" in context)
+        support_matches_topology = support_matches_topology and (
+            final_offset is None or not stack_offsets or any(final_offset == value for value in stack_offsets)
+        )
+        return (
+            support.kind == "backend-support-record"
+            and capability is not None
+            and capability in evidence.capabilities
+            and support.attributes.get("verified_capability") == capability
+            and support.producer_confidence in _PROOF_CONFIDENCES
+            and support.adapter_confidence in _PROOF_CONFIDENCES
+            and support.confidence in _PROOF_CONFIDENCES
+            and support.provenance.parser == _PARSER
+            and support.compile_id == dependent.compile_id
+            and support.function == dependent.function
+            and support.attributes.get("capture_run_id") == evidence.capture_run_id
+            and support.provenance.artifact_sha256 == dependent.provenance.artifact_sha256
+            and not support.provenance.input_record_ids
+            and support_matches_topology
+        )
+
+    def cited_support(
+        dependent: EvidenceNode | EvidenceEdge,
+        excluded_ids: frozenset[str] = frozenset(),
+    ) -> tuple[EvidenceNode, ...] | None:
+        selected: list[EvidenceNode] = []
+        for input_id in dependent.provenance.input_record_ids:
+            if input_id in excluded_ids:
+                continue
+            support = registered.get(input_id)
+            if not isinstance(support, EvidenceNode) or not exact_support_record(support, dependent):
+                return None
+            selected.append(support)
+        return tuple(selected)
+
     if isinstance(record, EvidenceNode):
         capability = _OWNER_NODE_CAPABILITIES.get(record.kind)
-        return capability is not None and capability in evidence.capabilities
+        support = cited_support(record)
+        return capability is not None and capability in evidence.capabilities and support is not None
     schema = _OWNER_EDGE_SCHEMAS.get(record.kind)
     if schema is None:
         return False
     capability, source_kinds, target_kinds = schema
     source = nodes.get(record.source_id)
     target = nodes.get(record.target_id)
+    endpoint_ids = frozenset({record.source_id, record.target_id})
+    support = cited_support(record, endpoint_ids)
+    support_kinds = (
+        frozenset() if support is None else frozenset(item.attributes.get("support_kind") for item in support)
+    )
+    required_support = _REQUIRED_EDGE_SUPPORT_KINDS.get(record.kind, frozenset())
+    if record.kind == "pcode-operand-lineage":
+        required_support = frozenset(
+            {"pcode-emission"} if source is not None and source.kind == "retail-pcode" else {"pcode-lineage-event"}
+        )
     return (
         capability in evidence.capabilities
         and source is not None
@@ -1043,6 +1169,29 @@ def exact_owner_path_record(
         and exact_owner_path_record(evidence, target)
         and {source.record_id, target.record_id}.issubset(record.provenance.input_record_ids)
         and set(record.provenance.input_record_ids) <= all_record_ids
+        and support is not None
+        and required_support <= support_kinds
+    )
+
+
+def owner_edge_requires_exact_v2(
+    evidence: ObjectBindingEvidence | None,
+    edge: EvidenceEdge,
+) -> bool:
+    """Identify v2 ownership edges, including untagged maps into v2 nodes."""
+
+    if edge.kind not in _EXACT_V2_OWNER_EDGE_KINDS:
+        return False
+    if edge.kind != "maps-to-allocator-node":
+        return True
+    if evidence is None:
+        return False
+    registered_node_ids = {node.record_id for node in evidence.nodes}
+    return (
+        edge.provenance.parser == _PARSER
+        or "capture_run_id" in edge.attributes
+        or edge.source_id in registered_node_ids
+        or edge.target_id in registered_node_ids
     )
 
 
@@ -1080,5 +1229,6 @@ __all__ = [
     "derive_backend_frame_recommendation",
     "emit_object_binding_evidence",
     "exact_owner_path_record",
+    "owner_edge_requires_exact_v2",
     "proof_complete",
 ]

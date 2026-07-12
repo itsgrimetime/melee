@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Iterable, Mapping
 
 from .canonical import canonical_bytes
@@ -9,6 +10,15 @@ from .graph import FrontierGraph
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance
 
 _PARSER_VERSION = "causal-frontier-differ.v1"
+_OWNER_ALIGNMENT_PARSER = "causal-backend-owner-alignment.v1"
+_OWNER_SEMANTIC_STATE_KEYS = frozenset(
+    {
+        "role_tuple",
+        "assigned_physical_register",
+        "stack_offset",
+        "stack_size",
+    }
+)
 _MATERIAL_NODE_KINDS = frozenset(
     {
         "allocator-node",
@@ -56,6 +66,10 @@ def _canonical_value(value: object) -> object:
 
 def _same_attributes(left: Mapping[str, object], right: Mapping[str, object]) -> bool:
     return canonical_bytes(_canonical_value(left)) == canonical_bytes(_canonical_value(right))
+
+
+def _verified_owner_semantic_state(value: object) -> bool:
+    return isinstance(value, Mapping) and frozenset(value) == _OWNER_SEMANTIC_STATE_KEYS
 
 
 def _unique_role_pairs(
@@ -136,23 +150,65 @@ def diff_frontiers(
     left_by_id = {node.record_id: node for node in left_nodes}
     right_by_id = {node.record_id: node for node in right_nodes}
     aligned: dict[str, str] = {}
+    owner_semantic_states: dict[tuple[str, str], tuple[object, object]] = {}
+    all_owner_comparisons = tuple(
+        comparison for comparison in comparison_records if comparison.relation_kind == "backend-owner-corresponds-to"
+    )
+    owner_comparisons = tuple(
+        comparison
+        for comparison in all_owner_comparisons
+        if comparison.confidence in {Confidence.OBSERVED, Confidence.DERIVED_UNIQUE}
+        and comparison.provenance.parser == _OWNER_ALIGNMENT_PARSER
+        and comparison.attributes.get("alternative_count") == 1
+        and comparison.attributes.get("proof_complete") is True
+        and comparison.attributes.get("left_path_proof_complete") is True
+        and comparison.attributes.get("right_path_proof_complete") is True
+        and _verified_owner_semantic_state(comparison.attributes.get("left_semantic_state"))
+        and _verified_owner_semantic_state(comparison.attributes.get("right_semantic_state"))
+    )
+    left_owner_counts = Counter(comparison.left_record_id for comparison in all_owner_comparisons)
+    right_owner_counts = Counter(comparison.right_record_id for comparison in all_owner_comparisons)
+    accepted_owner_ids = {
+        comparison.record_id
+        for comparison in owner_comparisons
+        if left_owner_counts[comparison.left_record_id] == 1 and right_owner_counts[comparison.right_record_id] == 1
+    }
     for comparison in comparison_records:
         if comparison.relation_kind not in {
             "role-corresponds-to",
             "backend-owner-corresponds-to",
         }:
             continue
+        if (
+            comparison.relation_kind == "backend-owner-corresponds-to"
+            and comparison.record_id not in accepted_owner_ids
+        ):
+            continue
         if comparison.left_record_id in left_by_id and comparison.right_record_id in right_by_id:
             aligned[comparison.left_record_id] = comparison.right_record_id
+            if comparison.relation_kind == "backend-owner-corresponds-to":
+                owner_semantic_states[(comparison.left_record_id, comparison.right_record_id)] = (
+                    comparison.attributes.get("left_semantic_state"),
+                    comparison.attributes.get("right_semantic_state"),
+                )
     for left, right in _unique_role_pairs(left_nodes, right_nodes):
         aligned.setdefault(left.record_id, right.record_id)
 
     deltas: list[ComparisonRecord] = []
     ordinal = 0
     aligned_right = set(aligned.values())
+    unaligned_left_owners = {
+        node.record_id for node in left_nodes if node.kind == "compiler-object" and node.record_id not in aligned
+    }
+    unaligned_right_owners = {
+        node.record_id for node in right_nodes if node.kind == "compiler-object" and node.record_id not in aligned_right
+    }
     for left_id, right_id in sorted(aligned.items()):
         left, right = left_by_id[left_id], right_by_id[right_id]
-        if left.kind == right.kind and _same_attributes(left.attributes, right.attributes):
+        owner_states = owner_semantic_states.get((left_id, right_id))
+        compared_left = left.attributes if owner_states is None else owner_states[0]
+        compared_right = right.attributes if owner_states is None else owner_states[1]
+        if left.kind == right.kind and _same_attributes(compared_left, compared_right):
             continue
         deltas.append(
             _delta(
@@ -165,14 +221,17 @@ def diff_frontiers(
                 attributes={
                     "kind": left.kind,
                     "role_key": left.role_key or right.role_key,
-                    "left_attributes": left.attributes,
-                    "right_attributes": right.attributes,
+                    "left_attributes": compared_left,
+                    "right_attributes": compared_right,
                 },
                 ordinal=ordinal,
             )
         )
         ordinal += 1
-    for left in sorted((node for node in left_nodes if node.record_id not in aligned), key=lambda node: node.record_id):
+    for left in sorted(
+        (node for node in left_nodes if node.record_id not in aligned and node.record_id not in unaligned_left_owners),
+        key=lambda node: node.record_id,
+    ):
         deltas.append(
             _delta(
                 analysis_id=analysis_id,
@@ -187,7 +246,12 @@ def diff_frontiers(
         )
         ordinal += 1
     for right in sorted(
-        (node for node in right_nodes if node.record_id not in aligned_right), key=lambda node: node.record_id
+        (
+            node
+            for node in right_nodes
+            if node.record_id not in aligned_right and node.record_id not in unaligned_right_owners
+        ),
+        key=lambda node: node.record_id,
     ):
         deltas.append(
             _delta(
@@ -214,6 +278,8 @@ def diff_frontiers(
         right_edge_index.setdefault((edge.kind, edge.source_id, edge.target_id), []).append(edge)
     matched_right_edges: set[str] = set()
     for left in left_edges:
+        if {left.source_id, left.target_id} & unaligned_left_owners:
+            continue
         mapped_source = aligned.get(left.source_id)
         mapped_target = aligned.get(left.target_id)
         if mapped_source is None or mapped_target is None:
@@ -278,6 +344,8 @@ def diff_frontiers(
             ordinal += 1
     for right in right_edges:
         if right.record_id in matched_right_edges:
+            continue
+        if {right.source_id, right.target_id} & unaligned_right_owners:
             continue
         missing_endpoints = tuple(
             endpoint for endpoint in (right.source_id, right.target_id) if endpoint in unaligned_right_material

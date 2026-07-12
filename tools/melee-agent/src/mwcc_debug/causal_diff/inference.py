@@ -11,7 +11,11 @@ from .canonical import canonical_bytes, stable_id
 from .effects import DerivedEffects, EffectPair
 from .graph import FrontierGraph
 from .models import AdapterResult, ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode
-from .object_binding_adapter import ObjectBindingEvidence, exact_owner_path_record
+from .object_binding_adapter import (
+    ObjectBindingEvidence,
+    exact_owner_path_record,
+    owner_edge_requires_exact_v2,
+)
 from .store import EvidenceQuery
 
 _PATH_EDGE_KINDS = frozenset(
@@ -327,18 +331,8 @@ def _all_simple_paths(
         nonlocal truncated
         neighbors: list[tuple[str, EvidenceEdge]] = []
         for edge in query.neighbors(node_id, _PATH_EDGE_KINDS, "both"):
-            if (
-                edge.kind
-                in {
-                    "assembly-anchor-emitted-by-pcode",
-                    "pcode-operand-lineage",
-                    "pcode-operand-uses-virtual",
-                    "object-materializes-virtual",
-                    "object-has-stack-home",
-                }
-                or "capture_run_id" in edge.attributes
-            ):
-                evidence = (owner_evidence_by_compile or {}).get(edge.compile_id)
+            evidence = (owner_evidence_by_compile or {}).get(edge.compile_id)
+            if owner_edge_requires_exact_v2(evidence, edge):
                 if evidence is None or not exact_owner_path_record(evidence, edge):
                     continue
             other = edge.target_id if edge.source_id == node_id else edge.source_id
