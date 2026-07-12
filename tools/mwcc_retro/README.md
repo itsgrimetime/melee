@@ -78,6 +78,10 @@ melee-agent debug retro backend-candidate src/melee/lb/lb_00B0.c -f lb_8000CE30
 # One-pass candidate diagnostic hook; still writes only candidate outputs
 melee-agent debug retro backend-candidate src/melee/lb/lb_00B0.c -f lb_8000CE30 --one-pass
 
+# Proof-bearing v2 request (currently strict-abstains; see below)
+melee-agent debug retro backend-candidate src/melee/lb/lb_00B0.c -f lb_8000CE30 \
+  --one-pass --trace-version v2
+
 # Compare a full or candidate backend trace with an existing mwcc-debug pcdump
 melee-agent debug retro verify-backend src/melee/lb/lb_00B0.c -f lb_8000CE30 --debug-pcdump pcdump.txt
 
@@ -100,6 +104,9 @@ Output goes to `build/mwcc_retro/<unit>/<fn>/`:
 | `backend-events.v1.jsonl` | Raw retail backend/regalloc events | GC/1.2.5n backend (`debug retro backend`) |
 | `backend-onepass-summary.json` | Hook completeness summary and warnings | GC/1.2.5n backend (`debug retro backend`) |
 | `backend-trace.v1.json` | Stable PCode, frame, and allocator facts | GC/1.2.5n backend (`debug retro backend`) |
+| `backend-trace.candidate.v1.json` | Existing diagnostic candidate contract | `backend-candidate` (default `--trace-version v1`) |
+| `backend-trace.v2.json` | Complete proof-bearing object/PCode lineage trace | `backend-candidate --one-pass --trace-version v2`, only after every trust gate passes |
+| `candidate-object.o` | Immutable raw ELF32/PowerPC candidate bound by the v2 capture identity | Published atomically with a validated v2 trace |
 | `regalloc-summary.txt` | Compact allocator summary for diffs | GC/1.2.5n backend (`debug retro backend`) |
 | `backend-summary.txt` | Human-readable backend/PCode/frame summary | GC/1.2.5n backend (`debug retro backend`) |
 | `backend-fidelity.json` / `backend-fidelity.txt` | Retail-vs-mwcc-debug comparison | `verify-backend`, `backend --verify-debug` |
@@ -110,6 +117,53 @@ Output goes to `build/mwcc_retro/<unit>/<fn>/`:
 | `variables.txt` | Stack allocation map (variable home assignments) | GC/1.1 backend (`--compiler 1.1`) |
 | `launch.log` | Emulator stdout/stderr for this run | Both |
 | `provenance.json` | Compiler identity, pinned SHAs, fidelity-gate result | Both |
+
+### Backend Trace v2 Trust Boundary
+
+`backend-candidate` defaults to the byte-for-byte compatible v1 diagnostic
+workflow. The explicit v2 form is:
+
+```bash
+melee-agent debug retro backend-candidate <src.c> -f <FUNCTION> \
+  --one-pass --trace-version v2 [-O OUT]
+```
+
+`--one-pass` is mandatory because runtime pointers, allocation generations,
+PCode virtuals, object owners, and sidecar identities may be joined only inside
+one serialized compiler process. The retrowin32 launcher already serializes
+its fixed gdb port; v2 does not merge evidence from separate processes or from
+patched-DLL pcdumps. Object and PCode sidecars must both have
+`publication_complete: true`, the exact same 128-bit capture-attempt ID, and an
+identity that names the requested function. Their producer `status` values are
+diagnostic only and never grant a capability.
+
+A successful v2 assembly finalizes `capture_identity` only after the raw
+candidate-object bytes and compiler/source/command/environment/function pins
+are available. It embeds the complete lifetime proof, recomputes the RFC 8785
+proof digest, requires the exact independently promoted GC/1.2.5n registry and
+installed-hook tuple, and then independently runs the object-binding and PCode
+lineage validators. The artifact declares only capabilities those validators
+actually return. In particular, the current object validator deliberately
+withholds `object-to-virtual` without exhaustive IG inventory/cap evidence and
+withholds `object-to-frame` without the promoted layout plus final
+PCode/assembly gate.
+
+The installed registry is presently empty and
+`backend_reader.pcode_instrumentation.validated` is false because exhaustive
+proof promotion is blocked by issues #1239 and #1240. Therefore the real v2
+command exits 2 before running a capture or replacing any artifact. It does not
+trust Task 7's diagnostic `status: complete`, synthesize a proof, write a
+partial `backend-trace.v2.json`, or replace an existing trace/candidate pair.
+The generic assembler is exercised with synthetic trusted test fixtures only.
+When promotion is eventually available, a valid pair is written as
+`backend-trace.v2.json` plus immutable, atomically published
+`candidate-object.o`; a different existing candidate is never overwritten.
+
+Phase 1 reserves source fields but requires `source_bindings: []` and
+`source_capture: null`. It never emits `object-to-source`, never joins remote
+inspector pointers to retail pointers, and ends at
+`source-object-binding-missing` whenever a causal verdict requires source
+ownership.
 
 ### Backend Map Probe
 

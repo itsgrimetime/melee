@@ -113,6 +113,41 @@ def test_jsonl_events_normalize_to_backend_trace():
     assert backend_schema.validate_backend_trace(trace) == []
 
 
+def test_event_normalizer_dispatches_exact_versions_without_changing_v1() -> None:
+    events = backend_events.load_events(FIXTURE)
+    explicit = backend_events.normalize_events(
+        events,
+        compiler=COMPILER,
+        source=SOURCE,
+        tool_version="test",
+        schema_version=backend_schema.SCHEMA_VERSION_V1,
+    )
+    implicit = backend_events.normalize_events(
+        events,
+        compiler=COMPILER,
+        source=SOURCE,
+        tool_version="test",
+    )
+    assert explicit == implicit
+
+    with pytest.raises(ValueError, match="proof-bearing v2 assembler"):
+        backend_events.normalize_events(
+            events,
+            compiler=COMPILER,
+            source=SOURCE,
+            tool_version="test",
+            schema_version=backend_schema.SCHEMA_VERSION_V2,
+        )
+    with pytest.raises(ValueError, match="unsupported backend trace schema"):
+        backend_events.normalize_events(
+            events,
+            compiler=COMPILER,
+            source=SOURCE,
+            tool_version="test",
+            schema_version="mwcc-retro-backend-trace.v3",
+        )
+
+
 def test_marker_only_events_do_not_normalize_to_complete_trace():
     with pytest.raises(ValueError, match="backend trace has no allocator classes"):
         backend_events.normalize_events(
@@ -231,3 +266,89 @@ def test_load_events_reports_invalid_json_line_number(tmp_path):
 
     with pytest.raises(ValueError, match="event line 2 invalid JSON: Expecting value"):
         backend_events.load_events(path)
+
+
+def test_v2_object_binding_collection_order_is_canonical() -> None:
+    payload = {
+        "lifecycle_events": [{"sequence": 1}, {"sequence": 0}],
+        "objects": [
+            {
+                "runtime_address": 2,
+                "allocation_generation": 1,
+                "areas": ["spill-owned", "locals"],
+                "stage_snapshots": [
+                    {"stage": "final_scheduler"},
+                    {"stage": "colorgraph_return"},
+                ],
+            },
+            {
+                "runtime_address": 1,
+                "allocation_generation": 2,
+                "areas": [],
+                "stage_snapshots": [],
+            },
+        ],
+        "virtual_bindings": [
+            {
+                "object_id": "obj-1",
+                "class_id": 0,
+                "virtual_kind": "r",
+                "virtual": 2,
+                "ig_id": 2,
+                "ignode_runtime_address": 4,
+            },
+            {
+                "object_id": "obj-0",
+                "class_id": 0,
+                "virtual_kind": "r",
+                "virtual": 1,
+                "ig_id": 1,
+                "ignode_runtime_address": 3,
+            },
+        ],
+        "frame_bindings": [],
+        "pcode_instructions": [],
+        "pcode_occurrences": [
+            {"pcode_event_sequence": 2, "pcode_id": "pc-0", "operand_index": 1},
+            {"pcode_event_sequence": 1, "pcode_id": "pc-0", "operand_index": 0},
+        ],
+        "pcode_operand_lineage_events": [],
+        "source_bindings": [],
+        "source_capture": None,
+        "coverage": {
+            "ig_classes": ["fpr", "gpr"],
+            "frame_areas": ["temps", "arguments", "locals"],
+            "errors": ["z", "a"],
+        },
+        "lifetime_proof": {
+            "allocation_sites": [
+                {"entity_kind": "pcode", "address": 2, "site_id": "b"},
+                {"entity_kind": "objobject", "address": 1, "site_id": "a"},
+            ],
+            "free_sites": [],
+            "operand_rewrite_sites": [],
+            "operand_mutation_sites": [],
+            "code_emission_sites": [],
+            "operand_rules": [],
+            "opcode_table": [],
+        },
+    }
+
+    forward = backend_events.canonicalize_v2_object_bindings(payload)
+    reverse = backend_events.canonicalize_v2_object_bindings(
+        {
+            **payload,
+            "lifecycle_events": list(reversed(payload["lifecycle_events"])),
+            "objects": list(reversed(payload["objects"])),
+            "virtual_bindings": list(reversed(payload["virtual_bindings"])),
+            "pcode_occurrences": list(reversed(payload["pcode_occurrences"])),
+        }
+    )
+
+    assert forward == reverse
+    assert [row["sequence"] for row in forward["lifecycle_events"]] == [0, 1]
+    assert [row["runtime_address"] for row in forward["objects"]] == [1, 2]
+    assert forward["objects"][1]["areas"] == ["locals", "spill-owned"]
+    assert forward["coverage"]["ig_classes"] == ["gpr", "fpr"]
+    assert forward["coverage"]["frame_areas"] == ["arguments", "locals", "temps"]
+    assert forward["coverage"]["errors"] == ["a", "z"]

@@ -19,6 +19,88 @@ def test_minimal_backend_trace_fixture_validates():
     assert errors == []
 
 
+def test_schema_dispatch_preserves_v1_and_rejects_unknown_or_hostile_payloads() -> None:
+    data = json.loads(FIXTURE.read_text())
+    assert backend_schema.SCHEMA_VERSION == backend_schema.SCHEMA_VERSION_V1
+    assert backend_schema.validate_backend_trace(data) == []
+
+    data["schema_version"] = "mwcc-retro-backend-trace.v3"
+    assert backend_schema.validate_backend_trace(data) == [
+        "unsupported backend trace schema 'mwcc-retro-backend-trace.v3'"
+    ]
+    assert backend_schema.validate_backend_trace([]) == ["backend trace must be an object"]
+
+
+def test_v2_schema_is_closed_and_phase1_source_fields_are_empty() -> None:
+    data = json.loads(FIXTURE.read_text())
+    data["schema_version"] = backend_schema.SCHEMA_VERSION_V2
+    data["capabilities"] = []
+    data["functions"][0]["object_bindings"] = {
+        "schema_version": "mwcc-retro-object-bindings.v1",
+        "capture_identity": {},
+        "capture_run_id": "f" * 64,
+        "lifetime_proof": {},
+        "coverage": {},
+        "lifecycle_events": [],
+        "objects": [],
+        "virtual_bindings": [],
+        "frame_bindings": [],
+        "pcode_instructions": [],
+        "pcode_occurrences": [],
+        "pcode_operand_lineage_events": [],
+        "source_bindings": [],
+        "source_capture": None,
+    }
+
+    errors = backend_schema.validate_backend_trace(data)
+    assert not any("unexpected" in error for error in errors)
+
+    data["unexpected"] = True
+    data["functions"][0]["object_bindings"]["source_bindings"] = [{}]
+    errors = backend_schema.validate_backend_trace(data)
+    assert "v2 top-level has unexpected fields: ['unexpected']" in errors
+    assert "function test_fn source_bindings must be empty in Phase 1" in errors
+
+
+def test_v2_capture_identity_is_closed_and_run_scoped() -> None:
+    data = json.loads(FIXTURE.read_text())
+    data["schema_version"] = backend_schema.SCHEMA_VERSION_V2
+    data["capabilities"] = ["object-to-source"]
+    identity = {
+        "nonce": "1" * 32,
+        "compiler_executable_sha256": "a" * 64,
+        "source_sha256": "b" * 64,
+        "mwcc_command_sha256": "c" * 64,
+        "environment_digest": "d" * 64,
+        "candidate_object_sha256": "e" * 64,
+        "function": "test_fn",
+        "capture_run_id": "f" * 64,
+        "unexpected": True,
+    }
+    data["functions"][0]["object_bindings"] = {
+        "schema_version": "mwcc-retro-object-bindings.v1",
+        "capture_identity": identity,
+        "capture_run_id": "0" * 64,
+        "lifetime_proof": {},
+        "coverage": {},
+        "lifecycle_events": [],
+        "objects": [],
+        "virtual_bindings": [],
+        "frame_bindings": [],
+        "pcode_instructions": [],
+        "pcode_occurrences": [],
+        "pcode_operand_lineage_events": [],
+        "source_bindings": [],
+        "source_capture": None,
+    }
+
+    errors = backend_schema.validate_backend_trace(data)
+
+    assert any("capture_identity has unexpected fields" in error for error in errors)
+    assert any("capture_run_id must equal capture_identity" in error for error in errors)
+    assert any("object-to-source" in error for error in errors)
+
+
 def test_compiler_family_must_be_mwcc():
     data = json.loads(FIXTURE.read_text())
     data["compiler"]["family"] = "Not MWCC"

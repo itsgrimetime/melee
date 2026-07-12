@@ -21,6 +21,7 @@ def test_retro_backend_candidate_help_lists_candidate_language():
     assert "Assemble a candidate retail GC/1.2.5n backend trace" in r.output
     assert "Diagnostic candidate output" in r.output
     assert "--one-pass" in r.output
+    assert "--trace-version" in r.output
 
 
 def test_retro_verify_backend_help():
@@ -229,6 +230,276 @@ def test_backend_candidate_command_writes_candidate_outputs(monkeypatch, tmp_pat
     assert (tmp_path / "backend-summary.candidate.txt").exists()
     assert not (tmp_path / "backend-trace.v1.json").exists()
     assert "backend candidate trace:" in r.output
+
+
+def test_backend_candidate_v2_synthetic_trusted_capture_publishes_atomic_artifacts(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+    from tests.test_retro_backend_trace_assembler import (
+        _base_trace,
+        _empty_v2_bindings,
+        _trusted_table,
+    )
+    from tests.test_retro_backend_pcode_lineage import _candidate_elf
+    from tools.mwcc_retro import backend_trace_assembler
+
+    staging = tmp_path / "staging.o"
+    staging.write_bytes(_candidate_elf(function="target"))
+    assembly = backend_trace_assembler.assemble_candidate_trace_v2(
+        base_trace=_base_trace("target"),
+        object_bindings=_empty_v2_bindings(),
+        candidate_object=staging,
+        nonce="1" * 32,
+        compiler_executable_sha256="a" * 64,
+        source_sha256="b" * 64,
+        mwcc_command_sha256="c" * 64,
+        environment_digest="d" * 64,
+        function="target",
+        struct_map=_trusted_table(),
+    )
+
+    def fake_v2(**_kwargs):
+        return retro.BackendCandidateV2Outcome(
+            exit_code=0,
+            trace=assembly.payload,
+            candidate_object=staging,
+            capabilities=assembly.capabilities,
+        )
+
+    monkeypatch.setattr(retro, "_run_backend_candidate_v2_trace", fake_v2)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
+    out = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "backend-candidate",
+            "src/melee/test/unit.c",
+            "-f",
+            "target",
+            "-O",
+            str(out),
+            "--one-pass",
+            "--trace-version",
+            "v2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads((out / "backend-trace.v2.json").read_text())
+    assert payload["schema_version"] == "mwcc-retro-backend-trace.v2"
+    assert (out / "candidate-object.o").read_bytes() == staging.read_bytes()
+    assert "compiler-object-bindings, pcode-to-code-range" in result.output
+    assert not (out / "backend-trace.candidate.v1.json").exists()
+
+
+def test_backend_candidate_v2_empty_installed_registry_refuses_without_artifact_loss(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+
+    def fail_setup(*_args, **_kwargs):
+        raise AssertionError("setup must not run before the installed proof preflight")
+
+    monkeypatch.setattr(retro, "_ensure_setup", fail_setup)
+    trace = tmp_path / "backend-trace.v2.json"
+    candidate = tmp_path / "candidate-object.o"
+    trace.write_bytes(b"old-trace\n")
+    candidate.write_bytes(b"old-candidate")
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "backend-candidate",
+            "src/melee/test/unit.c",
+            "-f",
+            "test_fn",
+            "-O",
+            str(tmp_path),
+            "--one-pass",
+            "--trace-version",
+            "v2",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "backend trace v2 unavailable" in result.output
+    assert "no promoted instrumentation proof" in result.output
+    assert trace.read_bytes() == b"old-trace\n"
+    assert candidate.read_bytes() == b"old-candidate"
+
+
+def test_backend_candidate_v2_validation_failure_preserves_prior_artifacts(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+
+    staging = tmp_path / "staging.o"
+    staging.write_bytes(b"not-an-elf")
+    old_trace = b"old-trace\n"
+    old_candidate = b"old-candidate"
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "backend-trace.v2.json").write_bytes(old_trace)
+    (out / "candidate-object.o").write_bytes(old_candidate)
+
+    def fake_v2(**_kwargs):
+        return retro.BackendCandidateV2Outcome(
+            exit_code=0,
+            trace={"schema_version": "mwcc-retro-backend-trace.v2"},
+            candidate_object=staging,
+            capabilities=frozenset(),
+        )
+
+    monkeypatch.setattr(retro, "_run_backend_candidate_v2_trace", fake_v2)
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "backend-candidate",
+            "src/melee/test/unit.c",
+            "-f",
+            "test_fn",
+            "-O",
+            str(out),
+            "--one-pass",
+            "--trace-version",
+            "v2",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "backend trace v2 schema errors" in result.output
+    assert (out / "backend-trace.v2.json").read_bytes() == old_trace
+    assert (out / "candidate-object.o").read_bytes() == old_candidate
+
+
+def test_backend_candidate_v2_never_replaces_different_immutable_candidate(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+    from tests.test_retro_backend_trace_assembler import (
+        _base_trace,
+        _empty_v2_bindings,
+        _trusted_table,
+    )
+    from tests.test_retro_backend_pcode_lineage import _candidate_elf
+    from tools.mwcc_retro import backend_trace_assembler
+
+    staging = tmp_path / "staging.o"
+    staging.write_bytes(_candidate_elf(function="target"))
+    assembly = backend_trace_assembler.assemble_candidate_trace_v2(
+        base_trace=_base_trace("target"),
+        object_bindings=_empty_v2_bindings(),
+        candidate_object=staging,
+        nonce="1" * 32,
+        compiler_executable_sha256="a" * 64,
+        source_sha256="b" * 64,
+        mwcc_command_sha256="c" * 64,
+        environment_digest="d" * 64,
+        function="target",
+        struct_map=_trusted_table(),
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+    old_trace = b"old-trace\n"
+    old_candidate = b"different-candidate"
+    (out / "backend-trace.v2.json").write_bytes(old_trace)
+    (out / "candidate-object.o").write_bytes(old_candidate)
+
+    monkeypatch.setattr(
+        retro,
+        "_run_backend_candidate_v2_trace",
+        lambda **_kwargs: retro.BackendCandidateV2Outcome(0, assembly.payload, staging, assembly.capabilities),
+    )
+    monkeypatch.setattr(retro, "_ensure_setup", lambda *_args, **_kwargs: None)
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "backend-candidate",
+            "src/melee/test/unit.c",
+            "-f",
+            "target",
+            "-O",
+            str(out),
+            "--one-pass",
+            "--trace-version",
+            "v2",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "candidate-object.o is immutable" in result.output
+    assert (out / "backend-trace.v2.json").read_bytes() == old_trace
+    assert (out / "candidate-object.o").read_bytes() == old_candidate
+
+
+def test_backend_candidate_v2_trace_publication_failure_rolls_back_new_candidate(
+    monkeypatch, tmp_path
+):
+    import src.cli.debug.retro as retro
+    from tests.test_retro_backend_trace_assembler import (
+        _base_trace,
+        _empty_v2_bindings,
+        _trusted_table,
+    )
+    from tests.test_retro_backend_pcode_lineage import _candidate_elf
+    from tools.mwcc_retro import backend_trace_assembler
+
+    staging = tmp_path / "staging.o"
+    staging.write_bytes(_candidate_elf(function="target"))
+    assembly = backend_trace_assembler.assemble_candidate_trace_v2(
+        base_trace=_base_trace("target"),
+        object_bindings=_empty_v2_bindings(),
+        candidate_object=staging,
+        nonce="1" * 32,
+        compiler_executable_sha256="a" * 64,
+        source_sha256="b" * 64,
+        mwcc_command_sha256="c" * 64,
+        environment_digest="d" * 64,
+        function="target",
+        struct_map=_trusted_table(),
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+    old_trace = b"old-trace\n"
+    (out / "backend-trace.v2.json").write_bytes(old_trace)
+    original_atomic_write = retro._atomic_write_bytes
+
+    def fail_trace(path, data):
+        if path.name == "backend-trace.v2.json":
+            raise OSError("trace replace failed")
+        original_atomic_write(path, data)
+
+    monkeypatch.setattr(retro, "_atomic_write_bytes", fail_trace)
+    monkeypatch.setattr(
+        retro,
+        "_run_backend_candidate_v2_trace",
+        lambda **_kwargs: retro.BackendCandidateV2Outcome(
+            0, assembly.payload, staging, assembly.capabilities
+        ),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "backend-candidate",
+            "src/melee/test/unit.c",
+            "-f",
+            "target",
+            "-O",
+            str(out),
+            "--one-pass",
+            "--trace-version",
+            "v2",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "trace replace failed" in result.output
+    assert (out / "backend-trace.v2.json").read_bytes() == old_trace
+    assert not (out / "candidate-object.o").exists()
 
 
 def test_probe_backend_map_command_writes_probe_without_backend_trace(monkeypatch, tmp_path):

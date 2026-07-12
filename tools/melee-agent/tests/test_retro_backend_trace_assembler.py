@@ -1,3 +1,5 @@
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -7,8 +9,17 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
 from tools.mwcc_retro import backend_schema, backend_trace_assembler  # noqa: E402
+from tools.mwcc_retro.backend_instrumentation_proof import proof_sha256  # noqa: E402
+
+from tests.test_retro_backend_object_bindings import (  # noqa: E402
+    lifetime_coverage,
+    minimal_object_bindings,
+    trusted_proof,
+)
+from tests.test_retro_backend_pcode_lineage import _candidate_elf  # noqa: E402
 
 COMPILER = {"family": "MWCC", "version": "GC/1.2.5n", "retail": True}
+FIXTURE_ROOT = REPO / "tools/melee-agent/tests/fixtures/retro"
 SOURCE = {
     "tu": "src/melee/test/unit.c",
     "function": "candidate_fn",
@@ -366,6 +377,165 @@ def test_frame_events_from_map_probe_payload_converts_probe_frame_shape() -> Non
             ],
         }
     ]
+
+
+def _empty_v2_bindings() -> dict[str, object]:
+    payload = minimal_object_bindings()
+    payload["lifecycle_events"] = []
+    payload["objects"] = []
+    payload["virtual_bindings"] = []
+    payload["frame_bindings"] = []
+    payload["coverage"]["objects_seen"] = 0
+    payload["coverage"]["virtual_bindings_seen"] = 0
+    payload["coverage"]["frame_bindings_seen"] = 0
+    payload["coverage"]["lifetime_identity"] = lifetime_coverage(empty=True)
+    payload.pop("capture_identity")
+    payload.pop("capture_run_id")
+    return payload
+
+
+def _trusted_table() -> dict[str, object]:
+    proof = trusted_proof()
+    payload = dict(proof.payload)
+    return {
+        "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs": [
+            {
+                "compiler_executable_sha256": proof.compiler_executable_sha256,
+                "proof_id": proof.proof_id,
+                "proof_sha256": proof_sha256(payload),
+                "promoted": True,
+            }
+        ],
+        "backend_reader": {
+            "pcode_instrumentation": {
+                "validated": True,
+                "compiler_executable_sha256": proof.compiler_executable_sha256,
+                "proof_id": proof.proof_id,
+                "proof_sha256": proof.sha256,
+                "operand_rewrite_site_ids": ["rewrite-register-operand-1"],
+                "operand_mutation_site_ids": ["rewrite-pcode-operands-1"],
+                "code_emission_site_ids": ["emit-pcode-1"],
+            }
+        },
+    }
+
+
+def _base_trace(function: str) -> dict[str, object]:
+    payload = json.loads((FIXTURE_ROOT / "backend_trace_v1_minimal.json").read_text())
+    payload["source"]["function"] = function
+    payload["functions"][0]["name"] = function
+    return payload
+
+
+def test_v2_assembler_recomputes_trust_and_emits_only_independent_capabilities(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "candidate.o"
+    candidate.write_bytes(_candidate_elf(function="target"))
+
+    result = backend_trace_assembler.assemble_candidate_trace_v2(
+        base_trace=_base_trace("target"),
+        object_bindings=_empty_v2_bindings(),
+        candidate_object=candidate,
+        nonce="1" * 32,
+        compiler_executable_sha256="a" * 64,
+        source_sha256="b" * 64,
+        mwcc_command_sha256="c" * 64,
+        environment_digest="d" * 64,
+        function="target",
+        struct_map=_trusted_table(),
+    )
+
+    assert result.payload["schema_version"] == backend_schema.SCHEMA_VERSION_V2
+    assert result.capabilities == frozenset({"compiler-object-bindings", "pcode-to-code-range"})
+    assert result.payload["capabilities"] == [
+        "compiler-object-bindings",
+        "pcode-to-code-range",
+    ]
+    assert "object-to-virtual" not in result.payload["capabilities"]
+    assert "object-to-frame" not in result.payload["capabilities"]
+    identity = result.payload["functions"][0]["object_bindings"]["capture_identity"]
+    assert identity["candidate_object_sha256"] == hashlib.sha256(candidate.read_bytes()).hexdigest()
+    assert backend_schema.validate_backend_trace(result.payload) == []
+
+
+def test_v2_assembler_rejects_unpromoted_proof_and_validator_failures(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "candidate.o"
+    candidate.write_bytes(_candidate_elf(function="target"))
+    kwargs = {
+        "base_trace": _base_trace("target"),
+        "object_bindings": _empty_v2_bindings(),
+        "candidate_object": candidate,
+        "nonce": "1" * 32,
+        "compiler_executable_sha256": "a" * 64,
+        "source_sha256": "b" * 64,
+        "mwcc_command_sha256": "c" * 64,
+        "environment_digest": "d" * 64,
+        "function": "target",
+    }
+    table = _trusted_table()
+    table["instrumentation_proofs"] = []
+    with pytest.raises(ValueError, match="no promoted instrumentation proof"):
+        backend_trace_assembler.assemble_candidate_trace_v2(**kwargs, struct_map=table)
+
+    bindings = _empty_v2_bindings()
+    bindings["coverage"]["status"] = "complete"  # status alone cannot mask a drop
+    bindings["coverage"]["lifetime_identity"]["dropped_events"] = 1
+    with pytest.raises(ValueError, match="object binding validation failed"):
+        backend_trace_assembler.assemble_candidate_trace_v2(
+            **{**kwargs, "object_bindings": bindings}, struct_map=_trusted_table()
+        )
+
+    recursive = _empty_v2_bindings()
+    recursive["objects"].append(recursive)
+    with pytest.raises(ValueError, match="object binding validation failed"):
+        backend_trace_assembler.assemble_candidate_trace_v2(
+            **{**kwargs, "object_bindings": recursive}, struct_map=_trusted_table()
+        )
+
+
+def test_v2_sidecars_require_same_complete_function_attempt(tmp_path: Path) -> None:
+    attempt = {
+        "capture_attempt_id": "a" * 32,
+        "function_identity": {"requested": "target"},
+    }
+    object_path = tmp_path / "backend-object-events.v1.json"
+    pcode_path = tmp_path / "backend-pcode-events.v1.json"
+    envelope = {
+        "capture_attempt": attempt,
+        "capture_status": {"status": "partial", "capabilities": []},
+        "events": [],
+        "publication_complete": True,
+    }
+    object_path.write_text(json.dumps({"schema_version": "mwcc-retro-object-events.v1", **envelope}))
+    pcode_path.write_text(json.dumps({"schema_version": "mwcc-retro-pcode-events.v1", **envelope}))
+
+    correlated = backend_trace_assembler.load_correlated_v2_sidecars(object_path, pcode_path, function="target")
+    assert correlated.capture_attempt_id == "a" * 32
+
+    payload = json.loads(pcode_path.read_text())
+    payload["capture_attempt"]["capture_attempt_id"] = "b" * 32
+    pcode_path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="capture attempt mismatch"):
+        backend_trace_assembler.load_correlated_v2_sidecars(object_path, pcode_path, function="target")
+
+    payload["capture_attempt"] = attempt
+    payload["publication_complete"] = False
+    pcode_path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="publication is incomplete"):
+        backend_trace_assembler.load_correlated_v2_sidecars(object_path, pcode_path, function="target")
+
+    payload["publication_complete"] = True
+    payload["capture_attempt"]["function_identity"] = {"requested": "other"}
+    pcode_path.write_text(json.dumps(payload))
+    object_payload = json.loads(object_path.read_text())
+    object_payload["capture_attempt"] = payload["capture_attempt"]
+    object_path.write_text(json.dumps(object_payload))
+    with pytest.raises(ValueError, match="does not identify function"):
+        backend_trace_assembler.load_correlated_v2_sidecars(object_path, pcode_path, function="target")
 
 
 def test_frame_events_from_map_probe_payload_rejects_incomplete_probe_frame() -> None:

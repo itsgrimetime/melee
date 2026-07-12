@@ -1,13 +1,70 @@
-"""Schema helpers for mwcc-retro backend trace v1."""
+"""Schema helpers for mwcc-retro backend trace v1 and proof-bearing v2."""
+
 from __future__ import annotations
 
-import json
+import copy
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "mwcc-retro-backend-trace.v1"
+SCHEMA_VERSION_V1 = "mwcc-retro-backend-trace.v1"
+SCHEMA_VERSION_V2 = "mwcc-retro-backend-trace.v2"
+# Compatibility alias used by existing v1 callers and fixtures.
+SCHEMA_VERSION = SCHEMA_VERSION_V1
 STRUCT_MAP_SCHEMA_VERSION = "mwcc-retro-struct-map.v1"
+
+_V2_TOP_FIELDS = frozenset(
+    {
+        "schema_version",
+        "tool_version",
+        "compiler",
+        "source",
+        "functions",
+        "struct_map",
+        "capabilities",
+    }
+)
+_V1_FUNCTION_FIELDS = frozenset({"name", "identity", "blocks", "pcode", "frame", "regalloc"})
+_V2_FUNCTION_FIELDS = _V1_FUNCTION_FIELDS | frozenset({"object_bindings"})
+_V2_BINDING_FIELDS = frozenset(
+    {
+        "schema_version",
+        "capture_identity",
+        "capture_run_id",
+        "lifetime_proof",
+        "coverage",
+        "lifecycle_events",
+        "objects",
+        "virtual_bindings",
+        "frame_bindings",
+        "pcode_instructions",
+        "pcode_occurrences",
+        "pcode_operand_lineage_events",
+        "source_bindings",
+        "source_capture",
+    }
+)
+_V2_CAPTURE_FIELDS = frozenset(
+    {
+        "nonce",
+        "compiler_executable_sha256",
+        "source_sha256",
+        "mwcc_command_sha256",
+        "environment_digest",
+        "candidate_object_sha256",
+        "function",
+        "capture_run_id",
+    }
+)
+_V2_CAPABILITIES = frozenset(
+    {
+        "compiler-object-bindings",
+        "object-to-virtual",
+        "object-to-frame",
+        "pcode-to-code-range",
+    }
+)
 
 REQUIRED_TOP = ("schema_version", "compiler", "source", "functions")
 REQUIRED_SOURCE_FIELDS = ("tu", "function", "mwcc_command", "mwcc_command_hash")
@@ -85,14 +142,30 @@ def write_backend_trace(path: str | Path, payload: dict[str, Any]) -> None:
     Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def validate_backend_trace(payload: dict[str, Any]) -> list[str]:
+def validate_backend_trace(payload: object) -> list[str]:
+    """Dispatch exact trace versions and contain hostile malformed inputs."""
+
+    if type(payload) is not dict:
+        return ["backend trace must be an object"]
+    version = payload.get("schema_version")
+    try:
+        if version == SCHEMA_VERSION_V1:
+            return validate_backend_trace_v1(payload)
+        if version == SCHEMA_VERSION_V2:
+            return validate_backend_trace_v2(payload)
+    except (KeyError, OverflowError, RecursionError, TypeError, ValueError) as exc:
+        return [f"backend trace contains malformed values: {type(exc).__name__}"]
+    return [f"unsupported backend trace schema {version!r}"]
+
+
+def validate_backend_trace_v1(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     for key in _missing(payload, REQUIRED_TOP):
         errors.append(f"top-level missing {key}")
 
-    if payload.get("schema_version") != SCHEMA_VERSION:
+    if payload.get("schema_version") != SCHEMA_VERSION_V1:
         errors.append(
-            f"schema_version must be {SCHEMA_VERSION}, got {payload.get('schema_version')!r}"
+            f"schema_version must be {SCHEMA_VERSION_V1}, got {payload.get('schema_version')!r}"
         )
 
     compiler = payload.get("compiler") or {}
@@ -137,6 +210,113 @@ def validate_backend_trace(payload: dict[str, Any]) -> list[str]:
                 continue
             errors.extend(_validate_class(fn_name, cls))
 
+    return errors
+
+
+def _closed_fields(value: object, expected: frozenset[str], label: str, errors: list[str]) -> bool:
+    if type(value) is not dict:
+        errors.append(f"{label} must be an object")
+        return False
+    actual = set(value)
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    if missing:
+        errors.append(f"{label} missing fields: {missing!r}")
+    if unexpected:
+        errors.append(f"{label} has unexpected fields: {unexpected!r}")
+    return not missing and not unexpected
+
+
+def validate_backend_trace_v2(payload: dict[str, Any]) -> list[str]:
+    """Validate the closed outer v2 shape; proof semantics are assembler gates."""
+
+    errors: list[str] = []
+    _closed_fields(payload, _V2_TOP_FIELDS, "v2 top-level", errors)
+
+    capabilities = payload.get("capabilities")
+    if type(capabilities) is not list:
+        errors.append("v2 capabilities must be a list")
+    elif any(type(item) is not str for item in capabilities):
+        errors.append("v2 capabilities must contain strings")
+    else:
+        if capabilities != sorted(set(capabilities)):
+            errors.append("v2 capabilities must be sorted and unique")
+        unknown = sorted(set(capabilities) - _V2_CAPABILITIES)
+        if unknown:
+            errors.append(f"v2 capabilities contain unsupported values: {unknown!r}")
+
+    functions = payload.get("functions")
+    if type(functions) is not list or not functions:
+        errors.append("functions must be a non-empty list")
+        functions = []
+    for index, function in enumerate(functions):
+        if not _closed_fields(function, _V2_FUNCTION_FIELDS, f"v2 function[{index}]", errors):
+            if type(function) is not dict:
+                continue
+        assert isinstance(function, dict)
+        function_name = function.get("name", index)
+        bindings = function.get("object_bindings")
+        if not _closed_fields(
+            bindings,
+            _V2_BINDING_FIELDS,
+            f"function {function_name} object_bindings",
+            errors,
+        ):
+            if type(bindings) is not dict:
+                continue
+        assert isinstance(bindings, dict)
+        if bindings.get("schema_version") != "mwcc-retro-object-bindings.v1":
+            errors.append(
+                f"function {function_name} object_bindings schema_version must be mwcc-retro-object-bindings.v1"
+            )
+        identity = bindings.get("capture_identity")
+        _closed_fields(
+            identity,
+            _V2_CAPTURE_FIELDS,
+            f"function {function_name} capture_identity",
+            errors,
+        )
+        if type(identity) is dict:
+            nonce = identity.get("nonce")
+            if not (
+                type(nonce) is str and len(nonce) == 32 and all(character in "0123456789abcdef" for character in nonce)
+            ):
+                errors.append(f"function {function_name} capture nonce must be 32 lowercase hex")
+            for field in (
+                "compiler_executable_sha256",
+                "source_sha256",
+                "mwcc_command_sha256",
+                "environment_digest",
+                "candidate_object_sha256",
+                "capture_run_id",
+            ):
+                value = identity.get(field)
+                if not (
+                    type(value) is str
+                    and len(value) == 64
+                    and all(character in "0123456789abcdef" for character in value)
+                ):
+                    errors.append(f"function {function_name} capture {field} must be 64 lowercase hex")
+            if identity.get("function") != function_name:
+                errors.append(f"function {function_name} capture identity function mismatch")
+            if bindings.get("capture_run_id") != identity.get("capture_run_id"):
+                errors.append(f"function {function_name} capture_run_id must equal capture_identity")
+        if bindings.get("source_bindings") != []:
+            errors.append(f"function {function_name} source_bindings must be empty in Phase 1")
+        if bindings.get("source_capture") is not None:
+            errors.append(f"function {function_name} source_capture must be null in Phase 1")
+
+    # Reuse every stable v1 backend fact check without teaching the v1 schema
+    # about v2-only ownership evidence.
+    legacy = copy.deepcopy(payload)
+    legacy["schema_version"] = SCHEMA_VERSION_V1
+    legacy.pop("capabilities", None)
+    legacy_functions = legacy.get("functions")
+    if isinstance(legacy_functions, list):
+        for function in legacy_functions:
+            if isinstance(function, dict):
+                function.pop("object_bindings", None)
+    errors.extend(validate_backend_trace_v1(legacy))
     return errors
 
 
