@@ -23,6 +23,10 @@ genuine retail behavior.
 # One-time: clone and build retrowin32 + cadmic/mwcc-debugger at pinned SHAs; run P0 gate
 melee-agent debug retro setup
 
+# Before any stripped GC/1.2.5n compiler static audit, validate the bounded,
+# exact-hash, host-native Ghidra project.
+melee-agent debug retro ghidra-setup
+
 # Front-end IRO trace (1.2.5n)
 melee-agent debug retro dump src/melee/mn/mndraw.c -f mnDraw_8024A3B0
 
@@ -72,6 +76,7 @@ ledger: which IROLinear indices appeared or disappeared between passes).
 | First look at a function | `tools/checkdiff.py`, m2c, nearby source |
 | Diff matches a known pattern | `/mismatch-db` or `/opseq` |
 | Need callers, callees, or string xrefs | `/ghidra` |
+| Static audit of the stripped GC/1.2.5n compiler | Run `melee-agent debug retro ghidra-setup` first |
 | Need parsed expression trees or ObjObject IDs | `/mwcc-inspect` |
 | Back-end PCode, basic blocks, virtual regs, coloring (fast path) | `/mwcc-debug` |
 | Need retail GC/1.2.5n backend/regalloc evidence | `melee-agent debug retro backend` |
@@ -82,6 +87,12 @@ ledger: which IROLinear indices appeared or disappeared between passes).
 wibo/DLL path. Use it when `mwcc-debug` and source-shape experiments have not
 explained the residual and you need either front-end pass visibility or exact
 retail GC/1.2.5n backend/regalloc facts.
+
+For static audits of the stripped compiler executable, always run
+`melee-agent debug retro ghidra-setup` first. Do not invoke archived or
+hard-coded Ghidra installations directly: the setup command enforces the exact
+compiler hash, a host-native decompiler, bounded analysis, and a nonempty
+validated project. Use `--repair` when it reports an invalid retained project.
 
 If `iro-summary.txt` shows no node changes across all passes, the mismatch is
 purely back-end. Start with `/mwcc-debug` for speed, then use

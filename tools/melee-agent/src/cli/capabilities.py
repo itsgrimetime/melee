@@ -148,6 +148,8 @@ _SCORE_THRESHOLD = 4  # >=4 requires either one name-token hit (score 5) or two 
 # Standalone tools/*.py targets are intentionally excluded (see manifest cross-link).
 # Every target below was verified to resolve to a real CLI leaf or skill name.
 TASK_ALIASES: dict[str, list[str]] = {
+    "MWCC Ghidra compiler audit": ["debug retro ghidra-setup"],
+    "stripped compiler callsite audit": ["debug retro ghidra-setup"],
     "find callers": ["ghidra", "commit check-callers"],
     "cross reference": ["ghidra", "commit check-callers"],
     "debug registers": [

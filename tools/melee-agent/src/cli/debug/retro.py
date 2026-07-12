@@ -29,6 +29,13 @@ from tools.mwcc_retro import (  # noqa: E402
 RETRO_DUMP_TIMEOUT_SECONDS = 600
 
 
+def setup_mwcc_ghidra(**kwargs):
+    """Load the MWCC Ghidra runner lazily to avoid the src.cli import cycle."""
+    from src.mwcc_debug.ghidra_mwcc_setup import setup_mwcc_ghidra as setup
+
+    return setup(**kwargs)
+
+
 @dataclass
 class DumpOutcome:
     exit_code: int
@@ -2223,6 +2230,101 @@ def setup_cmd(force: bool = typer.Option(False, "--force")):
     typer.echo(f"retrowin32: {res.retrowin32_bin}")
     typer.echo(f"cadmic:     {res.cadmic_script}")
     typer.echo(f"rebuilt:    {res.rebuilt}")
+
+
+@retro_app.command("ghidra-setup")
+def ghidra_setup_cmd(
+    project_dir: Path = typer.Option(
+        Path("tools/mwcc_debug/ghidra_project"),
+        "--project-dir",
+        help="MWCC Ghidra project directory; relative paths use the Melee root.",
+    ),
+    analysis_timeout: int = typer.Option(
+        300,
+        "--analysis-timeout",
+        min=1,
+        help="Ghidra per-file analysis timeout in seconds.",
+    ),
+    wall_timeout: int = typer.Option(
+        420,
+        "--wall-timeout",
+        min=1,
+        help="Outer process-group wall timeout in seconds.",
+    ),
+    repair: bool = typer.Option(
+        False,
+        "--repair",
+        help="Retain and quarantine an invalid canonical project before importing.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit stable result JSON."),
+    melee_root: Path | None = typer.Option(
+        None,
+        "--melee-root",
+        help="Active Melee checkout/worktree root. Defaults to the current cwd tree.",
+    ),
+):
+    """Create or validate the exact GC/1.2.5n compiler Ghidra audit project."""
+    from src.mwcc_debug.ghidra_mwcc_setup import MwccGhidraSetupError
+
+    active_root = _resolve_melee_root(melee_root)
+    expanded_project = project_dir.expanduser()
+    resolved_project = (
+        expanded_project.resolve()
+        if expanded_project.is_absolute()
+        else (active_root / expanded_project).resolve()
+    )
+    try:
+        result = setup_mwcc_ghidra(
+            melee_root=active_root,
+            project_dir=resolved_project,
+            analysis_timeout=analysis_timeout,
+            wall_timeout=wall_timeout,
+            repair=repair,
+        )
+    except MwccGhidraSetupError as error:
+        typer.secho(f"ghidra setup failed: {error.reason}", fg="red", err=True)
+        if error.details:
+            typer.echo(json.dumps(error.details, sort_keys=True, default=str), err=True)
+        if error.reason == "invalid-existing-project":
+            retry = shlex.join(
+                [
+                    "melee-agent",
+                    "debug",
+                    "retro",
+                    "ghidra-setup",
+                    "--repair",
+                    "--melee-root",
+                    str(active_root),
+                    "--project-dir",
+                    str(resolved_project),
+                    "--analysis-timeout",
+                    str(analysis_timeout),
+                    "--wall-timeout",
+                    str(wall_timeout),
+                ]
+            )
+            typer.echo(f"Retry: {retry}", err=True)
+        raise typer.Exit(4)
+
+    if json_output:
+        typer.echo(json.dumps(result.to_dict(), sort_keys=True))
+        return
+
+    typer.echo(f"status: {result.status}")
+    typer.echo(f"compiler SHA-256: {result.compiler_sha256}")
+    typer.echo(f"function count: {result.function_count}")
+    typer.echo(f"project: {result.project_dir}")
+    typer.echo(f"program: {result.program_path}")
+    typer.echo(f"Ghidra: {result.ghidra_install}")
+    typer.echo(f"headless: {result.headless_path}")
+    typer.echo(f"native decompiler: {result.native_decompiler_path or 'not required'}")
+    typer.echo(f"elapsed seconds: {result.elapsed_seconds}")
+    if result.quarantined_paths:
+        typer.echo("quarantine paths:")
+        for path in result.quarantined_paths:
+            typer.echo(f"  {path}")
+    else:
+        typer.echo("quarantine paths: none")
 
 
 @retro_app.command("dump")

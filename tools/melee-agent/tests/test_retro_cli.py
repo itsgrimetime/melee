@@ -8,6 +8,11 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from src.cli import app
+from src.mwcc_debug.ghidra_mwcc_setup import (
+    EXPECTED_COMPILER_SHA256,
+    MwccGhidraSetupError,
+    MwccGhidraSetupResult,
+)
 
 runner = CliRunner()
 
@@ -16,6 +21,152 @@ def test_retro_help_lists_subcommands():
     r = runner.invoke(app, ["debug", "retro", "--help"])
     assert r.exit_code == 0
     assert "setup" in r.output and "dump" in r.output and "verify" in r.output
+    assert "ghidra-setup" in r.output
+
+
+def _ghidra_setup_result(melee_root: Path, **changes) -> MwccGhidraSetupResult:
+    values = {
+        "status": "imported",
+        "ghidra_install": Path("/opt/ghidra"),
+        "headless_path": Path("/opt/ghidra/support/analyzeHeadless"),
+        "native_decompiler_path": Path(
+            "/opt/ghidra/Ghidra/Features/Decompiler/os/mac_arm_64/decompile"
+        ),
+        "compiler_path": melee_root / "build/compilers/GC/1.2.5n/mwcceppc.exe",
+        "compiler_sha256": EXPECTED_COMPILER_SHA256,
+        "project_dir": melee_root / "tools/mwcc_debug/ghidra_project",
+        "project_name": "mwcceppc",
+        "program_path": "/mwcceppc.exe",
+        "function_count": 3248,
+        "elapsed_seconds": 82.125,
+        "quarantined_paths": (),
+    }
+    values.update(changes)
+    return MwccGhidraSetupResult(**values)
+
+
+def test_retro_ghidra_setup_passes_exact_defaults_and_resolves_relative_project(
+    monkeypatch,
+    tmp_path,
+):
+    import src.cli.debug.retro as retro
+
+    melee_root = tmp_path / "melee"
+    seen = {}
+
+    def fake_setup(**kwargs):
+        seen.update(kwargs)
+        return _ghidra_setup_result(
+            melee_root,
+            project_dir=kwargs["project_dir"],
+        )
+
+    monkeypatch.setattr(retro, "_resolve_melee_root", lambda _root=None: melee_root)
+    monkeypatch.setattr(retro, "setup_mwcc_ghidra", fake_setup, raising=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "ghidra-setup",
+            "--project-dir",
+            "build/audit-project",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "melee_root": melee_root,
+        "project_dir": melee_root / "build/audit-project",
+        "analysis_timeout": 300,
+        "wall_timeout": 420,
+        "repair": False,
+    }
+    assert "status: imported" in result.output
+    assert f"compiler SHA-256: {EXPECTED_COMPILER_SHA256}" in result.output
+    assert "function count: 3248" in result.output
+    assert f"project: {melee_root / 'build/audit-project'}" in result.output
+    assert "Ghidra: /opt/ghidra" in result.output
+    assert "native decompiler:" in result.output
+    assert "elapsed seconds: 82.125" in result.output
+    assert "quarantine paths: none" in result.output
+
+
+def test_retro_ghidra_setup_json_is_stable_sorted_result_schema(monkeypatch, tmp_path):
+    import src.cli.debug.retro as retro
+
+    melee_root = tmp_path / "melee"
+    expected = _ghidra_setup_result(melee_root)
+    monkeypatch.setattr(retro, "_resolve_melee_root", lambda _root=None: melee_root)
+    monkeypatch.setattr(retro, "setup_mwcc_ghidra", lambda **_kwargs: expected, raising=False)
+
+    result = runner.invoke(app, ["debug", "retro", "ghidra-setup", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == json.dumps(expected.to_dict(), sort_keys=True) + "\n"
+
+
+def test_retro_ghidra_setup_invalid_existing_project_prints_repair_retry(
+    monkeypatch,
+    tmp_path,
+):
+    import src.cli.debug.retro as retro
+
+    melee_root = tmp_path / "melee"
+    project_dir = melee_root / "build/broken audit"
+    monkeypatch.setattr(retro, "_resolve_melee_root", lambda _root=None: melee_root)
+
+    def fail_setup(**_kwargs):
+        raise MwccGhidraSetupError(
+            "invalid-existing-project",
+            {"cause": "invalid-status-marker"},
+        )
+
+    monkeypatch.setattr(retro, "setup_mwcc_ghidra", fail_setup, raising=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "retro",
+            "ghidra-setup",
+            "--project-dir",
+            str(project_dir),
+            "--analysis-timeout",
+            "17",
+            "--wall-timeout",
+            "23",
+        ],
+    )
+
+    assert result.exit_code == 4
+    assert "ghidra setup failed: invalid-existing-project" in result.output
+    assert '"cause": "invalid-status-marker"' in result.output
+    assert (
+        "Retry: melee-agent debug retro ghidra-setup --repair --melee-root "
+        f"{melee_root} --project-dir '{project_dir}' --analysis-timeout 17 "
+        "--wall-timeout 23"
+    ) in result.output
+
+
+def test_retro_ghidra_setup_requires_positive_timeouts(monkeypatch):
+    import src.cli.debug.retro as retro
+
+    monkeypatch.setattr(
+        retro,
+        "setup_mwcc_ghidra",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("runner called")),
+        raising=False,
+    )
+
+    for option in ("--analysis-timeout", "--wall-timeout"):
+        result = runner.invoke(
+            app,
+            ["debug", "retro", "ghidra-setup", option, "0"],
+        )
+        assert result.exit_code == 2
+        assert "x>=1" in result.output
 
 
 def test_retro_dump_unknown_function_exit_3(monkeypatch, tmp_path):

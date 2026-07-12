@@ -89,6 +89,12 @@ def test_search_relevance_regression():
     assert "debug target score-source" in [c.name for c in cap.run_search("scorer", REPO)]
     assert "extract files" in [c.name for c in cap.run_search("per-file progress", REPO)]
     assert any(c.name in {"ghidra", "commit check-callers"} for c in cap.run_search("find callers", REPO))
+    assert "debug retro ghidra-setup" in [
+        c.name for c in cap.run_search("MWCC Ghidra compiler audit", REPO)
+    ]
+    assert "debug retro ghidra-setup" in [
+        c.name for c in cap.run_search("stripped compiler callsite audit", REPO)
+    ]
     register_alloc_names = [
         c.name for c in cap.run_search("register allocation", REPO)
     ]
