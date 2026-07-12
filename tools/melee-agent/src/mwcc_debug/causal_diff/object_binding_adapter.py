@@ -93,8 +93,11 @@ _REQUIRED_EDGE_SUPPORT_KINDS = {
     "assembly-anchor-emitted-by-pcode": frozenset({"pcode-generation", "pcode-code-range", "pcode-emission"}),
     "pcode-operand-uses-virtual": frozenset({"pcode-rewrite"}),
     "object-materializes-virtual": frozenset({"object-virtual-binding"}),
-    "maps-to-allocator-node": frozenset({"object-virtual-binding"}),
+    "maps-to-allocator-node": frozenset({"object-virtual-binding", "pcode-rewrite"}),
     "object-has-stack-home": frozenset({"object-frame-binding"}),
+}
+_REQUIRED_NODE_SUPPORT_KINDS = {
+    "allocator-node": frozenset({"object-virtual-binding", "pcode-rewrite"}),
 }
 
 
@@ -106,8 +109,16 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _is_physical(value: object) -> bool:
+    return _is_int(value) and 0 <= value <= 31
+
+
 def _is_string_tuple(value: object) -> bool:
-    return isinstance(value, tuple) and all(_is_nonempty_str(item) for item in value)
+    return (
+        isinstance(value, tuple)
+        and all(_is_nonempty_str(item) for item in value)
+        and value == tuple(sorted(set(value)))
+    )
 
 
 def _is_lineage_side(value: object) -> bool:
@@ -155,6 +166,7 @@ _SUPPORT_ATTRIBUTE_SCHEMAS = {
             code_offset=_is_int,
             machine_operand_key=_is_nonempty_str,
             operand_lineage_id=_is_nonempty_str,
+            physical_register=_is_physical,
         ),
     ),
     "pcode-rewrite": (
@@ -164,6 +176,7 @@ _SUPPORT_ATTRIBUTE_SCHEMAS = {
             operand_lineage_id=_is_nonempty_str,
             class_id=_is_int,
             virtual=_is_int,
+            allocated_physical=_is_physical,
         ),
     ),
     "pcode-lineage-event": (
@@ -488,6 +501,16 @@ def emit_object_binding_evidence(
         for event_index, event in enumerate(
             _rows(source.pcode_validation.normalized.get("pcode_operand_lineage_events"))
         ):
+            event_parent_ids = tuple(
+                sorted(
+                    {
+                        str(parent_id)
+                        for output in _rows(event.get("outputs"))
+                        for operand in _rows(output.get("operands"))
+                        for parent_id in operand.get("parent_lineage_ids", ())
+                    }
+                )
+            )
             for side in ("inputs", "outputs"):
                 for state in _rows(event.get(side)):
                     pcode_id = state.get("pcode_id")
@@ -509,7 +532,11 @@ def emit_object_binding_evidence(
                                 "side": side,
                                 "mutation_kind": event.get("mutation_kind"),
                                 "operand_lineage_id": lineage_id,
-                                "parent_lineage_ids": tuple(operand.get("parent_lineage_ids", ())),
+                                "parent_lineage_ids": (
+                                    tuple(operand.get("parent_lineage_ids", ()))
+                                    if side == "outputs"
+                                    else event_parent_ids
+                                ),
                             },
                         )
                         if support is not None:
@@ -576,6 +603,7 @@ def emit_object_binding_evidence(
                             "code_offset": offset,
                             "machine_operand_key": operand_key,
                             "operand_lineage_id": lineage_id,
+                            "physical_register": mapping.get("physical_register"),
                         },
                         Confidence.DERIVED_UNIQUE,
                     )
@@ -638,6 +666,7 @@ def emit_object_binding_evidence(
                     "operand_lineage_id": rewrite.get("operand_lineage_id"),
                     "class_id": rewrite.get("class_id"),
                     "virtual": rewrite.get("virtual"),
+                    "allocated_physical": rewrite.get("allocated_physical"),
                 },
                 _confidence(rewrite.get("confidence"), Confidence.HEURISTIC),
             )
@@ -806,7 +835,9 @@ def emit_object_binding_evidence(
                 )
 
         lineage_ordinal = len(edges)
-        for event in _rows(source.pcode_validation.normalized.get("pcode_operand_lineage_events")):
+        for event_index, event in enumerate(
+            _rows(source.pcode_validation.normalized.get("pcode_operand_lineage_events"))
+        ):
             for state in _rows(event.get("outputs")):
                 for operand in _rows(state.get("operands")):
                     child_id = operand.get("operand_lineage_id")
@@ -831,9 +862,12 @@ def emit_object_binding_evidence(
                                 adapter_confidence=Confidence.OBSERVED,
                                 rule="observed-pcode-mutation-lineage",
                                 attributes={
+                                    "event_index": event_index,
+                                    "lineage_event_side": "outputs",
                                     "mutation_kind": event.get("mutation_kind"),
                                     "parent_lineage_id": parent_id,
                                     "operand_lineage_id": child_id,
+                                    "parent_lineage_ids": tuple(parents),
                                 },
                                 support=tuple(
                                     {
@@ -875,6 +909,19 @@ def emit_object_binding_evidence(
                 },
                 _confidence(row.get("confidence"), Confidence.HEURISTIC),
             )
+            allocator_origin_support = tuple(
+                support
+                for support in rewrite_support.values()
+                if support.attributes.get("class_id") == class_id
+                and support.attributes.get("virtual") == virtual_number
+            )
+            assigned_physicals = {
+                support.attributes.get("allocated_physical")
+                for support in allocator_origin_support
+                if _is_physical(support.attributes.get("allocated_physical"))
+            }
+            assigned_physical = next(iter(assigned_physicals)) if len(assigned_physicals) == 1 else None
+            allocator_support = (() if binding_support is None else (binding_support,)) + allocator_origin_support
             virtual = by_virtual.get(key)
             if virtual is None:
                 virtual = _node(
@@ -921,9 +968,9 @@ def emit_object_binding_evidence(
                     "class_id": class_id,
                     "ig_id": row.get("ig_id"),
                     "virtual": virtual_number,
-                    "assigned_phys": virtual.attributes.get("physical_register"),
+                    "assigned_phys": assigned_physical,
                 },
-                support=(() if binding_support is None else (binding_support,)),
+                support=allocator_support,
             )
             nodes.append(allocator)
             edges.append(
@@ -936,8 +983,12 @@ def emit_object_binding_evidence(
                     producer_confidence=confidence,
                     adapter_confidence=Confidence.DERIVED_UNIQUE,
                     rule="unique-verified-object-virtual-ig-binding",
-                    attributes={"class_id": class_id, "ig_id": row.get("ig_id")},
-                    support=(() if binding_support is None else (binding_support,)),
+                    attributes={
+                        "class_id": class_id,
+                        "ig_id": row.get("ig_id"),
+                        "assigned_phys": assigned_physical,
+                    },
+                    support=allocator_support,
                 )
             )
 
@@ -1272,6 +1323,7 @@ def _support_topology_is_exact(
                 and any(
                     mapping.get("machine_operand_key") == attributes["machine_operand_key"]
                     and mapping.get("operand_lineage_id") == attributes["operand_lineage_id"]
+                    and mapping.get("physical_register") == attributes["physical_register"]
                     for mapping in _rows(code_range.get("machine_operand_mappings"))
                 )
                 for code_range in _rows(pcode.attributes.get("code_ranges"))
@@ -1294,6 +1346,7 @@ def _support_topology_is_exact(
                 if (anchor := nodes.get(edge.source_id)) is not None
                 and anchor.attributes.get("code_offset") == attributes["code_offset"]
                 and anchor.attributes.get("machine_operand_key") == attributes["machine_operand_key"]
+                and anchor.attributes.get("physical_register") == attributes["physical_register"]
             )
             if not matching_lineage_edges or not matching_anchors:
                 return False
@@ -1303,19 +1356,40 @@ def _support_topology_is_exact(
             return dependent.record_id in topology_ids
 
         if support_kind == "pcode-rewrite":
-            if dependent.kind != "pcode-operand-uses-virtual" or not isinstance(dependent, EvidenceEdge):
-                return False
-            lineage = nodes.get(dependent.source_id)
-            virtual = nodes.get(dependent.target_id)
-            return (
-                lineage is not None
-                and virtual is not None
-                and dependent.attributes.get("pcode_id") == attributes["pcode_id"]
-                and dependent.attributes.get("operand_lineage_id") == attributes["operand_lineage_id"]
-                and lineage.attributes.get("operand_lineage_id") == attributes["operand_lineage_id"]
-                and virtual.attributes.get("class_id") == attributes["class_id"]
-                and virtual.attributes.get("virtual") == attributes["virtual"]
-            )
+            if dependent.kind == "pcode-operand-uses-virtual" and isinstance(dependent, EvidenceEdge):
+                lineage = nodes.get(dependent.source_id)
+                virtual = nodes.get(dependent.target_id)
+                return (
+                    lineage is not None
+                    and virtual is not None
+                    and dependent.attributes.get("pcode_id") == attributes["pcode_id"]
+                    and dependent.attributes.get("operand_lineage_id") == attributes["operand_lineage_id"]
+                    and lineage.attributes.get("operand_lineage_id") == attributes["operand_lineage_id"]
+                    and virtual.attributes.get("class_id") == attributes["class_id"]
+                    and virtual.attributes.get("virtual") == attributes["virtual"]
+                    and virtual.attributes.get("physical_register") == attributes["allocated_physical"]
+                )
+            if dependent.kind == "allocator-node" and isinstance(dependent, EvidenceNode):
+                return (
+                    dependent.attributes.get("class_id") == attributes["class_id"]
+                    and dependent.attributes.get("virtual") == attributes["virtual"]
+                    and dependent.attributes.get("assigned_phys") == attributes["allocated_physical"]
+                )
+            if dependent.kind == "maps-to-allocator-node" and isinstance(dependent, EvidenceEdge):
+                virtual = nodes.get(dependent.source_id)
+                allocator = nodes.get(dependent.target_id)
+                return (
+                    virtual is not None
+                    and allocator is not None
+                    and virtual.attributes.get("class_id") == attributes["class_id"]
+                    and virtual.attributes.get("virtual") == attributes["virtual"]
+                    and virtual.attributes.get("physical_register") == attributes["allocated_physical"]
+                    and allocator.attributes.get("class_id") == attributes["class_id"]
+                    and allocator.attributes.get("virtual") == attributes["virtual"]
+                    and allocator.attributes.get("assigned_phys") == attributes["allocated_physical"]
+                    and dependent.attributes.get("assigned_phys") == attributes["allocated_physical"]
+                )
+            return False
 
         if support_kind == "pcode-lineage-event":
             operand_id = attributes["operand_lineage_id"]
@@ -1347,34 +1421,51 @@ def _support_topology_is_exact(
             if dependent.kind == "pcode-operand":
                 if dependent.attributes.get("operand_lineage_id") != operand_id:
                     return False
-                mutation_edges = tuple(
-                    edge
-                    for edge in evidence.edges
-                    if edge.kind == "pcode-operand-lineage"
-                    and edge.attributes.get("mutation_kind") == attributes["mutation_kind"]
-                )
-                if attributes["side"] == "outputs":
-                    return any(
-                        edge.target_id == dependent.record_id
-                        and (parent := nodes.get(edge.source_id)) is not None
-                        and parent.attributes.get("operand_lineage_id") in attributes["parent_lineage_ids"]
-                        for edge in mutation_edges
-                    )
-                return any(edge.source_id == dependent.record_id for edge in mutation_edges)
-            if dependent.kind != "pcode-operand-lineage" or not isinstance(dependent, EvidenceEdge):
+            elif dependent.kind != "pcode-operand-lineage" or not isinstance(dependent, EvidenceEdge):
                 return False
-            source = nodes.get(dependent.source_id)
-            target = nodes.get(dependent.target_id)
-            if source is None or target is None:
-                return False
-            if dependent.attributes.get("mutation_kind") != attributes["mutation_kind"]:
-                return False
+            relation_edges = tuple(
+                edge
+                for edge in evidence.edges
+                if edge.kind == "pcode-operand-lineage"
+                and edge.attributes.get("event_index") == attributes["event_index"]
+                and edge.attributes.get("lineage_event_side") == "outputs"
+                and edge.attributes.get("mutation_kind") == attributes["mutation_kind"]
+                and edge.attributes.get("parent_lineage_ids") == attributes["parent_lineage_ids"]
+            )
             if attributes["side"] == "outputs":
-                return (
-                    target.attributes.get("operand_lineage_id") == operand_id
-                    and source.attributes.get("operand_lineage_id") in attributes["parent_lineage_ids"]
+                output_nodes = _matching_nodes(
+                    nodes,
+                    "pcode-operand",
+                    operand_lineage_id=operand_id,
                 )
-            return source.attributes.get("operand_lineage_id") == operand_id
+                if len(output_nodes) != 1:
+                    return False
+                output = output_nodes[0]
+                selected_edges = tuple(edge for edge in relation_edges if edge.target_id == output.record_id)
+                actual_parents = tuple(
+                    sorted(
+                        str(parent.attributes.get("operand_lineage_id"))
+                        for edge in selected_edges
+                        if (parent := nodes.get(edge.source_id)) is not None
+                    )
+                )
+                return actual_parents == attributes["parent_lineage_ids"] and dependent.record_id in {
+                    output.record_id,
+                    *(edge.record_id for edge in selected_edges),
+                }
+            input_nodes = _matching_nodes(
+                nodes,
+                "pcode-operand",
+                operand_lineage_id=operand_id,
+            )
+            if len(input_nodes) != 1:
+                return False
+            input_node = input_nodes[0]
+            selected_edges = tuple(edge for edge in relation_edges if edge.source_id == input_node.record_id)
+            return operand_id in attributes["parent_lineage_ids"] and dependent.record_id in {
+                input_node.record_id,
+                *(edge.record_id for edge in selected_edges),
+            }
 
     if support_kind == "object-virtual-binding":
         owners = _matching_nodes(
@@ -1528,7 +1619,15 @@ def exact_owner_path_record(
     if isinstance(record, EvidenceNode):
         capability = _OWNER_NODE_CAPABILITIES.get(record.kind)
         support = cited_support(record)
-        return capability is not None and capability in evidence.capabilities and support is not None
+        support_kinds = (
+            frozenset() if support is None else frozenset(item.attributes.get("support_kind") for item in support)
+        )
+        return (
+            capability is not None
+            and capability in evidence.capabilities
+            and support is not None
+            and _REQUIRED_NODE_SUPPORT_KINDS.get(record.kind, frozenset()) <= support_kinds
+        )
     schema = _OWNER_EDGE_SCHEMAS.get(record.kind)
     if schema is None:
         return False

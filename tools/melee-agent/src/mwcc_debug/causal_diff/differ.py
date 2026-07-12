@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Iterable, Mapping
 
-from .canonical import canonical_bytes
+from .canonical import canonical_bytes, stable_id
 from .graph import FrontierGraph
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance
 
@@ -17,6 +17,18 @@ _OWNER_SEMANTIC_STATE_KEYS = frozenset(
         "assigned_physical_register",
         "stack_offset",
         "stack_size",
+    }
+)
+_OWNER_ALTERNATIVE_SAFE_ATTRIBUTE_KEYS = frozenset(
+    {
+        "role_tuple",
+        "left_semantic_state",
+        "right_semantic_state",
+        "alternative_count",
+        "left_path_proof_complete",
+        "right_path_proof_complete",
+        "proof_complete",
+        "scope",
     }
 )
 _MATERIAL_NODE_KINDS = frozenset(
@@ -145,11 +157,88 @@ def _owner_ambiguity_records(
             canonical_bytes(_canonical_value(comparison.attributes.get("role_tuple"))),
             [],
         ).append(comparison)
+
+    def alternative_safe_content(
+        comparison: ComparisonRecord,
+    ) -> Mapping[str, object]:
+        semantic_attributes = {
+            key: _canonical_value(comparison.attributes[key])
+            for key in sorted(_OWNER_ALTERNATIVE_SAFE_ATTRIBUTE_KEYS)
+            if key in comparison.attributes
+        }
+        safe_provenance = {
+            "artifact_sha256": comparison.provenance.artifact_sha256,
+            "parser": comparison.provenance.parser,
+            "derivation_rule": comparison.provenance.derivation_rule,
+        }
+        return {
+            "relation_kind": comparison.relation_kind,
+            "left_compile_id": comparison.left_compile_id,
+            "right_compile_id": comparison.right_compile_id,
+            "confidence": comparison.confidence.value,
+            "semantic_attributes": semantic_attributes,
+            "provenance": safe_provenance,
+        }
+
+    def alternative_metadata(
+        comparison: ComparisonRecord,
+        collision_ordinal: int,
+    ) -> Mapping[str, object]:
+        safe_content = alternative_safe_content(comparison)
+        alternative_id = stable_id(
+            comparison.analysis_id,
+            "backend-owner-alternative.v1",
+            {
+                **safe_content,
+                "collision_ordinal": collision_ordinal,
+            },
+        )
+        return {
+            "alternative_id": alternative_id,
+            "underlying_record_id": comparison.record_id,
+            "left_record_id": comparison.left_record_id,
+            "right_record_id": comparison.right_record_id,
+            "confidence": comparison.confidence.value,
+            "semantic_attributes": safe_content["semantic_attributes"],
+            "provenance": {
+                **safe_content["provenance"],
+                "input_record_ids": comparison.provenance.input_record_ids,
+            },
+        }
+
     records: list[ComparisonRecord] = []
     for ordinal, alternatives in enumerate(
         sorted(grouped.values(), key=lambda items: min(item.record_id for item in items))
     ):
-        ordered = tuple(sorted(alternatives, key=lambda item: item.record_id))
+        ordered_by_content = tuple(
+            sorted(
+                alternatives,
+                key=lambda comparison: (
+                    canonical_bytes(alternative_safe_content(comparison)),
+                    comparison.record_id,
+                ),
+            )
+        )
+        collision_counts: dict[bytes, int] = {}
+        audited_items: list[tuple[Mapping[str, object], ComparisonRecord]] = []
+        for comparison in ordered_by_content:
+            content_key = canonical_bytes(alternative_safe_content(comparison))
+            collision_ordinal = collision_counts.get(content_key, 0)
+            collision_counts[content_key] = collision_ordinal + 1
+            audited_items.append(
+                (
+                    alternative_metadata(comparison, collision_ordinal),
+                    comparison,
+                )
+            )
+        audited = tuple(
+            sorted(
+                audited_items,
+                key=lambda item: str(item[0]["alternative_id"]),
+            )
+        )
+        ordered = tuple(comparison for _metadata, comparison in audited)
+        metadata = tuple(item for item, _comparison in audited)
         first = ordered[0]
         records.append(
             ComparisonRecord.create(
@@ -174,6 +263,8 @@ def _owner_ambiguity_records(
                 attributes={
                     "reason": "backend-owner-ambiguous",
                     "role_tuple": first.attributes.get("role_tuple"),
+                    "alternative_ids": tuple(item["alternative_id"] for item in metadata),
+                    "alternatives": metadata,
                     "alternative_record_ids": tuple(item.record_id for item in ordered),
                     "alternative_owner_pairs": tuple((item.left_record_id, item.right_record_id) for item in ordered),
                 },

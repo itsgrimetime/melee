@@ -151,7 +151,12 @@ def _object_result(
     )
 
 
-def _pcode_result(*, virtual: int = 66, physical_register: int = 21) -> PCodeLineageValidation:
+def _pcode_result(
+    *,
+    virtual: int = 66,
+    physical_register: int = 21,
+    parent_lineage_ids: tuple[str, ...] = ("ol-parent",),
+) -> PCodeLineageValidation:
     normalized = MappingProxyType(
         {
             "pcode_instructions": (
@@ -171,7 +176,7 @@ def _pcode_result(*, virtual: int = 66, physical_register: int = 21) -> PCodeLin
                                                 "machine_operand_key": "use:0",
                                                 "emission_pcode_operand_index": 1,
                                                 "operand_lineage_id": "ol-1",
-                                                "physical_register": 21,
+                                                "physical_register": physical_register,
                                             }
                                         ),
                                     ),
@@ -205,13 +210,17 @@ def _pcode_result(*, virtual: int = 66, physical_register: int = 21) -> PCodeLin
                             MappingProxyType(
                                 {
                                     "pcode_id": "pc-parent",
-                                    "operands": (
+                                    "operands": tuple(
                                         MappingProxyType(
                                             {
-                                                "operand_lineage_id": "ol-parent",
-                                                "operand_index": 1,
+                                                "operand_lineage_id": parent_id,
+                                                "operand_index": index,
                                             }
-                                        ),
+                                        )
+                                        for index, parent_id in enumerate(
+                                            parent_lineage_ids,
+                                            start=1,
+                                        )
                                     ),
                                 }
                             ),
@@ -225,7 +234,7 @@ def _pcode_result(*, virtual: int = 66, physical_register: int = 21) -> PCodeLin
                                             {
                                                 "operand_lineage_id": "ol-1",
                                                 "operand_index": 1,
-                                                "parent_lineage_ids": ("ol-parent",),
+                                                "parent_lineage_ids": parent_lineage_ids,
                                             }
                                         ),
                                     ),
@@ -267,6 +276,7 @@ def _adapter_input(
     virtual: int = 66,
     physical_register: int = 21,
     object_result: ObjectBindingValidation | None = None,
+    pcode_result: PCodeLineageValidation | None = None,
 ) -> ObjectBindingAdapterInput:
     return ObjectBindingAdapterInput(
         compile_id=compile_id,
@@ -276,7 +286,8 @@ def _adapter_input(
         artifact_size=4096,
         capabilities=capabilities,
         object_validation=object_result or _object_result(capture_run_id=capture_run_id, virtual=virtual),
-        pcode_validation=_pcode_result(
+        pcode_validation=pcode_result
+        or _pcode_result(
             virtual=virtual,
             physical_register=physical_register,
         ),
@@ -737,6 +748,7 @@ def test_every_support_kind_has_closed_typed_semantics_and_valid_dependents() ->
                 "code_offset",
                 "machine_operand_key",
                 "operand_lineage_id",
+                "physical_register",
             },
         ),
         "pcode-rewrite": (
@@ -747,6 +759,7 @@ def test_every_support_kind_has_closed_typed_semantics_and_valid_dependents() ->
                 "operand_lineage_id",
                 "class_id",
                 "virtual",
+                "allocated_physical",
             },
         ),
         "pcode-lineage-event": (
@@ -806,6 +819,166 @@ def test_every_support_kind_has_closed_typed_semantics_and_valid_dependents() ->
         accepted_kinds.add(support_kind)
 
     assert accepted_kinds == set(expected_shapes)
+
+
+def _two_parent_lineage_evidence() -> ObjectBindingEvidence:
+    parents = ("ol-parent-a", "ol-parent-b")
+    return emit_object_binding_evidence(
+        _adapter_input(
+            pcode_result=_pcode_result(parent_lineage_ids=parents),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda attributes: {
+            **attributes,
+            "parent_lineage_ids": ("ol-parent-a",),
+        },
+        lambda attributes: {
+            **attributes,
+            "parent_lineage_ids": ("foreign-a", "foreign-b"),
+        },
+        lambda attributes: {
+            **attributes,
+            "parent_lineage_ids": (
+                "ol-parent-a",
+                "ol-parent-b",
+                "foreign-parent",
+            ),
+        },
+        lambda attributes: {
+            **attributes,
+            "parent_lineage_ids": (
+                "ol-parent-a",
+                "ol-parent-b",
+                "ol-parent-b",
+            ),
+        },
+        lambda attributes: {
+            **attributes,
+            "parent_lineage_ids": ("ol-parent-b", "ol-parent-a"),
+        },
+        lambda attributes: {
+            **attributes,
+            "event_index": attributes["event_index"] + 1,
+        },
+    ),
+    ids=("subset", "replacement", "superset", "duplicate", "ordering", "event-index"),
+)
+def test_mutation_lineage_requires_exact_canonical_parent_topology(mutate) -> None:
+    evidence = _two_parent_lineage_evidence()
+    poisoned, dependents = _poison_typed_support(
+        evidence,
+        "pcode-lineage-event",
+        mutate,
+        support_filter=lambda attributes: attributes.get("side") == "outputs",
+    )
+
+    assert dependents
+    assert all(not exact_owner_path_record(poisoned, dependent) for dependent in dependents)
+    assert not proof_complete(poisoned)
+
+
+def test_mutation_lineage_accepts_exact_canonical_parent_topology() -> None:
+    evidence = _two_parent_lineage_evidence()
+    support = next(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-lineage-event"
+        and node.attributes.get("side") == "outputs"
+    )
+    dependents = tuple(
+        record
+        for record in (*evidence.nodes, *evidence.edges)
+        if support.record_id in record.provenance.input_record_ids
+    )
+
+    assert support.attributes["parent_lineage_ids"] == (
+        "ol-parent-a",
+        "ol-parent-b",
+    )
+    assert dependents
+    assert all(exact_owner_path_record(evidence, dependent) for dependent in dependents)
+    assert proof_complete(evidence)
+
+
+def test_assigned_physical_is_grounded_by_validated_decode_and_allocator_origin() -> None:
+    evidence = emit_object_binding_evidence(_adapter_input(physical_register=21))
+    anchor = next(node for node in evidence.nodes if node.kind == "assembly-operand-anchor")
+    virtual = next(node for node in evidence.nodes if node.kind == "retail-virtual-register")
+    allocator = next(node for node in evidence.nodes if node.kind == "allocator-node")
+    mapping = next(edge for edge in evidence.edges if edge.kind == "maps-to-allocator-node")
+    emission_support = next(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record" and node.attributes.get("support_kind") == "pcode-emission"
+    )
+    origin_support = next(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record" and node.attributes.get("support_kind") == "pcode-rewrite"
+    )
+
+    assert {
+        anchor.attributes["physical_register"],
+        virtual.attributes["physical_register"],
+        allocator.attributes["assigned_phys"],
+        mapping.attributes["assigned_phys"],
+        emission_support.attributes["physical_register"],
+        origin_support.attributes["allocated_physical"],
+    } == {21}
+    assert origin_support.record_id in allocator.provenance.input_record_ids
+    assert origin_support.record_id in mapping.provenance.input_record_ids
+    assert proof_complete(evidence)
+
+
+@pytest.mark.parametrize(
+    ("record_kind", "support_kind", "attribute"),
+    (
+        ("allocator-node", None, "assigned_phys"),
+        ("retail-virtual-register", None, "physical_register"),
+        ("assembly-operand-anchor", None, "physical_register"),
+        ("backend-support-record", "pcode-emission", "physical_register"),
+        ("backend-support-record", "pcode-rewrite", "allocated_physical"),
+        ("maps-to-allocator-node", None, "assigned_phys"),
+    ),
+    ids=(
+        "allocator",
+        "virtual",
+        "anchor",
+        "emission-support",
+        "allocator-origin",
+        "mapping-edge",
+    ),
+)
+def test_foreign_assigned_physical_invalidates_owner_proof(
+    record_kind,
+    support_kind,
+    attribute,
+) -> None:
+    evidence = emit_object_binding_evidence(_adapter_input(physical_register=21))
+
+    def poison(record):
+        if record.kind != record_kind or (
+            support_kind is not None and record.attributes.get("support_kind") != support_kind
+        ):
+            return record
+        return replace(
+            record,
+            attributes=MappingProxyType({**record.attributes, attribute: 19}),
+        )
+
+    poisoned = replace(
+        evidence,
+        nodes=tuple(poison(node) for node in evidence.nodes),
+        edges=tuple(poison(edge) for edge in evidence.edges),
+    )
+
+    assert not proof_complete(poisoned)
 
 
 def _replace_evidence_record(
@@ -1149,6 +1322,40 @@ def test_proof_looking_owner_is_rejected_when_heuristic_alternative_remains(
         any(alternative.startswith("backend-owner-ambiguous:") for alternative in verdict.rejected_alternatives)
         for verdict in report.verdicts
     )
+    owner_comparisons = tuple(
+        comparison for comparison in report.comparisons if comparison.relation_kind == "backend-owner-corresponds-to"
+    )
+    assert len(owner_comparisons) == 2
+    assert len({comparison.record_id for comparison in owner_comparisons}) == 1
+    ambiguity = next(comparison for comparison in deltas if comparison.relation_kind == "backend-owner-ambiguous")
+    alternatives = ambiguity.attributes["alternatives"]
+    assert len(alternatives) == 2
+    assert len({alternative["alternative_id"] for alternative in alternatives}) == 2
+    assert len({alternative["underlying_record_id"] for alternative in alternatives}) == 1
+    assert {alternative["confidence"] for alternative in alternatives} == {
+        "derived-unique",
+        "heuristic",
+    }
+    assert all(
+        {
+            "alternative_id",
+            "underlying_record_id",
+            "confidence",
+            "semantic_attributes",
+            "provenance",
+            "left_record_id",
+            "right_record_id",
+        }
+        <= set(alternative)
+        for alternative in alternatives
+    )
+    retained_ids = {
+        alternative.removeprefix("alternative-owner:")
+        for verdict in report.verdicts
+        for alternative in verdict.rejected_alternatives
+        if alternative.startswith("alternative-owner:")
+    }
+    assert retained_ids == {alternative["alternative_id"] for alternative in alternatives}
 
 
 def test_future_verified_anchor_path_replaces_ambiguous_v1_backend_role(

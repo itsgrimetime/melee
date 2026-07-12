@@ -159,6 +159,7 @@ class BackendOwnerPath:
     virtual: EvidenceNode
     allocator: EvidenceNode
     stack: EvidenceNode
+    assigned_physical_register: int
     supporting_records: tuple[EvidenceNode | EvidenceEdge, ...]
 
     @property
@@ -170,7 +171,7 @@ class BackendOwnerPath:
 
         return {
             "role_tuple": role.values(),
-            "assigned_physical_register": self.allocator.attributes.get("assigned_phys"),
+            "assigned_physical_register": self.assigned_physical_register,
             "stack_offset": self.stack.attributes.get("offset"),
             "stack_size": self.stack.attributes.get("size"),
         }
@@ -293,6 +294,27 @@ def _local_backend_owner_paths(
                                 allocator = nodes[allocator_edge.target_id]
                                 if not exact_owner_path_record(evidence, allocator):
                                     continue
+                                origin_ids = (
+                                    set(virtual_edge.provenance.input_record_ids)
+                                    & set(allocator_edge.provenance.input_record_ids)
+                                    & set(allocator.provenance.input_record_ids)
+                                )
+                                origin_support = tuple(
+                                    nodes[record_id]
+                                    for record_id in sorted(origin_ids)
+                                    if record_id in nodes
+                                    and nodes[record_id].kind == "backend-support-record"
+                                    and nodes[record_id].attributes.get("support_kind") == "pcode-rewrite"
+                                )
+                                if len(origin_support) != 1:
+                                    continue
+                                assigned_physical = origin_support[0].attributes.get("allocated_physical")
+                                if (
+                                    not isinstance(assigned_physical, int)
+                                    or isinstance(assigned_physical, bool)
+                                    or not 0 <= assigned_physical <= 31
+                                ):
+                                    continue
                                 for stack_edge in stack_edges:
                                     stack = nodes[stack_edge.target_id]
                                     if not exact_owner_path_record(evidence, stack):
@@ -323,6 +345,7 @@ def _local_backend_owner_paths(
                                                 virtual,
                                                 allocator,
                                                 stack,
+                                                assigned_physical,
                                                 supporting,
                                             )
                                         )

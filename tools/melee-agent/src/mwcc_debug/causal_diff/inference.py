@@ -854,9 +854,9 @@ def infer_pair(
                     *rejected,
                     *(f"backend-owner-ambiguous:{comparison.record_id}" for comparison in owner_ambiguities),
                     *(
-                        f"alternative-owner-comparison:{record_id}"
+                        f"alternative-owner:{alternative['alternative_id']}"
                         for comparison in owner_ambiguities
-                        for record_id in comparison.attributes.get("alternative_record_ids", ())
+                        for alternative in comparison.attributes.get("alternatives", ())
                     ),
                 }
             )
