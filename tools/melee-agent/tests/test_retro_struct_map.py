@@ -1,3 +1,4 @@
+import copy
 import json
 import sys
 from pathlib import Path
@@ -27,6 +28,59 @@ def test_gc125n_struct_map_loader_reads_installed_registry():
     table = struct_map.load_gc125n_struct_map()
 
     assert table == _load_gc125n_table()
+
+
+def test_live_gc125n_table_satisfies_object_capture_gate_and_exact_layout():
+    table = _load_gc125n_table()
+
+    assert struct_map.validate_object_capture_capability(table) == []
+    layout = struct_map.load_object_capture_layout(table)
+
+    assert layout.ignode_obj_addr == 0x04
+    assert layout.objobject_name_record == 0x0A
+    assert layout.objobject_type_pointer == 0x0E
+    assert layout.objobject_stack_offset == 0x2A
+    assert layout.object_list_next == 0x00
+    assert layout.object_list_object == 0x04
+    assert layout.type_size == 0x02
+    assert layout.name_record_text == 0x0A
+    assert dict(layout.frame_list_vas) == {
+        "arguments": 0x58806C,
+        "locals": 0x587FB8,
+        "temps": 0x57FEC0,
+    }
+    assert layout.frame_base_size_va == 0x5880CC
+    assert layout.frame_call_args_size_va == 0x58712C
+
+
+def test_object_capture_gate_rejects_missing_offset_entry_and_confidence():
+    table = _load_gc125n_table()
+    missing = copy.deepcopy(table)
+    del missing["structs"]["IGNode"]["fields"]["obj_addr"]
+    bad_entry = copy.deepcopy(table)
+    bad_entry["entries"]["arguments"]["confidence"] = "guess"
+    boolean_offset = copy.deepcopy(table)
+    boolean_offset["structs"]["ObjectListNode"]["fields"]["next"] = False
+
+    assert any(
+        "IGNode.obj_addr expected offset 0x4" in error
+        for error in struct_map.validate_object_capture_capability(missing)
+    )
+    assert any(
+        "arguments confidence guess below required gate" in error
+        for error in struct_map.validate_object_capture_capability(bad_entry)
+    )
+    assert any(
+        "ObjectListNode.next expected offset 0x0" in error
+        for error in struct_map.validate_object_capture_capability(boolean_offset)
+    )
+    for malformed in (missing, bad_entry, boolean_offset):
+        try:
+            struct_map.load_object_capture_layout(malformed)
+        except ValueError as exc:
+            assert "object capture map failed validation" in str(exc)
+        else:
+            raise AssertionError("malformed object capture layout was accepted")
 
 
 def test_instrumentation_registry_gate_rejects_malformed_or_promoted_guesses():

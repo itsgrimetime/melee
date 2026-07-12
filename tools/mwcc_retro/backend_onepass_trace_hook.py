@@ -7,6 +7,13 @@ The full ``debug retro backend`` command uses it behind the
 for candidate-only diagnostics.
 """
 
+import json
+import os
+import tempfile
+from pathlib import Path
+
+from tools.mwcc_retro import backend_object_snapshot
+
 _OBJECT_EVENT_KINDS = frozenset(
     {"objobject_snapshot", "object_virtual_binding", "object_frame_binding"}
 )
@@ -47,9 +54,29 @@ def _canonical_object_events(events):
                 row.get("stage"),
             )
             previous = snapshots.get(key)
-            if previous is not None and previous != row:
-                raise ValueError(f"conflicting ObjObject snapshots for {key!r}")
-            snapshots[key] = row
+            if previous is not None:
+                sequence = row.get("lifecycle_sequence_at_capture")
+                previous_sequence = previous.get("lifecycle_sequence_at_capture")
+                row_content = {
+                    field: value
+                    for field, value in row.items()
+                    if field != "lifecycle_sequence_at_capture"
+                }
+                previous_content = {
+                    field: value
+                    for field, value in previous.items()
+                    if field != "lifecycle_sequence_at_capture"
+                }
+                if row_content != previous_content:
+                    raise ValueError(f"conflicting ObjObject snapshots for {key!r}")
+                if not isinstance(sequence, int) or not isinstance(
+                    previous_sequence, int
+                ):
+                    raise ValueError(f"malformed ObjObject snapshot sequence for {key!r}")
+                if sequence > previous_sequence:
+                    snapshots[key] = row
+            else:
+                snapshots[key] = row
         else:
             if row in other:
                 raise ValueError(f"duplicate object capture event: {row!r}")
@@ -98,6 +125,56 @@ def _object_capture_status(events, *, errors, cap_reached):
         # Task 4 intentionally withholds virtual/frame capabilities here.
         "capabilities": [],
     }
+
+
+def _retain_partial_object_facts(state, error, *, stage):
+    facts = [dict(fact) for fact in error.partial_facts]
+    state["object_events"].extend(facts)
+    state["errors"].append(
+        {
+            "stage": stage,
+            "error": str(error),
+            "object_capture_partial": True,
+        }
+    )
+
+
+def _reset_object_capture_state(state):
+    state["object_events"] = []
+
+
+def _publish_object_sidecar(path, events, status):
+    target = Path(path)
+    payload = {
+        "schema_version": "mwcc-retro-object-events.v1",
+        "capture_status": status,
+        "events": events,
+        "publication_complete": True,
+    }
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _frame_object_events(frame_event):
@@ -159,17 +236,29 @@ def intervene(ctx):
         backend_ig_snapshot,
         backend_pcode_snapshot,
         backend_trace_assembler,
+        struct_map,
     )
 
     gdb = ctx.gdb
     cad = ctx.cad
     entries = ctx.table.get("entries", {})
     out_events = ctx.out_dir + "/backend-events.v1.jsonl"
-    out_object_events = ctx.out_dir + "/backend-object-events.v1.jsonl"
+    out_object_events = ctx.out_dir + "/backend-object-events.v1.json"
     out_summary = ctx.out_dir + "/backend-onepass-candidate.json"
     source_file = os.environ.get("RETRO_SOURCE", "")
     requested = os.environ.get("RETRO_FUNCTION", ctx.fn)
     lifecycle_capture = getattr(ctx, "lifecycle_capture", None)
+    object_layout = struct_map.load_object_capture_layout(ctx.table)
+    object_offsets = backend_object_snapshot.ObjObjectOffsets(
+        name_record=object_layout.objobject_name_record,
+        type_pointer=object_layout.objobject_type_pointer,
+        type_size=object_layout.type_size,
+        stack_offset=object_layout.objobject_stack_offset,
+    )
+    list_offsets = backend_object_snapshot.FrameListOffsets(
+        next=object_layout.object_list_next,
+        object=object_layout.object_list_object,
+    )
 
     def parse_aliases():
         try:
@@ -281,13 +370,9 @@ def intervene(ctx):
         "assign_nonvolatile": entry_va("colorgraph_assign_nonvolatile"),
         "spill": entry_va("colorgraph_spill"),
     }
-    frame_vas = {
-        "arguments": entry_va("arguments", 0x58806C),
-        "locals": entry_va("locals", 0x587FB8),
-        "temps": entry_va("temps", 0x57FEC0),
-    }
-    frame_base_size_va = entry_va("frame_base_size", 0x5880CC)
-    frame_call_args_size_va = entry_va("frame_call_args_size", 0x58712C)
+    frame_vas = dict(object_layout.frame_list_vas)
+    frame_base_size_va = object_layout.frame_base_size_va
+    frame_call_args_size_va = object_layout.frame_call_args_size_va
     required = [
         "codegen_start",
         "codegen_end",
@@ -389,9 +474,14 @@ def intervene(ctx):
                 frame_base_size_va=frame_base_size_va,
                 frame_call_args_size_va=frame_call_args_size_va,
                 source_stage=stage,
+                object_offsets=object_offsets,
+                list_offsets=list_offsets,
+                name_record_text_offset=object_layout.name_record_text,
                 **lifecycle_inputs,
             )
         except Exception as exc:  # noqa: BLE001 - fall back to probe-shaped names
+            if isinstance(exc, backend_object_snapshot.PartialObjectCaptureError):
+                _retain_partial_object_facts(state, exc, stage=stage)
             state["warnings"].append(
                 {"stage": stage, "warning": f"frame_state fallback: {exc}"}
             )
@@ -402,6 +492,9 @@ def intervene(ctx):
                 list_vas=frame_vas,
                 frame_base_size_va=frame_base_size_va,
                 frame_call_args_size_va=frame_call_args_size_va,
+                object_offsets=object_offsets,
+                list_offsets=list_offsets,
+                name_record_text_offset=object_layout.name_record_text,
             )
             event = backend_trace_assembler.frame_events_from_map_probe_payload(
                 {"events": [{"stage": stage, "frame_state": probe_frame}]}
@@ -425,7 +518,7 @@ def intervene(ctx):
         state["class_iters"] = {}
         state["exact_decisions_by_class"] = {}
         state["matched_function_name"] = None
-        state["object_events"] = []
+        _reset_object_capture_state(state)
 
     class CodegenStart(gdb.Breakpoint):
         def stop(self):
@@ -523,6 +616,8 @@ def intervene(ctx):
                                 class_name=class_name,
                                 function_name=ctx.fn,
                                 read_s32=read_s32,
+                                ignode_obj_addr_offset=object_layout.ignode_obj_addr,
+                                object_offsets=object_offsets,
                                 **_stopped_lifecycle_inputs(lifecycle_capture),
                             )
                             state["object_events"].extend(
@@ -560,13 +655,21 @@ def intervene(ctx):
                                 }
                             )
                         except Exception as exc:  # noqa: BLE001 - summarize in payload
-                            state["errors"].append(
-                                {
-                                    "stage": "colorgraph_return",
-                                    "class_id": class_id,
-                                    "error": str(exc),
-                                }
-                            )
+                            if isinstance(
+                                exc,
+                                backend_object_snapshot.PartialObjectCaptureError,
+                            ):
+                                _retain_partial_object_facts(
+                                    state, exc, stage="colorgraph_return"
+                                )
+                            else:
+                                state["errors"].append(
+                                    {
+                                        "stage": "colorgraph_return",
+                                        "class_id": class_id,
+                                        "error": str(exc),
+                                    }
+                                )
                         finally:
                             state["pending_classes"].discard(class_id)
                             if state.get("active_colorgraph", {}).get("return_pc") == return_pc:
@@ -863,8 +966,6 @@ def intervene(ctx):
 
     if os.path.exists(out_events):
         os.remove(out_events)
-    if os.path.exists(out_object_events):
-        os.remove(out_object_events)
 
     if missing:
         print("[retro] ABORT: one-pass backend candidate missing entries " + ", ".join(missing))
@@ -888,9 +989,6 @@ def intervene(ctx):
             state["errors"].append(
                 {"stage": "object_capture_finalize", "error": str(exc)}
             )
-        with open(out_object_events, "w", encoding="utf-8") as f:
-            for event in object_events:
-                f.write(json.dumps(event, sort_keys=True) + "\n")
         object_errors = [
             str(row.get("error"))
             for row in state["errors"]
@@ -908,6 +1006,27 @@ def intervene(ctx):
             for error in object_errors
             for token in ("max_nodes", "max_objects", "exceeds", "exceeded")
         )
+        object_status = _object_capture_status(
+            object_events,
+            errors=object_errors,
+            cap_reached=cap_reached,
+        )
+        try:
+            _publish_object_sidecar(
+                out_object_events,
+                object_events,
+                object_status,
+            )
+        except Exception as exc:  # noqa: BLE001 - retain the prior valid sidecar
+            state["errors"].append(
+                {"stage": "object_capture_publish", "error": str(exc)}
+            )
+            object_errors.append(str(exc))
+            object_status = _object_capture_status(
+                object_events,
+                errors=object_errors,
+                cap_reached=cap_reached,
+            )
         payload = {
             "schema_version": "mwcc-retro-backend-onepass-candidate.v1",
             "compiler": {"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
@@ -920,11 +1039,7 @@ def intervene(ctx):
             "internal_breakpoints": internal_pcs,
             "errors": state["errors"],
             "warnings": state["warnings"],
-            "object_capture": _object_capture_status(
-                object_events,
-                errors=object_errors,
-                cap_reached=cap_reached,
-            ),
+            "object_capture": object_status,
             "notes": [
                 "One-pass retail backend event stream.",
                 "Diagnostic sidecar for trace assembly and completeness checks.",

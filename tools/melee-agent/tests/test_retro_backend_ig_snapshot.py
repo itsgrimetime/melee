@@ -6,7 +6,13 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
-from tools.mwcc_retro import backend_events, backend_ig_snapshot  # noqa: E402
+from tools.mwcc_retro import (  # noqa: E402
+    backend_events,
+    backend_ig_snapshot,
+    backend_object_snapshot,
+)
+
+OBJECT_OFFSETS = backend_object_snapshot.ObjObjectOffsets(0x0A, 0x0E, 0x02, 0x2A)
 
 COMPILER = {"family": "MWCC", "version": "GC/1.2.5n", "retail": True}
 SOURCE = {
@@ -110,6 +116,8 @@ def test_ig_node_emits_observed_objobject_snapshot_and_binding() -> None:
         generation_for=lambda kind, ptr: (
             3 if (kind, ptr) == ("objobject", 0x1200) else None
         ),
+        ignode_obj_addr_offset=0x04,
+        object_offsets=OBJECT_OFFSETS,
     )
 
     node = next(event for event in events if event["event"] == "node")
@@ -159,6 +167,8 @@ def test_ig_keeps_null_object_node_without_emitting_positive_binding() -> None:
         read_s32=mem.read_s32,
         lifecycle_sequence=7,
         generation_for=lambda _kind, _ptr: None,
+        ignode_obj_addr_offset=0x04,
+        object_offsets=OBJECT_OFFSETS,
     )
 
     node = next(event for event in events if event["event"] == "node")
@@ -192,6 +202,8 @@ def test_ig_retains_one_to_many_and_spill_owned_positive_bindings_canonically() 
         read_s32=mem.read_s32,
         lifecycle_sequence=0,
         generation_for=lambda _kind, _ptr: 1,
+        ignode_obj_addr_offset=0x04,
+        object_offsets=OBJECT_OFFSETS,
     )
 
     snapshots = [event for event in events if event["event"] == "objobject_snapshot"]
@@ -217,7 +229,80 @@ def test_ig_positive_object_without_active_generation_fails_closed() -> None:
             read_s32=mem.read_s32,
             lifecycle_sequence=0,
             generation_for=lambda _kind, _ptr: None,
+            ignode_obj_addr_offset=0x04,
+            object_offsets=OBJECT_OFFSETS,
         )
+
+
+def test_ig_late_failure_carries_immutable_positive_prefix_facts() -> None:
+    mem = Memory()
+    add_node(mem, graph_va=0x1000, ig_id=0, ptr=0x2000, objobject_ptr=0x1200)
+    add_node(mem, graph_va=0x1000, ig_id=1, ptr=0x2040, objobject_ptr=0x1300)
+    add_objobject(mem, 0x1200)
+    add_objobject(mem, 0x1300)
+    del mem._s16[0x2040 + 0x0E]
+
+    with pytest.raises(
+        backend_ig_snapshot.PartialObjectCaptureError,
+        match=r"failed to read IGNode\[1\].degree",
+    ) as caught:
+        backend_ig_snapshot.snapshot_interference_graph(
+            mem.read_u32,
+            mem.read_s16,
+            0x1000,
+            2,
+            class_id=0,
+            class_name="gpr",
+            source_stage="colorgraph_return",
+            read_s32=mem.read_s32,
+            lifecycle_sequence=7,
+            generation_for=lambda _kind, ptr: {0x1200: 3, 0x1300: 4}.get(ptr),
+            ignode_obj_addr_offset=0x04,
+            object_offsets=OBJECT_OFFSETS,
+        )
+
+    facts = caught.value.partial_facts
+    assert [fact["event"] for fact in facts] == [
+        "objobject_snapshot",
+        "object_virtual_binding",
+    ]
+    assert facts[1]["objobject_ptr"] == 0x1200
+    with pytest.raises(TypeError):
+        facts[1]["virtual"] = 99  # type: ignore[index]
+
+
+def test_post_colorgraph_late_head_cycle_carries_positive_snapshot_facts() -> None:
+    mem = Memory()
+    add_node(mem, graph_va=0x1000, ig_id=0, ptr=0x2000, objobject_ptr=0x1200)
+    add_node(mem, graph_va=0x1000, ig_id=1, ptr=0x2040, objobject_ptr=0x1300)
+    add_objobject(mem, 0x1200)
+    add_objobject(mem, 0x1300)
+    mem.u32(0x2000, 0x2040)
+    mem.u32(0x2040, 0x2000)
+
+    with pytest.raises(
+        backend_ig_snapshot.PartialObjectCaptureError,
+        match="cycle in colorgraph head list",
+    ) as caught:
+        backend_ig_snapshot.post_colorgraph_class_events(
+            mem.read_u32,
+            mem.read_s16,
+            graph_va=0x1000,
+            head_ptr=0x2000,
+            n_ignodes=2,
+            class_id=0,
+            class_name="gpr",
+            read_s32=mem.read_s32,
+            lifecycle_sequence=7,
+            generation_for=lambda _kind, ptr: {0x1200: 3, 0x1300: 4}.get(ptr),
+            ignode_obj_addr_offset=0x04,
+            object_offsets=OBJECT_OFFSETS,
+        )
+
+    assert [fact["objobject_ptr"] for fact in caught.value.partial_facts if fact["event"] == "object_virtual_binding"] == [
+        0x1200,
+        0x1300,
+    ]
 
 
 def test_walk_colorgraph_head_reads_ignode_next_order() -> None:

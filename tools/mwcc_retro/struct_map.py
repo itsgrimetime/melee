@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 INSTRUMENTATION_PROOF_SCHEMA = "mwcc-retro-lifetime-proof.v1"
@@ -71,6 +73,41 @@ REQUIRED_PCODE_SNAPSHOT_STRUCT_FIELDS = {
     "PCodeBlock": REQUIRED_STRUCT_FIELDS["PCodeBlock"],
     "PCode": REQUIRED_STRUCT_FIELDS["PCode"],
 }
+
+REQUIRED_OBJECT_CAPTURE_KEYS = (
+    "arguments",
+    "locals",
+    "temps",
+    "frame_base_size",
+    "frame_call_args_size",
+)
+
+REQUIRED_OBJECT_CAPTURE_STRUCT_FIELDS: dict[str, dict[str, int]] = {
+    "IGNode": {"obj_addr": 0x04},
+    "ObjObject": {
+        "name_record": 0x0A,
+        "type_pointer": 0x0E,
+        "stack_offset": 0x2A,
+    },
+    "ObjectListNode": {"next": 0x00, "object": 0x04},
+    "Type": {"size": 0x02},
+    "NameRecord": {"text": 0x0A},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectCaptureLayout:
+    ignode_obj_addr: int
+    objobject_name_record: int
+    objobject_type_pointer: int
+    objobject_stack_offset: int
+    object_list_next: int
+    object_list_object: int
+    type_size: int
+    name_record_text: int
+    frame_list_vas: Mapping[str, int]
+    frame_base_size_va: int
+    frame_call_args_size_va: int
 
 REQUIRED_BACKEND_READER_FAMILIES = (
     "function_start",
@@ -333,3 +370,87 @@ def validate_backend_pcode_snapshot_capability(table: dict[str, Any]) -> list[st
                     f"struct {name}.{field} expected offset {offset:#x}, got {actual.get(field)!r}"
                 )
     return errors
+
+
+def validate_object_capture_capability(table: object) -> list[str]:
+    """Validate the promoted retail ObjObject/frame observational layout."""
+
+    if not isinstance(table, Mapping):
+        return ["object capture table must be object"]
+    errors: list[str] = []
+    reader = table.get("backend_reader")
+    if not isinstance(reader, Mapping):
+        errors.append("missing object capture backend_reader gate")
+    else:
+        gate = reader.get("object_capture")
+        if not isinstance(gate, Mapping) or gate.get("validated") is not True:
+            errors.append("backend_reader.object_capture.validated is not true")
+
+    entries = table.get("entries")
+    if not isinstance(entries, Mapping):
+        errors.append("object capture entries must be object")
+        entries = {}
+    for key in REQUIRED_OBJECT_CAPTURE_KEYS:
+        entry = entries.get(key)
+        if not isinstance(entry, Mapping):
+            errors.append(f"missing object capture entry {key}")
+            continue
+        confidence = entry.get("confidence")
+        if confidence not in ACCEPTED_REQUIRED_CONFIDENCE:
+            errors.append(f"{key} confidence {confidence} below required gate")
+        va = entry.get("va")
+        if not isinstance(va, int) or isinstance(va, bool) or va <= 0:
+            errors.append(f"{key} missing positive va")
+
+    structs = table.get("structs")
+    if not isinstance(structs, Mapping):
+        errors.append("object capture structs must be object")
+        structs = {}
+    for name, expected_fields in REQUIRED_OBJECT_CAPTURE_STRUCT_FIELDS.items():
+        struct = structs.get(name)
+        if not isinstance(struct, Mapping):
+            errors.append(f"missing object capture struct {name}")
+            continue
+        confidence = struct.get("confidence")
+        if confidence not in ACCEPTED_REQUIRED_CONFIDENCE:
+            errors.append(f"struct {name} confidence {confidence} below required gate")
+        fields = struct.get("fields")
+        if not isinstance(fields, Mapping):
+            errors.append(f"struct {name} fields must be object")
+            continue
+        for field, expected in expected_fields.items():
+            actual = fields.get(field)
+            if (
+                not isinstance(actual, int)
+                or isinstance(actual, bool)
+                or actual != expected
+            ):
+                errors.append(
+                    f"struct {name}.{field} expected offset {expected:#x}, "
+                    f"got {actual!r}"
+                )
+    return errors
+
+
+def load_object_capture_layout(table: object) -> ObjectCaptureLayout:
+    errors = validate_object_capture_capability(table)
+    if errors:
+        raise ValueError("object capture map failed validation: " + "; ".join(errors))
+    assert isinstance(table, Mapping)
+    entries = table["entries"]
+    structs = table["structs"]
+    return ObjectCaptureLayout(
+        ignode_obj_addr=structs["IGNode"]["fields"]["obj_addr"],
+        objobject_name_record=structs["ObjObject"]["fields"]["name_record"],
+        objobject_type_pointer=structs["ObjObject"]["fields"]["type_pointer"],
+        objobject_stack_offset=structs["ObjObject"]["fields"]["stack_offset"],
+        object_list_next=structs["ObjectListNode"]["fields"]["next"],
+        object_list_object=structs["ObjectListNode"]["fields"]["object"],
+        type_size=structs["Type"]["fields"]["size"],
+        name_record_text=structs["NameRecord"]["fields"]["text"],
+        frame_list_vas=MappingProxyType(
+            {area: entries[area]["va"] for area in ("arguments", "locals", "temps")}
+        ),
+        frame_base_size_va=entries["frame_base_size"]["va"],
+        frame_call_args_size_va=entries["frame_call_args_size"]["va"],
+    )

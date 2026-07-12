@@ -12,6 +12,14 @@ ReadS32 = Callable[[int], int]
 _STAGES = frozenset({"colorgraph_return", "final_scheduler"})
 
 
+class PartialObjectCaptureError(ValueError):
+    """Controlled capture failure retaining immutable positive prefix facts."""
+
+    def __init__(self, message: str, partial_facts: list[dict[str, object]]) -> None:
+        super().__init__(message)
+        self.partial_facts = tuple(_freeze_json(fact) for fact in partial_facts)
+
+
 @dataclass(frozen=True, slots=True)
 class ObjObjectOffsets:
     """Validated GC/1.2.5n fields used by observational capture."""
@@ -22,12 +30,10 @@ class ObjObjectOffsets:
     stack_offset: int
 
 
-GC_125N_OBJOBJECT_OFFSETS = ObjObjectOffsets(
-    name_record=0x0A,
-    type_pointer=0x0E,
-    type_size=0x02,
-    stack_offset=0x2A,
-)
+@dataclass(frozen=True, slots=True)
+class FrameListOffsets:
+    next: int
+    object: int
 
 
 def snapshot_objobject(
@@ -105,3 +111,11 @@ def _validate_identity(*, ptr: object, stage: object, lifecycle_sequence: object
 
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _freeze_json(value: object) -> object:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_json(item) for item in value)
+    return value

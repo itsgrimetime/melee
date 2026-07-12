@@ -15,9 +15,10 @@ ReadU32 = Callable[[int], int]
 ReadS16 = Callable[[int], int]
 ReadS32 = Callable[[int], int]
 GenerationFor = Callable[[str, int], int | None]
+PartialObjectCaptureError = backend_object_snapshot.PartialObjectCaptureError
+_OBJECT_EVENT_KINDS = frozenset({"objobject_snapshot", "object_virtual_binding"})
 
 IGNODE_NEXT = 0x00
-IGNODE_OBJ_ADDR = 0x04
 IGNODE_IG_IDX = 0x0C
 IGNODE_DEGREE = 0x0E
 IGNODE_ASSIGNED_REG = 0x10
@@ -92,9 +93,53 @@ def snapshot_interference_graph(
     read_s32: ReadS32 | None = None,
     lifecycle_sequence: int | None = None,
     generation_for: GenerationFor | None = None,
-    object_offsets: backend_object_snapshot.ObjObjectOffsets = (
-        backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS
-    ),
+    ignode_obj_addr_offset: int | None = None,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets | None = None,
+) -> list[dict[str, Any]]:
+    partial_facts: list[dict[str, object]] = []
+    try:
+        return _snapshot_interference_graph(
+            read_u32,
+            read_s16,
+            graph_va,
+            n_ignodes,
+            class_id=class_id,
+            class_name=class_name,
+            source_stage=source_stage,
+            function_name=function_name,
+            max_nodes=max_nodes,
+            read_s32=read_s32,
+            lifecycle_sequence=lifecycle_sequence,
+            generation_for=generation_for,
+            ignode_obj_addr_offset=ignode_obj_addr_offset,
+            object_offsets=object_offsets,
+            partial_facts=partial_facts,
+        )
+    except PartialObjectCaptureError:
+        raise
+    except Exception as exc:
+        if partial_facts:
+            raise PartialObjectCaptureError(str(exc), partial_facts) from exc
+        raise
+
+
+def _snapshot_interference_graph(
+    read_u32: ReadU32,
+    read_s16: ReadS16,
+    graph_va: int,
+    n_ignodes: int,
+    *,
+    class_id: int,
+    class_name: str,
+    source_stage: str,
+    function_name: str | None = None,
+    max_nodes: int = DEFAULT_MAX_NODES,
+    read_s32: ReadS32 | None = None,
+    lifecycle_sequence: int | None = None,
+    generation_for: GenerationFor | None = None,
+    ignode_obj_addr_offset: int | None = None,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets | None = None,
+    partial_facts: list[dict[str, object]],
 ) -> list[dict[str, Any]]:
     """Return normalized backend events for one retail interference graph.
 
@@ -117,6 +162,8 @@ def snapshot_interference_graph(
         read_s32=read_s32,
         lifecycle_sequence=lifecycle_sequence,
         generation_for=generation_for,
+        ignode_obj_addr_offset=ignode_obj_addr_offset,
+        object_offsets=object_offsets,
     )
 
     for ig_id in range(n_ignodes):
@@ -125,10 +172,14 @@ def snapshot_interference_graph(
             raise ValueError(f"null node pointer for ig_id {ig_id}")
 
         next_ptr = _read_u32(read_u32, node_ptr + IGNODE_NEXT, f"IGNode[{ig_id}].next")
-        objobject_ptr = _read_u32(
-            read_u32,
-            node_ptr + IGNODE_OBJ_ADDR,
-            f"IGNode[{ig_id}].obj_addr",
+        objobject_ptr = (
+            _read_u32(
+                read_u32,
+                node_ptr + ignode_obj_addr_offset,
+                f"IGNode[{ig_id}].obj_addr",
+            )
+            if ignode_obj_addr_offset is not None
+            else 0
         )
         observed_ig_id = _read_s16(read_s16, node_ptr + IGNODE_IG_IDX, f"IGNode[{ig_id}].ig_idx")
         if observed_ig_id != ig_id:
@@ -173,6 +224,7 @@ def snapshot_interference_graph(
             assert read_s32 is not None
             assert lifecycle_sequence is not None
             assert generation_for is not None
+            assert object_offsets is not None
             generation = generation_for("objobject", objobject_ptr)
             if not _is_positive_int(generation):
                 raise ValueError(
@@ -188,12 +240,12 @@ def snapshot_interference_graph(
                 read_s32=read_s32,
                 offsets=object_offsets,
             )
-            object_snapshots.setdefault(
-                (objobject_ptr, generation),
-                {"event": "objobject_snapshot", **dict(snapshot)},
-            )
-            object_bindings.append(
-                {
+            snapshot_event = {"event": "objobject_snapshot", **dict(snapshot)}
+            snapshot_key = (objobject_ptr, generation)
+            if snapshot_key not in object_snapshots:
+                object_snapshots[snapshot_key] = snapshot_event
+                partial_facts.append(snapshot_event)
+            binding_event = {
                     "event": "object_virtual_binding",
                     "source_stage": source_stage,
                     "objobject_ptr": objobject_ptr,
@@ -208,7 +260,8 @@ def snapshot_interference_graph(
                     "confidence": "observed",
                     "provenance": "retail-ignode.obj_addr",
                 }
-            )
+            object_bindings.append(binding_event)
+            partial_facts.append(binding_event)
 
         flag_byte = flags & 0xFF
         if flag_byte & 0x04:
@@ -464,9 +517,8 @@ def post_colorgraph_class_events(
     read_s32: ReadS32 | None = None,
     lifecycle_sequence: int | None = None,
     generation_for: GenerationFor | None = None,
-    object_offsets: backend_object_snapshot.ObjObjectOffsets = (
-        backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS
-    ),
+    ignode_obj_addr_offset: int | None = None,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets | None = None,
 ) -> list[dict[str, Any]]:
     """Return one post-colorgraph class snapshot event batch.
 
@@ -476,14 +528,6 @@ def post_colorgraph_class_events(
     """
 
     source_stage = "colorgraph_return"
-    order = walk_colorgraph_head_order(
-        read_u32,
-        read_s16,
-        head_ptr,
-        n_ignodes,
-        allow_empty=True,
-        max_nodes=max_nodes,
-    )
     events = snapshot_interference_graph(
         read_u32,
         read_s16,
@@ -497,39 +541,58 @@ def post_colorgraph_class_events(
         read_s32=read_s32,
         lifecycle_sequence=lifecycle_sequence,
         generation_for=generation_for,
+        ignode_obj_addr_offset=ignode_obj_addr_offset,
         object_offsets=object_offsets,
     )
-    events = enrich_post_colorgraph_coalesce_mappings(
-        events,
-        read_u32,
-        read_s16,
-        graph_va,
-        n_ignodes,
-        class_name=class_name,
-        max_nodes=max_nodes,
-    )
-    return [
-        *events,
-        *colorgraph_order_events(
-            order,
-            class_id=class_id,
-            class_name=class_name,
-            source_stage=source_stage,
-            provenance="colorgraph_return_head",
-        ),
-        *post_colorgraph_color_decision_events(
+    partial_facts = [
+        event for event in events if event.get("event") in _OBJECT_EVENT_KINDS
+    ]
+    try:
+        order = walk_colorgraph_head_order(
             read_u32,
             read_s16,
             head_ptr,
+            n_ignodes,
+            allow_empty=True,
+            max_nodes=max_nodes,
+        )
+        events = enrich_post_colorgraph_coalesce_mappings(
+            events,
+            read_u32,
+            read_s16,
             graph_va,
             n_ignodes,
-            class_id=class_id,
             class_name=class_name,
-            colorgraph_order=order,
-            source_stage=source_stage,
             max_nodes=max_nodes,
-        ),
-    ]
+        )
+        return [
+            *events,
+            *colorgraph_order_events(
+                order,
+                class_id=class_id,
+                class_name=class_name,
+                source_stage=source_stage,
+                provenance="colorgraph_return_head",
+            ),
+            *post_colorgraph_color_decision_events(
+                read_u32,
+                read_s16,
+                head_ptr,
+                graph_va,
+                n_ignodes,
+                class_id=class_id,
+                class_name=class_name,
+                colorgraph_order=order,
+                source_stage=source_stage,
+                max_nodes=max_nodes,
+            ),
+        ]
+    except PartialObjectCaptureError:
+        raise
+    except Exception as exc:
+        if partial_facts:
+            raise PartialObjectCaptureError(str(exc), partial_facts) from exc
+        raise
 
 
 def enrich_post_colorgraph_coalesce_mappings(
@@ -698,6 +761,8 @@ def _validate_object_capture_inputs(
     read_s32: ReadS32 | None,
     lifecycle_sequence: int | None,
     generation_for: GenerationFor | None,
+    ignode_obj_addr_offset: int | None,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets | None,
 ) -> bool:
     supplied = (
         read_s32 is not None,
@@ -714,7 +779,15 @@ def _validate_object_capture_inputs(
         or lifecycle_sequence < -1
     ):
         raise ValueError("lifecycle_sequence must be an integer at least -1")
-    return all(supplied)
+    capture_objects = all(supplied)
+    if capture_objects and (
+        not isinstance(ignode_obj_addr_offset, int)
+        or isinstance(ignode_obj_addr_offset, bool)
+        or ignode_obj_addr_offset < 0
+        or not isinstance(object_offsets, backend_object_snapshot.ObjObjectOffsets)
+    ):
+        raise ValueError("validated object capture offsets are required")
+    return capture_objects
 
 
 def _is_positive_int(value: object) -> bool:

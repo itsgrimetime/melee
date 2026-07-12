@@ -9,13 +9,24 @@ backend-events.v1.jsonl or backend-trace.v1.json.
 def intervene(ctx):
     import json
 
-    from tools.mwcc_retro import backend_frame_state
+    from tools.mwcc_retro import backend_frame_state, backend_object_snapshot, struct_map
 
     gdb = ctx.gdb
     cad = ctx.cad
     out_path = ctx.out_dir + "/backend-map-probe.json"
     entries = ctx.table.get("entries", {})
     partial = ctx.table.get("backend_partial", {})
+    object_layout = struct_map.load_object_capture_layout(ctx.table)
+    object_offsets = backend_object_snapshot.ObjObjectOffsets(
+        name_record=object_layout.objobject_name_record,
+        type_pointer=object_layout.objobject_type_pointer,
+        type_size=object_layout.type_size,
+        stack_offset=object_layout.objobject_stack_offset,
+    )
+    list_offsets = backend_object_snapshot.FrameListOffsets(
+        next=object_layout.object_list_next,
+        object=object_layout.object_list_object,
+    )
 
     def table_va(key, fallback=None):
         entry = entries.get(key) or partial.get(key) or {}
@@ -54,11 +65,9 @@ def intervene(ctx):
         "0x58849a": 0x58849A,
     }
     frame_candidates = {
-        "arguments": 0x58806C,
-        "locals": 0x587FB8,
-        "temps": 0x57FEC0,
-        "frame_base_size": 0x5880CC,
-        "frame_call_args_size": 0x58712C,
+        **dict(object_layout.frame_list_vas),
+        "frame_base_size": object_layout.frame_base_size_va,
+        "frame_call_args_size": object_layout.frame_call_args_size_va,
     }
 
     state = {
@@ -181,6 +190,9 @@ def intervene(ctx):
                 },
                 frame_base_size_va=frame_candidates["frame_base_size"],
                 frame_call_args_size_va=frame_candidates["frame_call_args_size"],
+                object_offsets=object_offsets,
+                list_offsets=list_offsets,
+                name_record_text_offset=object_layout.name_record_text,
             )
         except Exception as exc:  # noqa: BLE001
             snap["frame_state"] = {"error": str(exc)}

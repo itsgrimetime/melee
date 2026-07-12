@@ -135,6 +135,36 @@
       "confidence": "live-invariant",
       "evidence": "frame locals list and frame-size globals sampled live"
     },
+    "arguments": {
+      "va": 5800044,
+      "provenance": "probe_lb00ce_fpr_frame2",
+      "confidence": "live-invariant",
+      "evidence": "arguments list global sampled by the bounded live frame probe"
+    },
+    "locals": {
+      "va": 5799864,
+      "provenance": "probe_lb00ce_fpr_frame2",
+      "confidence": "live-invariant",
+      "evidence": "locals list global sampled by the bounded live frame probe"
+    },
+    "temps": {
+      "va": 5766848,
+      "provenance": "probe_lb00ce_fpr_frame2",
+      "confidence": "live-invariant",
+      "evidence": "temporaries list global sampled by the bounded live frame probe"
+    },
+    "frame_base_size": {
+      "va": 5800140,
+      "provenance": "probe_lb00ce_fpr_frame2",
+      "confidence": "live-invariant",
+      "evidence": "frame base-size global sampled by the bounded live frame probe"
+    },
+    "frame_call_args_size": {
+      "va": 5796140,
+      "provenance": "probe_lb00ce_fpr_frame2",
+      "confidence": "live-invariant",
+      "evidence": "frame call-argument-size global sampled by the bounded live frame probe"
+    },
     "final_scheduler": {
       "va": 4414837,
       "provenance": "probe_lbarq_frame2/probe_lb00ce_fpr_frame2",
@@ -237,6 +267,7 @@
       "evidence": "IG sample proves expected IGNode offsets",
       "fields": {
         "next": 0,
+        "obj_addr": 4,
         "ig_idx": 12,
         "degree": 14,
         "assignedReg": 16,
@@ -263,6 +294,41 @@
         "next": 0,
         "opcode": 20,
         "arg_count": 26
+      }
+    },
+    "ObjObject": {
+      "provenance": "probe_lb00ce_fpr_frame2",
+      "confidence": "live-invariant",
+      "evidence": "bounded live frame rows confirmed name, type, and stack-offset fields",
+      "fields": {
+        "name_record": 10,
+        "type_pointer": 14,
+        "stack_offset": 42
+      }
+    },
+    "ObjectListNode": {
+      "provenance": "probe_lb00ce_fpr_frame2",
+      "confidence": "live-invariant",
+      "evidence": "bounded live frame list walk confirmed next and object fields",
+      "fields": {
+        "next": 0,
+        "object": 4
+      }
+    },
+    "Type": {
+      "provenance": "probe_lb00ce_fpr_frame2",
+      "confidence": "live-invariant",
+      "evidence": "bounded live frame rows confirmed type size",
+      "fields": {
+        "size": 2
+      }
+    },
+    "NameRecord": {
+      "provenance": "probe_lb00ce_fpr_frame2",
+      "confidence": "live-invariant",
+      "evidence": "bounded live frame rows confirmed name text",
+      "fields": {
+        "text": 10
       }
     }
   },
@@ -300,7 +366,11 @@
       "backend_marker",
       "block",
       "pcode_instruction"
-    ]
+    ],
+    "object_capture": {
+      "validated": true,
+      "note": "GC/1.2.5n ObjObject, IGNode owner, and frame layout validated by bounded live probes."
+    }
   },
   "backend_partial": {
     "codegen_start": {

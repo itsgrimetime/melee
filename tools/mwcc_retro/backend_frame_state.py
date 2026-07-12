@@ -11,6 +11,7 @@ ReadU32 = Callable[[int], int]
 ReadS32 = Callable[[int], int]
 ReadCString = Callable[[int, int], str]
 GenerationFor = Callable[[str, int], int | None]
+PartialObjectCaptureError = backend_object_snapshot.PartialObjectCaptureError
 
 POINTER_LOW = 0x600000
 POINTER_HIGH = 0x2000000
@@ -18,15 +19,6 @@ IMAGE_POINTER_LOW = 0x400000
 IMAGE_POINTER_HIGH = POINTER_LOW
 MAX_OBJECTS = 256
 PROBE_MAX_OBJECTS = 6
-
-OBJECT_LIST_NEXT = 0x00
-OBJECT_LIST_OBJECT = 0x04
-OBJECT_NAME_RECORD = 0x0A
-OBJECT_TYPE = 0x0E
-OBJECT_STACK_OFFSET = 0x2A
-NAME_RECORD_TEXT = 0x0A
-TYPE_SIZE = 0x02
-
 
 def snapshot_frame_state(
     read_u32: ReadU32,
@@ -40,9 +32,52 @@ def snapshot_frame_state(
     max_objects: int = MAX_OBJECTS,
     lifecycle_sequence: int | None = None,
     generation_for: GenerationFor | None = None,
-    object_offsets: backend_object_snapshot.ObjObjectOffsets = (
-        backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS
-    ),
+    object_offsets: backend_object_snapshot.ObjObjectOffsets,
+    list_offsets: backend_object_snapshot.FrameListOffsets,
+    name_record_text_offset: int,
+) -> dict[str, Any]:
+    partial_facts: list[dict[str, object]] = []
+    try:
+        return _snapshot_frame_state(
+            read_u32,
+            read_s32,
+            read_cstr,
+            list_vas=list_vas,
+            frame_base_size_va=frame_base_size_va,
+            frame_call_args_size_va=frame_call_args_size_va,
+            source_stage=source_stage,
+            max_objects=max_objects,
+            lifecycle_sequence=lifecycle_sequence,
+            generation_for=generation_for,
+            object_offsets=object_offsets,
+            list_offsets=list_offsets,
+            name_record_text_offset=name_record_text_offset,
+            partial_facts=partial_facts,
+        )
+    except PartialObjectCaptureError:
+        raise
+    except Exception as exc:
+        if partial_facts:
+            raise PartialObjectCaptureError(str(exc), partial_facts) from exc
+        raise
+
+
+def _snapshot_frame_state(
+    read_u32: ReadU32,
+    read_s32: ReadS32,
+    read_cstr: ReadCString,
+    *,
+    list_vas: Mapping[str, int],
+    frame_base_size_va: int,
+    frame_call_args_size_va: int,
+    source_stage: str,
+    max_objects: int = MAX_OBJECTS,
+    lifecycle_sequence: int | None = None,
+    generation_for: GenerationFor | None = None,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets,
+    list_offsets: backend_object_snapshot.FrameListOffsets,
+    name_record_text_offset: int,
+    partial_facts: list[dict[str, object]],
 ) -> dict[str, Any]:
     """Return one ``frame_state`` backend event.
 
@@ -82,6 +117,9 @@ def snapshot_frame_state(
                 lifecycle_sequence=lifecycle_sequence,
                 generation_for=generation_for,
                 object_offsets=object_offsets,
+                list_offsets=list_offsets,
+                name_record_text_offset=name_record_text_offset,
+                partial_facts=partial_facts,
             )
         )
 
@@ -107,6 +145,9 @@ def snapshot_probe_frame_state(
     frame_base_size_va: int,
     frame_call_args_size_va: int,
     max_objects: int = PROBE_MAX_OBJECTS,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets,
+    list_offsets: backend_object_snapshot.FrameListOffsets,
+    name_record_text_offset: int,
 ) -> dict[str, Any]:
     """Return the legacy ``backend-map-probe.json`` frame evidence shape."""
 
@@ -124,6 +165,9 @@ def snapshot_probe_frame_state(
             read_cstr,
             list_va=list_va,
             max_objects=max_objects,
+            object_offsets=object_offsets,
+            list_offsets=list_offsets,
+            name_record_text_offset=name_record_text_offset,
         )
 
     for key, va in (
@@ -145,6 +189,9 @@ def _snapshot_probe_object_list(
     *,
     list_va: int,
     max_objects: int,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets,
+    list_offsets: backend_object_snapshot.FrameListOffsets,
+    name_record_text_offset: int,
 ) -> dict[str, Any]:
     head = _read_u32(read_u32, list_va, "frame object list head")
     out: dict[str, Any] = {"va": list_va, "head": head, "objects_sample": []}
@@ -156,7 +203,13 @@ def _snapshot_probe_object_list(
         seen.add(current)
         try:
             row = _snapshot_probe_object_row(
-                read_u32, read_s32, read_cstr, node=current
+                read_u32,
+                read_s32,
+                read_cstr,
+                node=current,
+                object_offsets=object_offsets,
+                list_offsets=list_offsets,
+                name_record_text_offset=name_record_text_offset,
             )
             out["objects_sample"].append(row)
             current = row["next"]
@@ -172,27 +225,36 @@ def _snapshot_probe_object_row(
     read_cstr: ReadCString,
     *,
     node: int,
+    object_offsets: backend_object_snapshot.ObjObjectOffsets,
+    list_offsets: backend_object_snapshot.FrameListOffsets,
+    name_record_text_offset: int,
 ) -> dict[str, Any]:
-    obj = _read_u32(read_u32, node + OBJECT_LIST_OBJECT, "frame object pointer")
+    obj = _read_u32(read_u32, node + list_offsets.object, "frame object pointer")
     row = {
         "node": node,
-        "next": _read_u32(read_u32, node + OBJECT_LIST_NEXT, "frame object next"),
+        "next": _read_u32(read_u32, node + list_offsets.next, "frame object next"),
         "object": obj,
     }
     if _bounded_ptr(obj):
-        name_record = _read_u32(read_u32, obj + OBJECT_NAME_RECORD, "ObjObject name")
+        name_record = _read_u32(
+            read_u32, obj + object_offsets.name_record, "ObjObject name"
+        )
         row["name_ptr"] = (
-            name_record + NAME_RECORD_TEXT if _readable_ptr(name_record) else 0
+            name_record + name_record_text_offset if _readable_ptr(name_record) else 0
         )
         if _readable_ptr(row["name_ptr"]):
             row["name"] = read_cstr(row["name_ptr"], 96)
         row["stack_offset"] = _read_s32(
-            read_s32, obj + OBJECT_STACK_OFFSET, "ObjObject stack offset"
+            read_s32, obj + object_offsets.stack_offset, "ObjObject stack offset"
         )
-        type_ptr = _read_u32(read_u32, obj + OBJECT_TYPE, "ObjObject type")
+        type_ptr = _read_u32(
+            read_u32, obj + object_offsets.type_pointer, "ObjObject type"
+        )
         row["type"] = type_ptr
         row["size"] = (
-            _read_s32(read_s32, type_ptr + TYPE_SIZE, "ObjObject type size")
+            _read_s32(
+                read_s32, type_ptr + object_offsets.type_size, "ObjObject type size"
+            )
             if _readable_ptr(type_ptr)
             else 0
         )
@@ -212,6 +274,9 @@ def _snapshot_object_list(
     lifecycle_sequence: int | None,
     generation_for: GenerationFor | None,
     object_offsets: backend_object_snapshot.ObjObjectOffsets,
+    list_offsets: backend_object_snapshot.FrameListOffsets,
+    name_record_text_offset: int,
+    partial_facts: list[dict[str, object]],
 ) -> list[dict[str, Any]]:
     head = _read_u32(read_u32, list_va, f"{area} frame object list head")
     if head == 0:
@@ -232,10 +297,10 @@ def _snapshot_object_list(
         seen.add(current)
 
         next_node = _read_u32(
-            read_u32, current + OBJECT_LIST_NEXT, f"{area} frame object next"
+            read_u32, current + list_offsets.next, f"{area} frame object next"
         )
         obj = _read_u32(
-            read_u32, current + OBJECT_LIST_OBJECT, f"{area} frame object pointer"
+            read_u32, current + list_offsets.object, f"{area} frame object pointer"
         )
         if not _bounded_ptr(obj):
             raise ValueError(f"invalid {area} ObjObject pointer 0x{obj:x}")
@@ -264,12 +329,16 @@ def _snapshot_object_list(
             size = object_snapshot["type_size"]
         else:
             type_ptr = _read_u32(
-                read_u32, obj + OBJECT_TYPE, f"{area} ObjObject type"
+                read_u32,
+                obj + object_offsets.type_pointer,
+                f"{area} ObjObject type",
             )
             if not _readable_ptr(type_ptr):
                 raise ValueError(f"invalid {area} ObjObject type pointer 0x{type_ptr:x}")
             size = _read_s32(
-                read_s32, type_ptr + TYPE_SIZE, f"{area} ObjObject type size"
+                read_s32,
+                type_ptr + object_offsets.type_size,
+                f"{area} ObjObject type size",
             )
             if size < 0:
                 raise ValueError(f"negative {area} ObjObject size {size}")
@@ -283,7 +352,7 @@ def _snapshot_object_list(
             if object_snapshot is not None
             else _read_u32(
                 read_u32,
-                obj + OBJECT_NAME_RECORD,
+                obj + object_offsets.name_record,
                 f"{area} ObjObject name record",
             )
         )
@@ -292,6 +361,7 @@ def _snapshot_object_list(
             area=area,
             stack_offset=stack_offset,
             name_record=name_record,
+            name_record_text_offset=name_record_text_offset,
         )
 
         row = {
@@ -329,6 +399,10 @@ def _snapshot_object_list(
                 }
             )
         objects.append(row)
+        if object_snapshot is not None:
+            partial_facts.extend(
+                _frame_object_facts(row, source_stage="final_scheduler")
+            )
         current = next_node
     raise ValueError(f"{area} frame object list exceeded max_objects {max_objects}")
 
@@ -339,15 +413,45 @@ def _frame_object_name(
     area: str,
     stack_offset: int,
     name_record: int | None,
+    name_record_text_offset: int,
 ) -> tuple[str, str]:
     if isinstance(name_record, int) and _readable_ptr(name_record):
         try:
-            name = read_cstr(name_record + NAME_RECORD_TEXT, 96)
+            name = read_cstr(name_record + name_record_text_offset, 96)
         except Exception:  # noqa: BLE001 - unnamed frame slots are still useful facts
             name = ""
         if name:
             return name, "observed"
     return f"{area}_slot_{stack_offset}", "observed-unnamed"
+
+
+def _frame_object_facts(
+    row: Mapping[str, object], *, source_stage: str
+) -> list[dict[str, object]]:
+    snapshot = row.get("object_snapshot")
+    if not isinstance(snapshot, dict):
+        return []
+    return [
+        {"event": "objobject_snapshot", **snapshot},
+        {
+            "event": "object_frame_binding",
+            "source_stage": source_stage,
+            "objobject_ptr": row.get("objobject_ptr"),
+            "allocation_generation": row.get("allocation_generation"),
+            "lifecycle_sequence_at_capture": snapshot.get(
+                "lifecycle_sequence_at_capture"
+            ),
+            "area": row.get("area"),
+            "list_node_runtime_address": row.get("list_node_runtime_address"),
+            "raw_object_stack_offset": row.get("raw_object_stack_offset"),
+            "frame_base_size": row.get("frame_base_size"),
+            "frame_call_args_size": row.get("frame_call_args_size"),
+            "final_r1_offset": row.get("final_r1_offset"),
+            "size": row.get("size"),
+            "confidence": row.get("frame_binding_confidence"),
+            "provenance": row.get("frame_binding_provenance"),
+        },
+    ]
 
 
 def _bounded_ptr(value: int) -> bool:

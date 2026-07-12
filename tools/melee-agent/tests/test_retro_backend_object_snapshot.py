@@ -1,4 +1,5 @@
 import inspect
+import json
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -12,6 +13,8 @@ from tools.mwcc_retro import (  # noqa: E402
     backend_object_snapshot,
     backend_onepass_trace_hook,
 )
+
+OBJECT_OFFSETS = backend_object_snapshot.ObjObjectOffsets(0x0A, 0x0E, 0x02, 0x2A)
 
 
 def test_snapshot_objobject_reads_validated_offsets_once_and_is_immutable() -> None:
@@ -34,7 +37,7 @@ def test_snapshot_objobject_reads_validated_offsets_once_and_is_immutable() -> N
         generation=3,
         read_u32=read_u32,
         read_s32=read_s32,
-        offsets=backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS,
+        offsets=OBJECT_OFFSETS,
     )
 
     assert dict(snapshot) == {
@@ -51,7 +54,7 @@ def test_snapshot_objobject_reads_validated_offsets_once_and_is_immutable() -> N
     with pytest.raises(TypeError):
         snapshot["type_size"] = 8  # type: ignore[index]
     with pytest.raises(FrozenInstanceError):
-        backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS.type_size = 4  # type: ignore[misc]
+        OBJECT_OFFSETS.type_size = 4  # type: ignore[misc]
 
 
 def test_snapshot_objobject_returns_controlled_unreadable_record() -> None:
@@ -67,7 +70,7 @@ def test_snapshot_objobject_returns_controlled_unreadable_record() -> None:
         generation=1,
         read_u32=read_u32,
         read_s32=lambda _addr: 4,
-        offsets=backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS,
+        offsets=OBJECT_OFFSETS,
     )
 
     assert dict(snapshot) == {
@@ -90,7 +93,7 @@ def test_snapshot_objobject_never_leaks_malformed_type_size() -> None:
         generation=1,
         read_u32=lambda addr: {0x120A: 0x2200, 0x120E: 0x3200}[addr],
         read_s32=lambda _addr: -4,
-        offsets=backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS,
+        offsets=OBJECT_OFFSETS,
     )
 
     assert snapshot["readable"] is False
@@ -119,7 +122,7 @@ def test_snapshot_objobject_rejects_malformed_identity_without_reading(
         "generation": 1,
         "read_u32": lambda addr: reads.append(addr) or 0,
         "read_s32": lambda addr: reads.append(addr) or 0,
-        "offsets": backend_object_snapshot.GC_125N_OBJOBJECT_OFFSETS,
+        "offsets": OBJECT_OFFSETS,
     }
     kwargs.update(overrides)
 
@@ -134,6 +137,16 @@ def test_snapshot_objobject_contains_no_compiler_accessor_or_callback() -> None:
     assert "0x4C1720" not in source
     assert "cad." not in source
     assert "gdb." not in source
+
+
+def test_onepass_object_capture_has_no_layout_or_va_fallback_literals() -> None:
+    source = inspect.getsource(backend_onepass_trace_hook)
+
+    for literal in ("0x58806C", "0x587FB8", "0x57FEC0", "0x5880CC", "0x58712C"):
+        assert literal not in source
+    assert 'entry_va("arguments",' not in source
+    assert 'entry_va("locals",' not in source
+    assert 'entry_va("temps",' not in source
 
 
 def test_hook_samples_lifecycle_sequence_once_from_stopped_process() -> None:
@@ -214,3 +227,138 @@ def test_hook_canonicalizes_object_events_without_promoting_capability() -> None
 
     with pytest.raises(ValueError, match="duplicate object capture event"):
         backend_onepass_trace_hook._canonical_object_events([binding_0, dict(binding_0)])
+
+
+def test_hook_keeps_later_identical_cross_class_snapshot_and_resets_between_runs() -> None:
+    first = {
+        "event": "objobject_snapshot",
+        "stage": "colorgraph_return",
+        "runtime_address": 0x1200,
+        "allocation_generation": 1,
+        "lifecycle_sequence_at_capture": 3,
+        "name_record_pointer": 0x2200,
+        "type_pointer": 0x3200,
+        "type_size": 4,
+        "readable": True,
+    }
+    later = {**first, "lifecycle_sequence_at_capture": 8}
+
+    assert backend_onepass_trace_hook._canonical_object_events([later, first]) == [later]
+    assert backend_onepass_trace_hook._canonical_object_events([first]) == [first]
+    with pytest.raises(ValueError, match="conflicting ObjObject snapshots"):
+        backend_onepass_trace_hook._canonical_object_events([first, {**later, "type_size": 8}])
+
+    state = {"object_events": [later]}
+    backend_onepass_trace_hook._reset_object_capture_state(state)
+    state["object_events"].append(first)
+    assert backend_onepass_trace_hook._canonical_object_events(state["object_events"]) == [first]
+
+
+def test_hook_retains_partial_exception_facts_and_marks_capture_partial() -> None:
+    fact = {
+        "event": "object_virtual_binding",
+        "objobject_ptr": 0x1200,
+        "allocation_generation": 1,
+        "class_id": 0,
+        "virtual_kind": "r",
+        "virtual": 1,
+        "ig_id": 1,
+        "ignode_runtime_address": 0x2010,
+    }
+    error = backend_object_snapshot.PartialObjectCaptureError("late read", [fact])
+    state = {"object_events": [], "errors": []}
+
+    backend_onepass_trace_hook._retain_partial_object_facts(state, error, stage="colorgraph_return")
+
+    assert state["object_events"] == [fact]
+    assert state["errors"] == [
+        {
+            "stage": "colorgraph_return",
+            "error": "late read",
+            "object_capture_partial": True,
+        }
+    ]
+
+
+def test_atomic_sidecar_is_deterministic_and_marks_partial(tmp_path) -> None:
+    path = tmp_path / "backend-object-events.v1.json"
+    events = [
+        {
+            "event": "object_virtual_binding",
+            "objobject_ptr": 0x1200,
+            "allocation_generation": 1,
+            "class_id": 0,
+            "virtual_kind": "r",
+            "virtual": 1,
+            "ig_id": 1,
+            "ignode_runtime_address": 0x2010,
+        }
+    ]
+    status = backend_onepass_trace_hook._object_capture_status(events, errors=["late read"], cap_reached=False)
+
+    backend_onepass_trace_hook._publish_object_sidecar(path, events, status)
+    first = path.read_bytes()
+    backend_onepass_trace_hook._publish_object_sidecar(path, events, status)
+
+    assert path.read_bytes() == first
+    assert json.loads(first) == {
+        "schema_version": "mwcc-retro-object-events.v1",
+        "capture_status": status,
+        "events": events,
+        "publication_complete": True,
+    }
+
+
+def test_atomic_sidecar_replace_failure_preserves_previous_valid_file(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "backend-object-events.v1.json"
+    path.write_text('{"previous":"valid"}\n')
+    previous = path.read_bytes()
+
+    def fail_replace(_source, _target):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(backend_onepass_trace_hook.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        backend_onepass_trace_hook._publish_object_sidecar(
+            path,
+            [],
+            backend_onepass_trace_hook._object_capture_status([], errors=["partial"], cap_reached=False),
+        )
+
+    assert path.read_bytes() == previous
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_atomic_sidecar_write_failure_preserves_previous_valid_file(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "backend-object-events.v1.json"
+    path.write_text('{"previous":"valid"}\n')
+    previous = path.read_bytes()
+    temporary = tmp_path / ".backend-object-events.v1.json.failed.tmp"
+
+    class FailingStream:
+        name = str(temporary)
+
+        def __enter__(self):
+            temporary.write_bytes(b"partial")
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def write(self, _data):
+            raise OSError("write failed")
+
+    monkeypatch.setattr(
+        backend_onepass_trace_hook.tempfile,
+        "NamedTemporaryFile",
+        lambda **_kwargs: FailingStream(),
+    )
+    with pytest.raises(OSError, match="write failed"):
+        backend_onepass_trace_hook._publish_object_sidecar(
+            path,
+            [],
+            backend_onepass_trace_hook._object_capture_status([], errors=["partial"], cap_reached=False),
+        )
+
+    assert path.read_bytes() == previous
+    assert list(tmp_path.iterdir()) == [path]

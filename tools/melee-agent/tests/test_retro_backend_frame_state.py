@@ -8,6 +8,14 @@ sys.path.insert(0, str(REPO))
 
 from tools.mwcc_retro import backend_frame_state  # noqa: E402
 
+OBJECT_OFFSETS = backend_frame_state.backend_object_snapshot.ObjObjectOffsets(0x0A, 0x0E, 0x02, 0x2A)
+LIST_OFFSETS = backend_frame_state.backend_object_snapshot.FrameListOffsets(0x00, 0x04)
+CAPTURE_LAYOUT_KWARGS = {
+    "object_offsets": OBJECT_OFFSETS,
+    "list_offsets": LIST_OFFSETS,
+    "name_record_text_offset": 0x0A,
+}
+
 
 class Memory:
     def __init__(self) -> None:
@@ -91,6 +99,7 @@ def test_snapshot_frame_state_emits_stack_local_map_event() -> None:
         list_vas={"locals": 0x700000, "arguments": 0x700004, "temps": 0x700008},
         frame_base_size_va=0x70000C,
         frame_call_args_size_va=0x700010,
+        **CAPTURE_LAYOUT_KWARGS,
         source_stage="final_scheduler",
     )
 
@@ -144,6 +153,7 @@ def test_snapshot_frame_state_names_invalid_name_records_by_area_and_offset() ->
         list_vas={"locals": 0x700000, "arguments": 0x700004, "temps": 0x700008},
         frame_base_size_va=0x70000C,
         frame_call_args_size_va=0x700010,
+        **CAPTURE_LAYOUT_KWARGS,
         source_stage="final_scheduler",
     )
 
@@ -185,6 +195,7 @@ def test_snapshot_frame_state_accepts_static_image_type_pointers() -> None:
         list_vas={"locals": 0x700000, "arguments": 0x700004, "temps": 0x700008},
         frame_base_size_va=0x70000C,
         frame_call_args_size_va=0x700010,
+        **CAPTURE_LAYOUT_KWARGS,
         source_stage="final_scheduler",
     )
 
@@ -236,6 +247,7 @@ def test_snapshot_probe_frame_state_emits_map_probe_evidence_shape() -> None:
         list_vas={"locals": 0x700000, "arguments": 0x700004, "temps": 0x700008},
         frame_base_size_va=0x70000C,
         frame_call_args_size_va=0x700010,
+        **CAPTURE_LAYOUT_KWARGS,
     )
 
     assert frame == {
@@ -304,6 +316,7 @@ def test_snapshot_frame_state_rejects_cycles_and_bad_pointers() -> None:
             list_vas={"locals": 0x700000, "arguments": 0x700004, "temps": 0x700008},
             frame_base_size_va=0x70000C,
             frame_call_args_size_va=0x700010,
+            **CAPTURE_LAYOUT_KWARGS,
             source_stage="codegen_end",
         )
 
@@ -331,6 +344,7 @@ def test_frame_row_retains_raw_object_pointer_snapshot_and_stack_inputs() -> Non
         list_vas={"locals": 0x700000},
         frame_base_size_va=0x70000C,
         frame_call_args_size_va=0x700010,
+        **CAPTURE_LAYOUT_KWARGS,
         source_stage="final_scheduler",
         lifecycle_sequence=11,
         generation_for=lambda kind, ptr: (4 if (kind, ptr) == ("objobject", 0x711000) else None),
@@ -381,6 +395,7 @@ def test_frame_positive_object_without_active_generation_fails_closed() -> None:
             list_vas={"locals": 0x700000},
             frame_base_size_va=0x70000C,
             frame_call_args_size_va=0x700010,
+            **CAPTURE_LAYOUT_KWARGS,
             source_stage="final_scheduler",
             lifecycle_sequence=11,
             generation_for=lambda _kind, _ptr: None,
@@ -403,6 +418,7 @@ def test_frame_retains_controlled_unreadable_positive_snapshot() -> None:
         list_vas={"locals": 0x700000},
         frame_base_size_va=0x70000C,
         frame_call_args_size_va=0x700010,
+        **CAPTURE_LAYOUT_KWARGS,
         source_stage="final_scheduler",
         lifecycle_sequence=11,
         generation_for=lambda _kind, _ptr: 4,
@@ -431,10 +447,63 @@ def test_lifecycle_aware_frame_capture_requires_final_scheduler_stage() -> None:
             list_vas={"locals": 0x700000},
             frame_base_size_va=0x70000C,
             frame_call_args_size_va=0x700010,
+            **CAPTURE_LAYOUT_KWARGS,
             source_stage="codegen_end",
             lifecycle_sequence=11,
             generation_for=lambda _kind, _ptr: 4,
         )
+
+
+def test_frame_late_generation_failure_carries_positive_prefix_facts() -> None:
+    mem = Memory()
+    mem.u32(0x700000, 0x710000)
+    mem.s32(0x70000C, 84)
+    mem.s32(0x700010, 8)
+    add_frame_object(
+        mem,
+        list_node=0x710000,
+        next_node=0x720000,
+        obj=0x711000,
+        name_record=0x712000,
+        name="first",
+        stack_offset=-12,
+        type_ptr=0x713000,
+        size=4,
+    )
+    add_frame_object(
+        mem,
+        list_node=0x720000,
+        obj=0x721000,
+        name_record=0x722000,
+        name="second",
+        stack_offset=-8,
+        type_ptr=0x723000,
+        size=4,
+    )
+
+    with pytest.raises(
+        backend_frame_state.PartialObjectCaptureError,
+        match="no active ObjObject generation",
+    ) as caught:
+        backend_frame_state.snapshot_frame_state(
+            mem.read_u32,
+            mem.read_s32,
+            mem.read_cstr,
+            list_vas={"locals": 0x700000},
+            frame_base_size_va=0x70000C,
+            frame_call_args_size_va=0x700010,
+            **CAPTURE_LAYOUT_KWARGS,
+            source_stage="final_scheduler",
+            lifecycle_sequence=11,
+            generation_for=lambda _kind, ptr: 4 if ptr == 0x711000 else None,
+        )
+
+    facts = caught.value.partial_facts
+    assert [fact["event"] for fact in facts] == [
+        "objobject_snapshot",
+        "object_frame_binding",
+    ]
+    assert facts[1]["objobject_ptr"] == 0x711000
 
     mem.u32(0x700000, 0x1234)
     with pytest.raises(ValueError, match="invalid locals frame object pointer"):
@@ -445,5 +514,6 @@ def test_lifecycle_aware_frame_capture_requires_final_scheduler_stage() -> None:
             list_vas={"locals": 0x700000, "arguments": 0x700004, "temps": 0x700008},
             frame_base_size_va=0x70000C,
             frame_call_args_size_va=0x700010,
+            **CAPTURE_LAYOUT_KWARGS,
             source_stage="codegen_end",
         )
