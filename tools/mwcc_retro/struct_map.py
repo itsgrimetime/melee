@@ -74,6 +74,16 @@ REQUIRED_PCODE_SNAPSHOT_STRUCT_FIELDS = {
     "PCode": REQUIRED_STRUCT_FIELDS["PCode"],
 }
 
+REQUIRED_PCODE_ARG_CAPTURE_STRUCT_FIELDS: dict[str, dict[str, int]] = {
+    "PCode": {**REQUIRED_STRUCT_FIELDS["PCode"], "args": 0x1C},
+    "PCodeArg": {
+        "kind": 0x00,
+        "register_flags": 0x01,
+        "payload": 0x02,
+    },
+}
+PCODE_ARG_SIZE = 0x0C
+
 REQUIRED_OBJECT_CAPTURE_KEYS = (
     "arguments",
     "locals",
@@ -369,6 +379,118 @@ def validate_backend_pcode_snapshot_capability(table: dict[str, Any]) -> list[st
                 errors.append(
                     f"struct {name}.{field} expected offset {offset:#x}, got {actual.get(field)!r}"
                 )
+    return errors
+
+
+def validate_pcode_arg_capture_capability(table: object) -> list[str]:
+    """Require the complete inline PCodeArg layout before any raw reads."""
+
+    if not isinstance(table, Mapping):
+        return ["PCodeArg capture table must be object"]
+    errors: list[str] = []
+    structs = table.get("structs")
+    if not isinstance(structs, Mapping):
+        structs = {}
+    for name, fields in REQUIRED_PCODE_ARG_CAPTURE_STRUCT_FIELDS.items():
+        struct = structs.get(name)
+        if not isinstance(struct, Mapping):
+            errors.append(f"missing required {name} struct")
+            continue
+        if struct.get("confidence") not in ACCEPTED_REQUIRED_CONFIDENCE:
+            errors.append(f"struct {name} confidence below required gate")
+        actual = struct.get("fields")
+        if not isinstance(actual, Mapping):
+            actual = {}
+        for field, offset in fields.items():
+            if actual.get(field) != offset:
+                errors.append(
+                    f"{name}.{field} expected offset {offset:#x}, "
+                    f"got {actual.get(field)!r}"
+                )
+        if name == "PCodeArg" and struct.get("size") != PCODE_ARG_SIZE:
+            errors.append(
+                f"PCodeArg size expected {PCODE_ARG_SIZE:#x}, "
+                f"got {struct.get('size')!r}"
+            )
+    return errors
+
+
+def _proof_site_ids(proof: Mapping[str, object], collection: str) -> list[str]:
+    rows = proof.get(collection)
+    if not isinstance(rows, list):
+        return []
+    return [
+        row["site_id"]
+        for row in rows
+        if isinstance(row, Mapping) and isinstance(row.get("site_id"), str)
+    ]
+
+
+def validate_pcode_instrumentation_capability(
+    table: object, *, proof: Mapping[str, object] | None = None
+) -> list[str]:
+    """Require one promoted tuple and an exactly matching installed hook set."""
+
+    if not isinstance(table, Mapping):
+        return ["PCode instrumentation table must be object"]
+    errors: list[str] = []
+    rows = table.get("instrumentation_proofs")
+    promoted = (
+        [
+            row
+            for row in rows
+            if isinstance(row, Mapping) and row.get("promoted") is True
+        ]
+        if isinstance(rows, list)
+        else []
+    )
+    if not promoted:
+        errors.append("no promoted instrumentation proof")
+    elif len(promoted) != 1:
+        errors.append("expected exactly one promoted instrumentation proof")
+
+    reader = table.get("backend_reader")
+    gate = (
+        reader.get("pcode_instrumentation")
+        if isinstance(reader, Mapping)
+        else None
+    )
+    if not isinstance(gate, Mapping) or gate.get("validated") is not True:
+        errors.append("pcode instrumentation gate is not validated")
+        return errors
+
+    if len(promoted) == 1:
+        row = promoted[0]
+        for field in (
+            "compiler_executable_sha256",
+            "proof_id",
+            "proof_sha256",
+        ):
+            if gate.get(field) != row.get(field):
+                errors.append(f"pcode instrumentation {field} differs from registry")
+
+    if proof is not None:
+        if gate.get("compiler_executable_sha256") != proof.get(
+            "compiler_executable_sha256"
+        ):
+            errors.append("compiler executable digest differs from proof")
+        if gate.get("proof_id") != proof.get("proof_id"):
+            errors.append("proof ID differs from installed gate")
+        for collection, gate_field, label in (
+            (
+                "operand_rewrite_sites",
+                "operand_rewrite_site_ids",
+                "operand rewrite",
+            ),
+            (
+                "operand_mutation_sites",
+                "operand_mutation_site_ids",
+                "operand mutation",
+            ),
+            ("code_emission_sites", "code_emission_site_ids", "code emission"),
+        ):
+            if gate.get(gate_field) != _proof_site_ids(proof, collection):
+                errors.append(f"{label} site inventory differs from proof")
     return errors
 
 

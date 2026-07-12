@@ -1,11 +1,104 @@
 import json
 import subprocess
-from types import SimpleNamespace
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO))
+
+
+def test_legacy_onepass_event_stream_does_not_accept_task7_event_families() -> None:
+    from tools.mwcc_retro import backend_onepass_trace_hook
+
+    task7_events = [
+        {"event": "lifecycle", "sequence": 0},
+        {"event": "operand_rewrite", "pcode_event_sequence": 0},
+        {"event": "pcode_mutation", "pcode_event_sequence": 1},
+        {"event": "code_emission", "pcode_event_sequence": 2},
+    ]
+
+    assert backend_onepass_trace_hook._legacy_backend_events(task7_events) == []
+
+
+def test_pcode_sidecar_is_atomic_and_correlates_with_object_attempt(tmp_path) -> None:
+    from tools.mwcc_retro import backend_onepass_trace_hook
+
+    path = tmp_path / "backend-pcode-events.v1.json"
+    attempt = {
+        "capture_attempt_id": "a" * 32,
+        "function_identity": {"canonical_name": "fn"},
+    }
+    events = [
+        {
+            "event": "operand_rewrite",
+            "pcode_event_sequence": 0,
+            "runtime_address": 0x610000,
+            "allocation_generation": 2,
+            "lifecycle_sequence_at_capture": 8,
+            "instrumented_site_id": "rewrite-1",
+        }
+    ]
+    status = {
+        "status": "partial",
+        "capabilities": [],
+        "errors": ["proof unpromoted"],
+    }
+
+    backend_onepass_trace_hook._publish_pcode_sidecar(
+        path, events, status, attempt
+    )
+    first = path.read_bytes()
+    backend_onepass_trace_hook._publish_pcode_sidecar(
+        path, events, status, attempt
+    )
+
+    assert path.read_bytes() == first
+    assert json.loads(first) == {
+        "schema_version": "mwcc-retro-pcode-events.v1",
+        "capture_attempt": attempt,
+        "capture_status": status,
+        "events": events,
+        "publication_complete": True,
+    }
+
+
+def test_finalize_pcode_sidecar_preserves_partial_attempt_correlation(tmp_path) -> None:
+    from tools.mwcc_retro import backend_onepass_trace_hook
+
+    path = tmp_path / "backend-pcode-events.v1.json"
+    attempt = {
+        "capture_attempt_id": "b" * 32,
+        "function_identity": {"canonical_name": "fn"},
+    }
+    state = {
+        "pcode_events": [],
+        "object_capture_attempt": attempt,
+    }
+    proof = {
+        "operand_rewrite_sites": [],
+        "operand_mutation_sites": [],
+        "code_emission_sites": [],
+    }
+
+    result = backend_onepass_trace_hook._finalize_pcode_capture(
+        state,
+        path,
+        proof=proof,
+        hooked_site_ids=set(),
+        gate_errors=["layout unvalidated", "proof unpromoted"],
+    )
+
+    assert result["capture_attempt"] == attempt
+    assert result["capture_status"]["status"] == "partial"
+    assert result["capture_status"]["capabilities"] == []
+    assert result["capture_status"]["errors"] == [
+        "layout unvalidated",
+        "proof unpromoted",
+    ]
+    assert json.loads(path.read_bytes())["capture_attempt"] == attempt
 
 
 def _stub_backend_mwcc_command(monkeypatch, retro, command: str | None = None) -> None:

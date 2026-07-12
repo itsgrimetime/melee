@@ -5,11 +5,26 @@ It is evidence collection only: it writes backend-map-probe.json and never emits
 backend-events.v1.jsonl or backend-trace.v1.json.
 """
 
+from tools.mwcc_retro import struct_map
+
+
+def pcode_probe_status(table):
+    """Return the exact fail-closed proof/layout status for map evidence."""
+
+    layout_errors = struct_map.validate_pcode_arg_capture_capability(table)
+    proof_errors = struct_map.validate_pcode_instrumentation_capability(table)
+    return {
+        "status": "unpromoted" if layout_errors or proof_errors else "validated",
+        "layout_errors": layout_errors,
+        "proof_errors": proof_errors,
+        "capabilities": [],
+    }
+
 
 def intervene(ctx):
     import json
 
-    from tools.mwcc_retro import backend_frame_state, backend_object_snapshot, struct_map
+    from tools.mwcc_retro import backend_frame_state, backend_object_snapshot
 
     gdb = ctx.gdb
     cad = ctx.cad
@@ -17,6 +32,7 @@ def intervene(ctx):
     entries = ctx.table.get("entries", {})
     partial = ctx.table.get("backend_partial", {})
     object_layout = struct_map.load_object_capture_layout(ctx.table)
+    pcode_status = pcode_probe_status(ctx.table)
     object_offsets = backend_object_snapshot.ObjObjectOffsets(
         name_record=object_layout.objobject_name_record,
         type_pointer=object_layout.objobject_type_pointer,
@@ -321,6 +337,7 @@ def intervene(ctx):
             "stage_counts": state["stage_counts"],
             "events": state["events"],
             "errors": state["errors"],
+            "pcode_instrumentation": pcode_status,
             "notes": [
                 "Probe evidence is not a backend trace and does not satisfy the struct-map gate by itself.",
                 "Events are scoped by ObjObject source name when readable at codegen_start.",

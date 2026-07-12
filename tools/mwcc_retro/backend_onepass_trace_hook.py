@@ -13,11 +13,204 @@ import secrets
 import tempfile
 from pathlib import Path
 
-from tools.mwcc_retro import backend_object_snapshot
+from tools.mwcc_retro import backend_object_snapshot, struct_map
 
 _OBJECT_EVENT_KINDS = frozenset(
     {"objobject_snapshot", "object_virtual_binding", "object_frame_binding"}
 )
+
+_LEGACY_BACKEND_EVENT_KINDS = frozenset(
+    {
+        "function_start",
+        "backend_marker",
+        "block",
+        "pcode_instruction",
+        "regclass",
+        "node",
+        "edge",
+        "coalesce_mapping",
+        "coalesce_mapping_empty",
+        "simplify_order",
+        "select_order",
+        "color_decision",
+        "frame_state",
+    }
+)
+
+
+def _legacy_backend_events(events):
+    """Keep Task 7 raw instrumentation out of the stable v1 stream."""
+
+    return [
+        dict(event)
+        for event in events
+        if isinstance(event, dict)
+        and event.get("event") in _LEGACY_BACKEND_EVENT_KINDS
+    ]
+
+
+def _emit_pcode_event(state, event, *, site_id, pcode_ptr, lifecycle):
+    """Atomically append one site-tagged same-run PCode event."""
+
+    if not isinstance(event, dict):
+        raise ValueError("PCode event must be an object")
+    sequence = state.get("next_pcode_event_sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+        raise ValueError("next PCode event sequence must be nonnegative integer")
+    if not isinstance(site_id, str) or not site_id:
+        raise ValueError("PCode event site ID must be non-empty string")
+    if (
+        not isinstance(pcode_ptr, int)
+        or isinstance(pcode_ptr, bool)
+        or pcode_ptr <= 0
+    ):
+        raise ValueError("PCode runtime address must be positive integer")
+    lifecycle_position = lifecycle.sequence_at_stop()
+    generation = lifecycle.generation("pcode", pcode_ptr)
+    if (
+        not isinstance(lifecycle_position, int)
+        or isinstance(lifecycle_position, bool)
+        or lifecycle_position < -1
+    ):
+        raise ValueError("PCode lifecycle position must be integer at least -1")
+    if (
+        not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation <= 0
+    ):
+        raise ValueError("PCode allocation generation must be positive integer")
+    row = {
+        **event,
+        "pcode_event_sequence": sequence,
+        "instrumented_site_id": site_id,
+        "runtime_address": pcode_ptr,
+        "allocation_generation": generation,
+        "lifecycle_sequence_at_capture": lifecycle_position,
+    }
+    state.setdefault("pcode_events", []).append(row)
+    state["next_pcode_event_sequence"] = sequence + 1
+    return row
+
+
+def _emit_pcode_mutation_event(
+    state,
+    *,
+    site_id,
+    mutation_kind,
+    capture_inputs,
+    capture_outputs,
+):
+    """Capture complete mutation sides before publishing either side."""
+
+    inputs = capture_inputs()
+    outputs = capture_outputs()
+    if not isinstance(inputs, list) or not isinstance(outputs, list):
+        raise ValueError("PCode mutation inputs and outputs must be lists")
+    sequence = state.get("next_pcode_event_sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+        raise ValueError("next PCode event sequence must be nonnegative integer")
+    row = {
+        "event": "pcode_mutation",
+        "pcode_event_sequence": sequence,
+        "instrumented_site_id": site_id,
+        "mutation_kind": mutation_kind,
+        "inputs": inputs,
+        "outputs": outputs,
+    }
+    state.setdefault("pcode_events", []).append(row)
+    state["next_pcode_event_sequence"] = sequence + 1
+    return row
+
+
+def _site_ids(proof, collection):
+    rows = proof.get(collection) if isinstance(proof, dict) else None
+    if not isinstance(rows, list):
+        return set()
+    return {
+        row["site_id"]
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("site_id"), str)
+    }
+
+
+def _pcode_instrumentation_status(
+    proof,
+    *,
+    hooked_site_ids,
+    events,
+    event_cap,
+    dropped_events,
+    truncated,
+    errors,
+):
+    """Report raw producer coverage without trusting a declared status."""
+
+    hooked = set(hooked_site_ids)
+    rewrite_sites = _site_ids(proof, "operand_rewrite_sites")
+    mutation_sites = _site_ids(proof, "operand_mutation_sites")
+    emission_sites = _site_ids(proof, "code_emission_sites")
+    sequences = [
+        row.get("pcode_event_sequence")
+        for row in events
+        if isinstance(row, dict) and "pcode_event_sequence" in row
+    ]
+    gap_free = sequences == list(range(len(sequences)))
+    all_sites_hooked = all(
+        sites <= hooked for sites in (rewrite_sites, mutation_sites, emission_sites)
+    )
+    complete = (
+        all_sites_hooked
+        and gap_free
+        and bool(events)
+        and dropped_events == 0
+        and truncated is False
+        and not errors
+        and len(events) < event_cap
+    )
+    return {
+        "status": "complete" if complete else "partial",
+        "operand_rewrite_sites_expected": len(rewrite_sites),
+        "operand_rewrite_sites_hooked": len(rewrite_sites & hooked),
+        "operand_mutation_sites_expected": len(mutation_sites),
+        "operand_mutation_sites_hooked": len(mutation_sites & hooked),
+        "code_emission_sites_expected": len(emission_sites),
+        "code_emission_sites_hooked": len(emission_sites & hooked),
+        "first_event_sequence": sequences[0] if sequences else None,
+        "last_event_sequence": sequences[-1] if sequences else None,
+        "event_cap": event_cap,
+        "dropped_events": dropped_events,
+        "truncated": truncated,
+        "errors": list(errors),
+        # Task 6 performs the final independent replay before this can be set.
+        "capabilities": [],
+    }
+
+
+def _capture_pcode_events(
+    snapshot_reader,
+    read_u32,
+    read_s16,
+    read_bytes,
+    block_head,
+    **kwargs,
+):
+    """Wire the stopped-process raw reader into the pure PCode snapshotter."""
+
+    return snapshot_reader(
+        read_u32,
+        read_s16,
+        block_head,
+        read_bytes=read_bytes,
+        **kwargs,
+    )
+
+
+def _validated_pcode_raw_reader(table, read_bytes):
+    """Return the raw reader only after the installed layout passes its gate."""
+
+    if struct_map.validate_pcode_arg_capture_capability(table):
+        return None
+    return read_bytes
 _OBJECT_STAGE_ORDER = {"colorgraph_return": 0, "final_scheduler": 1}
 _FRAME_AREA_ORDER = {"arguments": 0, "locals": 1, "temps": 2}
 
@@ -194,10 +387,12 @@ def _reset_object_capture_state(
     }
 
 
-def _publish_object_sidecar(path, events, status, capture_attempt):
+def _publish_atomic_sidecar(
+    path, *, schema_version, events, status, capture_attempt
+):
     target = Path(path)
     payload = {
-        "schema_version": "mwcc-retro-object-events.v1",
+        "schema_version": schema_version,
         "capture_attempt": capture_attempt,
         "capture_status": status,
         "events": events,
@@ -227,6 +422,69 @@ def _publish_object_sidecar(path, events, status, capture_attempt):
                 temporary_path.unlink()
             except FileNotFoundError:
                 pass
+
+
+def _publish_object_sidecar(path, events, status, capture_attempt):
+    _publish_atomic_sidecar(
+        path,
+        schema_version="mwcc-retro-object-events.v1",
+        events=events,
+        status=status,
+        capture_attempt=capture_attempt,
+    )
+
+
+def _publish_pcode_sidecar(path, events, status, capture_attempt):
+    _publish_atomic_sidecar(
+        path,
+        schema_version="mwcc-retro-pcode-events.v1",
+        events=events,
+        status=status,
+        capture_attempt=capture_attempt,
+    )
+
+
+def _finalize_pcode_capture(
+    state,
+    path,
+    *,
+    proof,
+    hooked_site_ids,
+    gate_errors,
+    event_cap=8192,
+):
+    """Publish partial raw PCode evidence with the object-attempt identity."""
+
+    pcode_events = [dict(event) for event in state.get("pcode_events", [])]
+    errors = list(gate_errors)
+
+    def status():
+        return _pcode_instrumentation_status(
+            proof,
+            hooked_site_ids=hooked_site_ids,
+            events=pcode_events,
+            event_cap=event_cap,
+            dropped_events=0,
+            truncated=len(pcode_events) >= event_cap,
+            errors=errors,
+        )
+
+    capture_status = status()
+    attempt = state["object_capture_attempt"]
+    try:
+        _publish_pcode_sidecar(path, pcode_events, capture_status, attempt)
+    except Exception as exc:  # noqa: BLE001 - preserve prior atomic publication
+        message = str(exc)
+        errors.append(message)
+        state.setdefault("errors", []).append(
+            {"stage": "pcode_capture_publish", "error": message}
+        )
+        capture_status = status()
+    return {
+        "capture_attempt": attempt,
+        "capture_status": capture_status,
+        "events": pcode_events,
+    }
 
 
 def _finalize_object_capture(state, path):
@@ -341,10 +599,12 @@ def intervene(ctx):
     entries = ctx.table.get("entries", {})
     out_events = ctx.out_dir + "/backend-events.v1.jsonl"
     out_object_events = ctx.out_dir + "/backend-object-events.v1.json"
+    out_pcode_events = ctx.out_dir + "/backend-pcode-events.v1.json"
     out_summary = ctx.out_dir + "/backend-onepass-candidate.json"
     source_file = os.environ.get("RETRO_SOURCE", "")
     requested = os.environ.get("RETRO_FUNCTION", ctx.fn)
     lifecycle_capture = getattr(ctx, "lifecycle_capture", None)
+    pcode_raw_reader = _validated_pcode_raw_reader(ctx.table, ctx.read)
     object_layout = struct_map.load_object_capture_layout(ctx.table)
     object_offsets = backend_object_snapshot.ObjObjectOffsets(
         name_record=object_layout.objobject_name_record,
@@ -517,6 +777,8 @@ def intervene(ctx):
         "object_events": [],
         "object_capture_errors": [],
         "object_capture_warnings": [],
+        "pcode_events": [],
+        "next_pcode_event_sequence": 0,
     }
     _reset_object_capture_state(
         state,
@@ -540,9 +802,11 @@ def intervene(ctx):
         if state["pcode_captured"]:
             return
         block_head = read_u32(entry_va("pcbasicblocks"))
-        events = backend_pcode_snapshot.snapshot_pcode_blocks(
+        events = _capture_pcode_events(
+            backend_pcode_snapshot.snapshot_pcode_blocks,
             read_u32,
             read_s16,
+            pcode_raw_reader,
             block_head,
             pass_id="pcode_snapshot",
             pass_name="PCode Snapshot",
@@ -628,6 +892,8 @@ def intervene(ctx):
             state,
             function_identity=identity_payload(matched_name),
         )
+        state["pcode_events"] = []
+        state["next_pcode_event_sequence"] = 0
 
     class CodegenStart(gdb.Breakpoint):
         def stop(self):
@@ -1099,6 +1365,21 @@ def intervene(ctx):
         ctx.cont()
     finally:
         object_capture = _finalize_object_capture(state, out_object_events)
+        pcode_gate_errors = [
+            *struct_map.validate_pcode_arg_capture_capability(ctx.table),
+            *struct_map.validate_pcode_instrumentation_capability(ctx.table),
+        ]
+        pcode_capture = _finalize_pcode_capture(
+            state,
+            out_pcode_events,
+            proof={
+                "operand_rewrite_sites": [],
+                "operand_mutation_sites": [],
+                "code_emission_sites": [],
+            },
+            hooked_site_ids=set(),
+            gate_errors=pcode_gate_errors,
+        )
         payload = {
             "schema_version": "mwcc-retro-backend-onepass-candidate.v1",
             "compiler": {"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
@@ -1114,6 +1395,8 @@ def intervene(ctx):
             "object_capture_attempt": object_capture["capture_attempt"],
             "object_capture": object_capture["capture_status"],
             "object_capture_warnings": object_capture["warnings"],
+            "pcode_capture_attempt": pcode_capture["capture_attempt"],
+            "pcode_capture": pcode_capture["capture_status"],
             "notes": [
                 "One-pass retail backend event stream.",
                 "Diagnostic sidecar for trace assembly and completeness checks.",

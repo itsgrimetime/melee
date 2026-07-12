@@ -4,6 +4,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
+from tools.mwcc_retro import backend_map_probe_hook, struct_map  # noqa: E402
 from tools.mwcc_retro.backend_map_evidence import classify_probe_evidence  # noqa: E402
 
 PROMOTABLE_FROM_LIVE_PROBE = {
@@ -29,6 +30,97 @@ NOT_PROMOTABLE_FROM_CURRENT_PROBE = {
     "frame_locals",
     "final_scheduler",
 }
+
+
+def test_pcode_instrumentation_gate_rejects_unpromoted_and_partial_site_inventory():
+    table = struct_map.load_gc125n_struct_map()
+    assert table["instrumentation_proofs"] == []
+
+    errors = struct_map.validate_pcode_instrumentation_capability(table)
+
+    assert "no promoted instrumentation proof" in errors
+    assert "pcode instrumentation gate is not validated" in errors
+
+    layout_errors = struct_map.validate_pcode_arg_capture_capability(table)
+    assert "PCode.args expected offset 0x1c, got None" in layout_errors
+    assert "missing required PCodeArg struct" in layout_errors
+
+
+def test_pcode_instrumentation_gate_fails_closed_on_altered_site_inventory():
+    table = {
+        "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs": [
+            {
+                "compiler_executable_sha256": "a" * 64,
+                "proof_id": "proof",
+                "proof_sha256": "b" * 64,
+                "promoted": True,
+            }
+        ],
+        "backend_reader": {
+            "pcode_instrumentation": {
+                "validated": True,
+                "compiler_executable_sha256": "a" * 64,
+                "proof_id": "proof",
+                "proof_sha256": "b" * 64,
+                "operand_rewrite_site_ids": ["rewrite-1"],
+                "operand_mutation_site_ids": ["mutation-1"],
+                "code_emission_site_ids": ["emit-1"],
+            }
+        },
+    }
+    proof = {
+        "compiler_executable_sha256": "a" * 64,
+        "proof_id": "proof",
+        "operand_rewrite_sites": [{"site_id": "rewrite-1"}],
+        "operand_mutation_sites": [
+            {"site_id": "mutation-1"},
+            {"site_id": "mutation-2"},
+        ],
+        "code_emission_sites": [{"site_id": "emit-1"}],
+    }
+
+    errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+
+    assert errors == ["operand mutation site inventory differs from proof"]
+
+
+def test_map_probe_reports_exact_unpromoted_pcode_gates_without_capability():
+    status = backend_map_probe_hook.pcode_probe_status(
+        struct_map.load_gc125n_struct_map()
+    )
+
+    assert status["status"] == "unpromoted"
+    assert status["capabilities"] == []
+    assert status["layout_errors"] == [
+        "PCode.args expected offset 0x1c, got None",
+        "missing required PCodeArg struct",
+    ]
+    assert status["proof_errors"] == [
+        "no promoted instrumentation proof",
+        "pcode instrumentation gate is not validated",
+    ]
+
+
+def test_installed_table_records_explicit_unpromoted_pcode_gate():
+    gate = struct_map.load_gc125n_struct_map()["backend_reader"][
+        "pcode_instrumentation"
+    ]
+
+    assert gate == {
+        "validated": False,
+        "compiler_executable_sha256": (
+            "ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c"
+        ),
+        "proof_id": None,
+        "proof_sha256": None,
+        "operand_rewrite_site_ids": [],
+        "operand_mutation_site_ids": [],
+        "code_emission_site_ids": [],
+        "note": "Unpromoted: exhaustive static and live proof is incomplete.",
+    }
 
 
 def _fixture_payload():

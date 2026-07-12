@@ -370,6 +370,16 @@
     "object_capture": {
       "validated": true,
       "note": "GC/1.2.5n ObjObject, IGNode owner, and frame layout validated by bounded live probes."
+    },
+    "pcode_instrumentation": {
+      "validated": false,
+      "compiler_executable_sha256": "ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c",
+      "proof_id": null,
+      "proof_sha256": null,
+      "operand_rewrite_site_ids": [],
+      "operand_mutation_site_ids": [],
+      "code_emission_site_ids": [],
+      "note": "Unpromoted: exhaustive static and live proof is incomplete."
     }
   },
   "backend_partial": {
