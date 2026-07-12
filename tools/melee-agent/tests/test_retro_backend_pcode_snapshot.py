@@ -404,6 +404,48 @@ def test_runtime_marks_only_exact_complete_instrumentation_complete():
     assert coverage["capabilities"] == []
 
 
+def test_runtime_accepts_complete_zero_byte_emission_with_empty_code_ranges():
+    events = _complete_coverage_events()
+    events[2]["code_ranges"] = []
+
+    coverage = _coverage_status(events=events)
+
+    assert coverage["status"] == "complete"
+    assert coverage["errors"] == []
+    assert coverage["operand_rewrite_sites_expected"] == 1
+    assert coverage["operand_rewrite_sites_hooked"] == 1
+    assert coverage["operand_mutation_sites_expected"] == 1
+    assert coverage["operand_mutation_sites_hooked"] == 1
+    assert coverage["code_emission_sites_expected"] == 1
+    assert coverage["code_emission_sites_hooked"] == 1
+    assert coverage["first_event_sequence"] == 0
+    assert coverage["last_event_sequence"] == 2
+    assert coverage["capabilities"] == []
+
+
+@pytest.mark.parametrize(
+    ("code_ranges", "expected"),
+    [
+        ({}, "code_emission event 2 code_ranges must be list"),
+        (
+            [{}],
+            "code_emission event 2 range 0 fields differ from exact schema",
+        ),
+    ],
+)
+def test_runtime_rejects_malformed_code_range_containers(
+    code_ranges, expected
+):
+    events = _complete_coverage_events()
+    events[2]["code_ranges"] = code_ranges
+
+    coverage = _coverage_status(events=events)
+
+    assert coverage["status"] == "partial"
+    assert any(expected in error for error in coverage["errors"])
+    assert coverage["capabilities"] == []
+
+
 def test_runtime_fails_closed_on_hostile_nested_coverage_proof_site():
     proof = _complete_coverage_proof()
     proof["operand_rewrite_sites"][0] = _HostileMapping()

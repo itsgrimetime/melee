@@ -752,8 +752,10 @@ def _validate_pcode_mappings(
 
 
 def _validate_pcode_code_ranges(value, snapshot, label, diagnostics):
-    if type(value) is not list or not value:
-        diagnostics.append(f"{label} code_ranges must be nonempty list")
+    if type(value) is not list:
+        diagnostics.append(f"{label} code_ranges must be list")
+        return
+    if not value:
         return
     keys = []
     prior_end = None

@@ -251,3 +251,32 @@ types; it found zero exception paths. Scoped Ruff, `py_compile`, JSON parsing,
 and `git diff --check` exit zero. The installed registry/table is unchanged:
 proofs and site lists remain empty and `pcode_instrumentation.validated`
 remains false. No live probe or static audit was rerun.
+
+## Zero-byte pseudo-op compatibility remediation
+
+The final compatibility review identified one over-strict cardinality rule:
+Task 6 permits a structurally complete `code_emission` event to carry
+`code_ranges: []` for a zero-byte pseudo-op, while Task 7 required a nonempty
+list. The Task 7 RED run reported `2 failed, 1 passed`: the complete empty-range
+event was marked partial, and the desired distinct non-list diagnostic was
+absent; a malformed nonempty range still failed as required. The independent
+Task 6 reference assertion passed immediately with no errors and an empty
+anchor-binding map.
+
+Task 7 now distinguishes list type from cardinality. An exact empty list is
+valid when every emission identity, snapshot, proof site, event sequence, and
+coverage count is otherwise complete. Non-lists remain partial, and every
+nonempty range still passes through the exact closed range, relocation, and
+machine-mapping validators. Task 6 continues to independently decide semantic
+validity and producer capabilities remain empty.
+
+Fresh verification:
+
+```text
+Task 7 focused: 158 passed
+Task 6 lineage plus adjacent proof/object/identity/bundle: 423 passed
+```
+
+Scoped Ruff, `py_compile`, `git diff --check`, and the unchanged-table assertion
+exit zero. The installed registry remains empty, the gate remains unvalidated,
+and no live probe or static audit was rerun.

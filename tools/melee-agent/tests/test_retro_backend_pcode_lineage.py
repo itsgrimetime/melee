@@ -420,6 +420,21 @@ def test_valid_reorder_preserves_lineage_not_operand_index(tmp_path: Path) -> No
     assert result.errors == ()
 
 
+def test_zero_byte_pseudo_op_accepts_complete_emission_with_no_code_ranges(
+    candidate_object: Path,
+) -> None:
+    payload = minimal_payload()
+    payload["pcode_instructions"][0]["code_ranges"] = []
+
+    result = validate_pcode_lineage(
+        payload, trusted_proof(), candidate_object, "fn"
+    )
+
+    assert result.errors == ()
+    assert result.anchor_bindings == {}
+    assert result.capabilities == frozenset({"pcode-to-code-range"})
+
+
 def test_result_and_normalized_payload_are_deeply_immutable(candidate_object: Path) -> None:
     payload = minimal_payload()
     result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
