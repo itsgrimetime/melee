@@ -844,6 +844,43 @@ def test_ignored_inventory_enforces_bounds_before_opening_paths(
     )
 
 
+def test_inspection_reads_ignored_inventory_with_bounded_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, linked = _inspection_fixture(tmp_path)
+    output = linked / "build/obj/file.o"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"object")
+    real_run = subprocess.run
+    real_popen = subprocess.Popen
+    bounded_commands: list[list[str]] = []
+
+    def reject_unbounded_inventory(args, **kwargs):
+        if "ls-files" in args:
+            pytest.fail("ignored inventory used unbounded subprocess.run capture")
+        return real_run(args, **kwargs)
+
+    def recording_popen(args, **kwargs):
+        if "ls-files" in args:
+            bounded_commands.append([os.fspath(value) for value in args])
+        return real_popen(args, **kwargs)
+
+    monkeypatch.setattr(worktrees, "_IGNORED_MAX_BYTES", 1)
+    monkeypatch.setattr(worktrees.subprocess, "run", reject_unbounded_inventory)
+    monkeypatch.setattr(worktrees.subprocess, "Popen", recording_popen)
+
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=0,
+        process_snapshot=_quiet_snapshot(),
+    )
+    item = next(record for record in report.records if record.path == linked)
+
+    assert bounded_commands
+    assert "ignored-inventory-invalid" in item.skip_reasons
+
+
 @pytest.mark.parametrize(
     ("relative", "approved"),
     [
@@ -1104,6 +1141,26 @@ def test_collect_process_snapshot_uses_bounded_lsof_and_ps() -> None:
     assert snapshot.errors == ()
     assert snapshot.paths == ((77, Path("/tmp/work").resolve(strict=False)),)
     assert snapshot.commands == ((78, "python /tmp/work/job.py"),)
+
+
+@pytest.mark.parametrize("warning_query", ["lsof", "ps"])
+def test_collect_process_snapshot_rejects_successful_query_warning(
+    warning_query: str,
+) -> None:
+    warning = "; sys.stderr.write('permission warning\\n')"
+    lsof_script = "import sys; sys.stdout.write('p77\\nfcwd\\nn/tmp/work\\n')"
+    ps_script = "import sys; sys.stdout.write('78 python /tmp/work/job.py\\n')"
+    if warning_query == "lsof":
+        lsof_script += warning
+    else:
+        ps_script += warning
+    snapshot = worktrees.collect_process_snapshot(
+        popen_factory=_scripted_popen([lsof_script, ps_script])
+    )
+
+    assert snapshot.paths == ()
+    assert snapshot.commands == ()
+    assert snapshot.errors == ("process-query-failed",)
 
 
 def test_bounded_command_does_not_wait_forever_for_stubborn_child(
@@ -2233,6 +2290,48 @@ def test_retirement_apply_removes_checkout_and_preserves_branch(
     assert "prune" not in flattened
 
 
+def test_retirement_verification_ignores_unrelated_prunable_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, candidate, branch, original_head = _old_retirement_fixture(
+        tmp_path, "a-candidate"
+    )
+    _repo, unrelated, _branch, _head = _old_retirement_fixture(
+        tmp_path, "z-unrelated"
+    )
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    real_run = subprocess.run
+
+    def remove_then_break_unrelated(args, **kwargs):
+        result = real_run(args, **kwargs)
+        if "worktree" in args and "remove" in args and candidate in map(Path, args):
+            shutil.rmtree(unrelated)
+        return result
+
+    monkeypatch.setattr(worktrees.subprocess, "run", remove_then_break_unrelated)
+    report = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=24,
+        process_snapshot=_quiet_snapshot(),
+    )
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert [item.path for item in result.removed] == [candidate]
+    assert result.removed[0].branch_head_after == original_head
+    assert result.errors == ()
+    assert not candidate.exists()
+    assert (
+        real_run(
+            ["git", "-C", os.fspath(repo), "rev-parse", "--verify", branch],
+            check=True,
+            capture_output=True,
+        ).stdout.strip().decode()
+        == original_head
+    )
+
+
 def test_retirement_path_absence_check_detects_dangling_symlink(
     tmp_path: Path,
 ) -> None:
@@ -2314,6 +2413,14 @@ def test_retirement_post_remove_fails_closed_on_registration_canonicalization_er
         "discover_registered_worktrees",
         lambda _repo_root: (registered,),
     )
+    real_canonical = worktrees._canonical
+
+    def failing_canonical(path: Path) -> Path:
+        if path == broken_registration:
+            raise OSError("cannot canonicalize")
+        return real_canonical(path)
+
+    monkeypatch.setattr(worktrees, "_canonical", failing_canonical)
     monkeypatch.setattr(worktrees, "_path_exists_nofollow", lambda _path: False)
 
     def successful_git(args, **_kwargs):
@@ -2354,6 +2461,41 @@ def test_retirement_late_global_failure_reports_partial_result(tmp_path: Path, m
     assert [item.path for item in result.removed] == [first]
     assert result.skipped == ()
     assert [error.reason for error in result.errors] == ["process-query-failed"]
+    assert not first.exists()
+    assert second.exists()
+
+
+def test_retirement_late_ignored_inventory_overflow_reports_partial_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, first, _branch, _head = _old_retirement_fixture(tmp_path, "a-first")
+    _repo, second, _branch, _head = _old_retirement_fixture(tmp_path, "b-second")
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    real_run = subprocess.run
+
+    def shrink_inventory_limit_after_first_removal(args, **kwargs):
+        result = real_run(args, **kwargs)
+        if "worktree" in args and "remove" in args and first in map(Path, args):
+            monkeypatch.setattr(worktrees, "_IGNORED_MAX_BYTES", 1)
+        return result
+
+    monkeypatch.setattr(
+        worktrees.subprocess, "run", shrink_inventory_limit_after_first_removal
+    )
+    initial = worktrees.inspect_worktrees(
+        repo,
+        current_worktree=repo,
+        min_idle_hours=24,
+        process_snapshot=_quiet_snapshot(),
+    )
+
+    result = worktrees.retire_worktrees(initial, apply=True)
+
+    assert [item.path for item in result.removed] == [first]
+    assert [(item.path, item.reason) for item in result.skipped] == [
+        (second, "changed-during-retirement")
+    ]
+    assert result.errors == ()
     assert not first.exists()
     assert second.exists()
 

@@ -1,7 +1,7 @@
 # Conservative Agent Worktree Retirement
 
-**Date:** 2026-07-11  
-**Status:** Approved design  
+**Date:** 2026-07-11
+**Status:** Approved design
 **Issue:** Melee tooling issue #1234
 
 ## Problem

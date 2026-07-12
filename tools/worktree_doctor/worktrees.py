@@ -975,24 +975,36 @@ def _bounded_command(
     *,
     popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
     record_limit: int | None = None,
+    stdout_limit: int | None = None,
+    stderr_limit: int | None = None,
+    record_delimiters: bytes = b"\n\0",
+    timeout: float | None = None,
+    failure_reason: str = "process-query-failed",
+    overflow_reason: str = "process-query-overflow",
 ) -> tuple[bytes, bytes, str | None]:
+    if stdout_limit is None:
+        stdout_limit = _PROCESS_STDOUT_MAX
+    if stderr_limit is None:
+        stderr_limit = _PROCESS_STDERR_MAX
+    if timeout is None:
+        timeout = _PROCESS_TIMEOUT
     try:
         process = popen_factory(
             list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
     except OSError:
-        return b"", b"", "process-query-failed"
-    deadline = time.monotonic() + _PROCESS_TIMEOUT
+        return b"", b"", failure_reason
+    deadline = time.monotonic() + timeout
     if process.stdout is None or process.stderr is None:
         _kill_and_reap_bounded(process, deadline=deadline)
         for stream in (process.stdout, process.stderr):
             if stream is not None:
                 stream.close()
-        return b"", b"", "process-query-failed"
+        return b"", b"", failure_reason
 
     selector = selectors.DefaultSelector()
     outputs = {process.stdout: bytearray(), process.stderr: bytearray()}
-    limits = {process.stdout: _PROCESS_STDOUT_MAX, process.stderr: _PROCESS_STDERR_MAX}
+    limits = {process.stdout: stdout_limit, process.stderr: stderr_limit}
     record_count = 0
     try:
         for stream in outputs:
@@ -1002,11 +1014,11 @@ def _bounded_command(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _kill_and_reap_bounded(process, deadline=deadline)
-                return b"", b"", "process-query-failed"
+                return b"", b"", failure_reason
             events = selector.select(remaining)
             if not events:
                 _kill_and_reap_bounded(process, deadline=deadline)
-                return b"", b"", "process-query-failed"
+                return b"", b"", failure_reason
             for key, _ in events:
                 stream = key.fileobj
                 chunk = os.read(stream.fileno(), 65536)
@@ -1014,25 +1026,28 @@ def _bounded_command(
                     selector.unregister(stream)
                     continue
                 output = outputs[stream]
-                output.extend(chunk)
-                if len(output) > limits[stream]:
+                if len(output) + len(chunk) > limits[stream]:
                     _kill_and_reap_bounded(process, deadline=deadline)
-                    return b"", b"", "process-query-overflow"
+                    return b"", b"", overflow_reason
+                output.extend(chunk)
                 if stream is process.stdout and record_limit is not None:
-                    record_count += chunk.count(b"\n") + chunk.count(b"\0")
+                    record_count += sum(
+                        chunk.count(bytes((delimiter,)))
+                        for delimiter in record_delimiters
+                    )
                     if record_count > record_limit:
                         _kill_and_reap_bounded(process, deadline=deadline)
-                        return b"", b"", "process-query-overflow"
+                        return b"", b"", overflow_reason
         returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except (OSError, subprocess.TimeoutExpired):
         _kill_and_reap_bounded(process, deadline=deadline)
-        return b"", b"", "process-query-failed"
+        return b"", b"", failure_reason
     finally:
         selector.close()
         process.stdout.close()
         process.stderr.close()
     if returncode != 0:
-        return b"", b"", "process-query-failed"
+        return b"", b"", failure_reason
     return bytes(outputs[process.stdout]), bytes(outputs[process.stderr]), None
 
 
@@ -1041,20 +1056,20 @@ def collect_process_snapshot(
     popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
 ) -> ProcessSnapshot:
     self_pid = os.getpid()
-    lsof, _, error = _bounded_command(
+    lsof, lsof_stderr, error = _bounded_command(
         ("lsof", "-nP", "-F", "pfn"),
         popen_factory=popen_factory,
         record_limit=_PROCESS_RECORD_MAX,
     )
-    if error is not None:
-        return ProcessSnapshot((), (), (error,))
-    ps, _, error = _bounded_command(
+    if error is not None or lsof_stderr:
+        return ProcessSnapshot((), (), (error or "process-query-failed",))
+    ps, ps_stderr, error = _bounded_command(
         ("ps", "-axo", "pid=,command="),
         popen_factory=popen_factory,
         record_limit=_PROCESS_RECORD_MAX,
     )
-    if error is not None:
-        return ProcessSnapshot((), (), (error,))
+    if error is not None or ps_stderr:
+        return ProcessSnapshot((), (), (error or "process-query-failed",))
     lsof_records = len(lsof.replace(b"\0", b"\n").splitlines())
     ps_records = len(ps.splitlines())
     if lsof_records > _PROCESS_RECORD_MAX or ps_records > _PROCESS_RECORD_MAX:
@@ -1076,6 +1091,33 @@ def _git_bytes(path: Path, args: Sequence[str]) -> subprocess.CompletedProcess[b
         )
     except OSError:
         return subprocess.CompletedProcess(args, 127, b"", b"")
+
+
+def _collect_ignored_inventory(worktree: Path) -> tuple[bytes, tuple[str, ...]]:
+    args = [
+        "git",
+        "-C",
+        os.fspath(worktree),
+        "ls-files",
+        "--others",
+        "-i",
+        "--exclude-standard",
+        "-z",
+        "--",
+    ]
+    stdout, stderr, error = _bounded_command(
+        args,
+        popen_factory=subprocess.Popen,
+        record_limit=_IGNORED_MAX_ENTRIES,
+        stdout_limit=_IGNORED_MAX_BYTES,
+        stderr_limit=_PROCESS_STDERR_MAX,
+        record_delimiters=b"\0",
+        failure_reason="ignored-inventory-invalid",
+        overflow_reason="ignored-inventory-invalid",
+    )
+    if error is not None or stderr:
+        return b"", (error or "ignored-inventory-invalid",)
+    return stdout, ()
 
 
 def _admin_activity(worktree: Path) -> tuple[float, tuple[str, ...]]:
@@ -1174,19 +1216,16 @@ def _inspect_one(
         if dirty:
             reasons.append("dirty-worktree")
 
-    ignored_result = _git_bytes(
-        item.path, ("ls-files", "--others", "-i", "--exclude-standard", "-z", "--")
-    )
+    ignored_output, inventory_errors = _collect_ignored_inventory(item.path)
     ignored_entries: tuple[IgnoredEntry, ...] = ()
     retained = RetainedEvidenceSnapshot((), ())
     asset_snapshot: assets.HydratedAssetSnapshot | None = None
     dol_identity = None
     unapproved: tuple[Path, ...] = ()
-    if ignored_result.returncode != 0:
-        reasons.append("ignored-inventory-invalid")
-    else:
+    reasons.extend(inventory_errors)
+    if not inventory_errors:
         ignored_entries, inventory_errors = _parse_ignored_inventory(
-            item.path, ignored_result.stdout
+            item.path, ignored_output
         )
         reasons.extend(inventory_errors)
         if not inventory_errors:
@@ -1473,19 +1512,19 @@ def _path_exists_nofollow(path: Path) -> bool:
     return True
 
 
-def _strict_registered_canonical_paths(
-    registered: Sequence[RegisteredWorktree],
-) -> tuple[Path, ...]:
-    canonical_paths: list[Path] = []
+def _registered_contains_canonical_path(
+    registered: Sequence[RegisteredWorktree], canonical_path: Path
+) -> bool:
     for item in registered:
         try:
-            canonical_paths.append(item.path.resolve(strict=True))
+            current = _canonical(item.path)
         except OSError as error:
             raise WorktreeParseError(
-                f"cannot strictly canonicalize registered worktree "
-                f"{item.path!s}: {error}"
+                f"cannot canonicalize registered worktree {item.path!s}: {error}"
             ) from error
-    return tuple(canonical_paths)
+        if current == canonical_path:
+            return True
+    return False
 
 
 def _common_git_dir_error(
@@ -1688,13 +1727,12 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
 
             try:
                 registered = discover_registered_worktrees(report.repo_root)
-                registered_canonical_paths = _strict_registered_canonical_paths(
-                    registered
+                still_registered = _registered_contains_canonical_path(
+                    registered, canonical_path
                 )
             except WorktreeParseError as error:
                 errors.append(_porcelain_error(error, phase="verify"))
                 break
-            still_registered = canonical_path in registered_canonical_paths
             if _path_exists_nofollow(candidate.path) or still_registered:
                 skipped.append(
                     _skip(candidate, phase="verify", reason="git-remove-failed")
