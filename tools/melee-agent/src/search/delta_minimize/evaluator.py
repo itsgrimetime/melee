@@ -1012,7 +1012,24 @@ def _color_axis(
             for candidate_ig, canonical in candidate_proven.items()
             if canonical in donor_by_canonical
         }
+    candidate_structural_witness = _structural_namespace_witness(
+        candidate_compile,
+        objective.class_id,
+    )
+    donor_structural_witness = _structural_namespace_witness(
+        donor_compile,
+        objective.class_id,
+    )
+    donor_graph_igs = tuple(sorted(donor_descriptors))
     if (
+        candidate_proven is not None
+        and donor_proven is not None
+        and candidate_structural_witness is not None
+        and candidate_structural_witness == donor_structural_witness
+    ):
+        donor_graph_igs = tuple(range(candidate_structural_witness["virtual_count"]))
+        candidate_graph_roles = {ig_idx: ig_idx for ig_idx in donor_graph_igs}
+    elif (
         set(proven_graph_roles.values()) == set(donor_descriptors)
         and len(proven_graph_roles) == len(donor_descriptors)
     ):
@@ -1043,7 +1060,7 @@ def _color_axis(
 
     donor_role_map = {
         ig_idx: donor_target_roles_raw.get(ig_idx, 1_000_000 + ig_idx)
-        for ig_idx in donor_descriptors
+        for ig_idx in donor_graph_igs
     }
     candidate_role_map = {
         candidate_ig: donor_role_map[donor_ig] for candidate_ig, donor_ig in candidate_graph_roles.items()

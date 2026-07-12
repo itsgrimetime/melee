@@ -18,6 +18,15 @@ from src.search.delta_minimize.run import DeltaMinimizeError, DeltaMinimizeResul
 runner = CliRunner()
 
 
+def test_delta_minimize_help_names_supported_target_semantics() -> None:
+    result = runner.invoke(search_app, ["delta-minimize", "--help"])
+
+    assert result.exit_code == 0
+    normalized = " ".join(result.stdout.split())
+    assert "v1 semantic reanchoring" in normalized
+    assert "v2 reviewed cross-parent bindings" in normalized
+
+
 def _result(*, status: str = "frontier", provisional: bool = False) -> DeltaMinimizeResult:
     axes = AxisDistances(
         opcode=(0, 0),

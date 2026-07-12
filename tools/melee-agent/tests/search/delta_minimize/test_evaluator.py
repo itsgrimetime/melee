@@ -6,6 +6,7 @@ import subprocess
 from copy import deepcopy
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Mapping
 
 import pytest
 
@@ -495,6 +496,18 @@ def _capture_color_role_maps(
     return captured
 
 
+def _expected_complete_identity_role_map(
+    compile: Compile,
+    desired: Mapping[int, int],
+) -> dict[int, int]:
+    witness = objectives_module._structural_namespace_witness(compile, 0)
+    assert witness is not None
+    return {
+        ig_idx: ig_idx if ig_idx in desired else 1_000_000 + ig_idx
+        for ig_idx in range(witness["virtual_count"])
+    }
+
+
 def test_candidate_exact_parent_hashes_consume_reviewed_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -517,7 +530,9 @@ def test_candidate_exact_parent_hashes_consume_reviewed_binding(
 
     evaluator_module._color_axis(candidate, objective, parents)
 
-    expected = {ig_idx: ig_idx for ig_idx in objective.desired_phys}
+    expected = _expected_complete_identity_role_map(
+        compiles["left"], objective.desired_phys
+    )
     assert captured == [expected, expected]
 
 
@@ -551,7 +566,9 @@ def test_hybrid_equal_witness_inherits_parent_binding_despite_ambiguous_roles(
 
     evaluator_module._color_axis(candidate, objective, parents)
 
-    expected = {ig_idx: ig_idx for ig_idx in objective.desired_phys}
+    expected = _expected_complete_identity_role_map(
+        compiles["left"], objective.desired_phys
+    )
     assert captured == [expected, expected]
 
 

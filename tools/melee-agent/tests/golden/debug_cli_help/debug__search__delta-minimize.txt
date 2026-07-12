@@ -3,6 +3,8 @@
 
  Exhaustively minimize the closed source-delta lattice between two parents.
 
+ Targets use v1 semantic reanchoring or v2 reviewed cross-parent bindings.
+
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
 │ *  --function       -f                     TEXT             Target function  │
 │                                                             to recombine and │
@@ -28,8 +30,13 @@
 │                                                             this budget.     │
 │                                                             [default: 64]    │
 │    --target                                PATH             Optional         │
-│                                                             delta-minimize-… │
-│                                                             YAML file.       │
+│                                                             color-target     │
+│                                                             YAML: v1         │
+│                                                             semantic         │
+│                                                             reanchoring or   │
+│                                                             v2 reviewed      │
+│                                                             cross-parent     │
+│                                                             bindings.        │
 │    --donor                                 TEXT             Override color,  │
 │                                                             objobjects, or   │
 │                                                             stack-homes      │

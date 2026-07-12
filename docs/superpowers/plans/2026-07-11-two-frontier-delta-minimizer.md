@@ -1466,12 +1466,27 @@ python -m src.cli debug search delta-minimize \
   --function mnDiagram_DrawFighterHeaders \
   --left ../../build/delta-minimize/fighter-wrapper.c \
   --right /Users/mike/.codex/worktrees/eeff/melee/src/melee/mn/mndiagram.c \
+  --target ../../build/delta-minimize/fighter-role-target-v2.yaml \
+  --donor color=left \
+  --donor stack-homes=right \
   --out-dir ../../build/delta-minimize/fighter-real \
   --max-candidates 64 \
   --json
 ```
 
-Expected: exit 0 with `status` equal to `matched`, `joint-zero`, or `frontier`; `exact_four_axis: true`; every viable candidate complete; both endpoints byte-exact; every Pareto row linked to retained source, pcdump, inspect snapshot, and stack/color evidence. If objective inference is ambiguous, rerun with the explicit verified force target and donor override reported by the command; do not weaken the fail-closed gate.
+`fighter-role-target-v2.yaml` is the reviewed v2 target bound to both retained
+source and pcdump hashes, with identity bindings for canonical IGs 64 and 78.
+The explicit donor selections preserve the reviewed left allocator target and
+the expected-object-backed right stack-home reference used for acceptance.
+Keep that target, the frozen parent sources, and retained pcdumps untracked.
+
+Expected: exit 0 with `status` equal to `matched`, `joint-zero`, or `frontier`;
+`exact_four_axis: true`; every viable candidate complete and carrying a proven
+parent or structural-namespace mapping; both endpoints byte-exact; every Pareto
+row linked to retained source, pcdump, inspect snapshot, and stack/color
+evidence; and no `ambiguous-color-target`. If any viable mask lacks a proven
+mapping, exact frontier publication must remain blocked rather than guessing
+from raw IG equality.
 
 - [ ] **Step 5: Verify the repository build**
 

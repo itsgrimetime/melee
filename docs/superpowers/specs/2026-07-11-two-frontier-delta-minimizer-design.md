@@ -118,6 +118,51 @@ class, dump availability, IG uniqueness/resolution, physical-register values,
 and coalesce policy before profiling. It does not accept
 `role_descriptor.TargetSpec` JSON directly.
 
+V1 remains the automatic semantic-reanchor format. When two parents contain
+descriptor-identical roles, operators may instead supply reviewed cross-parent
+bindings with `delta-minimize-color-target.v2`:
+
+```yaml
+schema_version: delta-minimize-color-target.v2
+function: mnDiagram_DrawFighterHeaders
+class_id: 0
+baseline_side: left
+baseline_dump: /absolute/path/to/left.pcdump
+force_phys:
+  64: 30
+  78: 29
+coalesce_preservation: false
+parent_role_bindings:
+  left:
+    source_sha256: 0f38bf2740123c3bbf6b9c18ad10123cc0db3f6e14bd5041057d49921eaec7e2
+    pcdump_sha256: db41d64051334cace6e38b2db91ade6d6addfff0a4ab06b689b5cc1384578333
+    canonical_to_parent:
+      64: 64
+      78: 78
+  right:
+    source_sha256: e7f3a66ab56c14b8841591ade19425c4cb45df614795ef15e4d9fa983967af96
+    pcdump_sha256: 433e4954aa3b4402dedb61ef9830ac6aa03a393b1147217654f62e0350196598
+    canonical_to_parent:
+      64: 64
+      78: 78
+```
+
+The map direction is canonical baseline IG to raw parent IG. V2 requires exact
+top-level and nested fields, both parent sides, lowercase 64-character SHA-256
+values, total and injective maps whose keys exactly equal `force_phys`, and an
+identity map on the baseline side. The baseline dump and both retained parent
+source/pcdump byte hashes must match. Every selected role must exist in the
+declared class and be a minimum-cost semantic match; review may choose among
+tied minima but cannot select an unrelated role.
+
+A candidate consumes a reviewed map only when its exact source and pcdump bytes
+match that parent, or when its versioned structural namespace witness exactly
+matches a reviewed parent. Otherwise ordinary semantic reanchoring applies.
+Ambiguous or incomplete mappings leave the viable candidate incomplete, and
+any such viable candidate prevents exact frontier publication. Raw IG equality
+alone is never identity evidence, and malformed v2 evidence never falls back to
+v1 interpretation.
+
 The installed `melee-agent` entrypoint intentionally follows the shared tooling
 checkout. Branch-local development and verification therefore use
 `cd tools/melee-agent && python -m src.cli ...` until the tooling change reaches
@@ -304,6 +349,11 @@ the assignment target is unambiguous, the parent with the lower assignment
 distance becomes the color donor for secondary graph/order comparison;
 `--donor color=...` may override only that secondary donor, not the absolute
 assignment target.
+
+An explicit v2 target may resolve a tied cross-parent role only through its
+reviewed, byte-bound parent mappings. Hybrids inherit a mapping only from an
+exactly equal versioned structural namespace witness; otherwise they follow the
+same semantic-reanchor path as v1 and fail closed on ambiguity.
 
 Simplify order, select order, interference edges, coalesce mappings, and spill
 state have no binary-side absolute reference. Each compares against the selected

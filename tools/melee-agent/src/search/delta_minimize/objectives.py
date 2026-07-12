@@ -810,9 +810,11 @@ def _compile_for_explicit_target(
             matching_parents = [parent for parent in (left, right) if parent.pcdump_path.resolve() == baseline_path]
         else:
             baseline_parent = {"left": left, "right": right}[target.baseline_side]
+            baseline_hash = hashlib.sha256(target.baseline_dump.read_bytes()).hexdigest()
+            parent_hash = hashlib.sha256(baseline_parent.pcdump_path.read_bytes()).hexdigest()
             matching_parents = (
                 [baseline_parent]
-                if baseline_parent.pcdump_path.resolve() == baseline_path
+                if parent_hash == baseline_hash
                 else []
             )
         if not matching_parents:
@@ -1095,6 +1097,7 @@ def _complete_profile_role_map(
     class_id: int,
     *,
     allow_exact_namespace: bool = False,
+    allow_reviewed_namespace: bool = False,
 ) -> Mapping[int, int]:
     """Reanchor every structurally stable allocator role into one parent.
 
@@ -1104,6 +1107,14 @@ def _complete_profile_role_map(
     comparable across parents.  The color-profile parser will fail closed if
     genuinely ambiguous roles leave evidence unmapped.
     """
+    if allow_reviewed_namespace:
+        reference_witness = _structural_namespace_witness(reference_compile, class_id)
+        parent_witness = _structural_namespace_witness(parent_compile, class_id)
+        if reference_witness is not None and reference_witness == parent_witness:
+            return {
+                ig_idx: ig_idx
+                for ig_idx in range(reference_witness["virtual_count"])
+            }
     if allow_exact_namespace:
         reference_witness = _allocator_namespace_witness(reference_compile, class_id)
         parent_witness = _allocator_namespace_witness(parent_compile, class_id)
@@ -1479,12 +1490,14 @@ def infer_objective_manifest(
         left.compile,
         loaded.class_id,
         allow_exact_namespace=derived_exact_identity,
+        allow_reviewed_namespace=loaded.schema_version == COLOR_TARGET_SCHEMA_V2,
     )
     right_profile_roles = _complete_profile_role_map(
         profile_reference_compile,
         right.compile,
         loaded.class_id,
         allow_exact_namespace=derived_exact_identity,
+        allow_reviewed_namespace=loaded.schema_version == COLOR_TARGET_SCHEMA_V2,
     )
     if reviewed_reanchors:
         left_profile_roles = _overlay_reviewed_role_map(

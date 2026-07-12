@@ -4611,7 +4611,10 @@ def delta_minimize_cmd(
         Optional[Path],
         typer.Option(
             "--target",
-            help="Optional delta-minimize-color-target.v1 YAML file.",
+            help=(
+                "Optional color-target YAML: v1 semantic reanchoring or "
+                "v2 reviewed cross-parent bindings."
+            ),
         ),
     ] = None,
     donor: Annotated[
@@ -4636,7 +4639,10 @@ def delta_minimize_cmd(
         typer.Option("--json", help="Emit deterministic result JSON."),
     ] = False,
 ) -> None:
-    """Exhaustively minimize the closed source-delta lattice between two parents."""
+    """Exhaustively minimize the closed source-delta lattice between two parents.
+
+    Targets use v1 semantic reanchoring or v2 reviewed cross-parent bindings.
+    """
 
     try:
         donor_overrides = parse_donor_overrides(donor or ())
