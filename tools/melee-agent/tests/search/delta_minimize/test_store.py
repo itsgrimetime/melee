@@ -12,6 +12,9 @@ from types import SimpleNamespace
 import pytest
 
 from src.search.delta_minimize.contracts import DeltaMinimizeError
+from src.search.delta_minimize.epochs import PARSER_SCHEMA_HASH
+from src.search.delta_minimize.namespace_review import NamespaceArtifact, NamespaceReviewRequest
+from src.search.delta_minimize.objectives import ROLE_NAMESPACE_SCHEMA
 from src.search.delta_minimize.store import (
     DeltaRunStore,
     EvidenceKey,
@@ -435,3 +438,102 @@ def test_phase_and_result_paths_use_atomic_store_writes(tmp_path: Path) -> None:
     assert store.write_delta_manifest({"schema_version": "d.v1"}) == (tmp_path / "delta-manifest.json")
     assert store.write_candidates({"candidates": []}) == tmp_path / "candidates.json"
     assert store.write_result({"status": "incomplete"}) == tmp_path / "result.json"
+
+
+def _namespace_request() -> NamespaceReviewRequest:
+    domain = tuple(range(110))
+    return NamespaceReviewRequest(
+        function="draw",
+        class_id=0,
+        register_class="GPR",
+        namespace_schema=ROLE_NAMESPACE_SCHEMA,
+        parser_schema_hash=PARSER_SCHEMA_HASH,
+        target_sha256="1" * 64,
+        delta_manifest_sha256="2" * 64,
+        left_source_sha256="3" * 64,
+        right_source_sha256="4" * 64,
+        cflags_hash="5" * 64,
+        compiler_fingerprint="compiler-v1",
+        expected_object_hash="6" * 64,
+        inspector_version="inspector-v1",
+        canonical_artifact_id="parent:left",
+        canonical_source_sha256="3" * 64,
+        canonical_pcdump_sha256="7" * 64,
+        reviewed_anchors={64: 64, 78: 78},
+        artifacts=(
+            NamespaceArtifact(
+                "parent:left",
+                "parent",
+                "left",
+                None,
+                None,
+                "3" * 64,
+                "7" * 64,
+                domain,
+                True,
+                None,
+            ),
+            NamespaceArtifact(
+                "parent:right",
+                "parent",
+                "right",
+                None,
+                None,
+                "4" * 64,
+                "8" * 64,
+                domain,
+                False,
+                "ambiguous-automatic-v5",
+            ),
+        ),
+    )
+
+
+def test_namespace_request_and_resolution_provenance_paths_are_safe_and_deterministic(
+    tmp_path: Path,
+) -> None:
+    store = DeltaRunStore(tmp_path)
+    request = _namespace_request()
+    request_path = store.write_namespace_review_request(request)
+    provenance = {
+        "schema_version": "delta-minimize-namespace-resolution.v1",
+        "request_sha256": request.sha256,
+        "review_sha256": None,
+        "resolutions": {},
+    }
+    first = store.write_namespace_resolution(provenance)
+    second = store.write_namespace_resolution(dict(provenance))
+
+    assert request_path == tmp_path / "namespace-review-request.yaml"
+    assert request_path.read_text(encoding="utf-8") == request.to_yaml()
+    assert first == second
+    assert first.parent == tmp_path / "objective" / "namespace-resolutions"
+    assert len(first.stem) == 64
+    assert json.loads(first.read_text(encoding="utf-8")) == provenance
+
+
+def test_publication_invalidation_removes_request_but_preserves_raw_and_resolution_caches(
+    tmp_path: Path,
+) -> None:
+    store = DeltaRunStore(tmp_path)
+    request = _namespace_request()
+    request_path = store.write_namespace_review_request(request)
+    resolution_path = store.write_namespace_resolution(
+        {
+            "schema_version": "delta-minimize-namespace-resolution.v1",
+            "request_sha256": request.sha256,
+            "review_sha256": None,
+            "resolutions": {},
+        }
+    )
+    store.write_evidence(KEY, {"status": "complete"})
+    store.write_candidates({"candidates": []})
+    store.write_result({"status": "frontier"})
+
+    store.invalidate_publications()
+
+    assert not request_path.exists()
+    assert not (tmp_path / "candidates.json").exists()
+    assert not (tmp_path / "result.json").exists()
+    assert resolution_path.is_file()
+    assert store.load_evidence(KEY) == {"status": "complete"}

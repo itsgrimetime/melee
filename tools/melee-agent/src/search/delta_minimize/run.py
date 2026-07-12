@@ -38,8 +38,10 @@ from .evaluator import (
     ParentEvidenceBundle,
     RawCandidateEvidence,
     _candidate_blockers,
+    _compile,
     _compile_diagnostics,
     _compile_rejected,
+    _evidence_content_hashes,
     _evidence_frame_and_stack,
     _file_hash,
     _frame_and_stack,
@@ -50,22 +52,31 @@ from .evaluator import (
     default_evaluation_backends,
     profile_candidate,
 )
+from .namespace_review import (
+    REVIEWED_NAMESPACES_SCHEMA,
+    NamespaceArtifact,
+    NamespaceReviewRequest,
+    ReviewedNamespaces,
+    load_reviewed_namespaces,
+)
 from .objectives import (
     COLOR_TARGET_SCHEMA,
     COLOR_TARGET_SCHEMA_V2,
     OBJECTIVE_MANIFEST_SCHEMA,
     ROLE_NAMESPACE_SCHEMA,
     AxisReference,
+    NamespaceMapResolution,
     ObjectiveManifest,
     ParentObjectiveEvidence,
     infer_objective_manifest,
     load_color_target,
+    resolve_namespace_map,
 )
 from .pareto import reduce_pareto
 from .store import DeltaRunStore
 
 RESULT_SCHEMA = "delta-minimize-result.v1"
-OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v3"
+OBJECTIVE_INPUTS_SCHEMA = "delta-minimize-objective-inputs.v4"
 _OBJECTIVE_AXES = frozenset({"opcode", "color", "objobjects", "stack-homes"})
 _DONOR_OVERRIDE_AXES = frozenset({"color", "objobjects", "stack-homes"})
 _REGISTER_CLASSES = frozenset({0, 1})
@@ -90,6 +101,7 @@ _OBJECTIVE_FIELDS = frozenset(
         "objobject_donor",
         "stack_home_donor",
         "references",
+        "namespace_resolution",
     }
 )
 _DELTA_MANIFEST_FIELDS = frozenset({"schema_version", "function", "left_hash", "right_hash", "atoms"})
@@ -131,6 +143,7 @@ class DeltaMinimizeConfig:
     include_objobjects: bool
     melee_root: Path
     cflags_from: Path
+    namespace_review_path: Path | None = None
 
     def __post_init__(self) -> None:
         paths = (self.left, self.right, self.out_dir, self.melee_root, self.cflags_from)
@@ -139,6 +152,7 @@ class DeltaMinimizeConfig:
             or not self.function
             or any(not isinstance(path, Path) for path in paths)
             or (self.target_path is not None and not isinstance(self.target_path, Path))
+            or (self.namespace_review_path is not None and not isinstance(self.namespace_review_path, Path))
             or not isinstance(self.max_candidates, int)
             or isinstance(self.max_candidates, bool)
             or self.max_candidates < 1
@@ -202,6 +216,36 @@ class DeltaMinimizeBackends:
     parent_requires_checkdiff: bool = False
     profile_candidate: Callable[..., CandidateProfile] = profile_candidate
     extract_manifest: Callable[..., DeltaManifest] = extract_delta_manifest
+
+
+@dataclass(frozen=True)
+class RunNamespaceState:
+    request: NamespaceReviewRequest
+    resolutions: Mapping[str, NamespaceMapResolution]
+    unresolved_ids: tuple[str, ...]
+    review_digest: str | None
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.request, NamespaceReviewRequest)
+            or not isinstance(self.resolutions, Mapping)
+            or any(
+                not isinstance(artifact_id, str)
+                or not isinstance(resolution, NamespaceMapResolution)
+                or artifact_id != resolution.artifact_id
+                for artifact_id, resolution in self.resolutions.items()
+            )
+            or not isinstance(self.unresolved_ids, tuple)
+            or any(not isinstance(artifact_id, str) or not artifact_id for artifact_id in self.unresolved_ids)
+            or self.review_digest is not None
+            and not _is_digest(self.review_digest)
+        ):
+            raise DeltaMinimizeError("invalid-run-namespace-state")
+        object.__setattr__(
+            self,
+            "resolutions",
+            MappingProxyType(dict(sorted(self.resolutions.items()))),
+        )
 
 
 def _json_value(value: Any) -> Any:
@@ -411,11 +455,7 @@ def _validate_target_descriptor(payload: object, *, original_ig: int) -> None:
 
 
 def _valid_sha256(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 64
-        and all(character in "0123456789abcdef" for character in value)
-    )
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 def _validate_target_provenance(
@@ -463,7 +503,8 @@ def _validate_target_provenance(
             binding = bindings[side]
             if (
                 not isinstance(binding, Mapping)
-                or set(binding) != {
+                or set(binding)
+                != {
                     "source_sha256",
                     "pcdump_sha256",
                     "canonical_to_parent",
@@ -566,6 +607,36 @@ def _validate_target_spec(
     return _freeze_json(payload)
 
 
+def _validate_namespace_resolution_provenance(
+    payload: object,
+) -> Mapping[str, Any] | None:
+    if payload is None:
+        return None
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "schema_version",
+        "namespace_schema",
+        "review_schema",
+        "request_sha256",
+        "review_sha256",
+        "resolution_sha256",
+        "resolution_artifact",
+    }:
+        raise ValueError
+    if (
+        payload["schema_version"] != "delta-minimize-namespace-resolution.v1"
+        or payload["namespace_schema"] != ROLE_NAMESPACE_SCHEMA
+        or payload["review_schema"] != REVIEWED_NAMESPACES_SCHEMA
+        or not _is_digest(payload["request_sha256"])
+        or payload["review_sha256"] is not None
+        and not _is_digest(payload["review_sha256"])
+        or not _is_digest(payload["resolution_sha256"])
+        or not isinstance(payload["resolution_artifact"], str)
+        or not payload["resolution_artifact"]
+    ):
+        raise ValueError
+    return _freeze_json(payload)
+
+
 def _objective_from_dict(payload: Mapping[str, Any], *, function: str) -> ObjectiveManifest:
     try:
         if set(payload) != _OBJECTIVE_FIELDS:
@@ -654,6 +725,7 @@ def _objective_from_dict(payload: Mapping[str, Any], *, function: str) -> Object
             class_id=payload["class_id"],
             desired_phys=desired,
         )
+        namespace_resolution = _validate_namespace_resolution_provenance(payload["namespace_resolution"])
         objective = ObjectiveManifest(
             schema_version=payload["schema_version"],
             function=payload["function"],
@@ -664,6 +736,7 @@ def _objective_from_dict(payload: Mapping[str, Any], *, function: str) -> Object
             objobject_donor=objobject_donor,
             stack_home_donor=stack_donor,
             references=MappingProxyType(dict(sorted(references.items()))),
+            namespace_resolution=namespace_resolution,
         )
         if objective.to_dict() != payload:
             raise ValueError
@@ -874,7 +947,11 @@ def _parent_objective_context(raw: RawCandidateEvidence) -> dict[str, Any]:
     }
 
 
-def _objective_context(config: DeltaMinimizeConfig, parents: ParentEvidenceBundle) -> dict[str, Any]:
+def _objective_context(
+    config: DeltaMinimizeConfig,
+    parents: ParentEvidenceBundle,
+    namespace_resolution: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     target_hash = None
     if config.target_path is not None:
         try:
@@ -898,6 +975,7 @@ def _objective_context(config: DeltaMinimizeConfig, parents: ParentEvidenceBundl
             "path": None if config.target_path is None else str(config.target_path.absolute()),
             "content_hash": target_hash,
         },
+        "namespace_resolution": (None if namespace_resolution is None else _json_value(namespace_resolution)),
         "donor_overrides": dict(sorted(config.donor_overrides.items())),
     }
 
@@ -958,8 +1036,10 @@ def _load_or_infer_objective(
     parents: ParentEvidenceBundle,
     store: DeltaRunStore,
     active: DeltaMinimizeBackends,
+    namespace_state: RunNamespaceState | None = None,
+    namespace_provenance: Mapping[str, Any] | None = None,
 ) -> ObjectiveManifest:
-    context = _objective_context(config, parents)
+    context = _objective_context(config, parents, namespace_provenance)
     old_manifest = _load_json(store.root / "objective-manifest.json")
     old_context = _load_objective_context(
         store.root / "objective-inputs.json",
@@ -973,14 +1053,26 @@ def _load_or_infer_objective(
         objective = _objective_from_dict(old_manifest, function=config.function)
         _validate_objective_donor_context(objective, config.donor_overrides)
         try:
-            expected = _infer_validated_objective(config, parents, active)
+            expected = _infer_validated_objective(
+                config,
+                parents,
+                active,
+                namespace_state=namespace_state,
+                namespace_provenance=namespace_provenance,
+            )
         except DeltaMinimizeError as error:
             raise DeltaMinimizeError("corrupt-objective-manifest") from error
         if objective.to_dict() != expected.to_dict():
             raise DeltaMinimizeError("corrupt-objective-manifest")
     else:
         try:
-            objective = _infer_validated_objective(config, parents, active)
+            objective = _infer_validated_objective(
+                config,
+                parents,
+                active,
+                namespace_state=namespace_state,
+                namespace_provenance=namespace_provenance,
+            )
         except DeltaMinimizeError as error:
             if error.reason in {
                 "ambiguous-color-target",
@@ -1003,6 +1095,9 @@ def _infer_validated_objective(
     config: DeltaMinimizeConfig,
     parents: ParentEvidenceBundle,
     active: DeltaMinimizeBackends,
+    *,
+    namespace_state: RunNamespaceState | None = None,
+    namespace_provenance: Mapping[str, Any] | None = None,
 ) -> ObjectiveManifest:
     """Derive the one canonical manifest permitted by current parent evidence.
 
@@ -1013,9 +1108,26 @@ def _infer_validated_objective(
     """
     left = active.parent_objective(parents.left, "left", config)
     right = active.parent_objective(parents.right, "right", config)
-    objective = active.infer_objective(left, right, config)
+    if namespace_state is None:
+        objective = active.infer_objective(left, right, config)
+    else:
+        namespace_maps = {
+            artifact_id: resolution.raw_to_canonical
+            for artifact_id, resolution in namespace_state.resolutions.items()
+            if resolution.raw_to_canonical is not None
+        }
+        objective = active.infer_objective(
+            left,
+            right,
+            config,
+            namespace_resolution=namespace_maps,
+        )
     if not isinstance(objective, ObjectiveManifest) or objective.function != config.function:
         raise DeltaMinimizeError("invalid-objective-manifest")
+    objective = replace(
+        objective,
+        namespace_resolution=(None if namespace_provenance is None else _freeze_json(namespace_provenance)),
+    )
     objective = _objective_from_dict(objective.to_dict(), function=config.function)
     _validate_objective_donor_context(objective, config.donor_overrides)
     return objective
@@ -1171,10 +1283,332 @@ def _build_result(
             "right_hash": manifest.right_hash,
             "out_dir": str(config.out_dir),
             "target_path": None if config.target_path is None else str(config.target_path),
+            "namespace_review_path": (
+                None if config.namespace_review_path is None else str(config.namespace_review_path)
+            ),
             "donor_overrides": dict(config.donor_overrides),
             "include_objobjects": config.include_objobjects,
         },
         compiler_provenance=compiler_provenance,
+        candidate_budget=config.max_candidates,
+    )
+
+
+def _raw_capture_epoch(
+    config: DeltaMinimizeConfig,
+    parents: ParentEvidenceBundle,
+    manifest: DeltaManifest,
+) -> str:
+    """Bind raw candidate capture to inputs that affect captured evidence."""
+
+    if config.target_path is None:
+        raise DeltaMinimizeError("missing-reviewed-namespace-target")
+    try:
+        target_sha256 = hashlib.sha256(config.target_path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise DeltaMinimizeError("invalid-color-target-path") from error
+    return _hash_json(
+        {
+            "function": config.function,
+            "target_sha256": target_sha256,
+            "delta_manifest_sha256": _hash_json(_manifest_to_dict(manifest)),
+            "cflags_hash": parents.cflags_hash,
+            "compiler_fingerprint": parents.compiler_fingerprint,
+            "expected_object_hash": parents.expected_object_hash,
+            "parser_schema_hash": parents.parser_schema_hash,
+            "inspector_version": parents.inspector_version,
+            "include_objobjects": config.include_objobjects,
+        }
+    )
+
+
+def _namespace_artifact_id(candidate: MaterializedCandidate) -> str:
+    if not 0 <= candidate.mask <= 7:
+        raise DeltaMinimizeError("unsupported-namespace-review-lattice")
+    return f"candidate:mask-{candidate.mask:03b}"
+
+
+def _uses_reviewed_namespace_sidecar(target: Any | None) -> bool:
+    """Return whether the target participates in reviewed namespace discovery."""
+
+    return bool(
+        target is not None
+        and target.schema_version == COLOR_TARGET_SCHEMA_V2
+    )
+
+
+def _resolve_namespaces_for_run(
+    config: DeltaMinimizeConfig,
+    parents: ParentEvidenceBundle,
+    candidates: tuple[MaterializedCandidate, ...],
+    raw_candidates: tuple[RawCandidateEvidence, ...],
+    manifest: DeltaManifest,
+) -> RunNamespaceState:
+    """Resolve every viable allocator artifact against one canonical parent."""
+
+    if config.target_path is None or len(candidates) != len(raw_candidates):
+        raise DeltaMinimizeError("invalid-namespace-resolution-input")
+    target = load_color_target(config.target_path, function=config.function)
+    if (
+        target.schema_version != COLOR_TARGET_SCHEMA_V2
+        or target.baseline_side not in {"left", "right"}
+        or parents.parser_schema_hash != PARSER_SCHEMA_HASH
+    ):
+        raise DeltaMinimizeError("unsupported-reviewed-namespace-context")
+
+    parent_rows = {"left": parents.left, "right": parents.right}
+    canonical_raw = parent_rows[target.baseline_side]
+    try:
+        canonical_compile = _compile(canonical_raw, config.function)
+    except (OSError, UnicodeError, TypeError, ValueError) as error:
+        raise DeltaMinimizeError("invalid-canonical-namespace-evidence") from error
+    sections = [section for section in canonical_compile.fev.coalesce_sections if section.class_id == target.class_id]
+    if not sections or sections[-1].n_virtuals < 32:
+        raise DeltaMinimizeError("invalid-canonical-namespace-evidence")
+    domain = tuple(range(sections[-1].n_virtuals))
+    reviewed_anchors = {role: role for role in target.force_phys}
+
+    rows: list[tuple[str, str, str | None, int | None, RawCandidateEvidence]] = [
+        (
+            f"parent:{target.baseline_side}",
+            "parent",
+            target.baseline_side,
+            None,
+            canonical_raw,
+        ),
+        (
+            f"parent:{'right' if target.baseline_side == 'left' else 'left'}",
+            "parent",
+            "right" if target.baseline_side == "left" else "left",
+            None,
+            parent_rows["right" if target.baseline_side == "left" else "left"],
+        ),
+    ]
+    rows.extend(
+        (
+            _namespace_artifact_id(candidate),
+            "candidate",
+            None,
+            candidate.mask,
+            raw,
+        )
+        for candidate, raw in zip(candidates, raw_candidates, strict=True)
+        if raw.viable
+    )
+
+    def resolve_all(
+        request: NamespaceReviewRequest | None = None,
+        reviewed: ReviewedNamespaces | None = None,
+    ) -> tuple[NamespaceMapResolution, ...]:
+        resolved: list[NamespaceMapResolution] = []
+        for artifact_id, _kind, _side, _mask, raw in rows:
+            try:
+                source_sha256, pcdump_sha256 = _evidence_content_hashes(raw)
+                artifact_compile = _compile(raw, config.function)
+            except (OSError, UnicodeError, TypeError, ValueError) as error:
+                raise DeltaMinimizeError(
+                    "invalid-namespace-artifact-evidence",
+                    {"artifact_id": artifact_id},
+                ) from error
+            resolution = resolve_namespace_map(
+                artifact_id=artifact_id,
+                source_sha256=source_sha256,
+                pcdump_sha256=pcdump_sha256,
+                artifact_compile=artifact_compile,
+                canonical_compile=canonical_compile,
+                class_id=target.class_id,
+                domain=domain,
+                resolved=tuple(resolved),
+                request=request,
+                reviewed=reviewed,
+            )
+            if _kind == "parent" and resolution.raw_to_canonical is not None:
+                binding = target.parent_role_bindings[_side]
+                if any(
+                    resolution.raw_to_canonical.get(parent_ig) != canonical
+                    for canonical, parent_ig in binding.canonical_to_parent.items()
+                ):
+                    raise DeltaMinimizeError("invalid-parent-namespace-anchor")
+            resolved.append(resolution)
+        return tuple(resolved)
+
+    automatic = resolve_all()
+    automatic_by_id = {resolution.artifact_id: resolution for resolution in automatic}
+    artifacts: list[NamespaceArtifact] = []
+    for artifact_id, kind, side, mask, _raw in rows:
+        resolution = automatic_by_id[artifact_id]
+        artifacts.append(
+            NamespaceArtifact(
+                artifact_id=artifact_id,
+                kind=kind,
+                side=side,
+                candidate=None if mask is None else f"mask-{mask:03b}",
+                mask=mask,
+                source_sha256=resolution.source_sha256,
+                pcdump_sha256=resolution.pcdump_sha256,
+                domain=domain,
+                automatically_resolved=resolution.source != "unresolved",
+                diagnostic=(None if resolution.source != "unresolved" else "ambiguous-automatic-v5"),
+            )
+        )
+    target_sha256 = hashlib.sha256(config.target_path.read_bytes()).hexdigest()
+    request = NamespaceReviewRequest(
+        function=config.function,
+        class_id=target.class_id,
+        register_class="GPR" if target.class_id == 0 else "FPR",
+        namespace_schema=ROLE_NAMESPACE_SCHEMA,
+        parser_schema_hash=parents.parser_schema_hash,
+        target_sha256=target_sha256,
+        delta_manifest_sha256=_hash_json(_manifest_to_dict(manifest)),
+        left_source_sha256=parents.left.source_hash,
+        right_source_sha256=parents.right.source_hash,
+        cflags_hash=parents.cflags_hash,
+        compiler_fingerprint=parents.compiler_fingerprint,
+        expected_object_hash=parents.expected_object_hash,
+        inspector_version=parents.inspector_version,
+        canonical_artifact_id=f"parent:{target.baseline_side}",
+        canonical_source_sha256=canonical_raw.source_hash,
+        canonical_pcdump_sha256=canonical_raw.pcdump_hash or "",
+        reviewed_anchors=reviewed_anchors,
+        artifacts=tuple(artifacts),
+    )
+    reviewed = (
+        None
+        if config.namespace_review_path is None
+        else load_reviewed_namespaces(config.namespace_review_path, request=request)
+    )
+    final = automatic if reviewed is None else resolve_all(request, reviewed)
+    resolutions = {resolution.artifact_id: resolution for resolution in final}
+    unresolved_ids = tuple(
+        artifact.artifact_id
+        for artifact in request.artifacts
+        if resolutions[artifact.artifact_id].source == "unresolved"
+    )
+    return RunNamespaceState(
+        request=request,
+        resolutions=resolutions,
+        unresolved_ids=unresolved_ids,
+        review_digest=None if reviewed is None else reviewed.sha256,
+    )
+
+
+def _write_namespace_resolution_provenance(
+    state: RunNamespaceState,
+    store: DeltaRunStore,
+) -> Mapping[str, Any]:
+    payload = {
+        "schema_version": "delta-minimize-namespace-resolution.v1",
+        "namespace_schema": ROLE_NAMESPACE_SCHEMA,
+        "review_schema": REVIEWED_NAMESPACES_SCHEMA,
+        "request_sha256": state.request.sha256,
+        "review_sha256": state.review_digest,
+        "request": state.request.to_dict(),
+        "resolutions": {artifact_id: resolution.to_dict() for artifact_id, resolution in state.resolutions.items()},
+    }
+    path = store.write_namespace_resolution(payload)
+    return MappingProxyType(
+        {
+            "schema_version": "delta-minimize-namespace-resolution.v1",
+            "namespace_schema": ROLE_NAMESPACE_SCHEMA,
+            "review_schema": REVIEWED_NAMESPACES_SCHEMA,
+            "request_sha256": state.request.sha256,
+            "review_sha256": state.review_digest,
+            "resolution_sha256": path.stem,
+            "resolution_artifact": str(path.relative_to(store.root)),
+        }
+    )
+
+
+def _capture_namespace_candidates(
+    config: DeltaMinimizeConfig,
+    parents: ParentEvidenceBundle,
+    manifest: DeltaManifest,
+    candidates: tuple[MaterializedCandidate, ...],
+    store: DeltaRunStore,
+    active: DeltaMinimizeBackends,
+) -> tuple[RawCandidateEvidence, ...]:
+    """Capture the full raw lattice before namespace-dependent publication."""
+
+    if config.target_path is None:
+        raise DeltaMinimizeError("missing-reviewed-namespace-target")
+    loaded = load_color_target(config.target_path, function=config.function)
+    target = store.write_score_target(loaded.function, loaded.force_phys)
+    store.bind_provenance(
+        {
+            "cflags_hash": parents.cflags_hash,
+            "compiler_fingerprint": parents.compiler_fingerprint,
+            "expected_object_hash": parents.expected_object_hash,
+            "objective_manifest_hash": _raw_capture_epoch(config, parents, manifest),
+            "parser_schema_hash": f"{parents.parser_schema_hash}+{manifest.schema_version}",
+            "inspector_version": parents.inspector_version,
+        }
+    )
+    evaluation = CandidateEvaluationConfig(
+        melee_root=config.melee_root,
+        function=config.function,
+        cflags_from=config.cflags_from,
+        target_path=target,
+        output_dir=config.out_dir / "candidates",
+        include_objobjects=config.include_objobjects,
+    )
+    return tuple(
+        capture_candidate(candidate, evaluation, backends=active.evaluation, store=store) for candidate in candidates
+    )
+
+
+def _namespace_incomplete_result(
+    config: DeltaMinimizeConfig,
+    parents: ParentEvidenceBundle,
+    manifest: DeltaManifest,
+    raw_candidates: tuple[RawCandidateEvidence, ...],
+) -> DeltaMinimizeResult:
+    return DeltaMinimizeResult(
+        schema_version=RESULT_SCHEMA,
+        status="incomplete",
+        exact_four_axis=False,
+        function=config.function,
+        objective_manifest={},
+        delta_manifest=_manifest_to_dict(manifest),
+        candidate_counts={
+            "legal": len(raw_candidates),
+            "viable": sum(raw.viable for raw in raw_candidates),
+            "complete": 0,
+        },
+        candidates=tuple(
+            {
+                "candidate_id": raw.candidate_id,
+                "mask": raw.mask,
+                "source_hash": raw.source_hash,
+                "source_path": raw.source_path,
+                "evidence": raw.to_dict(),
+            }
+            for raw in raw_candidates
+        ),
+        pareto=None,
+        best_next=None,
+        cache_stats={"parent_entries": 2, "candidate_entries": len(raw_candidates)},
+        blockers=("namespace-review-required",),
+        inputs={
+            "left": str(config.left),
+            "right": str(config.right),
+            "left_hash": manifest.left_hash,
+            "right_hash": manifest.right_hash,
+            "out_dir": str(config.out_dir),
+            "target_path": None if config.target_path is None else str(config.target_path),
+            "namespace_review_path": (
+                None if config.namespace_review_path is None else str(config.namespace_review_path)
+            ),
+            "namespace_review_request": str(config.out_dir / "namespace-review-request.yaml"),
+            "donor_overrides": dict(config.donor_overrides),
+            "include_objobjects": config.include_objobjects,
+        },
+        compiler_provenance={
+            "cflags_hash": parents.cflags_hash,
+            "compiler_fingerprint": parents.compiler_fingerprint,
+            "expected_object_hash": parents.expected_object_hash,
+            "inspector_version": parents.inspector_version,
+            "parser_schema_hash": parents.parser_schema_hash,
+        },
         candidate_budget=config.max_candidates,
     )
 
@@ -1219,6 +1653,9 @@ def run_delta_minimize(
                 "right_hash": _hash_text(right_source),
                 "out_dir": str(config.out_dir),
                 "target_path": None if config.target_path is None else str(config.target_path),
+                "namespace_review_path": (
+                    None if config.namespace_review_path is None else str(config.namespace_review_path)
+                ),
                 "donor_overrides": dict(config.donor_overrides),
                 "include_objobjects": config.include_objobjects,
             },
@@ -1228,20 +1665,67 @@ def run_delta_minimize(
         store.write_result(result.to_dict())
         return result
     manifest = _load_or_extract_manifest(config, store, active, left_source, right_source)
-    objective = _load_or_infer_objective(config, parents, store, active)
-    objective_hash = _hash_json(objective.to_dict())
-    store.bind_provenance(
-        {
-            "cflags_hash": parents.cflags_hash,
-            "compiler_fingerprint": parents.compiler_fingerprint,
-            "expected_object_hash": parents.expected_object_hash,
-            "objective_manifest_hash": objective_hash,
-            "parser_schema_hash": f"{parents.parser_schema_hash}+{manifest.schema_version}",
-            "inspector_version": parents.inspector_version,
-        }
-    )
     masks = enumerate_legal_masks(manifest, max_candidates=config.max_candidates)
     candidates = _materialize_candidates(left_source, right_source, manifest, masks, store)
+    loaded_target = (
+        None if config.target_path is None else load_color_target(config.target_path, function=config.function)
+    )
+    uses_namespace_sidecar = _uses_reviewed_namespace_sidecar(loaded_target)
+    if config.namespace_review_path is not None and not uses_namespace_sidecar:
+        raise DeltaMinimizeError("unsupported-reviewed-namespace-context")
+    raw_candidates: tuple[RawCandidateEvidence, ...] | None = None
+    namespace_state: RunNamespaceState | None = None
+    namespace_provenance: Mapping[str, Any] | None = None
+    if uses_namespace_sidecar:
+        raw_candidates = _capture_namespace_candidates(
+            config,
+            parents,
+            manifest,
+            candidates,
+            store,
+            active,
+        )
+        namespace_state = _resolve_namespaces_for_run(
+            config,
+            parents,
+            candidates,
+            raw_candidates,
+            manifest,
+        )
+        if namespace_state.unresolved_ids:
+            store.write_namespace_review_request(namespace_state.request)
+            result = _namespace_incomplete_result(
+                config,
+                parents,
+                manifest,
+                raw_candidates,
+            )
+            store.write_result(result.to_dict())
+            return result
+        namespace_provenance = _write_namespace_resolution_provenance(
+            namespace_state,
+            store,
+        )
+    objective = _load_or_infer_objective(
+        config,
+        parents,
+        store,
+        active,
+        namespace_state=namespace_state,
+        namespace_provenance=namespace_provenance,
+    )
+    objective_hash = _hash_json(objective.to_dict())
+    if namespace_state is None:
+        store.bind_provenance(
+            {
+                "cflags_hash": parents.cflags_hash,
+                "compiler_fingerprint": parents.compiler_fingerprint,
+                "expected_object_hash": parents.expected_object_hash,
+                "objective_manifest_hash": objective_hash,
+                "parser_schema_hash": f"{parents.parser_schema_hash}+{manifest.schema_version}",
+                "inspector_version": parents.inspector_version,
+            }
+        )
     store.write_color_target(objective.target_spec)
     target = store.write_score_target(objective.function, objective.desired_phys)
     evaluation = CandidateEvaluationConfig(
@@ -1255,10 +1739,21 @@ def run_delta_minimize(
 
     rows: list[Mapping[str, Any]] = []
     profiles: list[CandidateProfile] = []
+    captured_by_id = {} if raw_candidates is None else {raw.candidate_id: raw for raw in raw_candidates}
     for candidate in candidates:
         try:
-            raw = capture_candidate(candidate, evaluation, backends=active.evaluation, store=store)
-            profile = active.profile_candidate(raw, objective, parents=parents)
+            raw = captured_by_id.get(candidate.candidate_id)
+            if raw is None:
+                raw = capture_candidate(candidate, evaluation, backends=active.evaluation, store=store)
+            if namespace_state is None:
+                profile = active.profile_candidate(raw, objective, parents=parents)
+            else:
+                profile = active.profile_candidate(
+                    raw,
+                    objective,
+                    parents=parents,
+                    namespace_resolutions=namespace_state.resolutions,
+                )
         except DeltaMinimizeError as error:
             blockers = tuple(
                 dict.fromkeys((*[item for profile in profiles for item in profile.blockers], error.reason))
@@ -1602,7 +2097,13 @@ def _default_parent_objective(
     )
 
 
-def _default_infer_objective(left: Any, right: Any, config: DeltaMinimizeConfig) -> ObjectiveManifest:
+def _default_infer_objective(
+    left: Any,
+    right: Any,
+    config: DeltaMinimizeConfig,
+    *,
+    namespace_resolution: Mapping[str, Mapping[int, int]] | None = None,
+) -> ObjectiveManifest:
     from ...cli.debug import _derive_force_phys_from_register_diff_lines
 
     return infer_objective_manifest(
@@ -1611,4 +2112,5 @@ def _default_infer_objective(left: Any, right: Any, config: DeltaMinimizeConfig)
         target_path=config.target_path,
         donor_overrides=config.donor_overrides,
         derive_force_target=_derive_force_phys_from_register_diff_lines,
+        namespace_resolution=namespace_resolution,
     )

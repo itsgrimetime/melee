@@ -17,6 +17,7 @@ from src.mwcc_debug.objobject_profile import ObjObjectProfile
 from src.mwcc_debug.role_descriptor import Compile, build_descriptors
 from src.mwcc_debug.stack_home_profile import StackHomeProfile
 from src.search.cli import search_app
+from src.search.delta_minimize.epochs import PARSER_SCHEMA_HASH
 from src.search.delta_minimize.evaluator import RawCandidateEvidence
 from src.search.delta_minimize.objectives import ParentObjectiveEvidence, infer_objective_manifest
 from src.search.delta_minimize.run import DeltaMinimizeBackends, run_delta_minimize
@@ -39,6 +40,14 @@ class _ReviewedRoleFixture(_CountingFixture):
         self.right_dump = tmp_path / "right.pcdump"
         self.left_dump.write_text(self.dump_text, encoding="utf-8")
         self.right_dump.write_text(f"{self.dump_text}\n", encoding="utf-8")
+
+    def parent_provenance(self, config):
+        return {
+            **super().parent_provenance(config),
+            "cflags_hash": "c" * 64,
+            "expected_object_hash": "e" * 64,
+            "parser_schema_hash": PARSER_SCHEMA_HASH,
+        }
 
     def _raw(self, candidate, dump: Path) -> RawCandidateEvidence:
         return RawCandidateEvidence(
@@ -91,13 +100,14 @@ class _ReviewedRoleFixture(_CountingFixture):
             stack_profile_artifact=f"{side}.stack.json",
         )
 
-    def infer_objective(self, left, right, config):
+    def infer_objective(self, left, right, config, *, namespace_resolution=None):
         self.infer_calls += 1
         return infer_objective_manifest(
             left,
             right,
             target_path=config.target_path,
             donor_overrides=config.donor_overrides,
+            namespace_resolution=namespace_resolution,
         )
 
     def score_rows(self, rows, _score_config):
@@ -343,6 +353,19 @@ def test_reviewed_v2_roles_publish_complete_reproducible_frontier(
         if candidate["profile"]["viable"]
     )
     assert result["pareto"]["candidate_ids"] == expected_candidate_ids
+    namespace = result["objective_manifest"]["namespace_resolution"]
+    resolution = json.loads(
+        (tmp_path / "v2" / namespace["resolution_artifact"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert resolution["request"]["reviewed_anchors"] == {
+        str(role): role for role in desired
+    }
+    assert all(
+        row["source"] in {"inheritance", "automatic-v5"}
+        for row in resolution["resolutions"].values()
+    )
     assert json.loads(second.stdout) == result
     assert json.loads((tmp_path / "v2" / "result.json").read_text()) == result
     assert fixture.captured_sources[0] == left.read_bytes()

@@ -5,18 +5,23 @@ import json
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from src.search.delta_minimize import run as run_module
 from src.search.delta_minimize.contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
 from src.search.delta_minimize.delta import DeltaAtom, DeltaManifest
+from src.search.delta_minimize.epochs import PARSER_SCHEMA_HASH
 from src.search.delta_minimize.evaluator import EvaluationBackends, RawCandidateEvidence
+from src.search.delta_minimize.namespace_review import NamespaceArtifact, NamespaceReviewRequest
 from src.search.delta_minimize.objectives import (
     COLOR_TARGET_SCHEMA_V2,
     OBJECTIVE_MANIFEST_SCHEMA,
     ROLE_NAMESPACE_SCHEMA,
     AxisReference,
+    NamespaceMapResolution,
     ObjectiveManifest,
 )
 from src.search.delta_minimize.run import (
@@ -421,6 +426,289 @@ def test_run_preserves_actionable_objective_ambiguity(tmp_path: Path) -> None:
         run_delta_minimize(_config(tmp_path), backends=backends)
 
 
+def test_v2_namespace_discovery_captures_full_lattice_before_objective_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    fixture.expected_object_hash = "e" * 64
+    config = _config(tmp_path)
+    left_dump = tmp_path / "parent-left.pcdump"
+    right_dump = tmp_path / "parent-right.pcdump"
+    left_dump.write_text("pcdump parent-left generation 1\n", encoding="utf-8")
+    right_dump.write_text("pcdump parent-right generation 1\n", encoding="utf-8")
+    target = tmp_path / "target.yaml"
+    target.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": COLOR_TARGET_SCHEMA_V2,
+                "function": "f",
+                "class_id": 0,
+                "baseline_side": "left",
+                "baseline_dump": str(left_dump),
+                "force_phys": {64: 30, 78: 29},
+                "coalesce_preservation": False,
+                "parent_role_bindings": {
+                    "left": {
+                        "source_sha256": _hash(LEFT),
+                        "pcdump_sha256": hashlib.sha256(left_dump.read_bytes()).hexdigest(),
+                        "canonical_to_parent": {64: 64, 78: 78},
+                    },
+                    "right": {
+                        "source_sha256": _hash(RIGHT),
+                        "pcdump_sha256": hashlib.sha256(right_dump.read_bytes()).hexdigest(),
+                        "canonical_to_parent": {64: 64, 78: 78},
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    config = replace(config, target_path=target)
+    expected_request: NamespaceReviewRequest | None = None
+
+    def discover(_config, parents, candidates, raw_candidates, manifest):
+        nonlocal expected_request
+        assert len(candidates) == len(raw_candidates) == 4
+        domain = tuple(range(110))
+        artifacts = [
+            NamespaceArtifact(
+                artifact_id="parent:left",
+                kind="parent",
+                side="left",
+                candidate=None,
+                mask=None,
+                source_sha256=parents.left.source_hash,
+                pcdump_sha256=parents.left.pcdump_hash,
+                domain=domain,
+                automatically_resolved=True,
+                diagnostic=None,
+            ),
+            NamespaceArtifact(
+                artifact_id="parent:right",
+                kind="parent",
+                side="right",
+                candidate=None,
+                mask=None,
+                source_sha256=parents.right.source_hash,
+                pcdump_sha256=parents.right.pcdump_hash,
+                domain=domain,
+                automatically_resolved=False,
+                diagnostic="ambiguous-automatic-v5",
+            ),
+        ]
+        for candidate, raw in zip(candidates, raw_candidates, strict=True):
+            automatically_resolved = candidate.mask == 0
+            artifacts.append(
+                NamespaceArtifact(
+                    artifact_id=f"candidate:mask-{candidate.mask:03b}",
+                    kind="candidate",
+                    side=None,
+                    candidate=f"mask-{candidate.mask:03b}",
+                    mask=candidate.mask,
+                    source_sha256=raw.source_hash,
+                    pcdump_sha256=raw.pcdump_hash,
+                    domain=domain,
+                    automatically_resolved=automatically_resolved,
+                    diagnostic=None if automatically_resolved else "ambiguous-automatic-v5",
+                )
+            )
+        expected_request = NamespaceReviewRequest(
+            function="f",
+            class_id=0,
+            register_class="GPR",
+            namespace_schema=ROLE_NAMESPACE_SCHEMA,
+            parser_schema_hash=PARSER_SCHEMA_HASH,
+            target_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+            delta_manifest_sha256=run_module._hash_json(run_module._manifest_to_dict(manifest)),
+            left_source_sha256=parents.left.source_hash,
+            right_source_sha256=parents.right.source_hash,
+            cflags_hash=parents.cflags_hash,
+            compiler_fingerprint=parents.compiler_fingerprint,
+            expected_object_hash=parents.expected_object_hash,
+            inspector_version=parents.inspector_version,
+            canonical_artifact_id="parent:left",
+            canonical_source_sha256=parents.left.source_hash,
+            canonical_pcdump_sha256=parents.left.pcdump_hash,
+            reviewed_anchors={64: 64, 78: 78},
+            artifacts=tuple(artifacts),
+        )
+        return SimpleNamespace(
+            request=expected_request,
+            resolutions={},
+            unresolved_ids=tuple(
+                artifact.artifact_id for artifact in expected_request.artifacts if not artifact.automatically_resolved
+            ),
+            review_digest=None,
+        )
+
+    monkeypatch.setattr(run_module, "_resolve_namespaces_for_run", discover, raising=False)
+    base = fixture.backends()
+    backends = replace(
+        base,
+        parent_provenance=lambda config: {
+            **base.parent_provenance(config),
+            "cflags_hash": "c" * 64,
+        },
+        infer_objective=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("objective inference must wait for namespace review")
+        ),
+    )
+
+    result = run_delta_minimize(config, backends=backends)
+
+    assert fixture.score_calls == 4
+    assert expected_request is not None
+    assert (config.out_dir / "namespace-review-request.yaml").read_text(encoding="utf-8") == expected_request.to_yaml()
+    assert result.status == "incomplete"
+    assert result.objective_manifest == {}
+    assert result.delta_manifest["schema_version"]
+    assert result.candidate_counts == {"legal": 4, "viable": 4, "complete": 0}
+    assert [row["candidate_id"] for row in result.candidates] == [
+        "mask-00",
+        "mask-01",
+        "mask-10",
+        "mask-11",
+    ]
+    assert all("evidence" in row for row in result.candidates)
+    assert result.pareto is None
+    assert result.blockers == ("namespace-review-required",)
+    assert not (config.out_dir / "objective-manifest.json").exists()
+    assert not (config.out_dir / "objective-inputs.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+
+
+def test_changed_review_digest_republishes_profiles_but_reuses_raw_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    fixture.expected_object_hash = "e" * 64
+    config = _config(tmp_path)
+    target = tmp_path / "target.yaml"
+    target.write_text("reviewed target\n", encoding="utf-8")
+    review = tmp_path / "reviewed.yaml"
+    review.write_text("review epoch\n", encoding="utf-8")
+    config = replace(
+        config,
+        target_path=target,
+        namespace_review_path=review,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "load_color_target",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            schema_version=COLOR_TARGET_SCHEMA_V2,
+            function="f",
+            class_id=0,
+            force_phys={64: 30, 78: 29},
+        ),
+    )
+    review_digest = ["a" * 64]
+
+    def resolved_state(_config, parents, candidates, raw_candidates, manifest):
+        domain = tuple(range(110))
+        rows = [
+            ("parent:left", "parent", "left", None, parents.left),
+            ("parent:right", "parent", "right", None, parents.right),
+            *[
+                (
+                    f"candidate:mask-{candidate.mask:03b}",
+                    "candidate",
+                    None,
+                    candidate.mask,
+                    raw,
+                )
+                for candidate, raw in zip(candidates, raw_candidates, strict=True)
+            ],
+        ]
+        artifacts = tuple(
+            NamespaceArtifact(
+                artifact_id=artifact_id,
+                kind=kind,
+                side=side,
+                candidate=None if mask is None else f"mask-{mask:03b}",
+                mask=mask,
+                source_sha256=raw.source_hash,
+                pcdump_sha256=raw.pcdump_hash,
+                domain=domain,
+                automatically_resolved=True,
+                diagnostic=None,
+            )
+            for artifact_id, kind, side, mask, raw in rows
+        )
+        request = NamespaceReviewRequest(
+            function="f",
+            class_id=0,
+            register_class="GPR",
+            namespace_schema=ROLE_NAMESPACE_SCHEMA,
+            parser_schema_hash=PARSER_SCHEMA_HASH,
+            target_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+            delta_manifest_sha256=run_module._hash_json(run_module._manifest_to_dict(manifest)),
+            left_source_sha256=parents.left.source_hash,
+            right_source_sha256=parents.right.source_hash,
+            cflags_hash=parents.cflags_hash,
+            compiler_fingerprint=parents.compiler_fingerprint,
+            expected_object_hash=parents.expected_object_hash,
+            inspector_version=parents.inspector_version,
+            canonical_artifact_id="parent:left",
+            canonical_source_sha256=parents.left.source_hash,
+            canonical_pcdump_sha256=parents.left.pcdump_hash,
+            reviewed_anchors={64: 64, 78: 78},
+            artifacts=artifacts,
+        )
+        resolutions = {
+            artifact.artifact_id: NamespaceMapResolution(
+                artifact_id=artifact.artifact_id,
+                source_sha256=artifact.source_sha256,
+                pcdump_sha256=artifact.pcdump_sha256,
+                raw_to_canonical={role: role for role in domain},
+                source="automatic-v5",
+            )
+            for artifact in artifacts
+        }
+        return run_module.RunNamespaceState(
+            request=request,
+            resolutions=resolutions,
+            unresolved_ids=(),
+            review_digest=review_digest[0],
+        )
+
+    monkeypatch.setattr(run_module, "_resolve_namespaces_for_run", resolved_state)
+    base = fixture.backends()
+
+    def infer(left, right, run_config, **_kwargs):
+        return fixture.infer_objective(left, right, run_config)
+
+    def profile(raw, objective, *, parents, **_kwargs):
+        return fixture.profile(raw, objective, parents=parents)
+
+    backends = replace(
+        base,
+        parent_provenance=lambda run_config: {
+            **base.parent_provenance(run_config),
+            "cflags_hash": "c" * 64,
+            "parser_schema_hash": PARSER_SCHEMA_HASH,
+        },
+        infer_objective=infer,
+        profile_candidate=profile,
+    )
+
+    first = run_delta_minimize(config, backends=backends)
+    first_resolution = first.objective_manifest["namespace_resolution"]
+    review_digest[0] = "b" * 64
+    second = run_delta_minimize(config, backends=backends)
+    second_resolution = second.objective_manifest["namespace_resolution"]
+
+    assert fixture.score_calls == 4
+    assert first_resolution["review_sha256"] == "a" * 64
+    assert second_resolution["review_sha256"] == "b" * 64
+    assert first_resolution["resolution_sha256"] != second_resolution["resolution_sha256"]
+    assert fixture.infer_calls == 2
+    assert second.candidate_counts == first.candidate_counts
+
+
 def test_resume_rejects_valid_shape_delta_dependency_cache_mutation(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
     config = _config(tmp_path)
@@ -785,7 +1073,7 @@ def test_objective_cache_persists_context_with_valid_digest(tmp_path: Path) -> N
     context = payload["context"]
     canonical = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
 
-    assert payload["schema_version"] == "delta-minimize-objective-inputs.v3"
+    assert payload["schema_version"] == "delta-minimize-objective-inputs.v4"
     assert payload["context_digest"] == hashlib.sha256(canonical).hexdigest()
     manifest = json.loads((config.out_dir / "objective-manifest.json").read_text(encoding="utf-8"))
     manifest_blob = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
@@ -814,11 +1102,19 @@ def test_pre_binding_objective_input_schema_is_rejected(tmp_path: Path) -> None:
     run_delta_minimize(config, backends=fixture.backends())
     cache_path = config.out_dir / "objective-inputs.json"
     payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    payload["schema_version"] = "delta-minimize-objective-inputs.v2"
+    payload["schema_version"] = "delta-minimize-objective-inputs.v3"
     cache_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-cache-context$"):
         run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_pre_sidecar_objective_manifest_schema_is_rejected() -> None:
+    payload = _objective().to_dict()
+    payload["schema_version"] = "delta-minimize-objectives.v2"
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_module._objective_from_dict(payload, function="f")
 
 
 @pytest.mark.parametrize(
@@ -1126,6 +1422,11 @@ def test_run_config_rejects_unsupported_donor_overrides(
 ) -> None:
     with pytest.raises(DeltaMinimizeError, match="^invalid-delta-minimize-config$"):
         _config(tmp_path, donor_overrides=overrides)
+
+
+def test_run_config_rejects_non_path_namespace_review(tmp_path: Path) -> None:
+    with pytest.raises(DeltaMinimizeError, match="^invalid-delta-minimize-config$"):
+        _config(tmp_path, namespace_review_path="reviewed.yaml")
 
 
 @pytest.mark.parametrize("mutation", ("manifest-payload", "manifest-digest"))

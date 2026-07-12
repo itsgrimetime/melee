@@ -639,6 +639,43 @@ class DeltaRunStore:
     def write_objective_manifest(self, payload: Mapping[str, Any]) -> Path:
         return self.write_json("objective-manifest.json", payload)
 
+    def write_namespace_review_request(self, request: Any) -> Path:
+        from .namespace_review import NamespaceReviewRequest
+
+        if not isinstance(request, NamespaceReviewRequest):
+            raise DeltaMinimizeError("invalid-namespace-review-request")
+        path = self._safe_path("namespace-review-request.yaml")
+        request.write(path)
+        return path
+
+    def write_namespace_resolution(self, payload: Mapping[str, Any]) -> Path:
+        """Persist immutable, content-addressed namespace-resolution provenance."""
+
+        if not isinstance(payload, Mapping):
+            raise DeltaMinimizeError("invalid-namespace-resolution-provenance")
+        normalized = _json_value(payload)
+        digest = hashlib.sha256(_canonical_json_bytes(normalized)).hexdigest()
+        path = self._safe_path(
+            "objective",
+            "namespace-resolutions",
+            f"{digest}.json",
+        )
+        with _exclusive_file_lock(path):
+            existing_blob = _read_regular_bytes(
+                path,
+                corruption="corrupt-namespace-resolution-provenance",
+            )
+            if existing_blob is not None:
+                try:
+                    existing = json.loads(existing_blob)
+                except (UnicodeError, json.JSONDecodeError) as error:
+                    raise DeltaMinimizeError("corrupt-namespace-resolution-provenance") from error
+                if existing != normalized or hashlib.sha256(_canonical_json_bytes(existing)).hexdigest() != digest:
+                    raise DeltaMinimizeError("corrupt-namespace-resolution-provenance")
+            else:
+                write_json_atomic(path, normalized)
+        return path
+
     def write_delta_manifest(self, payload: Mapping[str, Any]) -> Path:
         return self.write_json("delta-manifest.json", payload)
 
@@ -650,5 +687,9 @@ class DeltaRunStore:
 
     def invalidate_publications(self) -> None:
         """Remove outputs derived from a superseded delta manifest."""
-        for name in ("candidates.json", "result.json"):
+        for name in (
+            "namespace-review-request.yaml",
+            "candidates.json",
+            "result.json",
+        ):
             self._invalidate_evidence_path(self._safe_path(name))

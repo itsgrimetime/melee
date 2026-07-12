@@ -7,7 +7,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 import yaml
 
@@ -24,7 +24,7 @@ from .contracts import DeltaMinimizeError
 COLOR_TARGET_SCHEMA = "delta-minimize-color-target.v1"
 COLOR_TARGET_SCHEMA_V2 = "delta-minimize-color-target.v2"
 ROLE_NAMESPACE_SCHEMA = "delta-minimize-role-namespace.v5"
-OBJECTIVE_MANIFEST_SCHEMA = "delta-minimize-objectives.v2"
+OBJECTIVE_MANIFEST_SCHEMA = "delta-minimize-objectives.v3"
 _TARGET_FIELDS = frozenset(
     {
         "schema_version",
@@ -144,9 +144,7 @@ class LoadedColorTarget:
     coalesce_preservation: bool
     schema_version: str = COLOR_TARGET_SCHEMA
     baseline_side: str | None = None
-    parent_role_bindings: Mapping[str, ParentRoleBinding] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    parent_role_bindings: Mapping[str, ParentRoleBinding] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True)
@@ -194,6 +192,7 @@ class ObjectiveManifest:
     objobject_donor: str
     stack_home_donor: str | None
     references: Mapping[str, AxisReference]
+    namespace_resolution: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -206,6 +205,7 @@ class ObjectiveManifest:
             "objobject_donor": self.objobject_donor,
             "stack_home_donor": self.stack_home_donor,
             "references": {axis: reference.to_dict() for axis, reference in sorted(self.references.items())},
+            "namespace_resolution": _json_value(self.namespace_resolution),
         }
 
     def to_json(self) -> str:
@@ -239,6 +239,156 @@ class ParentObjectiveEvidence:
     objobject_artifact: str
     stack_absolute_artifact: str
     stack_profile_artifact: str
+
+
+@dataclass(frozen=True)
+class NamespaceMapResolution:
+    """One artifact's complete raw-IG to canonical namespace resolution."""
+
+    artifact_id: str
+    source_sha256: str
+    pcdump_sha256: str
+    raw_to_canonical: Mapping[int, int] | None
+    source: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.artifact_id, str)
+            or not self.artifact_id
+            or self.source not in {"inheritance", "automatic-v5", "reviewed-v1", "unresolved"}
+            or any(
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+                for digest in (self.source_sha256, self.pcdump_sha256)
+            )
+        ):
+            raise DeltaMinimizeError("invalid-namespace-resolution")
+        if self.source == "unresolved":
+            if self.raw_to_canonical is not None:
+                raise DeltaMinimizeError("invalid-namespace-resolution")
+            return
+        if not isinstance(self.raw_to_canonical, Mapping) or not self.raw_to_canonical:
+            raise DeltaMinimizeError("invalid-namespace-resolution")
+        mapping = _immutable_sorted_int_mapping(self.raw_to_canonical)
+        if any(
+            not _is_int(raw) or raw < 0 or not _is_int(canonical) or canonical < 0 for raw, canonical in mapping.items()
+        ) or len(set(mapping.values())) != len(mapping):
+            raise DeltaMinimizeError("invalid-namespace-resolution")
+        object.__setattr__(self, "raw_to_canonical", mapping)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "artifact_id": self.artifact_id,
+            "source_sha256": self.source_sha256,
+            "pcdump_sha256": self.pcdump_sha256,
+            "source": self.source,
+            "raw_to_canonical": (
+                None
+                if self.raw_to_canonical is None
+                else {str(raw): canonical for raw, canonical in self.raw_to_canonical.items()}
+            ),
+        }
+
+
+def resolve_namespace_map(
+    *,
+    artifact_id: str,
+    source_sha256: str,
+    pcdump_sha256: str,
+    artifact_compile: role_descriptor.Compile,
+    canonical_compile: role_descriptor.Compile,
+    class_id: int,
+    domain: tuple[int, ...],
+    resolved: Sequence[NamespaceMapResolution],
+    request: Any | None = None,
+    reviewed: Any | None = None,
+) -> NamespaceMapResolution:
+    """Resolve one namespace in inheritance, automatic, reviewed order."""
+
+    if (
+        not isinstance(artifact_compile, role_descriptor.Compile)
+        or not isinstance(canonical_compile, role_descriptor.Compile)
+        or class_id not in {0, 1}
+        or isinstance(class_id, bool)
+        or not isinstance(domain, tuple)
+        or domain != tuple(range(len(domain)))
+        or len(domain) < 32
+        or not isinstance(resolved, Sequence)
+        or any(not isinstance(item, NamespaceMapResolution) for item in resolved)
+    ):
+        raise DeltaMinimizeError("invalid-namespace-resolution")
+
+    exact = [
+        item
+        for item in resolved
+        if item.source_sha256 == source_sha256
+        and item.pcdump_sha256 == pcdump_sha256
+        and item.raw_to_canonical is not None
+    ]
+    if exact:
+        inherited = dict(exact[0].raw_to_canonical or {})
+        if any(dict(item.raw_to_canonical or {}) != inherited for item in exact[1:]):
+            raise DeltaMinimizeError("conflicting-inherited-namespace-maps")
+        return NamespaceMapResolution(
+            artifact_id=artifact_id,
+            source_sha256=source_sha256,
+            pcdump_sha256=pcdump_sha256,
+            raw_to_canonical=inherited,
+            source="inheritance",
+        )
+
+    automatic = role_descriptor.prove_virtual_namespace_map(
+        canonical_compile,
+        artifact_compile,
+        class_id,
+        len(domain),
+    )
+    if automatic is not None:
+        if set(automatic) != set(domain) or set(automatic.values()) != set(domain):
+            raise DeltaMinimizeError("invalid-automatic-namespace-map")
+        if reviewed is not None and any(
+            binding.source_sha256 == source_sha256 and binding.pcdump_sha256 == pcdump_sha256
+            for binding in reviewed.bindings
+        ):
+            raise DeltaMinimizeError("automatic-reviewed-namespace-conflict")
+        return NamespaceMapResolution(
+            artifact_id=artifact_id,
+            source_sha256=source_sha256,
+            pcdump_sha256=pcdump_sha256,
+            raw_to_canonical=automatic,
+            source="automatic-v5",
+        )
+
+    if reviewed is not None:
+        if request is None:
+            raise DeltaMinimizeError("invalid-reviewed-namespace-resolution")
+        from .namespace_review import resolve_reviewed_map
+
+        reviewed_map = resolve_reviewed_map(
+            reviewed,
+            request,
+            artifact_id=artifact_id,
+            source_sha256=source_sha256,
+            pcdump_sha256=pcdump_sha256,
+        )
+        if set(reviewed_map) != set(domain) or set(reviewed_map.values()) != set(domain):
+            raise DeltaMinimizeError("invalid-reviewed-namespace-map")
+        return NamespaceMapResolution(
+            artifact_id=artifact_id,
+            source_sha256=source_sha256,
+            pcdump_sha256=pcdump_sha256,
+            raw_to_canonical=reviewed_map,
+            source="reviewed-v1",
+        )
+
+    return NamespaceMapResolution(
+        artifact_id=artifact_id,
+        source_sha256=source_sha256,
+        pcdump_sha256=pcdump_sha256,
+        raw_to_canonical=None,
+        source="unresolved",
+    )
 
 
 ForceTargetDeriver = Callable[[list[str], list[str], Any, Any], Mapping[str, Any]]
@@ -290,8 +440,7 @@ def _parse_canonical_ig_key(raw: object, reason: str) -> int:
     if _is_int(raw) and raw >= 0:
         return raw
     if isinstance(raw, str) and (
-        raw == "0"
-        or (raw and "1" <= raw[0] <= "9" and all("0" <= char <= "9" for char in raw[1:]))
+        raw == "0" or (raw and "1" <= raw[0] <= "9" and all("0" <= char <= "9" for char in raw[1:]))
     ):
         return int(raw)
     raise DeltaMinimizeError(reason)
@@ -310,11 +459,7 @@ def _validate_force_phys(raw: object) -> Mapping[int, int]:
 
 
 def _validate_sha256_text(raw: object) -> str:
-    if (
-        not isinstance(raw, str)
-        or len(raw) != 64
-        or any(char not in "0123456789abcdef" for char in raw)
-    ):
+    if not isinstance(raw, str) or len(raw) != 64 or any(char not in "0123456789abcdef" for char in raw):
         raise DeltaMinimizeError("invalid-color-target-parent-bindings")
     return raw
 
@@ -340,20 +485,13 @@ def _validate_parent_role_bindings(
                 raw_canonical,
                 "invalid-color-target-parent-bindings",
             )
-            if (
-                canonical in canonical_to_parent
-                or not _is_int(raw_parent)
-                or raw_parent < 0
-            ):
+            if canonical in canonical_to_parent or not _is_int(raw_parent) or raw_parent < 0:
                 raise DeltaMinimizeError("invalid-color-target-parent-bindings")
             canonical_to_parent[canonical] = raw_parent
         if (
             set(canonical_to_parent) != set(force_phys)
             or len(set(canonical_to_parent.values())) != len(canonical_to_parent)
-            or (
-                side == baseline_side
-                and any(canonical != parent for canonical, parent in canonical_to_parent.items())
-            )
+            or (side == baseline_side and any(canonical != parent for canonical, parent in canonical_to_parent.items()))
         ):
             raise DeltaMinimizeError("invalid-color-target-parent-bindings")
         bindings[side] = ParentRoleBinding(
@@ -650,9 +788,7 @@ def _explicit_target_provenance(loaded: LoadedColorTarget) -> Mapping[str, Any]:
             "pcdump_sha256": loaded.parent_role_bindings[side].pcdump_sha256,
             "canonical_to_parent": {
                 str(canonical): parent
-                for canonical, parent in sorted(
-                    loaded.parent_role_bindings[side].canonical_to_parent.items()
-                )
+                for canonical, parent in sorted(loaded.parent_role_bindings[side].canonical_to_parent.items())
             },
         }
         for side in ("left", "right")
@@ -746,15 +882,8 @@ def _reviewed_parent_reanchor(
         pcdump_sha256 = hashlib.sha256(parent.pcdump_path.read_bytes()).hexdigest()
     except (OSError, UnicodeError) as error:
         raise DeltaMinimizeError("ambiguous-color-target") from error
-    target_roles = {
-        role.original_ig: role
-        for role in target_spec.roles
-        if role.class_id == parent.class_id
-    }
-    desired_phys = {
-        canonical: role.desired_phys
-        for canonical, role in target_roles.items()
-    }
+    target_roles = {role.original_ig: role for role in target_spec.roles if role.class_id == parent.class_id}
+    desired_phys = {canonical: role.desired_phys for canonical, role in target_roles.items()}
     mapping = dict(binding.canonical_to_parent)
     if (
         target_spec.function != parent.function
@@ -773,28 +902,15 @@ def _reviewed_parent_reanchor(
         if selected is None or reference is None:
             raise DeltaMinimizeError("ambiguous-color-target")
         selected_cost = role_matcher.role_cost(reference, selected)
-        candidate_costs = [
-            role_matcher.role_cost(reference, descriptor)
-            for descriptor in parent_descriptors.values()
-        ]
+        candidate_costs = [role_matcher.role_cost(reference, descriptor) for descriptor in parent_descriptors.values()]
         viable_costs = [cost for cost in candidate_costs if cost < role_matcher.MATCH_THRESHOLD]
-        if (
-            selected_cost >= role_matcher.MATCH_THRESHOLD
-            or not viable_costs
-            or selected_cost != min(viable_costs)
-        ):
+        if selected_cost >= role_matcher.MATCH_THRESHOLD or not viable_costs or selected_cost != min(viable_costs):
             raise DeltaMinimizeError("ambiguous-color-target")
     return role_reanchor.ReanchorResult(
         class_id=parent.class_id,
-        force_phys={
-            parent_ig: desired_phys[canonical]
-            for canonical, parent_ig in mapping.items()
-        },
+        force_phys={parent_ig: desired_phys[canonical] for canonical, parent_ig in mapping.items()},
         diagnostics={},
-        matched={
-            parent_ig: canonical
-            for canonical, parent_ig in mapping.items()
-        },
+        matched={parent_ig: canonical for canonical, parent_ig in mapping.items()},
     )
 
 
@@ -812,11 +928,7 @@ def _compile_for_explicit_target(
             baseline_parent = {"left": left, "right": right}[target.baseline_side]
             baseline_hash = hashlib.sha256(target.baseline_dump.read_bytes()).hexdigest()
             parent_hash = hashlib.sha256(baseline_parent.pcdump_path.read_bytes()).hexdigest()
-            matching_parents = (
-                [baseline_parent]
-                if parent_hash == baseline_hash
-                else []
-            )
+            matching_parents = [baseline_parent] if parent_hash == baseline_hash else []
         if not matching_parents:
             raise ValueError("baseline source cannot be bound to either parent")
         sources = {parent.compile.source for parent in matching_parents}
@@ -1109,11 +1221,7 @@ def _complete_profile_role_map(
     genuinely ambiguous roles leave evidence unmapped.
     """
     if allow_reviewed_namespace or allow_exact_namespace:
-        sections = [
-            section
-            for section in reference_compile.fev.coalesce_sections
-            if section.class_id == class_id
-        ]
+        sections = [section for section in reference_compile.fev.coalesce_sections if section.class_id == class_id]
         if sections:
             proven = role_descriptor.prove_virtual_namespace_map(
                 reference_compile,
@@ -1152,12 +1260,8 @@ def _overlay_reviewed_role_map(
     merged = dict(profile_role_map)
     for parent_ig, canonical in reviewed.matched.items():
         existing = merged.get(parent_ig)
-        if (
-            (existing is not None and existing != canonical)
-            or any(
-                other_ig != parent_ig and other_canonical == canonical
-                for other_ig, other_canonical in merged.items()
-            )
+        if (existing is not None and existing != canonical) or any(
+            other_ig != parent_ig and other_canonical == canonical for other_ig, other_canonical in merged.items()
         ):
             raise DeltaMinimizeError("ambiguous-color-donor")
         merged[parent_ig] = canonical
@@ -1237,21 +1341,9 @@ def _structural_namespace_witness(
     traversals and coalescing are validated for coherence but are not identity
     fields because they are color-objective state.
     """
-    decisions = [
-        section
-        for section in compile.fev.colorgraph_sections
-        if section.class_id == class_id
-    ]
-    simplify = [
-        section
-        for section in compile.fev.simplify_sections
-        if section.class_id == class_id
-    ]
-    coalesce = [
-        section
-        for section in compile.fev.coalesce_sections
-        if section.class_id == class_id
-    ]
+    decisions = [section for section in compile.fev.colorgraph_sections if section.class_id == class_id]
+    simplify = [section for section in compile.fev.simplify_sections if section.class_id == class_id]
+    coalesce = [section for section in compile.fev.coalesce_sections if section.class_id == class_id]
     if not decisions or not simplify or not coalesce:
         return None
     decision_section = decisions[-1]
@@ -1304,12 +1396,10 @@ def _structural_namespace_witness(
     mappings = tuple(tuple(mapping) for mapping in coalesce_section.mappings)
     overrides = tuple(tuple(override) for override in coalesce_section.forced_overrides)
     if any(
-        len(mapping) != 2
-        or any(not _is_int(ig_idx) or not 0 <= ig_idx < n_virtuals for ig_idx in mapping)
+        len(mapping) != 2 or any(not _is_int(ig_idx) or not 0 <= ig_idx < n_virtuals for ig_idx in mapping)
         for mapping in mappings
     ) or any(
-        len(override) != 3
-        or any(not _is_int(ig_idx) or not 0 <= ig_idx < n_virtuals for ig_idx in override)
+        len(override) != 3 or any(not _is_int(ig_idx) or not 0 <= ig_idx < n_virtuals for ig_idx in override)
         for override in overrides
     ):
         return None
@@ -1317,12 +1407,14 @@ def _structural_namespace_witness(
     semantic_roles = tuple(
         (
             ig_idx,
-            MappingProxyType({
-                "first_def_sig": identity[0],
-                "use_site_multiset": tuple(tuple(item) for item in identity[1]),
-                "is_param": identity[2],
-                "strong_name": identity[3],
-            }),
+            MappingProxyType(
+                {
+                    "first_def_sig": identity[0],
+                    "use_site_multiset": tuple(tuple(item) for item in identity[1]),
+                    "is_param": identity[2],
+                    "strong_name": identity[3],
+                }
+            ),
         )
         for ig_idx, identity in sorted(full_semantic_identities.items())
     )
@@ -1334,6 +1426,8 @@ def _structural_namespace_witness(
             "semantic_roles": semantic_roles,
         }
     )
+
+
 def _assignment_distance(profile: ColorGraphProfile, desired_phys: Mapping[int, int]) -> int:
     assignments = dict(profile.assignments)
     return sum(assignments.get(role) != physical for role, physical in desired_phys.items())
@@ -1402,6 +1496,7 @@ def infer_objective_manifest(
     donor_overrides: Mapping[str, str],
     derive_force_target: ForceTargetDeriver | None = None,
     compile_loader: CompileLoader | None = None,
+    namespace_resolution: Mapping[str, Mapping[int, int]] | None = None,
 ) -> ObjectiveManifest:
     """Infer one immutable objective manifest from two retained parents."""
     _validate_parent(left, "left")
@@ -1473,35 +1568,40 @@ def infer_objective_manifest(
             loaded.force_phys,
             exact_identity=profile_reference_compile is right.compile,
         )
-    left_profile_roles = _complete_profile_role_map(
-        profile_reference_compile,
-        left.compile,
-        loaded.class_id,
-        allow_exact_namespace=derived_exact_identity,
-        allow_reviewed_namespace=loaded.schema_version == COLOR_TARGET_SCHEMA_V2,
-        reviewed_roles=(
-            reviewed_reanchors["left"].matched if reviewed_reanchors else None
-        ),
-    )
-    right_profile_roles = _complete_profile_role_map(
-        profile_reference_compile,
-        right.compile,
-        loaded.class_id,
-        allow_exact_namespace=derived_exact_identity,
-        allow_reviewed_namespace=loaded.schema_version == COLOR_TARGET_SCHEMA_V2,
-        reviewed_roles=(
-            reviewed_reanchors["right"].matched if reviewed_reanchors else None
-        ),
-    )
-    if reviewed_reanchors:
-        left_profile_roles = _overlay_reviewed_role_map(
-            left_profile_roles,
-            reviewed_reanchors["left"],
+    if namespace_resolution is not None:
+        if not {"parent:left", "parent:right"} <= set(namespace_resolution) or any(
+            not isinstance(mapping, Mapping) or not mapping or len(set(mapping.values())) != len(mapping)
+            for mapping in namespace_resolution.values()
+        ):
+            raise DeltaMinimizeError("invalid-namespace-resolution")
+        left_profile_roles = namespace_resolution["parent:left"]
+        right_profile_roles = namespace_resolution["parent:right"]
+    else:
+        left_profile_roles = _complete_profile_role_map(
+            profile_reference_compile,
+            left.compile,
+            loaded.class_id,
+            allow_exact_namespace=derived_exact_identity,
+            allow_reviewed_namespace=loaded.schema_version == COLOR_TARGET_SCHEMA_V2,
+            reviewed_roles=(reviewed_reanchors["left"].matched if reviewed_reanchors else None),
         )
-        right_profile_roles = _overlay_reviewed_role_map(
-            right_profile_roles,
-            reviewed_reanchors["right"],
+        right_profile_roles = _complete_profile_role_map(
+            profile_reference_compile,
+            right.compile,
+            loaded.class_id,
+            allow_exact_namespace=derived_exact_identity,
+            allow_reviewed_namespace=loaded.schema_version == COLOR_TARGET_SCHEMA_V2,
+            reviewed_roles=(reviewed_reanchors["right"].matched if reviewed_reanchors else None),
         )
+        if reviewed_reanchors:
+            left_profile_roles = _overlay_reviewed_role_map(
+                left_profile_roles,
+                reviewed_reanchors["left"],
+            )
+            right_profile_roles = _overlay_reviewed_role_map(
+                right_profile_roles,
+                reviewed_reanchors["right"],
+            )
     left_color = _profile_for_parent(left, left_profile_roles, loaded.force_phys)
     right_color = _profile_for_parent(right, right_profile_roles, loaded.force_phys)
 

@@ -20,6 +20,7 @@ from src.mwcc_debug.role_descriptor import Compile, RoleDescriptor, build_descri
 from src.mwcc_debug.symbol_bridge import FirstDef
 from src.search.delta_minimize.contracts import DeltaMinimizeError
 from src.search.delta_minimize.delta import MaterializedCandidate
+from src.search.delta_minimize.epochs import PARSER_SCHEMA_HASH
 from src.search.delta_minimize.evaluator import (
     CandidateEvaluationConfig,
     EvaluationBackends,
@@ -28,12 +29,20 @@ from src.search.delta_minimize.evaluator import (
     capture_candidate,
     profile_candidate,
 )
+from src.search.delta_minimize.namespace_review import (
+    NamespaceArtifact,
+    NamespaceReviewRequest,
+    ReviewedNamespaceBinding,
+    ReviewedNamespaces,
+)
 from src.search.delta_minimize.objectives import (
     COLOR_TARGET_SCHEMA_V2,
     OBJECTIVE_MANIFEST_SCHEMA,
     ROLE_NAMESPACE_SCHEMA,
     AxisReference,
+    NamespaceMapResolution,
     ObjectiveManifest,
+    resolve_namespace_map,
 )
 from src.search.delta_minimize.store import DeltaRunStore
 
@@ -289,9 +298,7 @@ def test_structural_namespace_witness_excludes_allocator_outcome_lanes(
     monkeypatch.setattr(
         objectives_module.role_descriptor,
         "build_descriptors",
-        lambda compile, _class_id: (
-            baseline_descriptors if compile is baseline else changed_descriptors
-        ),
+        lambda compile, _class_id: (baseline_descriptors if compile is baseline else changed_descriptors),
     )
 
     baseline_witness = objectives_module._structural_namespace_witness(baseline, 0)
@@ -310,9 +317,7 @@ def test_structural_namespace_witness_covers_coalesced_virtual_identity() -> Non
     changed = deepcopy(baseline)
     decision_igs = set(_namespace_descriptors(baseline))
     coalesced_ig = next(
-        alias
-        for alias, _root in baseline.fev.coalesce_sections[-1].mappings
-        if alias not in decision_igs
+        alias for alias, _root in baseline.fev.coalesce_sections[-1].mappings if alias not in decision_igs
     )
     facts = changed.ir_facts.by_reg[("r", coalesced_ig)]
     assert facts.first_def is not None
@@ -332,9 +337,7 @@ def test_structural_namespace_witness_covers_nondecision_use_operands() -> None:
     changed = deepcopy(baseline)
     decision_igs = set(_namespace_descriptors(baseline))
     coalesced_ig = next(
-        alias
-        for alias, _root in baseline.fev.coalesce_sections[-1].mappings
-        if alias not in decision_igs
+        alias for alias, _root in baseline.fev.coalesce_sections[-1].mappings if alias not in decision_igs
     )
     for compile, offset in ((baseline, 4), (changed, 8)):
         compile.ir_facts.by_reg[("r", coalesced_ig)].use_sites = [
@@ -358,9 +361,7 @@ def test_structural_namespace_witness_covers_nondecision_use_operands() -> None:
 def test_early_ir_identity_covers_virtuals_missing_from_late_pass() -> None:
     compile = _raw_namespace_compile()
     virtual_count = compile.fev.coalesce_sections[-1].n_virtuals
-    assert set(compile.ir_facts.by_reg) < {
-        ("r", ig_idx) for ig_idx in range(virtual_count)
-    }
+    assert set(compile.ir_facts.by_reg) < {("r", ig_idx) for ig_idx in range(virtual_count)}
 
     role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
         compile,
@@ -603,11 +604,7 @@ def test_early_ir_occurrences_prove_nonidentity_namespace_bijection() -> None:
         for instruction in block.instructions:
             instruction.operands = re.sub(
                 rf"\br({first_ig}|{second_ig})\b",
-                lambda match: (
-                    f"r{second_ig}"
-                    if int(match.group(1)) == first_ig
-                    else f"r{first_ig}"
-                ),
+                lambda match: (f"r{second_ig}" if int(match.group(1)) == first_ig else f"r{first_ig}"),
                 instruction.operands,
             )
             instruction.regs = [
@@ -659,8 +656,7 @@ def test_pairwise_namespace_rejects_missing_early_ir_virtual() -> None:
         for instruction in block.instructions:
             instruction.operands = re.sub(r"\br47\b", "r3", instruction.operands)
             instruction.regs = [
-                (kind, 3 if kind == "r" and number == 47 else number)
-                for kind, number in instruction.regs
+                (kind, 3 if kind == "r" and number == 47 else number) for kind, number in instruction.regs
             ]
 
     role_map = objectives_module.role_descriptor.prove_virtual_namespace_map(
@@ -692,6 +688,208 @@ def test_pairwise_namespace_excludes_late_allocator_objective_state() -> None:
     )
 
     assert role_map == {ig_idx: ig_idx for ig_idx in range(virtual_count)}
+
+
+def _reviewed_resolution_context(
+    domain: tuple[int, ...],
+) -> tuple[NamespaceReviewRequest, ReviewedNamespaces]:
+    request = NamespaceReviewRequest(
+        function=FUNCTION,
+        class_id=0,
+        register_class="GPR",
+        namespace_schema=ROLE_NAMESPACE_SCHEMA,
+        parser_schema_hash=PARSER_SCHEMA_HASH,
+        target_sha256="5" * 64,
+        delta_manifest_sha256="6" * 64,
+        left_source_sha256="1" * 64,
+        right_source_sha256="3" * 64,
+        cflags_hash="7" * 64,
+        compiler_fingerprint="compiler-v1",
+        expected_object_hash="8" * 64,
+        inspector_version="inspector-v1",
+        canonical_artifact_id="parent:left",
+        canonical_source_sha256="1" * 64,
+        canonical_pcdump_sha256="2" * 64,
+        reviewed_anchors={64: 64, 78: 78},
+        artifacts=(
+            NamespaceArtifact(
+                artifact_id="parent:left",
+                kind="parent",
+                side="left",
+                candidate=None,
+                mask=None,
+                source_sha256="1" * 64,
+                pcdump_sha256="2" * 64,
+                domain=domain,
+                automatically_resolved=True,
+                diagnostic=None,
+            ),
+            NamespaceArtifact(
+                artifact_id="parent:right",
+                kind="parent",
+                side="right",
+                candidate=None,
+                mask=None,
+                source_sha256="3" * 64,
+                pcdump_sha256="4" * 64,
+                domain=domain,
+                automatically_resolved=False,
+                diagnostic="ambiguous-automatic-v5",
+            ),
+        ),
+    )
+    reviewed = ReviewedNamespaces(
+        request=request,
+        request_sha256=request.sha256,
+        bindings=(
+            ReviewedNamespaceBinding(
+                artifact_id="parent:right",
+                source_sha256="3" * 64,
+                pcdump_sha256="4" * 64,
+                canonical_to_artifact={role: role for role in domain},
+            ),
+        ),
+    )
+    return request, reviewed
+
+
+def test_namespace_resolver_inherits_only_exact_two_hash_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compile = _namespace_compile()
+    domain = tuple(range(110))
+    inherited = NamespaceMapResolution(
+        artifact_id="parent:left",
+        source_sha256="1" * 64,
+        pcdump_sha256="2" * 64,
+        raw_to_canonical={role: role for role in domain},
+        source="automatic-v5",
+    )
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "prove_virtual_namespace_map",
+        lambda *_args, **_kwargs: None,
+    )
+
+    exact = resolve_namespace_map(
+        artifact_id="candidate:mask-000",
+        source_sha256="1" * 64,
+        pcdump_sha256="2" * 64,
+        artifact_compile=compile,
+        canonical_compile=compile,
+        class_id=0,
+        domain=domain,
+        resolved=(inherited,),
+    )
+    pcdump_only = resolve_namespace_map(
+        artifact_id="candidate:mask-001",
+        source_sha256="9" * 64,
+        pcdump_sha256="2" * 64,
+        artifact_compile=compile,
+        canonical_compile=compile,
+        class_id=0,
+        domain=domain,
+        resolved=(inherited,),
+    )
+
+    assert exact.source == "inheritance"
+    assert dict(exact.raw_to_canonical or {}) == dict(inherited.raw_to_canonical or {})
+    assert pcdump_only.source == "unresolved"
+    assert pcdump_only.raw_to_canonical is None
+
+
+def test_namespace_resolver_automatic_v5_precedes_review_and_rejects_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compile = _namespace_compile()
+    domain = tuple(range(110))
+    request, reviewed = _reviewed_resolution_context(domain)
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "prove_virtual_namespace_map",
+        lambda *_args, **_kwargs: {role: role for role in domain},
+    )
+
+    with pytest.raises(DeltaMinimizeError, match="^automatic-reviewed-namespace-conflict$"):
+        resolve_namespace_map(
+            artifact_id="parent:right",
+            source_sha256="3" * 64,
+            pcdump_sha256="4" * 64,
+            artifact_compile=compile,
+            canonical_compile=compile,
+            class_id=0,
+            domain=domain,
+            resolved=(),
+            request=request,
+            reviewed=reviewed,
+        )
+
+    automatic = resolve_namespace_map(
+        artifact_id="candidate:mask-000",
+        source_sha256="9" * 64,
+        pcdump_sha256="a" * 64,
+        artifact_compile=compile,
+        canonical_compile=compile,
+        class_id=0,
+        domain=domain,
+        resolved=(),
+    )
+    assert automatic.source == "automatic-v5"
+    assert dict(automatic.raw_to_canonical or {}) == {role: role for role in domain}
+
+
+def test_namespace_resolver_uses_reviewed_fallback_and_fails_closed_on_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compile = _namespace_compile()
+    domain = tuple(range(110))
+    request, reviewed = _reviewed_resolution_context(domain)
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "prove_virtual_namespace_map",
+        lambda *_args, **_kwargs: None,
+    )
+
+    reviewed_result = resolve_namespace_map(
+        artifact_id="parent:right",
+        source_sha256="3" * 64,
+        pcdump_sha256="4" * 64,
+        artifact_compile=compile,
+        canonical_compile=compile,
+        class_id=0,
+        domain=domain,
+        resolved=(),
+        request=request,
+        reviewed=reviewed,
+    )
+    incomplete = resolve_namespace_map(
+        artifact_id="parent:right",
+        source_sha256="3" * 64,
+        pcdump_sha256="4" * 64,
+        artifact_compile=compile,
+        canonical_compile=compile,
+        class_id=0,
+        domain=domain,
+        resolved=(),
+        request=request,
+    )
+
+    assert reviewed_result.source == "reviewed-v1"
+    assert dict(reviewed_result.raw_to_canonical or {}) == {role: role for role in domain}
+    assert incomplete.source == "unresolved"
+    with pytest.raises(DeltaMinimizeError, match="^reviewed-namespace-artifact-drift$"):
+        resolve_namespace_map(
+            artifact_id="parent:right",
+            source_sha256="9" * 64,
+            pcdump_sha256="4" * 64,
+            artifact_compile=compile,
+            canonical_compile=compile,
+            class_id=0,
+            domain=domain,
+            resolved=(),
+            request=request,
+            reviewed=reviewed,
+        )
 
 
 @pytest.mark.parametrize(
@@ -726,11 +924,7 @@ def test_namespace_witness_uses_identity_not_objective_lanes(
         first, second = changed.fev.colorgraph_sections[-1].decisions[:2]
         first.iter_idx, second.iter_idx = second.iter_idx, first.iter_idx
     elif mutation == "simplify-traversal":
-        first, second = [
-            row
-            for row in changed.fev.simplify_sections[-1].entries
-            if row.ig_idx >= 0
-        ][:2]
+        first, second = [row for row in changed.fev.simplify_sections[-1].entries if row.ig_idx >= 0][:2]
         first.iter_idx, second.iter_idx = second.iter_idx, first.iter_idx
     elif mutation == "coalesce-mapping":
         section = changed.fev.coalesce_sections[-1]
@@ -738,9 +932,7 @@ def test_namespace_witness_uses_identity_not_objective_lanes(
     monkeypatch.setattr(
         objectives_module.role_descriptor,
         "build_descriptors",
-        lambda compile, _class_id: (
-            baseline_descriptors if compile is baseline else changed_descriptors
-        ),
+        lambda compile, _class_id: (baseline_descriptors if compile is baseline else changed_descriptors),
     )
 
     baseline_witness = objectives_module._structural_namespace_witness(baseline, 0)
@@ -848,9 +1040,7 @@ def _v2_color_case(
             compiler_stderr="",
             pcdump_hash=hashlib.sha256(pcdump.read_bytes()).hexdigest(),
         )
-        compiles[side] = _with_complete_virtual_identity(
-            Compile.from_text(emitted_pcdump, FUNCTION, source_text)
-        )
+        compiles[side] = _with_complete_virtual_identity(Compile.from_text(emitted_pcdump, FUNCTION, source_text))
     descriptors = _namespace_descriptors(compiles["left"])
     desired = {ig_idx: 0 for ig_idx in descriptors}
     target = build_target_spec(
@@ -864,9 +1054,7 @@ def _v2_color_case(
         side: {
             "source_sha256": raws[side].source_hash,
             "pcdump_sha256": raws[side].pcdump_hash,
-            "canonical_to_parent": {
-                str(ig_idx): ig_idx for ig_idx in sorted(desired)
-            },
+            "canonical_to_parent": {str(ig_idx): ig_idx for ig_idx in sorted(desired)},
         }
         for side in ("left", "right")
     }
@@ -930,10 +1118,47 @@ def _expected_complete_identity_role_map(
 ) -> dict[int, int]:
     witness = objectives_module._structural_namespace_witness(compile, 0)
     assert witness is not None
-    return {
-        ig_idx: ig_idx if ig_idx in desired else 1_000_000 + ig_idx
-        for ig_idx in range(witness["virtual_count"])
+    return {ig_idx: ig_idx if ig_idx in desired else 1_000_000 + ig_idx for ig_idx in range(witness["virtual_count"])}
+
+
+def test_candidate_color_profile_consumes_resolved_canonical_maps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate, objective, parents, compiles = _v2_color_case(tmp_path)
+    virtual_count = compiles["left"].fev.coalesce_sections[-1].n_virtuals
+    domain = tuple(range(virtual_count))
+    candidate_map = {role: role for role in domain}
+    first, second = 47, 54
+    candidate_map[first], candidate_map[second] = second, first
+    donor_map = {role: role for role in domain}
+    captured = _capture_color_role_maps(monkeypatch, dict(objective.desired_phys))
+    monkeypatch.setattr(evaluator_module, "_compile", lambda raw, _function: compiles[raw.candidate_id])
+    resolutions = {
+        "candidate:mask-000": NamespaceMapResolution(
+            artifact_id="candidate:mask-000",
+            source_sha256=candidate.source_hash,
+            pcdump_sha256=candidate.pcdump_hash,
+            raw_to_canonical=candidate_map,
+            source="reviewed-v1",
+        ),
+        "parent:left": NamespaceMapResolution(
+            artifact_id="parent:left",
+            source_sha256=parents.left.source_hash,
+            pcdump_sha256=parents.left.pcdump_hash,
+            raw_to_canonical=donor_map,
+            source="automatic-v5",
+        ),
     }
+
+    evaluator_module._color_axis(
+        candidate,
+        objective,
+        parents,
+        namespace_resolutions=resolutions,
+    )
+
+    assert captured == [candidate_map, donor_map]
 
 
 def test_candidate_exact_parent_hashes_consume_reviewed_binding(
@@ -958,9 +1183,7 @@ def test_candidate_exact_parent_hashes_consume_reviewed_binding(
 
     evaluator_module._color_axis(candidate, objective, parents)
 
-    expected = _expected_complete_identity_role_map(
-        compiles["left"], objective.desired_phys
-    )
+    expected = _expected_complete_identity_role_map(compiles["left"], objective.desired_phys)
     assert captured == [expected, expected]
 
 
@@ -994,9 +1217,7 @@ def test_hybrid_equal_witness_inherits_parent_binding_despite_ambiguous_roles(
 
     evaluator_module._color_axis(candidate, objective, parents)
 
-    expected = _expected_complete_identity_role_map(
-        compiles["left"], objective.desired_phys
-    )
+    expected = _expected_complete_identity_role_map(compiles["left"], objective.desired_phys)
     assert captured == [expected, expected]
 
 
@@ -1087,9 +1308,7 @@ def test_derived_target_uses_correlated_exact_allocator_namespace(
     pcdump.write_text(pcdump_text, encoding="utf-8")
     source = tmp_path / "same.c"
     source.write_text("", encoding="utf-8")
-    compile = _with_complete_virtual_identity(
-        Compile.from_text(pcdump_text, FUNCTION, "")
-    )
+    compile = _with_complete_virtual_identity(Compile.from_text(pcdump_text, FUNCTION, ""))
     desired_roles = list(build_descriptors(compile, 0))[:2]
     desired = {desired_roles[0]: 22, desired_roles[1]: 21}
     target = build_target_spec(

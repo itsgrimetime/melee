@@ -342,11 +342,12 @@ def test_request_rejects_stale_or_truncated_parser_epoch(parser_epoch: str) -> N
     [
         {"left_source_sha256": "0" * 64},
         {"right_source_sha256": "0" * 64},
-        {"class_id": 1},
-        {"register_class": "FPR"},
-        {"reviewed_anchors": {64: 64}},
+        {"class_id": 2},
+        {"register_class": "VR"},
+        {"class_id": 1, "register_class": "GPR"},
+        {"class_id": 0, "register_class": "FPR"},
+        {"reviewed_anchors": {}},
         {"reviewed_anchors": {64: 64, 78: 64}},
-        {"reviewed_anchors": {64: 64, 79: 79}},
     ],
 )
 def test_request_rejects_incoherent_parent_context_and_anchors(
@@ -354,6 +355,25 @@ def test_request_rejects_incoherent_parent_context_and_anchors(
 ) -> None:
     with pytest.raises(DeltaMinimizeError):
         replace(_request(), **change)
+
+
+@pytest.mark.parametrize(
+    "anchors",
+    ({40: 40}, {40: 40, 41: 41}, {64: 64, 79: 79}),
+)
+def test_request_accepts_generic_force_role_anchors(
+    anchors: dict[int, int],
+) -> None:
+    request = replace(_request(), reviewed_anchors=anchors)
+
+    assert dict(request.reviewed_anchors) == anchors
+
+
+def test_request_accepts_fpr_namespace_context() -> None:
+    request = replace(_request(), class_id=1, register_class="FPR")
+
+    assert request.class_id == 1
+    assert request.register_class == "FPR"
 
 
 def _nonidentity_map() -> dict[int, int]:

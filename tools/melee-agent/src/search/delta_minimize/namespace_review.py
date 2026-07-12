@@ -317,7 +317,7 @@ class NamespaceReviewRequest:
         if self.parser_schema_hash != PARSER_SCHEMA_HASH:
             raise DeltaMinimizeError("unsupported-namespace-review-epoch")
         _text(self.function, "invalid-namespace-review-request")
-        if self.class_id != 0 or self.register_class != "GPR":
+        if (self.class_id, self.register_class) not in {(0, "GPR"), (1, "FPR")}:
             raise DeltaMinimizeError("invalid-namespace-review-request")
         for digest in (
             self.target_sha256,
@@ -334,7 +334,7 @@ class NamespaceReviewRequest:
         _text(self.compiler_fingerprint, "invalid-namespace-review-request")
         _text(self.inspector_version, "invalid-namespace-review-request")
         anchors = _int_mapping(self.reviewed_anchors, "invalid-namespace-review-anchors")
-        if set(anchors) != {64, 78} or len(set(anchors.values())) != len(anchors):
+        if not anchors or len(set(anchors.values())) != len(anchors):
             raise DeltaMinimizeError("invalid-namespace-review-anchors")
         if (
             not isinstance(self.artifacts, (tuple, list))

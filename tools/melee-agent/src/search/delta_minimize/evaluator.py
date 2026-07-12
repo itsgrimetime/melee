@@ -27,6 +27,7 @@ from .contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
 from .objectives import (
     COLOR_TARGET_SCHEMA_V2,
     ROLE_NAMESPACE_SCHEMA,
+    NamespaceMapResolution,
     ObjectiveManifest,
 )
 
@@ -717,11 +718,7 @@ def _evidence_content_hashes(evidence: RawCandidateEvidence) -> tuple[str, str]:
         raise ValueError("missing pcdump evidence")
     source_hash = hashlib.sha256(Path(evidence.source_path).read_bytes()).hexdigest()
     pcdump_hash = hashlib.sha256(Path(evidence.pcdump_path).read_bytes()).hexdigest()
-    if (
-        evidence.source_hash != source_hash
-        or evidence.pcdump_hash is None
-        or evidence.pcdump_hash != pcdump_hash
-    ):
+    if evidence.source_hash != source_hash or evidence.pcdump_hash is None or evidence.pcdump_hash != pcdump_hash:
         raise ValueError("inconsistent candidate content hashes")
     return source_hash, pcdump_hash
 
@@ -770,7 +767,8 @@ def _v2_parent_role_maps(
         binding = bindings[side]
         if (
             not isinstance(binding, Mapping)
-            or set(binding) != {
+            or set(binding)
+            != {
                 "source_sha256",
                 "pcdump_sha256",
                 "canonical_to_parent",
@@ -800,19 +798,10 @@ def _v2_parent_role_maps(
         ):
             raise ValueError("invalid v2 role binding provenance")
         source_hash, pcdump_hash = _evidence_content_hashes(parent_rows[side])
-        if (
-            source_hash != binding["source_sha256"]
-            or pcdump_hash != binding["pcdump_sha256"]
-        ):
+        if source_hash != binding["source_sha256"] or pcdump_hash != binding["pcdump_sha256"]:
             raise ValueError("unbound v2 parent role evidence")
-        raw_maps[side] = {
-            parent_ig: canonical
-            for canonical, parent_ig in canonical_to_parent.items()
-        }
-    if (
-        provenance["baseline_dump_sha256"]
-        != bindings[baseline_side]["pcdump_sha256"]
-    ):
+        raw_maps[side] = {parent_ig: canonical for canonical, parent_ig in canonical_to_parent.items()}
+    if provenance["baseline_dump_sha256"] != bindings[baseline_side]["pcdump_sha256"]:
         raise ValueError("invalid v2 baseline binding")
     return raw_maps
 
@@ -841,8 +830,7 @@ def _candidate_proven_role_map(
     direct = [
         parent_maps[side]
         for side in ("left", "right")
-        if source_hash == bindings[side]["source_sha256"]
-        and pcdump_hash == bindings[side]["pcdump_sha256"]
+        if source_hash == bindings[side]["source_sha256"] and pcdump_hash == bindings[side]["pcdump_sha256"]
     ]
     proven = _agreeing_proven_map(direct)
     if proven is not None:
@@ -851,9 +839,7 @@ def _candidate_proven_role_map(
     inherited: list[dict[int, int]] = []
     for side in ("left", "right"):
         sections = [
-            section
-            for section in parent_compiles[side].fev.coalesce_sections
-            if section.class_id == objective.class_id
+            section for section in parent_compiles[side].fev.coalesce_sections if section.class_id == objective.class_id
         ]
         if not sections:
             continue
@@ -899,11 +885,14 @@ def _color_axis(
     evidence: RawCandidateEvidence,
     objective: ObjectiveManifest,
     parents: ParentEvidenceBundle,
+    *,
+    namespace_resolutions: Mapping[str, NamespaceMapResolution] | None = None,
 ) -> tuple[int, int, int, int, int, int]:
     # A ``none`` color donor is valid only when objective inference proved the
     # parent secondary profiles identical.  Either side is then an equivalent
     # concrete artifact for the comparison.
-    donor_raw = parents.left if objective.color_donor is None else _donor_raw(parents, objective.color_donor)
+    donor_side = "left" if objective.color_donor is None else objective.color_donor
+    donor_raw = _donor_raw(parents, donor_side)
     if donor_raw is None:
         raise ValueError("missing donor")
     candidate_payload = evidence.checkdiff_evidence or {}
@@ -911,6 +900,35 @@ def _color_axis(
     candidate_explicit = _explicit_color_role_map(candidate_payload)
     donor_explicit = _explicit_color_role_map(donor_payload)
     desired = dict(objective.desired_phys)
+    if namespace_resolutions is not None:
+        candidate_id = f"candidate:mask-{evidence.mask:03b}"
+        candidate_resolution = namespace_resolutions.get(candidate_id)
+        donor_resolution = namespace_resolutions.get(f"parent:{donor_side}")
+        if (
+            not isinstance(candidate_resolution, NamespaceMapResolution)
+            or not isinstance(donor_resolution, NamespaceMapResolution)
+            or candidate_resolution.raw_to_canonical is None
+            or donor_resolution.raw_to_canonical is None
+            or _evidence_content_hashes(evidence)
+            != (candidate_resolution.source_sha256, candidate_resolution.pcdump_sha256)
+            or _evidence_content_hashes(donor_raw) != (donor_resolution.source_sha256, donor_resolution.pcdump_sha256)
+        ):
+            raise ValueError("incomplete namespace resolution")
+        candidate_profile = build_colorgraph_profile(
+            _load_text(evidence.pcdump_path),
+            objective.function,
+            objective.class_id,
+            candidate_resolution.raw_to_canonical,
+            required_roles=frozenset(desired),
+        )
+        donor_profile = build_colorgraph_profile(
+            _load_text(donor_raw.pcdump_path),
+            objective.function,
+            objective.class_id,
+            donor_resolution.raw_to_canonical,
+            required_roles=frozenset(desired),
+        )
+        return tuple(colorgraph_distance(candidate_profile, donor_profile, desired).as_tuple())  # type: ignore[return-value]
     if candidate_explicit is not None or donor_explicit is not None:
         if candidate_explicit is None or donor_explicit is None:
             raise ValueError("partial explicit color role evidence")
@@ -935,13 +953,10 @@ def _color_axis(
         "left": _compile(parents.left, objective.function),
         "right": _compile(parents.right, objective.function),
     }
-    donor_side = "left" if objective.color_donor is None else objective.color_donor
     donor_compile = parent_compiles[donor_side]
     target = _target_spec(objective.target_spec)
     donor_sections = [
-        section
-        for section in donor_compile.fev.coalesce_sections
-        if section.class_id == objective.class_id
+        section for section in donor_compile.fev.coalesce_sections if section.class_id == objective.class_id
     ]
     exact_graph_roles = (
         role_descriptor.prove_virtual_namespace_map(
@@ -953,13 +968,8 @@ def _color_axis(
         if donor_sections
         else None
     )
-    if (
-        target.provenance.get("inference") == "parent-register-diff"
-        and exact_graph_roles is not None
-    ):
-        donor_role_map = {
-            ig_idx: ig_idx for ig_idx in range(donor_sections[-1].n_virtuals)
-        }
+    if target.provenance.get("inference") == "parent-register-diff" and exact_graph_roles is not None:
+        donor_role_map = {ig_idx: ig_idx for ig_idx in range(donor_sections[-1].n_virtuals)}
         candidate_profile = build_colorgraph_profile(
             _load_text(evidence.pcdump_path),
             objective.function,
@@ -1007,10 +1017,7 @@ def _color_axis(
         donor_target_roles_raw = dict(donor_target.matched)
     else:
         donor_target_roles_raw = dict(donor_proven)
-    if (
-        set(candidate_target_roles.values()) != set(desired)
-        or set(donor_target_roles_raw.values()) != set(desired)
-    ):
+    if set(candidate_target_roles.values()) != set(desired) or set(donor_target_roles_raw.values()) != set(desired):
         raise ValueError("incomplete target reanchor")
 
     donor_descriptors = role_descriptor.build_descriptors(donor_compile, objective.class_id)
@@ -1025,9 +1032,7 @@ def _color_axis(
     )
     proven_graph_roles: dict[int, int] = {}
     if candidate_proven is not None and donor_proven is not None:
-        donor_by_canonical = {
-            canonical: donor_ig for donor_ig, canonical in donor_proven.items()
-        }
+        donor_by_canonical = {canonical: donor_ig for donor_ig, canonical in donor_proven.items()}
         proven_graph_roles = {
             candidate_ig: donor_by_canonical[canonical]
             for candidate_ig, canonical in candidate_proven.items()
@@ -1048,9 +1053,8 @@ def _color_axis(
     if reviewed_graph_roles is not None:
         donor_graph_igs = tuple(range(donor_sections[-1].n_virtuals))
         candidate_graph_roles = reviewed_graph_roles
-    elif (
-        set(proven_graph_roles.values()) == set(donor_descriptors)
-        and len(proven_graph_roles) == len(donor_descriptors)
+    elif set(proven_graph_roles.values()) == set(donor_descriptors) and len(proven_graph_roles) == len(
+        donor_descriptors
     ):
         candidate_graph_roles = proven_graph_roles
     elif _load_text(evidence.pcdump_path) == _load_text(donor_raw.pcdump_path):
@@ -1068,19 +1072,11 @@ def _color_axis(
             candidate_graph.matched,
             proven_graph_roles,
         )
-        unresolved = set(candidate_graph.diagnostics) - set(
-            proven_graph_roles.values()
-        )
-        if (
-            unresolved
-            or set(candidate_graph_roles.values()) != set(donor_descriptors)
-        ):
+        unresolved = set(candidate_graph.diagnostics) - set(proven_graph_roles.values())
+        if unresolved or set(candidate_graph_roles.values()) != set(donor_descriptors):
             raise ValueError("incomplete graph reanchor")
 
-    donor_role_map = {
-        ig_idx: donor_target_roles_raw.get(ig_idx, 1_000_000 + ig_idx)
-        for ig_idx in donor_graph_igs
-    }
+    donor_role_map = {ig_idx: donor_target_roles_raw.get(ig_idx, 1_000_000 + ig_idx) for ig_idx in donor_graph_igs}
     candidate_role_map = {
         candidate_ig: donor_role_map[donor_ig] for candidate_ig, donor_ig in candidate_graph_roles.items()
     }
@@ -1334,6 +1330,7 @@ def profile_candidate(
     objective: ObjectiveManifest,
     *,
     parents: ParentEvidenceBundle | None = None,
+    namespace_resolutions: Mapping[str, NamespaceMapResolution] | None = None,
 ) -> CandidateProfile:
     """Normalize one captured row into a complete or explicitly blocked profile."""
 
@@ -1390,7 +1387,12 @@ def profile_candidate(
                 _add(blockers, "missing-parent-stack-evidence")
             else:
                 try:
-                    axes["color"] = _color_axis(evidence, objective, parents)
+                    axes["color"] = _color_axis(
+                        evidence,
+                        objective,
+                        parents,
+                        namespace_resolutions=namespace_resolutions,
+                    )
                 except (KeyError, OSError, TypeError, UnicodeError, ValueError):
                     _add(blockers, "incomplete-color-evidence")
                 try:

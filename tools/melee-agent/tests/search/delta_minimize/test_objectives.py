@@ -1830,7 +1830,7 @@ def test_manifest_serialization_is_deterministic_and_json_friendly(
     first = manifest.to_json()
     assert first == manifest.to_json()
     payload = json.loads(first)
-    assert payload["schema_version"] == "delta-minimize-objectives.v2"
+    assert payload["schema_version"] == "delta-minimize-objectives.v3"
     assert payload["references"]["opcode"]["reference_artifact"] == "expected.o:draw"
     assert payload["references"]["opcode"]["reference_kind"] == "absolute"
     assert payload["references"]["color"]["override"] is True
