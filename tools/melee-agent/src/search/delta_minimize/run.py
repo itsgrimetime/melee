@@ -1564,6 +1564,7 @@ def _namespace_incomplete_result(
     parents: ParentEvidenceBundle,
     manifest: DeltaManifest,
     raw_candidates: tuple[RawCandidateEvidence, ...],
+    unresolved_ids: tuple[str, ...],
 ) -> DeltaMinimizeResult:
     return DeltaMinimizeResult(
         schema_version=RESULT_SCHEMA,
@@ -1602,6 +1603,7 @@ def _namespace_incomplete_result(
                 None if config.namespace_review_path is None else str(config.namespace_review_path)
             ),
             "namespace_review_request": str(config.out_dir / "namespace-review-request.yaml"),
+            "namespace_review_unresolved": list(unresolved_ids),
             "donor_overrides": dict(config.donor_overrides),
             "include_objobjects": config.include_objobjects,
         },
@@ -1697,11 +1699,13 @@ def run_delta_minimize(
         )
         if namespace_state.unresolved_ids:
             store.write_namespace_review_request(namespace_state.request)
+            store.invalidate_objective_publications()
             result = _namespace_incomplete_result(
                 config,
                 parents,
                 manifest,
                 raw_candidates,
+                namespace_state.unresolved_ids,
             )
             store.write_result(result.to_dict())
             return result

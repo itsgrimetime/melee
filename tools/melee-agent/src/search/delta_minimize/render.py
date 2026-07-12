@@ -253,6 +253,9 @@ def _resume_command(result: DeltaMinimizeResult) -> str | None:
     target = result.inputs.get("target_path")
     if isinstance(target, str) and target:
         argv.extend(("--target", target))
+    namespace_review = result.inputs.get("namespace_review_path")
+    if isinstance(namespace_review, str) and namespace_review:
+        argv.extend(("--namespace-review", namespace_review))
     overrides = result.inputs.get("donor_overrides")
     if isinstance(overrides, Mapping):
         for axis in sorted(overrides):
@@ -267,6 +270,35 @@ def _resume_command(result: DeltaMinimizeResult) -> str | None:
 def _recovery_lines(result: DeltaMinimizeResult) -> list[str]:
     blockers = set(result.blockers)
     lines: list[str] = []
+    if "namespace-review-required" in blockers:
+        request = result.inputs.get("namespace_review_request")
+        unresolved = result.inputs.get("namespace_review_unresolved")
+        if isinstance(request, str) and request:
+            lines.append(f"namespace review request: {request}")
+            if isinstance(unresolved, (list, tuple)) and unresolved:
+                lines.append(
+                    "unresolved namespace artifacts: "
+                    + ", ".join(str(artifact_id) for artifact_id in unresolved)
+                )
+            lines.append(
+                "seal command: "
+                + shlex.join(
+                    [
+                        "melee-agent",
+                        "debug",
+                        "search",
+                        "delta-namespace-review",
+                        "seal",
+                        "--request",
+                        request,
+                        "--out",
+                        "PATH",
+                    ]
+                )
+            )
+            lines.append("rerun with --namespace-review PATH")
+        else:
+            lines.append("namespace review request unavailable; rerun discovery")
     if "ambiguous-color-target" in blockers:
         lines.extend(
             (

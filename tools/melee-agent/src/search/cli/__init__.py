@@ -10,13 +10,21 @@ from src.mwcc_debug.retained_frontier_triage import (
 from src.search.delta_minimize import (
     DeltaMinimizeConfig,
     DeltaMinimizeError,
+    load_review_request,
     parse_donor_overrides,
     render_delta_minimize_text,
     run_delta_minimize,
+    seal_namespace_review,
 )
 
 from ._helpers import *  # noqa: F403
 from ._helpers import _CFLAGS
+
+delta_namespace_review_app = typer.Typer(
+    help="Inspect and explicitly seal reviewed allocator namespace mappings.",
+    no_args_is_help=True,
+)
+search_app.add_typer(delta_namespace_review_app, name="delta-namespace-review")
 
 
 class _SearchRunDirectedPipeline:
@@ -115,6 +123,38 @@ def _resolve_delta_target_file(path: Path | None) -> Path | None:
     if _path_has_symlink_component(candidate) or not candidate.is_file():
         raise typer.BadParameter(f"target file not found or unsafe: {path}")
     return candidate.resolve()
+
+
+def _resolve_delta_namespace_review_file(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    expanded = path.expanduser()
+    candidate = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    if _path_has_symlink_component(candidate) or not candidate.is_file():
+        raise typer.BadParameter(
+            f"namespace review file not found or unsafe: {path}"
+        )
+    return candidate.resolve()
+
+
+def _parse_namespace_review_maps(values: Iterable[str]) -> dict[str, Path]:
+    parsed: dict[str, Path] = {}
+    for raw in values:
+        if not isinstance(raw, str) or raw.count("=") != 1 or raw.strip() != raw:
+            raise ValueError(f"invalid --map value {raw!r}; expected ARTIFACT_ID=PATH")
+        artifact_id, raw_path = raw.split("=", 1)
+        if (
+            not artifact_id
+            or not raw_path
+            or artifact_id.strip() != artifact_id
+            or raw_path.strip() != raw_path
+        ):
+            raise ValueError(f"invalid --map value {raw!r}; expected ARTIFACT_ID=PATH")
+        if artifact_id in parsed:
+            raise ValueError(f"duplicate --map approval for {artifact_id}")
+        path = Path(raw_path).expanduser()
+        parsed[artifact_id] = path if path.is_absolute() else Path.cwd() / path
+    return dict(sorted(parsed.items()))
 
 
 def _resolve_delta_cflags_source(
@@ -4574,6 +4614,59 @@ def _assignment_clusters(meta: dict | None) -> list[str]:
     return clusters
 
 
+@delta_namespace_review_app.command("seal")
+def delta_namespace_review_seal_cmd(
+    request: Annotated[
+        Path,
+        typer.Option(
+            "--request",
+            help="Discovery request YAML to inspect and approve explicitly.",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            help="Atomic output path for the sealed reviewed namespace sidecar.",
+        ),
+    ],
+    accept_identity: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--accept-identity",
+            help="Explicitly approve ARTIFACT_ID as a full identity map; repeatable.",
+        ),
+    ] = None,
+    map_value: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--map",
+            help="Approve ARTIFACT_ID with a full map YAML via ID=PATH; repeatable.",
+        ),
+    ] = None,
+) -> None:
+    """Seal explicit namespace-review authority into a provenance-bound sidecar."""
+
+    try:
+        map_paths = _parse_namespace_review_maps(map_value or ())
+        loaded_request = load_review_request(request.expanduser())
+        reviewed = seal_namespace_review(
+            loaded_request,
+            identity_ids=tuple(accept_identity or ()),
+            map_paths=map_paths,
+        )
+        output = out.expanduser()
+        if not output.is_absolute():
+            output = Path.cwd() / output
+        reviewed.write(output)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--map") from error
+    except DeltaMinimizeError as error:
+        raise typer.BadParameter(_delta_error_message(error)) from error
+
+    typer.echo(f"sealed namespace review: {output}")
+
+
 @search_app.command("delta-minimize")
 def delta_minimize_cmd(
     function: Annotated[
@@ -4615,6 +4708,13 @@ def delta_minimize_cmd(
                 "Optional color-target YAML: v1 semantic reanchoring or "
                 "v2 reviewed cross-parent bindings."
             ),
+        ),
+    ] = None,
+    namespace_review: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--namespace-review",
+            help="Sealed reviewed namespace sidecar produced from this run's request.",
         ),
     ] = None,
     donor: Annotated[
@@ -4666,6 +4766,9 @@ def delta_minimize_cmd(
             out_dir=_resolve_delta_output_dir(out_dir, melee_root=melee_root),
             max_candidates=max_candidates,
             target_path=_resolve_delta_target_file(target),
+            namespace_review_path=_resolve_delta_namespace_review_file(
+                namespace_review
+            ),
             donor_overrides=donor_overrides,
             include_objobjects=objobjects,
             melee_root=melee_root,

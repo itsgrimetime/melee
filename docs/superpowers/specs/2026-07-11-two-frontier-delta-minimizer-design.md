@@ -168,6 +168,43 @@ checkout. Branch-local development and verification therefore use
 `cd tools/melee-agent && python -m src.cli ...` until the tooling change reaches
 the shared baseline.
 
+### 5.1 Reviewed namespace discovery and sealing
+
+`--namespace-review PATH` accepts a sealed, provenance-bound namespace sidecar.
+When automatic v5 proof cannot resolve every viable allocator namespace, the
+first `delta-minimize` run captures the complete raw lattice, exits incomplete,
+and writes `namespace-review-request.yaml`. The text and JSON results name both
+that request path and every unresolved artifact ID. No objective manifest,
+candidate profile publication, or Pareto frontier is published at this stage.
+
+The operator workflow is deliberately explicit:
+
+```text
+# Discover and capture all raw evidence.
+melee-agent debug search delta-minimize ... --out-dir RUN
+
+# Inspect RUN/namespace-review-request.yaml, including content hashes,
+# automatic diagnostics, reviewed anchors, and unresolved artifact IDs.
+
+# Seal one authority choice for every unresolved exact-content group.
+melee-agent debug search delta-namespace-review seal \
+  --request RUN/namespace-review-request.yaml \
+  --accept-identity parent:right \
+  --map candidate:mask-100=mask-100-map.yaml \
+  --out RUN/reviewed-namespaces.yaml
+
+# Rerun without recapturing compatible raw evidence.
+melee-agent debug search delta-minimize ... --out-dir RUN \
+  --namespace-review RUN/reviewed-namespaces.yaml
+```
+
+Sealing is explicit review authority, not an automatic fallback. Identity
+approvals are expanded to every canonical/artifact pair in the namespace, and
+map approvals must already contain the complete bijection. The sealed sidecar
+contains no identity shorthand. Exact source-plus-pcdump aliases share one
+approval and inherit it on rerun; approving an alias separately is redundant.
+An automatic v5 proof cannot be overridden by the sidecar.
+
 ## 6. Architecture
 
 The implementation is divided into five independently testable components.

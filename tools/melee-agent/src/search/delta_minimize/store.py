@@ -693,3 +693,9 @@ class DeltaRunStore:
             "result.json",
         ):
             self._invalidate_evidence_path(self._safe_path(name))
+
+    def invalidate_objective_publications(self) -> None:
+        """Remove objective outputs that cannot precede namespace review."""
+
+        for name in ("objective-inputs.json", "objective-manifest.json"):
+            self._invalidate_evidence_path(self._safe_path(name))

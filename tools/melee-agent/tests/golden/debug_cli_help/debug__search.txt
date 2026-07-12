@@ -39,5 +39,6 @@
 │                                     layer for FUNCTION in UNIT.              │
 │ status                              Show status of the search substrate      │
 │                                     (store, config).                         │
+│ delta-namespace-review              Inspect and explicitly seal reviewed     │
+│                                     allocator namespace mappings.            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-

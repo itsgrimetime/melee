@@ -37,6 +37,11 @@
 │                                                             v2 reviewed      │
 │                                                             cross-parent     │
 │                                                             bindings.        │
+│    --namespace-re…                         PATH             Sealed reviewed  │
+│                                                             namespace        │
+│                                                             sidecar produced │
+│                                                             from this run's  │
+│                                                             request.         │
 │    --donor                                 TEXT             Override color,  │
 │                                                             objobjects, or   │
 │                                                             stack-homes      │

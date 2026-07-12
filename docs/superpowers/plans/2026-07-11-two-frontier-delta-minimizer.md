@@ -1502,13 +1502,40 @@ The explicit donor selections preserve the reviewed left allocator target and
 the expected-object-backed right stack-home reference used for acceptance.
 Keep that target, the frozen parent sources, and retained pcdumps untracked.
 
-Expected: exit 0 with `status` equal to `matched`, `joint-zero`, or `frontier`;
-`exact_four_axis: true`; every viable candidate complete and carrying a proven
-parent or structural-namespace mapping; both endpoints byte-exact; every Pareto
-row linked to retained source, pcdump, inspect snapshot, and stack/color
-evidence; and no `ambiguous-color-target`. If any viable mask lacks a proven
-mapping, exact frontier publication must remain blocked rather than guessing
-from raw IG equality.
+Expected discovery: exit 4 with `status: incomplete`, all eight legal and viable
+candidates captured, and `namespace-review-request.yaml` naming the unresolved
+exact-content groups. Inspect that request before granting authority. For the
+frozen family, seal exactly these four identity approvals; `mask-111` shares
+the exact source and pcdump content of `parent:right` and therefore must not
+receive a separate binding:
+
+```bash
+PYTHONPATH=/Users/mike/code/melee/.claude/worktrees/codex-delta-cross-parent-role-map/tools/melee-agent \
+python -m src.cli debug search delta-namespace-review seal \
+  --request build/delta-minimize/fighter-real-v2-task3/namespace-review-request.yaml \
+  --accept-identity parent:right \
+  --accept-identity candidate:mask-100 \
+  --accept-identity candidate:mask-101 \
+  --accept-identity candidate:mask-110 \
+  --out build/delta-minimize/fighter-real-v2-task3/reviewed-namespaces.yaml
+```
+
+Every identity approval is expanded to the complete canonical-to-artifact map;
+the sealed sidecar contains no identity shorthand. Rerun the discovery command
+with:
+
+```text
+--namespace-review build/delta-minimize/fighter-real-v2-task3/reviewed-namespaces.yaml
+```
+
+Expected reviewed rerun: exit 0, all eight candidates legal, viable, and
+complete, `exact_four_axis: true`, no blockers, exact Pareto masks
+`000/001/010/011`, and `best_next=000`. Every viable candidate carries a
+proven automatic, reviewed, or exact-content-inherited namespace; `mask-111`
+inherits `parent:right`. The rerun reuses all eight raw capture cache entries
+and performs no candidate recapture. If any viable mask remains unresolved,
+exact frontier publication remains blocked rather than guessing from raw IG
+equality.
 
 - [ ] **Step 5: Verify the repository build**
 

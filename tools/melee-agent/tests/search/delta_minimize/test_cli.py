@@ -4,11 +4,20 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
 import src.search.cli as search_cli
+import src.search.delta_minimize.namespace_review as namespace_review_module
 from src.search.cli import search_app
 from src.search.delta_minimize.contracts import AxisDistances, ParetoGroup, ParetoSummary
+from src.search.delta_minimize.epochs import PARSER_SCHEMA_HASH
+from src.search.delta_minimize.namespace_review import (
+    NamespaceArtifact,
+    NamespaceReviewRequest,
+    load_reviewed_namespaces,
+)
+from src.search.delta_minimize.objectives import ROLE_NAMESPACE_SCHEMA
 from src.search.delta_minimize.render import (
     parse_donor_overrides,
     render_delta_minimize_text,
@@ -19,12 +28,31 @@ runner = CliRunner()
 
 
 def test_delta_minimize_help_names_supported_target_semantics() -> None:
-    result = runner.invoke(search_app, ["delta-minimize", "--help"])
+    result = runner.invoke(
+        search_app,
+        ["delta-minimize", "--help"],
+        terminal_width=120,
+    )
 
     assert result.exit_code == 0
     normalized = " ".join(result.stdout.split())
     assert "v1 semantic reanchoring" in normalized
     assert "v2 reviewed cross-parent bindings" in normalized
+    assert "--namespace-re…" in normalized
+    assert "Sealed reviewed" in normalized
+    assert "sidecar produced" in normalized
+
+
+def test_namespace_review_seal_help_names_explicit_authority() -> None:
+    result = runner.invoke(search_app, ["delta-namespace-review", "seal", "--help"])
+
+    assert result.exit_code == 0
+    normalized = " ".join(result.stdout.split())
+    assert "--request" in normalized
+    assert "--accept-identity" in normalized
+    assert "--map" in normalized
+    assert "--out" in normalized
+    assert "explicit" in normalized.lower()
 
 
 def _result(*, status: str = "frontier", provisional: bool = False) -> DeltaMinimizeResult:
@@ -137,6 +165,198 @@ def _invoke_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
     return left, right, unit
 
 
+def _namespace_request() -> NamespaceReviewRequest:
+    domain = tuple(range(32))
+
+    def artifact(
+        artifact_id: str,
+        *,
+        source_sha256: str,
+        pcdump_sha256: str,
+        automatic: bool,
+    ) -> NamespaceArtifact:
+        if artifact_id.startswith("parent:"):
+            return NamespaceArtifact(
+                artifact_id=artifact_id,
+                kind="parent",
+                side=artifact_id.removeprefix("parent:"),
+                candidate=None,
+                mask=None,
+                source_sha256=source_sha256,
+                pcdump_sha256=pcdump_sha256,
+                domain=domain,
+                automatically_resolved=automatic,
+                diagnostic=None if automatic else "ambiguous-automatic-v5",
+            )
+        candidate = artifact_id.removeprefix("candidate:")
+        return NamespaceArtifact(
+            artifact_id=artifact_id,
+            kind="candidate",
+            side=None,
+            candidate=candidate,
+            mask=int(candidate.removeprefix("mask-"), 2),
+            source_sha256=source_sha256,
+            pcdump_sha256=pcdump_sha256,
+            domain=domain,
+            automatically_resolved=automatic,
+            diagnostic=None if automatic else "ambiguous-automatic-v5",
+        )
+
+    return NamespaceReviewRequest(
+        function="draw",
+        class_id=0,
+        register_class="GPR",
+        namespace_schema=ROLE_NAMESPACE_SCHEMA,
+        parser_schema_hash=PARSER_SCHEMA_HASH,
+        target_sha256="1" * 64,
+        delta_manifest_sha256="2" * 64,
+        left_source_sha256="3" * 64,
+        right_source_sha256="4" * 64,
+        cflags_hash="5" * 64,
+        compiler_fingerprint="mwcc-test",
+        expected_object_hash="6" * 64,
+        inspector_version="inspector-test",
+        canonical_artifact_id="parent:left",
+        canonical_source_sha256="3" * 64,
+        canonical_pcdump_sha256="7" * 64,
+        reviewed_anchors={1: 1},
+        artifacts=(
+            artifact(
+                "parent:left",
+                source_sha256="3" * 64,
+                pcdump_sha256="7" * 64,
+                automatic=True,
+            ),
+            artifact(
+                "parent:right",
+                source_sha256="4" * 64,
+                pcdump_sha256="8" * 64,
+                automatic=False,
+            ),
+            artifact(
+                "candidate:mask-100",
+                source_sha256="9" * 64,
+                pcdump_sha256="a" * 64,
+                automatic=False,
+            ),
+        ),
+    )
+
+
+def test_namespace_review_seal_is_deterministic_and_expands_identity(tmp_path: Path) -> None:
+    request = _namespace_request()
+    request_path = tmp_path / "request.yaml"
+    map_path = tmp_path / "candidate-map.yaml"
+    first_out = tmp_path / "first-reviewed.yaml"
+    second_out = tmp_path / "second-reviewed.yaml"
+    request.write(request_path)
+    map_path.write_text(
+        yaml.safe_dump({role: role for role in request.domain}, sort_keys=True),
+        encoding="utf-8",
+    )
+    common = [
+        "delta-namespace-review",
+        "seal",
+        "--request",
+        str(request_path),
+        "--accept-identity",
+        "parent:right",
+        "--map",
+        f"candidate:mask-100={map_path}",
+    ]
+
+    first = runner.invoke(search_app, [*common, "--out", str(first_out)])
+    second = runner.invoke(search_app, [*common, "--out", str(second_out)])
+
+    assert first.exit_code == second.exit_code == 0
+    assert first.stdout.replace(str(first_out), "OUT") == second.stdout.replace(
+        str(second_out), "OUT"
+    )
+    assert first_out.read_bytes() == second_out.read_bytes()
+    reviewed = load_reviewed_namespaces(first_out, request=request)
+    bindings = {binding.artifact_id: binding for binding in reviewed.bindings}
+    assert dict(bindings["parent:right"].canonical_to_artifact) == {
+        role: role for role in request.domain
+    }
+    assert len(bindings["parent:right"].canonical_to_artifact) == len(request.domain)
+    assert "identity" not in reviewed.to_yaml()
+
+
+def test_namespace_review_seal_rejects_duplicate_unknown_and_malformed_approvals(
+    tmp_path: Path,
+) -> None:
+    request_path = tmp_path / "request.yaml"
+    map_path = tmp_path / "map.yaml"
+    out = tmp_path / "reviewed.yaml"
+    request = _namespace_request()
+    request.write(request_path)
+    map_path.write_text(
+        yaml.safe_dump({role: role for role in request.domain}),
+        encoding="utf-8",
+    )
+    cases = (
+        ["--accept-identity", "parent:right", "--accept-identity", "parent:right"],
+        ["--accept-identity", "unknown"],
+        [
+            "--map",
+            f"parent:right={map_path}",
+            "--map",
+            f"parent:right={map_path}",
+        ],
+        ["--map", f"parent:right = {map_path}"],
+    )
+
+    for approvals in cases:
+        result = runner.invoke(
+            search_app,
+            [
+                "delta-namespace-review",
+                "seal",
+                "--request",
+                str(request_path),
+                *approvals,
+                "--out",
+                str(out),
+            ],
+        )
+        assert result.exit_code == 2, result.output
+        assert not out.exists()
+
+
+def test_namespace_review_seal_preserves_existing_output_on_atomic_replace_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    request_path = tmp_path / "request.yaml"
+    out = tmp_path / "reviewed.yaml"
+    _namespace_request().write(request_path)
+    out.write_text("previous\n", encoding="utf-8")
+    monkeypatch.setattr(
+        namespace_review_module.os,
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    result = runner.invoke(
+        search_app,
+        [
+            "delta-namespace-review",
+            "seal",
+            "--request",
+            str(request_path),
+            "--accept-identity",
+            "parent:right",
+            "--accept-identity",
+            "candidate:mask-100",
+            "--out",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert out.read_text(encoding="utf-8") == "previous\n"
+
+
 def test_parse_donor_overrides_accepts_only_unique_supported_axes() -> None:
     assert parse_donor_overrides(["color=left", "objobjects=right", "stack-homes=left"]) == {
         "color": "left",
@@ -166,7 +386,9 @@ def test_parse_donor_overrides_rejects_invalid_and_duplicate_values() -> None:
 def test_delta_minimize_cli_passes_all_options(monkeypatch, tmp_path: Path) -> None:
     left, right, unit = _invoke_paths(tmp_path)
     target = tmp_path / "target.yaml"
+    namespace_review = tmp_path / "namespace-review.yaml"
     target.write_text("target\n", encoding="utf-8")
+    namespace_review.write_text("review\n", encoding="utf-8")
     captured = {}
 
     def fake_run(config):
@@ -197,6 +419,8 @@ def test_delta_minimize_cli_passes_all_options(monkeypatch, tmp_path: Path) -> N
             "17",
             "--target",
             str(target),
+            "--namespace-review",
+            str(namespace_review),
             "--donor",
             "color=left",
             "--no-objobjects",
@@ -213,6 +437,7 @@ def test_delta_minimize_cli_passes_all_options(monkeypatch, tmp_path: Path) -> N
     assert config.out_dir == (tmp_path / "results").resolve()
     assert config.max_candidates == 17
     assert config.target_path == target.resolve()
+    assert config.namespace_review_path == namespace_review.resolve()
     assert dict(config.donor_overrides) == {"color": "left"}
     assert config.include_objobjects is False
 
@@ -242,6 +467,7 @@ def test_delta_minimize_cli_defaults_are_locked(monkeypatch, tmp_path: Path) -> 
     assert config.out_dir == (tmp_path / "build/delta-minimize").resolve()
     assert config.max_candidates == 64
     assert config.include_objobjects is True
+    assert config.namespace_review_path is None
 
 
 def test_delta_minimize_cli_rejects_invalid_donors_missing_paths_and_budget(tmp_path: Path) -> None:
@@ -537,6 +763,68 @@ def test_delta_minimize_incomplete_renders_then_exits_four(monkeypatch, tmp_path
     assert result.exit_code == 4
     assert "status: incomplete" in result.stdout
     assert "inspector-timeout" in result.stdout
+
+
+def test_delta_minimize_incomplete_names_review_request_and_unresolved_artifacts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    left, right, unit = _invoke_paths(tmp_path)
+    request_path = tmp_path / "run" / "namespace-review-request.yaml"
+    incomplete = replace(
+        _result(status="incomplete"),
+        inputs={
+            "left": str(left),
+            "right": str(right),
+            "out_dir": str(tmp_path / "run"),
+            "namespace_review_request": str(request_path),
+            "namespace_review_unresolved": [
+                "parent:right",
+                "candidate:mask-100",
+            ],
+        },
+        blockers=("namespace-review-required",),
+    )
+    monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        search_cli,
+        "_resolve_structure_source_file",
+        lambda function, source_file, *, melee_root: unit,
+    )
+    monkeypatch.setattr(search_cli, "run_delta_minimize", lambda _config: incomplete)
+
+    text_result = runner.invoke(
+        search_app,
+        ["delta-minimize", "-f", "draw", "--left", str(left), "--right", str(right)],
+    )
+    json_result = runner.invoke(
+        search_app,
+        [
+            "delta-minimize",
+            "-f",
+            "draw",
+            "--left",
+            str(left),
+            "--right",
+            str(right),
+            "--json",
+        ],
+    )
+
+    assert text_result.exit_code == json_result.exit_code == 4
+    assert f"namespace review request: {request_path}" in text_result.stdout
+    assert (
+        "unresolved namespace artifacts: parent:right, candidate:mask-100"
+        in text_result.stdout
+    )
+    assert "delta-namespace-review seal --request" in text_result.stdout
+    assert "rerun with --namespace-review PATH" in text_result.stdout
+    payload = json.loads(json_result.stdout)
+    assert payload["inputs"]["namespace_review_request"] == str(request_path)
+    assert payload["inputs"]["namespace_review_unresolved"] == [
+        "parent:right",
+        "candidate:mask-100",
+    ]
 
 
 def test_delta_minimize_json_is_pure_and_deterministic(monkeypatch, tmp_path: Path) -> None:

@@ -17,6 +17,7 @@ from src.mwcc_debug.objobject_profile import ObjObjectProfile
 from src.mwcc_debug.role_descriptor import Compile, build_descriptors
 from src.mwcc_debug.stack_home_profile import StackHomeProfile
 from src.search.cli import search_app
+from src.search.delta_minimize.contracts import AxisDistances, CandidateProfile
 from src.search.delta_minimize.epochs import PARSER_SCHEMA_HASH
 from src.search.delta_minimize.evaluator import RawCandidateEvidence
 from src.search.delta_minimize.namespace_review import (
@@ -380,6 +381,253 @@ def test_reviewed_v2_roles_publish_complete_reproducible_frontier(
     assert fixture.captured_sources[3] == right.read_bytes()
 
 
+def test_eight_mask_discovery_seal_and_reviewed_rerun_reuses_raw_capture(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    left_source = (
+        "int f(void) {\n"
+        "    int a = 0;\n"
+        "    int b = 0;\n"
+        "    int c = 0;\n"
+        "    return a + b + c;\n"
+        "}\n"
+    )
+    right_source = left_source.replace("a = 0", "a = 1").replace(
+        "b = 0", "b = 1"
+    ).replace("c = 0", "c = 1")
+    left = tmp_path / "left.c"
+    right = tmp_path / "right.c"
+    left.write_text(left_source, encoding="utf-8")
+    right.write_text(right_source, encoding="utf-8")
+    fixture = _ReviewedRoleFixture(tmp_path, left_source, right_source)
+    template = Compile.from_text(fixture.dump_text, "f", left_source)
+    virtual_count = template.fev.coalesce_sections[-1].n_virtuals
+    desired = {next(iter(build_descriptors(template, 0))): 30}
+
+    def prove_namespace(_reference, candidate_compile, class_id, count, reviewed=None):
+        del reviewed
+        assert class_id == 0
+        assert count == virtual_count
+        if "c = 1" in candidate_compile.source:
+            return None
+        return {role: role for role in range(count)}
+
+    monkeypatch.setattr(
+        objectives_module.role_descriptor,
+        "prove_virtual_namespace_map",
+        prove_namespace,
+    )
+
+    def color_profile(
+        _pcdump: str,
+        _function: str,
+        _class_id: int,
+        role_map: dict[int, int],
+        *,
+        required_roles: frozenset[int],
+    ) -> ColorGraphProfile:
+        roles = tuple(sorted(set(role_map.values())))
+        return ColorGraphProfile(
+            assignments=tuple((role, desired.get(role, 0)) for role in roles),
+            simplify_order=roles,
+            select_order=roles,
+            interference_edges=frozenset(),
+            coalesce_pairs=frozenset(),
+            spills=frozenset(),
+            complete=required_roles <= set(roles),
+        )
+
+    monkeypatch.setattr(objectives_module, "build_colorgraph_profile", color_profile)
+
+    def score_rows(rows, _score_config):
+        fixture.score_calls += 1
+        row = rows[0]
+        mask = int(row["candidate_id"].split("-")[1], 2)
+        source = Path(row["source_file"])
+        fixture.captured_sources[mask] = source.read_bytes()
+        if mask == 0:
+            dump = fixture.left_dump
+        elif mask == 7:
+            dump = fixture.right_dump
+        else:
+            dump = tmp_path / f"candidate-{mask}.pcdump"
+            dump.write_text(
+                fixture.dump_text + f"\nmask={mask}\n",
+                encoding="utf-8",
+            )
+        return [
+            {
+                **row,
+                "pcdump_path": str(dump),
+                "score_returncode": 0,
+                "score_error_kind": None,
+                "score_stderr": "",
+                "checkdiff_evidence": {
+                    "match": False,
+                    "target_asm": ["+000: 38 60 00 00 li r3,0"],
+                    "current_asm": ["+000: 38 80 00 00 li r4,0"],
+                    "classification": {"primary": "instruction-identical"},
+                },
+            }
+        ]
+
+    def profile(raw, _objective, *, parents, **_kwargs):
+        del parents
+        low = raw.mask & 0b011
+        penalty = 1 if raw.mask & 0b100 else 0
+        return CandidateProfile(
+            candidate_id=raw.candidate_id,
+            mask=raw.mask,
+            source_hash=raw.source_hash,
+            source_path=raw.source_path,
+            viable=True,
+            compile_status="compiled",
+            axes=AxisDistances(
+                opcode=(low + penalty, 0),
+                color=(3 - low + penalty, 0, 0, 0, 0, 0),
+                objobjects=(penalty, 0),
+                stack_homes=(penalty, 0, 0, 0),
+            ),
+            complete=True,
+            exact_object_match=False,
+        )
+
+    base = fixture.backends()
+    backends = replace(
+        base,
+        evaluation=replace(base.evaluation, score_rows=score_rows),
+        profile_candidate=profile,
+    )
+    target = tmp_path / "target.yaml"
+    _write_target(target, fixture, desired, version=2)
+    cflags = tmp_path / "unit.c"
+    cflags.write_text("/* unit */\n", encoding="utf-8")
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    stale_objective_inputs = out_dir / "objective-inputs.json"
+    stale_objective_manifest = out_dir / "objective-manifest.json"
+    stale_objective_inputs.write_text(
+        json.dumps({"schema_version": "delta-minimize-objective-inputs.v3"}),
+        encoding="utf-8",
+    )
+    stale_objective_manifest.write_text(
+        json.dumps({"schema_version": "delta-minimize-objectives.v2"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        search_cli,
+        "_resolve_structure_source_file",
+        lambda function, source_file, *, melee_root: cflags,
+    )
+    monkeypatch.setattr(
+        search_cli,
+        "run_delta_minimize",
+        lambda config: run_delta_minimize(config, backends=backends),
+    )
+    common = [
+        "delta-minimize",
+        "--function",
+        "f",
+        "--left",
+        str(left),
+        "--right",
+        str(right),
+        "--target",
+        str(target),
+        "--donor",
+        "color=left",
+        "--donor",
+        "objobjects=left",
+        "--donor",
+        "stack-homes=left",
+        "--out-dir",
+        str(out_dir),
+        "--json",
+    ]
+
+    discovered_cli = CliRunner().invoke(search_app, common)
+
+    assert discovered_cli.exit_code == 4, discovered_cli.output
+    discovered = json.loads(discovered_cli.stdout)
+    assert discovered["candidate_counts"] == {
+        "complete": 0,
+        "legal": 8,
+        "viable": 8,
+    }
+    assert fixture.score_calls == 8
+    assert not stale_objective_inputs.exists()
+    assert not stale_objective_manifest.exists()
+    request_path = out_dir / "namespace-review-request.yaml"
+    request = load_review_request(request_path)
+    approval_ids = (
+        "parent:right",
+        "candidate:mask-100",
+        "candidate:mask-101",
+        "candidate:mask-110",
+    )
+    assert set(discovered["inputs"]["namespace_review_unresolved"]) == {
+        *approval_ids,
+        "candidate:mask-111",
+    }
+    review_path = tmp_path / "reviewed.yaml"
+    seal_cli = CliRunner().invoke(
+        search_app,
+        [
+            "delta-namespace-review",
+            "seal",
+            "--request",
+            str(request_path),
+            *(item for artifact_id in approval_ids for item in ("--accept-identity", artifact_id)),
+            "--out",
+            str(review_path),
+        ],
+    )
+
+    assert seal_cli.exit_code == 0, seal_cli.output
+    reviewed = yaml.safe_load(review_path.read_text(encoding="utf-8"))
+    assert [binding["artifact_id"] for binding in reviewed["bindings"]] == sorted(
+        approval_ids
+    )
+    assert "candidate:mask-111" not in {
+        binding["artifact_id"] for binding in reviewed["bindings"]
+    }
+    assert all(
+        len(binding["canonical_to_artifact"]) == len(request.domain)
+        for binding in reviewed["bindings"]
+    )
+
+    rerun_cli = CliRunner().invoke(
+        search_app,
+        [*common[:-1], "--namespace-review", str(review_path), "--json"],
+    )
+
+    assert rerun_cli.exit_code == 0, rerun_cli.output
+    rerun = json.loads(rerun_cli.stdout)
+    assert rerun["status"] == "frontier"
+    assert rerun["exact_four_axis"] is True
+    assert rerun["candidate_counts"] == {
+        "complete": 8,
+        "legal": 8,
+        "viable": 8,
+    }
+    assert rerun["blockers"] == []
+    assert rerun["pareto"]["candidate_ids"] == [
+        "mask-000",
+        "mask-001",
+        "mask-010",
+        "mask-011",
+    ]
+    assert rerun["best_next"] == "mask-000"
+    assert fixture.score_calls == 8
+    resolution_path = out_dir / rerun["objective_manifest"]["namespace_resolution"][
+        "resolution_artifact"
+    ]
+    resolution = json.loads(resolution_path.read_text(encoding="utf-8"))
+    assert resolution["resolutions"]["candidate:mask-111"]["source"] == "inheritance"
+
+
 @pytest.mark.parametrize("baseline_side", ("left", "right"))
 def test_nonbaseline_nonidentity_anchor_discovery_seal_and_rerun(
     monkeypatch: pytest.MonkeyPatch,
@@ -533,6 +781,14 @@ def test_nonbaseline_nonidentity_anchor_discovery_seal_and_rerun(
     request = load_review_request(config.out_dir / "namespace-review-request.yaml")
 
     assert discovered.status == "incomplete"
+    assert discovered.inputs["namespace_review_request"] == str(
+        config.out_dir / "namespace-review-request.yaml"
+    )
+    assert discovered.inputs["namespace_review_unresolved"] == [
+        artifact.artifact_id
+        for artifact in request.artifacts
+        if not artifact.automatically_resolved
+    ]
     assert request.canonical_artifact_id == f"parent:{baseline_side}"
     assert dict(request.reviewed_anchors) == {canonical: alias}
     full_map = {role: role for role in request.domain}
