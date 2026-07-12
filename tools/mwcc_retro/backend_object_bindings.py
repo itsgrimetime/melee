@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from .backend_instrumentation_proof import InstrumentationProof, proof_sha256
 
 SCHEMA_VERSION = "mwcc-retro-object-bindings.v1"
 LIFETIME_MODE = "allocation-generation"
-CAPABILITIES = frozenset({"compiler-object-bindings", "object-to-virtual", "object-to-frame"})
+CAPABILITIES = frozenset({"compiler-object-bindings"})
 
 _TOP_FIELDS = frozenset(
     {
@@ -186,6 +187,7 @@ _FRAME_PROVENANCE = (
     "retail-objobject.stack-offset",
 )
 _HEX = frozenset("0123456789abcdef")
+_MAX_SAFE_JSON_INT = (1 << 53) - 1
 
 
 @dataclass(frozen=True)
@@ -360,6 +362,8 @@ def _replay_lifecycle(
             continue
         _closed(event, _EVENT_FIELDS, f"lifecycle event {index}", errors)
         sequence = event.get("sequence")
+        if not _is_nonnegative_int(sequence):
+            errors.append(f"lifecycle event {index} sequence must be nonnegative integer")
         if sequence != index:
             errors.append(f"lifecycle sequence gap at index {index}")
         kind = event.get("entity_kind")
@@ -479,20 +483,32 @@ def _validate_lifetime_coverage(
         "generation_assignments": replay.generation_assignments,
     }
     for field, expected in expected_counts.items():
-        if value.get(field) != expected:
+        actual = value.get(field)
+        if not _is_nonnegative_int(actual):
+            errors.append(f"lifetime {field} must be nonnegative integer")
+        elif actual != expected:
             errors.append(f"{field} does not match lifecycle replay")
     expected_first = 0 if event_count else -1
     expected_last = event_count - 1
-    if value.get("first_event_sequence") != expected_first:
+    first_sequence = value.get("first_event_sequence")
+    last_sequence = value.get("last_event_sequence")
+    if not _is_int(first_sequence):
+        errors.append("lifetime first_event_sequence must be integer")
+    elif first_sequence != expected_first:
         errors.append("lifetime first_event_sequence does not match lifecycle events")
-    if value.get("last_event_sequence") != expected_last:
+    if not _is_int(last_sequence):
+        errors.append("lifetime last_event_sequence must be integer")
+    elif last_sequence != expected_last:
         errors.append("lifetime last_event_sequence does not match lifecycle events")
     event_cap = value.get("event_cap")
     if not _is_positive_int(event_cap):
         errors.append("lifetime event_cap must be positive integer")
     elif event_count >= event_cap:
         errors.append("lifecycle event cap was reached")
-    if value.get("dropped_events") != 0:
+    dropped_events = value.get("dropped_events")
+    if not _is_nonnegative_int(dropped_events):
+        errors.append("lifetime dropped_events must be nonnegative integer")
+    elif dropped_events != 0:
         errors.append("lifecycle events were dropped")
     if value.get("truncated") is not False:
         errors.append("lifecycle capture is truncated")
@@ -618,6 +634,8 @@ def _validate_snapshot(
         errors.append(f"{label} type_size must be nonnegative integer")
     if not isinstance(snapshot.get("readable"), bool):
         errors.append(f"{label} readable must be boolean")
+    elif snapshot.get("readable") is False:
+        errors.append(f"{label} snapshot is unreadable")
 
 
 def _validate_objects(value: object, replay: _LifecycleReplay, errors: list[str]) -> dict[str, Mapping[str, object]]:
@@ -683,6 +701,7 @@ def _validate_objects(value: object, replay: _LifecycleReplay, errors: list[str]
         if len(snapshots) not in (1, 2):
             errors.append(f"{label} stage_snapshots must contain one or two records")
         stages: list[str] = []
+        lifecycle_sequences: list[int] = []
         fingerprints: list[tuple[object, object, object, object]] = []
         for snapshot_index, stage_row in enumerate(snapshots):
             snapshot_label = f"{label} snapshot {snapshot_index}"
@@ -693,6 +712,9 @@ def _validate_objects(value: object, replay: _LifecycleReplay, errors: list[str]
             stage = stage_row.get("stage")
             if isinstance(stage, str) and stage in _STAGE_ORDER:
                 stages.append(stage)
+            sequence = stage_row.get("lifecycle_sequence_at_capture")
+            if _is_int(sequence):
+                lifecycle_sequences.append(sequence)
             fingerprint = (
                 stage_row.get("runtime_address"),
                 stage_row.get("name_record_pointer"),
@@ -714,6 +736,8 @@ def _validate_objects(value: object, replay: _LifecycleReplay, errors: list[str]
                 errors.append(f"{label} stage_snapshots must be canonically ordered")
         if len(fingerprints) == 2 and fingerprints[0] != fingerprints[1]:
             errors.append(f"{label} object fingerprint changed across stages")
+        if len(lifecycle_sequences) == 2 and lifecycle_sequences[1] < lifecycle_sequences[0]:
+            errors.append(f"{label} snapshot lifecycle sequences must be monotonic")
         confidence = row.get("cross_stage_identity_confidence")
         if len(snapshots) == 2 and confidence != "derived-unique":
             errors.append(f"{label} two-stage object confidence must be derived-unique")
@@ -747,6 +771,9 @@ def _validate_virtual_bindings(
     rows = _list(value, "virtual_bindings", errors)
     keys: list[tuple[object, ...]] = []
     seen_rows: set[tuple[object, ...]] = set()
+    seen_virtual_identities: set[tuple[object, ...]] = set()
+    seen_ig_identities: set[tuple[object, ...]] = set()
+    seen_ignode_addresses: set[int] = set()
     virtual_owners: dict[tuple[object, ...], object] = {}
     ig_owners: dict[tuple[object, ...], object] = {}
     sortable = True
@@ -772,6 +799,9 @@ def _validate_virtual_bindings(
         for field in ("virtual", "ig_id"):
             if not _is_nonnegative_int(row.get(field)):
                 errors.append(f"{label} {field} must be nonnegative integer")
+        if _is_nonnegative_int(row.get("virtual")) and _is_nonnegative_int(row.get("ig_id")):
+            if row.get("virtual") != row.get("ig_id"):
+                errors.append(f"{label} virtual must equal ig_id")
         if not _is_positive_int(row.get("ignode_runtime_address")):
             errors.append(f"{label} ignode_runtime_address must be positive integer")
         if row.get("source_stage") != "colorgraph_return":
@@ -798,6 +828,20 @@ def _validate_virtual_bindings(
             sortable = False
         virtual_key = (class_id, virtual_kind, row.get("virtual"))
         ig_key = (class_id, row.get("ig_id"))
+        try:
+            if virtual_key in seen_virtual_identities:
+                errors.append(f"{label} duplicate class/virtual binding")
+            seen_virtual_identities.add(virtual_key)
+            if ig_key in seen_ig_identities:
+                errors.append(f"{label} duplicate class/IG binding")
+            seen_ig_identities.add(ig_key)
+        except TypeError:
+            pass
+        ignode_address = row.get("ignode_runtime_address")
+        if _is_positive_int(ignode_address):
+            if ignode_address in seen_ignode_addresses:
+                errors.append(f"{label} duplicate IGNode runtime address")
+            seen_ignode_addresses.add(ignode_address)
         for identity, owners in (
             (virtual_key, virtual_owners),
             (ig_key, ig_owners),
@@ -825,6 +869,7 @@ def _validate_frame_bindings(
     rows = _list(value, "frame_bindings", errors)
     keys: list[tuple[object, ...]] = []
     seen: set[tuple[object, ...]] = set()
+    seen_list_nodes: set[int] = set()
     object_areas: Counter[tuple[str, str]] = Counter()
     sortable = True
     for index, row in enumerate(rows):
@@ -837,6 +882,20 @@ def _validate_frame_bindings(
         object_id = row.get("object_id")
         owner = objects.get(object_id) if isinstance(object_id, str) else None
         area = row.get("area")
+        if not isinstance(area, str) or area not in _FRAME_AREAS:
+            errors.append(f"{label} has unknown frame area {area!r}")
+        if not _is_positive_int(row.get("list_node_runtime_address")):
+            errors.append(f"{label} list_node_runtime_address must be positive integer")
+        else:
+            list_node = row["list_node_runtime_address"]
+            if list_node in seen_list_nodes:
+                errors.append(f"{label} duplicate frame list node runtime address")
+            seen_list_nodes.add(list_node)
+        if not _is_int(row.get("raw_object_stack_offset")):
+            errors.append(f"{label} raw_object_stack_offset must be integer")
+        for field in ("frame_base_size", "frame_call_args_size", "size"):
+            if not _is_nonnegative_int(row.get(field)):
+                errors.append(f"{label} {field} must be nonnegative integer")
         if owner is None:
             errors.append(f"{label} frame binding references unknown object")
         else:
@@ -849,15 +908,6 @@ def _validate_frame_bindings(
                 errors.append(f"{label} frame binding area is absent from object areas")
             if row.get("size") != owner.get("type_size"):
                 errors.append(f"{label} size does not match object type_size")
-        if not isinstance(area, str) or area not in _FRAME_AREAS:
-            errors.append(f"{label} has unknown frame area {area!r}")
-        if not _is_positive_int(row.get("list_node_runtime_address")):
-            errors.append(f"{label} list_node_runtime_address must be positive integer")
-        if not _is_int(row.get("raw_object_stack_offset")):
-            errors.append(f"{label} raw_object_stack_offset must be integer")
-        for field in ("frame_base_size", "frame_call_args_size", "size"):
-            if not _is_nonnegative_int(row.get(field)):
-                errors.append(f"{label} {field} must be nonnegative integer")
         inputs = (
             row.get("frame_base_size"),
             row.get("frame_call_args_size"),
@@ -865,7 +915,9 @@ def _validate_frame_bindings(
         )
         if all(_is_int(item) for item in inputs):
             expected_offset = inputs[0] + inputs[1] + inputs[2]
-            if row.get("final_r1_offset") != expected_offset:
+            if not _is_int(row.get("final_r1_offset")):
+                errors.append(f"{label} final_r1_offset must be integer")
+            elif row.get("final_r1_offset") != expected_offset:
                 errors.append(f"{label} final_r1_offset does not match frame layout formula")
         elif not _is_int(row.get("final_r1_offset")):
             errors.append(f"{label} final_r1_offset must be integer")
@@ -921,8 +973,10 @@ def _freeze(value: object, active: set[int] | None = None) -> object:
         identity = id(value)
         if identity in seen:
             raise ValueError("recursive value")
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError("JSON object keys must be strings")
         seen.add(identity)
-        result = MappingProxyType({str(key): _freeze(item, seen) for key, item in value.items()})
+        result = MappingProxyType({key: _freeze(item, seen) for key, item in value.items()})
         seen.remove(identity)
         return result
     if isinstance(value, list):
@@ -933,7 +987,18 @@ def _freeze(value: object, active: set[int] | None = None) -> object:
         result = tuple(_freeze(item, seen) for item in value)
         seen.remove(identity)
         return result
-    return value
+    if value is None or type(value) is bool:
+        return value
+    if type(value) is str:
+        value.encode("utf-8")
+        return value
+    if type(value) is int:
+        if not -_MAX_SAFE_JSON_INT <= value <= _MAX_SAFE_JSON_INT:
+            raise ValueError("integer exceeds RFC 8785 safe domain")
+        return value
+    if type(value) is float and math.isfinite(value):
+        return value
+    raise ValueError(f"non-JSON value {type(value).__name__}")
 
 
 def _validate(payload: object, proof: object) -> ObjectBindingValidation:

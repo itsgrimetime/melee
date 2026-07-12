@@ -289,11 +289,12 @@ def assert_invalid(payload: object, message: str) -> None:
     assert result.capabilities == frozenset()
 
 
-def test_complete_capture_verifies_all_object_capabilities_and_derives_frame_home():
+def test_complete_capture_verifies_compiler_objects_but_withholds_downstream_capabilities():
     result = validate_object_bindings(minimal_object_bindings(), trusted_proof())
 
     assert result.errors == ()
-    assert result.capabilities == frozenset({"compiler-object-bindings", "object-to-virtual", "object-to-frame"})
+    assert result.capabilities == frozenset({"compiler-object-bindings"})
+    assert result.normalized["virtual_bindings"][0]["confidence"] == "observed"
     assert result.normalized["frame_bindings"][0]["confidence"] == "derived-unique"
     with pytest.raises(TypeError):
         result.normalized["objects"][0]["type_size"] = 8
@@ -632,7 +633,84 @@ def test_complete_empty_capture_still_verifies_availability_capabilities():
     result = validate_object_bindings(payload, trusted_proof())
 
     assert result.errors == ()
-    assert result.capabilities == frozenset({"compiler-object-bindings", "object-to-virtual", "object-to-frame"})
+    assert result.capabilities == frozenset({"compiler-object-bindings"})
+
+
+def test_zero_positive_virtual_bindings_cannot_prove_ig_cap_non_exhaustion():
+    payload = minimal_object_bindings()
+    payload["virtual_bindings"] = []
+    payload["coverage"]["virtual_bindings_seen"] = 0
+    payload["coverage"]["caps"]["max_ig_nodes"] = 1
+
+    result = validate_object_bindings(payload, trusted_proof())
+
+    assert result.errors == ()
+    assert result.capabilities == frozenset({"compiler-object-bindings"})
+    assert result.normalized["virtual_bindings"] == ()
+
+
+def test_unreadable_snapshot_is_diagnostic_only_and_blocks_all_capabilities():
+    payload = minimal_object_bindings()
+    payload["objects"][0]["stage_snapshots"][0]["readable"] = False
+
+    result = validate_object_bindings(payload, trusted_proof())
+
+    assert any("snapshot is unreadable" in error for error in result.errors)
+    assert result.capabilities == frozenset()
+    assert result.normalized["objects"][0]["stage_snapshots"][0]["readable"] is False
+
+
+def test_two_stage_snapshot_lifecycle_positions_must_be_monotonic():
+    payload = minimal_object_bindings()
+    pcode_event = lifecycle(1, "allocate", "pcode", 0x9000, 1)
+    pcode_event["compiler_stage"] = "backend-lowering"
+    payload["lifecycle_events"].append(pcode_event)
+    payload["coverage"]["lifetime_identity"].update(
+        {
+            "last_event_sequence": 1,
+            "allocation_events": 2,
+            "generation_assignments": 2,
+        }
+    )
+    payload["objects"][0]["stage_snapshots"][0]["lifecycle_sequence_at_capture"] = 1
+    payload["objects"][0]["stage_snapshots"][1]["lifecycle_sequence_at_capture"] = 0
+
+    assert_invalid(payload, "snapshot lifecycle sequences must be monotonic")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda p: p["virtual_bindings"][0].update({"ig_id": 67}),
+            "virtual must equal ig_id",
+        ),
+        (
+            lambda p: p["virtual_bindings"].append({**p["virtual_bindings"][0], "ignode_runtime_address": 0x7000}),
+            "duplicate class/virtual binding",
+        ),
+        (
+            lambda p: p["virtual_bindings"].append({**virtual_binding(virtual=67), "ignode_runtime_address": 0x4042}),
+            "duplicate IGNode runtime address",
+        ),
+    ],
+)
+def test_virtual_identity_bijection_rejects_near_duplicate_rows(mutate, message):
+    payload = minimal_object_bindings()
+    mutate(payload)
+    payload["coverage"]["virtual_bindings_seen"] = len(payload["virtual_bindings"])
+    assert_invalid(payload, message)
+
+
+def test_frame_list_node_pointer_is_globally_unique():
+    payload = minimal_object_bindings()
+    payload["objects"][0]["areas"] = ["locals", "temps"]
+    second = copy.deepcopy(payload["frame_bindings"][0])
+    second.update({"area": "temps", "final_r1_offset": 76, "raw_object_stack_offset": -8})
+    payload["frame_bindings"].append(second)
+    payload["coverage"]["frame_bindings_seen"] = 2
+
+    assert_invalid(payload, "duplicate frame list node runtime address")
 
 
 def test_partial_positive_bindings_remain_immutable_diagnostics_without_capability():
@@ -646,6 +724,119 @@ def test_partial_positive_bindings_remain_immutable_diagnostics_without_capabili
     assert result.normalized["frame_bindings"][0]["final_r1_offset"] == 72
     with pytest.raises(TypeError):
         result.normalized["objects"][0]["type_size"] = 8
+
+
+def _set_path(payload: dict[str, object], path: tuple[object, ...], value: object) -> None:
+    current: object = payload
+    for part in path[:-1]:
+        current = current[part]
+    current[path[-1]] = value
+
+
+INTEGER_FIELD_CASES = (
+    (("lifecycle_events", 0, "sequence"), 0),
+    (("lifecycle_events", 0, "runtime_address"), 0x1000),
+    (("lifecycle_events", 0, "allocation_generation"), 1),
+    (("coverage", "objects_seen"), 1),
+    (("coverage", "virtual_bindings_seen"), 1),
+    (("coverage", "frame_bindings_seen"), 1),
+    (("coverage", "pcode_instructions_seen"), 0),
+    (("coverage", "pcode_occurrences_seen"), 0),
+    (("coverage", "caps", "max_ig_nodes"), 2048),
+    (("coverage", "caps", "max_frame_objects_per_area"), 256),
+    (("coverage", "caps", "max_pcode_instructions"), 4096),
+    (("coverage", "caps", "max_pcode_operands_per_instruction"), 32),
+    (("coverage", "lifetime_identity", "allocation_sites_expected"), 2),
+    (("coverage", "lifetime_identity", "allocation_sites_hooked"), 2),
+    (("coverage", "lifetime_identity", "free_sites_expected"), 1),
+    (("coverage", "lifetime_identity", "free_sites_hooked"), 1),
+    (("coverage", "lifetime_identity", "first_event_sequence"), 0),
+    (("coverage", "lifetime_identity", "last_event_sequence"), 0),
+    (("coverage", "lifetime_identity", "allocation_events"), 1),
+    (("coverage", "lifetime_identity", "free_events"), 0),
+    (("coverage", "lifetime_identity", "reuse_events"), 0),
+    (("coverage", "lifetime_identity", "generation_assignments"), 1),
+    (("coverage", "lifetime_identity", "event_cap"), 4096),
+    (("coverage", "lifetime_identity", "dropped_events"), 0),
+    (("objects", 0, "allocation_generation"), 1),
+    (("objects", 0, "runtime_address"), 0x1000),
+    (("objects", 0, "name_record_pointer"), 0x2000),
+    (("objects", 0, "type_pointer"), 0x3000),
+    (("objects", 0, "type_size"), 4),
+    (("objects", 0, "stage_snapshots", 0, "allocation_generation"), 1),
+    (("objects", 0, "stage_snapshots", 0, "lifecycle_sequence_at_capture"), 0),
+    (("objects", 0, "stage_snapshots", 0, "runtime_address"), 0x1000),
+    (("objects", 0, "stage_snapshots", 0, "name_record_pointer"), 0x2000),
+    (("objects", 0, "stage_snapshots", 0, "type_pointer"), 0x3000),
+    (("objects", 0, "stage_snapshots", 0, "type_size"), 4),
+    (("virtual_bindings", 0, "class_id"), 0),
+    (("virtual_bindings", 0, "virtual"), 66),
+    (("virtual_bindings", 0, "ig_id"), 66),
+    (("virtual_bindings", 0, "ignode_runtime_address"), 0x4042),
+    (("frame_bindings", 0, "list_node_runtime_address"), 0x5000),
+    (("frame_bindings", 0, "raw_object_stack_offset"), -12),
+    (("frame_bindings", 0, "frame_base_size"), 84),
+    (("frame_bindings", 0, "frame_call_args_size"), 0),
+    (("frame_bindings", 0, "final_r1_offset"), 72),
+    (("frame_bindings", 0, "size"), 4),
+)
+
+
+@pytest.mark.parametrize(("path", "original"), INTEGER_FIELD_CASES)
+@pytest.mark.parametrize("replacement_kind", ["bool", "float"])
+def test_every_task4_integer_field_rejects_bool_and_float(path, original, replacement_kind):
+    payload = minimal_object_bindings()
+    replacement = True if replacement_kind == "bool" else float(original)
+    _set_path(payload, path, replacement)
+
+    result = validate_object_bindings(payload, trusted_proof())
+
+    assert result.errors, (path, replacement)
+    assert result.capabilities == frozenset()
+
+
+class _DeferredMutable:
+    pass
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        {"not-json"},
+        ("tuple-is-not-json-array",),
+        bytearray(b"mutable"),
+        _DeferredMutable(),
+        {1: "non-string JSON object key"},
+        "\ud800",
+        1 << 100,
+    ],
+)
+def test_non_json_or_deferred_mutable_values_are_rejected(bad_value):
+    payload = minimal_object_bindings()
+    payload["pcode_instructions"] = [{"deferred": bad_value}]
+    payload["coverage"]["pcode_instructions_seen"] = 1
+
+    result = validate_object_bindings(payload, trusted_proof())
+
+    assert any("diagnostic normalization failed" in error for error in result.errors)
+    assert result.capabilities == frozenset()
+
+
+def test_deferred_json_collections_are_deeply_frozen():
+    payload = minimal_object_bindings()
+    payload["pcode_instructions"] = [{"operands": [{"metadata": ["stable", {"value": 7}]}]}]
+    payload["coverage"]["pcode_instructions_seen"] = 1
+
+    result = validate_object_bindings(payload, trusted_proof())
+
+    assert result.errors == ()
+    row = result.normalized["pcode_instructions"][0]
+    with pytest.raises(TypeError):
+        row["new"] = True
+    with pytest.raises(AttributeError):
+        row["operands"].append({})
+    with pytest.raises(TypeError):
+        row["operands"][0]["metadata"][1]["value"] = 8
 
 
 @pytest.mark.parametrize(
