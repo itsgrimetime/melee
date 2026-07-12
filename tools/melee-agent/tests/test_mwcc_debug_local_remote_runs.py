@@ -10,7 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from src.cli import app
 from src.mwcc_debug import local_remote_runs as lrr
 
 
@@ -2132,3 +2134,248 @@ def test_retain_local_remote_run_publish_race_fails_without_marking_replacement(
     assert result.status == "publish-failed"
     assert not (run / lrr.RETENTION_MARKER_FILENAME).exists()
     assert not (moved / lrr.RETENTION_MARKER_FILENAME).exists()
+
+
+def test_local_prune_cli_defaults_to_read_only_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    inventory_fn = lrr.inventory_local_remote_runs
+    monkeypatch.setattr(
+        lrr,
+        "inventory_local_remote_runs",
+        lambda root: inventory_fn(root, git_runner=_untracked_git),
+    )
+    monkeypatch.setattr(
+        lrr,
+        "probe_remote_run_activity",
+        lambda inventory, **_kwargs: replace(
+            inventory,
+            runs=tuple(summary.with_remote_state("stopped") for summary in inventory.runs),
+        ),
+    )
+    monkeypatch.setattr(
+        lrr,
+        "apply_local_remote_run_retention",
+        lambda *_args, **_kwargs: pytest.fail("dry run must not call apply"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "local-prune",
+            "--perm-root",
+            str(perm_root),
+            "--max-total-bytes",
+            "0",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["mode"] == "dry-run"
+    assert payload["status"] == "planned"
+    assert payload["config"]["perm_root"] == str(perm_root)
+    assert payload["counts"] == {
+        "runs": 1,
+        "issues": 0,
+        "protected": 0,
+        "eligible": 1,
+        "selected": 1,
+        "removed": 0,
+        "skipped": 0,
+    }
+    assert payload["items"][0]["job_id"] == run.name
+    assert payload["items"][0]["disposition"] == "selected"
+    assert payload["actions"] == []
+
+
+def test_local_prune_cli_apply_forwards_only_to_apply_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    inventory = _inventory(perm_root)
+    stopped = replace(
+        inventory,
+        runs=tuple(summary.with_remote_state("stopped") for summary in inventory.runs),
+    )
+    plan = lrr.plan_local_remote_run_retention(
+        stopped,
+        max_total_bytes=0,
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+    item = plan.selected[0]
+    action = lrr.RetentionApplyAction(
+        original_path=run,
+        quarantine_path=run.parent / f"{lrr.QUARANTINE_PREFIX}done",
+        function=item.summary.function,
+        job_id=item.summary.job_id,
+        status="removed",
+        reasons=(),
+        planned_bytes=item.summary.total_bytes,
+        reclaimed_bytes=item.summary.total_bytes,
+    )
+    captured: dict[str, object] = {}
+
+    def apply(root: Path, **kwargs: object) -> lrr.LocalRemoteRunRetentionResult:
+        captured.update(root=root, **kwargs)
+        return lrr.LocalRemoteRunRetentionResult(
+            status="completed",
+            plan=plan,
+            actions=(action,),
+            reclaimed_bytes=item.summary.total_bytes,
+            projected_total_bytes=0,
+            inventory_complete=True,
+            cap_satisfied=True,
+        )
+
+    monkeypatch.setattr(lrr, "apply_local_remote_run_retention", apply)
+    monkeypatch.setattr(
+        lrr,
+        "inventory_local_remote_runs",
+        lambda *_args, **_kwargs: pytest.fail("apply CLI must not precompute a plan"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "local-prune",
+            "--perm-root",
+            str(perm_root),
+            "--max-age-days",
+            "12",
+            "--max-total-bytes",
+            "0",
+            "--status-timeout",
+            "3",
+            "--apply",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["root"] == perm_root
+    assert captured["max_age_days"] == 12.0
+    assert captured["max_total_bytes"] == 0
+    assert captured["status_timeout"] == 3.0
+    payload = json.loads(result.stdout)
+    assert payload["mode"] == "apply"
+    assert payload["counts"]["removed"] == 1
+    assert payload["actions"][0]["original_path"] == str(run)
+
+
+def test_local_prune_cli_apply_skipped_action_renders_then_exits_two(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    inventory = _inventory(perm_root)
+    stopped = replace(
+        inventory,
+        runs=tuple(summary.with_remote_state("stopped") for summary in inventory.runs),
+    )
+    plan = lrr.plan_local_remote_run_retention(stopped, max_total_bytes=0)
+    item = plan.selected[0]
+    action = lrr.RetentionApplyAction(
+        run,
+        None,
+        item.summary.function,
+        item.summary.job_id,
+        "skipped",
+        ("remote-active",),
+        item.summary.total_bytes,
+        0,
+    )
+    monkeypatch.setattr(
+        lrr,
+        "apply_local_remote_run_retention",
+        lambda *_args, **_kwargs: lrr.LocalRemoteRunRetentionResult(
+            "completed",
+            plan,
+            (action,),
+            0,
+            plan.total_bytes,
+            True,
+            False,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "local-prune", "--perm-root", str(perm_root), "--apply"],
+    )
+
+    assert result.exit_code == 2
+    assert "SKIPPED" in result.stdout
+    assert "remote-active" in result.stdout
+
+
+@pytest.mark.parametrize("status", ["written", "idempotent", "conflict", "not-found"])
+def test_local_retain_cli_renders_status_and_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    marker = perm_root / "marker.json"
+    monkeypatch.setattr(
+        lrr,
+        "retain_local_remote_run",
+        lambda *_args, **_kwargs: lrr.RetentionMarkerWriteResult(
+            status,
+            marker if status in {"written", "idempotent", "conflict"} else None,
+            "detail" if status not in {"written", "idempotent"} else "",
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "local-retain",
+            "job-1",
+            "--reason",
+            "keep evidence",
+            "--perm-root",
+            str(perm_root),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == (0 if status in {"written", "idempotent"} else 2)
+    payload = json.loads(result.stdout)
+    assert payload["mode"] == "retain"
+    assert payload["status"] == status
+    assert payload["job_id"] == "job-1"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--max-age-days", "-1"],
+        ["--max-total-bytes", "-1"],
+        ["--status-timeout", "0"],
+    ],
+)
+def test_local_prune_cli_rejects_invalid_limits(args: list[str]) -> None:
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "local-prune", *args],
+    )
+
+    assert result.exit_code == 2

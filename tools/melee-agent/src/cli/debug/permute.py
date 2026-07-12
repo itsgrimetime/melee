@@ -43,6 +43,7 @@ from ...mwcc_debug import (
 )
 from ...mwcc_debug import candidate_audit
 from ...mwcc_debug import cache as pcdump_cache
+from ...mwcc_debug import local_remote_runs
 from ...mwcc_debug import permuter_remote
 from ...mwcc_debug.diff_capture import (
     _run_with_process_group_timeout,
@@ -1403,6 +1404,304 @@ def remote_reap(
               f"Re-run with --no-dry-run to execute.")
     else:
         print(f"\nStopped {len(stopped)} job(s).")
+
+
+# ── local fetched remote-run retention ───────────────────────────────────────
+
+
+def _local_retention_plan_item_payload(
+    item: local_remote_runs.RetentionPlanItem,
+) -> dict[str, Any]:
+    summary = item.summary
+    return {
+        "job_id": summary.job_id,
+        "function": summary.function,
+        "path": str(summary.path),
+        "bytes": summary.total_bytes,
+        "latest_activity": summary.latest_activity,
+        "disposition": item.disposition,
+        "reasons": list(item.reasons),
+        "remote_state": summary.remote_state,
+        "remote_detail": summary.remote_detail,
+    }
+
+
+def _local_retention_action_payload(
+    action: local_remote_runs.RetentionApplyAction,
+) -> dict[str, Any]:
+    return {
+        "job_id": action.job_id,
+        "function": action.function,
+        "original_path": str(action.original_path),
+        "quarantine_path": (
+            str(action.quarantine_path) if action.quarantine_path is not None else None
+        ),
+        "status": action.status,
+        "reasons": list(action.reasons),
+        "planned_bytes": action.planned_bytes,
+        "reclaimed_bytes": action.reclaimed_bytes,
+    }
+
+
+def _local_retention_payload(
+    *,
+    mode: str,
+    status: str,
+    perm_root: Path,
+    max_age_days: float,
+    max_total_bytes: int,
+    status_timeout: float,
+    plan: local_remote_runs.LocalRemoteRunRetentionPlan | None,
+    issues: tuple[local_remote_runs.InventoryIssue, ...] = (),
+    actions: tuple[local_remote_runs.RetentionApplyAction, ...] = (),
+    reclaimed_bytes: int = 0,
+    projected_total_bytes: int = 0,
+    inventory_complete: bool = False,
+    cap_satisfied: bool = False,
+    detail: str = "",
+) -> dict[str, Any]:
+    items = plan.items if plan is not None else ()
+    protected = plan.protected if plan is not None else ()
+    eligible = plan.eligible if plan is not None else ()
+    selected = plan.selected if plan is not None else ()
+    removed = tuple(action for action in actions if action.status == "removed")
+    skipped = tuple(action for action in actions if action.status == "skipped")
+    return {
+        "mode": mode,
+        "status": status,
+        "detail": detail,
+        "config": {
+            "perm_root": str(perm_root),
+            "max_age_days": max_age_days,
+            "max_total_bytes": max_total_bytes,
+            "status_timeout": status_timeout,
+        },
+        "generated_at": plan.generated_at.isoformat() if plan is not None else None,
+        "counts": {
+            "runs": len(items),
+            "issues": len(issues),
+            "protected": len(protected),
+            "eligible": len(eligible),
+            "selected": len(selected),
+            "removed": len(removed),
+            "skipped": len(skipped),
+        },
+        "bytes": {
+            "total": plan.total_bytes if plan is not None else 0,
+            "protected": plan.protected_bytes if plan is not None else 0,
+            "eligible": plan.eligible_bytes if plan is not None else 0,
+            "selected": plan.selected_bytes if plan is not None else 0,
+            "removed": sum(action.reclaimed_bytes for action in removed),
+            "skipped": sum(action.planned_bytes for action in skipped),
+            "projected": projected_total_bytes,
+            "reclaimed": reclaimed_bytes,
+        },
+        "inventory_complete": inventory_complete,
+        "cap_satisfied": cap_satisfied,
+        "items": [_local_retention_plan_item_payload(item) for item in items],
+        "issues": [
+            {"path": str(issue.path), "code": issue.code, "detail": issue.detail}
+            for issue in issues
+        ],
+        "actions": [_local_retention_action_payload(action) for action in actions],
+    }
+
+
+def _render_local_retention_text(payload: Mapping[str, Any]) -> None:
+    mode = payload["mode"]
+    counts = payload["counts"]
+    byte_counts = payload["bytes"]
+    if mode == "dry-run":
+        print("DRY RUN — no local remote-run artifacts were deleted.")
+    else:
+        print(f"APPLY — {payload['status']}")
+    print(
+        f"Root: {payload['config']['perm_root']}\n"
+        f"Runs: {counts['runs']}  issues: {counts['issues']}  "
+        f"selected: {counts['selected']}  removed: {counts['removed']}  "
+        f"skipped: {counts['skipped']}\n"
+        f"Bytes: total={byte_counts['total']} protected={byte_counts['protected']} "
+        f"eligible={byte_counts['eligible']} selected={byte_counts['selected']} "
+        f"reclaimed={byte_counts['reclaimed']} projected={byte_counts['projected']}\n"
+        f"Inventory complete: {payload['inventory_complete']}  "
+        f"cap satisfied: {payload['cap_satisfied']}"
+    )
+    selected_items = [item for item in payload["items"] if item["disposition"] == "selected"]
+    protected_items = [item for item in payload["items"] if item["disposition"] == "protected"]
+    if selected_items:
+        print("Selected for deletion:")
+        for item in selected_items:
+            print(
+                f"  {item['job_id']}  {item['bytes']} bytes  {item['path']}  "
+                f"({', '.join(item['reasons'])})"
+            )
+    if protected_items:
+        print("Protected (never selected):")
+        for item in protected_items:
+            print(
+                f"  {item['job_id']}  {item['bytes']} bytes  "
+                f"({', '.join(item['reasons'])})"
+            )
+    if payload["issues"]:
+        print("Inventory issues:")
+        for issue in payload["issues"]:
+            suffix = f": {issue['detail']}" if issue["detail"] else ""
+            print(f"  {issue['code']}  {issue['path']}{suffix}")
+    if payload["actions"]:
+        print("Apply actions:")
+        for action in payload["actions"]:
+            reasons = f" ({', '.join(action['reasons'])})" if action["reasons"] else ""
+            print(f"  {action['status'].upper()}  {action['job_id']}  {action['original_path']}{reasons}")
+    if payload["detail"]:
+        print(f"Detail: {payload['detail']}")
+    if mode == "dry-run":
+        print("Re-run with --apply to delete only the selected, revalidated runs.")
+
+
+@remote_app.command(name="local-prune")
+def remote_local_prune(
+    perm_root: Annotated[
+        Path,
+        typer.Option("--perm-root", help="Local decomp-permuter root."),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    max_age_days: Annotated[
+        float,
+        typer.Option("--max-age-days", min=0.0, help="Select stopped eligible runs older than this many days."),
+    ] = local_remote_runs.DEFAULT_MAX_AGE_DAYS,
+    max_total_bytes: Annotated[
+        int,
+        typer.Option("--max-total-bytes", min=0, help="Target maximum bytes across local fetched remote runs."),
+    ] = local_remote_runs.DEFAULT_MAX_TOTAL_BYTES,
+    status_timeout: Annotated[
+        float,
+        typer.Option("--status-timeout", min=0.001, help="Per-host remote activity probe timeout in seconds."),
+    ] = local_remote_runs.DEFAULT_REMOTE_STATUS_TIMEOUT,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Apply the freshly recomputed plan under the lifecycle lock."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic JSON."),
+    ] = False,
+) -> None:
+    """Plan or safely apply retention for locally fetched remote runs."""
+    root = perm_root.expanduser().absolute()
+    try:
+        if apply:
+            result = local_remote_runs.apply_local_remote_run_retention(
+                root,
+                max_age_days=max_age_days,
+                max_total_bytes=max_total_bytes,
+                status_timeout=status_timeout,
+            )
+            payload = _local_retention_payload(
+                mode="apply",
+                status=result.status,
+                perm_root=root,
+                max_age_days=max_age_days,
+                max_total_bytes=max_total_bytes,
+                status_timeout=status_timeout,
+                plan=result.plan,
+                issues=result.inventory_issues,
+                actions=result.actions,
+                reclaimed_bytes=result.reclaimed_bytes,
+                projected_total_bytes=result.projected_total_bytes,
+                inventory_complete=result.inventory_complete,
+                cap_satisfied=result.cap_satisfied,
+                detail=result.detail,
+            )
+            unsafe = result.status != "completed" or result.skipped_count > 0
+        else:
+            inventory = local_remote_runs.inventory_local_remote_runs(root)
+            probed = local_remote_runs.probe_remote_run_activity(
+                inventory,
+                timeout=status_timeout,
+            )
+            plan = local_remote_runs.plan_local_remote_run_retention(
+                probed,
+                max_age_days=max_age_days,
+                max_total_bytes=max_total_bytes,
+            )
+            payload = _local_retention_payload(
+                mode="dry-run",
+                status="planned",
+                perm_root=root,
+                max_age_days=max_age_days,
+                max_total_bytes=max_total_bytes,
+                status_timeout=status_timeout,
+                plan=plan,
+                issues=probed.issues,
+                reclaimed_bytes=0,
+                projected_total_bytes=plan.projected_total_bytes,
+                inventory_complete=plan.inventory_complete,
+                cap_satisfied=plan.cap_satisfied,
+            )
+            unsafe = False
+    except (OSError, ValueError) as exc:
+        payload = {
+            "mode": "apply" if apply else "dry-run",
+            "status": "error",
+            "detail": str(exc),
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            typer.echo(f"Local remote-run retention failed: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+    else:
+        _render_local_retention_text(payload)
+    if unsafe:
+        raise typer.Exit(2)
+
+
+@remote_app.command(name="local-retain")
+def remote_local_retain(
+    job_id: Annotated[str, typer.Argument(help="Owned local remote-run job id.")],
+    reason: Annotated[
+        str,
+        typer.Option("--reason", help="Required reason for retaining the run."),
+    ],
+    perm_root: Annotated[
+        Path,
+        typer.Option("--perm-root", help="Local decomp-permuter root."),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic JSON."),
+    ] = False,
+) -> None:
+    """Explicitly retain one owned locally fetched remote run."""
+    root = perm_root.expanduser().absolute()
+    result = local_remote_runs.retain_local_remote_run(
+        root,
+        job_id,
+        reason=reason,
+    )
+    payload = {
+        "mode": "retain",
+        "status": result.status,
+        "ok": result.ok,
+        "job_id": job_id,
+        "reason": reason,
+        "perm_root": str(root),
+        "path": str(result.path) if result.path is not None else None,
+        "detail": result.detail,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+    else:
+        label = "Retained" if result.status == "written" else result.status.capitalize()
+        typer.echo(f"{label}: {job_id}")
+        if result.path is not None:
+            typer.echo(f"Marker: {result.path}")
+        if result.detail:
+            typer.echo(f"Detail: {result.detail}")
+    if not result.ok:
+        raise typer.Exit(2)
 
 
 # ── remote prune ─────────────────────────────────────────────────────────────

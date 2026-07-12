@@ -221,6 +221,7 @@ class LocalRemoteRunRetentionResult:
     projected_total_bytes: int
     inventory_complete: bool
     cap_satisfied: bool
+    inventory_issues: tuple[InventoryIssue, ...] = ()
     detail: str = ""
 
     @property
@@ -2460,6 +2461,7 @@ def apply_local_remote_run_retention(
             projected_total_bytes=projected,
             inventory_complete=plan.inventory_complete,
             cap_satisfied=(plan.inventory_complete and projected <= plan.max_total_bytes),
+            inventory_issues=inventory.issues,
         )
     finally:
         lifecycle_lock.close()

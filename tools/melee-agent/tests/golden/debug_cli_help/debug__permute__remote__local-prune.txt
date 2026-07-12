@@ -1,0 +1,26 @@
+                                                                                
+ Usage: melee-agent debug permute remote local-prune [OPTIONS]                  
+                                                                                
+ Plan or safely apply retention for locally fetched remote runs.                
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --perm-root              PATH                    Local decomp-permuter root. │
+│                                                  [default:                   │
+│                                                  /Users/mike/code/decomp-pe… │
+│ --max-age-days           FLOAT RANGE [x>=0.0]    Select stopped eligible     │
+│                                                  runs older than this many   │
+│                                                  days.                       │
+│                                                  [default: 30]               │
+│ --max-total-bytes        INTEGER RANGE [x>=0]    Target maximum bytes across │
+│                                                  local fetched remote runs.  │
+│                                                  [default: 5368709120]       │
+│ --status-timeout         FLOAT RANGE [x>=0.001]  Per-host remote activity    │
+│                                                  probe timeout in seconds.   │
+│                                                  [default: 15.0]             │
+│ --apply                                          Apply the freshly           │
+│                                                  recomputed plan under the   │
+│                                                  lifecycle lock.             │
+│ --json                                           Emit deterministic JSON.    │
+│ --help                                           Show this message and exit. │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
