@@ -236,3 +236,39 @@ python -m pytest \
 `ruff format --check`, default `ruff check`, and `git diff --check` pass. The
 optional C901 audit remains informational at the same 12 unsuppressed helpers;
 no complexity warning was suppressed.
+
+## Lifecycle anchor remediation
+
+The remaining lifecycle-binding review issue was resolved with a fourth
+focused RED/GREEN cycle. Before implementation, the new probes produced eight
+failures with 132 tests passing. They demonstrated that chronological event
+ordering alone did not bind events back to a PCode's first-observed snapshot,
+and that lifecycle-free semantic equality correctly allowed observational
+timestamps to drift unless checked separately.
+
+The validator now maintains PCode-local first-observed lifecycle bounds for
+allocator-input snapshots and rejects every touching rewrite, mutation, or
+emission whose event interval begins before that PCode's bound. A later bound
+on an unrelated PCode does not constrain earlier events for another PCode.
+When clone, create, or replace first defines a mutation-output PCode, its
+first snapshot must occur exactly at the defining mutation's output
+post-position. Every code-emission snapshot must likewise occur exactly at its
+emission event's lifecycle position. Lifecycle position remains excluded from
+persistent semantic-state equality.
+
+The focused suite now contains 140 tests. Final focused and adjacent
+verification reports:
+
+```text
+python -m pytest \
+  tests/test_retro_backend_pcode_lineage.py \
+  tests/test_retro_backend_instrumentation_proof.py \
+  tests/test_retro_struct_map.py \
+  tests/test_retro_backend_object_bindings.py \
+  tests/test_retro_backend_identity.py \
+  tests/test_causal_diff_bundles.py -q -o addopts=''
+422 passed
+```
+
+`ruff format --check`, default `ruff check`, and `git diff --check` pass. The
+optional C901 audit remains informational at 12 unsuppressed helpers.

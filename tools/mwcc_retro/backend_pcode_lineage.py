@@ -838,6 +838,42 @@ def _event_pcode_ids(kind: str, row: Mapping[str, object]) -> set[str]:
     return result
 
 
+def _allocator_first_observed_bounds(
+    snapshots: Mapping[tuple[str, str], Mapping[str, object]],
+) -> dict[str, int]:
+    return {
+        pcode_id: position
+        for (pcode_id, stage), snapshot in snapshots.items()
+        if stage == "allocator_input" and _int(position := snapshot.get("lifecycle_sequence_at_capture"))
+    }
+
+
+def _bind_mutation_output_positions(
+    row: Mapping[str, object],
+    interval: tuple[int, int] | None,
+    snapshots: Mapping[tuple[str, str], Mapping[str, object]],
+    first_observed_bounds: dict[str, int],
+    ctx: _Context,
+) -> None:
+    if interval is None:
+        return
+    input_ids = _event_pcode_ids("mutation", {"inputs": row.get("inputs"), "outputs": []})
+    output_ids = _event_pcode_ids("mutation", {"inputs": [], "outputs": row.get("outputs")})
+    post_position = interval[1]
+    for pcode_id in sorted(output_ids - input_ids):
+        snapshot = snapshots.get((pcode_id, "mutation_output"))
+        if snapshot is None:
+            continue
+        snapshot_position = snapshot.get("lifecycle_sequence_at_capture")
+        if not _int(snapshot_position) or snapshot_position != post_position:
+            ctx.errors.append(
+                f"PCode {pcode_id} mutation_output snapshot lifecycle position disagrees "
+                "with defining mutation post-position"
+            )
+            continue
+        first_observed_bounds[pcode_id] = snapshot_position
+
+
 def _validate_instructions(
     payload: Mapping[str, object],
     function: str,
@@ -1294,6 +1330,10 @@ def _observe_emission(
         return None
     if ctx.emission_sites.get(row.get("emission_site_id")) is None:
         ctx.errors.append(f"PCode {pcode_id} references unknown emission site")
+    snapshot_position = snapshot.get("lifecycle_sequence_at_capture")
+    event_position = row.get("emission_lifecycle_sequence_at_capture")
+    if not _int(snapshot_position) or not _int(event_position) or snapshot_position != event_position:
+        ctx.errors.append(f"PCode {pcode_id} code_emission snapshot lifecycle position disagrees with emission event")
     if row.get("emission_runtime_address") != row.get("runtime_address") or row.get(
         "emission_allocation_generation"
     ) != row.get("allocation_generation"):
@@ -1376,6 +1416,7 @@ def _replay_pcode_events(
     rewrite_indexes = {id(row): index for index, row in enumerate(rewrite_raw)}
     mutation_indexes = {id(row): index for index, row in enumerate(mutation_raw)}
     terminal_ids: set[str] = set()
+    first_observed_bounds = _allocator_first_observed_bounds(snapshots)
     prior_lifecycle_end: int | None = None
     for sequence, kind, row in sorted(events, key=lambda item: item[0]):
         del sequence
@@ -1385,7 +1426,13 @@ def _replay_pcode_events(
             if prior_lifecycle_end is not None and start < prior_lifecycle_end:
                 ctx.errors.append(f"PCode {kind} event moves backward in lifecycle time")
             prior_lifecycle_end = end if prior_lifecycle_end is None else max(prior_lifecycle_end, end)
-        for pcode_id in sorted(_event_pcode_ids(kind, row) & terminal_ids):
+        event_pcode_ids = _event_pcode_ids(kind, row)
+        if interval is not None:
+            for pcode_id in sorted(event_pcode_ids):
+                first_observed = first_observed_bounds.get(pcode_id)
+                if first_observed is not None and interval[0] < first_observed:
+                    ctx.errors.append(f"PCode {kind} event for {pcode_id} precedes first-observed lifecycle position")
+        for pcode_id in sorted(event_pcode_ids & terminal_ids):
             ctx.errors.append(f"PCode {kind} touches terminal emitted pcode_id {pcode_id}")
         if kind == "rewrite":
             validated = _validate_rewrite(row, rewrite_indexes[id(row)], snapshots, ctx)
@@ -1402,6 +1449,7 @@ def _replay_pcode_events(
             )
             if validated is not None:
                 mutations.append(validated)
+            _bind_mutation_output_positions(row, interval, snapshots, first_observed_bounds, ctx)
         elif kind == "emission":
             observation = _observe_emission(row, snapshots, ctx)
             if observation is not None:

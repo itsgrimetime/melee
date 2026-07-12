@@ -1291,13 +1291,13 @@ def test_unrelated_nonemitted_pcode_may_evolve(tmp_path: Path) -> None:
     assert result.capabilities == frozenset({"pcode-to-code-range"})
 
 
-def _add_lifecycle_observation(payload: dict[str, object]) -> None:
+def _add_lifecycle_observation(payload: dict[str, object], *, address: int = 0x3000) -> None:
     payload["lifecycle_events"].append(
         {
-            "sequence": 1,
+            "sequence": len(payload["lifecycle_events"]),
             "event": "allocate",
             "entity_kind": "pcode",
-            "runtime_address": 0x3000,
+            "runtime_address": address,
             "allocation_generation": 1,
             "instrumented_site_id": "pcode-alloc-1",
             "compiler_stage": "backend-lowering",
@@ -1412,3 +1412,190 @@ def test_integer_update_load_raw_legality(code: bytes, message: str) -> None:
 )
 def test_legal_update_forms_remain_decodable(code: bytes) -> None:
     assert _decode_registers(code, 0)
+
+
+def _allocator_bound_payload() -> dict[str, object]:
+    payload = minimal_payload()
+    _add_lifecycle_observation(payload)
+    payload["pcode_instructions"][0]["stage_snapshots"][0]["lifecycle_sequence_at_capture"] = 1
+    for occurrence in payload["pcode_occurrences"]:
+        occurrence["lifecycle_sequence_at_capture"] = 1
+    mutation = payload["pcode_operand_lineage_events"][0]
+    mutation["inputs"][0]["lifecycle_sequence_at_capture"] = 1
+    mutation["outputs"][0]["lifecycle_sequence_at_capture"] = 1
+    instruction = payload["pcode_instructions"][0]
+    instruction["stage_snapshots"][1]["lifecycle_sequence_at_capture"] = 1
+    instruction["emission_lifecycle_sequence_at_capture"] = 1
+    return payload
+
+
+def _created_payload() -> dict[str, object]:
+    payload = minimal_payload()
+    _add_lifecycle_observation(payload)
+    instruction = payload["pcode_instructions"][0]
+    emission = copy.deepcopy(instruction["stage_snapshots"][1])
+    first = copy.deepcopy(emission)
+    first.update({"stage": "mutation_output", "lifecycle_sequence_at_capture": 1})
+    emission["lifecycle_sequence_at_capture"] = 1
+    instruction["stage_snapshots"] = [first, emission]
+    instruction["emission_event_sequence"] = 1
+    instruction["emission_lifecycle_sequence_at_capture"] = 1
+    created_operands = [
+        {**item, "parent_lineage_ids": []} for item in copy.deepcopy(emission["operand_lineage_inventory"])
+    ]
+    payload["pcode_occurrences"] = []
+    payload["pcode_operand_lineage_events"] = [
+        {
+            "pcode_event_sequence": 0,
+            "instrumented_site_id": "mutation-1",
+            "mutation_kind": "create",
+            "inputs": [],
+            "outputs": [state(created_operands, sequence=1)],
+        }
+    ]
+    payload["coverage"]["pcode_occurrences_seen"] = 0
+    payload["coverage"]["pcode_instrumentation"].update(
+        {
+            "last_event_sequence": 1,
+            "allocatable_register_operands": 0,
+            "fixed_physical_register_operands": 2,
+            "rewrite_events": 0,
+        }
+    )
+    return payload
+
+
+def _replacement_payload() -> dict[str, object]:
+    payload = cloned_payload()
+    original = payload["pcode_instructions"][0]
+    original["stage_snapshots"].pop()
+    original.update(
+        {
+            "emission_event_sequence": None,
+            "emission_site_id": None,
+            "emission_runtime_address": None,
+            "emission_allocation_generation": None,
+            "emission_lifecycle_sequence_at_capture": None,
+            "code_ranges": [],
+            "cross_stage_identity_confidence": None,
+        }
+    )
+    clone = payload["pcode_instructions"][1]
+    clone["emission_event_sequence"] = 3
+    mutation = payload["pcode_operand_lineage_events"][0]
+    mutation.update({"mutation_kind": "replace", "outputs": [mutation["outputs"][1]]})
+    payload["coverage"]["pcode_instrumentation"].update(
+        {"last_event_sequence": 3, "final_pcodes": 1, "emission_events": 1}
+    )
+    return payload
+
+
+def test_reviewer_probe_allocator_snapshot_cannot_postdate_rewrite(candidate_object: Path) -> None:
+    payload = _allocator_bound_payload()
+    payload["pcode_occurrences"][0]["lifecycle_sequence_at_capture"] = 0
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any("rewrite event for pc-0 precedes first-observed" in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
+def test_reviewer_probe_emission_snapshot_must_match_event(candidate_object: Path) -> None:
+    payload = minimal_payload()
+    _add_lifecycle_observation(payload)
+    payload["pcode_instructions"][0]["emission_lifecycle_sequence_at_capture"] = 1
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any("code_emission snapshot lifecycle position disagrees" in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
+@pytest.mark.parametrize("kind", ["rewrite", "mutation", "emission"])
+def test_allocator_first_observed_bound_applies_to_every_touching_event(
+    candidate_object: Path,
+    kind: str,
+) -> None:
+    payload = _allocator_bound_payload()
+    if kind == "rewrite":
+        payload["pcode_occurrences"][0]["lifecycle_sequence_at_capture"] = 0
+    elif kind == "mutation":
+        mutation = payload["pcode_operand_lineage_events"][0]
+        mutation["inputs"][0]["lifecycle_sequence_at_capture"] = 0
+        mutation["outputs"][0]["lifecycle_sequence_at_capture"] = 0
+    else:
+        instruction = payload["pcode_instructions"][0]
+        instruction["stage_snapshots"][1]["lifecycle_sequence_at_capture"] = 0
+        instruction["emission_lifecycle_sequence_at_capture"] = 0
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any(f"{kind} event for pc-0 precedes first-observed" in error for error in result.errors), result.errors
+
+
+def test_allocator_first_observed_bound_accepts_equal_event_positions(candidate_object: Path) -> None:
+    result = validate_pcode_lineage(_allocator_bound_payload(), trusted_proof(), candidate_object, "fn")
+    assert result.errors == ()
+    assert result.capabilities == frozenset({"pcode-to-code-range"})
+
+
+def test_unrelated_pcode_event_may_precede_later_first_observed_bound(tmp_path: Path) -> None:
+    candidate = tmp_path / "independent-bound.o"
+    candidate.write_bytes(_candidate_elf(bytes.fromhex("3ad500003ad50000")))
+    result = validate_pcode_lineage(cloned_payload(), trusted_proof(), candidate, "fn")
+    assert result.errors == ()
+    assert result.capabilities == frozenset({"pcode-to-code-range"})
+
+
+def test_clone_mutation_output_snapshot_must_equal_defining_post_position(tmp_path: Path) -> None:
+    candidate = tmp_path / "clone-bound.o"
+    candidate.write_bytes(_candidate_elf(bytes.fromhex("3ad500003ad50000")))
+    payload = cloned_payload()
+    _add_lifecycle_observation(payload, address=0x4000)
+    mutation = payload["pcode_operand_lineage_events"][0]
+    for output in mutation["outputs"]:
+        output["lifecycle_sequence_at_capture"] = 2
+    for instruction in payload["pcode_instructions"]:
+        instruction["stage_snapshots"][-1]["lifecycle_sequence_at_capture"] = 2
+        instruction["emission_lifecycle_sequence_at_capture"] = 2
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    assert any("mutation_output snapshot lifecycle position disagrees" in error for error in result.errors), (
+        result.errors
+    )
+
+
+def test_create_mutation_output_snapshot_must_equal_defining_post_position(candidate_object: Path) -> None:
+    payload = _created_payload()
+    _add_lifecycle_observation(payload, address=0x4000)
+    mutation = payload["pcode_operand_lineage_events"][0]
+    mutation["outputs"][0]["lifecycle_sequence_at_capture"] = 2
+    instruction = payload["pcode_instructions"][0]
+    instruction["stage_snapshots"][1]["lifecycle_sequence_at_capture"] = 2
+    instruction["emission_lifecycle_sequence_at_capture"] = 2
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate_object, "fn")
+    assert any("mutation_output snapshot lifecycle position disagrees" in error for error in result.errors), (
+        result.errors
+    )
+
+
+def test_replace_mutation_output_snapshot_must_equal_defining_post_position(tmp_path: Path) -> None:
+    candidate = tmp_path / "replace-bound.o"
+    candidate.write_bytes(_candidate_elf(bytes.fromhex("3ad500003ad50000")))
+    payload = _replacement_payload()
+    _add_lifecycle_observation(payload, address=0x4000)
+    mutation = payload["pcode_operand_lineage_events"][0]
+    mutation["outputs"][0]["lifecycle_sequence_at_capture"] = 2
+    clone = payload["pcode_instructions"][1]
+    clone["stage_snapshots"][1]["lifecycle_sequence_at_capture"] = 2
+    clone["emission_lifecycle_sequence_at_capture"] = 2
+    result = validate_pcode_lineage(payload, trusted_proof(), candidate, "fn")
+    assert any("mutation_output snapshot lifecycle position disagrees" in error for error in result.errors), (
+        result.errors
+    )
+
+
+@pytest.mark.parametrize("payload_factory", [cloned_payload, _created_payload, _replacement_payload])
+def test_mutation_output_snapshot_accepts_equal_defining_post_position(
+    tmp_path: Path,
+    payload_factory,
+) -> None:
+    candidate = tmp_path / "equal-first-observed.o"
+    code = bytes.fromhex("3ad500003ad50000") if payload_factory is not _created_payload else bytes.fromhex("3ad50000")
+    candidate.write_bytes(_candidate_elf(code))
+    result = validate_pcode_lineage(payload_factory(), trusted_proof(), candidate, "fn")
+    assert result.errors == ()
+    assert result.capabilities == frozenset({"pcode-to-code-range"})
