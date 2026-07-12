@@ -13,11 +13,14 @@ import fcntl
 import json
 import math
 import os
+import selectors
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
@@ -38,11 +41,18 @@ DEFAULT_MAX_TOTAL_BYTES = 5 * 1024**3
 DEFAULT_REMOTE_STATUS_TIMEOUT = 15.0
 DEFAULT_REMOTE_PROBE_WORKERS = 8
 REMOTE_DETAIL_LIMIT = 500
+REMOTE_CAPTURE_LIMIT = 64 * 1024
+REMOTE_SESSION_ROW_LIMIT = 1024
+REMOTE_CAPTURE_OVERFLOW_DETAIL = "remote probe capture limit exceeded"
 REMOTE_SESSION_HEADER = "__MELEE_TMUX_SESSIONS_V1_BEGIN__"
 REMOTE_SESSION_TRAILER = "__MELEE_TMUX_SESSIONS_V1_END__"
 REMOTE_TMUX_MISSING_SENTINEL = "__MELEE_TMUX_MISSING__"
 LIFECYCLE_LOCK_FILENAME = ".melee-agent-local-remote-runs.lock"
 QUARANTINE_PREFIX = ".melee-agent-local-remote-run-quarantine-"
+QUARANTINE_CHILD_NAME = "candidate"
+_DARWIN_RENAME_EXCL = 0x00000004
+_DARWIN_RENAME_NOFOLLOW_ANY = 0x00000010
+_LINUX_RENAME_NOREPLACE = 0x00000001
 
 REMOTE_FETCH_WARNING_FILENAME = "remote-fetch-warning.json"
 CANDIDATE_AUDIT_FILENAME = "candidate_audit.json"
@@ -214,7 +224,12 @@ class RetentionApplyAction:
 
 @dataclass(frozen=True)
 class LocalRemoteRunRetentionResult:
-    status: Literal["completed", "lock-busy", "lock-unavailable"]
+    status: Literal[
+        "completed",
+        "incomplete-inventory",
+        "lock-busy",
+        "lock-unavailable",
+    ]
     plan: LocalRemoteRunRetentionPlan | None
     actions: tuple[RetentionApplyAction, ...]
     reclaimed_bytes: int
@@ -299,6 +314,35 @@ class _TreeFacts:
     filesystem_error: bool
 
 
+@dataclass(frozen=True)
+class _DirectoryHandle:
+    fd: int
+    device: int
+    inode: int
+
+
+@dataclass
+class _OwnedRunHandles:
+    root: _DirectoryHandle
+    nonmatchings: _DirectoryHandle
+    function: _DirectoryHandle
+    remote_runs: _DirectoryHandle
+    run: _DirectoryHandle
+
+    def close(self) -> None:
+        for handle in (
+            self.run,
+            self.remote_runs,
+            self.function,
+            self.nonmatchings,
+            self.root,
+        ):
+            try:
+                os.close(handle.fd)
+            except OSError:
+                pass
+
+
 def _is_nonbool_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -351,6 +395,105 @@ def _within(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _directory_open_flags() -> int | None:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        return None
+    return os.O_RDONLY | directory | nofollow | getattr(os, "O_CLOEXEC", 0)
+
+
+def _same_stat_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    return first.st_dev == second.st_dev and first.st_ino == second.st_ino
+
+
+def _open_directory_path(path: Path) -> tuple[_DirectoryHandle | None, str]:
+    flags = _directory_open_flags()
+    if flags is None:
+        return None, "safe-directory-open-unavailable"
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        return None, _bounded_detail(exc)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+        return None, "unsafe-directory"
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        return None, _bounded_detail(exc)
+    try:
+        after = os.fstat(fd)
+        if not stat.S_ISDIR(after.st_mode) or not _same_stat_identity(before, after):
+            os.close(fd)
+            return None, "directory-replaced"
+        return _DirectoryHandle(fd, after.st_dev, after.st_ino), ""
+    except OSError as exc:
+        os.close(fd)
+        return None, _bounded_detail(exc)
+
+
+def _open_directory_child(
+    parent_fd: int,
+    name: str,
+) -> tuple[_DirectoryHandle | None, str]:
+    flags = _directory_open_flags()
+    if flags is None:
+        return None, "safe-directory-open-unavailable"
+    try:
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        return None, _bounded_detail(exc)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+        return None, "unsafe-directory"
+    try:
+        fd = os.open(name, flags, dir_fd=parent_fd)
+    except OSError as exc:
+        return None, _bounded_detail(exc)
+    try:
+        after = os.fstat(fd)
+        if not stat.S_ISDIR(after.st_mode) or not _same_stat_identity(before, after):
+            os.close(fd)
+            return None, "directory-replaced"
+        return _DirectoryHandle(fd, after.st_dev, after.st_ino), ""
+    except OSError as exc:
+        os.close(fd)
+        return None, _bounded_detail(exc)
+
+
+def _open_owned_run_handles(
+    perm_root: Path,
+    function: str,
+    job_id: str,
+) -> tuple[_OwnedRunHandles | None, str]:
+    root, detail = _open_directory_path(perm_root)
+    if root is None:
+        return None, detail
+    opened: list[_DirectoryHandle] = [root]
+    parent = root
+    try:
+        for name in ("nonmatchings", function, "remote-runs", job_id):
+            child, detail = _open_directory_child(parent.fd, name)
+            if child is None:
+                return None, detail
+            opened.append(child)
+            parent = child
+        return _OwnedRunHandles(*opened), ""
+    finally:
+        if len(opened) != 5:
+            for handle in reversed(opened):
+                os.close(handle.fd)
+
+
+def _entry_missing(parent_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _scan_tree(run: Path) -> _TreeFacts:
@@ -641,6 +784,61 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _fsync_directory_fd(directory_fd: int) -> None:
+    os.fsync(directory_fd)
+
+
+def _read_json_regular_at(
+    directory_fd: int,
+    name: str,
+) -> tuple[dict[str, Any] | None, str]:
+    try:
+        before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError as exc:
+        return None, f"stat failed: {exc}"
+    if not stat.S_ISREG(before.st_mode):
+        return None, "not a regular file"
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(name, flags, dir_fd=directory_fd)
+    except OSError as exc:
+        return None, f"open failed: {exc}"
+    try:
+        after = os.fstat(fd)
+        if not stat.S_ISREG(after.st_mode) or not _same_stat_identity(before, after):
+            return None, "file changed during open"
+        with os.fdopen(fd, "r", encoding="utf-8") as stream:
+            fd = -1
+            payload = json.load(stream)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return None, f"read failed: {exc}"
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if not isinstance(payload, dict):
+        return None, "root must be an object"
+    return payload, ""
+
+
+def _open_identity_run(
+    run: Path,
+    identity: RemoteRunIdentity,
+) -> tuple[_OwnedRunHandles | None, str]:
+    perm_root, detail = _manifest_owned_run_root(run, identity)
+    if perm_root is None:
+        return None, detail
+    handles, detail = _open_owned_run_handles(
+        perm_root,
+        identity.function,
+        identity.job_id,
+    )
+    if handles is None:
+        return None, detail
+    return handles, ""
+
+
 def write_local_fetch_manifest(
     run: Path,
     *,
@@ -691,31 +889,48 @@ def write_local_fetch_manifest(
         "candidate_audit": compact_audit,
     }
 
+    handles, detail = _open_identity_run(run, identity)
+    if handles is None:
+        return ManifestWriteResult("invalid", manifest, detail)
+    run_fd = handles.run.fd
     existing_stat: os.stat_result | None = None
-    existing, existing_detail = _read_json_regular(manifest)
+    existing, existing_detail = _read_json_regular_at(run_fd, FETCH_MANIFEST_FILENAME)
     if existing is not None:
         try:
-            existing_stat = manifest.lstat()
+            existing_stat = os.stat(
+                FETCH_MANIFEST_FILENAME,
+                dir_fd=run_fd,
+                follow_symlinks=False,
+            )
         except OSError as exc:
+            handles.close()
             return ManifestWriteResult("unsafe-existing", manifest, str(exc))
         if existing == payload:
+            handles.close()
             return ManifestWriteResult("idempotent", manifest)
-        existing_read = read_fetch_manifest(
-            run,
-            identity=identity,
-            candidate_count=int(compact_audit["total"]),
+        existing_audit = existing.get("candidate_audit")
+        existing_valid = (
+            existing.get("kind") == FETCH_MANIFEST_KIND
+            and existing.get("version") == FETCH_MANIFEST_VERSION
+            and _identity_matches(existing, identity)
+            and _valid_timestamp(existing.get("fetched_at"))
+            and existing.get("state") in {"complete", "partial"}
+            and isinstance(existing_audit, dict)
+            and existing_audit.get("total") == compact_audit["total"]
         )
-        if existing_read.status not in {"complete", "partial"}:
+        if not existing_valid:
+            handles.close()
             return ManifestWriteResult(
                 "unsafe-existing",
                 manifest,
                 "existing manifest identity or schema conflicts",
             )
     elif existing_detail != "missing":
+        handles.close()
         return ManifestWriteResult("unsafe-existing", manifest, existing_detail)
 
-    temp = run / f".melee-agent-local-fetch.{uuid.uuid4().hex}.tmp"
-    backup = run / f".melee-agent-local-fetch.{uuid.uuid4().hex}.backup"
+    temp_name = f".melee-agent-local-fetch.{uuid.uuid4().hex}.tmp"
+    backup_name = f".melee-agent-local-fetch.{uuid.uuid4().hex}.backup"
     descriptor: int | None = None
     temp_identity: tuple[int, int] | None = None
     published = False
@@ -723,7 +938,7 @@ def write_local_fetch_manifest(
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(temp, flags, 0o600)
+        descriptor = os.open(temp_name, flags, 0o600, dir_fd=run_fd)
         temp_stat = os.fstat(descriptor)
         temp_identity = (temp_stat.st_dev, temp_stat.st_ino)
         encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
@@ -732,29 +947,36 @@ def write_local_fetch_manifest(
             stream.write(encoded)
             stream.flush()
             os.fsync(stream.fileno())
-        written, written_detail = _read_json_regular(temp)
+        written, written_detail = _read_json_regular_at(run_fd, temp_name)
         if written != payload:
             return ManifestWriteResult(
                 "publish-failed",
                 manifest,
                 written_detail or "temporary manifest readback mismatch",
             )
-        _, ownership_detail = _manifest_owned_run_root(run, identity)
-        current_run = run.lstat()
-        if (
-            ownership_detail
-            or (current_run.st_dev, current_run.st_ino) != run_identity
-        ):
+        current_run = os.fstat(run_fd)
+        if (current_run.st_dev, current_run.st_ino) != run_identity:
             return ManifestWriteResult(
                 "publish-failed",
                 manifest,
-                ownership_detail or "owned run changed before publication",
+                "owned run changed before publication",
             )
         if existing_stat is None:
-            _rename_no_replace(temp, manifest)
+            move = _rename_no_replace_at(
+                run_fd,
+                temp_name,
+                run_fd,
+                FETCH_MANIFEST_FILENAME,
+            )
+            if move != "ok":
+                raise OSError(errno.EIO, f"manifest publish {move}")
             status: Literal["written", "updated"] = "written"
         else:
-            current = manifest.lstat()
+            current = os.stat(
+                FETCH_MANIFEST_FILENAME,
+                dir_fd=run_fd,
+                follow_symlinks=False,
+            )
             if (
                 not stat.S_ISREG(current.st_mode)
                 or (current.st_dev, current.st_ino)
@@ -765,66 +987,97 @@ def write_local_fetch_manifest(
                     manifest,
                     "existing manifest changed before update",
                 )
-            _rename_no_replace(manifest, backup)
+            move = _rename_no_replace_at(
+                run_fd,
+                FETCH_MANIFEST_FILENAME,
+                run_fd,
+                backup_name,
+            )
+            if move != "ok":
+                raise OSError(errno.EIO, f"manifest backup {move}")
             backup_created = True
-            backup_stat = backup.lstat()
+            backup_stat = os.stat(backup_name, dir_fd=run_fd, follow_symlinks=False)
             if (
                 not stat.S_ISREG(backup_stat.st_mode)
                 or (backup_stat.st_dev, backup_stat.st_ino)
                 != (existing_stat.st_dev, existing_stat.st_ino)
             ):
                 raise RuntimeError("manifest backup identity mismatch")
-            _rename_no_replace(temp, manifest)
+            move = _rename_no_replace_at(
+                run_fd,
+                temp_name,
+                run_fd,
+                FETCH_MANIFEST_FILENAME,
+            )
+            if move != "ok":
+                raise OSError(errno.EIO, f"manifest update {move}")
             status = "updated"
         published = True
-        _fsync_directory(run)
-        readback = read_fetch_manifest(
-            run,
-            identity=identity,
-            candidate_count=int(compact_audit["total"]),
+        _fsync_directory_fd(run_fd)
+        readback, readback_detail = _read_json_regular_at(
+            run_fd,
+            FETCH_MANIFEST_FILENAME,
         )
-        if readback.payload != payload:
+        if readback != payload:
             raise RuntimeError("published manifest readback mismatch")
         if backup_created:
-            backup.unlink()
+            os.unlink(backup_name, dir_fd=run_fd)
             backup_created = False
             try:
-                _fsync_directory(run)
+                _fsync_directory_fd(run_fd)
             except OSError:
                 pass
         return ManifestWriteResult(status, manifest)
     except Exception as exc:
         if published and temp_identity is not None:
             try:
-                published_stat = manifest.lstat()
+                published_stat = os.stat(
+                    FETCH_MANIFEST_FILENAME,
+                    dir_fd=run_fd,
+                    follow_symlinks=False,
+                )
                 if (
                     stat.S_ISREG(published_stat.st_mode)
                     and (published_stat.st_dev, published_stat.st_ino)
                     == temp_identity
                 ):
-                    manifest.unlink()
-                    _fsync_directory(run)
+                    os.unlink(FETCH_MANIFEST_FILENAME, dir_fd=run_fd)
+                    _fsync_directory_fd(run_fd)
             except OSError:
                 pass
         if backup_created and existing_stat is not None:
             try:
                 try:
-                    current_manifest = manifest.lstat()
+                    current_manifest = os.stat(
+                        FETCH_MANIFEST_FILENAME,
+                        dir_fd=run_fd,
+                        follow_symlinks=False,
+                    )
                 except FileNotFoundError:
                     current_manifest = None
                 if current_manifest is None:
-                    backup_stat = backup.lstat()
+                    backup_stat = os.stat(
+                        backup_name,
+                        dir_fd=run_fd,
+                        follow_symlinks=False,
+                    )
                     if (
                         stat.S_ISREG(backup_stat.st_mode)
                         and (backup_stat.st_dev, backup_stat.st_ino)
                         == (existing_stat.st_dev, existing_stat.st_ino)
                     ):
-                        _rename_no_replace(backup, manifest)
-                        backup_created = False
-                        try:
-                            _fsync_directory(run)
-                        except OSError:
-                            pass
+                        restored = _rename_no_replace_at(
+                            run_fd,
+                            backup_name,
+                            run_fd,
+                            FETCH_MANIFEST_FILENAME,
+                        )
+                        if restored == "ok":
+                            backup_created = False
+                            try:
+                                _fsync_directory_fd(run_fd)
+                            except OSError:
+                                pass
             except OSError:
                 pass
         return ManifestWriteResult(
@@ -836,7 +1089,7 @@ def write_local_fetch_manifest(
         if descriptor is not None:
             os.close(descriptor)
         try:
-            leftover = temp.lstat()
+            leftover = os.stat(temp_name, dir_fd=run_fd, follow_symlinks=False)
         except OSError:
             pass
         else:
@@ -846,9 +1099,159 @@ def write_local_fetch_manifest(
                 and (leftover.st_dev, leftover.st_ino) == temp_identity
             ):
                 try:
-                    temp.unlink()
+                    os.unlink(temp_name, dir_fd=run_fd)
                 except OSError:
                     pass
+        handles.close()
+
+
+def write_local_fetch_warning(
+    run: Path,
+    *,
+    identity: RemoteRunIdentity,
+    payload: dict[str, Any],
+) -> tuple[bool, str]:
+    handles, detail = _open_identity_run(run, identity)
+    if handles is None:
+        return False, detail
+    run_fd = handles.run.fd
+    name = REMOTE_FETCH_WARNING_FILENAME
+    temp_name = f".remote-fetch-warning.{uuid.uuid4().hex}.tmp"
+    descriptor: int | None = None
+    temp_identity: tuple[int, int] | None = None
+    try:
+        existing, existing_detail = _read_json_regular_at(run_fd, name)
+        existing_stat: os.stat_result | None = None
+        if existing is not None:
+            existing_stat = os.stat(name, dir_fd=run_fd, follow_symlinks=False)
+        elif existing_detail != "missing":
+            return False, existing_detail
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(temp_name, flags, 0o600, dir_fd=run_fd)
+        temp_stat = os.fstat(descriptor)
+        temp_identity = (temp_stat.st_dev, temp_stat.st_ino)
+        encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        written, written_detail = _read_json_regular_at(run_fd, temp_name)
+        if written != payload:
+            return False, written_detail or "warning temp readback mismatch"
+        if existing_stat is None:
+            move = _rename_no_replace_at(run_fd, temp_name, run_fd, name)
+            if move != "ok":
+                return False, f"warning publish {move}"
+        else:
+            current = os.stat(name, dir_fd=run_fd, follow_symlinks=False)
+            if not stat.S_ISREG(current.st_mode) or not _same_stat_identity(
+                current,
+                existing_stat,
+            ):
+                return False, "warning changed before publication"
+            os.replace(
+                temp_name,
+                name,
+                src_dir_fd=run_fd,
+                dst_dir_fd=run_fd,
+            )
+        _fsync_directory_fd(run_fd)
+        readback, readback_detail = _read_json_regular_at(run_fd, name)
+        if readback != payload:
+            return False, readback_detail or "warning readback mismatch"
+        return True, ""
+    except OSError as exc:
+        return False, _bounded_detail(type(exc).__name__, exc)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temp_identity is not None:
+            try:
+                leftover = os.stat(
+                    temp_name,
+                    dir_fd=run_fd,
+                    follow_symlinks=False,
+                )
+                if stat.S_ISREG(leftover.st_mode) and (
+                    leftover.st_dev,
+                    leftover.st_ino,
+                ) == temp_identity:
+                    os.unlink(temp_name, dir_fd=run_fd)
+            except OSError:
+                pass
+        handles.close()
+
+
+def clear_local_fetch_warning(
+    run: Path,
+    *,
+    identity: RemoteRunIdentity,
+) -> tuple[bool, str]:
+    handles, detail = _open_identity_run(run, identity)
+    if handles is None:
+        return False, detail
+    run_fd = handles.run.fd
+    name = REMOTE_FETCH_WARNING_FILENAME
+    tombstone = f".remote-fetch-warning.{uuid.uuid4().hex}.clear"
+    moved = False
+    try:
+        try:
+            warning_stat = os.stat(name, dir_fd=run_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return True, ""
+        except OSError as exc:
+            return False, _bounded_detail(exc)
+        if not stat.S_ISREG(warning_stat.st_mode):
+            return False, "unsafe remote fetch warning clear path"
+        move = _rename_no_replace_at(run_fd, name, run_fd, tombstone)
+        if move != "ok":
+            return False, f"warning clear {move}"
+        moved = True
+        moved_stat = os.stat(tombstone, dir_fd=run_fd, follow_symlinks=False)
+        if not stat.S_ISREG(moved_stat.st_mode) or not _same_stat_identity(
+            warning_stat,
+            moved_stat,
+        ):
+            return False, "warning identity changed during clear"
+        os.unlink(tombstone, dir_fd=run_fd)
+        moved = False
+        try:
+            _fsync_directory_fd(run_fd)
+        except OSError:
+            pass
+        return True, ""
+    finally:
+        if moved and _entry_missing(run_fd, name):
+            _rename_no_replace_at(run_fd, tombstone, run_fd, name)
+        handles.close()
+
+
+def local_fetch_warning_state(
+    run: Path,
+    *,
+    identity: RemoteRunIdentity,
+) -> tuple[Literal["absent", "regular", "unsafe"], str]:
+    handles, detail = _open_identity_run(run, identity)
+    if handles is None:
+        return "unsafe", detail
+    try:
+        try:
+            warning_stat = os.stat(
+                REMOTE_FETCH_WARNING_FILENAME,
+                dir_fd=handles.run.fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return "absent", ""
+        except OSError as exc:
+            return "unsafe", _bounded_detail(exc)
+        if not stat.S_ISREG(warning_stat.st_mode):
+            return "unsafe", "remote fetch warning is not regular"
+        return "regular", ""
+    finally:
+        handles.close()
 
 
 def read_retention_marker(
@@ -1157,6 +1560,34 @@ def _summarize_run(
     )
 
 
+def _safe_empty_quarantine_container(path: Path) -> bool:
+    container, _ = _open_directory_path(path)
+    if container is None:
+        return False
+    try:
+        try:
+            with os.scandir(container.fd) as entries:
+                names = sorted(entry.name for entry in entries)
+        except OSError:
+            return False
+        if not names:
+            return True
+        if names != [QUARANTINE_CHILD_NAME]:
+            return False
+        child, _ = _open_directory_child(container.fd, QUARANTINE_CHILD_NAME)
+        if child is None:
+            return False
+        try:
+            with os.scandir(child.fd) as entries:
+                return next(entries, None) is None
+        except OSError:
+            return False
+        finally:
+            os.close(child.fd)
+    finally:
+        os.close(container.fd)
+
+
 def inventory_local_remote_runs(
     perm_root: Path,
     *,
@@ -1294,6 +1725,8 @@ def inventory_local_remote_runs(
         for job_entry in job_entries:
             job_path = Path(job_entry.path)
             if job_entry.name.startswith(QUARANTINE_PREFIX):
+                if _safe_empty_quarantine_container(job_path):
+                    continue
                 issues.append(
                     InventoryIssue(
                         job_path,
@@ -1340,15 +1773,122 @@ def _production_remote_runner(
     check: bool,
     timeout: float,
 ) -> Any:
-    # Import lazily so the future fetch-manifest producer can depend on this
-    # lifecycle module without creating an import cycle.
-    from . import permuter_remote  # noqa: PLC0415
-
-    return permuter_remote.run_command(
+    return _bounded_remote_runner(
         argv,
         check=check,
         timeout=timeout,
     )
+
+
+def _terminate_and_reap(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            process.kill()
+    try:
+        process.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _append_capture_overflow_detail(stderr: bytearray) -> None:
+    notice = REMOTE_CAPTURE_OVERFLOW_DETAIL.encode()
+    separator = b"\n" if stderr else b""
+    keep = REMOTE_CAPTURE_LIMIT - len(separator) - len(notice)
+    if keep < 0:
+        stderr[:] = notice[:REMOTE_CAPTURE_LIMIT]
+        return
+    del stderr[keep:]
+    stderr.extend(separator)
+    stderr.extend(notice)
+
+
+def _bounded_remote_runner(
+    argv: list[str],
+    *,
+    check: bool,
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    """Run one probe with bounded incremental stdout/stderr capture."""
+    process = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    if process.stdout is None or process.stderr is None:
+        _terminate_and_reap(process)
+        raise RuntimeError("remote probe capture pipes were unavailable")
+
+    captured = {"stdout": bytearray(), "stderr": bytearray()}
+    selector = selectors.DefaultSelector()
+    overflow = False
+    deadline = time.monotonic() + timeout
+    try:
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        while selector.get_map():
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            events = selector.select(min(remaining_time, 0.1))
+            for key, _ in events:
+                stream = key.fileobj
+                destination = captured[key.data]
+                remaining_bytes = REMOTE_CAPTURE_LIMIT - len(destination)
+                chunk = os.read(stream.fileno(), min(8192, remaining_bytes + 1))
+                if not chunk:
+                    selector.unregister(stream)
+                    continue
+                destination.extend(chunk[:remaining_bytes])
+                if len(chunk) > remaining_bytes:
+                    overflow = True
+                    break
+            if overflow:
+                break
+
+        if overflow:
+            _terminate_and_reap(process)
+            _append_capture_overflow_detail(captured["stderr"])
+        else:
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            process.wait(timeout=remaining_time)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_and_reap(process)
+        raise subprocess.TimeoutExpired(
+            argv,
+            timeout,
+            output=captured["stdout"].decode(errors="replace"),
+            stderr=captured["stderr"].decode(errors="replace"),
+        ) from exc
+    except Exception:
+        _terminate_and_reap(process)
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+
+    result = subprocess.CompletedProcess(
+        argv,
+        process.returncode,
+        captured["stdout"].decode(errors="replace"),
+        captured["stderr"].decode(errors="replace"),
+    )
+    if check and result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            argv,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+    return result
 
 
 def _bounded_detail(*values: object) -> str:
@@ -1392,6 +1932,8 @@ def _parse_remote_sessions(stdout: object) -> tuple[frozenset[str] | None, str]:
     if len(lines) < 2 or lines[0] != REMOTE_SESSION_HEADER or lines[-1] != REMOTE_SESSION_TRAILER:
         return None, "malformed remote tmux inventory"
     sessions = lines[1:-1]
+    if any(len(session.encode()) > REMOTE_SESSION_ROW_LIMIT for session in sessions):
+        return None, "remote tmux session name exceeded the size limit"
     if any(
         not session
         or session != session.strip()
@@ -1419,6 +1961,11 @@ def _probe_one_host(
         stderr = result.stderr
     except Exception as exc:
         return None, _bounded_detail(type(exc).__name__, exc)
+    if any(
+        isinstance(value, str) and len(value.encode()) > REMOTE_CAPTURE_LIMIT
+        for value in (stdout, stderr)
+    ):
+        return None, "remote probe capture exceeded the size limit"
     if returncode != 0:
         detail = _bounded_detail(stderr, stdout)
         if REMOTE_TMUX_MISSING_SENTINEL in detail:
@@ -1727,91 +2274,40 @@ def _owned_parents_are_safe(
     return True
 
 
-def _validate_quarantine(
-    original: Path,
-    quarantine: Path,
-    planned: LocalRemoteRunSummary,
-    perm_root: Path,
-    root_identity: tuple[int, int],
-) -> tuple[bool, tuple[str, ...]]:
-    reasons: list[str] = []
-    try:
-        original.lstat()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        reasons.append("original-state-unknown")
-    else:
-        reasons.append("original-still-present")
-    try:
-        quarantine_stat = quarantine.lstat()
-    except OSError:
-        reasons.append("quarantine-unavailable")
-        return False, tuple(sorted(set(reasons)))
-    if not stat.S_ISDIR(quarantine_stat.st_mode):
-        reasons.append("quarantine-not-directory")
-    if quarantine_stat.st_dev != planned.device or quarantine_stat.st_ino != planned.inode:
-        reasons.append("quarantine-identity-mismatch")
-    if quarantine.parent != original.parent or not _owned_parents_are_safe(perm_root, root_identity, planned):
-        reasons.append("quarantine-owner-mismatch")
-    tree = _scan_tree(quarantine)
-    if tree.filesystem_error:
-        reasons.append("quarantine-filesystem-error")
-    if tree.nested_symlink:
-        reasons.append("quarantine-nested-symlink")
-    if tree.nonregular_entry:
-        reasons.append("quarantine-nonregular-entry")
-    if tree.path_escape:
-        reasons.append("quarantine-path-escape")
-    marker = quarantine / RETENTION_MARKER_FILENAME
-    try:
-        marker.lstat()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        reasons.append("quarantine-marker-state-unknown")
-    else:
-        reasons.append("quarantine-retention-marker")
-    return not reasons, tuple(sorted(set(reasons)))
-
-
-def _restore_quarantine(
-    original: Path,
-    quarantine: Path,
-    rename: Callable[[Path, Path], Any],
-) -> tuple[str, ...]:
-    try:
-        original.lstat()
-    except FileNotFoundError:
-        try:
-            rename(quarantine, original)
-        except Exception as exc:
-            return ("restore-failed", _bounded_detail(type(exc).__name__, exc))
-        return ("restored",)
-    except OSError as exc:
-        return ("restore-unsafe", _bounded_detail(type(exc).__name__, exc))
-    return ("restore-original-present",)
-
-
-def _rename_no_replace(source: Path, destination: Path) -> None:
-    """Atomically rename a directory without replacing an existing path."""
+def _rename_no_replace_at(
+    source_fd: int,
+    source_name: str,
+    destination_fd: int,
+    destination_name: str,
+) -> str:
+    """Native descriptor-relative no-replace rename, or a fail-closed status."""
     libc = ctypes.CDLL(None, use_errno=True)
-    encoded_source = os.fsencode(source)
-    encoded_destination = os.fsencode(destination)
+    encoded_source = os.fsencode(source_name)
+    encoded_destination = os.fsencode(destination_name)
     if sys.platform == "darwin":
-        rename_exclusive = 0x00000004
-        renamex = libc.renamex_np
-        renamex.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-        renamex.restype = ctypes.c_int
-        result = renamex(
+        renameatx = getattr(libc, "renameatx_np", None)
+        if renameatx is None:
+            return "unsupported"
+        renameatx.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameatx.restype = ctypes.c_int
+        ctypes.set_errno(0)
+        result = renameatx(
+            source_fd,
             encoded_source,
+            destination_fd,
             encoded_destination,
-            rename_exclusive,
+            _DARWIN_RENAME_EXCL | _DARWIN_RENAME_NOFOLLOW_ANY,
         )
     elif sys.platform.startswith("linux"):
-        at_fdcwd = -100
-        rename_noreplace = 1
-        renameat2 = libc.renameat2
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            return "unsupported"
         renameat2.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
@@ -1820,22 +2316,31 @@ def _rename_no_replace(source: Path, destination: Path) -> None:
             ctypes.c_uint,
         ]
         renameat2.restype = ctypes.c_int
+        ctypes.set_errno(0)
         result = renameat2(
-            at_fdcwd,
+            source_fd,
             encoded_source,
-            at_fdcwd,
+            destination_fd,
             encoded_destination,
-            rename_noreplace,
+            _LINUX_RENAME_NOREPLACE,
         )
     else:
-        raise OSError(
-            errno.ENOTSUP,
-            "atomic no-replace rename is unavailable",
-            str(destination),
-        )
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), str(destination))
+        return "unsupported"
+    if result == 0:
+        return "ok"
+    error = ctypes.get_errno()
+    if error in {errno.EEXIST, errno.ENOTEMPTY}:
+        return "destination-exists"
+    if error in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+        return "source-replaced"
+    if error in {
+        errno.EINVAL,
+        getattr(errno, "ENOSYS", -1),
+        getattr(errno, "ENOTSUP", -1),
+        getattr(errno, "EOPNOTSUPP", -1),
+    }:
+        return "unsupported"
+    return "error"
 
 
 @dataclass
@@ -1975,21 +2480,19 @@ def _locate_owned_job(
 
 
 def _publish_retention_marker(
-    run: Path,
-    marker: Path,
+    run_fd: int,
     payload: dict[str, object],
     *,
-    identity: RemoteRunIdentity,
     run_identity: tuple[int, int],
 ) -> tuple[bool, str]:
-    temp = run / f".melee-agent-local-retention.{uuid.uuid4().hex}.tmp"
+    temp_name = f".melee-agent-local-retention.{uuid.uuid4().hex}.tmp"
     descriptor: int | None = None
     temp_identity: tuple[int, int] | None = None
     published = False
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(temp, flags, 0o600)
+        descriptor = os.open(temp_name, flags, 0o600, dir_fd=run_fd)
         temp_stat = os.fstat(descriptor)
         temp_identity = (temp_stat.st_dev, temp_stat.st_ino)
         encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
@@ -1998,48 +2501,56 @@ def _publish_retention_marker(
             stream.write(encoded)
             stream.flush()
             os.fsync(stream.fileno())
-        written, detail = _read_json_regular(temp)
+        written, detail = _read_json_regular_at(run_fd, temp_name)
         if written != payload:
             return False, detail or "temporary marker readback mismatch"
-        _, detail = _manifest_owned_run_root(run, identity)
-        if detail:
-            return False, detail
-        current = run.lstat()
+        current = os.fstat(run_fd)
         if (
             not stat.S_ISDIR(current.st_mode)
             or (current.st_dev, current.st_ino) != run_identity
         ):
             return False, "owned run changed before marker publication"
         try:
-            marker.lstat()
+            os.stat(
+                RETENTION_MARKER_FILENAME,
+                dir_fd=run_fd,
+                follow_symlinks=False,
+            )
         except FileNotFoundError:
             pass
         except OSError as exc:
             return False, _bounded_detail(exc)
         else:
             return False, "retention marker appeared before publication"
-        _rename_no_replace(temp, marker)
-        published = True
-        _fsync_directory(run)
-        readback = read_retention_marker(
-            run,
-            function=identity.function,
-            job_id=identity.job_id,
+        move = _rename_no_replace_at(
+            run_fd,
+            temp_name,
+            run_fd,
+            RETENTION_MARKER_FILENAME,
         )
-        if readback.status != "valid" or readback.payload != payload:
+        if move != "ok":
+            raise OSError(errno.EIO, f"retention marker publish {move}")
+        published = True
+        _fsync_directory_fd(run_fd)
+        readback, _ = _read_json_regular_at(run_fd, RETENTION_MARKER_FILENAME)
+        if readback != payload:
             raise RuntimeError("published marker readback mismatch")
         return True, ""
     except Exception as exc:
         if published and temp_identity is not None:
             try:
-                published_stat = marker.lstat()
+                published_stat = os.stat(
+                    RETENTION_MARKER_FILENAME,
+                    dir_fd=run_fd,
+                    follow_symlinks=False,
+                )
                 if (
                     stat.S_ISREG(published_stat.st_mode)
                     and (published_stat.st_dev, published_stat.st_ino)
                     == temp_identity
                 ):
-                    marker.unlink()
-                    _fsync_directory(run)
+                    os.unlink(RETENTION_MARKER_FILENAME, dir_fd=run_fd)
+                    _fsync_directory_fd(run_fd)
             except OSError:
                 pass
         return False, _bounded_detail(type(exc).__name__, exc)
@@ -2047,7 +2558,7 @@ def _publish_retention_marker(
         if descriptor is not None:
             os.close(descriptor)
         try:
-            leftover = temp.lstat()
+            leftover = os.stat(temp_name, dir_fd=run_fd, follow_symlinks=False)
         except OSError:
             pass
         else:
@@ -2057,7 +2568,7 @@ def _publish_retention_marker(
                 and (leftover.st_dev, leftover.st_ino) == temp_identity
             ):
                 try:
-                    temp.unlink()
+                    os.unlink(temp_name, dir_fd=run_fd)
                 except OSError:
                     pass
 
@@ -2115,46 +2626,337 @@ def retain_local_remote_run(
             run_stat = run.lstat()
         except OSError as exc:
             return RetentionMarkerWriteResult("unsafe", marker, _bounded_detail(exc))
-
-        existing = read_retention_marker(
-            run,
-            function=function,
-            job_id=job_id,
-        )
-        if existing.status == "valid":
-            if existing.payload is not None and existing.payload.get("reason") == reason:
-                return RetentionMarkerWriteResult("idempotent", marker)
-            return RetentionMarkerWriteResult(
-                "conflict",
-                marker,
-                "a different retention marker already exists",
+        handles, detail = _open_identity_run(run, identity)
+        if handles is None:
+            return RetentionMarkerWriteResult("unsafe", marker, detail)
+        try:
+            if (handles.run.device, handles.run.inode) != (
+                run_stat.st_dev,
+                run_stat.st_ino,
+            ):
+                return RetentionMarkerWriteResult(
+                    "unsafe",
+                    marker,
+                    "owned run changed before marker publication",
+                )
+            existing_payload, existing_detail = _read_json_regular_at(
+                handles.run.fd,
+                RETENTION_MARKER_FILENAME,
             )
-        if existing.status != "absent":
-            return RetentionMarkerWriteResult(
-                "invalid",
-                marker,
-                existing.detail or "existing retention marker is invalid",
+            if existing_payload is not None:
+                existing_valid = (
+                    existing_payload.get("kind") == RETENTION_MARKER_KIND
+                    and existing_payload.get("version") == RETENTION_MARKER_VERSION
+                    and existing_payload.get("job_id") == job_id
+                    and existing_payload.get("function") == function
+                    and isinstance(existing_payload.get("reason"), str)
+                    and str(existing_payload["reason"]).strip()
+                    and _valid_timestamp(existing_payload.get("created_at"))
+                )
+                if not existing_valid:
+                    return RetentionMarkerWriteResult(
+                        "invalid",
+                        marker,
+                        "existing retention marker is invalid",
+                    )
+                if existing_payload.get("reason") == reason:
+                    return RetentionMarkerWriteResult("idempotent", marker)
+                return RetentionMarkerWriteResult(
+                    "conflict",
+                    marker,
+                    "a different retention marker already exists",
+                )
+            if existing_detail != "missing":
+                return RetentionMarkerWriteResult(
+                    "invalid",
+                    marker,
+                    existing_detail,
+                )
+            payload: dict[str, object] = {
+                "kind": RETENTION_MARKER_KIND,
+                "version": RETENTION_MARKER_VERSION,
+                "job_id": job_id,
+                "function": function,
+                "reason": reason,
+                "created_at": created_at,
+            }
+            published, detail = _publish_retention_marker(
+                handles.run.fd,
+                payload,
+                run_identity=(run_stat.st_dev, run_stat.st_ino),
             )
-        payload: dict[str, object] = {
-            "kind": RETENTION_MARKER_KIND,
-            "version": RETENTION_MARKER_VERSION,
-            "job_id": job_id,
-            "function": function,
-            "reason": reason,
-            "created_at": created_at,
-        }
-        published, detail = _publish_retention_marker(
-            run,
-            marker,
-            payload,
-            identity=identity,
-            run_identity=(run_stat.st_dev, run_stat.st_ino),
-        )
-        if not published:
-            return RetentionMarkerWriteResult("publish-failed", marker, detail)
-        return RetentionMarkerWriteResult("written", marker)
+            if not published:
+                return RetentionMarkerWriteResult("publish-failed", marker, detail)
+            return RetentionMarkerWriteResult("written", marker)
+        finally:
+            handles.close()
     finally:
         lifecycle_lock.close()
+
+
+def _scan_tree_descriptor(root_fd: int) -> _TreeFacts:
+    total_bytes = 0
+    regular_mtimes: list[float] = []
+    nested_symlink = False
+    nonregular_entry = False
+    filesystem_error = False
+    pending = [root_fd]
+    try:
+        root_stat = os.fstat(root_fd)
+        while pending:
+            directory_fd = pending.pop()
+            try:
+                with os.scandir(directory_fd) as entries:
+                    ordered = sorted(entries, key=lambda entry: entry.name)
+            except OSError:
+                filesystem_error = True
+                os.close(directory_fd)
+                continue
+            for entry in ordered:
+                try:
+                    entry_stat = os.stat(
+                        entry.name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                except OSError:
+                    filesystem_error = True
+                    continue
+                if stat.S_ISLNK(entry_stat.st_mode):
+                    nested_symlink = True
+                elif stat.S_ISDIR(entry_stat.st_mode):
+                    child, _ = _open_directory_child(directory_fd, entry.name)
+                    if child is None:
+                        filesystem_error = True
+                    else:
+                        pending.append(child.fd)
+                elif stat.S_ISREG(entry_stat.st_mode):
+                    total_bytes += entry_stat.st_size
+                    regular_mtimes.append(entry_stat.st_mtime)
+                else:
+                    nonregular_entry = True
+            os.close(directory_fd)
+    finally:
+        for directory_fd in pending:
+            try:
+                os.close(directory_fd)
+            except OSError:
+                pass
+    return _TreeFacts(
+        total_bytes=total_bytes,
+        latest_activity=max(regular_mtimes, default=root_stat.st_mtime),
+        nested_symlink=nested_symlink,
+        nonregular_entry=nonregular_entry,
+        path_escape=False,
+        filesystem_error=filesystem_error,
+    )
+
+
+def _descriptor_marker_present(run_fd: int) -> tuple[bool, bool]:
+    try:
+        marker_stat = os.stat(
+            RETENTION_MARKER_FILENAME,
+            dir_fd=run_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return False, False
+    except OSError:
+        return False, True
+    return True, not stat.S_ISREG(marker_stat.st_mode)
+
+
+def _rmtree_expected(directory_fd: int, expected_stat: os.stat_result) -> str | None:
+    try:
+        current = os.fstat(directory_fd)
+    except OSError:
+        return "cleanup-error"
+    if not stat.S_ISDIR(current.st_mode) or not _same_stat_identity(current, expected_stat):
+        return "quarantine-child-replaced"
+    if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        return "safe-rmtree-unavailable"
+    try:
+        shutil.rmtree(".", dir_fd=directory_fd)
+    except OSError as exc:
+        if exc.errno == errno.EINVAL:
+            return None
+        return "cleanup-error"
+    return None
+
+
+def _restore_descriptor_child(
+    parent_fd: int,
+    job_id: str,
+    container_fd: int,
+    child_name: str,
+    planned: LocalRemoteRunSummary,
+) -> bool:
+    child, _ = _open_directory_child(container_fd, child_name)
+    if child is None:
+        return False
+    try:
+        if (
+            (child.device, child.inode) != (planned.device, planned.inode)
+            or not _entry_missing(parent_fd, job_id)
+        ):
+            return False
+    finally:
+        os.close(child.fd)
+    return (
+        _rename_no_replace_at(container_fd, child_name, parent_fd, job_id)
+        == "ok"
+    )
+
+
+def _create_quarantine_container(
+    parent_fd: int,
+    job_id: str,
+) -> tuple[str, _DirectoryHandle] | None:
+    for _ in range(8):
+        name = f"{QUARANTINE_PREFIX}{job_id}-{uuid.uuid4().hex}"
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        except OSError:
+            return None
+        handle, _ = _open_directory_child(parent_fd, name)
+        if handle is None:
+            return None
+        return name, handle
+    return None
+
+
+def _quarantine_and_remove_descriptor(
+    perm_root: Path,
+    planned: LocalRemoteRunSummary,
+    *,
+    validation_hook: Callable[[Path, Path, int], Any] | None = None,
+    quarantine_hook: Callable[[Path, Path, int], Any] | None = None,
+    descriptor_remover: Callable[[int, os.stat_result], str | None] | None = None,
+) -> tuple[Literal["removed", "skipped"], Path | None, tuple[str, ...]]:
+    handles, detail = _open_owned_run_handles(
+        perm_root,
+        planned.function,
+        planned.job_id,
+    )
+    if handles is None:
+        return "skipped", None, ("ownership-changed", detail)
+    try:
+        if (handles.run.device, handles.run.inode) != (planned.device, planned.inode):
+            return "skipped", None, ("run-changed",)
+        container_result = _create_quarantine_container(
+            handles.remote_runs.fd,
+            planned.job_id,
+        )
+        if container_result is None:
+            return "skipped", None, ("quarantine-create-failed",)
+        container_name, container = container_result
+        quarantine_path = planned.path.parent / container_name / QUARANTINE_CHILD_NAME
+        try:
+            move = _rename_no_replace_at(
+                handles.remote_runs.fd,
+                planned.job_id,
+                container.fd,
+                QUARANTINE_CHILD_NAME,
+            )
+            if move != "ok":
+                return "skipped", quarantine_path, (f"quarantine-move-{move}",)
+            held, detail = _open_directory_child(container.fd, QUARANTINE_CHILD_NAME)
+            if held is None:
+                return "skipped", quarantine_path, ("quarantine-child-missing", detail)
+            try:
+                expected_stat = os.fstat(held.fd)
+                if (held.device, held.inode) != (planned.device, planned.inode):
+                    return "skipped", quarantine_path, ("quarantine-identity-mismatch",)
+                if validation_hook is not None:
+                    validation_hook(
+                        planned.path.parent / container_name,
+                        quarantine_path,
+                        held.fd,
+                    )
+                tree = _scan_tree_descriptor(os.dup(held.fd))
+                marker_present, marker_unsafe = _descriptor_marker_present(held.fd)
+                reasons: list[str] = []
+                if tree.filesystem_error:
+                    reasons.append("quarantine-filesystem-error")
+                if tree.nested_symlink:
+                    reasons.append("quarantine-nested-symlink")
+                if tree.nonregular_entry:
+                    reasons.append("quarantine-nonregular-entry")
+                if tree.total_bytes != planned.total_bytes:
+                    reasons.append("run-changed")
+                if marker_present:
+                    reasons.append("quarantine-retention-marker")
+                if marker_unsafe:
+                    reasons.append("quarantine-marker-state-unknown")
+                if reasons:
+                    restored = _restore_descriptor_child(
+                        handles.remote_runs.fd,
+                        planned.job_id,
+                        container.fd,
+                        QUARANTINE_CHILD_NAME,
+                        planned,
+                    )
+                    return (
+                        "skipped",
+                        quarantine_path,
+                        tuple(reasons) + (("restored",) if restored else ("quarantine-retained",)),
+                    )
+                if quarantine_hook is not None:
+                    quarantine_hook(
+                        planned.path.parent / container_name,
+                        quarantine_path,
+                        held.fd,
+                    )
+                remover = descriptor_remover or _rmtree_expected
+                removal_reason = remover(held.fd, expected_stat)
+                if removal_reason is not None:
+                    restored = _restore_descriptor_child(
+                        handles.remote_runs.fd,
+                        planned.job_id,
+                        container.fd,
+                        QUARANTINE_CHILD_NAME,
+                        planned,
+                    )
+                    return (
+                        "skipped",
+                        quarantine_path,
+                        (removal_reason, "restored" if restored else "quarantine-retained"),
+                    )
+                try:
+                    with os.scandir(held.fd) as entries:
+                        removal_incomplete = next(entries, None) is not None
+                except OSError:
+                    removal_incomplete = True
+                if removal_incomplete:
+                    restored = _restore_descriptor_child(
+                        handles.remote_runs.fd,
+                        planned.job_id,
+                        container.fd,
+                        QUARANTINE_CHILD_NAME,
+                        planned,
+                    )
+                    return (
+                        "skipped",
+                        quarantine_path,
+                        ("removal-incomplete", "restored" if restored else "quarantine-retained"),
+                    )
+                named, _ = _open_directory_child(container.fd, QUARANTINE_CHILD_NAME)
+                if named is None:
+                    return "skipped", quarantine_path, ("quarantine-child-missing",)
+                try:
+                    if (named.device, named.inode) != (planned.device, planned.inode):
+                        return "skipped", quarantine_path, ("quarantine-child-replaced",)
+                finally:
+                    os.close(named.fd)
+                return "removed", quarantine_path, ()
+            finally:
+                os.close(held.fd)
+        finally:
+            os.close(container.fd)
+    finally:
+        handles.close()
 
 
 def _lock_failure(
@@ -2183,11 +2985,11 @@ def apply_local_remote_run_retention(
     remote_runner: Callable[..., Any] = _production_remote_runner,
     git_runner: GitRunner = _run_git,
     clock: Callable[[], object] = _utcnow,
-    rename: Callable[[Path, Path], Any] | None = None,
-    remover: Callable[[Path], Any] = shutil.rmtree,
+    validation_hook: Callable[[Path, Path, int], Any] | None = None,
+    quarantine_hook: Callable[[Path, Path, int], Any] | None = None,
+    descriptor_remover: Callable[[int, os.stat_result], str | None] | None = None,
 ) -> LocalRemoteRunRetentionResult:
     """Recompute and safely apply local remote-run retention under a lock."""
-    rename_operation = _rename_no_replace if rename is None else rename
     lifecycle_lock, lock_status, lock_detail = _acquire_lifecycle_lock(perm_root)
     if lifecycle_lock is None:
         return _lock_failure(lock_status, lock_detail)
@@ -2208,6 +3010,30 @@ def apply_local_remote_run_retention(
             clock=clock,
         )
         selected = tuple(item.summary for item in plan.selected)
+        if inventory.issues:
+            actions = tuple(
+                RetentionApplyAction(
+                    original_path=summary.path,
+                    quarantine_path=None,
+                    function=summary.function,
+                    job_id=summary.job_id,
+                    status="skipped",
+                    reasons=("inventory-incomplete",),
+                    planned_bytes=summary.total_bytes,
+                    reclaimed_bytes=0,
+                )
+                for summary in selected
+            )
+            return LocalRemoteRunRetentionResult(
+                status="incomplete-inventory",
+                plan=plan,
+                actions=actions,
+                reclaimed_bytes=0,
+                projected_total_bytes=plan.total_bytes,
+                inventory_complete=False,
+                cap_satisfied=False,
+                inventory_issues=inventory.issues,
+            )
         selected_inventory = LocalRemoteRunInventory(
             perm_root=resolved_root,
             runs=selected,
@@ -2305,113 +3131,14 @@ def apply_local_remote_run_retention(
                 )
                 continue
 
-            quarantine = planned.path.parent / f"{QUARANTINE_PREFIX}{uuid.uuid4().hex}"
-            try:
-                quarantine.lstat()
-            except FileNotFoundError:
-                pass
-            except OSError as exc:
-                actions.append(
-                    RetentionApplyAction(
-                        planned.path,
-                        quarantine,
-                        planned.function,
-                        planned.job_id,
-                        "skipped",
-                        ("quarantine-state-unknown", _bounded_detail(exc)),
-                        planned.total_bytes,
-                        0,
-                    )
-                )
-                continue
-            else:
-                actions.append(
-                    RetentionApplyAction(
-                        planned.path,
-                        quarantine,
-                        planned.function,
-                        planned.job_id,
-                        "skipped",
-                        ("quarantine-collision",),
-                        planned.total_bytes,
-                        0,
-                    )
-                )
-                continue
-            try:
-                rename_operation(planned.path, quarantine)
-            except Exception as exc:
-                actions.append(
-                    RetentionApplyAction(
-                        planned.path,
-                        quarantine,
-                        planned.function,
-                        planned.job_id,
-                        "skipped",
-                        ("rename-failed", _bounded_detail(type(exc).__name__, exc)),
-                        planned.total_bytes,
-                        0,
-                    )
-                )
-                continue
-
-            quarantine_valid, reasons = _validate_quarantine(
-                planned.path,
-                quarantine,
-                planned,
+            disposition, quarantine, reasons = _quarantine_and_remove_descriptor(
                 resolved_root,
-                root_identity,
+                planned,
+                validation_hook=validation_hook,
+                quarantine_hook=quarantine_hook,
+                descriptor_remover=descriptor_remover,
             )
-            if not quarantine_valid:
-                ambiguous = {
-                    "original-state-unknown",
-                    "original-still-present",
-                    "quarantine-unavailable",
-                    "quarantine-not-directory",
-                    "quarantine-identity-mismatch",
-                    "quarantine-owner-mismatch",
-                }
-                restore = (
-                    ("restore-skipped-ambiguous",)
-                    if ambiguous.intersection(reasons)
-                    else _restore_quarantine(
-                        planned.path,
-                        quarantine,
-                        rename_operation,
-                    )
-                )
-                actions.append(
-                    RetentionApplyAction(
-                        planned.path,
-                        quarantine,
-                        planned.function,
-                        planned.job_id,
-                        "skipped",
-                        reasons + restore,
-                        planned.total_bytes,
-                        0,
-                    )
-                )
-                continue
-            try:
-                remover(quarantine)
-            except Exception as exc:
-                actions.append(
-                    RetentionApplyAction(
-                        planned.path,
-                        quarantine,
-                        planned.function,
-                        planned.job_id,
-                        "skipped",
-                        ("removal-failed", _bounded_detail(type(exc).__name__, exc)),
-                        planned.total_bytes,
-                        0,
-                    )
-                )
-                continue
-            try:
-                quarantine.lstat()
-            except FileNotFoundError:
+            if disposition == "removed":
                 reclaimed += planned.total_bytes
                 actions.append(
                     RetentionApplyAction(
@@ -2425,19 +3152,6 @@ def apply_local_remote_run_retention(
                         planned.total_bytes,
                     )
                 )
-            except OSError as exc:
-                actions.append(
-                    RetentionApplyAction(
-                        planned.path,
-                        quarantine,
-                        planned.function,
-                        planned.job_id,
-                        "skipped",
-                        ("removal-state-unknown", _bounded_detail(exc)),
-                        planned.total_bytes,
-                        0,
-                    )
-                )
             else:
                 actions.append(
                     RetentionApplyAction(
@@ -2446,7 +3160,7 @@ def apply_local_remote_run_retention(
                         planned.function,
                         planned.job_id,
                         "skipped",
-                        ("removal-incomplete",),
+                        reasons,
                         planned.total_bytes,
                         0,
                     )

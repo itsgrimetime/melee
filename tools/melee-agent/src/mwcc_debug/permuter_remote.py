@@ -16,7 +16,6 @@ import subprocess
 import tempfile
 import time
 import tomllib
-import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -1048,17 +1047,16 @@ def _mark_local_fetch_failure(
     label: str,
     detail: str,
 ) -> str:
-    warning = fetch_dest / "remote-fetch-warning.json"
-    try:
-        warning_stat = warning.lstat()
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        return f"warning state unavailable: {exc}"
-    else:
-        if stat.S_ISLNK(warning_stat.st_mode) or not stat.S_ISREG(warning_stat.st_mode):
-            return "unsafe existing remote fetch warning"
+    from . import local_remote_runs  # noqa: PLC0415
+
+    state, state_detail = local_remote_runs.local_fetch_warning_state(
+        fetch_dest,
+        identity=_local_fetch_identity(job),
+    )
+    if state == "regular":
         return ""
+    if state == "unsafe":
+        return state_detail or "unsafe existing remote fetch warning"
     try:
         _write_remote_fetch_warning(
             fetch_dest,
@@ -1211,7 +1209,7 @@ def fetch_job(
             f"{detail}{warning_detail}"
         )
     if not rsync_failures:
-        _clear_remote_fetch_warning(fetch_dest)
+        _clear_remote_fetch_warning(fetch_dest, job=job)
     if active_failure_detail is not None:
         raise RemoteJobError(
             f"remote fetch failed for active job {job.job_id}: {active_failure_detail}"
@@ -1258,147 +1256,26 @@ def _write_remote_fetch_warning(
     }
     if remote_status.detail:
         payload["remote_status_detail"] = remote_status.detail
-    warning = fetch_dest / "remote-fetch-warning.json"
-    try:
-        owner_stat = fetch_dest.lstat()
-    except OSError as exc:
-        raise RemoteJobError(f"remote fetch warning owner is unavailable: {exc}") from exc
-    if fetch_dest.is_symlink() or not stat.S_ISDIR(owner_stat.st_mode):
-        raise RemoteJobError("remote fetch warning owner is unsafe")
-    existing_stat: os.stat_result | None = None
-    try:
-        existing_stat = warning.lstat()
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        raise RemoteJobError(f"remote fetch warning state is unavailable: {exc}") from exc
-    if existing_stat is not None and (
-        stat.S_ISLNK(existing_stat.st_mode)
-        or not stat.S_ISREG(existing_stat.st_mode)
-    ):
-        raise RemoteJobError(f"unsafe remote fetch warning path: {warning}")
-
-    temp = fetch_dest / f".remote-fetch-warning.{uuid.uuid4().hex}.tmp"
-    descriptor: int | None = None
-    temp_identity: tuple[int, int] | None = None
-    try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(temp, flags, 0o600)
-        temp_stat = os.fstat(descriptor)
-        temp_identity = (temp_stat.st_dev, temp_stat.st_ino)
-        encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
-        with os.fdopen(descriptor, "wb") as stream:
-            descriptor = None
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-        current_owner = fetch_dest.lstat()
-        if (
-            stat.S_ISLNK(current_owner.st_mode)
-            or not stat.S_ISDIR(current_owner.st_mode)
-            or (current_owner.st_dev, current_owner.st_ino)
-            != (owner_stat.st_dev, owner_stat.st_ino)
-        ):
-            raise RemoteJobError("remote fetch warning owner changed before publication")
-
-        from . import local_remote_runs  # noqa: PLC0415
-
-        if existing_stat is None:
-            local_remote_runs._rename_no_replace(temp, warning)
-        else:
-            current = warning.lstat()
-            if (
-                not stat.S_ISREG(current.st_mode)
-                or (current.st_dev, current.st_ino)
-                != (existing_stat.st_dev, existing_stat.st_ino)
-            ):
-                raise RemoteJobError("remote fetch warning changed before publication")
-            os.replace(temp, warning)
-        local_remote_runs._fsync_directory(fetch_dest)
-        published_stat = warning.lstat()
-        if (
-            temp_identity is None
-            or not stat.S_ISREG(published_stat.st_mode)
-            or (published_stat.st_dev, published_stat.st_ino) != temp_identity
-        ):
-            raise RemoteJobError("remote fetch warning changed before readback")
-        readback, readback_detail = local_remote_runs._read_json_regular(warning)
-        if readback is None:
-            raise RemoteJobError(
-                f"remote fetch warning readback failed: {readback_detail}"
-            )
-        if readback != payload:
-            raise RemoteJobError("remote fetch warning readback mismatch")
-    except RemoteJobError:
-        raise
-    except OSError as exc:
-        raise RemoteJobError(f"remote fetch warning publication failed: {exc}") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            leftover = temp.lstat()
-        except OSError:
-            pass
-        else:
-            if (
-                temp_identity is not None
-                and stat.S_ISREG(leftover.st_mode)
-                and (leftover.st_dev, leftover.st_ino) == temp_identity
-            ):
-                try:
-                    temp.unlink()
-                except OSError:
-                    pass
-
-
-def _clear_remote_fetch_warning(fetch_dest: Path) -> None:
-    warning = fetch_dest / "remote-fetch-warning.json"
-    try:
-        warning_stat = warning.lstat()
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise RemoteJobError(f"remote fetch warning state is unavailable: {exc}") from exc
-    if stat.S_ISLNK(warning_stat.st_mode) or not stat.S_ISREG(warning_stat.st_mode):
-        raise RemoteJobError(f"unsafe remote fetch warning clear path: {warning}")
-
     from . import local_remote_runs  # noqa: PLC0415
 
-    tombstone = fetch_dest / f".remote-fetch-warning.{uuid.uuid4().hex}.clear"
-    moved = False
-    try:
-        local_remote_runs._rename_no_replace(warning, tombstone)
-        moved = True
-        moved_stat = tombstone.lstat()
-        if (
-            not stat.S_ISREG(moved_stat.st_mode)
-            or (moved_stat.st_dev, moved_stat.st_ino)
-            != (warning_stat.st_dev, warning_stat.st_ino)
-        ):
-            raise RemoteJobError("remote fetch warning changed during clear")
-        tombstone.unlink()
-        moved = False
-        try:
-            local_remote_runs._fsync_directory(fetch_dest)
-        except OSError:
-            pass
-    except RemoteJobError:
-        raise
-    except OSError as exc:
-        raise RemoteJobError(f"remote fetch warning clear failed: {exc}") from exc
-    finally:
-        if moved:
-            try:
-                warning.lstat()
-            except FileNotFoundError:
-                try:
-                    local_remote_runs._rename_no_replace(tombstone, warning)
-                except OSError:
-                    pass
-            except OSError:
-                pass
+    written, detail = local_remote_runs.write_local_fetch_warning(
+        fetch_dest,
+        identity=_local_fetch_identity(job),
+        payload=payload,
+    )
+    if not written:
+        raise RemoteJobError(f"remote fetch warning publication failed: {detail}")
+
+
+def _clear_remote_fetch_warning(fetch_dest: Path, *, job: RemoteJob) -> None:
+    from . import local_remote_runs  # noqa: PLC0415
+
+    cleared, detail = local_remote_runs.clear_local_fetch_warning(
+        fetch_dest,
+        identity=_local_fetch_identity(job),
+    )
+    if not cleared:
+        raise RemoteJobError(f"remote fetch warning clear failed: {detail}")
 
 
 def _format_remote_fetch_failure_detail(

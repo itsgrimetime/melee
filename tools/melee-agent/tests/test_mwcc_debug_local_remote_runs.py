@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -775,6 +776,102 @@ def test_remote_activity_probe_failures_are_unknown_for_entire_host(
     assert all(len(run.remote_detail) <= lrr.REMOTE_DETAIL_LIMIT for run in probed.runs)
 
 
+def test_remote_activity_probe_rejects_oversized_injected_capture(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    _set_remote_identity(run, ssh="host", session="session")
+    inventory = _inventory(perm_root)
+
+    probed = lrr.probe_remote_run_activity(
+        inventory,
+        runner=lambda argv, **_: subprocess.CompletedProcess(
+            argv,
+            0,
+            "x" * (lrr.REMOTE_CAPTURE_LIMIT + 1),
+            "",
+        ),
+    )
+
+    assert probed.runs[0].remote_state == "unknown"
+    assert "capture" in probed.runs[0].remote_detail.lower()
+    assert len(probed.runs[0].remote_detail) <= lrr.REMOTE_DETAIL_LIMIT
+
+
+def test_remote_activity_probe_rejects_oversized_session_row(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    _set_remote_identity(run, ssh="host", session="session")
+    inventory = _inventory(perm_root)
+    oversized_session = "x" * (lrr.REMOTE_SESSION_ROW_LIMIT + 1)
+
+    probed = lrr.probe_remote_run_activity(
+        inventory,
+        runner=lambda argv, **_: _tmux_result(argv, oversized_session),
+    )
+
+    assert probed.runs[0].remote_state == "unknown"
+    assert "session" in probed.runs[0].remote_detail.lower()
+
+
+def test_bounded_remote_runner_terminates_and_reaps_oversized_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_popen = subprocess.Popen
+    processes: list[subprocess.Popen[bytes]] = []
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(lrr.subprocess, "Popen", recording_popen)
+    result = lrr._bounded_remote_runner(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os, time; "
+                f"os.write(1, b'x' * {lrr.REMOTE_CAPTURE_LIMIT + 1}); "
+                "time.sleep(30)"
+            ),
+        ],
+        check=False,
+        timeout=5.0,
+    )
+
+    assert processes and processes[0].poll() is not None
+    assert result.returncode != 0
+    assert len(result.stdout.encode()) <= lrr.REMOTE_CAPTURE_LIMIT
+    assert len(result.stderr.encode()) <= lrr.REMOTE_CAPTURE_LIMIT
+    assert "capture limit" in result.stderr.lower()
+
+
+def test_bounded_remote_runner_terminates_and_reaps_timed_out_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_popen = subprocess.Popen
+    processes: list[subprocess.Popen[bytes]] = []
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(lrr.subprocess, "Popen", recording_popen)
+    with pytest.raises(subprocess.TimeoutExpired):
+        lrr._bounded_remote_runner(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            check=False,
+            timeout=0.1,
+        )
+
+    assert processes and processes[0].poll() is not None
+
+
 def test_remote_activity_probe_missing_tmux_is_unknown_not_stopped(
     tmp_path: Path,
 ) -> None:
@@ -1484,7 +1581,7 @@ def test_apply_unsafe_lock_path_fails_closed(tmp_path: Path) -> None:
     assert run.is_dir()
 
 
-def test_inventory_reports_quarantine_without_treating_it_as_run(
+def test_inventory_ignores_only_proven_empty_quarantine_containers(
     tmp_path: Path,
 ) -> None:
     perm_root = tmp_path / "decomp-permuter"
@@ -1492,6 +1589,12 @@ def test_inventory_reports_quarantine_without_treating_it_as_run(
     quarantine = run.parent / f"{lrr.QUARANTINE_PREFIX}leftover"
     quarantine.mkdir()
 
+    empty = _inventory(perm_root)
+
+    assert [summary.path for summary in empty.runs] == [run]
+    assert empty.issues == ()
+
+    (quarantine / "unexpected").write_text("visible evidence")
     inventory = _inventory(perm_root)
 
     assert [summary.path for summary in inventory.runs] == [run]
@@ -1507,16 +1610,46 @@ def test_inventory_reports_quarantine_without_treating_it_as_run(
 
 def test_apply_quarantine_collision_never_renames_or_overwrites(
     tmp_path: Path,
+) -> None:
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    (parent / "source").mkdir()
+    (parent / "destination").mkdir()
+    sentinel = parent / "destination" / "sentinel"
+    sentinel.write_text("untouched")
+    descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        result = lrr._rename_no_replace_at(
+            descriptor,
+            "source",
+            descriptor,
+            "destination",
+        )
+    finally:
+        os.close(descriptor)
+
+    assert result == "destination-exists"
+    assert (parent / "source").is_dir()
+    assert sentinel.read_text() == "untouched"
+
+
+def test_apply_rename_failure_keeps_original(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     perm_root = tmp_path / "decomp-permuter"
     run = _make_run(perm_root)
-    fixed_uuid = lrr.uuid.UUID(int=0)
-    quarantine = run.parent / f"{lrr.QUARANTINE_PREFIX}{fixed_uuid.hex}"
-    quarantine.mkdir()
-    sentinel = quarantine / "sentinel"
-    sentinel.write_text("untouched")
-    monkeypatch.setattr(lrr.uuid, "uuid4", lambda: fixed_uuid)
+
+    original = lrr._rename_no_replace_at
+    monkeypatch.setattr(
+        lrr,
+        "_rename_no_replace_at",
+        lambda source_fd, source_name, destination_fd, destination_name: (
+            "error"
+            if source_name == run.name
+            else original(source_fd, source_name, destination_fd, destination_name)
+        ),
+    )
 
     result = lrr.apply_local_remote_run_retention(
         perm_root,
@@ -1526,25 +1659,7 @@ def test_apply_quarantine_collision_never_renames_or_overwrites(
         clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
     )
 
-    assert result.actions[0].reasons == ("quarantine-collision",)
-    assert run.is_dir()
-    assert sentinel.read_text() == "untouched"
-
-
-def test_apply_rename_failure_keeps_original(tmp_path: Path) -> None:
-    perm_root = tmp_path / "decomp-permuter"
-    run = _make_run(perm_root)
-
-    result = lrr.apply_local_remote_run_retention(
-        perm_root,
-        max_total_bytes=0,
-        remote_runner=lambda argv, **_: _tmux_result(argv),
-        git_runner=_untracked_git,
-        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
-        rename=lambda _source, _destination: (_ for _ in ()).throw(OSError("rename denied")),
-    )
-
-    assert result.actions[0].reasons[0] == "rename-failed"
+    assert result.actions[0].reasons[0] == "quarantine-move-error"
     assert result.reclaimed_bytes == 0
     assert run.is_dir()
 
@@ -1563,17 +1678,12 @@ def test_apply_post_rename_protection_restores_original(
 ) -> None:
     perm_root = tmp_path / "decomp-permuter"
     run = _make_run(perm_root)
-    first = True
 
-    def rename(source: Path, destination: Path) -> None:
-        nonlocal first
-        os.rename(source, destination)
-        if first:
-            first = False
-            if post_rename_mutation == "symlink":
-                (destination / "late-link").symlink_to(tmp_path)
-            else:
-                (destination / lrr.RETENTION_MARKER_FILENAME).write_text("late")
+    def mutate(_container: Path, child: Path, _fd: int) -> None:
+        if post_rename_mutation == "symlink":
+            (child / "late-link").symlink_to(tmp_path)
+        else:
+            (child / lrr.RETENTION_MARKER_FILENAME).write_text("late")
 
     result = lrr.apply_local_remote_run_retention(
         perm_root,
@@ -1581,7 +1691,7 @@ def test_apply_post_rename_protection_restores_original(
         remote_runner=lambda argv, **_: _tmux_result(argv),
         git_runner=_untracked_git,
         clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
-        rename=rename,
+        validation_hook=mutate,
     )
 
     assert expected_reason in result.actions[0].reasons
@@ -1596,15 +1706,19 @@ def test_apply_quarantine_identity_mismatch_is_not_restored_or_removed(
 ) -> None:
     perm_root = tmp_path / "decomp-permuter"
     run = _make_run(perm_root)
-    displaced = tmp_path / "displaced-original"
-    rename_calls = 0
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_sentinel = outside / "sentinel"
+    outside_sentinel.write_text("outside untouched")
+    replacement_sentinel: Path | None = None
 
-    def rename(source: Path, destination: Path) -> None:
-        nonlocal rename_calls
-        rename_calls += 1
-        os.rename(source, destination)
-        os.rename(destination, displaced)
-        destination.mkdir()
+    def substitute(container: Path, child: Path, _fd: int) -> None:
+        nonlocal replacement_sentinel
+        child.rename(container / "held-original")
+        child.mkdir()
+        replacement_sentinel = child / "replacement-sentinel"
+        replacement_sentinel.write_text("replacement untouched")
+        (child / "outside-link").symlink_to(outside, target_is_directory=True)
 
     result = lrr.apply_local_remote_run_retention(
         perm_root,
@@ -1612,31 +1726,35 @@ def test_apply_quarantine_identity_mismatch_is_not_restored_or_removed(
         remote_runner=lambda argv, **_: _tmux_result(argv),
         git_runner=_untracked_git,
         clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
-        rename=rename,
+        quarantine_hook=substitute,
     )
 
     action = result.actions[0]
-    assert "quarantine-identity-mismatch" in action.reasons
-    assert "restored" not in action.reasons
-    assert rename_calls == 1
+    assert action.reasons == ("quarantine-child-replaced",)
     assert action.quarantine_path is not None
-    assert action.quarantine_path.is_dir()
-    assert displaced.is_dir()
+    assert replacement_sentinel is not None
+    assert replacement_sentinel.read_text() == "replacement untouched"
+    assert outside_sentinel.read_text() == "outside untouched"
     assert not run.exists()
 
 
-def test_apply_restore_failure_leaves_visible_quarantine(tmp_path: Path) -> None:
+def test_apply_restore_failure_leaves_visible_quarantine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     perm_root = tmp_path / "decomp-permuter"
     run = _make_run(perm_root)
-    calls = 0
+    original = lrr._rename_no_replace_at
 
-    def rename(source: Path, destination: Path) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError("restore denied")
-        os.rename(source, destination)
-        (destination / lrr.RETENTION_MARKER_FILENAME).write_text("late")
+    def rename_at(source_fd: int, source: str, dest_fd: int, dest: str) -> str:
+        if source == lrr.QUARANTINE_CHILD_NAME and dest == run.name:
+            return "error"
+        return original(source_fd, source, dest_fd, dest)
+
+    monkeypatch.setattr(lrr, "_rename_no_replace_at", rename_at)
+
+    def add_marker(_container: Path, child: Path, _fd: int) -> None:
+        (child / lrr.RETENTION_MARKER_FILENAME).write_text("late")
 
     result = lrr.apply_local_remote_run_retention(
         perm_root,
@@ -1644,11 +1762,11 @@ def test_apply_restore_failure_leaves_visible_quarantine(tmp_path: Path) -> None
         remote_runner=lambda argv, **_: _tmux_result(argv),
         git_runner=_untracked_git,
         clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
-        rename=rename,
+        validation_hook=add_marker,
     )
 
     action = result.actions[0]
-    assert "restore-failed" in action.reasons
+    assert "quarantine-retained" in action.reasons
     assert action.quarantine_path is not None
     assert action.quarantine_path.is_dir()
     assert not run.exists()
@@ -1662,10 +1780,10 @@ def test_apply_removal_failure_reclaims_no_bytes_and_leaves_quarantine(
     perm_root = tmp_path / "decomp-permuter"
     run = _make_run(perm_root)
 
-    def remover(quarantine: Path) -> None:
+    def remover(directory_fd: int, _expected: os.stat_result) -> str:
         if partial:
-            next(path for path in quarantine.rglob("*") if path.is_file()).unlink()
-        raise OSError("rmtree failed")
+            os.unlink("candidate_audit.json", dir_fd=directory_fd)
+        return "cleanup-error"
 
     result = lrr.apply_local_remote_run_retention(
         perm_root,
@@ -1673,16 +1791,17 @@ def test_apply_removal_failure_reclaims_no_bytes_and_leaves_quarantine(
         remote_runner=lambda argv, **_: _tmux_result(argv),
         git_runner=_untracked_git,
         clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
-        remover=remover,
+        descriptor_remover=remover,
     )
 
     action = result.actions[0]
-    assert action.reasons[0] == "removal-failed"
+    assert action.reasons[0] == "cleanup-error"
     assert result.reclaimed_bytes == 0
     assert result.plan is not None
     assert result.projected_total_bytes == result.plan.total_bytes
     assert action.quarantine_path is not None
-    assert action.quarantine_path.is_dir()
+    assert not action.quarantine_path.exists()
+    assert run.is_dir()
 
 
 def test_apply_remover_returning_with_quarantine_present_is_incomplete(
@@ -1697,10 +1816,10 @@ def test_apply_remover_returning_with_quarantine_present_is_incomplete(
         remote_runner=lambda argv, **_: _tmux_result(argv),
         git_runner=_untracked_git,
         clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
-        remover=lambda _quarantine: None,
+        descriptor_remover=lambda _fd, _expected: None,
     )
 
-    assert result.actions[0].reasons == ("removal-incomplete",)
+    assert result.actions[0].reasons == ("removal-incomplete", "restored")
     assert result.reclaimed_bytes == 0
 
 
@@ -1736,7 +1855,7 @@ def test_apply_batches_two_probe_rounds_for_mixed_selected_and_active_runs(
     assert not result.cap_satisfied
 
 
-def test_apply_deletes_proven_run_but_reports_unrelated_inventory_issue(
+def test_apply_incomplete_inventory_skips_all_selected_runs(
     tmp_path: Path,
 ) -> None:
     perm_root = tmp_path / "decomp-permuter"
@@ -1752,10 +1871,14 @@ def test_apply_deletes_proven_run_but_reports_unrelated_inventory_issue(
         clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
     )
 
-    assert result.removed_count == 1
+    assert result.status == "incomplete-inventory"
+    assert result.removed_count == 0
+    assert result.skipped_count == 1
+    assert result.actions[0].reasons == ("inventory-incomplete",)
     assert not result.inventory_complete
     assert not result.cap_satisfied
     assert unexpected.read_text() == "unknown"
+    assert run.is_dir()
 
 
 def test_apply_initial_remote_runner_exception_protects_run(tmp_path: Path) -> None:
@@ -1896,8 +2019,8 @@ def test_write_fetch_manifest_cleans_temp_when_atomic_publish_fails(
     assert summary.identity is not None
     monkeypatch.setattr(
         lrr,
-        "_rename_no_replace",
-        lambda _source, _destination: (_ for _ in ()).throw(OSError("collision")),
+        "_rename_no_replace_at",
+        lambda _source_fd, _source, _destination_fd, _destination: "error",
     )
 
     result = lrr.write_local_fetch_manifest(
@@ -1933,7 +2056,7 @@ def test_write_fetch_manifest_update_restores_prior_on_post_publish_failure(
     prior = first.path.read_bytes()
     monkeypatch.setattr(
         lrr,
-        "_fsync_directory",
+        "_fsync_directory_fd",
         lambda _path: (_ for _ in ()).throw(OSError("fsync failed")),
     )
 
@@ -1948,6 +2071,48 @@ def test_write_fetch_manifest_update_restores_prior_on_post_publish_failure(
     assert update.status == "publish-failed"
     assert first.path.read_bytes() == prior
     assert not list(run.glob(".melee-agent-local-fetch.*"))
+
+
+def test_fetch_manifest_parent_swap_writes_only_opened_original_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    summary = _summary(perm_root)
+    assert summary.identity is not None
+    remote_runs = run.parent
+    moved = tmp_path / "moved-remote-runs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / run.name).mkdir()
+    sentinel = outside / run.name / "sentinel"
+    sentinel.write_text("outside untouched")
+    original = lrr._rename_no_replace_at
+    swapped = False
+
+    def swap_then_rename(source_fd: int, source: str, dest_fd: int, dest: str) -> str:
+        nonlocal swapped
+        if not swapped and dest == lrr.FETCH_MANIFEST_FILENAME:
+            swapped = True
+            remote_runs.rename(moved)
+            remote_runs.symlink_to(outside, target_is_directory=True)
+        return original(source_fd, source, dest_fd, dest)
+
+    monkeypatch.setattr(lrr, "_rename_no_replace_at", swap_then_rename)
+
+    result = lrr.write_local_fetch_manifest(
+        run,
+        identity=summary.identity,
+        state="complete",
+        candidate_audit={"total": 0, "candidates": []},
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.ok
+    assert (moved / run.name / lrr.FETCH_MANIFEST_FILENAME).is_file()
+    assert sentinel.read_text() == "outside untouched"
+    assert not (outside / run.name / lrr.FETCH_MANIFEST_FILENAME).exists()
 
 
 def test_retain_local_remote_run_writes_bound_marker_and_protects_run(tmp_path: Path) -> None:
@@ -2108,21 +2273,22 @@ def test_retain_local_remote_run_refuses_invalid_or_symlinked_evidence(
     assert not (outside / lrr.RETENTION_MARKER_FILENAME).exists()
 
 
-def test_retain_local_remote_run_publish_race_fails_without_marking_replacement(
+def test_retain_local_remote_run_publish_race_marks_only_opened_original(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     perm_root = tmp_path / "decomp-permuter"
     run = _make_run(perm_root)
-    original_rename = lrr._rename_no_replace
+    original_rename = lrr._rename_no_replace_at
     moved = tmp_path / "moved-original"
 
-    def raced_rename(source: Path, destination: Path) -> None:
-        run.rename(moved)
-        run.mkdir()
-        original_rename(source, destination)
+    def raced_rename(source_fd: int, source: str, dest_fd: int, dest: str) -> str:
+        if dest == lrr.RETENTION_MARKER_FILENAME:
+            run.rename(moved)
+            run.mkdir()
+        return original_rename(source_fd, source, dest_fd, dest)
 
-    monkeypatch.setattr(lrr, "_rename_no_replace", raced_rename)
+    monkeypatch.setattr(lrr, "_rename_no_replace_at", raced_rename)
 
     result = lrr.retain_local_remote_run(
         perm_root,
@@ -2131,9 +2297,48 @@ def test_retain_local_remote_run_publish_race_fails_without_marking_replacement(
         clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
     )
 
-    assert result.status == "publish-failed"
+    assert result.status == "written"
     assert not (run / lrr.RETENTION_MARKER_FILENAME).exists()
-    assert not (moved / lrr.RETENTION_MARKER_FILENAME).exists()
+    assert (moved / lrr.RETENTION_MARKER_FILENAME).is_file()
+
+
+def test_retention_marker_parent_swap_writes_only_opened_original_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    remote_runs = run.parent
+    moved = tmp_path / "moved-remote-runs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / run.name).mkdir()
+    sentinel = outside / run.name / "sentinel"
+    sentinel.write_text("outside untouched")
+    original = lrr._rename_no_replace_at
+    swapped = False
+
+    def swap_then_rename(source_fd: int, source: str, dest_fd: int, dest: str) -> str:
+        nonlocal swapped
+        if not swapped and dest == lrr.RETENTION_MARKER_FILENAME:
+            swapped = True
+            remote_runs.rename(moved)
+            remote_runs.symlink_to(outside, target_is_directory=True)
+        return original(source_fd, source, dest_fd, dest)
+
+    monkeypatch.setattr(lrr, "_rename_no_replace_at", swap_then_rename)
+
+    result = lrr.retain_local_remote_run(
+        perm_root,
+        run.name,
+        reason="descriptor bound",
+        clock=lambda: datetime(2026, 7, 11, tzinfo=UTC),
+    )
+
+    assert result.ok
+    assert (moved / run.name / lrr.RETENTION_MARKER_FILENAME).is_file()
+    assert sentinel.read_text() == "outside untouched"
+    assert not (outside / run.name / lrr.RETENTION_MARKER_FILENAME).exists()
 
 
 def test_local_prune_cli_defaults_to_read_only_json(

@@ -1814,6 +1814,81 @@ def test_complete_manifest_failure_does_not_clear_prior_warning(
     assert warning.read_bytes() == prior
 
 
+def test_fetch_warning_parent_swap_writes_only_opened_original_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    run = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    pr._prepare_local_fetch_destination(job, run)
+    remote_runs = run.parent
+    moved = tmp_path / "moved-remote-runs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / run.name).mkdir()
+    sentinel = outside / run.name / "sentinel"
+    sentinel.write_text("outside untouched")
+    original = lrr._rename_no_replace_at
+    swapped = False
+
+    def swap_then_rename(source_fd: int, source: str, dest_fd: int, dest: str) -> str:
+        nonlocal swapped
+        if not swapped and dest == "remote-fetch-warning.json":
+            swapped = True
+            remote_runs.rename(moved)
+            remote_runs.symlink_to(outside, target_is_directory=True)
+        return original(source_fd, source, dest_fd, dest)
+
+    monkeypatch.setattr(lrr, "_rename_no_replace_at", swap_then_rename)
+
+    pr._write_remote_fetch_warning(
+        run,
+        job=job,
+        remote_status=pr.RemoteStatus(job.job_id, "stopped"),
+        rsync_failures=[{"command": "rsync", "returncode": 23}],
+    )
+
+    assert (moved / run.name / "remote-fetch-warning.json").is_file()
+    assert sentinel.read_text() == "outside untouched"
+    assert not (outside / run.name / "remote-fetch-warning.json").exists()
+
+
+def test_fetch_warning_clear_parent_swap_unlinks_only_opened_original_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    run = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    pr._prepare_local_fetch_destination(job, run)
+    warning = run / "remote-fetch-warning.json"
+    warning.write_text("original warning")
+    remote_runs = run.parent
+    moved = tmp_path / "moved-remote-runs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_run = outside / run.name
+    outside_run.mkdir()
+    outside_warning = outside_run / "remote-fetch-warning.json"
+    outside_warning.write_text("outside warning")
+    original = lrr._rename_no_replace_at
+    swapped = False
+
+    def swap_then_rename(source_fd: int, source: str, dest_fd: int, dest: str) -> str:
+        nonlocal swapped
+        if not swapped and source == "remote-fetch-warning.json":
+            swapped = True
+            remote_runs.rename(moved)
+            remote_runs.symlink_to(outside, target_is_directory=True)
+        return original(source_fd, source, dest_fd, dest)
+
+    monkeypatch.setattr(lrr, "_rename_no_replace_at", swap_then_rename)
+
+    pr._clear_remote_fetch_warning(run, job=job)
+
+    assert not (moved / run.name / "remote-fetch-warning.json").exists()
+    assert outside_warning.read_text() == "outside warning"
+
+
 def test_cleanup_remote_run_dir_deletes_only_remote_runs_child(tmp_path: Path) -> None:
     job = _sample_job(tmp_path)
     calls: list[tuple[list[str], bool]] = []
