@@ -82,7 +82,13 @@ def _add_candidate(
     })
     _write_json(run / "candidate_audit.json", audit)
     if sidecar is not None:
-        _write_json(source.parent / "melee-agent-candidate-status.json", sidecar)
+        bound_sidecar = dict(sidecar)
+        bound_sidecar.setdefault("candidate", str(source))
+        bound_sidecar.setdefault("function", audit["function"])
+        _write_json(
+            source.parent / "melee-agent-candidate-status.json",
+            bound_sidecar,
+        )
     return source
 
 
@@ -163,6 +169,37 @@ def test_inventory_discovers_only_direct_owned_runs_in_deterministic_order(
     assert any(issue.code == "owner-symlink" for issue in inventory.issues)
 
 
+def test_nonmatchings_owner_symlink_is_not_traversed(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    outside = tmp_path / "outside"
+    _make_run(outside, function="fn_external", job_id="external-job")
+    (perm_root / "nonmatchings").symlink_to(
+        outside / "nonmatchings",
+        target_is_directory=True,
+    )
+
+    inventory = _inventory(perm_root)
+
+    assert inventory.runs == ()
+    assert inventory.issues == (
+        lrr.InventoryIssue(perm_root / "nonmatchings", "owner-symlink"),
+    )
+
+
+def test_nonmatchings_owner_non_directory_is_rejected(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    (perm_root / "nonmatchings").write_text("not a directory")
+
+    inventory = _inventory(perm_root)
+
+    assert inventory.runs == ()
+    assert inventory.issues == (
+        lrr.InventoryIssue(perm_root / "nonmatchings", "owner-not-directory"),
+    )
+
+
 def test_legacy_metadata_is_strict_and_manifest_absence_is_allowed(
     tmp_path: Path,
 ) -> None:
@@ -187,6 +224,56 @@ def test_legacy_metadata_is_strict_and_manifest_absence_is_allowed(
     invalid = _summary(perm_root)
     assert not invalid.metadata_valid
     assert "metadata-invalid" in invalid.local_reasons
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("local_perm_dir", "nonmatchings/fn_80000000"),
+        (
+            "remote_run_dir",
+            "remote-runs/fn_80000000-coder64-20260701-120000",
+        ),
+        (
+            "remote_perm_dir",
+            "remote-runs/fn_80000000-coder64-20260701-120000/"
+            "nonmatchings/fn_80000000",
+        ),
+    ],
+)
+def test_metadata_paths_must_be_absolute(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    metadata_path = run / "remote-run" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata[field] = value
+    _write_json(metadata_path, metadata)
+
+    summary = _summary(perm_root)
+
+    assert not summary.metadata_valid
+    assert "metadata-invalid" in summary.local_reasons
+
+
+def test_metadata_remote_paths_must_share_the_same_job_root(tmp_path: Path) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    metadata_path = run / "remote-run" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["remote_perm_dir"] = metadata["remote_perm_dir"].replace(
+        "/home/coder/",
+        "/srv/other/",
+    )
+    _write_json(metadata_path, metadata)
+
+    summary = _summary(perm_root)
+
+    assert not summary.metadata_valid
+    assert "metadata-invalid" in summary.local_reasons
 
 
 def test_fetch_manifest_version_identity_and_partial_state_fail_closed(
@@ -355,10 +442,67 @@ def test_full_triage_requires_every_sidecar_but_zero_candidate_audit_is_valid(
     fetch_only = _summary(perm_root)
     assert not fetch_only.fully_triaged
 
-    _write_json(source.parent / "melee-agent-candidate-status.json", _triage_status())
+    _write_json(
+        source.parent / "melee-agent-candidate-status.json",
+        _triage_status(candidate=str(source), function="fn_80000000"),
+    )
     triaged = _summary(perm_root)
     assert triaged.fully_triaged
     assert "candidate-untriaged" not in triaged.local_reasons
+
+
+@pytest.mark.parametrize(
+    "candidate_value,function_value",
+    [
+        (None, "fn_80000000"),
+        ("relative/output-1-1/source.c", "fn_80000000"),
+        ("{outside}", "fn_80000000"),
+        ("{source}", None),
+        ("{source}", "fn_other"),
+    ],
+)
+def test_triage_sidecar_must_bind_exact_candidate_and_function(
+    tmp_path: Path,
+    candidate_value: str | None,
+    function_value: str | None,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    source = _add_candidate(run)
+    outside = tmp_path / "outside.c"
+    outside.write_text("void outside(void) {}\n")
+    payload = _triage_status()
+    if candidate_value is not None:
+        payload["candidate"] = candidate_value.format(
+            source=source,
+            outside=outside,
+        )
+    if function_value is not None:
+        payload["function"] = function_value
+    _write_json(source.parent / "melee-agent-candidate-status.json", payload)
+
+    summary = _summary(perm_root)
+
+    assert not summary.fully_triaged
+    assert summary.flags.candidate_status_invalid
+    assert "candidate-status-invalid" in summary.local_reasons
+
+
+def test_writer_shaped_triage_sidecar_with_exact_identity_is_valid(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    run = _make_run(perm_root)
+    source = _add_candidate(run)
+    _write_json(
+        source.parent / "melee-agent-candidate-status.json",
+        _triage_status(candidate=str(source), function="fn_80000000"),
+    )
+
+    summary = _summary(perm_root)
+
+    assert summary.fully_triaged
+    assert not summary.flags.candidate_status_invalid
 
 
 @pytest.mark.parametrize(

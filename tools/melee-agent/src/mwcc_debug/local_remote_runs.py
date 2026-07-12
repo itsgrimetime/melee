@@ -298,10 +298,11 @@ def read_legacy_metadata(
     if payload["job_id"] != job_id or payload["function"] != function:
         return None, "metadata identity contradicts owned path"
     function_dir = run.parent.parent
+    local_perm_raw = Path(str(payload["local_perm_dir"])).expanduser()
+    if not local_perm_raw.is_absolute():
+        return None, "metadata local path must be absolute"
     try:
-        local_perm_dir = Path(str(payload["local_perm_dir"])).expanduser().resolve(
-            strict=False
-        )
+        local_perm_dir = local_perm_raw.resolve(strict=False)
         expected_local = function_dir.resolve(strict=True)
     except (OSError, RuntimeError):
         return None, "metadata local path cannot be resolved"
@@ -309,12 +310,14 @@ def read_legacy_metadata(
         return None, "metadata local path contradicts owned path"
     remote_run = PurePosixPath(str(payload["remote_run_dir"]))
     remote_perm = PurePosixPath(str(payload["remote_perm_dir"]))
+    if not remote_run.is_absolute() or not remote_perm.is_absolute():
+        return None, "metadata remote paths must be absolute"
     if remote_run.name != job_id:
         return None, "metadata remote run path contradicts job id"
     if remote_run.parent.name != "remote-runs":
         return None, "metadata remote run path is outside remote-runs"
-    expected_tail = ("remote-runs", job_id, "nonmatchings", function)
-    if tuple(remote_perm.parts[-4:]) != expected_tail:
+    expected_remote_perm = remote_run / "nonmatchings" / function
+    if remote_perm != expected_remote_perm:
         return None, "metadata remote permuter path contradicts identity"
     if not _valid_timestamp(payload["created_at"]):
         return None, "metadata created_at is invalid"
@@ -484,13 +487,32 @@ def _candidate_audit_valid(
     return valid, False
 
 
-def _candidate_status(source: Path) -> tuple[bool, bool, bool]:
+def _candidate_status(
+    source: Path,
+    *,
+    run: Path,
+    function: str,
+) -> tuple[bool, bool, bool]:
     """Return (fully_triaged, winner, invalid)."""
     payload, detail = _read_json_regular(source.parent / CANDIDATE_STATUS_FILENAME)
     if payload is None:
         return False, False, detail != "missing"
     if payload.get("source") not in {"triage", "verify"}:
         return False, False, False
+    candidate = payload.get("candidate")
+    if not isinstance(candidate, str):
+        return False, False, True
+    candidate_path = Path(candidate)
+    if not candidate_path.is_absolute():
+        return False, False, True
+    normalized_candidate = Path(os.path.abspath(candidate_path))
+    expected_candidate = source.absolute()
+    if (
+        not _within(normalized_candidate, run.absolute())
+        or normalized_candidate != expected_candidate
+        or payload.get("function") != function
+    ):
+        return False, False, True
     if not isinstance(payload.get("status"), str) or not str(
         payload["status"]
     ).strip():
@@ -622,7 +644,11 @@ def _summarize_run(
     winner = False
     status_invalid = False
     for source in sources:
-        triaged, source_winner, invalid = _candidate_status(source)
+        triaged, source_winner, invalid = _candidate_status(
+            source,
+            run=run,
+            function=function,
+        )
         all_triaged = all_triaged and triaged
         winner = winner or source_winner
         status_invalid = status_invalid or invalid
@@ -721,9 +747,46 @@ def inventory_local_remote_runs(
 
     nonmatchings = resolved_root / "nonmatchings"
     try:
-        function_entries = sorted(os.scandir(nonmatchings), key=lambda item: item.name)
+        nonmatchings_stat = nonmatchings.lstat()
     except FileNotFoundError:
         return LocalRemoteRunInventory(resolved_root, (), ())
+    except OSError as exc:
+        return LocalRemoteRunInventory(
+            resolved_root,
+            (),
+            (InventoryIssue(nonmatchings, "owner-unreadable", str(exc)),),
+        )
+    if stat.S_ISLNK(nonmatchings_stat.st_mode):
+        return LocalRemoteRunInventory(
+            resolved_root,
+            (),
+            (InventoryIssue(nonmatchings, "owner-symlink"),),
+        )
+    if not stat.S_ISDIR(nonmatchings_stat.st_mode):
+        return LocalRemoteRunInventory(
+            resolved_root,
+            (),
+            (InventoryIssue(nonmatchings, "owner-not-directory"),),
+        )
+    try:
+        resolved_nonmatchings = nonmatchings.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return LocalRemoteRunInventory(
+            resolved_root,
+            (),
+            (InventoryIssue(nonmatchings, "owner-unreadable", str(exc)),),
+        )
+    if (
+        not _within(resolved_nonmatchings, resolved_root)
+        or resolved_nonmatchings != nonmatchings
+    ):
+        return LocalRemoteRunInventory(
+            resolved_root,
+            (),
+            (InventoryIssue(nonmatchings, "path-escape"),),
+        )
+    try:
+        function_entries = sorted(os.scandir(nonmatchings), key=lambda item: item.name)
     except OSError as exc:
         return LocalRemoteRunInventory(
             resolved_root,
