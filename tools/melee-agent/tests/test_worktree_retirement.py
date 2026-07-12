@@ -1326,6 +1326,37 @@ def test_retirement_global_preflight_failure_prevents_every_removal(
     assert not any("remove" in args for args in calls)
 
 
+def test_retirement_preflight_common_git_dir_mismatch_prevents_every_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = _retirement_record(tmp_path / "agent")
+    report = _retirement_report(tmp_path, (item,))
+    other_common_git_dir = tmp_path / "other-common-git"
+    other_common_git_dir.mkdir()
+    mismatched = replace(report, common_git_dir=other_common_git_dir)
+    monkeypatch.setattr(
+        worktrees, "inspect_worktrees", lambda *_args, **_kwargs: mismatched
+    )
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        worktrees.subprocess,
+        "run",
+        lambda args, **_kwargs: calls.append(args)
+        or subprocess.CompletedProcess(args, 1, b"", b"remove rejected"),
+    )
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert result.planned == ()
+    assert result.removed == ()
+    assert result.skipped == ()
+    assert [error.reason for error in result.errors] == [
+        "common-git-dir-changed"
+    ]
+    assert not any("remove" in args for args in calls)
+
+
 def _local_revalidation_mutation(
     name: str, item: worktrees.WorktreeRecord
 ) -> tuple[worktrees.WorktreeRecord | None, str]:
@@ -1420,6 +1451,57 @@ def test_retirement_revalidation_skips_changed_candidate(
     assert [(skip.phase, skip.reason) for skip in result.skipped] == [("revalidate", expected)]
     assert result.errors == ()
     assert not any("remove" in args for args in calls)
+
+
+@pytest.mark.parametrize("mutation", ["cache-identity", "link-identity"])
+def test_retirement_revalidation_binds_asset_snapshot_identities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    link = worktrees.assets.HydratedAssetLink(
+        relative=Path("build/tools/tool"),
+        link_device=1,
+        link_inode=2,
+        link_text="../../../cache/files/build/tools/tool",
+        target_device=3,
+        target_inode=4,
+    )
+    snapshot = worktrees.assets.HydratedAssetSnapshot(
+        cache_root=tmp_path / "cache",
+        cache_identity=(5, 6),
+        manifest_identity=(7, 8),
+        links=(link,),
+    )
+    if mutation == "cache-identity":
+        changed_snapshot = replace(snapshot, cache_identity=(5, 99))
+    else:
+        changed_snapshot = replace(
+            snapshot,
+            links=(replace(link, link_inode=99),),
+        )
+    item = replace(
+        _retirement_record(tmp_path / "agent"), asset_snapshot=snapshot
+    )
+    changed = replace(item, asset_snapshot=changed_snapshot)
+    report = _retirement_report(tmp_path, (item,))
+    reports = [report, replace(report, records=(changed,))]
+    monkeypatch.setattr(
+        worktrees, "inspect_worktrees", lambda *_args, **_kwargs: reports.pop(0)
+    )
+    monkeypatch.setattr(
+        worktrees.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("changed asset identity was removed"),
+    )
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert result.removed == ()
+    assert [(skip.phase, skip.reason) for skip in result.skipped] == [
+        ("revalidate", "changed-during-retirement")
+    ]
+    assert result.errors == ()
 
 
 @pytest.mark.parametrize(
@@ -1576,6 +1658,95 @@ def test_retirement_path_absence_check_detects_dangling_symlink(
     dangling.symlink_to(tmp_path / "missing-target")
 
     assert worktrees._path_exists_nofollow(dangling) is True
+
+
+@pytest.mark.parametrize("equivalent_spelling", [False, True])
+def test_retirement_post_remove_detects_recreated_registration_by_canonical_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    equivalent_spelling: bool,
+) -> None:
+    item = _retirement_record(tmp_path / "agent")
+    report = _retirement_report(tmp_path, (item,))
+    reports = [report, report]
+    registered_path = item.path
+    if equivalent_spelling:
+        registered_path = tmp_path / "agent-alias"
+        registered_path.symlink_to(item.path, target_is_directory=True)
+    registered = worktrees.RegisteredWorktree(
+        path=registered_path,
+        head=item.head,
+        branch=item.branch,
+        detached=False,
+        locked_reason=None,
+        prunable_reason=None,
+    )
+    monkeypatch.setattr(
+        worktrees, "inspect_worktrees", lambda *_args, **_kwargs: reports.pop(0)
+    )
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    monkeypatch.setattr(
+        worktrees,
+        "discover_registered_worktrees",
+        lambda _repo_root: (registered,),
+    )
+    monkeypatch.setattr(worktrees, "_path_exists_nofollow", lambda _path: False)
+
+    def successful_git(args, **_kwargs):
+        stdout = item.head.encode() + b"\n" if "rev-parse" in args else b""
+        return subprocess.CompletedProcess(args, 0, stdout, b"")
+
+    monkeypatch.setattr(worktrees.subprocess, "run", successful_git)
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert result.removed == ()
+    assert [(skip.phase, skip.reason) for skip in result.skipped] == [
+        ("verify", "git-remove-failed")
+    ]
+    assert result.errors == ()
+
+
+def test_retirement_post_remove_fails_closed_on_registration_canonicalization_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = _retirement_record(tmp_path / "agent")
+    report = _retirement_report(tmp_path, (item,))
+    reports = [report, report]
+    broken_registration = tmp_path / "broken-registration"
+    broken_registration.symlink_to(tmp_path / "missing-worktree")
+    registered = worktrees.RegisteredWorktree(
+        path=broken_registration,
+        head=item.head,
+        branch=item.branch,
+        detached=False,
+        locked_reason=None,
+        prunable_reason=None,
+    )
+    monkeypatch.setattr(
+        worktrees, "inspect_worktrees", lambda *_args, **_kwargs: reports.pop(0)
+    )
+    monkeypatch.setattr(worktrees, "collect_process_snapshot", _quiet_snapshot)
+    monkeypatch.setattr(
+        worktrees,
+        "discover_registered_worktrees",
+        lambda _repo_root: (registered,),
+    )
+    monkeypatch.setattr(worktrees, "_path_exists_nofollow", lambda _path: False)
+
+    def successful_git(args, **_kwargs):
+        stdout = item.head.encode() + b"\n" if "rev-parse" in args else b""
+        return subprocess.CompletedProcess(args, 0, stdout, b"")
+
+    monkeypatch.setattr(worktrees.subprocess, "run", successful_git)
+
+    result = worktrees.retire_worktrees(report, apply=True)
+
+    assert result.removed == ()
+    assert result.skipped == ()
+    assert [error.reason for error in result.errors] == [
+        "worktree-porcelain-invalid"
+    ]
 
 
 def test_retirement_late_global_failure_reports_partial_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

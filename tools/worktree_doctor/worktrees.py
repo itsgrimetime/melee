@@ -1470,6 +1470,21 @@ def _path_exists_nofollow(path: Path) -> bool:
     return True
 
 
+def _strict_registered_canonical_paths(
+    registered: Sequence[RegisteredWorktree],
+) -> tuple[Path, ...]:
+    canonical_paths: list[Path] = []
+    for item in registered:
+        try:
+            canonical_paths.append(item.path.resolve(strict=True))
+        except OSError as error:
+            raise WorktreeParseError(
+                f"cannot strictly canonicalize registered worktree "
+                f"{item.path!s}: {error}"
+            ) from error
+    return tuple(canonical_paths)
+
+
 def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult:
     """Plan or safely apply retirement of eligible registered worktrees."""
 
@@ -1490,14 +1505,20 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
             errors=(),
         )
 
-    lock_path = report.common_git_dir / "worktree-doctor-retirement.lock"
     lock_descriptor: int | None = None
     try:
         try:
+            locked_common_git_dir = report.common_git_dir.resolve(strict=True)
+            lock_path = locked_common_git_dir / "worktree-doctor-retirement.lock"
             lock_descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
             fcntl.flock(
                 lock_descriptor,
                 fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+            locked_common_git_stat = locked_common_git_dir.stat()
+            locked_common_git_identity = (
+                locked_common_git_stat.st_dev,
+                locked_common_git_stat.st_ino,
             )
         except OSError as error:
             if lock_descriptor is not None:
@@ -1531,6 +1552,43 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
                 skipped=(),
                 errors=_retirement_errors(
                     preflight.global_errors, detail="preflight inspection failed"
+                ),
+            )
+        try:
+            preflight_common_git_dir = preflight.common_git_dir.resolve(strict=True)
+            preflight_common_git_stat = preflight_common_git_dir.stat()
+            preflight_common_git_identity = (
+                preflight_common_git_stat.st_dev,
+                preflight_common_git_stat.st_ino,
+            )
+        except OSError as error:
+            return RetirementResult(
+                planned=(),
+                removed=(),
+                skipped=(),
+                errors=(
+                    RetirementError(
+                        reason="common-git-dir-changed",
+                        detail=f"preflight common Git directory is unavailable: {error}",
+                    ),
+                ),
+            )
+        if (
+            preflight_common_git_dir != locked_common_git_dir
+            or preflight_common_git_identity != locked_common_git_identity
+        ):
+            return RetirementResult(
+                planned=(),
+                removed=(),
+                skipped=(),
+                errors=(
+                    RetirementError(
+                        reason="common-git-dir-changed",
+                        detail=(
+                            "preflight common Git directory does not match the "
+                            "locked directory"
+                        ),
+                    ),
                 ),
             )
 
@@ -1607,10 +1665,13 @@ def retire_worktrees(report: WorktreeReport, *, apply: bool) -> RetirementResult
 
             try:
                 registered = discover_registered_worktrees(report.repo_root)
+                registered_canonical_paths = _strict_registered_canonical_paths(
+                    registered
+                )
             except WorktreeParseError as error:
                 errors.append(_porcelain_error(error, phase="verify"))
                 break
-            still_registered = any(item.path == candidate.path for item in registered)
+            still_registered = canonical_path in registered_canonical_paths
             if _path_exists_nofollow(candidate.path) or still_registered:
                 skipped.append(
                     _skip(candidate, phase="verify", reason="git-remove-failed")
