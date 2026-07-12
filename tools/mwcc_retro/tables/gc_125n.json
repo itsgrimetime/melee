@@ -1,5 +1,7 @@
 {
   "compiler": "1.2.5n",
+  "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
+  "instrumentation_proofs": [],
   "entries": {
     "codegen_start": {
       "va": 4411840,
