@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from dataclasses import fields, is_dataclass, replace
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Iterable, Mapping, TypeVar
 
+import pytest
 from tools.mwcc_retro.backend_object_bindings import ObjectBindingValidation
 from tools.mwcc_retro.backend_pcode_lineage import (
     AnchorVirtualBinding,
     PCodeLineageValidation,
 )
 
+from src.mwcc_debug.causal_diff import backend_adapter
+from src.mwcc_debug.causal_diff.bundles import ValidatedBundle
 from src.mwcc_debug.causal_diff.canonical import canonical_bytes
 from src.mwcc_debug.causal_diff.models import EvidenceEdge, EvidenceNode
 from src.mwcc_debug.causal_diff.object_binding_adapter import (
@@ -19,13 +23,17 @@ from src.mwcc_debug.causal_diff.object_binding_adapter import (
     emit_object_binding_evidence,
 )
 from src.mwcc_debug.causal_diff.owner_certificate import OwnerRoleKey
+from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 from tests.test_causal_diff_object_bindings import (
     _adapter_input,
     _object_result,
     _pcode_result,
+    _verified_bundle,
 )
 
 _T = TypeVar("_T")
+
+STORE_FACTORIES = (pytest.param(InMemoryEvidenceStore, id="in-memory"),)
 
 
 def only(items: Iterable[_T]) -> _T:
@@ -37,6 +45,30 @@ def only(items: Iterable[_T]) -> _T:
 
 def complete_evidence(**adapter_overrides: object) -> ObjectBindingEvidence:
     return emit_object_binding_evidence(_adapter_input(**adapter_overrides))
+
+
+def validated_current_v2_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> ValidatedBundle:
+    return _verified_bundle(tmp_path, monkeypatch)
+
+
+def future_complete_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> backend_adapter.BackendEvidence:
+    bundle = validated_current_v2_bundle(tmp_path, monkeypatch)
+    evidence = complete_evidence(
+        compile_id=bundle.compile_id,
+        function=bundle.manifest.function,
+    )
+    monkeypatch.setattr(
+        backend_adapter,
+        "adapt_object_bindings",
+        lambda _bundle: evidence,
+    )
+    return backend_adapter.adapt_backends(bundle)
 
 
 def first_role() -> OwnerRoleKey:

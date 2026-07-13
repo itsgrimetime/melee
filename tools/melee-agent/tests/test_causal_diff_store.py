@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Iterable
 
 import pytest
 
+from src.mwcc_debug.causal_diff.graph import add_adapter_results_atomically
 from src.mwcc_debug.causal_diff.models import (
+    AdapterResult,
     ComparisonRecord,
     Confidence,
     EvidenceEdge,
@@ -12,6 +15,26 @@ from src.mwcc_debug.causal_diff.models import (
     Provenance,
 )
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
+from tests.owner_certificate_fixtures import (
+    STORE_FACTORIES,
+    future_complete_backend,
+)
+
+
+class _RecordingEvidenceStore(InMemoryEvidenceStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.batches: list[tuple[str, tuple[str, ...]]] = []
+
+    def add_nodes(self, records: Iterable[EvidenceNode]) -> None:
+        batch = tuple(records)
+        self.batches.append(("nodes", tuple(record.record_id for record in batch)))
+        super().add_nodes(batch)
+
+    def add_edges(self, records: Iterable[EvidenceEdge]) -> None:
+        batch = tuple(records)
+        self.batches.append(("edges", tuple(record.record_id for record in batch)))
+        super().add_edges(batch)
 
 
 def _prov(*, input_record_ids: tuple[str, ...] = ()) -> Provenance:
@@ -113,6 +136,117 @@ def test_duplicate_id_with_different_content_is_rejected() -> None:
     altered = node.with_attributes({"virtual": 67})
     with pytest.raises(ValueError, match="record ID collision"):
         store.add_nodes((altered,))
+
+
+@pytest.mark.parametrize("store_factory", STORE_FACTORIES)
+def test_changed_content_with_same_certificate_id_is_store_collision(
+    store_factory,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    backend = future_complete_backend(tmp_path, monkeypatch)
+    certificate = backend.owner_certificates.certificate_nodes[0]
+    store = store_factory()
+    add_adapter_results_atomically(store, (backend.result,))
+
+    with pytest.raises(ValueError, match="record ID collision"):
+        store.add_nodes((certificate.with_attributes({**certificate.attributes, "stack_offset": 0x48}),))
+
+
+def test_atomic_certificate_ingestion_orders_diagnostics_edges_then_certificate(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    backend = future_complete_backend(tmp_path, monkeypatch)
+    certificate_ids = {certificate.record_id for certificate in backend.owner_certificates.certificate_nodes}
+    store = _RecordingEvidenceStore()
+
+    add_adapter_results_atomically(store, (backend.result,))
+
+    assert [kind for kind, _ids in store.batches] == ["nodes", "edges", "nodes"]
+    assert certificate_ids.isdisjoint(store.batches[0][1])
+    assert certificate_ids == set(store.batches[2][1])
+
+
+def test_atomic_certificate_ingestion_leaves_destination_unchanged_on_missing_provenance(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    backend = future_complete_backend(tmp_path, monkeypatch)
+    certificate = backend.owner_certificates.certificate_nodes[0]
+    malformed = replace(
+        certificate,
+        provenance=replace(
+            certificate.provenance,
+            input_record_ids=(
+                "missing-provenance-record",
+                *certificate.provenance.input_record_ids[1:],
+            ),
+        ),
+    )
+    result = replace(
+        backend.result,
+        nodes=tuple(malformed if node.record_id == certificate.record_id else node for node in backend.result.nodes),
+    )
+    store = _RecordingEvidenceStore()
+
+    with pytest.raises(ValueError, match="provenance input record not found"):
+        add_adapter_results_atomically(store, (result,))
+
+    assert store.batches == []
+    assert store.find_nodes(backend.result.nodes[0].compile_id) == ()
+    assert store.find_edges(backend.result.nodes[0].compile_id) == ()
+
+
+def test_atomic_certificate_ingestion_leaves_destination_unchanged_on_collision(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    backend = future_complete_backend(tmp_path, monkeypatch)
+    certificate = backend.owner_certificates.certificate_nodes[0]
+    diagnostic_nodes = tuple(node for node in backend.result.nodes if node.kind != "owner-proof-certificate")
+    collision = certificate.with_attributes({**certificate.attributes, "stack_offset": 0x48})
+    store = _RecordingEvidenceStore()
+    store.add_nodes(diagnostic_nodes)
+    store.add_edges(backend.result.edges)
+    store.add_nodes((collision,))
+    before_nodes = store.find_nodes(certificate.compile_id)
+    before_edges = store.find_edges(certificate.compile_id)
+    store.batches.clear()
+
+    with pytest.raises(ValueError, match="record ID collision"):
+        add_adapter_results_atomically(store, (backend.result,))
+
+    assert store.batches == []
+    assert store.find_nodes(certificate.compile_id) == before_nodes
+    assert store.find_edges(certificate.compile_id) == before_edges
+
+
+def test_atomic_ingestion_leaves_destination_unchanged_on_bad_edge() -> None:
+    source = _node("compile-a", "66", "row-counter")
+    dangling = EvidenceEdge.create(
+        compile_id=source.compile_id,
+        function=source.function,
+        kind="lowers-to",
+        source_id=source.record_id,
+        target_id="missing-target",
+        occurrence_ordinal=0,
+        producer_confidence=Confidence.OBSERVED,
+        adapter_confidence=Confidence.OBSERVED,
+        provenance=_prov(),
+        attributes={},
+    )
+    store = _RecordingEvidenceStore()
+
+    with pytest.raises(ValueError, match="edge endpoint not found"):
+        add_adapter_results_atomically(
+            store,
+            (AdapterResult(nodes=(source,), edges=(dangling,)),),
+        )
+
+    assert store.batches == []
+    assert store.find_nodes(source.compile_id) == ()
+    assert store.find_edges(source.compile_id) == ()
 
 
 def test_record_id_collisions_are_rejected_across_record_categories() -> None:

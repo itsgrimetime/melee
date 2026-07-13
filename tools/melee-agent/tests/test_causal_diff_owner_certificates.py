@@ -4,6 +4,7 @@ import pytest
 
 from src.mwcc_debug.causal_diff import owner_certificate
 from src.mwcc_debug.causal_diff.canonical import stable_id
+from src.mwcc_debug.causal_diff.graph import add_adapter_results_atomically
 from src.mwcc_debug.causal_diff.models import (
     Confidence,
     EvidenceEdge,
@@ -22,6 +23,7 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
     build_owner_certificates,
 )
 from tests.owner_certificate_fixtures import (
+    STORE_FACTORIES,
     ambiguous_evidence,
     canonical_result,
     complete_evidence,
@@ -40,6 +42,7 @@ from tests.owner_certificate_fixtures import (
     evidence_with_two_mutation_outputs,
     evidence_without_instrumentation_identity,
     first_role,
+    future_complete_backend,
     other_role,
     replace_record,
     second_role,
@@ -154,6 +157,26 @@ def test_direct_certificate_result_construction_is_not_trusted():
 
     assert result.is_trusted is False
     assert result.certificate(forged.record_id) is None
+
+
+@pytest.mark.parametrize("store_factory", STORE_FACTORIES)
+def test_certificate_round_trips_through_store_as_diagnostic_bytes(
+    store_factory,
+    tmp_path,
+    monkeypatch,
+):
+    backend = future_complete_backend(tmp_path, monkeypatch)
+    store = store_factory()
+    add_adapter_results_atomically(store, (backend.result,))
+    certificate = backend.owner_certificates.certificate_nodes[0]
+
+    reloaded = store.get_node(certificate.record_id)
+    assert reloaded == certificate
+    rebuilt = build_owner_certificates(backend.object_bindings)
+    assert rebuilt.certificate(certificate.record_id) == reloaded
+    forged_result = OwnerCertificateResult((reloaded,), (), ())
+    assert forged_result.is_trusted is False
+    assert forged_result.certificate(certificate.record_id) is None
 
 
 def test_certificate_result_subclass_cannot_override_trust():

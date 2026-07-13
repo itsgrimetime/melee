@@ -16,6 +16,9 @@ from ..pressure_explorer.models import AllocatorFacts
 from .bundles import BundleInputError, ValidatedBundle
 from .models import AdapterResult, Confidence, EvidenceEdge, EvidenceNode, Provenance
 from .object_binding_adapter import ObjectBindingEvidence, adapt_object_bindings
+from .owner_certificate import OwnerCertificateResult, build_owner_certificates
+
+EMPTY_OWNER_CERTIFICATE_RESULT = OwnerCertificateResult((), (), ())
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +29,13 @@ class BackendEvidence:
     nodes_by_class_ig: Mapping[tuple[int, int], str]
     nodes_by_virtual: Mapping[tuple[str, int], str]
     object_bindings: ObjectBindingEvidence | None = None
+    owner_certificates: OwnerCertificateResult = EMPTY_OWNER_CERTIFICATE_RESULT
+
+    @property
+    def owner_abstention_reason(self) -> str | None:
+        if self.object_bindings is None:
+            return None
+        return None if self.owner_certificates.certificate_nodes else "backend-owner-path-incomplete"
 
     @property
     def verified_capabilities(self) -> frozenset[str]:
@@ -575,6 +585,7 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
     role_compile: role_descriptor.Compile | None = None
     pcode_roles_exact = True
     object_bindings = adapt_object_bindings(bundle)
+    owner_certificates = build_owner_certificates(object_bindings)
     try:
         source_text = bundle.artifact_paths["source"].read_bytes().decode("utf-8")
     except (OSError, UnicodeError) as error:
@@ -682,6 +693,7 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
 
     nodes.extend(object_bindings.nodes)
     edges.extend(object_bindings.edges)
+    nodes.extend(owner_certificates.certificate_nodes)
 
     normalized_nodes = _deduplicate_nodes(nodes)
     normalized_edges = _deduplicate_edges(edges)
@@ -712,6 +724,7 @@ def adapt_backends(bundle: ValidatedBundle) -> BackendEvidence:
         nodes_by_class_ig=MappingProxyType({key: node.record_id for key, node in nodes_by_class_ig.items()}),
         nodes_by_virtual=MappingProxyType({key: node.record_id for key, node in nodes_by_virtual.items()}),
         object_bindings=(object_bindings if object_bindings.capture_run_id else None),
+        owner_certificates=owner_certificates,
     )
 
 

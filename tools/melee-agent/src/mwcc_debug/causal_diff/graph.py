@@ -51,10 +51,12 @@ class _Signature:
 
 
 def add_adapter_results_atomically(store: EvidenceStore, results: Iterable[AdapterResult]) -> None:
-    """Ingest one compile's adapter nodes before any endpoint-checked edges."""
+    """Preflight a batch, then ingest diagnostics, edges, and certificates."""
 
     normalized = tuple(results)
     nodes = tuple(node for result in normalized for node in result.nodes)
+    diagnostic_nodes = tuple(node for node in nodes if node.kind != "owner-proof-certificate")
+    certificate_nodes = tuple(node for node in nodes if node.kind == "owner-proof-certificate")
     edges = tuple(edge for result in normalized for edge in result.edges)
 
     preflight = InMemoryEvidenceStore()
@@ -66,16 +68,24 @@ def add_adapter_results_atomically(store: EvidenceStore, results: Iterable[Adapt
     external_edges = tuple(
         record for record_id in sorted(referenced_ids) if (record := store.get_edge(record_id)) is not None
     )
-    preflight.add_nodes((*external_nodes, *nodes))
+    batch_ids = {record.record_id for record in (*nodes, *edges)}
+    for certificate in certificate_nodes:
+        for record_id in certificate.provenance.input_record_ids:
+            if record_id not in batch_ids and store.get_node(record_id) is None and store.get_edge(record_id) is None:
+                raise ValueError(f"provenance input record not found: {record_id}")
+
+    preflight.add_nodes((*external_nodes, *diagnostic_nodes))
     preflight.add_edges((*external_edges, *edges))
+    preflight.add_nodes(certificate_nodes)
 
     for record in (*nodes, *edges):
         existing = store.get_node(record.record_id) or store.get_edge(record.record_id)
         if existing is not None and existing != record:
             raise ValueError(f"record ID collision: {record.record_id}")
 
-    store.add_nodes(nodes)
+    store.add_nodes(diagnostic_nodes)
     store.add_edges(edges)
+    store.add_nodes(certificate_nodes)
 
 
 def _validate_compile_scope(bundle: ValidatedBundle, results: Iterable[AdapterResult]) -> None:

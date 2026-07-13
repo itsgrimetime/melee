@@ -22,6 +22,10 @@ from src.mwcc_debug.causal_diff.bundles import (
 from src.mwcc_debug.causal_diff.canonical import canonical_bytes
 from src.mwcc_debug.causal_diff.models import Confidence
 from src.mwcc_debug.parser import Instruction
+from tests.owner_certificate_fixtures import (
+    future_complete_backend,
+    validated_current_v2_bundle,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FUNCTION = "mnDiagram_DrawFighterHeaders"
@@ -283,6 +287,32 @@ def test_backend_adapter_verifies_all_pcdump_capabilities(
     assert node.provenance.raw_start == 0
     assert node.provenance.raw_end == len(bundle.artifact_paths["backend[0]"].read_bytes())
     assert evidence.role_compile.name == FUNCTION
+
+
+def test_current_verified_v2_backend_honestly_abstains_from_owner_certificates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = validated_current_v2_bundle(tmp_path, monkeypatch)
+
+    backend = adapt_backends(bundle)
+
+    assert backend.object_bindings is not None
+    assert backend.owner_certificates.certificate_nodes == ()
+    assert backend.owner_abstention_reason == "backend-owner-path-incomplete"
+
+
+def test_backend_adds_certificate_and_all_inputs_in_one_adapter_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = future_complete_backend(tmp_path, monkeypatch)
+    certificate = backend.owner_certificates.certificate_nodes[0]
+
+    assert certificate in backend.result.nodes
+    assert set(certificate.provenance.input_record_ids) <= {
+        record.record_id for record in (*backend.result.nodes, *backend.result.edges)
+    }
 
 
 def test_pcdump_role_chain_records_are_diagnostic(
