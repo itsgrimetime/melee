@@ -784,7 +784,7 @@ def _infer_certificate_pair(
         and frozenset((comparison.left_record_id, comparison.right_record_id)) == owner_ids
         and (comparison_role := _owner_role(comparison.attributes.get("role"))) is not None
         and comparison_role.operand_key == expected_operand
-        and comparison_role.operand_key == pair.allocator.operand_key
+        and comparison_role.operand_key in pair.allocator.operand_keys
     )
     deltas = tuple(
         comparison
@@ -796,7 +796,7 @@ def _infer_certificate_pair(
         and frozenset((comparison.left_record_id, comparison.right_record_id)) == owner_ids
         and (delta_role := _owner_role(comparison.attributes.get("role"))) is not None
         and delta_role.operand_key == expected_operand
-        and delta_role.operand_key == pair.allocator.operand_key
+        and delta_role.operand_key in pair.allocator.operand_keys
     )
     relations_complete = len(correspondences) == 1 and len(deltas) == 1
     role = _owner_role(correspondences[0].attributes.get("role")) if relations_complete else None
@@ -969,7 +969,7 @@ def infer_pair(
         if comparison.relation_kind == _BACKEND_OWNER_AMBIGUOUS
         and (role_tuple := comparison.attributes.get("role_tuple"))
         and isinstance(role_tuple, (list, tuple))
-        and role_tuple[0] == pair.allocator.operand_key
+        and role_tuple[0] in pair.allocator.operand_keys
     )
     allocator_ids = frozenset({role.left.record_id, role.right.record_id})
     stack_nodes_by_compile = _stack_nodes_by_compile(pair, query)

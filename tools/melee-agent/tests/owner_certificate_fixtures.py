@@ -1020,6 +1020,31 @@ def future_complete_pipeline_inputs() -> tuple[
     return graph_pair, owner_alignment, comparisons + deltas
 
 
+def future_complete_tied_pipeline_inputs() -> tuple[
+    tuple[FrontierGraph, FrontierGraph],
+    AnchorAlignment,
+    tuple[ComparisonRecord, ...],
+]:
+    graph_pair = _future_complete_graph_pair()
+    base_alignment = _future_complete_alignment(graph_pair)
+    tied_key = "use:1"
+    base_pair = base_alignment.by_operand[ROLE.operand_key]
+    tied_alignment = replace(
+        base_alignment,
+        operand_roles=(
+            *base_alignment.operand_roles,
+            OperandRole(tied_key, "use", 1, "r", 21),
+        ),
+        by_operand={
+            **base_alignment.by_operand,
+            tied_key: replace(base_pair, operand_key=tied_key),
+        },
+    )
+    comparisons = build_role_comparisons(tied_alignment, graph_pair)
+    deltas = diff_frontiers(graph_pair, comparisons)
+    return graph_pair, tied_alignment, comparisons + deltas
+
+
 def _future_complete_inputs():
     graph_pair, owner_alignment, all_comparisons = future_complete_pipeline_inputs()
     effects = derive_effects(owner_alignment, graph_pair, all_comparisons)

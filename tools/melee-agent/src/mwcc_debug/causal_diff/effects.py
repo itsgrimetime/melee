@@ -41,6 +41,10 @@ class AllocatorEffect:
     direction: EffectDirection
     role_correspondence: RolePair
 
+    @property
+    def operand_keys(self) -> tuple[str, ...]:
+        return tuple(self.operand_key.split("+"))
+
 
 @dataclass(frozen=True, slots=True)
 class StackEffect:
@@ -212,7 +216,7 @@ def _certificate_stack_effects(
     comparisons: tuple[ComparisonRecord, ...],
 ) -> tuple[tuple[StackEffect, ...], tuple[EffectAbstention, ...]]:
     graphs_by_compile = {str(graph.bundle.compile_id): graph for graph in graphs}
-    allocator_operands = {effect.operand_key for effect in allocator_effects}
+    allocator_operands = {operand_key for effect in allocator_effects for operand_key in effect.operand_keys}
     correspondences = tuple(
         comparison
         for comparison in comparisons
@@ -505,7 +509,7 @@ def _effect_pairs(
     for allocator in allocator_effects:
         allocator_quality = _quality_by_label(allocator.first_label, allocator.second_label, allocator.direction)
         for stack in stack_effects:
-            if stack.owner_operand_key is not None and stack.owner_operand_key != allocator.operand_key:
+            if stack.owner_operand_key is not None and stack.owner_operand_key not in allocator.operand_keys:
                 continue
             stack_quality = _quality_by_label(stack.first_label, stack.second_label, stack.direction)
             eligible = [

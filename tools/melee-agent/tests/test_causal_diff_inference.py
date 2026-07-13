@@ -39,6 +39,7 @@ from src.mwcc_debug.causal_diff.render import render_json, render_text
 from src.mwcc_debug.causal_diff.store import EvidenceQuery, InMemoryEvidenceStore
 from tests.owner_certificate_fixtures import (
     future_complete_pipeline_inputs,
+    future_complete_tied_pipeline_inputs,
     only,
     run_synthetic_future_complete_pair,
     run_with_forged_certificate_node_but_no_trusted_result,
@@ -574,6 +575,22 @@ def test_unique_changed_certificate_pair_stops_only_at_source_binding_gate() -> 
         owner.left_record_id,
         owner.right_record_id,
     }
+
+
+def test_tied_allocator_certificate_pair_stops_only_at_source_binding_gate() -> None:
+    graph_pair, tied_alignment, comparisons = future_complete_tied_pipeline_inputs()
+    effects = derive_effects(tied_alignment, graph_pair, comparisons)
+
+    report = build_report(graph_pair, effects, comparisons)
+    verdict = only(report.verdicts)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+    assert len(verdict.proof_paths) == 2
+    payload = json.loads(render_json(report))
+    allocator_payload = only(payload["effects"]["allocator_effects"])
+    assert allocator_payload["operand_key"] == "use:0+use:1"
+    assert "operand_keys" not in allocator_payload
 
 
 @pytest.mark.parametrize(

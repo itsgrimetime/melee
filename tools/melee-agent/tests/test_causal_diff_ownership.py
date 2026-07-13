@@ -39,6 +39,7 @@ from tests.owner_certificate_fixtures import (
     _certified_frontier,
     _semantic_frontier,
     future_complete_pipeline_inputs,
+    future_complete_tied_pipeline_inputs,
     graphs,
     only,
     owner_comparison,
@@ -1488,6 +1489,21 @@ def test_certificate_delta_drives_owner_mediated_stack_effect() -> None:
     }
     assert stack.first_offset == 0x48
     assert stack.second_offset == 0x44
+
+
+def test_tied_allocator_effect_preserves_certified_operand_membership() -> None:
+    graph_pair, tied_alignment, comparisons = future_complete_tied_pipeline_inputs()
+
+    effects = derive_effects(tied_alignment, graph_pair, comparisons)
+
+    allocator = only(effects.allocator_effects)
+    assert allocator.operand_key == "use:0+use:1"
+    assert allocator.operand_keys == ("use:0", "use:1")
+    stack = only(effects.stack_effects)
+    assert stack.owner_operand_key == "use:0"
+    pair = only(effects.pairs)
+    assert pair.allocator is allocator
+    assert pair.stack is stack
 
 
 def test_changed_certificate_semantics_emit_one_reconstructable_delta() -> None:
