@@ -547,6 +547,57 @@ def test_audited_capstone_writer_metadata_contract(
 
 
 @pytest.mark.parametrize(
+    (
+        "encoded",
+        "instruction_id",
+        "mnemonic",
+        "operand_registers",
+        "operand_access",
+        "register_reads",
+        "register_writes",
+    ),
+    [
+        ("d9 c1", 331, "fld", ("st(1)",), (1,), (), ("fpsw",)),
+        (
+            "d9 c9",
+            1494,
+            "fxch",
+            ("st(0)", "st(1)"),
+            (1, 0),
+            (),
+            ("fpsw",),
+        ),
+        ("dd d1", 713, "fst", ("st(1)",), (1,), (), ("fpsw",)),
+        ("dd d9", 714, "fstp", ("st(1)",), (2,), (), ("fpsw",)),
+        ("d8 c1", 15, "fadd", ("st(1)",), (1,), (), ()),
+        ("de c1", 15, "faddp", ("st(1)",), (1,), (), ()),
+    ],
+)
+def test_audited_capstone_hidden_x87_stack_metadata_contract(
+    encoded,
+    instruction_id,
+    mnemonic,
+    operand_registers,
+    operand_access,
+    register_reads,
+    register_writes,
+):
+    decoder, decoded = decode_one(encoded)
+    assert decoded.id == instruction_id
+    assert decoded.mnemonic == mnemonic
+    assert tuple(decoder.reg_name(op.reg) for op in decoded.operands) == (
+        operand_registers
+    )
+    assert tuple(op.access for op in decoded.operands) == operand_access
+    assert tuple(decoder.reg_name(reg) for reg in decoded.regs_read) == (
+        register_reads
+    )
+    assert tuple(decoder.reg_name(reg) for reg in decoded.regs_write) == (
+        register_writes
+    )
+
+
+@pytest.mark.parametrize(
     "program",
     [
         # A tainted base is an address, not the loaded payload.
@@ -684,17 +735,135 @@ def test_partial_conditional_and_stack_payloads_remain_tainted(
         recover_cfg(image, inventory(image), generous_limits(image))
 
 
-def test_unhandled_ambiguous_form_fails_with_detailed_diagnostic(tmp_path):
-    image = load_cfg_program(tmp_path, "0f b1 d8 c3")  # CMPXCHG EAX, EBX
-    with pytest.raises(CfgRecoveryError) as raised:
+def test_wide_cmpxchg_failure_arm_preserves_accumulator_taint(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f c7 0f a3 90 20 40 00 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
         recover_cfg(image, inventory(image), generous_limits(image))
-    diagnostic = str(raised.value)
-    assert "ambiguous x86 value-flow semantics" in diagnostic
-    assert "address=0x40100a" in diagnostic
-    assert "bytes=0fb1d8" in diagnostic
-    assert "id=" in diagnostic
-    assert "mnemonic=cmpxchg" in diagnostic
-    assert "overlapping CMPXCHG" in diagnostic
+
+
+@pytest.mark.parametrize("instruction", ["87 c0", "0f c1 c0"])
+def test_aliased_exchange_outputs_retain_old_accumulator_taint(
+    tmp_path, instruction
+):
+    image = load_cfg_program(
+        tmp_path,
+        f"b8 50 10 40 00 {instruction} a3 90 20 40 00 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_cmpxchg_destination_aliasing_accumulator_uses_source_value(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 31 db 0f b1 d8 a3 90 20 40 00 c3",
+    )
+    recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        # Source aliases the accumulator: either architectural arm can retain it.
+        "b8 50 10 40 00 31 db 0f b1 c3 a3 90 20 40 00 c3",
+        # Source aliases the destination: the destination remains unchanged.
+        "bb 50 10 40 00 31 c0 0f b1 db 89 1d 90 20 40 00 c3",
+        # The high-byte source partially aliases the implicit AL accumulator.
+        "b8 50 10 40 00 31 db 0f b0 e3 89 1d 90 20 40 00 c3",
+    ],
+)
+def test_cmpxchg_source_destination_and_partial_aliases_join_taint(
+    tmp_path, program
+):
+    image = load_cfg_program(tmp_path, program)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize("fld", ["d9 c1", "66 d9 c1", "2e d9 c1"])
+def test_fld_register_pushes_hidden_x87_stack_value(tmp_path, fld):
+    image = load_cfg_program(
+        tmp_path,
+        f"b8 50 10 40 00 0f 6e c8 {fld} dd 19 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        # FXCH moves the tainted ST(1) value to the memory-visible top.
+        "b8 50 10 40 00 0f 6e c8 d9 c9 dd 19 c3",
+        # FST copies ST(0) into ST(1) even though Capstone marks it read-only.
+        "b8 50 10 40 00 0f 6e c0 dd d1 dd c0 d9 c9 dd 19 c3",
+        # FLD shifts a tainted ST(1) to ST(2), then arithmetic consumes it.
+        "b8 50 10 40 00 0f 6e c8 d9 e8 d8 c2 dd 19 c3",
+        # FADDP writes its hidden destination before popping the x87 stack.
+        "b8 50 10 40 00 0f 6e c0 d9 e8 de c1 dd 19 c3",
+        # The implicit ST(0) arithmetic input is not reported as an operand.
+        "b8 50 10 40 00 0f 6e c0 de c1 dd 19 c3",
+    ],
+)
+def test_x87_swap_store_and_arithmetic_stack_forms_preserve_taint(
+    tmp_path, program
+):
+    image = load_cfg_program(tmp_path, program)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_clean_fstp_register_copy_and_pop_is_fully_modeled(tmp_path):
+    image = load_cfg_program(tmp_path, "d9 e8 dd d9 dd 19 c3")
+    recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        # FLDENV changes control/TOP state but does not overwrite data registers.
+        "b8 50 10 40 00 0f 6e c0 d9 21 0f 7e c0 a3 90 20 40 00 c3",
+        # EMMS changes tags; the aliased MMX payload remains architecturally present.
+        "b8 50 10 40 00 0f 6e c0 0f 77 0f 7e c0 a3 90 20 40 00 c3",
+        # FFREE changes a tag; it does not erase the aliased physical payload.
+        "b8 50 10 40 00 0f 6e c0 dd c0 0f 7e c0 a3 90 20 40 00 c3",
+        # An x87 push cannot silently erase the old MM7 physical alias.
+        "b8 50 10 40 00 0f 6e f8 d9 e8 0f 7e f8 a3 90 20 40 00 c3",
+    ],
+)
+def test_x87_stack_and_tag_updates_preserve_mmx_physical_alias_taint(
+    tmp_path, program
+):
+    image = load_cfg_program(tmp_path, program)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_unknown_hidden_x87_stack_form_blocks_only_relevant_taint(tmp_path):
+    tainted = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c8 d9 f7 c3",
+    )
+    with pytest.raises(CfgRecoveryError, match="unmodeled x87 stack effect"):
+        recover_cfg(tainted, inventory(tainted), generous_limits(tainted))
+
+    clean = load_cfg_program(tmp_path, "d9 f7 c3")
+    recover_cfg(clean, inventory(clean), generous_limits(clean))
 
 
 def test_entry_export_and_anchor_bind_to_complete_first_instruction(

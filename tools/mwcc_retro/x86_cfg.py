@@ -460,6 +460,9 @@ class MemoryWriteSpec:
 class _InstructionValueFlow:
     register_effects: tuple[_RegisterEffect, ...] = ()
     memory_writes: tuple[MemoryWriteSpec, ...] = ()
+    join_overlapping_register_effects: bool = False
+    taint_blocker_dependencies: tuple[_ValueDependency, ...] = ()
+    taint_blocker_reason: str | None = None
 
 
 _I386_RELOCATION_WIDTHS = {1: 2, 2: 2, 3: 4, 4: 2}
@@ -470,6 +473,22 @@ _AUDITED_X86_ENUM_SHA256 = (
     "1f5c37794e44d07e6fa47775c27d1b2418876ceadb08090eb75421f33d5e36b0"
 )
 _CALL_CLOBBERED_REGISTER_NAMES = ("eax", "ecx", "edx")
+_LEGACY_X86_PREFIXES = frozenset(
+    {
+        0x26,
+        0x2E,
+        0x36,
+        0x3E,
+        0x64,
+        0x65,
+        0x66,
+        0x67,
+        0x9B,
+        0xF0,
+        0xF2,
+        0xF3,
+    }
+)
 
 # Capstone 5.0.7 reports these operand-0 memory destinations as reads.  The
 # audit contract above makes this metadata correction table fail closed when
@@ -584,6 +603,56 @@ _PUSH_INSTRUCTIONS = frozenset({609})
 _PUSHA_INSTRUCTIONS = frozenset({610, 611})
 _PUSHF_INSTRUCTIONS = frozenset({612, 613, 614})
 _X87_VALUE_WRITERS = frozenset({174, 251, 252, 253, 713, 714})
+_X87_POP_VALUE_WRITERS = frozenset({174, 251, 253, 714})
+_X87_CONSTANT_LOADS = frozenset({187, 188, 189, 190, 191, 329, 330})
+_X87_MEMORY_LOADS = frozenset({173, 227})
+_X87_BINARY_ARITHMETIC_MNEMONICS = frozenset(
+    {
+        "fadd",
+        "faddp",
+        "fdiv",
+        "fdivp",
+        "fdivr",
+        "fdivrp",
+        "fiadd",
+        "fidiv",
+        "fidivr",
+        "fimul",
+        "fisub",
+        "fisubr",
+        "fmul",
+        "fmulp",
+        "fsub",
+        "fsubp",
+        "fsubr",
+        "fsubrp",
+    }
+)
+_X87_COMPARISON_POP_COUNTS = {
+    "fcomp": 1,
+    "fcomip": 1,
+    "fcompp": 2,
+    "fucomp": 1,
+    "fucomip": 1,
+    "fucompp": 2,
+}
+_X87_NON_STACK_MNEMONICS = frozenset(
+    {
+        "fclex",
+        "fdisi",
+        "feni",
+        "fnclex",
+        "fndisi",
+        "fneni",
+        "fnop",
+        "fnstcw",
+        "fnstenv",
+        "fnstsw",
+        "fstcw",
+        "fstenv",
+        "fstsw",
+    }
+)
 _X87_CONTROL_WRITERS = {
     195: "fpcw",  # FNSTCW
     196: "fpsw",  # FNSTSW memory form
@@ -1382,6 +1451,289 @@ class _DirectCfgRecovery:
                 )
         return tuple(dependencies)
 
+    @staticmethod
+    def _x87_stack_slice(index: int) -> _RegisterSlice:
+        if not 0 <= index < 8:
+            raise CfgRecoveryError(f"invalid x87 stack index: {index}")
+        return _RegisterSlice(
+            family=f"fp:{index}",
+            mask=(1 << 80) - 1,
+            name=f"st({index})",
+        )
+
+    def _x87_stack_dependency(self, index: int) -> _ValueDependency:
+        return _ValueDependency(
+            "register", register=self._x87_stack_slice(index)
+        )
+
+    def _x87_stack_dependencies(self) -> tuple[_ValueDependency, ...]:
+        return tuple(self._x87_stack_dependency(index) for index in range(8))
+
+    def _x87_stack_effects(
+        self,
+        dependencies: dict[int, tuple[_ValueDependency, ...]],
+        *,
+        preserve_physical_aliases: bool = True,
+    ) -> tuple[_RegisterEffect, ...]:
+        return tuple(
+            _RegisterEffect(
+                self._x87_stack_slice(index),
+                (
+                    (
+                        self._x87_stack_dependency(index),
+                        *dependencies.get(index, ()),
+                    )
+                    if preserve_physical_aliases
+                    else dependencies.get(index, ())
+                ),
+            )
+            for index in range(8)
+        )
+
+    def _x87_push_effects(
+        self, value: tuple[_ValueDependency, ...]
+    ) -> tuple[_RegisterEffect, ...]:
+        dependencies = {0: value}
+        dependencies.update(
+            {
+                index: (self._x87_stack_dependency(index - 1),)
+                for index in range(1, 8)
+            }
+        )
+        return self._x87_stack_effects(dependencies)
+
+    def _x87_pop_effects(
+        self,
+        count: int = 1,
+        *,
+        replacements: dict[int, tuple[_ValueDependency, ...]] | None = None,
+    ) -> tuple[_RegisterEffect, ...]:
+        replacements = {} if replacements is None else replacements
+        dependencies = {}
+        for destination in range(8):
+            source = destination + count
+            if source >= 8:
+                dependencies[destination] = ()
+            else:
+                dependencies[destination] = replacements.get(
+                    source, (self._x87_stack_dependency(source),)
+                )
+        return self._x87_stack_effects(dependencies)
+
+    def _x87_register_index(self, decoded, operand) -> int:
+        if operand.type != X86_OP_REG:
+            raise self._flow_error(decoded, "x87 operand is not a register")
+        name = self.decoder.reg_name(operand.reg)
+        match = re.fullmatch(r"st\((\d+)\)", name)
+        if match is None or int(match.group(1)) >= 8:
+            raise self._flow_error(
+                decoded, f"unsupported x87 register operand: {name}"
+            )
+        return int(match.group(1))
+
+    @staticmethod
+    def _has_x87_opcode(decoded) -> bool:
+        instruction_bytes = bytes(decoded.bytes)
+        opcode_index = 0
+        while (
+            opcode_index < len(instruction_bytes)
+            and instruction_bytes[opcode_index] in _LEGACY_X86_PREFIXES
+        ):
+            opcode_index += 1
+        return (
+            opcode_index < len(instruction_bytes)
+            and 0xD8 <= instruction_bytes[opcode_index] <= 0xDF
+        )
+
+    def _x87_value_flow(self, decoded) -> _InstructionValueFlow | None:
+        if decoded.mnemonic in {"emms", "femms"}:
+            return _InstructionValueFlow()
+        if not self._has_x87_opcode(decoded):
+            return None
+        operands = decoded.operands
+        mnemonic = decoded.mnemonic
+
+        if mnemonic == "fld":
+            if len(operands) != 1:
+                raise self._flow_error(decoded, "unexpected FLD form")
+            source = operands[0]
+            if source.type == X86_OP_REG:
+                value = (
+                    self._x87_stack_dependency(
+                        self._x87_register_index(decoded, source)
+                    ),
+                )
+            elif source.type == X86_OP_MEM:
+                value = (self._memory_dependency(0),)
+            else:
+                raise self._flow_error(decoded, "unsupported FLD source")
+            return _InstructionValueFlow(
+                register_effects=self._x87_push_effects(value)
+            )
+
+        if decoded.id in _X87_CONSTANT_LOADS:
+            return _InstructionValueFlow(
+                register_effects=self._x87_push_effects(())
+            )
+        if decoded.id in _X87_MEMORY_LOADS:
+            if len(operands) != 1 or operands[0].type != X86_OP_MEM:
+                raise self._flow_error(decoded, "unexpected x87 load form")
+            return _InstructionValueFlow(
+                register_effects=self._x87_push_effects(
+                    (self._memory_dependency(0),)
+                )
+            )
+
+        if mnemonic == "fxch":
+            register_operands = [
+                operand for operand in operands if operand.type == X86_OP_REG
+            ]
+            if not register_operands:
+                raise self._flow_error(decoded, "unexpected FXCH form")
+            target = self._x87_register_index(decoded, register_operands[-1])
+            dependencies = {
+                index: (self._x87_stack_dependency(index),)
+                for index in range(8)
+            }
+            dependencies[0] = (self._x87_stack_dependency(target),)
+            dependencies[target] = (self._x87_stack_dependency(0),)
+            return _InstructionValueFlow(
+                register_effects=self._x87_stack_effects(dependencies)
+            )
+
+        if decoded.id in _X87_VALUE_WRITERS:
+            if len(operands) != 1:
+                raise self._flow_error(decoded, "unexpected x87 store form")
+            destination = operands[0]
+            writes: tuple[MemoryWriteSpec, ...] = ()
+            replacements: dict[int, tuple[_ValueDependency, ...]] = {}
+            if destination.type == X86_OP_MEM:
+                writes = (
+                    MemoryWriteSpec(
+                        "x87-value-store",
+                        (self._x87_stack_dependency(0),),
+                    ),
+                )
+            elif destination.type == X86_OP_REG and decoded.id in {713, 714}:
+                target = self._x87_register_index(decoded, destination)
+                replacements[target] = (self._x87_stack_dependency(0),)
+                if decoded.id == 713:
+                    return _InstructionValueFlow(
+                        register_effects=(
+                            _RegisterEffect(
+                                self._x87_stack_slice(target),
+                                replacements[target],
+                            ),
+                        )
+                    )
+            else:
+                raise self._flow_error(decoded, "unsupported x87 store form")
+            effects = (
+                self._x87_pop_effects(replacements=replacements)
+                if decoded.id in _X87_POP_VALUE_WRITERS
+                else ()
+            )
+            return _InstructionValueFlow(effects, writes)
+
+        if mnemonic in _X87_BINARY_ARITHMETIC_MNEMONICS:
+            is_pop = mnemonic.endswith("p")
+            if operands and operands[0].type == X86_OP_MEM:
+                if is_pop or len(operands) != 1:
+                    raise self._flow_error(
+                        decoded, "unexpected x87 memory arithmetic form"
+                    )
+                dependencies = (
+                    self._x87_stack_dependency(0),
+                    self._memory_dependency(0),
+                )
+                return _InstructionValueFlow(
+                    register_effects=(
+                        _RegisterEffect(self._x87_stack_slice(0), dependencies),
+                    )
+                )
+            register_operands = [
+                operand for operand in operands if operand.type == X86_OP_REG
+            ]
+            if not register_operands:
+                raise self._flow_error(
+                    decoded, "unexpected x87 register arithmetic form"
+                )
+            target = (
+                self._x87_register_index(decoded, register_operands[0])
+                if len(register_operands) > 1 or is_pop
+                else 0
+            )
+            other = (
+                self._x87_register_index(decoded, register_operands[-1])
+                if len(register_operands) > 1
+                else (
+                    0
+                    if is_pop
+                    else self._x87_register_index(
+                        decoded, register_operands[0]
+                    )
+                )
+            )
+            dependencies = (
+                self._x87_stack_dependency(target),
+                self._x87_stack_dependency(other),
+            )
+            if is_pop:
+                return _InstructionValueFlow(
+                    register_effects=self._x87_pop_effects(
+                        replacements={target: dependencies}
+                    )
+                )
+            return _InstructionValueFlow(
+                register_effects=(
+                    _RegisterEffect(self._x87_stack_slice(target), dependencies),
+                )
+            )
+
+        pop_count = _X87_COMPARISON_POP_COUNTS.get(mnemonic)
+        if pop_count is not None:
+            return _InstructionValueFlow(
+                register_effects=self._x87_pop_effects(pop_count)
+            )
+        if mnemonic in {"fcom", "fucom", "ftst", "fxam"}:
+            return _InstructionValueFlow()
+
+        if mnemonic == "ffree" and len(operands) == 1:
+            self._x87_register_index(decoded, operands[0])
+            return _InstructionValueFlow()
+        if mnemonic == "ffreep" and len(operands) == 1:
+            target = self._x87_register_index(decoded, operands[0])
+            return _InstructionValueFlow(
+                register_effects=self._x87_pop_effects(
+                    replacements={target: ()}
+                )
+            )
+
+        if mnemonic in {"fninit", "finit"}:
+            return _InstructionValueFlow()
+        if mnemonic == "fldenv":
+            return _InstructionValueFlow()
+        if mnemonic == "frstor":
+            return _InstructionValueFlow(
+                register_effects=self._x87_stack_effects(
+                    {}, preserve_physical_aliases=False
+                )
+            )
+        if mnemonic in _X87_NON_STACK_MNEMONICS or decoded.id in (
+            _FNSAVE_WRITERS
+            | set(_X87_CONTROL_WRITERS)
+            | _NO_TRACKED_PAYLOAD_MEMORY_WRITERS
+        ):
+            return None
+
+        return _InstructionValueFlow(
+            taint_blocker_dependencies=self._x87_stack_dependencies(),
+            taint_blocker_reason=(
+                "unmodeled x87 stack effect; "
+                f"mnemonic={mnemonic};operands={decoded.op_str}"
+            ),
+        )
+
     def _zero_idiom_flow(self, decoded) -> _InstructionValueFlow | None:
         operands = decoded.operands
         zero_mnemonics = {
@@ -1437,6 +1789,10 @@ class _DirectCfgRecovery:
         zero_flow = self._zero_idiom_flow(decoded)
         if zero_flow is not None:
             return zero_flow
+
+        x87_flow = self._x87_value_flow(decoded)
+        if x87_flow is not None:
+            return x87_flow
 
         if decoded.id == X86_INS_LEA:
             if (
@@ -1513,7 +1869,11 @@ class _DirectCfgRecovery:
                 raise self._flow_error(decoded, "invalid XCHG operand 1")
             if len(writes) > 1:
                 raise self._flow_error(decoded, "memory-to-memory XCHG")
-            return _InstructionValueFlow(tuple(effects), tuple(writes))
+            return _InstructionValueFlow(
+                tuple(effects),
+                tuple(writes),
+                join_overlapping_register_effects=True,
+            )
 
         if decoded.id in _XADD_INSTRUCTIONS:
             if len(operands) != 2 or operands[1].type != X86_OP_REG:
@@ -1538,6 +1898,7 @@ class _DirectCfgRecovery:
                             "xadd-memory", (destination_dep, source_dep)
                         ),
                     ),
+                    join_overlapping_register_effects=True,
                 )
             if operands[0].type != X86_OP_REG:
                 raise self._flow_error(decoded, "invalid XADD destination")
@@ -1551,7 +1912,8 @@ class _DirectCfgRecovery:
                     ),
                     source_effect,
                     *flag_effects,
-                )
+                ),
+                join_overlapping_register_effects=True,
             )
 
         if decoded.id in _CMPXCHG_INSTRUCTIONS:
@@ -1572,7 +1934,16 @@ class _DirectCfgRecovery:
                     (
                         *tuple(
                             _RegisterEffect(
-                                self._named_register_slice(name), (memory_dep,)
+                                self._named_register_slice(name),
+                                (
+                                    _ValueDependency(
+                                        "register",
+                                        register=self._named_register_slice(
+                                            name
+                                        ),
+                                    ),
+                                    memory_dep,
+                                ),
                             )
                             for name in accumulator_names
                         ),
@@ -1631,14 +2002,21 @@ class _DirectCfgRecovery:
                 if destination_slice.family == accumulator.family and (
                     destination_slice.mask & accumulator.mask
                 ):
-                    raise self._flow_error(
-                        decoded, "overlapping CMPXCHG accumulator destination"
+                    if destination_slice.mask != accumulator.mask:
+                        raise self._flow_error(
+                            decoded,
+                            "partially overlapping CMPXCHG accumulator "
+                            "destination",
+                        )
+                    effects = [
+                        _RegisterEffect(accumulator, (source_dep,))
+                    ]
+                else:
+                    effects.append(
+                        _RegisterEffect(
+                            destination_slice, (destination_dep, source_dep)
+                        )
                     )
-                effects.append(
-                    _RegisterEffect(
-                        destination_slice, (destination_dep, source_dep)
-                    )
-                )
             else:
                 raise self._flow_error(decoded, "invalid CMPXCHG destination")
             effects.append(
@@ -1647,7 +2025,11 @@ class _DirectCfgRecovery:
                     (accumulator_dep, destination_dep),
                 )
             )
-            return _InstructionValueFlow(tuple(effects), writes)
+            return _InstructionValueFlow(
+                tuple(effects),
+                writes,
+                join_overlapping_register_effects=True,
+            )
 
         if decoded.id in _MASKMOV_IMPLICIT_WRITERS:
             if (
@@ -2145,6 +2527,11 @@ class _DirectCfgRecovery:
         self, decoded, state: dict[str, int]
     ) -> dict[str, int]:
         flow = self._instruction_value_flow(decoded)
+        if flow.taint_blocker_reason is not None and any(
+            self._dependency_is_tainted(dependency, state)
+            for dependency in flow.taint_blocker_dependencies
+        ):
+            raise self._flow_error(decoded, flow.taint_blocker_reason)
         if decoded.address not in self.accepted_initializer_instructions:
             for write in flow.memory_writes:
                 if any(
@@ -2163,7 +2550,7 @@ class _DirectCfgRecovery:
             overlap = written_masks.get(effect.destination.family, 0) & (
                 effect.destination.mask
             )
-            if overlap:
+            if overlap and not flow.join_overlapping_register_effects:
                 raise self._flow_error(
                     decoded,
                     "overlapping simultaneous register effects: "
@@ -2376,6 +2763,35 @@ class _DirectCfgRecovery:
             if operand.type == X86_OP_REG and operand.access & CS_AC_WRITE
         }
         written.update(decoded.regs_write)
+        if decoded.id in _CMPXCHG_INSTRUCTIONS:
+            if decoded.id == 115:
+                written.update(
+                    {
+                        x86_const.X86_REG_EAX,
+                        x86_const.X86_REG_EDX,
+                    }
+                )
+            elif decoded.id == 113:
+                written.update(
+                    {
+                        x86_const.X86_REG_RAX,
+                        x86_const.X86_REG_RDX,
+                    }
+                )
+            elif decoded.operands:
+                accumulator_name = {
+                    1: "al",
+                    2: "ax",
+                    4: "eax",
+                    8: "rax",
+                }.get(decoded.operands[0].size)
+                if accumulator_name is not None:
+                    written.add(
+                        getattr(
+                            x86_const,
+                            f"X86_REG_{accumulator_name.upper()}",
+                        )
+                    )
         for register in written:
             state.pop(self._register_family(register), None)
 
