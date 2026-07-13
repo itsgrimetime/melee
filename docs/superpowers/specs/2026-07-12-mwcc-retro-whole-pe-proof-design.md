@@ -135,41 +135,88 @@ may silently receive a short read.
 ### Deterministic x86 CFG recovery
 
 Add `tools/mwcc_retro/x86_cfg.py`. It uses Capstone in x86-32 detail mode with
-skip-data disabled. An address-priority worklist is seeded from:
+skip-data disabled. Recovery is the monotone least fixed point from an
+authoritative root set: the PE entry point and exports; loader-declared
+callbacks from strictly parsed, bounded PE/CRT/unwind structures; and the
+closed audit-anchor inventory after exact instruction-byte validation. A
+relocation-backed executable pointer becomes a root only when its containing
+slot is proved to be a code-pointer initializer by a PE-declared structure or
+by reachable registration/data flow. Every root carries the address and bytes
+that prove its provenance. Reachable fallthrough, direct call/branch targets,
+and finite computed targets are consequences added by the fixed point, not
+independent syntax-based roots.
 
-- the PE entry point and exports;
-- exact direct call and branch targets;
-- executable targets proven through relocations and bounded pointer tables;
-- independently validated audit anchors;
-- recovered callback tables; and
-- independently decoded function-pointer initializers.
+The following categories are removed and forbidden as code, function, or root
+evidence: `relocation-aligned-entry`, `relocation-computed-transfer`,
+`relocation-inline-data-successor`, `closed-executable-island`, and
+`closed-aligned-function`. `terminal-noninstruction-separator` is likewise
+forbidden as evidence. Relocation presence or alignment, successful decoding,
+a zero prefix, a terminal instruction, a closed-looking island, and an
+apparent separator can never promote arbitrary executable-section bytes to
+code. Relocations remain proof obligations: each executable pointer value is
+either connected to a proved root/use and admitted through ordinary finite
+target recovery, or is classified with byte and use provenance as non-control
+data; an unexplained executable pointer blocks closure.
 
 Basic blocks split at branch targets, conditional and unconditional control
 flow, calls, returns, and indirect transfers. Instructions, blocks, edges,
 tables, and diagnostics are emitted in numeric canonical order. Direct
 `E8 rel32` candidates are scanned independently across the executable bytes;
-every valid raw candidate must be owned by the recovered CFG or reported as an
-unresolved blocker. Embedded data that resembles a call is explained by exact
-instruction/data ownership rather than counted blindly.
+the scan never creates a root or edge. Embedded data that resembles a call is
+explained by exact instruction/data ownership, and every remaining candidate
+is covered by the post-closure unreachable-residue partition rather than
+counted blindly.
 
 Computed branches and calls are resolved only from proven finite tables or
-proven finite abstract target sets. A jump table records the guard that bounds
-it, entry width, base, index range, every raw entry, and every executable
-target. `formatoperands` is an explicit acceptance case: the recovered graph
-must derive the unsigned guard `0..465`, all 466 relocation-backed executable
-targets at `0x0056287C`, and the shared dispatch closure through its exit
-region. At exact compiler SHA-256
+proven finite abstract target sets. A contiguous relocation run is never a
+table bound: a table records the reachable guard or other proved finite domain
+that bounds it, entry width, base, index range, every raw entry, and every
+executable target.
+
+Task 4 includes the minimal provenance-bearing, context-sensitive control-
+target interpreter needed to close this graph. Its finite fixed point tracks
+cdecl arguments and stack spills/reloads, finite return values, globals and
+BSS callback registrars, object/descriptor fields, and strictly parsed
+CRT/unwind records. Direct import/IAT transfers are typed terminal external
+edges. Passing a possible internal code pointer across an unmodelled external
+escape, using an unknown or import return as a computed target, or retaining
+any other possibly internal unknown transfer is a blocker. This layer proves
+only control-target provenance; Task 5 reuses and extends the same facts with
+the semantic value/type lattice rather than replacing them with a weaker CFG
+analysis.
+
+`formatoperands` is an explicit acceptance case. From the function entry at
+`0x004C4BF0`, the recovered graph must reach and verify the exact instruction
+bytes and edges for the compare at `0x004C4C01`, unsigned default branch at
+`0x004C4C07`, and indexed transfer at `0x004C4C0D`; derive the unsigned domain
+`0..465`; and prove every one of the 466 slots at `0x0056287C` is a type-3
+relocation-backed executable pointer. At exact compiler SHA-256
 `ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c`,
 the first 466 table dwords hash to
 `575e165f8bfb3a01076871267f1fed9f5844219f9de565ff0941fd8b312afac7`;
-the following unrelocated dwords are non-code values `0x2d` and `0x4228`.
-The analyzer does not special-case the 466 targets as truth; it requires the
-ordinary table-recovery algorithm to derive them. The separate opcode proof
-still requires all metadata IDs `0..467`; Task 7 must prove how zero-encoding
-`PENTRY` and `PEXIT` survive or are eliminated before final emission.
+the following dwords must be exactly the unrelocated non-code values `0x2d`
+and `0x4228` and must be rejected as entries. Every distinct handler and the
+default path must converge through the proved exit region, the function must
+have exactly one reachable return, and no transfer in this closure may remain
+unresolved. The analyzer does not special-case the 466 targets as truth; it
+requires the ordinary table-recovery algorithm to derive them. The separate
+opcode proof still requires all metadata IDs `0..467`; Task 7 must prove how
+zero-encoding `PENTRY` and `PEXIT` survive or are eliminated before final
+emission.
 
-Conflicting decodes, branches into instruction interiors, unresolved relevant
-computed transfers, or unexplained executable regions fail closed.
+After the least fixed point has zero potentially internal unresolved
+transfers and every authoritative root, relocation obligation, direct edge,
+finite target, and external escape is closed, the analyzer partitions the
+remaining executable-section bytes into a disjoint
+`unreachable-executable-residue` certificate. The certificate records exact
+ordered intervals, bytes/hashes, and the reachable-instruction/data ownership
+hash it complements. It is invalid before closure, on overlap or omission, or
+if any residue byte is later reached. An independent raw `E8 rel32` scan never
+seeds decoding; each candidate is partitioned as a reachable owned
+instruction, reachable proved data, or exact-hashed unreachable residue.
+Conflicting decodes, branches into instruction interiors, a potentially
+internal unresolved transfer, an unexplained relocation/escape, or a
+non-exact executable-byte partition fails closed.
 
 ### Interprocedural value and type analysis
 
@@ -256,15 +303,17 @@ directory containing:
 - `REPORT.md`: human-readable completeness argument generated from the same
   inventories.
 
-Publication order is acyclic: raw CFG, Ghidra cross-check, lifetime sites,
-opcode layouts, audit summary, canonical hook manifest and digest, canonical
-proof containing the manifest digest and its digest, candidate table containing
-that proof tuple and exact site gate, then the report.
+Construction inside one unpublished generation is acyclic: raw CFG, Ghidra
+cross-check, lifetime sites, opcode layouts, audit summary, canonical hook
+manifest and digest, canonical proof containing the manifest digest and its
+digest, candidate table containing that proof tuple and exact site gate, then
+the report.
 
 Digest-bearing artifacts exclude timestamps, elapsed time, host-specific
-paths, and unordered containers. Publication uses a temporary file, flush,
-`fsync`, and atomic replace. A second run in a separate output directory must
-produce byte-identical canonical artifacts and identical digests.
+paths, and unordered containers. Publication uses the immutable-generation and
+atomic-`CURRENT` transaction below. A second run in a separate output
+directory must produce byte-identical canonical artifacts and identical
+digests.
 
 The reviewed candidate proof and its digest-bound hook manifest are then
 tracked at `tools/mwcc_retro/tables/gc_125n_lifetime_proof.json` and
@@ -274,9 +323,40 @@ exact binary; the tracked proof, manifest, generator, tests, and human evidence
 document are the review surface.
 
 Ghidra cross-check input is exported from the validated exact-hash project.
-Differences are reported by address and category. Ghidra may reveal a raw
-recovery bug and thereby block the proof, but a missing Ghidra owner does not
-erase correctly recovered raw code.
+The exporter emits exact instruction bytes, all typed flow successors,
+computed targets, data references, executable-pointer references, function
+entries, and ownership. At each source where raw and Ghidra instructions have
+byte-equal decodes, the comparison uses canonical typed sets for every one of
+those semantic facts. A Ghidra-only fact at such a shared source blocks proof;
+a raw-only fact is a reported delta because Ghidra ownership is not complete.
+Byte conflicts and every raw unresolved address always block. Other ownership
+and non-shared-source deltas are reported without deleting raw facts. The
+`RawCfg` function-entry inventory includes every canonical seed/target row
+whose `is_function` field is true; it must not infer the inventory from a
+hard-coded subset of provenance categories.
+
+### Transactional audit publication
+
+Neither the transitional Task 4 artifacts nor the final Task 7 bundle are
+published by independently replacing files. A producer builds every member in
+a newly created same-filesystem staging directory, flushes and `fsync`s every
+file, writes and `fsync`s a canonical manifest containing the complete member
+list, sizes, hashes, compiler identity, and schema, then `fsync`s the staging
+directory. It renames that directory to an immutable generation name, `fsync`s
+the generations parent, and finally publishes a flushed and `fsync`ed
+temporary `CURRENT` pointer with one atomic replace followed by an output-root
+`fsync`.
+
+Readers resolve artifacts only through `CURRENT`, validate its generation
+name and manifest hash, and validate the manifest and every member before
+returning any path or payload. A failure before the pointer switch leaves the
+previous generation visible; an unreferenced complete or partial generation
+is never visible and is removed or ignored on restart. Tests inject failure at
+every file, manifest, directory-rename, and pointer/fsync boundary and prove
+restart either resolves the whole old generation or the whole new generation,
+never a mixed or partial bundle. Task 4 applies this contract to its complete
+transitional artifact set; Task 7 uses the identical resolver contract for all
+nine final artifacts.
 
 ## Corrected unmerged proof schema
 

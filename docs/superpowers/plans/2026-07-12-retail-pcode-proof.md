@@ -4,7 +4,7 @@
 
 **Goal:** Produce, live-validate, promote, and merge one independently auditable retail GC/1.2.5n ObjObject/PCode lifetime proof driven by a deterministic bounded raw whole-PE analysis.
 
-**Architecture:** A strict PE32/x86 parser feeds a deterministic raw CFG and computed-flow recovery layer. A separate interprocedural abstract interpreter classifies lifecycle, field mutation, rewrite, and emission sites; opcode analysis produces all 468 constructor/layout rules; a canonical proof digest binds a canonical runtime-hook manifest. Existing map and PCode probes install that exact manifest, capture gap-free lifecycle and PCode events, and grant capability only after exact static, hook, lineage, code-mapping, and four-probe gates agree.
+**Architecture:** A strict PE32/x86 parser feeds a deterministic least-reachability raw CFG, finite computed-target fixed point, and exact-hashed unreachable-executable-residue certificate. A separate interprocedural abstract interpreter extends those control-target facts to classify lifecycle, field mutation, rewrite, and emission sites; opcode analysis produces all 468 constructor/layout rules; a canonical proof digest binds a canonical runtime-hook manifest. Existing map and PCode probes install that exact manifest, capture gap-free lifecycle and PCode events, and grant capability only after exact static, hook, lineage, code-mapping, and four-probe gates agree.
 
 **Tech Stack:** Python 3.11, Capstone 5.x, RFC 8785 0.1.4, pytest, Ghidra 12 headless cross-checks, retrowin32/gdb, JSON/JSONL, Ruff, Ninja.
 
@@ -272,8 +272,8 @@ Commit: `feat: validate exact PE boundary for retail audit`
 - Produces `AnalysisLimits.for_image(image) -> AnalysisLimits` with structural caps.
 - Produces `build_seed_inventory(image, audit_anchors) -> SeedInventory`.
 - Produces `recover_cfg(image, seeds, limits) -> RawCfg`.
-- `SeedInventory` records every entrypoint/export, relocation-proven executable pointer, audit anchor, executable function-pointer initializer, and its byte provenance; direct call/branch targets discovered while decoding are added to the same numeric worklist. Task 4 extends it with recovered callback-table targets.
-- `RawCfg` contains the canonical seed inventory, instructions, blocks, edges, direct calls, raw E8 candidates, data regions, ownership diagnostics, caps, and high-water marks.
+- `SeedInventory` records authoritative entrypoint/export, strictly parsed loader/CRT/unwind callback, and exact-byte audit-anchor roots plus their byte provenance. Relocation-backed executable pointers and callback initializers enter only through proved PE structure or reachable registration/data flow; direct and finite targets are derived closure facts, not syntax roots.
+- `RawCfg` contains the canonical authoritative-root inventory, explicit `is_function` entries, instructions, blocks, edges, direct calls, raw E8 candidates, data regions, ownership diagnostics, caps, and high-water marks. Task 4 adds the post-closure unreachable-executable-residue certificate.
 
 Use exact default caps:
 
@@ -299,7 +299,7 @@ Every cap hit raises `AnalysisLimitError` with configured limit and observed hig
 
 - [ ] **Step 1: Add RED CFG fixtures/tests**
 
-Synthetic `.text` includes an entry, export, direct call, fallthrough, conditional branch, return, padding, relocation-proven executable pointer, function-pointer initializer, audit anchor, pointer-referenced data island, and embedded fake `E8` bytes. Test every production seed category and byte provenance, canonical output under reversed seed order, instruction-interior conflicts, unmapped targets, unexplained executable bytes, and equality-at-cap plus over-cap for every cap. A malformed/unmapped/interior seed and an executable relocation or initializer that cannot be classified are unresolved blockers.
+Synthetic `.text` includes an entry, export, direct call, fallthrough, conditional branch, return, padding, a relocation-proven executable pointer in a proved initializer, an audit anchor, pointer-referenced data, and embedded fake `E8` bytes. Test every authoritative root category and byte provenance, canonical output under reversed root order, instruction-interior conflicts, unmapped targets, unresolved relocation obligations, and equality-at-cap plus over-cap for every cap. A malformed/unmapped/interior root and an executable relocation or initializer that cannot be classified are unresolved blockers. Add adversarial bytes that decode cleanly after a return and relocation-aligned bytes after zeros; neither is a root or function without authoritative incoming provenance.
 
 ```python
 def test_seed_order_cannot_change_raw_cfg(synthetic_cfg_image):
@@ -325,11 +325,13 @@ python -m pytest -o addopts='' tests/test_retro_x86_cfg.py -x
 
 Expected: import failure for `x86_cfg`.
 
-- [ ] **Step 3: Implement the production seed universe and direct CFG recovery**
+- [ ] **Step 3: Implement authoritative roots and direct least-reachability recovery**
 
-Build the initial numeric seed set from the PE entrypoint and every export; every executable target proven by a parsed relocation; every executable pointer in a statically decoded function-pointer initializer; and the closed audited anchors recorded by the design/evidence (`formatoperands`, arena helpers, unlink helper, allocation candidates, mutation/rewrite helpers, final walker/encoder/buffer-write sites). Validate each audit anchor against exact instruction bytes before trusting it and publish its provenance; an anchor is a completeness seed, never semantic proof. Decode Capstone x86-32 with detail mode and skip-data disabled. Add every exact direct call/branch target to the numeric heap worklist. Split blocks on targets, calls, conditional/unconditional branches, returns, and indirect transfers. Maintain exact byte ownership and reject overlap/interior targets. Scan raw executable bytes independently for valid `E8 rel32` targets; require each candidate to be owned instruction or proven data/padding. Any executable relocation/initializer/anchor that is unmapped, interior, ambiguous, or unexplained blocks proof.
+Build the initial numeric root set only from the PE entrypoint and exports; strictly parsed, bounded loader/CRT/unwind callbacks; and the closed audited anchors recorded by the design/evidence (`formatoperands`, arena helpers, unlink helper, allocation candidates, mutation/rewrite helpers, final walker/encoder/buffer-write sites). Validate each audit anchor against exact instruction bytes before trusting it and publish its provenance; an anchor is a completeness root, never semantic proof. A relocation-backed executable pointer is admitted only when the containing slot is proved as a code-pointer initializer by a PE-declared structure or later reachable registration/data flow. Decode Capstone x86-32 with detail mode and skip-data disabled. Add reachable fallthrough and every exact direct call/branch target to the numeric heap worklist. Split blocks on targets, calls, conditional/unconditional branches, returns, and indirect transfers. Maintain exact byte ownership and reject overlap/interior targets.
 
-- [ ] **Step 4: Implement canonical serialization and atomic JSONL output**
+Delete and forbid `relocation-aligned-entry`, `relocation-computed-transfer`, `relocation-inline-data-successor`, `closed-executable-island`, and `closed-aligned-function` as seed/function/code categories, and forbid `terminal-noninstruction-separator` as evidence. Relocation alignment, a successful decode, a zero prefix, a terminal instruction, and a closed-looking byte island never prove code. Independently scan raw executable bytes for valid `E8 rel32` encodings, but never turn a scan hit into a root or edge. Task 4 partitions those hits after control-flow closure. Any authoritative root or executable relocation obligation that is unmapped, interior, ambiguous, or unexplained blocks proof.
+
+- [ ] **Step 4: Implement canonical serialization**
 
 No host path, timestamp, elapsed time, unordered set, or nondeterministic Capstone representation enters digest-bearing output. Sort records by `(address, record_kind, target)` and emit compact UTF-8 JSON lines with a final newline.
 
@@ -365,12 +367,18 @@ Commit: `feat: recover deterministic raw x86 control flow`
 
 **Interfaces:**
 - Adds `JumpTable` with guard address/operator/bound, base, entry width, index range, raw entries, and targets.
+- Produces a provenance-bearing context-sensitive `ControlTargetResult` whose finite target sets, terminal external edges, external escapes, and unresolved rows are consumed unchanged by Task 5.
 - Produces `compare_ghidra_inventory(cfg, inventory) -> CrosscheckReport`.
-- `probe-backend-map --static-only` writes raw CFG and cross-check artifacts after the existing exact-hash `ghidra-setup` prerequisite.
+- Produces `resolve_static_backend_bundle(out_dir) -> PublishedStaticBundle`; readers never open generation members without this manifest-verifying resolver.
+- `probe-backend-map --static-only` transactionally publishes one transitional generation containing `raw-pe-cfg.v1.jsonl`, `raw-ghidra-crosscheck.v1.json`, and `backend-map-candidates.json` after the existing exact-hash `ghidra-setup` prerequisite.
 
 - [ ] **Step 1: Add RED computed-flow and cross-check tests**
 
-Cover absolute and base+index tables, bounded callback sets, missing guard, conflicting width/base, unmapped entry, target outside `.text`, 468-way synthetic dispatch, and a Ghidra inventory missing a raw-owned body.
+Cover absolute and base+index tables, bounded callback sets, missing guard, conflicting width/base, unmapped entry, target outside `.text`, 468-way synthetic dispatch, and a Ghidra inventory missing a raw-owned body. A table domain must come from a reachable guard, finite initializer domain, or finite value set; a contiguous relocation run by itself is never a bound.
+
+Add context-sensitive finite-target fixtures for cdecl arguments and spills/reloads, finite returns through wrappers, globals/BSS registrars, object and descriptor fields, strictly parsed CRT/unwind registrations, and import/IAT terminal edges. An unknown target, a possible internal code pointer escaping through an unmodelled import, or an import return used as a target stays unresolved and blocks. Test that the forbidden Task 3 categories and `terminal-noninstruction-separator` cannot promote the cleanly decodable byte strings `41 42 43 c3` after an owned return or `41 42 43 44 a1 80 20 40 00 c3` after zeros/relocation evidence.
+
+Add residue tests proving the complete executable-byte partition is disjoint, exact-hashed, deterministic, and accepted only after every root, relocation, direct edge, finite target, and external escape is closed with zero potentially internal unresolved transfers. Raw `E8` scan hits never seed decoding and are partitioned as reachable instruction, reachable proved data, or unreachable executable residue.
 
 ```python
 def test_guarded_468_way_dispatch_is_recovered(dispatch_image):
@@ -387,6 +395,24 @@ def test_missing_ghidra_owner_is_delta_not_raw_failure(raw_cfg, ghidra_inventory
     assert not report.unresolved_raw_addresses
 ```
 
+Cross-check fixtures use shared byte-equal sources and independently vary typed
+flow successors, computed targets, data references, and executable-pointer
+references. A Ghidra-only fact at a shared source, any byte conflict, and every
+raw unresolved address block; raw-only facts and ownership deltas remain
+reported without granting Ghidra completeness authority. Test that the raw
+function-entry inventory contains every canonical row marked
+`is_function=true`, independent of its provenance category.
+
+Add exact `formatoperands` RED mutations for entry-to-dispatch reachability,
+each of the three dispatch instruction byte strings and their typed edges,
+the unsigned bound, every one of the 466 type-3 relocation slots, the two
+following exact unrelocated dwords and their rejection, handler/default exit
+convergence, an extra/missing reachable return, and an unresolved transfer in
+the closure. The skip-if-missing exact-binary integration recomputes the
+pre-repair 705-row corpus and asserts the repaired analysis reports zero
+potentially internal unresolved transfers; 705 is historical input coverage,
+not an acceptance constant.
+
 - [ ] **Step 2: Run RED**
 
 Run:
@@ -399,19 +425,27 @@ python -m pytest -o addopts='' \
   tests/test_retro_backend_cli.py -x
 ```
 
-Expected: failures for missing jump-table/cross-check/static output behavior.
+Expected: failures for the forbidden seed reproductions, missing finite-target
+closure/residue, incomplete cross-check/format assertions, non-transactional
+publication, and a nonzero exact unresolved inventory.
 
-- [ ] **Step 3: Implement finite indirect recovery**
+- [ ] **Step 3: Implement the finite control-target fixed point and residue certificate**
 
-Derive table bounds only from dominating guards or finite abstract target initializers. Record every entry and refuse an unbounded scan. Resolve every recovered callback table through the same algorithm, add every finite executable callback target to `SeedInventory` with table-entry provenance, and iterate raw recovery until no seed/edge/ownership fact changes. Any relevant indirect with no finite target set, any callback entry without finite provenance, or any newly discovered executable initializer outside the closed seed inventory remains an explicit blocker.
+Derive table bounds only from reachable dominating guards or other proved finite domains. Record every entry and refuse an unbounded scan; neither a relocation run nor decodability beyond the domain extends a table. Implement the minimal provenance-bearing, context-sensitive fixed point for control targets: cdecl arguments and stack spills/reloads, finite call returns, globals/BSS registrar slots, object/descriptor fields, strictly parsed CRT/unwind records, and imports/IAT as typed terminal external edges. Resolve callbacks through the same engine and iterate roots, decoding, target facts, and ownership monotonically to the least fixed point.
+
+An unknown or import-return value used as a computed target, a possible internal code pointer that escapes to an unmodelled external callee, an initializer without finite use provenance, or any other potentially internal unresolved transfer is a hard blocker. The first exact pre-repair run produced 705 diagnostic rows; retain those addresses/forms as a regression corpus, not as an expected count or source of truth. The repaired exact run recomputes the inventory and must reduce its potentially internal unresolved count to zero.
+
+Only after that zero-unresolved result and complete root/relocation/direct/finite/external-escape closure, form the disjoint `unreachable-executable-residue` certificate from all remaining executable bytes. Store ordered intervals plus exact bytes/hashes and the complementary reachable ownership hash. Reject overlap, omission, reachability into residue, a changed partition, or any raw `E8` candidate outside the three closed classifications.
 
 - [ ] **Step 4: Export and compare Ghidra evidence**
 
-The Java script emits every recovered Ghidra instruction, function entry/body range, call, computed transfer, data reference, and function-pointer reference in numeric order. It asserts the exact program hash. The Python cross-check reports raw-only, Ghidra-only, byte mismatch, flow mismatch, and ownership mismatch rows without deleting raw facts.
+The Java script emits every recovered Ghidra instruction with exact bytes, function entry/body range, typed flow successor, computed target, data reference, and executable-pointer reference in numeric order. It asserts the exact program hash. At each shared byte-equal instruction source, Python compares canonical typed sets for all four semantic families. Any Ghidra-only fact at a shared source, byte mismatch, or raw unresolved address blocks. Raw-only facts, missing Ghidra owners, and non-shared ownership deltas are reported without deleting raw facts. Build the raw function-entry set from every canonical `RawCfg` row whose `is_function` field is true, not from a hard-coded provenance-category allowlist.
 
 - [ ] **Step 5: Integrate `probe-backend-map --static-only`**
 
-Keep the same command. At this task boundary, extend help/output to write transitional `raw-pe-cfg.v1.jsonl`, `raw-ghidra-crosscheck.v1.json`, and existing `backend-map-candidates.json`. Task 7 replaces this transitional publication with the closed nine-file bundle. The command must execute in this order: load and exact-hash the PE, recover the bounded raw CFG, invoke the validated Ghidra exporter against the already prepared exact-hash project, parse its numeric inventory, and compare it with the raw CFG. A Ghidra mismatch that indicates a raw decode conflict fails; a missing Ghidra owner with consistent bytes/flow is reported.
+Keep the same command. At this task boundary, extend help/output to publish the transitional `raw-pe-cfg.v1.jsonl`, `raw-ghidra-crosscheck.v1.json`, and existing `backend-map-candidates.json` as one immutable generation. Task 7 replaces the logical transitional member set with the closed nine-file bundle while preserving the same resolver/transaction model. The command must execute in this order: load and exact-hash the PE, recover the bounded least-reachability CFG and zero-unresolved control-target closure, form the exact residue certificate, invoke the validated Ghidra exporter against the already prepared exact-hash project, parse its numeric inventory, compare it with the raw CFG, and only then publish. Blocking cross-check facts fail; a missing Ghidra owner with consistent bytes/flow is reported.
+
+Create a same-filesystem staging directory under the output root and write all three members there. Flush and `fsync` each member; write last a canonical manifest binding the exact member names, sizes, hashes, compiler identity, and schema; flush/`fsync` it and the staging directory; rename the directory to an immutable generation name; and `fsync` the generations parent. Publish a flushed/`fsync`ed temporary `CURRENT` pointer containing the generation name and manifest hash with one atomic replace, then `fsync` the output root. `resolve_static_backend_bundle` follows only `CURRENT` and validates the pointer, manifest, and all members before returning any of them. On failure or restart, an old generation remains wholly visible and partial/orphan generations are ignored or cleaned; mixed generations are impossible.
 
 The production path is branch-local and executable without relying on the installed editable entry point:
 
@@ -432,11 +466,13 @@ DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof \
   -O "$ROOT/build/mwcc_retro/gc125n-proof/static-smoke"
 ```
 
-`probe-backend-map --static-only` invokes `tools/mwcc_debug/scripts/ExportMwccRawCrosscheck.java` through the validated project and writes its numeric inventory only inside a newly created `tempfile.TemporaryDirectory` outside the output directory. It consumes that exact temporary file before publishing `raw-ghidra-crosscheck.v1.json`, which records the canonical inventory digest, and deletes the temporary directory on both success and failure. It refuses a stale, missing, differently hashed, or manually substituted inventory. The transient exporter inventory is never a published artifact; after Task 7, the fresh published audit directory contains exactly the nine declared bundle artifacts.
+`probe-backend-map --static-only` invokes `tools/mwcc_debug/scripts/ExportMwccRawCrosscheck.java` through the validated project and writes its numeric inventory only inside a newly created `tempfile.TemporaryDirectory` outside the output directory. It consumes that exact temporary file before building the cross-check generation member, which records the canonical inventory digest, and deletes the temporary directory on both success and failure. It refuses a stale, missing, differently hashed, or manually substituted inventory. The transient exporter inventory is never a published artifact. Add failure injection at every member write/fsync, manifest write/fsync, directory rename/fsync, and `CURRENT` replace/fsync boundary plus restart tests proving the resolver returns the whole previous or whole next generation and never partial output.
 
 - [ ] **Step 6: Run the exact compiler regression**
 
-Require raw recovery to derive `formatoperands` at `0x004C4BF0`, its unsigned bound `0..465`, table base `0x0056287C`, all 466 relocation-backed executable targets, and its exit closure. Assert the exact 466-entry byte digest `575e165f8bfb3a01076871267f1fed9f5844219f9de565ff0941fd8b312afac7` and reject the following unrelocated non-code dwords `0x2d` and `0x4228` as targets. Keep the independent 468-way synthetic dispatch test as a generic boundary case. The separate opcode metadata proof still covers IDs `0..467`; IDs 466 `PENTRY` and 467 `PEXIT` are zero-encoding pseudo-ops whose final-list survival/elimination remains a Task 7 obligation. Reproduce or explicitly explain each retained lower-bound pair as a separately named audit assertion: 3,187 recovered internal Ghidra functions and 27,020 direct calls in their bodies; 1,861 raw/Ghidra-union arena calls versus 1,825 within recovered bodies; 962 raw selected-PCode-helper calls versus 773 within recovered bodies; and 102 raw unlink-helper calls versus 59 within recovered bodies. These are regression cross-checks, never analyzer completeness truth.
+Require raw recovery to start at `formatoperands` entry `0x004C4BF0` and reach the exact instruction bytes `81fad1010000` at `0x004C4C01`, `0f8733120000` at `0x004C4C07`, and `ff24957c285600` at `0x004C4C0D`, with the exact compare/fallthrough/default/table edges. Derive the unsigned domain `0..465`, table base `0x0056287C`, and all 466 entries. Require every slot to have a type-3 relocation and an executable target; assert the exact 466-entry byte digest `575e165f8bfb3a01076871267f1fed9f5844219f9de565ff0941fd8b312afac7`; and require the next dwords at `0x00562FC4` and `0x00562FC8` to be the exact unrelocated non-code values `0x2d` and `0x4228`, rejected as entries. Prove every distinct handler and the default path converge through the shared exit, exactly one return is reachable from the function entry, and the entire closure has zero unresolved transfers.
+
+Keep the independent 468-way synthetic dispatch test as a generic boundary case. The separate opcode metadata proof still covers IDs `0..467`; IDs 466 `PENTRY` and 467 `PEXIT` are zero-encoding pseudo-ops whose final-list survival/elimination remains a Task 7 obligation. Reproduce or explicitly explain each retained lower-bound pair as a separately named audit assertion: 3,187 recovered internal Ghidra functions and 27,020 direct calls in their bodies; 1,861 raw/Ghidra-union arena calls versus 1,825 within recovered bodies; 962 raw selected-PCode-helper calls versus 773 within recovered bodies; and 102 raw unlink-helper calls versus 59 within recovered bodies. These are historical regression cross-checks, never analyzer completeness truth or hard-coded acceptance counts.
 
 - [ ] **Step 7: Run GREEN/static checks and commit**
 
@@ -474,12 +510,13 @@ Commit: `feat: close computed retail compiler control flow`
 
 **Interfaces:**
 - Produces frozen `AbstractValue`, `MachineState`, `FunctionSummary`, and `AnalysisResult`.
-- Produces `analyze_values(image, cfg, roots, limits) -> AnalysisResult`.
+- Produces `analyze_values(image, cfg, control_targets, roots, limits) -> AnalysisResult`, where `control_targets` is the exact accepted Task 4 fixed-point result.
 - Unknown values retain exact origin/reason and cannot silently enter proof-relevant outputs.
+- Task 5 reuses every Task 4 context, target, terminal-import, external-escape, and provenance fact, extends the lattice semantically, and may add facts monotonically; it cannot discard a Task 4 blocker or rerun a weaker independent target analysis.
 
 - [ ] **Step 1: Add RED lattice/transfer/fixpoint tests**
 
-Cover exact/finite/affine/null/image/typed pointers, stack arguments, cdecl returns, wrapper calls, globals, loops/SCC convergence, unsupported instructions on relevant versus irrelevant slices, finite-set/state/update cap failures, and deterministic summary ordering.
+Cover exact/finite/affine/null/image/typed pointers, stack arguments, cdecl returns, wrapper calls, globals, loops/SCC convergence, unsupported instructions on relevant versus irrelevant slices, finite-set/state/update cap failures, deterministic summary ordering, and lossless import of every Task 4 control-target fact. A semantic refinement that changes a finite control target forces CFG closure/residue regeneration before proof continues.
 
 ```python
 def test_affine_pcode_allocation_survives_wrapper_call(pcode_wrapper_cfg):
@@ -508,7 +545,7 @@ Expected: import failure.
 
 - [ ] **Step 3: Implement finite values and x86 transfers**
 
-Implement exact join/equality/canonical keys; model registers, flags needed for finite branch refinement, stack slots/arguments, effective addresses, memory widths, calls/returns, and exact globals. Preserve typed origin plus byte offset across moves, LEA, stack spill/reload, and wrappers.
+Begin from the accepted Task 4 control-target contexts and provenance. Implement exact join/equality/canonical keys; model registers, flags needed for finite branch refinement, stack slots/arguments, effective addresses, memory widths, calls/returns, and exact globals. Preserve typed origin plus byte offset across moves, LEA, stack spill/reload, and wrappers. Retain imports as terminal control edges; an unknown/import return that reaches an indirect target and every unmodelled possible internal external escape remain blockers.
 
 - [ ] **Step 4: Implement SCC summary fixpoint**
 
@@ -624,6 +661,7 @@ Commit: `feat: prove retail pcode lifetime site closure`
 **Interfaces:**
 - Produces `analyze_opcode_layouts(image, cfg, values) -> OpcodeLayoutInventory`.
 - Produces `generate_lifetime_bundle(inputs, out_dir) -> GeneratedLifetimeBundle`.
+- Produces `resolve_lifetime_bundle(out_dir) -> PublishedLifetimeBundle`; all readers use the manifest-verifying `CURRENT` resolver rather than opening generation files directly, and `PublishedLifetimeBundle.canonical_files()` returns the exact ordered name-to-bytes mapping.
 - `GeneratedLifetimeBundle` exposes all nine exact outputs and their canonical digests:
   `raw-pe-cfg.v1.jsonl`, `raw-ghidra-crosscheck.v1.json`,
   `backend-lifetime-sites.candidate.v1.json`,
@@ -650,8 +688,14 @@ def test_generation_is_byte_identical(tmp_path, exact_inputs):
 def test_unresolved_cfg_prevents_proof_file(tmp_path, unresolved_inputs):
     bundle = generate_lifetime_bundle(unresolved_inputs, tmp_path)
     assert bundle.audit_summary["proof_ready"] is False
-    assert not (tmp_path / "gc_125n_lifetime_proof.candidate.json").exists()
+    assert "gc_125n_lifetime_proof.candidate.json" not in bundle.canonical_files()
 ```
+
+Add injected-failure/restart tests at every member write/fsync, manifest
+write/fsync, immutable-generation rename/fsync, and `CURRENT` replace/fsync.
+The resolver must return the complete previous or complete new nine-member
+generation, never mixed/partial files; stale, tampered, missing, or orphaned
+generations are rejected or ignored.
 
 - [ ] **Step 3: Run RED**
 
@@ -674,7 +718,9 @@ Read the 468×16 metadata table directly. Derive format mapping from constructor
 
 - [ ] **Step 5: Implement canonical bundle publication**
 
-Emit the nine artifacts above using compact sorted JSON/JSONL and atomic temp/fsync/replace. Construction is acyclic and ordered: raw CFG; Ghidra cross-check; lifetime sites; opcode layouts; audit summary; canonical hook manifest and its digest; canonical proof containing that manifest digest and its proof digest; candidate table containing the exact proof registry tuple and exact site gate; report last. Validate proof, manifest, digest binding, exact site bijection, canonical ordering, and candidate registry/gate before publication. Candidate table uses the production registry/gate shape but remains only in ignored output.
+Emit the nine artifacts above as one immutable same-filesystem generation using compact sorted JSON/JSONL. Construction inside its unpublished staging directory is acyclic and ordered: raw CFG; Ghidra cross-check; lifetime sites; opcode layouts; audit summary; canonical hook manifest and its digest; canonical proof containing that manifest digest and its proof digest; candidate table containing the exact proof registry tuple and exact site gate; report last. Validate proof, hook manifest, digest binding, exact site bijection, canonical ordering, and candidate registry/gate before publication. Candidate table uses the production registry/gate shape but remains only in ignored output.
+
+Flush and `fsync` every member, then write and `fsync` a canonical generation manifest binding the exact nine names, sizes, hashes, compiler identity, and schema; `fsync` staging; rename it to an immutable generation name; and `fsync` the generations parent. Atomically replace a flushed/`fsync`ed temporary `CURRENT` pointer containing the generation name and manifest hash, then `fsync` the output root. The resolver validates `CURRENT`, manifest, and all nine members before returning any path or payload. This is the same all-or-none contract introduced for the transitional Task 4 bundle; independently replacing nine top-level files is forbidden.
 
 - [ ] **Step 6: Run generator twice from the exact validated project**
 
@@ -694,25 +740,32 @@ for OUT in "$RUN1" "$RUN2"; do
     -f mnDiagram_DrawFighterHeaders \
     --static-only --melee-root "$ROOT" -O "$OUT"
 done
-EXPECTED=$(printf '%s\n' \
-  REPORT.md backend-lifetime-audit.v1.json \
-  backend-lifetime-sites.candidate.v1.json gc_125n.candidate.json \
-  gc_125n_lifetime_hooks.candidate.json \
-  gc_125n_lifetime_proof.candidate.json opcode-layouts.candidate.v1.json \
-  raw-ghidra-crosscheck.v1.json raw-pe-cfg.v1.jsonl | sort)
-for OUT in "$RUN1" "$RUN2"; do
-  ACTUAL=$(find "$OUT" -maxdepth 1 -type f -exec basename {} \; | sort)
-  test "$ACTUAL" = "$EXPECTED"
-done
-for NAME in \
-  raw-pe-cfg.v1.jsonl raw-ghidra-crosscheck.v1.json \
-  backend-lifetime-sites.candidate.v1.json \
-  opcode-layouts.candidate.v1.json backend-lifetime-audit.v1.json \
-  gc_125n_lifetime_hooks.candidate.json \
-  gc_125n_lifetime_proof.candidate.json gc_125n.candidate.json REPORT.md; do
-  cmp "$RUN1/$NAME" "$RUN2/$NAME"
-  shasum -a 256 "$RUN1/$NAME" "$RUN2/$NAME"
-done
+PYTHONPATH="$ROOT/tools" python - "$RUN1" "$RUN2" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+from mwcc_retro.backend_lifetime_proof import resolve_lifetime_bundle
+
+expected = (
+    "raw-pe-cfg.v1.jsonl",
+    "raw-ghidra-crosscheck.v1.json",
+    "backend-lifetime-sites.candidate.v1.json",
+    "opcode-layouts.candidate.v1.json",
+    "backend-lifetime-audit.v1.json",
+    "gc_125n_lifetime_hooks.candidate.json",
+    "gc_125n_lifetime_proof.candidate.json",
+    "gc_125n.candidate.json",
+    "REPORT.md",
+)
+first = resolve_lifetime_bundle(Path(sys.argv[1])).canonical_files()
+second = resolve_lifetime_bundle(Path(sys.argv[2])).canonical_files()
+assert tuple(first) == expected
+assert tuple(second) == expected
+assert first == second
+for name, payload in first.items():
+    print(name, hashlib.sha256(payload).hexdigest())
+PY
 ```
 
 Any delta or unresolved diagnostic blocks the task.
