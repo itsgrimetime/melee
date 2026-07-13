@@ -497,6 +497,27 @@ def _index_evidence(evidence: ObjectBindingEvidence) -> _OwnerEvidenceIndex:
     )
 
 
+def _conflicting_record_groups(
+    index: _OwnerEvidenceIndex,
+) -> tuple[tuple[EvidenceNode | EvidenceEdge, ...], ...]:
+    groups = tuple(
+        tuple(
+            sorted(
+                records,
+                key=lambda record: canonical_bytes(_safe_json(_record_json(record))),
+            )
+        )
+        for records in index.records_by_id.values()
+        if any(record != records[0] for record in records[1:])
+    )
+    return tuple(
+        sorted(
+            groups,
+            key=lambda records: tuple(canonical_bytes(_safe_json(_record_json(record))) for record in records),
+        )
+    )
+
+
 def _is_nonempty_str(value: object) -> bool:
     return isinstance(value, str) and bool(value)
 
@@ -1319,6 +1340,16 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
         )
 
     index = _index_evidence(evidence)
+    conflicting_groups = _conflicting_record_groups(index)
+    if conflicting_groups:
+        global_rejections.extend(
+            _rejection("unregistered-support", candidates=records) for records in conflicting_groups
+        )
+        return _ValidationOutcome(
+            (),
+            (),
+            tuple(sorted(global_rejections, key=lambda item: item.rejection_id)),
+        )
     candidates = _enumerate_candidates(index)
     paths: list[_OwnerPath] = []
     rejections: list[OwnerCertificateRejection] = []

@@ -126,12 +126,75 @@ def test_indexed_registration_rejects_conflicting_exact_path_id_permutation_stab
 
     first = diagnostic((*evidence.nodes, conflicting))
     second = diagnostic((conflicting, *evidence.nodes))
-    first_resolution = next(item for item in first.role_resolutions if item.role == ROLE)
-    second_resolution = next(item for item in second.role_resolutions if item.role == ROLE)
 
     assert first.certificate_nodes == second.certificate_nodes == ()
-    assert {item.reason for item in first_resolution.rejections} == {"unregistered-support"}
+    assert first.role_resolutions == second.role_resolutions == ()
+    assert {item.reason for item in first.global_rejections} == {"unregistered-support"}
+    assert only(first.global_rejections).candidate_record_ids == (original.record_id, original.record_id)
     assert canonical_result(first) == canonical_result(second)
+
+
+_PATH_NODE_KINDS = (
+    "compiler-object",
+    "assembly-operand-anchor",
+    "retail-pcode",
+    "pcode-operand",
+    "retail-virtual-register",
+    "allocator-node",
+    "stack-object",
+)
+_PATH_EDGE_KINDS = (
+    "assembly-anchor-emitted-by-pcode",
+    "pcode-operand-lineage",
+    "pcode-operand-uses-virtual",
+    "object-materializes-virtual",
+    "maps-to-allocator-node",
+    "object-has-stack-home",
+)
+
+
+def _path_record(evidence: ObjectBindingEvidence, record_kind: str) -> EvidenceNode | EvidenceEdge:
+    candidate = only(owner_certificate._enumerate_candidates(owner_certificate._index_evidence(evidence)))
+    return only(record for record in candidate.path_records if record.kind == record_kind)
+
+
+def _with_conflicting_path_record(
+    evidence: ObjectBindingEvidence,
+    record_kind: str,
+    *,
+    prepend: bool,
+) -> ObjectBindingEvidence:
+    records = evidence.nodes if record_kind in _PATH_NODE_KINDS else evidence.edges
+    original = _path_record(evidence, record_kind)
+    conflicting = original.with_attributes({**original.attributes, "conflict_marker": record_kind})
+    changed_records = (conflicting, *records) if prepend else (*records, conflicting)
+    return ObjectBindingEvidence(
+        changed_records if record_kind in _PATH_NODE_KINDS else evidence.nodes,
+        changed_records if record_kind in _PATH_EDGE_KINDS else evidence.edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+
+@pytest.mark.parametrize("record_kind", (*_PATH_NODE_KINDS, *_PATH_EDGE_KINDS))
+def test_conflicting_path_id_permutation_is_globally_stable(record_kind):
+    evidence = complete_evidence()
+    original = _path_record(evidence, record_kind)
+    prepend = owner_certificate.validate_owner_evidence(
+        _with_conflicting_path_record(evidence, record_kind, prepend=True)
+    )
+    append = owner_certificate.validate_owner_evidence(
+        _with_conflicting_path_record(evidence, record_kind, prepend=False)
+    )
+
+    assert canonical_result(prepend) == canonical_result(append)
+    for result in (prepend, append):
+        assert result.certificate_nodes == ()
+        assert len(result.global_rejections) == 1
+        rejection = only(item for item in result.global_rejections if item.reason == "unregistered-support")
+        assert rejection.role is None
+        assert rejection.candidate_record_ids == (original.record_id, original.record_id)
 
 
 def test_synthetic_future_complete_pair_reaches_only_gate_9():
@@ -764,9 +827,10 @@ def test_semantic_duplicate_alternatives_retain_canonical_multiplicity():
 
 def test_exact_duplicate_alternatives_retain_one_group_and_multiplicity():
     evidence = complete_evidence()
+    duplicate_node = next(node for node in evidence.nodes if node.kind == "retail-pcode")
     duplicate = next(edge for edge in evidence.edges if edge.kind == "assembly-anchor-emitted-by-pcode")
     tokenless = ObjectBindingEvidence(
-        evidence.nodes,
+        (*evidence.nodes, duplicate_node),
         (*evidence.edges, duplicate),
         evidence.capabilities,
         evidence.capture_run_id,
