@@ -4,16 +4,28 @@
  Check whether a remote target is ready to run decomp-permuter.                 
                                                                                 
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ *  --target             TEXT  Configured remote target name. [required]      │
-│    --function   -f      TEXT  Also check this local permuter function dir.   │
-│    --perm-root          PATH  Root containing nonmatchings/<function>. If    │
-│                               this is a matcher worktree, repair resolves    │
-│                               the decomp-permuter code checkout from         │
-│                               $MELEE_DECOMP_PERMUTER_ROOT or                 │
-│                               ~/code/decomp-permuter.                        │
-│                               [default: /Users/mike/code/decomp-permuter]    │
-│    --repair                   Bootstrap/repair project-owned remote tooling  │
-│                               before checking.                               │
-│    --help                     Show this message and exit.                    │
+│ *  --target             TEXT                    Configured remote target     │
+│                                                 name.                        │
+│                                                 [required]                   │
+│    --function   -f      TEXT                    Also check this local        │
+│                                                 permuter function dir.       │
+│    --perm-root          PATH                    Root containing              │
+│                                                 nonmatchings/<function>. If  │
+│                                                 this is a matcher worktree,  │
+│                                                 repair resolves the          │
+│                                                 decomp-permuter code         │
+│                                                 checkout from                │
+│                                                 $MELEE_DECOMP_PERMUTER_ROOT  │
+│                                                 or ~/code/decomp-permuter.   │
+│                                                 [default:                    │
+│                                                 /Users/mike/code/decomp-per… │
+│    --repair                                     Bootstrap/repair             │
+│                                                 project-owned remote tooling │
+│                                                 before checking.             │
+│    --timeout            FLOAT RANGE [x>=0.001]  Total deadline for repair    │
+│                                                 plus the final remote probe, │
+│                                                 in seconds.                  │
+│                                                 [default: 60.0]              │
+│    --help                                       Show this message and exit.  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 

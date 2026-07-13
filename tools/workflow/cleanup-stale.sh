@@ -1,5 +1,5 @@
 #!/bin/bash
-# cleanup-stale.sh - Report on stale git worktrees
+# cleanup-stale.sh - Legacy commit-age report for stale git worktrees
 #
 # Usage: ./tools/workflow/cleanup-stale.sh [--apply]
 #
@@ -11,7 +11,10 @@
 # delete the stale candidates. The script does NOT execute them; the user
 # runs them manually after reviewing.
 #
-# The main worktree (master) is always skipped.
+# The main worktree (master) is always skipped. Prefer the activity-aware,
+# fail-closed lifecycle commands:
+#   python tools/worktree-doctor.py worktrees report
+#   python tools/worktree-doctor.py worktrees retire
 
 set -e
 
@@ -152,6 +155,10 @@ echo ""
 # Candidates section
 if [[ ${#STALE_PATHS[@]} -eq 0 ]]; then
     echo -e "${GREEN}No stale candidates found.${NC}"
+    echo ""
+    echo "This is a legacy commit-age report. For activity-aware retirement, use:"
+    echo "python tools/worktree-doctor.py worktrees report"
+    echo "python tools/worktree-doctor.py worktrees retire"
     exit 0
 fi
 
@@ -180,4 +187,8 @@ else
     echo -e "Run with ${BOLD}--apply${NC} to print removal commands."
 fi
 
+echo ""
+echo "This is a legacy commit-age report. For activity-aware retirement, use:"
+echo "python tools/worktree-doctor.py worktrees report"
+echo "python tools/worktree-doctor.py worktrees retire"
 echo ""

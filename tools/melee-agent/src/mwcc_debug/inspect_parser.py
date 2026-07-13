@@ -4,11 +4,11 @@ The inspector output is treated as text snapshots, not a semantic IR. The goal
 is stable section slicing so diff_report can compare frontend and mid-end
 sections before backend pcdump passes.
 """
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-
 
 _FUNCTION_RE = re.compile(r"^FUNCTION:\s+(\S+)\s*$")
 _SECTION_NAMES = {
@@ -25,6 +25,21 @@ _SECTION_NAMES = {
 class InspectSnapshot:
     name: str
     text: str
+
+
+def _snapshot_name(header: str) -> str | None:
+    """Return a canonical snapshot name for raw or already-labeled headers."""
+
+    upper = header.strip().rstrip(":").upper()
+    if upper in _SECTION_NAMES:
+        return f"{_SECTION_NAMES[upper]}: {upper}"
+    for family in {"Frontend", "Mid-end"}:
+        prefix = f"{family.upper()}: "
+        if upper.startswith(prefix):
+            section = upper.removeprefix(prefix)
+            if _SECTION_NAMES.get(section) == family:
+                return f"{family}: {section}"
+    return None
 
 
 def _slice_function(text: str, function: str) -> list[str]:
@@ -61,10 +76,10 @@ def parse_inspect_snapshots(text: str, *, function: str) -> list[InspectSnapshot
 
     for raw in lines:
         stripped = raw.strip()
-        upper = stripped.upper()
-        if upper in _SECTION_NAMES:
+        snapshot_name = _snapshot_name(stripped)
+        if snapshot_name is not None:
             flush()
-            current_name = f"{_SECTION_NAMES[upper]}: {upper}"
+            current_name = snapshot_name
             current_lines = [stripped]
             continue
         if current_name is not None:

@@ -1,4 +1,5 @@
 """Tests for mwcc_debug hook-event parsing used by debug inspect diff."""
+
 from __future__ import annotations
 
 import src.mwcc_debug.colorgraph_parser as colorgraph_parser
@@ -37,6 +38,25 @@ IG CONSTRUCTED (class=1, n_nodes=8)
     assert events[0].coalesce_sections[0].mappings == [(5, 3), (6, 4)]
     assert events[0].coalesce_sections[0].distinct_roots == 6
     assert events[0].coalesce_sections[0].forced_count == 0
+    assert events[0].coalesce_sections[0].exit_class_id == 1
+    assert events[0].coalesce_sections[0].exit_n_virtuals == 8
+    assert events[0].coalesce_sections[0].exit_valid is True
+
+
+def test_parse_negative_natural_coalesce_endpoints_verbatim() -> None:
+    text = """\
+Starting function fn_test
+
+[COALESCE] enter class=1 n_virtuals=8
+[COALESCE] natural mappings (virt -> root):
+  -5 -> 3
+  6 -> -4
+[COALESCE] exit class=1 n_virtuals=8 distinct_roots=6 forced=0
+"""
+
+    section = parse_hook_events(text)[0].coalesce_sections[0]
+
+    assert section.mappings == [(-5, 3), (6, -4)]
 
 
 def test_parse_force_coalesce_override_applications() -> None:
@@ -58,6 +78,56 @@ Starting function fn_test
     assert section.forced_count == 1
 
 
+def test_parse_negative_force_coalesce_endpoints_verbatim() -> None:
+    text = """\
+Starting function fn_test
+
+[COALESCE] enter class=0 n_virtuals=64
+[COALESCE] natural mappings (virt -> root):
+  (none - no virtuals coalesced)
+[FORCE_COALESCE] alias[-43]: -40 -> -41
+[COALESCE] exit class=0 n_virtuals=64 distinct_roots=64 forced=1
+"""
+
+    section = parse_hook_events(text)[0].coalesce_sections[0]
+
+    assert section.forced_overrides == [(-43, -40, -41)]
+
+
+def test_parse_mismatched_coalesce_exit_class_as_invalid_evidence() -> None:
+    text = """\
+Starting function fn_test
+
+[COALESCE] enter class=0 n_virtuals=64
+[COALESCE] natural mappings (virt -> root):
+  (none - no virtuals coalesced)
+[COALESCE] exit class=1 n_virtuals=64 distinct_roots=64 forced=0
+"""
+
+    section = parse_hook_events(text)[0].coalesce_sections[0]
+
+    assert section.exit_class_id == 1
+    assert section.exit_n_virtuals == 64
+    assert section.exit_valid is False
+
+
+def test_parse_mismatched_coalesce_exit_count_as_invalid_evidence() -> None:
+    text = """\
+Starting function fn_test
+
+[COALESCE] enter class=0 n_virtuals=64
+[COALESCE] natural mappings (virt -> root):
+  (none - no virtuals coalesced)
+[COALESCE] exit class=0 n_virtuals=63 distinct_roots=63 forced=0
+"""
+
+    section = parse_hook_events(text)[0].coalesce_sections[0]
+
+    assert section.exit_class_id == 0
+    assert section.exit_n_virtuals == 63
+    assert section.exit_valid is False
+
+
 def test_parse_empty_natural_coalesce_mappings() -> None:
     text = """
 Starting function fn_test
@@ -73,6 +143,24 @@ Starting function fn_test
     assert events[0].coalesce_sections[0].class_id == 0
     assert events[0].coalesce_sections[0].mappings == []
     assert events[0].coalesce_sections[0].distinct_roots == 4
+
+
+def test_parse_capped_natural_coalesce_mappings() -> None:
+    text = """
+Starting function fn_test
+
+[COALESCE] enter class=0 n_virtuals=400
+[COALESCE] natural mappings (virt -> root):
+  1 -> 0
+  ...(capped at 256)
+[COALESCE] exit class=0 n_virtuals=400 distinct_roots=100 forced=0
+""".strip()
+
+    events = parse_hook_events(text)
+
+    section = events[0].coalesce_sections[0]
+    assert section.mappings == [(1, 0)]
+    assert section.truncated is True
 
 
 def test_parse_coalesced_aliases_after_colorgraph_section() -> None:

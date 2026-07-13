@@ -203,6 +203,175 @@ def test_default_discovery_only_uses_registered_worktrees(tmp_path: Path) -> Non
     assert unregistered.resolve() not in artifacts.discover_worktrees(repo)
 
 
+def test_scan_root_only_validates_git_markers_and_prunes_repo_contents(
+    tmp_path: Path, monkeypatch
+) -> None:
+    nonrepo = tmp_path / "nonrepo"
+    nonrepo.mkdir()
+    scan_root = tmp_path / "scan-root"
+    repo = scan_root / "arbitrary" / "depth" / "repo"
+    repo.mkdir(parents=True)
+    _run_git(repo, "init")
+
+    nested_repo = repo / "large" / "tree" / "nested-repo"
+    nested_repo.mkdir(parents=True)
+    _run_git(nested_repo, "init")
+    for index in range(64):
+        (repo / "large" / "tree" / f"directory-{index}" / "child").mkdir(parents=True)
+
+    real_run_git = artifacts._run_git
+    validated: list[Path] = []
+
+    def record_git(cwd, args, **kwargs):
+        if args == ["rev-parse", "--show-toplevel"]:
+            validated.append(Path(cwd))
+        return real_run_git(cwd, args, **kwargs)
+
+    monkeypatch.setattr(artifacts, "_run_git", record_git)
+
+    discovered = artifacts.discover_worktrees(nonrepo, scan_roots=[scan_root])
+
+    assert discovered == (repo.resolve(),)
+    assert validated == [repo.resolve()]
+    assert nested_repo.resolve() not in discovered
+
+
+@pytest.mark.parametrize("marker_kind", ["symlink", "fifo"])
+def test_scan_root_prunes_suspect_git_markers(
+    tmp_path: Path, monkeypatch, marker_kind: str
+) -> None:
+    nonrepo = tmp_path / "nonrepo"
+    nonrepo.mkdir()
+    scan_root = tmp_path / "scan-root"
+    suspect = scan_root / "suspect"
+    suspect.mkdir(parents=True)
+    marker = suspect / ".git"
+    if marker_kind == "symlink":
+        marker_target = tmp_path / "marker-target"
+        marker_target.mkdir()
+        marker.symlink_to(marker_target, target_is_directory=True)
+    else:
+        os.mkfifo(marker)
+
+    nested_repo = suspect / "large" / "tree" / "nested-repo"
+    nested_repo.mkdir(parents=True)
+    _run_git(nested_repo, "init")
+    for index in range(32):
+        (suspect / "large" / "tree" / f"directory-{index}" / "child").mkdir(parents=True)
+
+    real_run_git = artifacts._run_git
+    validated: list[Path] = []
+
+    def record_git(cwd, args, **kwargs):
+        if args == ["rev-parse", "--show-toplevel"]:
+            validated.append(Path(cwd))
+        return real_run_git(cwd, args, **kwargs)
+
+    monkeypatch.setattr(artifacts, "_run_git", record_git)
+
+    assert artifacts.discover_worktrees(nonrepo, scan_roots=[scan_root]) == ()
+    assert validated == []
+
+
+def test_git_ownership_batches_large_candidate_queries(tmp_path: Path, monkeypatch) -> None:
+    _, linked = _make_repo_and_linked_worktree(tmp_path)
+    for index in range(63):
+        _write_ignored_file(linked / "build" / f"object-{index}.o", b"x")
+    _track_file(linked, "build/tracked\nobject.o", "tracked")
+
+    real_run_git = artifacts._run_git
+    ownership_calls: list[tuple[list[str], str | None]] = []
+
+    def record_git(cwd, args, **kwargs):
+        if args and args[0] in {"ls-files", "check-ignore"}:
+            ownership_calls.append((list(args), kwargs.get("input_text")))
+        return real_run_git(cwd, args, **kwargs)
+
+    monkeypatch.setattr(artifacts, "_run_git", record_git)
+
+    candidate = _candidate(
+        artifacts.inspect_artifacts(
+            [linked], min_age_days=0, min_bytes=0, now=NOW, active_commands=[]
+        ),
+        linked,
+        "build",
+    )
+
+    ls_files_calls = [call for call in ownership_calls if call[0][0] == "ls-files"]
+    check_ignore_calls = [call for call in ownership_calls if call[0][0] == "check-ignore"]
+    assert len(ls_files_calls) == 1
+    assert len(check_ignore_calls) == 1
+    assert "git-tracked" in candidate.skip_reasons
+    assert ls_files_calls[0][0] == ["ls-files", "--stage", "-z", "--", "build"]
+    assert check_ignore_calls[0][0] == ["check-ignore", "--stdin", "-z"]
+    ignore_input = check_ignore_calls[0][1]
+    assert ignore_input is not None
+    ignore_paths = ignore_input.split("\0")
+    assert ignore_paths[0] == "build/"
+    assert ignore_paths[-1] == ""
+    assert set(ignore_paths[1:-1]) == {f"build/object-{index}.o" for index in range(63)}
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "not-stage-metadata\tbuild/object.o\0",
+        f"100644 {'a' * 40} 0\tbuild/object.o",
+        f"100644 {'a' * 40} 0\toutside/object.o\0",
+        f"100644 {'a' * 40} 0\tbuild/../outside.o\0",
+    ],
+)
+def test_git_ownership_rejects_malformed_ls_files_output(
+    monkeypatch, stdout: str
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_git(cwd, args, **kwargs):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(["git", *args], 0, stdout, "")
+
+    monkeypatch.setattr(artifacts, "_run_git", fake_run_git)
+    reasons: list[str] = []
+
+    artifacts._check_git_ownership(
+        Path("/repo"), Path("build"), (Path("object.o"),), reasons
+    )
+
+    assert reasons == ["git-error"]
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout"),
+    [
+        (0, "build/"),
+        (0, "outside/object.o\0"),
+        (0, ""),
+        (1, "build/\0"),
+    ],
+)
+def test_git_ownership_rejects_malformed_check_ignore_output(
+    monkeypatch, returncode: int, stdout: str
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_git(cwd, args, **kwargs):
+        calls.append(list(args))
+        if args[0] == "ls-files":
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        return subprocess.CompletedProcess(["git", *args], returncode, stdout, "")
+
+    monkeypatch.setattr(artifacts, "_run_git", fake_run_git)
+    reasons: list[str] = []
+
+    artifacts._check_git_ownership(
+        Path("/repo"), Path("build"), (Path("object.o"),), reasons
+    )
+
+    assert reasons == ["git-error", "contains-nonignored", "root-not-git-ignored"]
+    assert len(calls) == 2
+
+
 def test_current_worktree_is_reported_but_never_eligible_for_cleanup(tmp_path: Path) -> None:
     repo, linked = _make_repo_and_linked_worktree(tmp_path)
     _write_ignored_file(repo / "build/primary.o", b"primary")
@@ -951,6 +1120,100 @@ def test_hydrate_preserves_a_mismatched_consumer_symlink(tmp_path: Path) -> None
     assert "build/tools/wibo" in result.skipped
     assert consumer.is_symlink()
     assert consumer.read_bytes() == b"other"
+
+
+def test_inspect_hydrated_assets_binds_links_and_cache_targets(tmp_path: Path) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    assert assets.hydrate_shared_assets(target, cache).status == "hydrated"
+
+    snapshot, errors = assets.inspect_hydrated_assets(target, cache)
+
+    assert errors == ()
+    assert snapshot is not None
+    assert snapshot.cache_identity == (cache.stat().st_dev, cache.stat().st_ino)
+    assert snapshot.manifest_identity == (
+        (cache / "manifest.json").stat().st_dev,
+        (cache / "manifest.json").stat().st_ino,
+    )
+    assert tuple(link.relative for link in snapshot.links) == tuple(
+        sorted(
+            (
+                Path("build/compilers/GC/1.2.5n/mwcceppc.exe"),
+                Path("build/tools/wibo"),
+                Path("tools/table-typer/table-typer"),
+            ),
+            key=lambda path: path.as_posix(),
+        )
+    )
+    for link in snapshot.links:
+        entry = (target / link.relative).lstat()
+        opened = (target / link.relative).stat()
+        assert (link.link_device, link.link_inode) == (entry.st_dev, entry.st_ino)
+        assert (link.target_device, link.target_inode) == (opened.st_dev, opened.st_ino)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["real-file", "extra-leaf", "extra-directory", "wrong-link"]
+)
+def test_inspect_hydrated_assets_rejects_invalid_consumer_tree(
+    tmp_path: Path, mutation: str
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    assert assets.hydrate_shared_assets(target, cache).status == "hydrated"
+    consumer = target / "build" / "tools" / "wibo"
+    if mutation == "real-file":
+        consumer.unlink()
+        consumer.write_bytes(b"local")
+    elif mutation == "extra-leaf":
+        (consumer.parent / "extra").write_bytes(b"extra")
+    elif mutation == "extra-directory":
+        (consumer.parent / "extra").mkdir()
+    else:
+        consumer.unlink()
+        consumer.symlink_to(tmp_path / "elsewhere")
+
+    snapshot, errors = assets.inspect_hydrated_assets(target, cache)
+
+    assert snapshot is None
+    assert errors == ("asset-validation-failed",)
+
+
+def test_inspect_hydrated_assets_detects_coherent_cache_replacement(
+    tmp_path: Path,
+) -> None:
+    source = _asset_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    target = tmp_path / "target"
+    target.mkdir()
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    assert assets.hydrate_shared_assets(target, cache).status == "hydrated"
+    before, errors = assets.inspect_hydrated_assets(target, cache)
+    assert before is not None and errors == ()
+
+    old_cache = tmp_path / "old-cache"
+    cache.chmod(0o755)
+    cache.rename(old_cache)
+    assert assets.seed_shared_assets(source, cache).status == "seeded"
+    for link in before.links:
+        consumer = target / link.relative
+        consumer.unlink()
+        consumer.symlink_to(
+            os.path.relpath(cache / "files" / link.relative, start=consumer.parent)
+        )
+
+    after, errors = assets.inspect_hydrated_assets(target, cache)
+
+    assert errors == ()
+    assert after is not None
+    assert after != before
 
 
 def test_hydrate_rejects_cache_root_replacement_before_target_mutation(

@@ -11,8 +11,8 @@
 │                              run/config/verify.                              │
 │ bootstrap                    Bootstrap a decomp-permuter function dir from   │
 │                              the current repo source.                        │
-│ local-orphans                Detect orphaned local wibo/MWCC compile         │
-│                              processes.                                      │
+│ local-orphans                Detect abandoned local permuter compiler and    │
+│                              Python worker processes.                        │
 │ candidate-audit              Audit permuter candidates and print a compact   │
 │                              status summary.                                 │
 │ verify                       Tier 7a: apply a permuter candidate to the real │

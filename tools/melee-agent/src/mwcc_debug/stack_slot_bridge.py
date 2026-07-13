@@ -27,19 +27,21 @@ _FINAL_PASS_PREFERENCE = (
     "AFTER GENERATING EPILOGUE, PROLOGUE",
 )
 
-_STACK_OPS = {
-    "lbz",
-    "lha",
-    "lhz",
-    "lwz",
-    "stb",
-    "sth",
-    "stw",
-    "lfd",
-    "lfs",
-    "stfd",
-    "stfs",
-}
+STACK_ACCESS_OPCODES = frozenset(
+    {
+        "lbz",
+        "lha",
+        "lhz",
+        "lwz",
+        "stb",
+        "sth",
+        "stw",
+        "lfd",
+        "lfs",
+        "stfd",
+        "stfs",
+    }
+)
 
 _SOURCE_CALL_HINTS = {
     "sqrtf",
@@ -379,7 +381,7 @@ def _stack_sites_in_pass(pass_: Pass) -> list[StackSlotSite]:
     for block in pass_.blocks:
         for instr_idx, instr in enumerate(block.instructions):
             opcode = instr.opcode.lower()
-            if opcode not in _STACK_OPS:
+            if opcode not in STACK_ACCESS_OPCODES:
                 continue
             offset = _stack_offset(instr.operands)
             if offset is None:

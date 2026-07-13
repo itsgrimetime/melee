@@ -43,6 +43,7 @@ from ...mwcc_debug import (
 )
 from ...mwcc_debug import candidate_audit
 from ...mwcc_debug import cache as pcdump_cache
+from ...mwcc_debug import local_remote_runs
 from ...mwcc_debug import permuter_remote
 from ...mwcc_debug.diff_capture import (
     _run_with_process_group_timeout,
@@ -110,22 +111,44 @@ __all__ = [
 ]
 
 
-def _signal_process_group(proc: subprocess.Popen[Any], sig: int) -> None:
+def _process_group_exists(pgid: int) -> bool:
+    if pgid <= 1 or pgid == os.getpgrp():
+        return False
     try:
-        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, 0)
     except ProcessLookupError:
-        return
+        return False
     except PermissionError:
-        pgid = proc.pid
+        return True
+    return True
+
+
+def _signal_captured_process_group(
+    pgid: int,
+    sig: int,
+    proc: subprocess.Popen[Any] | None = None,
+) -> None:
+    if pgid <= 1 or pgid == os.getpgrp():
+        return
     try:
         os.killpg(pgid, sig)
     except ProcessLookupError:
         return
     except PermissionError:
-        if sig == signal.SIGKILL:
-            proc.kill()
-        else:
-            proc.terminate()
+        if proc is not None and proc.poll() is None:
+            if sig == signal.SIGKILL:
+                proc.kill()
+            else:
+                proc.terminate()
+
+
+def _wait_for_process_group_exit(pgid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while _process_group_exists(pgid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+    return True
 
 
 class _LocalPermuterInterrupted(BaseException):
@@ -137,21 +160,23 @@ class _LocalPermuterInterrupted(BaseException):
 def _terminate_local_permuter_group(
     proc: subprocess.Popen[Any],
     *,
+    pgid: int,
     sigterm_sent: bool = False,
+    grace_seconds: float = 1.0,
 ) -> None:
-    if not sigterm_sent:
-        _signal_process_group(proc, signal.SIGTERM)
-    try:
-        proc.wait(timeout=5)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    _signal_process_group(proc, signal.SIGKILL)
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+    safe_group = pgid > 1 and pgid != os.getpgrp()
+    if safe_group and _process_group_exists(pgid):
+        if not sigterm_sent:
+            _signal_captured_process_group(pgid, signal.SIGTERM, proc)
+        if not _wait_for_process_group_exit(pgid, grace_seconds):
+            _signal_captured_process_group(pgid, signal.SIGKILL, proc)
+            _wait_for_process_group_exit(pgid, min(grace_seconds, 0.1))
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
 
 def _run_local_permuter(
@@ -166,6 +191,10 @@ def _run_local_permuter(
         cwd=cwd,
         start_new_session=True,
     )
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError):
+        pgid = proc.pid
     signals = [signal.SIGINT, signal.SIGTERM]
     if hasattr(signal, "SIGHUP"):
         signals.append(signal.SIGHUP)
@@ -178,7 +207,7 @@ def _run_local_permuter(
         if termination_requested:
             return
         termination_requested = True
-        _signal_process_group(proc, signal.SIGTERM)
+        _signal_captured_process_group(pgid, signal.SIGTERM, proc)
 
     def finish_termination() -> None:
         nonlocal termination_finished
@@ -187,6 +216,7 @@ def _run_local_permuter(
         termination_finished = True
         _terminate_local_permuter_group(
             proc,
+            pgid=pgid,
             sigterm_sent=termination_requested,
         )
 
@@ -203,8 +233,7 @@ def _run_local_permuter(
             finish_termination()
             raise SystemExit(128 + exc.signum)
         finally:
-            if proc.poll() is None:
-                finish_termination()
+            finish_termination()
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
@@ -568,6 +597,14 @@ def remote_doctor(
         bool,
         typer.Option("--repair", help="Bootstrap/repair project-owned remote tooling before checking."),
     ] = False,
+    timeout: Annotated[
+        float,
+        typer.Option(
+            "--timeout",
+            min=0.001,
+            help="Total deadline for repair plus the final remote probe, in seconds.",
+        ),
+    ] = permuter_remote.DEFAULT_REMOTE_DOCTOR_TIMEOUT,
 ) -> None:
     """Check whether a remote target is ready to run decomp-permuter."""
     from src.cli.debug import DEFAULT_MELEE_ROOT  # noqa: PLC0415
@@ -575,6 +612,30 @@ def remote_doctor(
         _resolve_decomp_permuter_root,
         _resolve_permuter_function_dir,
     )
+    deadline = time.monotonic() + timeout
+
+    def deadline_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> permuter_remote.CommandResult:
+        remaining = deadline - time.monotonic()
+        if timeout is not None:
+            remaining = min(remaining, timeout)
+        if remaining <= 0:
+            message = "remote doctor total deadline expired"
+            if check:
+                raise permuter_remote.RemoteJobError(message)
+            return permuter_remote.CommandResult(124, "", message)
+        return permuter_remote.run_command(
+            argv,
+            cwd=cwd,
+            check=check,
+            timeout=remaining,
+        )
+
     try:
         targets = _remote_load_targets()
         target = targets.get(target_name)
@@ -599,12 +660,15 @@ def remote_doctor(
                 local_perm_root=repair_perm_root,
                 function=function,
                 local_perm_dir=local_perm_dir,
+                runner=deadline_runner,
             )
             for action in repair_report.actions:
                 print(f"REPAIR\t{action}")
         report = permuter_remote.doctor_target(
             target,
             local_perm_dir=local_perm_dir,
+            runner=deadline_runner,
+            timeout=timeout,
         )
     except (permuter_remote.RemoteConfigError, permuter_remote.RemoteJobError) as exc:
         _remote_error(exc)
@@ -1128,25 +1192,96 @@ def remote_tail(
 
 
 @permute_app.command(name="local-orphans")
-def permute_local_orphans() -> None:
-    """Detect orphaned local wibo/MWCC compile processes."""
-    orphans = permuter_remote.detect_orphaned_wibo_processes()
-    if not orphans:
-        print("No orphaned local wibo/MWCC processes detected.")
+def permute_local_orphans(
+    perm_root: Annotated[
+        Path,
+        typer.Option(
+            "--perm-root",
+            help="Resolved decomp-permuter root used to prove process ownership.",
+        ),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    terminate: Annotated[
+        bool,
+        typer.Option(
+            "--terminate",
+            help="Revalidate and terminate safe orphan process groups.",
+        ),
+    ] = False,
+    grace_seconds: Annotated[
+        float,
+        typer.Option(
+            "--grace-seconds",
+            min=0.0,
+            help="Seconds to wait between TERM and KILL.",
+        ),
+    ] = 2.0,
+) -> None:
+    """Detect abandoned local permuter compiler and Python worker processes."""
+    orphans = permuter_remote.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+    )
+    strict_pids = {proc.pid for proc in orphans}
+    legacy_wibo = [
+        proc
+        for proc in permuter_remote.detect_orphaned_wibo_processes()
+        if proc.pid not in strict_pids
+    ]
+    if not orphans and not legacy_wibo:
+        print("No orphaned local permuter processes detected.")
         return
-    print("Orphaned local wibo/MWCC processes:")
-    for proc in orphans:
-        state_note = (
-            " uninterruptible; kill may not work, restart host if it blocks builds"
-            if "U" in proc.stat
-            else ""
-        )
+    if orphans:
+        print("Orphaned local permuter processes:")
+        for proc in orphans:
+            state_note = (
+                " uninterruptible; kill may not work, restart host if it blocks builds"
+                if "U" in proc.stat
+                else ""
+            )
+            print(
+                f"PID={proc.pid}\tPPID={proc.ppid}\tPGID={proc.pgid}\t"
+                f"STAT={proc.stat}\tELAPSED={proc.elapsed}\tKIND={proc.kind}"
+                f"{state_note}"
+            )
+            print(f"  cwd={proc.cwd}")
+            print(f"  {proc.command}")
+    if legacy_wibo:
         print(
-            f"PID={proc.pid}\tPPID={proc.ppid}\tSTAT={proc.stat}\t"
-            f"ELAPSED={proc.elapsed}{state_note}"
+            "Legacy wibo/MWCC orphans outside --perm-root "
+            "(report-only; restart the host for uninterruptible processes):"
         )
-        print(f"  {proc.command}")
-    raise typer.Exit(1)
+        for proc in legacy_wibo:
+            state_note = " uninterruptible" if "U" in proc.stat else ""
+            print(
+                f"PID={proc.pid}\tPPID={proc.ppid}\tSTAT={proc.stat}\t"
+                f"ELAPSED={proc.elapsed}{state_note}"
+            )
+            print(f"  {proc.command}")
+    if not terminate:
+        raise typer.Exit(1)
+
+    if not orphans:
+        raise typer.Exit(1)
+
+    report = permuter_remote.terminate_orphaned_permuter_processes(
+        orphans,
+        perm_root=perm_root,
+        grace_seconds=grace_seconds,
+    )
+    if report.terminated_pids:
+        print(
+            "Terminated orphan PID(s): "
+            + ", ".join(str(pid) for pid in report.terminated_pids)
+        )
+    for pgid, reason in sorted(report.skipped_groups.items()):
+        print(f"Skipped PGID={pgid}: {reason}")
+    if report.surviving_pids:
+        print(
+            "Surviving orphan PID(s): "
+            + ", ".join(str(pid) for pid in report.surviving_pids)
+        )
+        raise typer.Exit(1)
+    if legacy_wibo:
+        raise typer.Exit(1)
 
 
 @remote_app.command(name="stop")
@@ -1269,6 +1404,304 @@ def remote_reap(
               f"Re-run with --no-dry-run to execute.")
     else:
         print(f"\nStopped {len(stopped)} job(s).")
+
+
+# ── local fetched remote-run retention ───────────────────────────────────────
+
+
+def _local_retention_plan_item_payload(
+    item: local_remote_runs.RetentionPlanItem,
+) -> dict[str, Any]:
+    summary = item.summary
+    return {
+        "job_id": summary.job_id,
+        "function": summary.function,
+        "path": str(summary.path),
+        "bytes": summary.total_bytes,
+        "latest_activity": summary.latest_activity,
+        "disposition": item.disposition,
+        "reasons": list(item.reasons),
+        "remote_state": summary.remote_state,
+        "remote_detail": summary.remote_detail,
+    }
+
+
+def _local_retention_action_payload(
+    action: local_remote_runs.RetentionApplyAction,
+) -> dict[str, Any]:
+    return {
+        "job_id": action.job_id,
+        "function": action.function,
+        "original_path": str(action.original_path),
+        "quarantine_path": (
+            str(action.quarantine_path) if action.quarantine_path is not None else None
+        ),
+        "status": action.status,
+        "reasons": list(action.reasons),
+        "planned_bytes": action.planned_bytes,
+        "reclaimed_bytes": action.reclaimed_bytes,
+    }
+
+
+def _local_retention_payload(
+    *,
+    mode: str,
+    status: str,
+    perm_root: Path,
+    max_age_days: float,
+    max_total_bytes: int,
+    status_timeout: float,
+    plan: local_remote_runs.LocalRemoteRunRetentionPlan | None,
+    issues: tuple[local_remote_runs.InventoryIssue, ...] = (),
+    actions: tuple[local_remote_runs.RetentionApplyAction, ...] = (),
+    reclaimed_bytes: int = 0,
+    projected_total_bytes: int = 0,
+    inventory_complete: bool = False,
+    cap_satisfied: bool = False,
+    detail: str = "",
+) -> dict[str, Any]:
+    items = plan.items if plan is not None else ()
+    protected = plan.protected if plan is not None else ()
+    eligible = plan.eligible if plan is not None else ()
+    selected = plan.selected if plan is not None else ()
+    removed = tuple(action for action in actions if action.status == "removed")
+    skipped = tuple(action for action in actions if action.status == "skipped")
+    return {
+        "mode": mode,
+        "status": status,
+        "detail": detail,
+        "config": {
+            "perm_root": str(perm_root),
+            "max_age_days": max_age_days,
+            "max_total_bytes": max_total_bytes,
+            "status_timeout": status_timeout,
+        },
+        "generated_at": plan.generated_at.isoformat() if plan is not None else None,
+        "counts": {
+            "runs": len(items),
+            "issues": len(issues),
+            "protected": len(protected),
+            "eligible": len(eligible),
+            "selected": len(selected),
+            "removed": len(removed),
+            "skipped": len(skipped),
+        },
+        "bytes": {
+            "total": plan.total_bytes if plan is not None else 0,
+            "protected": plan.protected_bytes if plan is not None else 0,
+            "eligible": plan.eligible_bytes if plan is not None else 0,
+            "selected": plan.selected_bytes if plan is not None else 0,
+            "removed": sum(action.reclaimed_bytes for action in removed),
+            "skipped": sum(action.planned_bytes for action in skipped),
+            "projected": projected_total_bytes,
+            "reclaimed": reclaimed_bytes,
+        },
+        "inventory_complete": inventory_complete,
+        "cap_satisfied": cap_satisfied,
+        "items": [_local_retention_plan_item_payload(item) for item in items],
+        "issues": [
+            {"path": str(issue.path), "code": issue.code, "detail": issue.detail}
+            for issue in issues
+        ],
+        "actions": [_local_retention_action_payload(action) for action in actions],
+    }
+
+
+def _render_local_retention_text(payload: Mapping[str, Any]) -> None:
+    mode = payload["mode"]
+    counts = payload["counts"]
+    byte_counts = payload["bytes"]
+    if mode == "dry-run":
+        print("DRY RUN — no local remote-run artifacts were deleted.")
+    else:
+        print(f"APPLY — {payload['status']}")
+    print(
+        f"Root: {payload['config']['perm_root']}\n"
+        f"Runs: {counts['runs']}  issues: {counts['issues']}  "
+        f"selected: {counts['selected']}  removed: {counts['removed']}  "
+        f"skipped: {counts['skipped']}\n"
+        f"Bytes: total={byte_counts['total']} protected={byte_counts['protected']} "
+        f"eligible={byte_counts['eligible']} selected={byte_counts['selected']} "
+        f"reclaimed={byte_counts['reclaimed']} projected={byte_counts['projected']}\n"
+        f"Inventory complete: {payload['inventory_complete']}  "
+        f"cap satisfied: {payload['cap_satisfied']}"
+    )
+    selected_items = [item for item in payload["items"] if item["disposition"] == "selected"]
+    protected_items = [item for item in payload["items"] if item["disposition"] == "protected"]
+    if selected_items:
+        print("Selected for deletion:")
+        for item in selected_items:
+            print(
+                f"  {item['job_id']}  {item['bytes']} bytes  {item['path']}  "
+                f"({', '.join(item['reasons'])})"
+            )
+    if protected_items:
+        print("Protected (never selected):")
+        for item in protected_items:
+            print(
+                f"  {item['job_id']}  {item['bytes']} bytes  "
+                f"({', '.join(item['reasons'])})"
+            )
+    if payload["issues"]:
+        print("Inventory issues:")
+        for issue in payload["issues"]:
+            suffix = f": {issue['detail']}" if issue["detail"] else ""
+            print(f"  {issue['code']}  {issue['path']}{suffix}")
+    if payload["actions"]:
+        print("Apply actions:")
+        for action in payload["actions"]:
+            reasons = f" ({', '.join(action['reasons'])})" if action["reasons"] else ""
+            print(f"  {action['status'].upper()}  {action['job_id']}  {action['original_path']}{reasons}")
+    if payload["detail"]:
+        print(f"Detail: {payload['detail']}")
+    if mode == "dry-run":
+        print("Re-run with --apply to delete only the selected, revalidated runs.")
+
+
+@remote_app.command(name="local-prune")
+def remote_local_prune(
+    perm_root: Annotated[
+        Path,
+        typer.Option("--perm-root", help="Local decomp-permuter root."),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    max_age_days: Annotated[
+        float,
+        typer.Option("--max-age-days", min=0.0, help="Select stopped eligible runs older than this many days."),
+    ] = local_remote_runs.DEFAULT_MAX_AGE_DAYS,
+    max_total_bytes: Annotated[
+        int,
+        typer.Option("--max-total-bytes", min=0, help="Target maximum bytes across local fetched remote runs."),
+    ] = local_remote_runs.DEFAULT_MAX_TOTAL_BYTES,
+    status_timeout: Annotated[
+        float,
+        typer.Option("--status-timeout", min=0.001, help="Per-host remote activity probe timeout in seconds."),
+    ] = local_remote_runs.DEFAULT_REMOTE_STATUS_TIMEOUT,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Apply the freshly recomputed plan under the lifecycle lock."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic JSON."),
+    ] = False,
+) -> None:
+    """Plan or safely apply retention for locally fetched remote runs."""
+    root = perm_root.expanduser().absolute()
+    try:
+        if apply:
+            result = local_remote_runs.apply_local_remote_run_retention(
+                root,
+                max_age_days=max_age_days,
+                max_total_bytes=max_total_bytes,
+                status_timeout=status_timeout,
+            )
+            payload = _local_retention_payload(
+                mode="apply",
+                status=result.status,
+                perm_root=root,
+                max_age_days=max_age_days,
+                max_total_bytes=max_total_bytes,
+                status_timeout=status_timeout,
+                plan=result.plan,
+                issues=result.inventory_issues,
+                actions=result.actions,
+                reclaimed_bytes=result.reclaimed_bytes,
+                projected_total_bytes=result.projected_total_bytes,
+                inventory_complete=result.inventory_complete,
+                cap_satisfied=result.cap_satisfied,
+                detail=result.detail,
+            )
+            unsafe = result.status != "completed" or result.skipped_count > 0
+        else:
+            inventory = local_remote_runs.inventory_local_remote_runs(root)
+            probed = local_remote_runs.probe_remote_run_activity(
+                inventory,
+                timeout=status_timeout,
+            )
+            plan = local_remote_runs.plan_local_remote_run_retention(
+                probed,
+                max_age_days=max_age_days,
+                max_total_bytes=max_total_bytes,
+            )
+            payload = _local_retention_payload(
+                mode="dry-run",
+                status="planned",
+                perm_root=root,
+                max_age_days=max_age_days,
+                max_total_bytes=max_total_bytes,
+                status_timeout=status_timeout,
+                plan=plan,
+                issues=probed.issues,
+                reclaimed_bytes=0,
+                projected_total_bytes=plan.projected_total_bytes,
+                inventory_complete=plan.inventory_complete,
+                cap_satisfied=plan.cap_satisfied,
+            )
+            unsafe = False
+    except (OSError, ValueError) as exc:
+        payload = {
+            "mode": "apply" if apply else "dry-run",
+            "status": "error",
+            "detail": str(exc),
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            typer.echo(f"Local remote-run retention failed: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+    else:
+        _render_local_retention_text(payload)
+    if unsafe:
+        raise typer.Exit(2)
+
+
+@remote_app.command(name="local-retain")
+def remote_local_retain(
+    job_id: Annotated[str, typer.Argument(help="Owned local remote-run job id.")],
+    reason: Annotated[
+        str,
+        typer.Option("--reason", help="Required reason for retaining the run."),
+    ],
+    perm_root: Annotated[
+        Path,
+        typer.Option("--perm-root", help="Local decomp-permuter root."),
+    ] = Path("~/code/decomp-permuter").expanduser(),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic JSON."),
+    ] = False,
+) -> None:
+    """Explicitly retain one owned locally fetched remote run."""
+    root = perm_root.expanduser().absolute()
+    result = local_remote_runs.retain_local_remote_run(
+        root,
+        job_id,
+        reason=reason,
+    )
+    payload = {
+        "mode": "retain",
+        "status": result.status,
+        "ok": result.ok,
+        "job_id": job_id,
+        "reason": reason,
+        "perm_root": str(root),
+        "path": str(result.path) if result.path is not None else None,
+        "detail": result.detail,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+    else:
+        label = "Retained" if result.status == "written" else result.status.capitalize()
+        typer.echo(f"{label}: {job_id}")
+        if result.path is not None:
+            typer.echo(f"Marker: {result.path}")
+        if result.detail:
+            typer.echo(f"Detail: {result.detail}")
+    if not result.ok:
+        raise typer.Exit(2)
 
 
 # ── remote prune ─────────────────────────────────────────────────────────────
@@ -3178,6 +3611,9 @@ def _build_simplify_order_compile_sh(
     ``debug target score-simplify-order`` consumes — it reads
     ``<o>.pcdump.txt`` to compute the score, no recompile.
     """
+    from ...mwcc_debug.fix_perm_compile import render_wibo_resolution
+
+    wibo_lines = render_wibo_resolution(wibo_path)
     if full_unit_source is None:
         stage_lines = [
             "cp \"$INPUT_ABS\" \"$STAGE\"",
@@ -3232,16 +3668,13 @@ def _build_simplify_order_compile_sh(
 
     if remote_portable:
         cd_line = 'cd "${MELEE_ROOT:?MELEE_ROOT must be set}"'
-        compiler_prefix = (
-            '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}" '
+        compiler = (
             '"${MWCC_DEBUG_COMPILER:-$MELEE_ROOT/build/compilers/GC/1.2.5n/'
             'mwcceppc_debug.exe}"'
         )
     else:
         cd_line = f"cd {shlex.quote(str(project_root))}"
-        compiler_prefix = (
-            f"{shlex.quote(str(wibo_path))} {shlex.quote(str(debug_compiler))}"
-        )
+        compiler = shlex.quote(str(debug_compiler))
 
     return "\n".join([
         "#!/usr/bin/env bash",
@@ -3251,6 +3684,7 @@ def _build_simplify_order_compile_sh(
         "INPUT_ABS=\"$(realpath \"$1\")\"",
         "OUTPUT_ABS=\"$(realpath \"$3\")\"",
         cd_line,
+        *wibo_lines,
         f"STAGE=\"{stage_path}\"",
         "mkdir -p \"$(dirname \"$STAGE\")\"",
         *stage_lines,
@@ -3258,7 +3692,7 @@ def _build_simplify_order_compile_sh(
         "# Deposit the pcdump as a sibling of the .o so",
         "# `debug target score-simplify-order` finds it via the fast path.",
         "export MWCC_DEBUG_PCDUMP_PATH=\"${OUTPUT_ABS}.pcdump.txt\"",
-        f"{compiler_prefix} {cflags} -c \"$STAGE\" -o \"$OUTPUT_ABS\"",
+        f'"$WIBO" {compiler} {cflags} -c "$STAGE" -o "$OUTPUT_ABS"',
         "",
     ])
 
@@ -3621,13 +4055,12 @@ def setup_simplify_order_scorer(
     # Locate the debug compiler + wibo for the wrapper compile.sh
     # ----------------------------------------------------------------
 
-    wibo_path = _find_wibo()
-    if wibo_path is None or not wibo_path.exists():
-        typer.echo(
-            "wibo not found. Run `melee-agent debug dump setup` first "
-            "or set $MWCC_DEBUG_WIBO.",
-            err=True,
-        )
+    from ...mwcc_debug.fix_perm_compile import validate_wibo_path
+
+    try:
+        wibo_path = validate_wibo_path(_find_wibo())
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
         raise typer.Exit(2)
     debug_compiler = _find_compiler_dir() / "mwcceppc_debug.exe"
     if not debug_compiler.exists():
@@ -3991,6 +4424,7 @@ def gen_permuter_config(
     from src.cli.debug import DEFAULT_MELEE_ROOT  # noqa: PLC0415
     from src.cli.debug import (  # noqa: PLC0415
         _abort_function_not_in_dump,
+        _find_wibo,
         _permuter_import_hint,
         _resolve_pcdump_path,
         _resolve_permuter_function_dir,
@@ -4173,8 +4607,16 @@ def gen_permuter_config(
     # Side-effect: fix the compile.sh for macOS+wine if it has the
     # known import.py path-handling bug. Quiet if not applicable;
     # one-liner note if a fix was applied.
-    from ...mwcc_debug.fix_perm_compile import fix_perm_dir
-    compile_fix = fix_perm_dir(out.parent)
+    from ...mwcc_debug.fix_perm_compile import FixResult, fix_perm_dir
+    config_wibo = _find_wibo()
+    if config_wibo is None:
+        compile_fix = FixResult(
+            path=out.parent / "compile.sh",
+            action="skipped",
+            reason="custom wibo executable not found",
+        )
+    else:
+        compile_fix = fix_perm_dir(out.parent, wibo_path=config_wibo)
 
     if json_out:
         print(json.dumps({
@@ -4266,10 +4708,14 @@ def fix_perm_compile(
         typer.echo(f"target not found: {target}", err=True)
         raise typer.Exit(2)
 
-    if target.is_dir():
-        result = fix_perm_dir(target)
-    else:
-        result = fix_compile_sh(target)
+    try:
+        if target.is_dir():
+            result = fix_perm_dir(target)
+        else:
+            result = fix_compile_sh(target)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2)
 
     if json_out:
         print(json.dumps({

@@ -335,6 +335,54 @@ Fetched outputs land back under the local function directory:
 Use `fetch --triage` to print the follow-up local triage command, or run
 `melee-agent debug permute triage <fetched-run-dir> --function <fn>` manually.
 
+### Local fetched-run retention
+
+Fetched remote runs keep source candidates, scores, logs, objects, and job
+provenance together. Inspect the retention plan without changing the filesystem:
+
+```bash
+melee-agent debug permute remote local-prune
+melee-agent debug permute remote local-prune --json
+```
+
+The defaults select eligible runs older than 30 days and target a maximum of
+5 GiB across fetched local remote runs. This lifecycle is separate from
+`melee-agent debug artifacts`: `debug artifacts` manages compiler diagnostic
+bundles under `build/diagnostics`, while `remote local-prune` owns only direct
+job directories under
+`<perm-root>/nonmatchings/<function>/remote-runs/<job-id>/`.
+
+The default command is always a dry run. It probes remote tmux sessions in
+batches and protects active or unknown jobs, partial or malformed fetches,
+untriaged candidates, verified winners, tracked files, symlinks, and explicitly
+retained runs. Mark a run for retention with a required reason:
+
+```bash
+melee-agent debug permute remote local-retain JOB_ID \
+  --reason "preserve allocator investigation"
+```
+
+JSON output includes deterministic plan items and inventory issues for scripts:
+
+```bash
+melee-agent debug permute remote local-prune --json \
+  | jq '{mode, counts, bytes, inventory_complete, cap_satisfied}'
+melee-agent debug permute remote local-retain JOB_ID \
+  --reason "keep winning source" --json
+```
+
+Deletion requires the literal `--apply` flag:
+
+```bash
+melee-agent debug permute remote local-prune --apply
+```
+
+Apply does not trust the displayed dry-run plan. It acquires the local lifecycle
+lock, inventories and probes again, rechecks selected sessions and filesystem
+identity, then quarantines each individually proven run before removal. Skipped
+actions are reported and cause a nonzero exit; protected evidence is never
+deleted merely to satisfy the byte cap.
+
 ## Tier 3 (shipped — targeted mutations + multi-start)
 
 Where Tier 2 says "evaluate candidates better," Tier 3 says "generate

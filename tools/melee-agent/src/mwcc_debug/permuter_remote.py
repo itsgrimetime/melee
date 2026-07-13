@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import os
@@ -9,8 +10,11 @@ import posixpath
 import re
 import shlex
 import shutil
+import signal
+import stat
 import subprocess
 import tempfile
+import time
 import tomllib
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -19,10 +23,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple
 
 from . import candidate_audit
+from .diff_capture import _run_with_process_group_timeout
 from .permuter_config import DEFAULT_OBJDUMP_COMMAND
 
 CONFIG_PATH = Path.home() / ".config" / "decomp-me" / "permuter-remotes.toml"
 JOBS_DIR = Path.home() / ".config" / "decomp-me" / "permuter-jobs"
+DEFAULT_REMOTE_DOCTOR_TIMEOUT = 60.0
 
 CONFIG_EXAMPLE = """
 [target.coder64]
@@ -123,6 +129,37 @@ class OrphanedWiboProcess:
 
 
 @dataclass(frozen=True)
+class OrphanedPermuterProcess:
+    pid: int
+    ppid: int
+    pgid: int
+    stat: str
+    elapsed: str
+    birth_identity: str
+    command: str
+    cwd: Path
+    kind: str
+
+
+@dataclass(frozen=True)
+class OrphanCleanupReport:
+    terminated_pids: tuple[int, ...]
+    surviving_pids: tuple[int, ...]
+    skipped_groups: dict[int, str]
+
+
+@dataclass(frozen=True)
+class _ProcessSnapshot:
+    pid: int
+    ppid: int
+    pgid: int
+    stat: str
+    elapsed: str
+    birth_identity: str | None
+    command: str
+
+
+@dataclass(frozen=True)
 class DoctorCheck:
     name: str
     ok: bool
@@ -191,21 +228,33 @@ def run_command(
 ) -> CommandResult:
     """Run a local command, returning captured output."""
     try:
-        completed = subprocess.run(
-            argv,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        if timeout is None:
+            completed = subprocess.run(
+                argv,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            completed = _run_with_process_group_timeout(
+                argv,
+                cwd=cwd or Path.cwd(),
+                timeout=timeout,
+            )
     except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        timeout_message = f"timed out after {timeout:g}s running {shlex.join(argv)}"
+        if timeout_message not in stderr:
+            stderr = f"{timeout_message}\n{stderr}" if stderr else timeout_message
         result = CommandResult(
             returncode=124,
-            stdout=exc.stdout or "",
-            stderr=(
-                exc.stderr or ""
-                or f"timed out after {timeout:g}s running {shlex.join(argv)}"
-            ),
+            stdout=stdout,
+            stderr=stderr,
         )
         if check:
             raise RemoteJobError(result.stderr)
@@ -220,6 +269,30 @@ def run_command(
         detail = f": {stderr}" if stderr else ""
         raise RemoteJobError(f"Command failed ({result.returncode}): {shlex.join(argv)}{detail}")
     return result
+
+
+def _runner_accepts_timeout(runner: Callable[..., CommandResult]) -> bool:
+    try:
+        parameters = inspect.signature(runner).parameters.values()
+    except (TypeError, ValueError):
+        return runner is run_command
+    return any(
+        parameter.name == "timeout"
+        or parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _run_bounded_command(
+    runner: Callable[..., CommandResult],
+    argv: list[str],
+    *,
+    check: bool,
+    timeout: float,
+) -> CommandResult:
+    if _runner_accepts_timeout(runner):
+        return runner(argv, check=check, timeout=timeout)
+    return runner(argv, check=check)
 
 
 def load_targets(config_path: Path = CONFIG_PATH) -> dict[str, RemoteTarget]:
@@ -550,40 +623,454 @@ def sanitize_log_tail(text: str, *, lines: int) -> str:
     return "\n".join(cleaned_lines) + "\n"
 
 
-def detect_orphaned_wibo_processes(
-    runner: Callable[[list[str]], CommandResult] = run_command,
-) -> list[OrphanedWiboProcess]:
-    """Find orphaned local wibo/MWCC processes that likely need operator action."""
-    result = runner(
-        ["ps", "-axo", "pid=,ppid=,stat=,etime=,command="],
-        check=False,
-    )
+_RESOURCE_TRACKER_RE = re.compile(
+    r"(?:^|\s)(?:\S*/)?python(?:\d+(?:\.\d+)*)?\s+-c\s+['\"]?"
+    r"from multiprocessing\.resource_tracker import main;main\(\d+\)"
+    r"['\"]?\s*$"
+)
+_SPAWN_WORKER_RE = re.compile(
+    r"(?:^|\s)(?:\S*/)?python(?:\d+(?:\.\d+)*)?\s+-c\s+['\"]?"
+    r"from multiprocessing\.spawn import spawn_main;\s*spawn_main\([^\r\n]*\)"
+    r"['\"]?\s+--multiprocessing-fork\s*$"
+)
+
+
+def _python_process_kind(command: str) -> str | None:
+    if _RESOURCE_TRACKER_RE.search(command):
+        return "python-resource-tracker"
+    if _SPAWN_WORKER_RE.search(command):
+        return "python-spawn-worker"
+    return None
+
+
+def _is_legacy_wibo_command(command: str) -> bool:
+    command_lower = command.lower()
+    return "wibo" in command_lower and "mwcceppc" in command_lower
+
+
+def _parse_birth_identity(tokens: list[str]) -> str | None:
+    if len(tokens) != 5:
+        return None
+    weekday, month, day, clock, year = tokens
+    if weekday not in {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}:
+        return None
+    if month not in {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    }:
+        return None
+    if not day.isdigit() or not 1 <= int(day) <= 31:
+        return None
+    clock_match = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2})", clock)
+    if clock_match is None:
+        return None
+    hour, minute, second = (int(value) for value in clock_match.groups())
+    if hour > 23 or minute > 59 or second > 60:
+        return None
+    if not re.fullmatch(r"\d{4}", year):
+        return None
+    return " ".join(tokens)
+
+
+def _read_process_table(
+    runner: Callable[..., CommandResult],
+) -> list[_ProcessSnapshot] | None:
+    try:
+        result = runner(
+            [
+                "env", "LC_ALL=C", "ps", "-axo",
+                "pid=,ppid=,pgid=,stat=,etime=,lstart=,command=",
+            ],
+            check=False,
+        )
+    except OSError:
+        return None
     if result.returncode != 0:
-        return []
-    orphans: list[OrphanedWiboProcess] = []
+        return None
+    processes: list[_ProcessSnapshot] = []
     for raw in result.stdout.splitlines():
-        parts = raw.strip().split(None, 4)
-        if len(parts) != 5:
+        parts = raw.strip().split(None, 10)
+        if len(parts) < 10:
             continue
-        pid_s, ppid_s, stat, elapsed, command = parts
-        command_lower = command.lower()
-        if "wibo" not in command_lower or "mwcceppc" not in command_lower:
-            continue
+        pid_s, ppid_s, pgid_s, stat, elapsed = parts[:5]
+        birth_identity = _parse_birth_identity(parts[5:10])
+        command = parts[10] if len(parts) == 11 else ""
         try:
             pid = int(pid_s)
             ppid = int(ppid_s)
+            pgid = int(pgid_s)
         except ValueError:
             continue
-        if ppid != 1:
-            continue
-        orphans.append(OrphanedWiboProcess(
+        processes.append(_ProcessSnapshot(
             pid=pid,
             ppid=ppid,
+            pgid=pgid,
             stat=stat,
             elapsed=elapsed,
+            birth_identity=birth_identity,
             command=command,
         ))
-    return orphans
+    return processes
+
+
+def _resolve_process_cwd(
+    pid: int,
+    runner: Callable[..., CommandResult],
+) -> Path | None:
+    proc_cwd = Path(f"/proc/{pid}/cwd")
+    if proc_cwd.exists():
+        try:
+            return proc_cwd.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return None
+    try:
+        result = runner(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    cwd_text = next(
+        (line[1:] for line in result.stdout.splitlines() if line.startswith("n")),
+        None,
+    )
+    if not cwd_text:
+        return None
+    try:
+        return Path(cwd_text).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _classify_orphaned_permuter_processes(
+    processes: list[_ProcessSnapshot],
+    *,
+    perm_root: Path,
+    runner: Callable[..., CommandResult],
+    current_pgid: int,
+) -> dict[int, OrphanedPermuterProcess]:
+    found: dict[int, OrphanedPermuterProcess] = {}
+    for proc in processes:
+        kind = _python_process_kind(proc.command)
+        if (
+            kind is None
+            or proc.birth_identity is None
+            or proc.ppid != 1
+            or proc.pgid <= 1
+            or proc.pgid == current_pgid
+        ):
+            continue
+        cwd = _resolve_process_cwd(proc.pid, runner)
+        if cwd is None or not _is_within(cwd, perm_root):
+            continue
+        found[proc.pid] = OrphanedPermuterProcess(
+            pid=proc.pid,
+            ppid=proc.ppid,
+            pgid=proc.pgid,
+            stat=proc.stat,
+            elapsed=proc.elapsed,
+            birth_identity=proc.birth_identity,
+            command=proc.command,
+            cwd=cwd,
+            kind=kind,
+        )
+    return found
+
+
+def detect_orphaned_permuter_processes(
+    *,
+    perm_root: Path = Path("~/code/decomp-permuter"),
+    runner: Callable[..., CommandResult] = run_command,
+    current_pgid: int | None = None,
+) -> list[OrphanedPermuterProcess]:
+    """Find only proven abandoned compiler and multiprocessing helpers."""
+    try:
+        resolved_root = perm_root.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return []
+    processes = _read_process_table(runner)
+    if processes is None:
+        return []
+    pgid = os.getpgrp() if current_pgid is None else current_pgid
+    return list(_classify_orphaned_permuter_processes(
+        processes,
+        perm_root=resolved_root,
+        runner=runner,
+        current_pgid=pgid,
+    ).values())
+
+
+def detect_orphaned_wibo_processes(
+    runner: Callable[..., CommandResult] = run_command,
+) -> list[OrphanedWiboProcess]:
+    """Compatibility report for PPID-1 wibo/MWCC processes."""
+    processes = _read_process_table(runner)
+    if processes is None:
+        return []
+    return [
+        OrphanedWiboProcess(
+            pid=proc.pid,
+            ppid=proc.ppid,
+            stat=proc.stat,
+            elapsed=proc.elapsed,
+            command=proc.command,
+        )
+        for proc in processes
+        if proc.ppid == 1 and _is_legacy_wibo_command(proc.command)
+    ]
+
+
+def terminate_orphaned_permuter_processes(
+    candidates: list[OrphanedPermuterProcess],
+    *,
+    perm_root: Path,
+    runner: Callable[..., CommandResult] = run_command,
+    killpg: Callable[[int, int], None] = os.killpg,
+    current_pgid: int | None = None,
+    grace_seconds: float = 2.0,
+) -> OrphanCleanupReport:
+    """Revalidate and terminate safe, homogeneous orphan process groups."""
+    try:
+        resolved_root = perm_root.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return OrphanCleanupReport(
+            terminated_pids=(),
+            surviving_pids=tuple(sorted(proc.pid for proc in candidates)),
+            skipped_groups={proc.pgid: "permuter root could not be resolved" for proc in candidates},
+        )
+    own_pgid = os.getpgrp() if current_pgid is None else current_pgid
+    original_by_group: dict[int, list[OrphanedPermuterProcess]] = {}
+    for candidate in candidates:
+        original_by_group.setdefault(candidate.pgid, []).append(candidate)
+
+    terminated: set[int] = set()
+    survivors: set[int] = set()
+    skipped: dict[int, str] = {}
+    for pgid, originals in sorted(original_by_group.items()):
+        if pgid <= 1 or pgid == own_pgid:
+            skipped[pgid] = "unsafe process group"
+            survivors.update(proc.pid for proc in originals)
+            continue
+        processes = _read_process_table(runner)
+        if processes is None:
+            skipped[pgid] = "could not re-scan process table"
+            survivors.update(proc.pid for proc in originals)
+            continue
+        members = [proc for proc in processes if proc.pgid == pgid]
+        if not members:
+            terminated.update(proc.pid for proc in originals)
+            continue
+        recognized = _classify_orphaned_permuter_processes(
+            members,
+            perm_root=resolved_root,
+            runner=runner,
+            current_pgid=own_pgid,
+        )
+        if any(member.pid not in recognized for member in members):
+            birth_mismatch = any(
+                member.pid == original.pid
+                and member.birth_identity != original.birth_identity
+                for member in members
+                for original in originals
+            )
+            skipped[pgid] = (
+                "candidate birth identity changed before SIGTERM"
+                if birth_mismatch
+                else "process group contains an unrecognized member"
+            )
+            survivors.update(proc.pid for proc in originals)
+            continue
+        changed = False
+        birth_changed_before_term = False
+        for original in originals:
+            current = recognized.get(original.pid)
+            if (
+                current is not None
+                and current.birth_identity != original.birth_identity
+            ):
+                birth_changed_before_term = True
+            if current is None or (
+                current.pgid != original.pgid
+                or current.birth_identity != original.birth_identity
+                or current.command != original.command
+                or current.cwd != original.cwd
+                or current.kind != original.kind
+            ):
+                changed = True
+                break
+        if changed:
+            skipped[pgid] = (
+                "candidate birth identity changed before SIGTERM"
+                if birth_changed_before_term
+                else "candidate changed during PID reuse revalidation"
+            )
+            survivors.update(proc.pid for proc in originals)
+            continue
+        if any("U" in member.stat for member in members):
+            skipped[pgid] = "uninterruptible process; restart the host"
+            survivors.update(member.pid for member in members)
+            continue
+        try:
+            killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            terminated.update(member.pid for member in members)
+            continue
+        except PermissionError:
+            skipped[pgid] = "permission denied while signaling process group"
+            survivors.update(member.pid for member in members)
+            continue
+        time.sleep(max(0.0, grace_seconds))
+        remaining = _read_process_table(runner)
+        if remaining is None:
+            skipped[pgid] = "could not verify termination"
+            survivors.update(member.pid for member in members)
+            continue
+        live = [proc for proc in remaining if proc.pgid == pgid]
+        if live:
+            birth_changed = any(
+                proc.pid in recognized
+                and proc.birth_identity != recognized[proc.pid].birth_identity
+                for proc in live
+            )
+            live_recognized = _classify_orphaned_permuter_processes(
+                live,
+                perm_root=resolved_root,
+                runner=runner,
+                current_pgid=own_pgid,
+            )
+            group_changed = any(
+                proc.pid not in live_recognized
+                or proc.pid not in recognized
+                or live_recognized[proc.pid].birth_identity
+                != recognized[proc.pid].birth_identity
+                or live_recognized[proc.pid].command != recognized[proc.pid].command
+                or live_recognized[proc.pid].cwd != recognized[proc.pid].cwd
+                or live_recognized[proc.pid].kind != recognized[proc.pid].kind
+                for proc in live
+            )
+            if group_changed:
+                skipped[pgid] = (
+                    "process birth identity changed before SIGKILL"
+                    if birth_changed
+                    else "process group changed before SIGKILL revalidation"
+                )
+                survivors.update(proc.pid for proc in live)
+                terminated.update(
+                    proc.pid for proc in members if proc.pid not in survivors
+                )
+                continue
+            try:
+                killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                live = []
+            except PermissionError:
+                skipped[pgid] = "permission denied while escalating process group"
+                survivors.update(proc.pid for proc in live)
+                continue
+            if live:
+                time.sleep(min(max(0.0, grace_seconds), 0.1))
+                final = _read_process_table(runner)
+                if final is None:
+                    survivors.update(proc.pid for proc in live)
+                else:
+                    live = [proc for proc in final if proc.pgid == pgid]
+        survivors.update(proc.pid for proc in live)
+        terminated.update(proc.pid for proc in members if proc.pid not in survivors)
+    return OrphanCleanupReport(
+        terminated_pids=tuple(sorted(terminated)),
+        surviving_pids=tuple(sorted(survivors)),
+        skipped_groups=skipped,
+    )
+
+
+def _local_fetch_identity(job: RemoteJob) -> Any:
+    from . import local_remote_runs  # noqa: PLC0415
+
+    return local_remote_runs.RemoteRunIdentity(**asdict(job))
+
+
+def _prepare_local_fetch_destination(job: RemoteJob, fetch_dest: Path) -> None:
+    from . import local_remote_runs  # noqa: PLC0415
+
+    identity = _local_fetch_identity(job)
+    function_dir = Path(job.local_perm_dir).expanduser()
+    if not function_dir.is_absolute():
+        raise RemoteJobError("remote fetch destination requires an absolute local permuter path")
+    function_dir = function_dir.absolute()
+    expected = function_dir / "remote-runs" / job.job_id
+    if fetch_dest.expanduser().absolute() != expected:
+        raise RemoteJobError(
+            f"remote fetch destination is outside the owned job path: {fetch_dest}"
+        )
+    if function_dir.name != job.function or function_dir.parent.name != "nonmatchings":
+        raise RemoteJobError("remote fetch destination is outside nonmatchings ownership")
+    perm_root = function_dir.parent.parent
+    try:
+        perm_root.mkdir(parents=True, exist_ok=True)
+        for owner in (
+            perm_root,
+            function_dir.parent,
+            function_dir,
+            function_dir / "remote-runs",
+            expected,
+        ):
+            try:
+                owner_stat = owner.lstat()
+            except FileNotFoundError:
+                owner.mkdir(mode=0o700)
+                owner_stat = owner.lstat()
+            if owner.is_symlink() or not stat.S_ISDIR(owner_stat.st_mode):
+                raise RemoteJobError(f"unsafe remote fetch destination owner: {owner}")
+        _, detail = local_remote_runs._manifest_owned_run_root(expected, identity)
+        if detail:
+            raise RemoteJobError(f"unsafe remote fetch destination: {detail}")
+    except RemoteJobError:
+        raise
+    except OSError as exc:
+        raise RemoteJobError(f"unable to prepare remote fetch destination: {exc}") from exc
+
+
+def _mark_local_fetch_failure(
+    fetch_dest: Path,
+    *,
+    job: RemoteJob,
+    label: str,
+    detail: str,
+) -> str:
+    from . import local_remote_runs  # noqa: PLC0415
+
+    state, state_detail = local_remote_runs.local_fetch_warning_state(
+        fetch_dest,
+        identity=_local_fetch_identity(job),
+    )
+    if state == "regular":
+        return ""
+    if state == "unsafe":
+        return state_detail or "unsafe existing remote fetch warning"
+    try:
+        _write_remote_fetch_warning(
+            fetch_dest,
+            job=job,
+            remote_status=RemoteStatus(job.job_id, "unknown", detail),
+            rsync_failures=[{
+                "command": label,
+                "returncode": -1,
+                "stderr": detail,
+            }],
+        )
+    except (OSError, RemoteJobError) as exc:
+        return str(exc)
+    return ""
 
 
 def fetch_job(
@@ -594,8 +1081,16 @@ def fetch_job(
     """Fetch remote permuter outputs for a job into a local run directory."""
     fetch_dest = dest if dest is not None else Path(job.local_perm_dir) / "remote-runs" / job.job_id
     remote_run_dest = fetch_dest / "remote-run"
-    fetch_dest.mkdir(parents=True, exist_ok=True)
-    remote_run_dest.mkdir(parents=True, exist_ok=True)
+    _prepare_local_fetch_destination(job, fetch_dest)
+    try:
+        remote_run_dest.mkdir(mode=0o700)
+    except FileExistsError:
+        try:
+            remote_stat = remote_run_dest.lstat()
+        except OSError as exc:
+            raise RemoteJobError(f"unsafe remote metadata destination: {exc}") from exc
+        if remote_run_dest.is_symlink() or not stat.S_ISDIR(remote_stat.st_mode):
+            raise RemoteJobError(f"unsafe remote metadata destination: {remote_run_dest}")
     seed_prefix = f"nonmatchings/{job.function}"
     seed_files = [
         "base.c",
@@ -650,23 +1145,75 @@ def fetch_job(
         result = runner(command, check=False)
         if result.returncode != 0:
             rsync_failures.append(_remote_fetch_rsync_failure(command, result))
+    remote_status: RemoteStatus | None = None
+    active_failure_detail: str | None = None
     if rsync_failures:
-        status = status_job(job, runner=runner)
+        remote_status = status_job(job, runner=runner)
         _write_remote_fetch_warning(
             fetch_dest,
             job=job,
-            remote_status=status,
+            remote_status=remote_status,
             rsync_failures=rsync_failures,
         )
-        if status.state == "active":
-            detail = _format_remote_fetch_failure_detail(
-                status,
+        if remote_status.state == "active":
+            active_failure_detail = _format_remote_fetch_failure_detail(
+                remote_status,
                 rsync_failures,
             )
-            raise RemoteJobError(
-                f"remote fetch failed for active job {job.job_id}: {detail}"
-            )
-    candidate_audit.audit_candidate_tree(fetch_dest, function=job.function)
+    try:
+        audit_summary = candidate_audit.audit_candidate_tree(
+            fetch_dest,
+            function=job.function,
+        )
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        warning_failure = _mark_local_fetch_failure(
+            fetch_dest,
+            job=job,
+            label="local candidate audit",
+            detail=detail,
+        )
+        warning_detail = (
+            f"; warning update failed: {warning_failure}"
+            if warning_failure
+            else ""
+        )
+        raise RemoteJobError(
+            f"remote fetch candidate audit failed for {job.job_id}: "
+            f"{detail}{warning_detail}"
+        ) from exc
+
+    from . import local_remote_runs  # noqa: PLC0415
+
+    manifest_result = local_remote_runs.write_local_fetch_manifest(
+        fetch_dest,
+        identity=_local_fetch_identity(job),
+        state="partial" if rsync_failures else "complete",
+        candidate_audit=audit_summary,
+    )
+    if not manifest_result.ok:
+        detail = manifest_result.detail or manifest_result.status
+        warning_failure = _mark_local_fetch_failure(
+            fetch_dest,
+            job=job,
+            label="local fetch manifest",
+            detail=detail,
+        )
+        warning_detail = (
+            f"; warning update failed: {warning_failure}"
+            if warning_failure
+            else ""
+        )
+        raise RemoteJobError(
+            f"remote fetch manifest publication failed for {job.job_id}: "
+            f"{detail}{warning_detail}"
+        )
+    if not rsync_failures:
+        _clear_remote_fetch_warning(fetch_dest, job=job)
+    if active_failure_detail is not None:
+        raise RemoteJobError(
+            f"remote fetch failed for active job {job.job_id}: {active_failure_detail}"
+        )
     return fetch_dest
 
 
@@ -709,10 +1256,26 @@ def _write_remote_fetch_warning(
     }
     if remote_status.detail:
         payload["remote_status_detail"] = remote_status.detail
-    (fetch_dest / "remote-fetch-warning.json").write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    from . import local_remote_runs  # noqa: PLC0415
+
+    written, detail = local_remote_runs.write_local_fetch_warning(
+        fetch_dest,
+        identity=_local_fetch_identity(job),
+        payload=payload,
     )
+    if not written:
+        raise RemoteJobError(f"remote fetch warning publication failed: {detail}")
+
+
+def _clear_remote_fetch_warning(fetch_dest: Path, *, job: RemoteJob) -> None:
+    from . import local_remote_runs  # noqa: PLC0415
+
+    cleared, detail = local_remote_runs.clear_local_fetch_warning(
+        fetch_dest,
+        identity=_local_fetch_identity(job),
+    )
+    if not cleared:
+        raise RemoteJobError(f"remote fetch warning clear failed: {detail}")
 
 
 def _format_remote_fetch_failure_detail(
@@ -791,6 +1354,7 @@ def doctor_target(
     local_perm_dir: Path | None = None,
     runner: Callable[..., CommandResult] = run_command,
     require_remote_scorer_target: bool = True,
+    timeout: float = DEFAULT_REMOTE_DOCTOR_TIMEOUT,
 ) -> DoctorReport:
     """Run read-only checks for a remote permuter target."""
     checks: list[DoctorCheck] = [
@@ -827,7 +1391,19 @@ def doctor_target(
         objdump_info=objdump_info,
         require_remote_scorer_target=require_remote_scorer_target,
     )
-    result = runner(["ssh", target.ssh, _remote_sh(script)], check=False)
+    if timeout <= 0:
+        checks.append(DoctorCheck(
+            "remote ssh",
+            False,
+            "doctor timeout must be positive",
+        ))
+        return DoctorReport(target=target.name, checks=checks)
+    result = _run_bounded_command(
+        runner,
+        ["ssh", target.ssh, _remote_sh(script)],
+        check=False,
+        timeout=timeout,
+    )
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "ssh command failed"
         checks.append(DoctorCheck("remote ssh", False, detail))
@@ -1561,33 +2137,114 @@ def _validate_remote_ready_perm_dir(local_perm_dir: Path) -> None:
         )
 
 
-_MWCC_EXE_RE = re.compile(r"mwcceppc(?:_debug)?\.exe(?P<rest>.*)$")
+_MWCC_EXE_TOKEN_RE = re.compile(r"(?:^|/)mwcceppc(?:_debug)?\.exe$")
+
+
+def _shell_word_spans(line: str) -> list[tuple[int, int, str]]:
+    """Return shell words with source spans while respecting basic quoting."""
+    spans: list[tuple[int, int, str]] = []
+    index = 0
+    while index < len(line):
+        while index < len(line) and line[index].isspace():
+            index += 1
+        if index >= len(line):
+            break
+        start = index
+        quote: str | None = None
+        while index < len(line):
+            char = line[index]
+            if char == "\\" and quote != "'":
+                index = min(index + 2, len(line))
+                continue
+            if char in {"'", '"'}:
+                if quote is None:
+                    quote = char
+                elif quote == char:
+                    quote = None
+                index += 1
+                continue
+            if char.isspace() and quote is None:
+                break
+            index += 1
+        raw = line[start:index]
+        try:
+            parsed = shlex.split(raw, posix=True)
+        except ValueError:
+            return []
+        if len(parsed) != 1:
+            return []
+        spans.append((start, index, parsed[0]))
+    return spans
+
+
+def _host_wibo_fallback_condition(line: str) -> bool:
+    """Return whether *line* is the generated absolute baked-wibo branch."""
+    try:
+        words = shlex.split(line.strip(), posix=True)
+    except ValueError:
+        return False
+    return (
+        len(words) >= 7
+        and words[:3] == ["elif", "[[", "-f"]
+        and Path(words[3]).is_absolute()
+        and words[4:6] == ["&&", "-x"]
+        and words[6] == words[3]
+    )
+
+
+def _remote_compile_command(line: str, *, wibo: str) -> str | None:
+    """Replace a local compiler prefix while preserving the original suffix."""
+    for _start, end, word in _shell_word_spans(line):
+        if "MWCC_DEBUG_COMPILER" in word:
+            return None
+        if _MWCC_EXE_TOKEN_RE.search(word):
+            indent = line[: len(line) - len(line.lstrip())]
+            compiler = (
+                '"${MWCC_DEBUG_COMPILER:-$MELEE_ROOT/build/compilers/GC/'
+                '1.2.5n/mwcceppc_debug.exe}"'
+            )
+            return f"{indent}{wibo} {compiler}{line[end:]}"
+    return None
 
 
 def _rewrite_compile_sh_for_remote(text: str) -> str:
     out: list[str] = []
+    has_wibo_preflight = 'WIBO=""' in text
+    skip_baked_assignment = False
     for line in text.splitlines():
+        if skip_baked_assignment:
+            skip_baked_assignment = False
+            if line.strip().startswith('WIBO="/'):
+                continue
+        # A setup wrapper may carry the generator host's absolute custom-wibo
+        # fallback.  The remote MELEE_ROOT/current-checkout candidates precede
+        # it, so omit only that host-local branch from the staged copy.
+        if _host_wibo_fallback_condition(line):
+            skip_baked_assignment = True
+            continue
         stripped = line.strip()
+        try:
+            shell_words = shlex.split(stripped, posix=True)
+        except ValueError:
+            shell_words = []
         if (
-            stripped.startswith("cd ")
-            and not stripped.startswith('cd "$MELEE_ROOT"')
-            and not stripped.startswith('cd "${MELEE_ROOT')
-            and ("/Users/" in stripped or stripped.startswith("cd /"))
+            len(shell_words) >= 2
+            and shell_words[0] == "cd"
+            and Path(shell_words[1]).is_absolute()
         ):
-            out.append('cd "${MELEE_ROOT:?MELEE_ROOT must be set}"')
+            indent = line[: len(line) - len(line.lstrip())]
+            out.append(indent + 'cd "${MELEE_ROOT:?MELEE_ROOT must be set}"')
             continue
 
         if "mwcceppc" in line and ".exe" in line:
-            match = _MWCC_EXE_RE.search(line)
-            if match is not None:
-                indent = line[: len(line) - len(line.lstrip())]
-                rest = match.group("rest")
-                out.append(
-                    indent
-                    + '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}" '
-                    + '"${MWCC_DEBUG_COMPILER:-$MELEE_ROOT/build/compilers/GC/1.2.5n/mwcceppc_debug.exe}"'
-                    + rest
-                )
+            wibo = (
+                '"$WIBO"'
+                if has_wibo_preflight
+                else '"${MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo}"'
+            )
+            rewritten = _remote_compile_command(line, wibo=wibo)
+            if rewritten is not None:
+                out.append(rewritten)
                 continue
 
         out.append(line)

@@ -559,3 +559,49 @@ def test_session_startup_links_base_dol_for_local_agent_worktree(tmp_path: Path)
     assert dol_path.exists()
     assert dol_path.is_symlink()
     assert dol_path.resolve() == candidate.resolve()
+
+
+def test_cleanup_stale_apply_remains_print_only_and_points_to_retirement_cli(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    stale = tmp_path / "stale"
+    fake_bin = tmp_path / "bin"
+    repo.mkdir()
+    stale.mkdir()
+    fake_bin.mkdir()
+    call_log = tmp_path / "git-calls"
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/bin/bash\n"
+        "printf '%s\\n' \"$*\" >> \"$FAKE_GIT_LOG\"\n"
+        "case \"$*\" in\n"
+        f"  'rev-parse --path-format=absolute --git-common-dir') echo '{repo}/.git' ;;\n"
+        "  'worktree list --porcelain')\n"
+        f"    printf 'worktree %s\\nHEAD %040d\\nbranch refs/heads/master\\n\\n' '{repo}' 1\n"
+        f"    printf 'worktree %s\\nHEAD %040d\\nbranch refs/heads/codex/stale\\n\\n' '{stale}' 2\n"
+        "    ;;\n"
+        "  log*) echo 1 ;;\n"
+        "  rev-list*) echo 0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    script = Path(__file__).resolve().parents[2] / "workflow" / "cleanup-stale.sh"
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    environment["FAKE_GIT_LOG"] = str(call_log)
+
+    process = subprocess.run(
+        ["bash", str(script), "--apply"],
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=True,
+    )
+
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    assert not any(call.startswith("worktree remove") for call in calls)
+    assert f'git worktree remove "{stale}"' in process.stdout
+    assert "python tools/worktree-doctor.py worktrees report" in process.stdout
+    assert "python tools/worktree-doctor.py worktrees retire" in process.stdout

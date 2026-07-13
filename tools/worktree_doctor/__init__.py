@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from collections.abc import Sequence
@@ -115,6 +116,7 @@ from .assets import (  # noqa: E402, F401
     AssetResult,
     default_cache_root,
     hydrate_shared_assets,
+    inspect_hydrated_assets,
     seed_shared_assets,
 )
 
@@ -313,8 +315,319 @@ def _assets_main(argv: Sequence[str]) -> int:
     } else 1
 
 
+def _worktree_record_payload(record, *, inspected_at: float) -> dict[str, object]:
+    idle_seconds = (
+        None
+        if record.last_activity is None
+        else inspected_at - record.last_activity
+    )
+    return {
+        "path": str(record.path),
+        "head": record.head,
+        "branch": record.branch,
+        "estimated_disk_bytes": record.estimated_disk_bytes,
+        "last_activity": record.last_activity,
+        "idle_seconds": idle_seconds,
+        "dirty": record.dirty,
+        "active_pids": list(record.active_pids),
+        "merged_into_master": record.merged_into_master,
+        "ignored_path_count": len(record.ignored_entries),
+        "unapproved_ignored_paths": [
+            str(path) for path in record.unapproved_ignored_paths
+        ],
+        "eligible": record.eligible,
+        "skip_reasons": list(record.skip_reasons),
+    }
+
+
+def _worktrees_payload(report, result, *, mode: str) -> dict[str, object]:
+    authoritative_report = (
+        result.authoritative_report
+        if result is not None and result.authoritative_report is not None
+        else report
+    )
+    records = sorted(
+        authoritative_report.records,
+        key=lambda record: str(record.canonical_path),
+    )
+    if result is None:
+        planned = ()
+        removed = ()
+        skipped = ()
+        errors = [
+            {"reason": reason, "detail": "initial inspection failed"}
+            for reason in report.global_errors
+        ]
+    else:
+        planned = result.planned
+        removed = result.removed
+        skipped = result.skipped
+        errors = [
+            {"reason": error.reason, "detail": error.detail}
+            for error in result.errors
+        ]
+    return {
+        "schema_version": 1,
+        "resource": "worktrees",
+        "mode": mode,
+        "thresholds": {"min_idle_hours": authoritative_report.min_idle_hours},
+        "repository": {
+            "root": str(authoritative_report.repo_root),
+            "common_git_dir": str(authoritative_report.common_git_dir),
+            "current_worktree": str(authoritative_report.current_worktree),
+        },
+        "worktrees": [
+            _worktree_record_payload(
+                record, inspected_at=authoritative_report.inspected_at
+            )
+            for record in records
+        ],
+        "planned": [
+            {
+                "path": str(candidate.path),
+                "branch": candidate.branch,
+                "head": candidate.head,
+                "estimated_disk_bytes": candidate.estimated_disk_bytes,
+                "last_activity": candidate.last_activity,
+            }
+            for candidate in planned
+        ],
+        "removed": [
+            {
+                "path": str(removal.path),
+                "branch": removal.branch,
+                "head": removal.head,
+                "branch_head_after": removal.branch_head_after,
+                "estimated_reclaimed_bytes": removal.estimated_reclaimed_bytes,
+            }
+            for removal in removed
+        ],
+        "skipped": [
+            {
+                "path": str(skip.path),
+                "branch": skip.branch,
+                "head": skip.head,
+                "phase": skip.phase,
+                "reason": skip.reason,
+            }
+            for skip in skipped
+        ],
+        "errors": errors,
+        "summary": {
+            "eligible_count": sum(record.eligible for record in records),
+            "estimated_planned_bytes": sum(
+                candidate.estimated_disk_bytes for candidate in planned
+            ),
+            "removed_count": len(removed),
+            "estimated_reclaimed_bytes": sum(
+                removal.estimated_reclaimed_bytes for removal in removed
+            ),
+        },
+    }
+
+
+def _format_worktree_value(value: object) -> str:
+    if value is None:
+        return "unknown"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _escape_worktree_text(value: object) -> str:
+    rendered = json.dumps(str(value), ensure_ascii=True)
+    return rendered[1:-1]
+
+
+def _format_worktree_list(values: Sequence[object]) -> str:
+    return json.dumps(
+        list(values), ensure_ascii=True, separators=(",", ":")
+    )
+
+
+def _print_worktrees_payload(payload: dict[str, object]) -> None:
+    print(f"mode: {payload['mode']}")
+    thresholds = payload["thresholds"]
+    repository = payload["repository"]
+    assert isinstance(thresholds, dict)
+    assert isinstance(repository, dict)
+    print(f"thresholds: min_idle_hours={thresholds['min_idle_hours']}")
+    print(
+        "repository: "
+        f"root={_escape_worktree_text(repository['root'])} "
+        f"common_git_dir={_escape_worktree_text(repository['common_git_dir'])} "
+        f"current_worktree={_escape_worktree_text(repository['current_worktree'])}"
+    )
+    for record in payload["worktrees"]:
+        assert isinstance(record, dict)
+        reasons = record["skip_reasons"]
+        assert isinstance(reasons, list)
+        reason_text = ",".join(_escape_worktree_text(reason) for reason in reasons) or "-"
+        eligibility = "eligible" if record["eligible"] else "ineligible"
+        branch = (
+            _escape_worktree_text(record["branch"])
+            if record["branch"] is not None
+            else "-"
+        )
+        active_pids = record["active_pids"]
+        unapproved = record["unapproved_ignored_paths"]
+        assert isinstance(active_pids, list)
+        assert isinstance(unapproved, list)
+        print(
+            f"worktree={_escape_worktree_text(record['path'])} branch={branch} "
+            f"head={_escape_worktree_text(str(record['head'])[:12])} "
+            f"estimated_disk_bytes={record['estimated_disk_bytes']} "
+            f"last_activity={_format_worktree_value(record['last_activity'])} "
+            f"idle_seconds={_format_worktree_value(record['idle_seconds'])} "
+            f"dirty={_format_worktree_value(record['dirty'])} "
+            f"active_pids={_format_worktree_list(active_pids)} "
+            f"merged_into_master={_format_worktree_value(record['merged_into_master'])} "
+            f"ignored_path_count={record['ignored_path_count']} "
+            f"unapproved_ignored_path_count={len(unapproved)} "
+            f"unapproved_ignored_paths={_format_worktree_list(unapproved[:20])} "
+            f"eligibility={eligibility} reasons={reason_text}"
+        )
+    for candidate in payload["planned"]:
+        assert isinstance(candidate, dict)
+        print(
+            f"planned: path={_escape_worktree_text(candidate['path'])} "
+            f"branch={_escape_worktree_text(candidate['branch'])} "
+            f"head={_escape_worktree_text(str(candidate['head'])[:12])} "
+            f"estimated_disk_bytes={candidate['estimated_disk_bytes']} "
+            f"last_activity={_format_worktree_value(candidate['last_activity'])}"
+        )
+    for removal in payload["removed"]:
+        assert isinstance(removal, dict)
+        print(
+            f"removed: path={_escape_worktree_text(removal['path'])} "
+            f"branch={_escape_worktree_text(removal['branch'])} "
+            f"head={_escape_worktree_text(str(removal['head'])[:12])} "
+            f"branch_head_after={_escape_worktree_text(removal['branch_head_after'])} "
+            f"estimated_reclaimed_bytes={removal['estimated_reclaimed_bytes']}"
+        )
+    for skip in payload["skipped"]:
+        assert isinstance(skip, dict)
+        print(
+            f"skipped: path={_escape_worktree_text(skip['path'])} "
+            f"branch={_escape_worktree_text(skip['branch'])} "
+            f"head={_escape_worktree_text(str(skip['head'])[:12])} "
+            f"phase={_escape_worktree_text(skip['phase'])} "
+            f"reason={_escape_worktree_text(skip['reason'])}"
+        )
+    for error in payload["errors"]:
+        assert isinstance(error, dict)
+        print(
+            f"error: reason={_escape_worktree_text(error['reason'])} "
+            f"detail={_escape_worktree_text(error['detail'])}"
+        )
+    summary = payload["summary"]
+    assert isinstance(summary, dict)
+    print(
+        "summary: "
+        f"eligible_count={summary['eligible_count']} "
+        f"estimated_planned_bytes={summary['estimated_planned_bytes']} "
+        f"removed_count={summary['removed_count']} "
+        f"estimated_reclaimed_bytes={summary['estimated_reclaimed_bytes']}"
+    )
+
+
+def _worktrees_status(payload: dict[str, object], *, mode: str) -> int:
+    errors = payload["errors"]
+    skipped = payload["skipped"]
+    planned = payload["planned"]
+    removed = payload["removed"]
+    assert isinstance(errors, list)
+    assert isinstance(skipped, list)
+    assert isinstance(planned, list)
+    assert isinstance(removed, list)
+    if mode != "apply":
+        return 1 if errors else 0
+    if errors and not planned and not removed:
+        return 1
+    if errors or skipped or len(removed) != len(planned):
+        return 2
+    return 0
+
+
+def _worktrees_main(argv: Sequence[str]) -> int:
+    from . import worktrees
+
+    parser = argparse.ArgumentParser(
+        prog=f"{Path(sys.argv[0]).name} worktrees",
+        description="Report and safely retire idle agent worktrees",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("report", "retire"):
+        command = commands.add_parser(name)
+        command.add_argument(
+            "--min-idle-hours",
+            type=float,
+            default=24.0,
+            help="Minimum worktree idle time required for eligibility (default: %(default)s)",
+        )
+        command.add_argument(
+            "--json", action="store_true", help="Emit machine-readable JSON"
+        )
+        if name == "retire":
+            command.add_argument(
+                "--apply",
+                action="store_true",
+                help="Retire freshly revalidated eligible worktrees",
+            )
+    args = parser.parse_args(argv)
+    if args.min_idle_hours < 0 or not math.isfinite(args.min_idle_hours):
+        parser.error("--min-idle-hours must be finite and non-negative")
+
+    mode = "apply" if args.command == "retire" and args.apply else (
+        "dry-run" if args.command == "retire" else "report"
+    )
+    try:
+        report = worktrees.inspect_worktrees(
+            ROOT,
+            current_worktree=ROOT,
+            min_idle_hours=args.min_idle_hours,
+        )
+    except worktrees.WorktreeParseError as error:
+        report = worktrees.WorktreeReport(
+            repo_root=ROOT,
+            common_git_dir=ROOT / ".git",
+            current_worktree=ROOT,
+            min_idle_hours=args.min_idle_hours,
+            inspected_at=time.time(),
+            records=(),
+            global_errors=(),
+        )
+        result = worktrees.RetirementResult(
+            planned=(),
+            removed=(),
+            skipped=(),
+            errors=(
+                worktrees.RetirementError(
+                    reason="worktree-porcelain-invalid", detail=str(error)
+                ),
+            ),
+            authoritative_report=report,
+        )
+    else:
+        if args.command == "report":
+            result = None
+        else:
+            result = worktrees.retire_worktrees(report, apply=args.apply)
+
+    payload = _worktrees_payload(report, result, mode=mode)
+    if args.json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        _print_worktrees_payload(payload)
+    return _worktrees_status(payload, mode=mode)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "worktrees":
+        return _worktrees_main(arguments[1:])
     if arguments and arguments[0] == "artifacts":
         return _artifacts_main(arguments[1:])
     if arguments and arguments[0] == "assets":

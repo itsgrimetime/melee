@@ -192,15 +192,20 @@ MWCC_ARGS="${MWCC_ARGS%% && *}"
 
 # 4. Remote command: cd to remote melee, fetch+checkout, run inspector
 if [[ -n "${MWCC_INSPECT_REMOTE_REF:-}" ]]; then
-  REMOTE_REF="${MWCC_INSPECT_REMOTE_REF}"
+  REMOTE_REF_INPUT="${MWCC_INSPECT_REMOTE_REF}"
 elif [[ "${UPLOAD_SOURCE}" == "1" ]]; then
   if [[ -n "${LOCAL_UPSTREAM}" ]]; then
-    REMOTE_REF="${LOCAL_UPSTREAM}"
+    REMOTE_REF_INPUT="${LOCAL_UPSTREAM}"
   else
-    REMOTE_REF="${MWCC_INSPECT_DEFAULT_REMOTE_REF:-master}"
+    REMOTE_REF_INPUT="${MWCC_INSPECT_DEFAULT_REMOTE_REF:-master}"
   fi
 else
-  REMOTE_REF="${LOCAL_HEAD}"
+  REMOTE_REF_INPUT="${LOCAL_HEAD}"
+fi
+if ! REMOTE_REF=$(git -C "${REPO_ROOT}" rev-parse --verify "${REMOTE_REF_INPUT}^{commit}" 2>/dev/null); then
+  echo "ERROR: cannot resolve remote inspector ref locally: ${REMOTE_REF_INPUT}" >&2
+  echo "  Fetch the ref locally or pass MWCC_INSPECT_REMOTE_REF as an exact available commit." >&2
+  exit 1
 fi
 
 mkdir -p "$(dirname "${OUT_FILE}")"

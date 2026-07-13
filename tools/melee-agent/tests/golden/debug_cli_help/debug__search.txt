@@ -7,6 +7,9 @@
 │ --help          Show this message and exit.                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ delta-minimize                      Exhaustively minimize the closed         │
+│                                     source-delta lattice between two         │
+│                                     parents.                                 │
 │ structure                           Run structure-search axes and rank       │
 │                                     candidate variants.                      │
 │ plan-transforms                     Plan source-transform families and       │
@@ -36,5 +39,6 @@
 │                                     layer for FUNCTION in UNIT.              │
 │ status                              Show status of the search substrate      │
 │                                     (store, config).                         │
+│ delta-namespace-review              Inspect and explicitly seal reviewed     │
+│                                     allocator namespace mappings.            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-

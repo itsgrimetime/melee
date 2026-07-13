@@ -17,6 +17,7 @@ binary.
 | Need parsed expression trees or ObjObject IDs | `mwcc-inspect` |
 | Need fast back-end PCode, virtual registers, coloring decisions | `mwcc-debug` (fast; DLL pcdump) |
 | Need exact retail GC/1.2.5n backend/regalloc facts | `mwcc-retro backend` |
+| Static audit of the stripped GC/1.2.5n compiler | Run `melee-agent debug retro ghidra-setup` first |
 | Need front-end IRO pass-by-pass trace (CSE, loop unrolling, propagation, DCE…) | `mwcc-retro` |
 | Suspect a mismatch is a debug-DLL artifact vs. retail | `mwcc-retro verify` |
 | Register mismatch confirmed, source shape is already correct | `mwcc-debug` force options + permuter |
@@ -32,6 +33,10 @@ confirmation.
 ```bash
 # One-time setup: clone+build retrowin32 and cadmic/mwcc-debugger, run P0 gate
 melee-agent debug retro setup
+
+# Required before a stripped compiler callsite/static audit. This validates
+# the exact compiler hash, native Ghidra tools, timeout bounds, and project.
+melee-agent debug retro ghidra-setup
 
 # Front-end IRO trace (1.2.5n)
 melee-agent debug retro dump src/melee/mn/mndraw.c -f mnDraw_8024A3B0
@@ -75,6 +80,25 @@ Output lands in `build/mwcc_retro/<unit>/<fn>/`. The most useful files for
 front-end investigation are `iro-trace.txt`, the split `iro-NN-<phase>.txt`
 files, and `iro-summary.txt`. For exact retail backend work, start with
 `backend-trace.v1.json`, `regalloc-summary.txt`, and `backend-summary.txt`.
+
+## Stripped compiler Ghidra setup
+
+Before any static compiler audit, run:
+
+```bash
+melee-agent debug retro ghidra-setup
+```
+
+Do not invoke archived or hard-coded Ghidra installation paths directly. The
+CLI selects the configured installation, requires a host-native decompiler on
+macOS, enforces the exact GC/1.2.5n compiler SHA-256, bounds both analysis and
+wall time, and rejects empty or interrupted projects. If an existing project
+is invalid, rerun the exact retry it prints with `--repair`; the old artifacts
+are retained with a shared `.invalid-YYYYmmddTHHMMSSZ` suffix.
+
+For isolated acceptance or investigation without touching the established
+project, use `--project-dir PATH`. Relative paths resolve against the active
+Melee checkout. `--json` emits the stable `mwcc-ghidra-setup.v1` result.
 
 ## Backend map probe
 

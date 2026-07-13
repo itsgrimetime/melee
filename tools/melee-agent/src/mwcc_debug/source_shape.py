@@ -106,6 +106,7 @@ class CandidateScore:
     expression_score: dict[str, Any] | None = None
     structural_guard: dict[str, Any] | None = None
     structural_guard_error: str | None = None
+    checkdiff_evidence: dict[str, Any] | None = None
     source_file: str | None = None
     source_retained: str | None = None
     pcdump_path: str | None = None

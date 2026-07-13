@@ -2,13 +2,29 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from ._helpers import *  # noqa: F403
-from ._helpers import _CFLAGS
 from src.mwcc_debug.retained_frontier_triage import (
     RetainedFrontierTriageError,
     render_retained_frontier_text,
     triage_retained_frontiers,
 )
+from src.search.delta_minimize import (
+    DeltaMinimizeConfig,
+    DeltaMinimizeError,
+    load_review_request,
+    parse_donor_overrides,
+    render_delta_minimize_text,
+    run_delta_minimize,
+    seal_namespace_review,
+)
+
+from ._helpers import *  # noqa: F403
+from ._helpers import _CFLAGS
+
+delta_namespace_review_app = typer.Typer(
+    help="Inspect and explicitly seal reviewed allocator namespace mappings.",
+    no_args_is_help=True,
+)
+search_app.add_typer(delta_namespace_review_app, name="delta-namespace-review")
 
 
 class _SearchRunDirectedPipeline:
@@ -68,6 +84,136 @@ def _resolve_source_file(path: Path | None, *, melee_root: Path) -> Path | None:
         if candidate.is_file():
             return candidate.resolve()
     raise typer.BadParameter(f"source file not found: {path}")
+
+
+def _path_has_symlink_component(path: Path) -> bool:
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            return True
+    return False
+
+
+def _delta_source_candidates(path: Path, *, melee_root: Path) -> tuple[Path, ...]:
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        return (expanded,)
+    candidates = (Path.cwd() / expanded, melee_root / expanded)
+    return tuple(dict.fromkeys(candidates))
+
+
+def _resolve_delta_source_file(path: Path, *, melee_root: Path) -> Path:
+    """Resolve one delta parent only after fail-closed symlink validation."""
+
+    for candidate in _delta_source_candidates(path, melee_root=melee_root):
+        if _path_has_symlink_component(candidate):
+            raise typer.BadParameter(f"source file not found or unsafe: {path}")
+        if candidate.is_file():
+            return candidate.resolve()
+    raise typer.BadParameter(f"source file not found: {path}")
+
+
+def _resolve_delta_target_file(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    expanded = path.expanduser()
+    candidate = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    if _path_has_symlink_component(candidate) or not candidate.is_file():
+        raise typer.BadParameter(f"target file not found or unsafe: {path}")
+    return candidate.resolve()
+
+
+def _resolve_delta_namespace_review_file(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    expanded = path.expanduser()
+    candidate = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    if _path_has_symlink_component(candidate) or not candidate.is_file():
+        raise typer.BadParameter(
+            f"namespace review file not found or unsafe: {path}"
+        )
+    return candidate.resolve()
+
+
+def _parse_namespace_review_maps(values: Iterable[str]) -> dict[str, Path]:
+    parsed: dict[str, Path] = {}
+    for raw in values:
+        if not isinstance(raw, str) or raw.count("=") != 1 or raw.strip() != raw:
+            raise ValueError(f"invalid --map value {raw!r}; expected ARTIFACT_ID=PATH")
+        artifact_id, raw_path = raw.split("=", 1)
+        if (
+            not artifact_id
+            or not raw_path
+            or artifact_id.strip() != artifact_id
+            or raw_path.strip() != raw_path
+        ):
+            raise ValueError(f"invalid --map value {raw!r}; expected ARTIFACT_ID=PATH")
+        if artifact_id in parsed:
+            raise ValueError(f"duplicate --map approval for {artifact_id}")
+        path = Path(raw_path).expanduser()
+        parsed[artifact_id] = path if path.is_absolute() else Path.cwd() / path
+    return dict(sorted(parsed.items()))
+
+
+def _resolve_delta_cflags_source(
+    function: str,
+    left: Path,
+    right: Path,
+    *,
+    melee_root: Path,
+) -> Path:
+    try:
+        return _resolve_structure_source_file(function, None, melee_root=melee_root)
+    except typer.BadParameter as original_error:
+        for parent in (right, left):
+            parts = parent.parts
+            try:
+                src_index = len(parts) - 1 - tuple(reversed(parts)).index("src")
+            except ValueError:
+                continue
+            candidate = melee_root.joinpath(*parts[src_index:])
+            if candidate.is_file() and not _path_has_symlink_component(candidate):
+                return candidate.resolve()
+        raise original_error
+
+
+def _resolve_delta_output_dir(path: Path, *, melee_root: Path) -> Path:
+    """Resolve an output directory only after checking every path component."""
+
+    expanded = path.expanduser()
+    candidate = expanded if expanded.is_absolute() else melee_root / expanded
+    if _path_has_symlink_component(candidate):
+        raise typer.BadParameter(f"output directory is unsafe: {path}")
+    absolute = candidate.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        if current.exists() and not current.is_dir():
+            raise typer.BadParameter(
+                f"output directory component is not a directory: {current}"
+            )
+    return candidate.resolve()
+
+
+def _delta_error_message(error: DeltaMinimizeError) -> str:
+    message = error.reason
+    if error.details:
+        details = ", ".join(
+            f"{key}={value}" for key, value in sorted(error.details.items())
+        )
+        message = f"{message}: {details}"
+    hints = {
+        "ambiguous-color-target": "provide --target PATH",
+        "ambiguous-color-donor": "provide --donor color=left|right",
+        "ambiguous-objobject-donor": "provide --donor objobjects=left|right",
+        "ambiguous-stack-home-donor": "provide --donor stack-homes=left|right",
+        "candidate-budget-exceeded": "increase --max-candidates to the reported requirement",
+        "atom-limit-exceeded": "reduce the source delta to at most 20 atoms",
+    }
+    hint = hints.get(error.reason)
+    return f"{message}; {hint}" if hint else message
 
 
 def _resolve_optional_plan_source_file(
@@ -4466,6 +4612,178 @@ def _assignment_clusters(meta: dict | None) -> list[str]:
     if not clusters and igs:
         clusters.append("unclassified proof-assignment movement")
     return clusters
+
+
+@delta_namespace_review_app.command("seal")
+def delta_namespace_review_seal_cmd(
+    request: Annotated[
+        Path,
+        typer.Option(
+            "--request",
+            help="Discovery request YAML to inspect and approve explicitly.",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            help="Atomic output path for the sealed reviewed namespace sidecar.",
+        ),
+    ],
+    accept_identity: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--accept-identity",
+            help="Explicitly approve ARTIFACT_ID as a full identity map; repeatable.",
+        ),
+    ] = None,
+    map_value: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--map",
+            help="Approve ARTIFACT_ID with a full map YAML via ID=PATH; repeatable.",
+        ),
+    ] = None,
+) -> None:
+    """Seal explicit namespace-review authority into a provenance-bound sidecar."""
+
+    try:
+        map_paths = _parse_namespace_review_maps(map_value or ())
+        loaded_request = load_review_request(request.expanduser())
+        reviewed = seal_namespace_review(
+            loaded_request,
+            identity_ids=tuple(accept_identity or ()),
+            map_paths=map_paths,
+        )
+        output = out.expanduser()
+        if not output.is_absolute():
+            output = Path.cwd() / output
+        reviewed.write(output)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--map") from error
+    except DeltaMinimizeError as error:
+        raise typer.BadParameter(_delta_error_message(error)) from error
+
+    typer.echo(f"sealed namespace review: {output}")
+
+
+@search_app.command("delta-minimize")
+def delta_minimize_cmd(
+    function: Annotated[
+        str,
+        typer.Option(
+            "--function",
+            "-f",
+            help="Target function to recombine and minimize.",
+        ),
+    ],
+    left: Annotated[
+        Path,
+        typer.Option("--left", help="Left full translation-unit source file."),
+    ],
+    right: Annotated[
+        Path,
+        typer.Option("--right", help="Right full translation-unit source file."),
+    ],
+    out_dir: Annotated[
+        Path,
+        typer.Option(
+            "--out-dir",
+            help="Resumable artifact and result directory.",
+        ),
+    ] = Path("build/delta-minimize"),
+    max_candidates: Annotated[
+        int,
+        typer.Option(
+            "--max-candidates",
+            min=1,
+            help="Fail if the exact legal lattice exceeds this budget.",
+        ),
+    ] = 64,
+    target: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--target",
+            help=(
+                "Optional color-target YAML: v1 semantic reanchoring or "
+                "v2 reviewed cross-parent bindings."
+            ),
+        ),
+    ] = None,
+    namespace_review: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--namespace-review",
+            help="Sealed reviewed namespace sidecar produced from this run's request.",
+        ),
+    ] = None,
+    donor: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--donor",
+            help=(
+                "Override color, objobjects, or stack-homes donor with "
+                "AXIS=left|right; repeatable."
+            ),
+        ),
+    ] = None,
+    objobjects: Annotated[
+        bool,
+        typer.Option(
+            "--objobjects/--no-objobjects",
+            help="Collect ObjObject evidence for an exact four-axis result.",
+        ),
+    ] = True,
+    json_out: Annotated[
+        bool,
+        typer.Option("--json", help="Emit deterministic result JSON."),
+    ] = False,
+) -> None:
+    """Exhaustively minimize the closed source-delta lattice between two parents.
+
+    Targets use v1 semantic reanchoring or v2 reviewed cross-parent bindings.
+    """
+
+    try:
+        donor_overrides = parse_donor_overrides(donor or ())
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--donor") from error
+
+    melee_root = _compute_melee_root()
+    resolved_left = _resolve_delta_source_file(left, melee_root=melee_root)
+    resolved_right = _resolve_delta_source_file(right, melee_root=melee_root)
+    cflags_from = _resolve_delta_cflags_source(
+        function,
+        resolved_left,
+        resolved_right,
+        melee_root=melee_root,
+    )
+    try:
+        config = DeltaMinimizeConfig(
+            function=function,
+            left=resolved_left,
+            right=resolved_right,
+            out_dir=_resolve_delta_output_dir(out_dir, melee_root=melee_root),
+            max_candidates=max_candidates,
+            target_path=_resolve_delta_target_file(target),
+            namespace_review_path=_resolve_delta_namespace_review_file(
+                namespace_review
+            ),
+            donor_overrides=donor_overrides,
+            include_objobjects=objobjects,
+            melee_root=melee_root,
+            cflags_from=cflags_from,
+        )
+        result = run_delta_minimize(config)
+    except DeltaMinimizeError as error:
+        raise typer.BadParameter(_delta_error_message(error)) from error
+
+    if json_out:
+        typer.echo(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        typer.echo(render_delta_minimize_text(result))
+    if result.status == "incomplete":
+        raise typer.Exit(code=4)
 
 
 @search_app.command("structure")

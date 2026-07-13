@@ -9,46 +9,27 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
-
-_COLORGRAPH_HEADER_RE = re.compile(
-    r"^COLORGRAPH DECISIONS \(class=(\d+), result=(\d+)(?:, n_nodes=(\d+))?\)"
-)
+_COLORGRAPH_HEADER_RE = re.compile(r"^COLORGRAPH DECISIONS \(class=(\d+), result=(\d+)(?:, n_nodes=(\d+))?\)")
 _IG_HEADER_RE = re.compile(r"^IG CONSTRUCTED \(class=(\d+), n_nodes=(\d+)\)")
-_CP_HEADER_RE = re.compile(
-    r"^CONSTPROP RAN \(changed_flag: before=(-?\d+) after=(-?\d+)\)"
-)
-_SIMPLIFY_HEADER_RE = re.compile(
-    r"^SIMPLIFY GRAPH \(class=(\d+), n_colors=(\d+), n_class_regs=(\d+)\)"
-)
-_ITER_RE = re.compile(
-    r"^\s*(\d+)\s+(-?\d+)\s+r(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+0x([0-9a-fA-F]+)(?:\s+\[.*\])?\s*$"
-)
+_CP_HEADER_RE = re.compile(r"^CONSTPROP RAN \(changed_flag: before=(-?\d+) after=(-?\d+)\)")
+_SIMPLIFY_HEADER_RE = re.compile(r"^SIMPLIFY GRAPH \(class=(\d+), n_colors=(\d+), n_class_regs=(\d+)\)")
+_ITER_RE = re.compile(r"^\s*(\d+)\s+(-?\d+)\s+r(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+0x([0-9a-fA-F]+)(?:\s+\[.*\])?\s*$")
 # SIMPLIFY row: iter ig_idx degree arraySize 0xflags [notes]
 # Notes column is optional / freeform (e.g. "SPILLED").
-_SIMPLIFY_ITER_RE = re.compile(
-    r"^\s*(\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+0x([0-9a-fA-F]+)\s*(.*?)\s*$"
-)
+_SIMPLIFY_ITER_RE = re.compile(r"^\s*(\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+0x([0-9a-fA-F]+)\s*(.*?)\s*$")
 _INTERFERERS_RE = re.compile(r"^\s*interferers:\s*(.*)$")
 _FUNCTION_START_RE = re.compile(r"^Starting function\s+(\S+)")
-_COALESCE_ENTER_RE = re.compile(
-    r"^\[COALESCE\] enter class=(\d+) n_virtuals=(\d+)"
-)
-_COALESCE_MAPPING_RE = re.compile(r"^\s*(\d+)\s+->\s+(\d+)\s*$")
+_COALESCE_ENTER_RE = re.compile(r"^\[COALESCE\] enter class=(\d+) n_virtuals=(\d+)")
+_COALESCE_MAPPING_RE = re.compile(r"^\s*(-?\d+)\s+->\s+(-?\d+)\s*$")
+_COALESCE_CAPPED_RE = re.compile(r"^\s*\.\.\.\(capped at \d+\)\s*$")
 _COALESCE_EXIT_RE = re.compile(
     r"^\[COALESCE\] exit class=(\d+) n_virtuals=(\d+) "
     r"distinct_roots=(\d+) forced=(\d+)"
 )
-_FORCE_COALESCE_RE = re.compile(
-    r"^\[FORCE_COALESCE\] alias\[(\d+)\]:\s+(-?\d+)\s+->\s+(-?\d+)"
-)
-_COALESCED_ALIAS_HEADER_RE = re.compile(
-    r"^COALESCED ALIASES \(alias_idx -> root_idx \[root_phys\]\):"
-)
-_COALESCED_ALIAS_RE = re.compile(
-    r"^\s*(\d+)\s+->\s+(\d+)\s+\[r(-?\d+)\]\s*$"
-)
+_FORCE_COALESCE_RE = re.compile(r"^\[FORCE_COALESCE\] alias\[(-?\d+)\]:\s+(-?\d+)\s+->\s+(-?\d+)")
+_COALESCED_ALIAS_HEADER_RE = re.compile(r"^COALESCED ALIASES \(alias_idx -> root_idx \[root_phys\]\):")
+_COALESCED_ALIAS_RE = re.compile(r"^\s*(\d+)\s+->\s+(\d+)\s+\[r(-?\d+)\]\s*$")
 
 
 def _looks_like_numeric_table_row(line: str) -> bool:
@@ -132,6 +113,10 @@ class CoalesceSection:
     # (virt, old_root, new_root), emitted by the backend FORCE_COALESCE hook.
     distinct_roots: int | None = None
     forced_count: int = 0
+    truncated: bool = False
+    exit_class_id: int | None = None
+    exit_n_virtuals: int | None = None
+    exit_valid: bool = True
 
 
 @dataclass
@@ -164,13 +149,13 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
     register class — and matching ig/cp events).
     """
     functions: list[FunctionEvents] = []
-    current_func: Optional[FunctionEvents] = None
-    current_cg: Optional[ColorgraphSection] = None
-    current_simplify: Optional[SimplifySection] = None
-    current_coalesce: Optional[CoalesceSection] = None
-    current_aliases: Optional[CoalescedAliasSection] = None
-    last_colorgraph_class: Optional[int] = None
-    last_decision: Optional[ColorgraphDecision] = None
+    current_func: FunctionEvents | None = None
+    current_cg: ColorgraphSection | None = None
+    current_simplify: SimplifySection | None = None
+    current_coalesce: CoalesceSection | None = None
+    current_aliases: CoalescedAliasSection | None = None
+    last_colorgraph_class: int | None = None
+    last_decision: ColorgraphDecision | None = None
     # True if next line might be the table header row we should skip
     expect_header_row = False
 
@@ -231,6 +216,7 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
             current_coalesce = CoalesceSection(
                 class_id=int(m.group(1)),
                 n_virtuals=int(m.group(2)),
+                exit_valid=False,
             )
             current_func.coalesce_sections.append(current_coalesce)
             current_cg = None
@@ -243,20 +229,31 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
         if current_coalesce is not None:
             m = _FORCE_COALESCE_RE.match(stripped)
             if m:
-                current_coalesce.forced_overrides.append((
-                    int(m.group(1)),
-                    int(m.group(2)),
-                    int(m.group(3)),
-                ))
+                current_coalesce.forced_overrides.append(
+                    (
+                        int(m.group(1)),
+                        int(m.group(2)),
+                        int(m.group(3)),
+                    )
+                )
                 continue
             m = _COALESCE_MAPPING_RE.match(stripped)
             if m:
                 current_coalesce.mappings.append((int(m.group(1)), int(m.group(2))))
                 continue
+            if _COALESCE_CAPPED_RE.match(stripped):
+                current_coalesce.truncated = True
+                continue
             m = _COALESCE_EXIT_RE.match(stripped)
             if m:
+                current_coalesce.exit_class_id = int(m.group(1))
+                current_coalesce.exit_n_virtuals = int(m.group(2))
                 current_coalesce.distinct_roots = int(m.group(3))
                 current_coalesce.forced_count = int(m.group(4))
+                current_coalesce.exit_valid = (
+                    current_coalesce.exit_class_id == current_coalesce.class_id
+                    and current_coalesce.exit_n_virtuals == current_coalesce.n_virtuals
+                )
                 current_coalesce = None
                 continue
 
@@ -274,9 +271,7 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
         if current_aliases is not None:
             m = _COALESCED_ALIAS_RE.match(stripped)
             if m:
-                current_aliases.aliases.append(
-                    (int(m.group(1)), int(m.group(2)), int(m.group(3)))
-                )
+                current_aliases.aliases.append((int(m.group(1)), int(m.group(2)), int(m.group(3))))
                 continue
             if stripped and not stripped.startswith(" "):
                 current_aliases = None
@@ -288,10 +283,12 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
 
         m = _IG_HEADER_RE.match(stripped)
         if m:
-            current_func.ig_events.append(IGConstructedEvent(
-                class_id=int(m.group(1)),
-                n_nodes=int(m.group(2)),
-            ))
+            current_func.ig_events.append(
+                IGConstructedEvent(
+                    class_id=int(m.group(1)),
+                    n_nodes=int(m.group(2)),
+                )
+            )
             current_cg = None
             current_simplify = None
             current_coalesce = None
@@ -301,10 +298,12 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
 
         m = _CP_HEADER_RE.match(stripped)
         if m:
-            current_func.cp_events.append(ConstPropEvent(
-                changed_before=int(m.group(1)),
-                changed_after=int(m.group(2)),
-            ))
+            current_func.cp_events.append(
+                ConstPropEvent(
+                    changed_before=int(m.group(1)),
+                    changed_after=int(m.group(2)),
+                )
+            )
             current_cg = None
             current_simplify = None
             current_coalesce = None
@@ -318,14 +317,16 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
                 m = _SIMPLIFY_ITER_RE.match(stripped)
                 if m:
                     flags = int(m.group(5), 16)
-                    current_simplify.entries.append(SimplifyEntry(
-                        iter_idx=int(m.group(1)),
-                        ig_idx=int(m.group(2)),
-                        degree=int(m.group(3)),
-                        array_size=int(m.group(4)),
-                        flags=flags,
-                        spilled=bool(flags & 0x08),
-                    ))
+                    current_simplify.entries.append(
+                        SimplifyEntry(
+                            iter_idx=int(m.group(1)),
+                            ig_idx=int(m.group(2)),
+                            degree=int(m.group(3)),
+                            array_size=int(m.group(4)),
+                            flags=flags,
+                            spilled=bool(flags & 0x08),
+                        )
+                    )
                     continue
 
         # Try parsing as a decision row (only if we're inside a colorgraph section)
@@ -366,7 +367,7 @@ def parse_hook_events(text: str) -> list[FunctionEvents]:
     return functions
 
 
-def find_function(events: list[FunctionEvents], name: str) -> Optional[FunctionEvents]:
+def find_function(events: list[FunctionEvents], name: str) -> FunctionEvents | None:
     for f in events:
         if f.name == name:
             return f

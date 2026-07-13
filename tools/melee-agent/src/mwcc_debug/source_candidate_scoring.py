@@ -5,9 +5,12 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+import tempfile
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -82,6 +85,40 @@ def score_source_candidates(
     return score_retained_source_rows(rows, config, runner=runner)
 
 
+@contextmanager
+def _stage_score_source_candidate(
+    candidate_path: Path,
+    repo_root: Path,
+) -> Iterator[Path]:
+    resolved_candidate = candidate_path.resolve()
+    resolved_repo_root = repo_root.resolve()
+    if resolved_candidate.is_relative_to(resolved_repo_root):
+        yield candidate_path
+        return
+
+    staging_root = (
+        resolved_repo_root
+        / "build"
+        / "diagnostics"
+        / "score_source_staging"
+    )
+    staging_root.mkdir(parents=True, exist_ok=True)
+    resolved_staging_root = staging_root.resolve()
+    if not resolved_staging_root.is_relative_to(resolved_repo_root):
+        raise ValueError(
+            "score-source staging root resolves outside repository: "
+            f"{resolved_staging_root}"
+        )
+    with tempfile.TemporaryDirectory(
+        dir=resolved_staging_root,
+        prefix="candidate-",
+    ) as temp_dir:
+        safe_name = _unique_safe_name(resolved_candidate.stem, set())
+        staged_path = Path(temp_dir) / f"{safe_name}.c"
+        shutil.copyfile(resolved_candidate, staged_path)
+        yield staged_path
+
+
 def score_retained_source_rows(
     rows: Sequence[Mapping[str, Any]],
     config: ScoreSourceConfig,
@@ -98,7 +135,7 @@ def score_retained_source_rows(
         candidate_path = _row_candidate_path(row)
         row_full_unit = bool(row.get("full_unit_source", config.full_unit_source))
         row_score_function = str(row.get("score_function") or config.function)
-        if candidate_path is None:
+        if candidate_path is None or not candidate_path.exists():
             out.append(_finalize_score_row(
                 _with_score_source_scope_defaults(
                     {
@@ -116,33 +153,47 @@ def score_retained_source_rows(
                     },
                     input_row=row,
                     config=config,
-                    candidate_path=None,
+                    candidate_path=candidate_path,
                     score_function=row_score_function,
                 )
             ))
             continue
 
-        cmd = build_score_source_command(
+        durable_cmd = build_score_source_command(
             candidate_path,
             config,
             function=row_score_function,
             full_unit_source=row_full_unit,
         )
-        score_command = " ".join(shlex.quote(part) for part in cmd)
+        score_command = " ".join(shlex.quote(part) for part in durable_cmd)
+        score_command_executed = score_command
         try:
-            proc = score_runner(
-                cmd,
-                cwd=config.repo_root,
-                env=env,
-                text=True,
-                capture_output=True,
-                timeout=(
-                    config.timeout + 10
-                    if config.timeout and config.timeout > 0
-                    else None
-                ),
-                check=False,
-            )
+            with _stage_score_source_candidate(
+                candidate_path,
+                config.repo_root,
+            ) as score_candidate_path:
+                cmd = build_score_source_command(
+                    score_candidate_path,
+                    config,
+                    function=row_score_function,
+                    full_unit_source=row_full_unit,
+                )
+                score_command_executed = " ".join(
+                    shlex.quote(part) for part in cmd
+                )
+                proc = score_runner(
+                    cmd,
+                    cwd=config.repo_root,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    timeout=(
+                        config.timeout + 10
+                        if config.timeout and config.timeout > 0
+                        else None
+                    ),
+                    check=False,
+                )
         except KeyboardInterrupt:
             out.append(_finalize_score_row(
                 _with_score_source_scope_defaults(
@@ -155,6 +206,7 @@ def score_retained_source_rows(
                         "score_error_kind": "infrastructure",
                         "score_returncode": 130,
                         "score_command": score_command,
+                        "score_command_executed": score_command_executed,
                         "full_unit_source": row_full_unit,
                         "score_stderr": (
                             "Interrupted while scoring source candidate "
@@ -186,6 +238,7 @@ def score_retained_source_rows(
                         "score_error_kind": "infrastructure",
                         "score_returncode": 124,
                         "score_command": score_command,
+                        "score_command_executed": score_command_executed,
                         "full_unit_source": row_full_unit,
                         "score_stderr": _timeout_stream_text(exc.stderr)
                         or f"Timed out while scoring source candidate {candidate_id}",
@@ -210,11 +263,31 @@ def score_retained_source_rows(
         payload = _parse_score_source_stdout(proc.stdout)
         merged = dict(row)
         merged.update(payload)
-        merged.setdefault("candidate_id", candidate_id)
-        merged.setdefault("source_file", str(candidate_path))
-        merged.setdefault("source_retained", str(candidate_path))
+        if candidate_id is not None:
+            # The CLI derives an ID from the retained filename.  The caller's
+            # manifest ID is authoritative for cache keys and mask identity.
+            merged["candidate_id"] = candidate_id
+        else:
+            merged.setdefault("candidate_id", candidate_id)
+        durable_source = str(candidate_path)
+        merged["source_file"] = durable_source
+        merged["source_retained"] = durable_source
+        merged["c_file"] = durable_source
         merged["full_unit_source"] = row_full_unit
-        merged["score_command"] = score_command
+        merged["score_command_executed"] = score_command_executed
+        artifact_source = payload.get("artifact_source")
+        if artifact_source:
+            replay_cmd = build_score_source_command(
+                Path(str(artifact_source)),
+                config,
+                function=row_score_function,
+                full_unit_source=row_full_unit,
+            )
+            merged["score_command"] = " ".join(
+                shlex.quote(part) for part in replay_cmd
+            )
+        else:
+            merged["score_command"] = score_command_executed
         merged["score_returncode"] = proc.returncode
         merged = _with_score_source_scope_defaults(
             merged,
@@ -344,6 +417,7 @@ def source_row_to_candidate_score(row: Mapping[str, Any]):
             if row.get("structural_guard_error") is not None
             else None
         ),
+        checkdiff_evidence=_mapping_or_none(row.get("checkdiff_evidence")),
         source_file=_str_or_none(row.get("source_file")),
         source_retained=_str_or_none(row.get("source_retained")),
         pcdump_path=_str_or_none(row.get("pcdump_path")),
