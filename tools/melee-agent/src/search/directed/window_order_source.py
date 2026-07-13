@@ -6053,6 +6053,18 @@ def _inline_call_return_copy_chain(
     return chain
 
 
+def _source_attribution_proves_direct_call(
+    source_attr: Any,
+    *,
+    call_symbol: str,
+) -> bool:
+    first_def = _attr_value(source_attr, "first_def")
+    return (
+        _attr_value(first_def, "opcode") == "bl"
+        and _attr_value(first_def, "operands") == call_symbol
+    )
+
+
 def _inline_call_return_owner(
     source_text: str,
     groups: list[statement_move.SiblingGroup],
@@ -6211,8 +6223,21 @@ def _inline_call_return_owner(
         binding.preprocessor_controlled for binding in low_level_conflicts
     ):
         return reject("inline-call-return-preprocessor-ambiguous")
+    low_level_binding_resolution = "raw-source"
     if low_level_binding is None:
-        return reject("inline-call-return-low-level-call-binding-ambiguous")
+        has_zero_raw_tu_bindings = (
+            not low_level_conflicts
+            and not definitions.get(call_symbol)
+        )
+        if not (
+            has_zero_raw_tu_bindings
+            and _source_attribution_proves_direct_call(
+                source_attr,
+                call_symbol=call_symbol,
+            )
+        ):
+            return reject("inline-call-return-low-level-call-binding-ambiguous")
+        low_level_binding_resolution = "attributed-direct-call"
 
     helper, helper_reason = _analyze_inline_call_return_helper(
         source_bytes,
@@ -6261,9 +6286,12 @@ def _inline_call_return_owner(
         "wrapper_function_binding": _top_level_function_binding_metadata(
             wrapper_binding
         ),
-        "low_level_function_binding": _top_level_function_binding_metadata(
-            low_level_binding
+        "low_level_function_binding": (
+            _top_level_function_binding_metadata(low_level_binding)
+            if low_level_binding is not None
+            else None
         ),
+        "low_level_binding_resolution": low_level_binding_resolution,
         "wrapper_definition_span": list(helper.definition_span),
         "helper_result_declaration_span": list(helper.result_declaration_span),
         "low_level_call_span": list(helper.low_level_call_span),

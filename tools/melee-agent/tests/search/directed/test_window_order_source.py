@@ -472,6 +472,10 @@ def _plan_inline_call_return_owner(
         "name": None,
         "type": attributed_type,
         "expression": "HSD_JObjLoadJoint(joint_data)",
+        "first_def": {
+            "opcode": "bl",
+            "operands": "HSD_JObjLoadJoint",
+        },
         "call_symbol": "HSD_JObjLoadJoint",
         "source_line": None,
         "copy_chain": [72, 86, 3] if copy_chain is None else copy_chain,
@@ -596,6 +600,110 @@ def test_window_order_inline_call_return_preserves_exact_attribution() -> None:
 
     expected = json.loads(json.dumps(dataclasses.asdict(source_attribution)))
     assert plan.probes[0].provenance["source_attribution"] == expected
+
+
+def test_window_order_inline_call_return_accepts_attributed_header_call() -> None:
+    source_attribution = SourceAttribution(
+        kind="call-return",
+        confidence="copy-chain",
+        source_file="src/melee/mn/mndiagram.c",
+        expression="HSD_JObjLoadJoint(...) ",
+        first_def=InstructionSite(
+            pass_name="BEFORE GLOBAL OPTIMIZATION",
+            block_idx=23,
+            instr_idx=0,
+            opcode="bl",
+            operands="HSD_JObjLoadJoint",
+        ),
+        call_symbol="HSD_JObjLoadJoint",
+        copy_chain=(72, 86, 3),
+        owner_status="unresolved-call-return",
+        owner_scope_path=("fn", "for"),
+    )
+    source = textwrap.dedent("""\
+        #include <melee/hsd/hsd_jobj.h>
+        static inline HSD_JObj* make_header(void* joint_data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(joint_data);
+            return result;
+        }
+        void fn(void* joint_data)
+        {
+            HSD_JObj* header;
+            header = make_header(joint_data);
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 72, "order_move": ["before", 67]}],
+        source_attributions={72: source_attribution},
+        max_probes=1,
+    )
+
+    assert len(plan.probes) == 1
+    probe = plan.probes[0]
+    proof = probe.provenance["call_return_source_probe"]
+    assert proof["owner_local"] == "header"
+    assert proof["copy_chain"] == [72, 86, 3]
+    assert proof["low_level_function_binding"] is None
+    assert proof["low_level_binding_resolution"] == "attributed-direct-call"
+    expected = json.loads(json.dumps(dataclasses.asdict(source_attribution)))
+    assert probe.provenance["source_attribution"] == expected
+
+
+@pytest.mark.parametrize(
+    "first_def",
+    [
+        None,
+        {"opcode": "bctrl", "operands": "HSD_JObjLoadJoint"},
+        {"opcode": "bl", "operands": "HSD_JObjLoadJointOther"},
+    ],
+    ids=["missing-first-def", "indirect-call", "different-symbol"],
+)
+def test_window_order_inline_call_return_rejects_unproven_header_call(
+    first_def: dict[str, str] | None,
+) -> None:
+    source_attribution = {
+        "kind": "call-return",
+        "name": None,
+        "type": None,
+        "expression": "HSD_JObjLoadJoint(joint_data)",
+        "first_def": first_def,
+        "call_symbol": "HSD_JObjLoadJoint",
+        "source_line": None,
+        "copy_chain": [72, 86, 3],
+    }
+    source = textwrap.dedent("""\
+        #include <melee/hsd/hsd_jobj.h>
+        static inline HSD_JObj* make_header(void* joint_data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(joint_data);
+            return result;
+        }
+        void fn(void* joint_data)
+        {
+            HSD_JObj* header;
+            header = make_header(joint_data);
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 72, "order_move": ["before", 67]}],
+        source_attributions={72: source_attribution},
+        max_probes=1,
+    )
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    reason = "inline-call-return-low-level-call-binding-ambiguous"
+    assert diag["terminal_blocker"] == reason
+    assert diag["call_return_source_probe"]["rejection_reason"] == reason
 
 
 @pytest.mark.parametrize(
@@ -1241,10 +1349,15 @@ def test_window_order_plan_rejects_ordinary_identifier_call_shadow(
         if scope == "local" and shadowed_symbol == "make_header"
         else ""
     )
+    low_level_declaration = (
+        ""
+        if shadowed_symbol == "HSD_JObjLoadJoint"
+        else "HSD_JObj* HSD_JObjLoadJoint(void* data);"
+    )
     plan, _source_attribution = _plan_inline_call_return_owner(f"""\
         typedef struct HSD_JObj HSD_JObj;
         {translation_unit_shadow}
-        HSD_JObj* HSD_JObjLoadJoint(void* data);
+        {low_level_declaration}
         static inline HSD_JObj* make_header(void* data)
         {{
             {helper_shadow}
