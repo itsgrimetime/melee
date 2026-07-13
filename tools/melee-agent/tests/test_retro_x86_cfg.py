@@ -945,6 +945,62 @@ def test_fresh_x87_state_restore_clears_physical_payload_taint(
     recover_cfg(image, inventory(image), generous_limits(image))
 
 
+def test_fxrstor_replaces_low_xmm_lanes_but_not_upper_vector_lanes(tmp_path):
+    restored_xmm = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 66 0f 6e c0 0f ae 09 0f 11 02 c3",
+    )
+    recover_cfg(
+        restored_xmm,
+        inventory(restored_xmm),
+        generous_limits(restored_xmm),
+    )
+
+    retained_upper_ymm = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 62 f2 7d 28 7c c0 0f ae 09 c5 fc 11 02 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(
+            retained_upper_ymm,
+            inventory(retained_upper_ymm),
+            generous_limits(retained_upper_ymm),
+        )
+
+
+@pytest.mark.parametrize("restore", ["dd 21", "0f ae 29"])
+def test_other_state_restores_do_not_overclear_vector_state(tmp_path, restore):
+    image = load_cfg_program(
+        tmp_path,
+        f"b8 50 10 40 00 66 0f 6e c0 {restore} 0f 11 02 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_full_mmx_replacement_overwrites_aliased_x87_sign_exponent(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c0 d8 c0 0f ef c0 0f ae 01 c3",
+    )
+    recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_full_mmx_replacement_propagates_tainted_low_payload(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c0 d8 c0 0f 6e c0 0f ae 01 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
 def test_x87_state_save_sinks_stale_physical_payload_after_emms(tmp_path):
     image = load_cfg_program(
         tmp_path,

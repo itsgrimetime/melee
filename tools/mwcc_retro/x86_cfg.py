@@ -518,6 +518,9 @@ _AUDITED_X86_ENUM_SHA256 = (
     "1f5c37794e44d07e6fa47775c27d1b2418876ceadb08090eb75421f33d5e36b0"
 )
 _CALL_CLOBBERED_REGISTER_NAMES = ("eax", "ecx", "edx")
+_MMX_PAYLOAD_MASK = (1 << 64) - 1
+_X87_PHYSICAL_PAYLOAD_MASK = (1 << 80) - 1
+_XMM_PAYLOAD_MASK = (1 << 128) - 1
 _LEGACY_X86_PREFIXES = frozenset(
     {
         0x26,
@@ -1545,7 +1548,20 @@ class _DirectCfgRecovery:
                 x87_effect=_X87Effect("empty-tags")
             )
         if decoded.id == 210:  # FXRSTOR
-            return _InstructionValueFlow(x87_effect=_X87Effect("restore"))
+            return _InstructionValueFlow(
+                register_effects=tuple(
+                    _RegisterEffect(
+                        _RegisterSlice(
+                            family=f"vector:{index}",
+                            mask=_XMM_PAYLOAD_MASK,
+                            name=f"xmm{index}",
+                        ),
+                        (),
+                    )
+                    for index in range(8)
+                ),
+                x87_effect=_X87Effect("restore"),
+            )
         if not self._has_x87_opcode(decoded):
             return None
         operands = decoded.operands
@@ -2818,8 +2834,24 @@ class _DirectCfgRecovery:
             )
             if physical_slot is None:
                 continue
+            taint_mask = (
+                effect.destination.mask
+                if effect.taint_mask is None
+                else effect.taint_mask
+            )
+            if (
+                effect.destination.mask != _MMX_PAYLOAD_MASK
+                or taint_mask != _MMX_PAYLOAD_MASK
+            ):
+                raise self._flow_error(
+                    decoded,
+                    "partial or ambiguous MMX destination effect: "
+                    f"register={effect.destination.name};"
+                    f"written-mask={effect.destination.mask:#x};"
+                    f"taint-mask={taint_mask:#x}",
+                )
             wrote_physical = True
-            physical[physical_slot] &= ~effect.destination.mask
+            physical[physical_slot] &= ~_X87_PHYSICAL_PAYLOAD_MASK
         for effect in flow.register_effects:
             taint_mask = (
                 effect.destination.mask
