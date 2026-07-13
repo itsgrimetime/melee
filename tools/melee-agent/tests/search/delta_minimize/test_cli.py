@@ -715,6 +715,103 @@ def test_delta_minimize_cli_reports_domain_errors_as_usage(monkeypatch, tmp_path
     assert "max-candidates" in result.output
 
 
+def test_delta_minimize_cli_renders_actionable_coupling_diagnostic(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    left, right, unit = _invoke_paths(tmp_path)
+    artifact = tmp_path / "out" / "delta-coupling-diagnostic.json"
+    diagnostic = {
+        "schema_version": "delta-coupling-diagnostic.v1",
+        "reason": "ambiguous-delta-coupling",
+        "function": "draw",
+        "left_sha256": "1" * 64,
+        "right_sha256": "2" * 64,
+        "context": {"candidate_symbols": {"old": ["new_a", "new_b"]}},
+        "alternatives": [
+            {
+                "label": "old -> new_a",
+                "reason": "competing-function-rename",
+                "symbols": ["old", "new_a"],
+                "atom_ids": ["atom-a", "atom-call-a"],
+                "left_spans": [[10, 13], [30, 33]],
+                "right_spans": [[11, 16], [34, 39]],
+            },
+            {
+                "label": "old -> new_b",
+                "reason": "competing-function-rename",
+                "symbols": ["old", "new_b"],
+                "atom_ids": ["atom-b", "atom-call-b"],
+                "left_spans": [[10, 13], [30, 33]],
+                "right_spans": [[50, 55], [70, 75]],
+            },
+        ],
+        "review": {
+            "supported": False,
+            "reason": "semantic-coupling-review-unsupported",
+            "next_action": "edit-parent-and-rerun",
+        },
+    }
+    error = DeltaMinimizeError(
+        "ambiguous-delta-coupling",
+        {
+            "diagnostic": diagnostic,
+            "diagnostic_artifact": str(artifact),
+        },
+    )
+    monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        search_cli,
+        "_resolve_structure_source_file",
+        lambda function, source_file, *, melee_root: unit,
+    )
+    monkeypatch.setattr(
+        search_cli,
+        "run_delta_minimize",
+        lambda _config: (_ for _ in ()).throw(error),
+    )
+    argv = [
+        "delta-minimize",
+        "-f",
+        "draw",
+        "--left",
+        str(left),
+        "--right",
+        str(right),
+    ]
+
+    human = runner.invoke(search_app, argv)
+    machine = runner.invoke(search_app, [*argv, "--json"])
+
+    assert human.exit_code == 2
+    assert human.stderr == ""
+    assert "Invalid value" not in human.stdout
+    assert "ambiguous-delta-coupling" in human.stdout
+    assert str(artifact) in human.stdout
+    assert "semantic-coupling alternatives/evidence groups" in human.stdout
+    for text in (
+        "old -> new_a",
+        "old -> new_b",
+        "competing-function-rename",
+        "atom-a, atom-call-a",
+        "left spans: 10:13, 30:33",
+        "right spans: 11:16, 34:39",
+        "no supported semantic-coupling review",
+        "edit either parent source and rerun delta-minimize",
+    ):
+        assert text in human.stdout
+    assert "delta-namespace-review seal" not in human.stdout
+
+    assert machine.exit_code == 2
+    assert machine.stderr == ""
+    payload = json.loads(machine.stdout)
+    assert payload == {
+        "schema_version": "delta-minimize-error.v1",
+        "status": "error",
+        "error": error.to_dict(),
+    }
+
+
 def test_delta_minimize_cli_reports_actionable_objective_ambiguity(monkeypatch, tmp_path: Path) -> None:
     left, right, unit = _invoke_paths(tmp_path)
     monkeypatch.setattr(search_cli, "_compute_melee_root", lambda: tmp_path)

@@ -31,6 +31,7 @@ from .delta import (
     enumerate_legal_masks,
     extract_delta_manifest,
     materialize_mask,
+    validate_coupling_diagnostic,
 )
 from .epochs import PARSER_SCHEMA_HASH
 from .evaluator import (
@@ -2464,7 +2465,32 @@ def run_delta_minimize(
         )
         store.write_result(result.to_dict())
         return result
-    manifest = _load_or_extract_manifest(config, store, active, left_source, right_source)
+    try:
+        manifest = _load_or_extract_manifest(
+            config,
+            store,
+            active,
+            left_source,
+            right_source,
+        )
+    except DeltaMinimizeError as error:
+        if error.reason != "ambiguous-delta-coupling":
+            raise
+        store.invalidate_delta_manifest()
+        diagnostic = validate_coupling_diagnostic(
+            error.details.get("diagnostic"),
+            left=left_source,
+            right=right_source,
+            function=config.function,
+        )
+        artifact = store.write_coupling_diagnostic(diagnostic)
+        raise DeltaMinimizeError(
+            error.reason,
+            {
+                "diagnostic": diagnostic,
+                "diagnostic_artifact": str(artifact),
+            },
+        ) from error
     masks = enumerate_legal_masks(manifest, max_candidates=config.max_candidates)
     candidates = _materialize_candidates(left_source, right_source, manifest, masks, store)
     loaded_target = (

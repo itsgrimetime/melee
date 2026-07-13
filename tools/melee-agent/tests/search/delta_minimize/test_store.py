@@ -528,12 +528,16 @@ def test_publication_invalidation_removes_request_but_preserves_raw_and_resoluti
         }
     )
     store.write_evidence(KEY, {"status": "complete"})
+    coupling_path = store.write_coupling_diagnostic(
+        {"schema_version": "delta-coupling-diagnostic.v1"}
+    )
     store.write_candidates({"candidates": []})
     store.write_result({"status": "frontier"})
 
     store.invalidate_publications()
 
     assert not request_path.exists()
+    assert not coupling_path.exists()
     assert not (tmp_path / "candidates.json").exists()
     assert not (tmp_path / "result.json").exists()
     assert resolution_path.is_file()

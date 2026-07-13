@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from hashlib import sha256
@@ -13,6 +14,7 @@ from src.common.tree_sitter_c import get_parser
 from .contracts import DeltaMinimizeError
 
 DELTA_MANIFEST_SCHEMA = "delta-manifest.v3"
+COUPLING_DIAGNOSTIC_SCHEMA = "delta-coupling-diagnostic.v1"
 _PRESENTATION_ONLY_RE = re.compile(
     r"(?:\s+|//[^\r\n]*(?:\r?\n|\r|$)|/\*.*?\*/)*\Z",
     re.DOTALL,
@@ -226,15 +228,30 @@ def extract_delta_manifest(
         for atom in primitive.atoms
         if set(atom.affected_functions) & scope
     }
-    atoms = couple_semantic_atoms(
-        left_index,
-        right_index,
-        primitive.atoms,
-        seed_atom_ids=seed_atom_ids,
-        scope_functions=scope,
-        left_scope_functions=left_scope,
-        right_scope_functions=right_scope,
-    )
+    try:
+        atoms = couple_semantic_atoms(
+            left_index,
+            right_index,
+            primitive.atoms,
+            seed_atom_ids=seed_atom_ids,
+            scope_functions=scope,
+            left_scope_functions=left_scope,
+            right_scope_functions=right_scope,
+        )
+    except DeltaMinimizeError as error:
+        if error.reason != "ambiguous-delta-coupling":
+            raise
+        raise DeltaMinimizeError(
+            error.reason,
+            {
+                "diagnostic": _coupling_diagnostic(
+                    left,
+                    right,
+                    function=function,
+                    details=error.details,
+                )
+            },
+        ) from error
     seed_patches = {
         _patch_identity(patch)
         for atom in primitive.atoms
@@ -300,6 +317,207 @@ def extract_delta_manifest(
     if not excluded_tuple and projected != right:
         raise DeltaMinimizeError("endpoint-reproduction-failed", {"endpoint": "right"})
     return manifest
+
+
+def _coupling_diagnostic(
+    left: str,
+    right: str,
+    *,
+    function: str,
+    details: dict[str, object],
+) -> dict[str, object]:
+    supplied = details.get("alternatives")
+    if not isinstance(supplied, list) or not supplied:
+        raise DeltaMinimizeError(
+            "invalid-delta-coupling-diagnostic",
+            {"ambiguity_details": details},
+        )
+    alternatives = supplied
+    context = {
+        key: value
+        for key, value in details.items()
+        if key != "alternatives"
+    }
+    return {
+        "schema_version": COUPLING_DIAGNOSTIC_SCHEMA,
+        "reason": "ambiguous-delta-coupling",
+        "function": function,
+        "left_sha256": _source_hash(left),
+        "right_sha256": _source_hash(right),
+        "context": context,
+        "alternatives": sorted(
+            alternatives,
+            key=lambda item: (item["label"], item["atom_ids"]),
+        ),
+        "review": {
+            "supported": False,
+            "reason": "semantic-coupling-review-unsupported",
+            "next_action": "edit-parent-and-rerun",
+        },
+    }
+
+
+def validate_coupling_diagnostic(
+    payload: object,
+    *,
+    left: str,
+    right: str,
+    function: str,
+) -> dict[str, object]:
+    """Validate a diagnostic before it becomes a public recovery artifact."""
+
+    fields = {
+        "schema_version",
+        "reason",
+        "function",
+        "left_sha256",
+        "right_sha256",
+        "context",
+        "alternatives",
+        "review",
+    }
+    if not isinstance(payload, Mapping) or set(payload) != fields:
+        raise DeltaMinimizeError("invalid-delta-coupling-diagnostic")
+    if (
+        payload["schema_version"] != COUPLING_DIAGNOSTIC_SCHEMA
+        or payload["reason"] != "ambiguous-delta-coupling"
+        or payload["function"] != function
+        or payload["left_sha256"] != _source_hash(left)
+        or payload["right_sha256"] != _source_hash(right)
+        or not isinstance(payload["context"], Mapping)
+    ):
+        raise DeltaMinimizeError("invalid-delta-coupling-diagnostic")
+    alternatives = payload["alternatives"]
+    if not isinstance(alternatives, list) or not alternatives:
+        raise DeltaMinimizeError("invalid-delta-coupling-diagnostic")
+    normalized_alternatives = [
+        _validate_coupling_alternative(
+            item,
+            left_length=len(left),
+            right_length=len(right),
+        )
+        for item in alternatives
+    ]
+    if normalized_alternatives != sorted(
+        normalized_alternatives,
+        key=lambda item: (item["label"], item["atom_ids"]),
+    ):
+        raise DeltaMinimizeError("invalid-delta-coupling-diagnostic")
+    review = payload["review"]
+    expected_review = {
+        "supported": False,
+        "reason": "semantic-coupling-review-unsupported",
+        "next_action": "edit-parent-and-rerun",
+    }
+    if not isinstance(review, Mapping) or dict(review) != expected_review:
+        raise DeltaMinimizeError("invalid-delta-coupling-diagnostic")
+    try:
+        context = _coupling_json_value(payload["context"])
+    except (TypeError, ValueError) as error:
+        raise DeltaMinimizeError("invalid-delta-coupling-diagnostic") from error
+    return {
+        "schema_version": COUPLING_DIAGNOSTIC_SCHEMA,
+        "reason": "ambiguous-delta-coupling",
+        "function": function,
+        "left_sha256": _source_hash(left),
+        "right_sha256": _source_hash(right),
+        "context": context,
+        "alternatives": normalized_alternatives,
+        "review": expected_review,
+    }
+
+
+def _validate_coupling_alternative(
+    payload: object,
+    *,
+    left_length: int,
+    right_length: int,
+) -> dict[str, object]:
+    fields = {
+        "label",
+        "reason",
+        "symbols",
+        "atom_ids",
+        "left_spans",
+        "right_spans",
+    }
+    if not isinstance(payload, Mapping) or set(payload) != fields:
+        raise DeltaMinimizeError("invalid-delta-coupling-diagnostic")
+    label = payload["label"]
+    reason = payload["reason"]
+    symbols = payload["symbols"]
+    atom_ids = payload["atom_ids"]
+    if (
+        not isinstance(label, str)
+        or not label
+        or not isinstance(reason, str)
+        or not reason
+        or not isinstance(symbols, list)
+        or not symbols
+        or any(not isinstance(symbol, str) or not symbol for symbol in symbols)
+        or len(set(symbols)) != len(symbols)
+        or not isinstance(atom_ids, list)
+        or not atom_ids
+        or any(not isinstance(atom_id, str) or not atom_id for atom_id in atom_ids)
+        or len(set(atom_ids)) != len(atom_ids)
+    ):
+        raise DeltaMinimizeError("invalid-delta-coupling-diagnostic")
+    left_spans = _validate_diagnostic_spans(
+        payload["left_spans"],
+        length=left_length,
+    )
+    right_spans = _validate_diagnostic_spans(
+        payload["right_spans"],
+        length=right_length,
+    )
+    return {
+        "label": label,
+        "reason": reason,
+        "symbols": list(symbols),
+        "atom_ids": list(atom_ids),
+        "left_spans": left_spans,
+        "right_spans": right_spans,
+    }
+
+
+def _validate_diagnostic_spans(
+    payload: object,
+    *,
+    length: int,
+) -> list[list[int]]:
+    if not isinstance(payload, list) or not payload:
+        raise DeltaMinimizeError("invalid-delta-coupling-diagnostic")
+    spans: list[list[int]] = []
+    for item in payload:
+        if (
+            not isinstance(item, list)
+            or len(item) != 2
+            or any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in item
+            )
+            or not _valid_span(item[0], item[1], length)
+        ):
+            raise DeltaMinimizeError("invalid-delta-coupling-diagnostic")
+        spans.append(list(item))
+    return spans
+
+
+def _coupling_json_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("diagnostic context keys must be strings")
+        return {
+            key: _coupling_json_value(item)
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, (list, tuple)):
+        return [_coupling_json_value(item) for item in value]
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and value == value and abs(value) != float("inf"):
+        return value
+    raise TypeError("diagnostic context must be JSON-compatible")
 
 
 def enumerate_legal_masks(

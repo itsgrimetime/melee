@@ -314,8 +314,21 @@ extraction with `unmergeable-overlapping-delta`. Dependency cycles are collapsed
 into one composite atom before enumeration.
 
 When symbol or call-site coupling cannot be resolved uniquely, extraction
-stops with `ambiguous-delta-coupling`. The report includes candidate spans and
-does not produce speculative hybrids.
+stops with `ambiguous-delta-coupling` and does not produce speculative hybrids.
+Because this happens before a delta manifest or lattice exists, it is not a
+namespace-review case. The run writes only
+`delta-coupling-diagnostic.json` (`delta-coupling-diagnostic.v1`) alongside the
+retained parent evidence. The diagnostic is bound to the function and exact
+left/right source hashes and preserves the extraction context plus deterministic
+competing pairing choices or explicit conflicting evidence groups, atom IDs,
+symbols, and left/right spans. These groups are derived from the ambiguous
+binding path itself; unrelated nearby primitive atoms are never presented as
+choices. The diagnostic explicitly records that semantic-coupling review is
+unsupported and directs the user to edit either parent and rerun. Human output
+summarizes those alternatives/evidence groups; `--json` returns a structured
+`delta-minimize-error.v1` envelope. Any manifest from a reused output directory
+is invalidated, and no delta manifest, candidates, result, or namespace-review
+request is published for the ambiguous run.
 
 The tool assumes the two user-supplied parents are semantically acceptable. It
 does not prove their equivalence, but it must not introduce known

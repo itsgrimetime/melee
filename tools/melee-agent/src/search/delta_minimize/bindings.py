@@ -667,7 +667,11 @@ def couple_semantic_atoms(
     reclassified: dict[tuple[str, int], str] = {}
     for left_function, right_function, renamed in pairs:
         if _has_signature_patch(atoms, left_function, right_function):
-            permutation = _parameter_permutation(left_function, right_function)
+            permutation = _parameter_permutation(
+                left_function,
+                right_function,
+                atoms,
+            )
             parameter_only = _signature_change_is_parameter_only(
                 atoms,
                 left_function,
@@ -884,16 +888,184 @@ def _pair_functions(
     }
     ambiguous = {name: options for name, options in candidates.items() if len(options) > 1}
     if ambiguous:
+        alternatives = [
+            _rename_coupling_alternative(left, right, atoms or ())
+            for left in left_only
+            for right in ambiguous.get(left.name, ())
+        ]
         raise DeltaMinimizeError(
             "ambiguous-delta-coupling",
-            {"candidate_symbols": {name: [item.name for item in options] for name, options in ambiguous.items()}},
+            {
+                "candidate_symbols": {
+                    name: [item.name for item in options]
+                    for name, options in ambiguous.items()
+                },
+                "alternatives": sorted(
+                    alternatives,
+                    key=lambda item: item["label"],
+                ),
+            },
         )
     selected_pairs = [(left, candidates[left.name][0]) for left in left_only if len(candidates[left.name]) == 1]
-    selected_rights = [right for _, right in selected_pairs]
-    if len({item.name for item in selected_rights}) != len(selected_rights):
-        raise DeltaMinimizeError("ambiguous-delta-coupling")
+    by_right: dict[str, list[tuple[FunctionBinding, FunctionBinding]]] = defaultdict(list)
+    for left, right in selected_pairs:
+        by_right[right.name].append((left, right))
+    duplicate_rights = {
+        right_name: pairings
+        for right_name, pairings in by_right.items()
+        if len(pairings) > 1
+    }
+    if duplicate_rights:
+        raise DeltaMinimizeError(
+            "ambiguous-delta-coupling",
+            {
+                "duplicate_right_candidates": {
+                    right_name: [left.name for left, _right in pairings]
+                    for right_name, pairings in duplicate_rights.items()
+                },
+                "alternatives": [
+                    _rename_coupling_alternative(left, right, atoms or ())
+                    for pairings in duplicate_rights.values()
+                    for left, right in pairings
+                ],
+            },
+        )
     pairs.extend((left, right, True) for left, right in selected_pairs)
     return sorted(pairs, key=lambda item: item[0].definition_span)
+
+
+def _rename_coupling_alternative(
+    left: FunctionBinding,
+    right: FunctionBinding,
+    atoms,
+) -> dict[str, object]:
+    """Describe one possible rename without granting authority to select it."""
+
+    left_spans = tuple(
+        dict.fromkeys(
+            (
+                left.definition_name_span or left.definition_span,
+                *_declaration_name_spans(left),
+                *(
+                    call.callee_name_span or call.call_span
+                    for call in left.direct_calls
+                ),
+            )
+        )
+    )
+    right_spans = tuple(
+        dict.fromkeys(
+            (
+                right.definition_name_span or right.definition_span,
+                *_declaration_name_spans(right),
+                *(
+                    call.callee_name_span or call.call_span
+                    for call in right.direct_calls
+                ),
+            )
+        )
+    )
+    atom_ids = tuple(
+        dict.fromkeys(
+            (
+                *_atoms_for_directional_spans(atoms, left_spans, side="left"),
+                *_atoms_for_directional_spans(
+                    atoms,
+                    right_spans,
+                    side="right",
+                ),
+            )
+        )
+    )
+    return {
+        "label": f"{left.name} -> {right.name}",
+        "reason": "competing-function-rename",
+        "symbols": [left.name, right.name],
+        "atom_ids": list(atom_ids),
+        "left_spans": [list(span) for span in left_spans],
+        "right_spans": [list(span) for span in right_spans],
+    }
+
+
+def _coupling_evidence(
+    *,
+    label: str,
+    reason: str,
+    symbols: Sequence[str],
+    atoms,
+    left_spans: Sequence[tuple[int, int]],
+    right_spans: Sequence[tuple[int, int]],
+) -> dict[str, object]:
+    """Describe factual bilateral binding evidence without choosing it."""
+
+    left_spans = tuple(dict.fromkeys(left_spans))
+    right_spans = tuple(dict.fromkeys(right_spans))
+    atom_ids = tuple(
+        dict.fromkeys(
+            (
+                *_atoms_for_directional_spans(atoms, left_spans, side="left"),
+                *_atoms_for_directional_spans(
+                    atoms,
+                    right_spans,
+                    side="right",
+                ),
+            )
+        )
+    )
+    return {
+        "label": label,
+        "reason": reason,
+        "symbols": list(dict.fromkeys(symbols)),
+        "atom_ids": list(atom_ids),
+        "left_spans": [list(span) for span in left_spans],
+        "right_spans": [list(span) for span in right_spans],
+    }
+
+
+def _call_pairing_alternatives(
+    left: FunctionBinding,
+    right: FunctionBinding,
+    atoms,
+) -> list[dict[str, object]]:
+    symbols = tuple(dict.fromkeys((left.name, right.name)))
+    if left.direct_calls and right.direct_calls:
+        pairings = [
+            _coupling_evidence(
+                label=(
+                    f"{right.name} direct call left[{left_index}] "
+                    f"-> right[{right_index}]"
+                ),
+                reason="competing-direct-call-pairing",
+                symbols=symbols,
+                atoms=atoms,
+                left_spans=(left_call.call_span,),
+                right_spans=(right_call.call_span,),
+            )
+            for left_index, left_call in enumerate(left.direct_calls)
+            for right_index, right_call in enumerate(right.direct_calls)
+        ]
+        return [pairing for pairing in pairings if pairing["atom_ids"]]
+    left_anchor = left.definition_name_span or left.definition_span
+    right_anchor = right.definition_name_span or right.definition_span
+    return [
+        _coupling_evidence(
+            label=f"{right.name} unpaired direct-call evidence",
+            reason="conflicting-unpaired-direct-call-set",
+            symbols=symbols,
+            atoms=atoms,
+            left_spans=tuple(call.call_span for call in left.direct_calls)
+            or (left_anchor,),
+            right_spans=tuple(call.call_span for call in right.direct_calls)
+            or (right_anchor,),
+        )
+    ]
+
+
+def _signature_evidence_spans(
+    function: FunctionBinding,
+) -> tuple[tuple[int, int], ...]:
+    definition = function.definition_signature_span or function.parameter_span
+    return (definition, *function.declaration_spans)
 
 
 def _has_rename_pair_evidence(atoms, left: FunctionBinding, right: FunctionBinding) -> bool:
@@ -916,10 +1088,36 @@ def _has_rename_pair_evidence(atoms, left: FunctionBinding, right: FunctionBindi
     )
 
 
-def _parameter_permutation(left: FunctionBinding, right: FunctionBinding) -> tuple[int, ...] | None:
-    if len(set(left.parameter_names)) != len(left.parameter_names):
+def _parameter_permutation(
+    left: FunctionBinding,
+    right: FunctionBinding,
+    atoms,
+) -> tuple[int, ...] | None:
+    has_duplicate_names = (
+        len(set(left.parameter_names)) != len(left.parameter_names)
+        or len(set(right.parameter_names)) != len(right.parameter_names)
+    )
+    if has_duplicate_names:
         if left.parameter_names != right.parameter_names:
-            raise DeltaMinimizeError("ambiguous-delta-coupling", {"symbol": left.name})
+            raise DeltaMinimizeError(
+                "ambiguous-delta-coupling",
+                {
+                    "symbol": left.name,
+                    "parameter_pairing": "duplicate-name",
+                    "left_parameters": list(left.parameter_names),
+                    "right_parameters": list(right.parameter_names),
+                    "alternatives": [
+                        _coupling_evidence(
+                            label=f"{left.name} parameter-name evidence",
+                            reason="conflicting-parameter-name-evidence",
+                            symbols=(left.name,),
+                            atoms=atoms,
+                            left_spans=(left.parameter_span,),
+                            right_spans=(right.parameter_span,),
+                        )
+                    ],
+                },
+            )
         return None
     if sorted(left.parameter_names) != sorted(right.parameter_names):
         return None
@@ -1019,7 +1217,22 @@ def _couple_signature_change(
     if len(left.direct_calls) != len(right.direct_calls):
         raise DeltaMinimizeError(
             "ambiguous-delta-coupling",
-            {"symbol": left.name, "left_calls": len(left.direct_calls), "right_calls": len(right.direct_calls)},
+            {
+                "symbol": left.name,
+                "left_calls": len(left.direct_calls),
+                "right_calls": len(right.direct_calls),
+                "left_call_spans": [
+                    list(call.call_span) for call in left.direct_calls
+                ],
+                "right_call_spans": [
+                    list(call.call_span) for call in right.direct_calls
+                ],
+                "alternatives": _call_pairing_alternatives(
+                    left,
+                    right,
+                    atoms,
+                ),
+            },
         )
     selected: list[str] = []
     selected.extend(
@@ -1036,17 +1249,53 @@ def _couple_signature_change(
     if len(left_declaration_signatures) != len(right_declaration_signatures):
         raise DeltaMinimizeError(
             "ambiguous-delta-coupling",
-            {"symbol": left.name, "declaration_pairing": "count-mismatch"},
+            {
+                "symbol": left.name,
+                "declaration_pairing": "count-mismatch",
+                "left_declarations": len(left_declaration_signatures),
+                "right_declarations": len(right_declaration_signatures),
+                "alternatives": [
+                    _coupling_evidence(
+                        label=f"{left.name} declaration signature evidence",
+                        reason="conflicting-declaration-signature-count",
+                        symbols=(left.name,),
+                        atoms=atoms,
+                        left_spans=_signature_evidence_spans(left),
+                        right_spans=_signature_evidence_spans(right),
+                    )
+                ],
+            },
         )
-    for left_signature, right_signature in zip(
-        left_declaration_signatures,
-        right_declaration_signatures,
-        strict=True,
+    for declaration_index, (left_signature, right_signature) in enumerate(
+        zip(
+            left_declaration_signatures,
+            right_declaration_signatures,
+            strict=True,
+        )
     ):
         if len(left_signature) != len(right_signature):
             raise DeltaMinimizeError(
                 "ambiguous-delta-coupling",
-                {"symbol": left.name, "declaration_pairing": "shape-mismatch"},
+                {
+                    "symbol": left.name,
+                    "declaration_pairing": "shape-mismatch",
+                    "declaration_index": declaration_index,
+                    "left_parts": len(left_signature),
+                    "right_parts": len(right_signature),
+                    "alternatives": [
+                        _coupling_evidence(
+                            label=(
+                                f"{left.name} declaration[{declaration_index}] "
+                                "signature evidence"
+                            ),
+                            reason="conflicting-declaration-signature-shape",
+                            symbols=(left.name,),
+                            atoms=atoms,
+                            left_spans=left_signature,
+                            right_spans=right_signature,
+                        )
+                    ],
+                },
             )
         for left_span, right_span in zip(left_signature, right_signature, strict=True):
             selected.extend(
@@ -1062,7 +1311,28 @@ def _couple_signature_change(
     if len(left.declaration_parameter_spans) != len(right.declaration_parameter_spans):
         raise DeltaMinimizeError(
             "ambiguous-delta-coupling",
-            {"symbol": left.name, "declaration_pairing": "count-mismatch"},
+            {
+                "symbol": left.name,
+                "declaration_pairing": "parameter-count-mismatch",
+                "left_declarations": len(left.declaration_parameter_spans),
+                "right_declarations": len(right.declaration_parameter_spans),
+                "alternatives": [
+                    _coupling_evidence(
+                        label=f"{left.name} declaration parameter evidence",
+                        reason="conflicting-declaration-parameter-count",
+                        symbols=(left.name,),
+                        atoms=atoms,
+                        left_spans=(
+                            left.parameter_span,
+                            *left.declaration_parameter_spans,
+                        ),
+                        right_spans=(
+                            right.parameter_span,
+                            *right.declaration_parameter_spans,
+                        ),
+                    )
+                ],
+            },
         )
     for left_span, right_span in zip(
         left.declaration_parameter_spans,
@@ -1101,7 +1371,23 @@ def _couple_rename(
     if len(left.direct_calls) != len(right.direct_calls):
         raise DeltaMinimizeError(
             "ambiguous-delta-coupling",
-            {"symbols": [left.name, right.name]},
+            {
+                "symbols": [left.name, right.name],
+                "rename_pairing": "call-count-mismatch",
+                "left_calls": len(left.direct_calls),
+                "right_calls": len(right.direct_calls),
+                "left_call_spans": [
+                    list(call.call_span) for call in left.direct_calls
+                ],
+                "right_call_spans": [
+                    list(call.call_span) for call in right.direct_calls
+                ],
+                "alternatives": _call_pairing_alternatives(
+                    left,
+                    right,
+                    atoms,
+                ),
+            },
         )
     left_name_span = left.definition_name_span or (left.definition_span[0], left.parameter_span[0])
     right_name_span = right.definition_name_span or (right.definition_span[0], right.parameter_span[0])
@@ -1111,7 +1397,25 @@ def _couple_rename(
     if len(left_declaration_names) != len(right_declaration_names):
         raise DeltaMinimizeError(
             "ambiguous-delta-coupling",
-            {"symbols": [left.name, right.name], "declaration_pairing": "count-mismatch"},
+            {
+                "symbols": [left.name, right.name],
+                "declaration_pairing": "count-mismatch",
+                "left_declarations": len(left_declaration_names),
+                "right_declarations": len(right_declaration_names),
+                "alternatives": [
+                    _coupling_evidence(
+                        label=(
+                            f"{left.name} -> {right.name} declaration-name "
+                            "evidence"
+                        ),
+                        reason="conflicting-rename-declaration-count",
+                        symbols=(left.name, right.name),
+                        atoms=atoms,
+                        left_spans=(left_name_span, *left_declaration_names),
+                        right_spans=(right_name_span, *right_declaration_names),
+                    )
+                ],
+            },
         )
     for left_span, right_span in zip(
         left_declaration_names,

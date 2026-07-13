@@ -68,6 +68,32 @@ def _config(tmp_path: Path, **changes: object) -> DeltaMinimizeConfig:
     return DeltaMinimizeConfig(**values)
 
 
+def _coupling_diagnostic() -> dict[str, object]:
+    return {
+        "schema_version": "delta-coupling-diagnostic.v1",
+        "reason": "ambiguous-delta-coupling",
+        "function": "f",
+        "left_sha256": _hash(LEFT),
+        "right_sha256": _hash(RIGHT),
+        "context": {"symbol": "f"},
+        "alternatives": [
+            {
+                "label": "f declaration + call",
+                "reason": "competing-semantic-atom-group",
+                "symbols": ["f"],
+                "atom_ids": ["atom-a"],
+                "left_spans": [[0, 5]],
+                "right_spans": [[0, 5]],
+            }
+        ],
+        "review": {
+            "supported": False,
+            "reason": "semantic-coupling-review-unsupported",
+            "next_action": "edit-parent-and-rerun",
+        },
+    }
+
+
 def _objective(
     *,
     desired_physical: int = 3,
@@ -411,6 +437,81 @@ class _CountingFixture:
             evaluation=EvaluationBackends(self.score_rows, self.inspect_source),
             profile_candidate=self.profile,
         )
+
+
+def test_ambiguous_coupling_publishes_only_content_bound_diagnostic(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    diagnostic = _coupling_diagnostic()
+    stale_manifest = DeltaRunStore(config.out_dir).write_delta_manifest(
+        {"schema_version": "stale-delta-manifest.v0"}
+    )
+
+    def ambiguous_manifest(*_args, **_kwargs):
+        raise DeltaMinimizeError(
+            "ambiguous-delta-coupling",
+            {"diagnostic": diagnostic},
+        )
+
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="^ambiguous-delta-coupling$",
+    ) as raised:
+        run_delta_minimize(
+            config,
+            backends=replace(
+                fixture.backends(),
+                extract_manifest=ambiguous_manifest,
+            ),
+        )
+
+    artifact = config.out_dir / "delta-coupling-diagnostic.json"
+    assert raised.value.details == {
+        "diagnostic": diagnostic,
+        "diagnostic_artifact": str(artifact),
+    }
+    assert json.loads(artifact.read_text(encoding="utf-8")) == diagnostic
+    assert fixture.parent_calls == 2
+    assert len(
+        tuple((config.out_dir / "evidence" / "parents").glob("*.json"))
+    ) == 2
+    assert not stale_manifest.exists()
+    assert not (config.out_dir / "namespace-review-request.yaml").exists()
+    assert not (config.out_dir / "delta-manifest.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+    assert not (config.out_dir / "result.json").exists()
+
+
+def test_ambiguous_coupling_rejects_nonmatching_diagnostic_content(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    diagnostic = _coupling_diagnostic()
+    diagnostic["left_sha256"] = "0" * 64
+
+    def malformed_manifest(*_args, **_kwargs):
+        raise DeltaMinimizeError(
+            "ambiguous-delta-coupling",
+            {"diagnostic": diagnostic},
+        )
+
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="^invalid-delta-coupling-diagnostic$",
+    ):
+        run_delta_minimize(
+            config,
+            backends=replace(
+                fixture.backends(),
+                extract_manifest=malformed_manifest,
+            ),
+        )
+
+    assert fixture.parent_calls == 2
+    assert not (config.out_dir / "delta-coupling-diagnostic.json").exists()
 
 
 def test_run_evaluates_every_legal_mask_and_resumes(tmp_path: Path) -> None:

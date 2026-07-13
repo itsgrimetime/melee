@@ -648,6 +648,9 @@ class DeltaRunStore:
         request.write(path)
         return path
 
+    def write_coupling_diagnostic(self, payload: Mapping[str, Any]) -> Path:
+        return self.write_json("delta-coupling-diagnostic.json", payload)
+
     def write_namespace_resolution(self, payload: Mapping[str, Any]) -> Path:
         """Persist immutable, content-addressed namespace-resolution provenance."""
 
@@ -679,6 +682,11 @@ class DeltaRunStore:
     def write_delta_manifest(self, payload: Mapping[str, Any]) -> Path:
         return self.write_json("delta-manifest.json", payload)
 
+    def invalidate_delta_manifest(self) -> None:
+        """Remove only a stale manifest when extraction cannot replace it."""
+
+        self._invalidate_evidence_path(self._safe_path("delta-manifest.json"))
+
     def write_candidates(self, payload: Mapping[str, Any]) -> Path:
         return self.write_json("candidates.json", payload)
 
@@ -688,6 +696,7 @@ class DeltaRunStore:
     def invalidate_publications(self) -> None:
         """Remove outputs derived from a superseded delta manifest."""
         for name in (
+            "delta-coupling-diagnostic.json",
             "namespace-review-request.yaml",
             "candidates.json",
             "result.json",

@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from src.search.delta_minimize import DeltaMinimizeError, delta
@@ -78,9 +80,27 @@ static int helper(int a, int b) { return a; }
 int draw(int x) { return helper(x, 1) + helper(x, 2); }
 """
 
+UNCHANGED_CALL_PAIRING_LEFT = """\
+int helper(int value) { return value; }
+int draw(int x) { return helper(x); }
+"""
+UNCHANGED_CALL_PAIRING_RIGHT = """\
+int helper(unsigned int value) { return value; }
+int draw(int x) { return helper(x) + helper((unsigned int) x); }
+"""
+
 DECLARATION_COUNT_CHANGE_RIGHT = """\
 static int helper(int a, int b) { return a; }
 int draw(int x) { return helper(x, 1); }
+"""
+
+DUPLICATE_PARAMETER_LEFT = """\
+static int helper(int value, int value) { return value; }
+int draw(int x) { return helper(x, x); }
+"""
+DUPLICATE_PARAMETER_RIGHT = """\
+static int helper(int value, int other) { return value; }
+int draw(int x) { return helper(x, x); }
 """
 
 UNIQUE_RENAME_LEFT = """\
@@ -744,14 +764,149 @@ int draw(int helper[helper(1, 2)]) {
     assert any(blocker.symbol == "helper" and blocker.reason == "shadowed-call" for blocker in index.blockers)
 
 
+def test_call_count_ambiguity_reports_actual_pairing_choices():
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="ambiguous-delta-coupling",
+    ) as raised:
+        delta.extract_delta_manifest(
+            ARITY_CHANGE_LEFT,
+            CALL_COUNT_CHANGE_RIGHT,
+            function="draw",
+        )
+
+    left_calls = build_binding_index(ARITY_CHANGE_LEFT).functions["helper"].direct_calls
+    right_calls = build_binding_index(CALL_COUNT_CHANGE_RIGHT).functions["helper"].direct_calls
+    diagnostic = raised.value.details["diagnostic"]
+    assert diagnostic["context"] == {
+        "symbol": "helper",
+        "left_calls": 1,
+        "right_calls": 2,
+        "left_call_spans": [list(call.call_span) for call in left_calls],
+        "right_call_spans": [list(call.call_span) for call in right_calls],
+    }
+    alternatives = diagnostic["alternatives"]
+    assert [alternative["label"] for alternative in alternatives] == [
+        "helper direct call left[0] -> right[0]",
+        "helper direct call left[0] -> right[1]",
+    ]
+    for index, alternative in enumerate(alternatives):
+        assert alternative["reason"] == "competing-direct-call-pairing"
+        assert alternative["symbols"] == ["helper"]
+        assert alternative["atom_ids"]
+        assert alternative["left_spans"] == [list(left_calls[0].call_span)]
+        assert alternative["right_spans"] == [list(right_calls[index].call_span)]
+
+
+def test_unchanged_call_pairing_is_context_not_empty_atom_alternative():
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="ambiguous-delta-coupling",
+    ) as raised:
+        delta.extract_delta_manifest(
+            UNCHANGED_CALL_PAIRING_LEFT,
+            UNCHANGED_CALL_PAIRING_RIGHT,
+            function="draw",
+        )
+
+    left_call = build_binding_index(UNCHANGED_CALL_PAIRING_LEFT).functions[
+        "helper"
+    ].direct_calls[0]
+    right_calls = build_binding_index(UNCHANGED_CALL_PAIRING_RIGHT).functions[
+        "helper"
+    ].direct_calls
+    diagnostic = raised.value.details["diagnostic"]
+    assert diagnostic["context"] == {
+        "symbol": "helper",
+        "left_calls": 1,
+        "right_calls": 2,
+        "left_call_spans": [list(left_call.call_span)],
+        "right_call_spans": [list(call.call_span) for call in right_calls],
+    }
+    assert [item["label"] for item in diagnostic["alternatives"]] == [
+        "helper direct call left[0] -> right[1]"
+    ]
+    assert all(item["atom_ids"] for item in diagnostic["alternatives"])
+    assert delta.validate_coupling_diagnostic(
+        diagnostic,
+        left=UNCHANGED_CALL_PAIRING_LEFT,
+        right=UNCHANGED_CALL_PAIRING_RIGHT,
+        function="draw",
+    ) == diagnostic
+
+
+def test_declaration_count_ambiguity_reports_conflicting_signature_evidence():
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="ambiguous-delta-coupling",
+    ) as raised:
+        delta.extract_delta_manifest(
+            ARITY_CHANGE_LEFT,
+            DECLARATION_COUNT_CHANGE_RIGHT,
+            function="draw",
+        )
+
+    diagnostic = raised.value.details["diagnostic"]
+    assert diagnostic["context"] == {
+        "symbol": "helper",
+        "declaration_pairing": "count-mismatch",
+        "left_declarations": 1,
+        "right_declarations": 0,
+    }
+    assert len(diagnostic["alternatives"]) == 1
+    evidence = diagnostic["alternatives"][0]
+    assert evidence["label"] == "helper declaration signature evidence"
+    assert evidence["reason"] == "conflicting-declaration-signature-count"
+    assert evidence["symbols"] == ["helper"]
+    assert evidence["atom_ids"]
+    assert evidence["left_spans"]
+    assert evidence["right_spans"]
+    assert all(
+        "helper" in ARITY_CHANGE_LEFT[start:end]
+        for start, end in evidence["left_spans"]
+    )
+    assert all(
+        "helper" in DECLARATION_COUNT_CHANGE_RIGHT[start:end]
+        for start, end in evidence["right_spans"]
+    )
+
+
 @pytest.mark.parametrize(
-    "right",
-    [CALL_COUNT_CHANGE_RIGHT, DECLARATION_COUNT_CHANGE_RIGHT],
-    ids=("call-count", "declaration-count"),
+    ("left", "right"),
+    (
+        (DUPLICATE_PARAMETER_LEFT, DUPLICATE_PARAMETER_RIGHT),
+        (DUPLICATE_PARAMETER_RIGHT, DUPLICATE_PARAMETER_LEFT),
+    ),
+    ids=("left-duplicate", "right-duplicate"),
 )
-def test_signature_change_count_ambiguity_fails_closed(right):
-    with pytest.raises(DeltaMinimizeError, match="ambiguous-delta-coupling"):
-        delta.extract_delta_manifest(ARITY_CHANGE_LEFT, right, function="draw")
+def test_duplicate_parameter_ambiguity_reports_parameter_evidence(left, right):
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="ambiguous-delta-coupling",
+    ) as raised:
+        delta.extract_delta_manifest(
+            left,
+            right,
+            function="draw",
+        )
+
+    left_binding = build_binding_index(left).functions["helper"]
+    right_binding = build_binding_index(right).functions["helper"]
+    diagnostic = raised.value.details["diagnostic"]
+    assert diagnostic["context"] == {
+        "symbol": "helper",
+        "parameter_pairing": "duplicate-name",
+        "left_parameters": list(left_binding.parameter_names),
+        "right_parameters": list(right_binding.parameter_names),
+    }
+    assert len(diagnostic["alternatives"]) == 1
+    evidence = diagnostic["alternatives"][0]
+    assert evidence["label"] == "helper parameter-name evidence"
+    assert evidence["reason"] == "conflicting-parameter-name-evidence"
+    assert evidence["symbols"] == ["helper"]
+    assert evidence["atom_ids"]
+    assert evidence["left_spans"] == [list(left_binding.parameter_span)]
+    assert evidence["right_spans"] == [list(right_binding.parameter_span)]
 
 
 @pytest.mark.parametrize(
@@ -1111,12 +1266,68 @@ int draw(int x) { return assist(x); }
 
 
 def test_ambiguous_rename_fails_closed():
-    with pytest.raises(DeltaMinimizeError, match="ambiguous-delta-coupling"):
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="ambiguous-delta-coupling",
+    ) as raised:
         delta.extract_delta_manifest(
             AMBIGUOUS_RENAME_LEFT,
             AMBIGUOUS_RENAME_RIGHT,
             function="draw",
         )
+
+    diagnostic = raised.value.details["diagnostic"]
+    assert set(diagnostic) == {
+        "schema_version",
+        "reason",
+        "function",
+        "left_sha256",
+        "right_sha256",
+        "context",
+        "alternatives",
+        "review",
+    }
+    assert diagnostic["schema_version"] == "delta-coupling-diagnostic.v1"
+    assert diagnostic["reason"] == "ambiguous-delta-coupling"
+    assert diagnostic["function"] == "draw"
+    assert diagnostic["left_sha256"] == hashlib.sha256(
+        AMBIGUOUS_RENAME_LEFT.encode()
+    ).hexdigest()
+    assert diagnostic["right_sha256"] == hashlib.sha256(
+        AMBIGUOUS_RENAME_RIGHT.encode()
+    ).hexdigest()
+    assert diagnostic["context"] == {
+        "candidate_symbols": {
+            "first": ["third", "fourth"],
+            "second": ["third", "fourth"],
+        }
+    }
+    assert diagnostic["review"] == {
+        "supported": False,
+        "reason": "semantic-coupling-review-unsupported",
+        "next_action": "edit-parent-and-rerun",
+    }
+    alternatives = diagnostic["alternatives"]
+    assert [alternative["label"] for alternative in alternatives] == [
+        "first -> fourth",
+        "first -> third",
+        "second -> fourth",
+        "second -> third",
+    ]
+    for alternative in alternatives:
+        assert set(alternative) == {
+            "label",
+            "reason",
+            "symbols",
+            "atom_ids",
+            "left_spans",
+            "right_spans",
+        }
+        assert alternative["reason"] == "competing-function-rename"
+        assert len(alternative["symbols"]) == 2
+        assert alternative["atom_ids"]
+        assert alternative["left_spans"]
+        assert alternative["right_spans"]
 
 
 def test_semantic_union_recomputes_dependency_scc_deterministically():

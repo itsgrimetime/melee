@@ -216,6 +216,67 @@ def _delta_error_message(error: DeltaMinimizeError) -> str:
     return f"{message}; {hint}" if hint else message
 
 
+def _delta_error_payload(error: DeltaMinimizeError) -> dict[str, object]:
+    return {
+        "schema_version": "delta-minimize-error.v1",
+        "status": "error",
+        "error": error.to_dict(),
+    }
+
+
+def _coupling_diagnostic_error(error: DeltaMinimizeError) -> bool:
+    return (
+        error.reason == "ambiguous-delta-coupling"
+        and isinstance(error.details.get("diagnostic"), Mapping)
+    )
+
+
+def _render_coupling_diagnostic_error(error: DeltaMinimizeError) -> str:
+    diagnostic = error.details["diagnostic"]
+    assert isinstance(diagnostic, Mapping)
+    artifact = error.details.get("diagnostic_artifact")
+    lines = [error.reason]
+    if isinstance(artifact, str) and artifact:
+        lines.append(f"diagnostic artifact: {artifact}")
+    lines.append("semantic-coupling alternatives/evidence groups:")
+    alternatives = diagnostic.get("alternatives")
+    if isinstance(alternatives, list):
+        for alternative in alternatives:
+            if not isinstance(alternative, Mapping):
+                continue
+            lines.append(
+                f"- {alternative.get('label')} ({alternative.get('reason')})"
+            )
+            symbols = alternative.get("symbols")
+            atom_ids = alternative.get("atom_ids")
+            if isinstance(symbols, list):
+                lines.append(
+                    f"  symbols: {', '.join(str(item) for item in symbols)}"
+                )
+            if isinstance(atom_ids, list):
+                lines.append(
+                    f"  atoms: {', '.join(str(item) for item in atom_ids)}"
+                )
+            for side in ("left", "right"):
+                spans = alternative.get(f"{side}_spans")
+                if isinstance(spans, list):
+                    rendered = ", ".join(
+                        f"{span[0]}:{span[1]}"
+                        for span in spans
+                        if isinstance(span, list) and len(span) == 2
+                    )
+                    lines.append(f"  {side} spans: {rendered}")
+    lines.extend(
+        (
+            "no supported semantic-coupling review exists for resolving "
+            "these alternatives/evidence groups.",
+            "recovery: inspect the diagnostic, edit either parent source "
+            "and rerun delta-minimize.",
+        )
+    )
+    return "\n".join(lines)
+
+
 def _resolve_optional_plan_source_file(
     plan_source_file: str,
     *,
@@ -4776,6 +4837,18 @@ def delta_minimize_cmd(
         )
         result = run_delta_minimize(config)
     except DeltaMinimizeError as error:
+        if _coupling_diagnostic_error(error):
+            if json_out:
+                typer.echo(
+                    json.dumps(
+                        _delta_error_payload(error),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                typer.echo(_render_coupling_diagnostic_error(error))
+            raise typer.Exit(code=2) from error
         raise typer.BadParameter(_delta_error_message(error)) from error
 
     if json_out:
