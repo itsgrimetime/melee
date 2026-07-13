@@ -330,7 +330,8 @@ def test_multi_output_event_uses_each_outputs_exact_parent_set():
 )
 def test_mutation_parent_variants_fail_closed(parents):
     evidence = evidence_with_mutation_parent_override(parents)
-    resolution = build_owner_certificates(evidence).resolution_for(ROLE)
+    diagnostic = owner_certificate.validate_owner_evidence(evidence)
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
 
     assert resolution.status is not OwnerResolutionStatus.UNIQUE
     expected = (
@@ -351,9 +352,10 @@ def test_mutation_parent_variants_fail_closed(parents):
     ],
 )
 def test_lineage_event_variants_fail_closed(variant, reason):
-    resolution = build_owner_certificates(
+    diagnostic = owner_certificate.validate_owner_evidence(
         evidence_with_lineage_variant(variant)
-    ).resolution_for(ROLE)
+    )
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
 
     assert resolution.status is not OwnerResolutionStatus.UNIQUE
     assert {item.reason for item in resolution.rejections} == {reason}
@@ -419,6 +421,25 @@ def test_missing_required_capability_is_global_and_fail_closed():
         "missing-required-capability"
     }
     assert result.resolution_for(ROLE).status is OwnerResolutionStatus.INCOMPLETE
+
+
+def test_diagnostic_missing_capability_preserves_fully_validated_candidate_id():
+    evidence = complete_evidence()
+    tokenless = replace(
+        evidence,
+        capabilities=evidence.capabilities - {"object-to-frame"},
+    )
+
+    diagnostic = owner_certificate.validate_owner_evidence(tokenless)
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
+
+    assert {item.reason for item in diagnostic.global_rejections} == {
+        "missing-required-capability"
+    }
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert len(resolution.certificate_record_ids) == 1
+    assert diagnostic.certificate_nodes == ()
+    assert diagnostic.certificate(resolution.certificate_record_ids[0]) is None
 
 
 @pytest.mark.parametrize("scope_field", ["compile", "capture", "artifact", "parser"])
@@ -579,12 +600,16 @@ def test_valid_certificate_plus_compatible_rejection_is_not_unique():
 
 def test_global_rejection_taints_every_lookup_as_incomplete():
     result = build_owner_certificates(evidence_without_instrumentation_identity())
+    resolution = result.resolution_for(ROLE)
 
     assert result.global_rejections
     assert all(rejection.role is None for rejection in result.global_rejections)
-    assert result.resolution_for(ROLE).status is OwnerResolutionStatus.INCOMPLETE
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert len(resolution.certificate_record_ids) == 1
+    assert result.certificate_nodes == ()
+    assert result.certificate(resolution.certificate_record_ids[0]) is None
     assert result.resolution_for(other_role()).status is OwnerResolutionStatus.INCOMPLETE
-    assert result.resolution_for(ROLE).rejections == ()
+    assert resolution.rejections == ()
 
 
 def test_global_rejection_preserves_role_scoped_rejections():
@@ -619,8 +644,15 @@ def test_repeated_lookup_does_not_change_resolution():
 
 
 def test_input_permutation_is_byte_stable():
-    evidence = ambiguous_evidence()
-    permuted_evidence = ambiguous_evidence(permuted=True)
+    evidence = evidence_with_two_mutation_outputs(
+        first_parents=("ol-a",),
+        second_parents=("ol-b", "ol-c"),
+    )
+    permuted_evidence = evidence_with_two_mutation_outputs(
+        first_parents=("ol-a",),
+        second_parents=("ol-b", "ol-c"),
+        permuted=True,
+    )
 
     assert canonical_result(build_owner_certificates(evidence)) == canonical_result(
         build_owner_certificates(permuted_evidence)
@@ -659,11 +691,112 @@ def test_exact_duplicate_alternatives_retain_one_group_and_multiplicity():
     result = owner_certificate.validate_owner_evidence(tokenless)
     resolution = next(item for item in result.role_resolutions if item.role == ROLE)
 
-    assert resolution.status is OwnerResolutionStatus.AMBIGUOUS
+    assert resolution.status is OwnerResolutionStatus.UNIQUE
+    assert len(resolution.certificate_record_ids) == 1
     groups = tuple(group for group in result._canonical_groups if group.role == ROLE)
     assert len(groups) == 1
     assert groups[0].multiplicity == 2
     assert len(groups[0].provenance_record_ids) == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("capabilities", [], id="capabilities-list"),
+        pytest.param("capabilities", {}, id="capabilities-mapping"),
+        pytest.param("capture", [], id="capture-list"),
+        pytest.param("capture", {}, id="capture-mapping"),
+        pytest.param("compile", [], id="compile-list"),
+        pytest.param("function", {}, id="function-mapping"),
+        pytest.param("artifact", [], id="artifact-list"),
+        pytest.param("parser", {}, id="parser-mapping"),
+        pytest.param("physical", [], id="physical-list"),
+        pytest.param("physical", {}, id="physical-mapping"),
+        pytest.param("lineage-parents", [["ol-a"]], id="lineage-parent-list"),
+        pytest.param(
+            "lineage-parents",
+            {"parent": "ol-a"},
+            id="lineage-parent-mapping",
+        ),
+        pytest.param("nested", {"malformed": []}, id="nested-list"),
+        pytest.param("nested", {"malformed": {}}, id="nested-mapping"),
+        pytest.param("nested", float("nan"), id="nested-nonfinite"),
+        pytest.param("nested", object(), id="nested-unsupported"),
+    ],
+)
+def test_diagnostic_validation_closes_malformed_persistence_values(field, value):
+    evidence = complete_evidence()
+    if field == "capabilities":
+        malformed = replace(evidence, capabilities=value)
+    elif field == "capture":
+        malformed = replace(evidence, capture_run_id=value)
+    elif field in {"compile", "function", "artifact", "parser"}:
+        emission = support(evidence, "pcode-emission")
+        if field == "compile":
+            changed = replace(emission, compile_id=value)
+        elif field == "function":
+            changed = replace(emission, function=value)
+        elif field == "artifact":
+            changed = replace(
+                emission,
+                provenance=replace(emission.provenance, artifact_sha256=value),
+            )
+        else:
+            changed = replace(
+                emission,
+                provenance=replace(emission.provenance, parser=value),
+            )
+        malformed = replace_record(evidence, changed)
+    elif field == "physical":
+        anchor = next(
+            node for node in evidence.nodes if node.kind == "assembly-operand-anchor"
+        )
+        malformed = replace_record(
+            evidence,
+            anchor.with_attributes({**anchor.attributes, "physical_register": value}),
+        )
+    elif field == "lineage-parents":
+        lineage = next(
+            node
+            for node in evidence.nodes
+            if node.kind == "backend-support-record"
+            and node.attributes.get("support_kind") == "pcode-lineage-event"
+            and "event_index" in node.attributes
+        )
+        malformed = replace_record(
+            evidence,
+            lineage.with_attributes(
+                {**lineage.attributes, "parent_lineage_ids": value}
+            ),
+        )
+    else:
+        emission = support(evidence, "pcode-emission")
+        malformed = replace_record(
+            evidence,
+            emission.with_attributes({**emission.attributes, "nested": value}),
+        )
+
+    try:
+        diagnostic = owner_certificate.validate_owner_evidence(malformed)
+    except Exception as error:  # pragma: no cover - assertion reports escaped input
+        pytest.fail(
+            f"malformed {field} escaped as {type(error).__name__}: {error}"
+        )
+
+    reasons = {
+        rejection.reason
+        for rejection in (
+            *diagnostic.global_rejections,
+            *(
+                rejection
+                for resolution in diagnostic.role_resolutions
+                for rejection in resolution.rejections
+            ),
+        )
+    }
+    assert reasons == {"malformed-support"}
+    assert diagnostic.certificate_nodes == ()
+    assert diagnostic.is_trusted is False
 
 
 def test_five_role_statuses_are_resolved_independently():

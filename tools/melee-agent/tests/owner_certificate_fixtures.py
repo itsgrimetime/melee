@@ -121,6 +121,7 @@ def _evidence_from_paths(
     *,
     events: tuple[Mapping[str, object], ...] | None = None,
     reverse_pcode_inputs: bool = False,
+    reverse_event_inputs: bool = False,
     instrumentation_identity: object = (
         "1" * 64,
         "proof-test",
@@ -262,6 +263,26 @@ def _evidence_from_paths(
             )
             for path in paths
         )
+    if reverse_event_inputs:
+        events = tuple(
+            _mapping(
+                **{
+                    **dict(event),
+                    "inputs": tuple(
+                        _mapping(
+                            **{
+                                **dict(group),
+                                "operands": tuple(
+                                    reversed(tuple(group["operands"]))
+                                ),
+                            }
+                        )
+                        for group in event["inputs"]
+                    ),
+                }
+            )
+            for event in events
+        )
     if reverse_pcode_inputs:
         instructions.reverse()
         occurrences.reverse()
@@ -289,6 +310,8 @@ def _evidence_from_paths(
 def evidence_with_two_mutation_outputs(
     first_parents: tuple[str, ...],
     second_parents: tuple[str, ...],
+    *,
+    permuted: bool = False,
 ) -> ObjectBindingEvidence:
     paths = (
         _path(0, operand_key="use:0", semantic_stack_role="row-home"),
@@ -303,67 +326,54 @@ def evidence_with_two_mutation_outputs(
     )
     # One event can have sibling outputs with different exact parent sets.
     shared_pcode_paths = tuple({**path, "pcode_id": "pc-0", "offset": 0x234} for path in paths)
-    return _evidence_from_paths(shared_pcode_paths, events=events)
+    return _evidence_from_paths(
+        shared_pcode_paths,
+        events=events,
+        reverse_event_inputs=permuted,
+    )
 
 
 def evidence_with_mutation_parent_override(
     parents: tuple[str, ...],
 ) -> ObjectBindingEvidence:
-    base = _pcode_result(parent_lineage_ids=("ol-a",))
-    normalized = dict(base.normalized)
-    normalized["pcode_operand_lineage_events"] = (
-        *tuple(normalized["pcode_operand_lineage_events"]),
-        _event(
-            pcode_id="pc-0",
-            inputs=parents,
-            outputs=(("ol-1", parents),),
-        ),
+    evidence = complete_evidence()
+    lineage_support = only(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-lineage-event"
+        and "event_index" in node.attributes
     )
-    mutated = replace(base, normalized=MappingProxyType(normalized))
-    source = replace(_adapter_input(), pcode_validation=mutated)
-    return emit_object_binding_evidence(source)
+    changed = lineage_support.with_attributes(
+        {**lineage_support.attributes, "parent_lineage_ids": parents}
+    )
+    # Public emission creates one coherent event. The proof-incapable persistence
+    # seam then changes only the named parent fact; no competing event is added.
+    return replace_record(evidence, changed)
 
 
 def evidence_with_lineage_variant(variant: str) -> ObjectBindingEvidence:
-    if variant == "noncanonical-parent-order":
-        pcode = _pcode_result(parent_lineage_ids=("ol-b", "ol-a"))
-    else:
-        pcode = _pcode_result(parent_lineage_ids=("ol-a",))
-        normalized = dict(pcode.normalized)
-        events = tuple(normalized["pcode_operand_lineage_events"])
-        if variant == "event-index":
-            events = (
-                *events,
-                _event(
-                    pcode_id="pc-0",
-                    inputs=("ol-a",),
-                    outputs=(("ol-1", ("ol-a",)),),
-                ),
-            )
-        elif variant == "side":
-            events = (
-                _event(
-                    pcode_id="pc-0",
-                    inputs=("ol-1",),
-                    outputs=(("ol-unused", ("ol-1",)),),
-                ),
-            )
-        elif variant == "mutation-kind":
-            events = (
-                *events,
-                _event(
-                    pcode_id="pc-0",
-                    inputs=("ol-a",),
-                    outputs=(("ol-1", ("ol-a",)),),
-                    mutation_kind="merge",
-                ),
-            )
-        else:
-            raise ValueError(f"unknown lineage variant: {variant}")
-        normalized["pcode_operand_lineage_events"] = events
-        pcode = replace(pcode, normalized=MappingProxyType(normalized))
-    source = replace(_adapter_input(), pcode_validation=pcode)
-    return emit_object_binding_evidence(source)
+    evidence = complete_evidence()
+    lineage_support = only(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-lineage-event"
+        and "event_index" in node.attributes
+    )
+    field, value = {
+        "event-index": ("event_index", 1),
+        "side": ("side", "inputs"),
+        "mutation-kind": ("mutation_kind", "merge"),
+        "noncanonical-parent-order": ("parent_lineage_ids", ("ol-b", "ol-a")),
+    }.get(variant, (None, None))
+    if field is None:
+        raise ValueError(f"unknown lineage variant: {variant}")
+    changed = lineage_support.with_attributes(
+        {**lineage_support.attributes, field: value}
+    )
+    # Corrupt exactly one field of the sole publicly emitted mutation event.
+    return replace_record(evidence, changed)
 
 
 def evidence_with_certificate_and_role_rejection(

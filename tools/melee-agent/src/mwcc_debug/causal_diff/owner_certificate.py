@@ -11,7 +11,7 @@ from typing import Iterable, Mapping
 
 import rfc8785
 
-from .canonical import canonical_bytes
+from .canonical import canonical_bytes, stable_id
 from .models import Confidence, EvidenceEdge, EvidenceNode, Provenance
 from .object_binding_adapter import (
     _OBJECT_BINDING_ADAPTER_TOKEN,
@@ -303,8 +303,10 @@ def _unique_records(
     return tuple(by_id.values())
 
 
-def _certificate(path: _OwnerPath, evidence: ObjectBindingEvidence) -> EvidenceNode:
-    cited_records = (*path.path_records, *path.raw_support)
+def _proof_content_sha256(
+    path: _OwnerPath,
+    evidence: ObjectBindingEvidence,
+) -> str:
     proof_payload = {
         "schema_version": "causal-owner-certificate.v1",
         "capture_run_id": evidence.capture_run_id,
@@ -314,7 +316,23 @@ def _certificate(path: _OwnerPath, evidence: ObjectBindingEvidence) -> EvidenceN
         "path_records": [_record_json(record) for record in path.path_records],
         "raw_support_records": [_record_json(record) for record in path.raw_support],
     }
-    proof_content_sha256 = hashlib.sha256(canonical_bytes(proof_payload)).hexdigest()
+    return hashlib.sha256(canonical_bytes(proof_payload)).hexdigest()
+
+
+def _certificate_record_id(
+    path: _OwnerPath,
+    evidence: ObjectBindingEvidence,
+) -> str:
+    return stable_id(
+        path.owner.compile_id,
+        "owner-proof-certificate",
+        _proof_content_sha256(path, evidence),
+    )
+
+
+def _certificate(path: _OwnerPath, evidence: ObjectBindingEvidence) -> EvidenceNode:
+    cited_records = (*path.path_records, *path.raw_support)
+    proof_content_sha256 = _proof_content_sha256(path, evidence)
     path_record_ids = tuple(record.record_id for record in path.path_records)
     raw_support_record_ids = tuple(record.record_id for record in path.raw_support)
     all_input_ids = tuple(record.record_id for record in cited_records)
@@ -396,7 +414,7 @@ def _is_string_tuple(value: object) -> bool:
 
 
 def _is_lineage_side(value: object) -> bool:
-    return value in {"inputs", "outputs"}
+    return isinstance(value, str) and value in {"inputs", "outputs"}
 
 
 def _support_schema(**values: object) -> dict[str, object]:
@@ -575,7 +593,7 @@ def _validate_common_scope(
     values = tuple(records)
     if not values:
         return None
-    domains = {
+    domains = tuple(
         (
             record.compile_id,
             record.function,
@@ -584,12 +602,24 @@ def _validate_common_scope(
             record.attributes.get("capture_run_id"),
         )
         for record in values
-    }
-    if len(domains) != 1 or next(iter(domains))[3:] != (_PARSER, evidence.capture_run_id):
+    )
+    if (
+        not _is_nonempty_str(evidence.capture_run_id)
+        or any(
+            not all(_is_nonempty_str(item) for item in domain)
+            for domain in domains
+        )
+    ):
+        return _rejection("malformed-support", candidates=values)
+    first_domain = domains[0]
+    if (
+        any(domain != first_domain for domain in domains[1:])
+        or first_domain[3:] != (_PARSER, evidence.capture_run_id)
+    ):
         return _rejection("mixed-record-scope", candidates=values)
     try:
         canonical_bytes([_record_json(record) for record in values])
-    except rfc8785.CanonicalizationError:
+    except (TypeError, ValueError, rfc8785.CanonicalizationError):
         return _rejection("malformed-support", candidates=values)
     return None
 
@@ -597,11 +627,17 @@ def _validate_common_scope(
 def _support_attributes_are_exact(support: EvidenceNode) -> bool:
     support_kind = support.attributes.get("support_kind")
     schemas = _SUPPORT_SCHEMAS.get(str(support_kind), ())
-    return any(
-        set(support.attributes) == set(schema)
-        and all(predicate(support.attributes[key]) for key, predicate in schema.items())
-        for schema in schemas
-    )
+    try:
+        return any(
+            set(support.attributes) == set(schema)
+            and all(
+                predicate(support.attributes[key])
+                for key, predicate in schema.items()
+            )
+            for schema in schemas
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _validated_support_records(
@@ -625,9 +661,11 @@ def _validated_support_records(
             )
         support_kind = str(registered.attributes.get("support_kind"))
         capability = _SUPPORT_CAPABILITIES.get(support_kind)
+        # The capture-level capability set is a global authority gate. A
+        # persisted path may still be validated diagnostically from its exact
+        # per-record capability claims so global taint can preserve its ID.
         if (
             capability is None
-            or capability not in evidence.capabilities
             or registered.attributes.get("verified_capability") != capability
             or not _support_attributes_are_exact(registered)
             or registered.provenance.input_record_ids
@@ -864,11 +902,11 @@ def _validate_emission(
         and mapping.get("machine_operand_key") == operand_key
         and mapping.get("operand_lineage_id") == lineage_id
     )
-    values = {
+    values = (
         candidate.anchor.attributes.get("physical_register"),
         emission.attributes.get("physical_register"),
         *(mapping.get("physical_register") for mapping in mappings),
-    }
+    )
     if (
         len(mappings) != 1
         or any(
@@ -898,11 +936,13 @@ def _validate_emission(
         )
     ):
         return _rejection("malformed-support", role, candidate.path_records, support)
-    if len(values) != 1 or not _is_physical(next(iter(values))):
+    if not all(_is_physical(value) for value in values):
+        return _rejection("malformed-support", role, candidate.path_records, support)
+    if any(value != values[0] for value in values[1:]):
         return _rejection(
             "split-physical-assignment", role, candidate.path_records, support
         )
-    return next(iter(values)), (generation, code_range, emission, direct_lineage)
+    return values[0], (generation, code_range, emission, direct_lineage)
 
 
 def _validate_lineage_output(
@@ -1025,14 +1065,16 @@ def _validate_allocator_origin(
         "class_id": candidate.virtual.attributes.get("class_id"),
         "virtual": candidate.virtual.attributes.get("virtual"),
     }
-    physicals = {
+    physicals = (
         decoded_physical,
         candidate.virtual.attributes.get("physical_register"),
         rewrite.attributes.get("allocated_physical"),
         candidate.allocator.attributes.get("assigned_phys"),
         allocator_edge.attributes.get("assigned_phys"),
-    }
-    if len(physicals) != 1 or not _is_physical(next(iter(physicals))):
+    )
+    if not all(_is_physical(value) for value in physicals):
+        return _rejection("malformed-support", role, candidate.path_records, support)
+    if any(value != physicals[0] for value in physicals[1:]):
         return _rejection(
             "split-physical-assignment", role, candidate.path_records, support
         )
@@ -1061,7 +1103,7 @@ def _validate_allocator_origin(
         return _rejection(
             "allocator-origin-contradiction", role, candidate.path_records, support
         )
-    return next(iter(physicals)), (rewrite, binding)
+    return physicals[0], (rewrite, binding)
 
 
 def _validate_object_identity(
@@ -1265,7 +1307,12 @@ def _validate_candidate(
 
 def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
     global_rejections: list[OwnerCertificateRejection] = []
-    if not _REQUIRED_CAPABILITIES <= evidence.capabilities:
+    if (
+        not isinstance(evidence.capabilities, frozenset)
+        or not all(_is_nonempty_str(item) for item in evidence.capabilities)
+    ):
+        global_rejections.append(_rejection("malformed-support"))
+    elif not _REQUIRED_CAPABILITIES <= evidence.capabilities:
         global_rejections.append(_rejection("missing-required-capability"))
     if not _valid_instrumentation_identity(evidence.instrumentation_identity):
         global_rejections.append(_rejection("missing-instrumentation-identity"))
@@ -1274,7 +1321,7 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
     if scope_rejection is not None:
         global_rejections.append(scope_rejection)
     if scope_rejection is not None or any(
-        rejection.reason == "missing-required-capability"
+        rejection.reason == "malformed-support"
         for rejection in global_rejections
     ):
         return _ValidationOutcome(
@@ -1320,7 +1367,10 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
             for role in roles
         )
     )
-    if disconnected:
+    if disconnected and not any(
+        rejection.reason == "missing-required-capability"
+        for rejection in global_rejections
+    ):
         global_rejections.append(
             _rejection("disconnected-owner-path", candidates=disconnected)
         )
@@ -1331,6 +1381,37 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
     )
 
 
+def _validate_diagnostic_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
+    """Fail closed at the public persistence-validation boundary."""
+
+    try:
+        return _validate_core(evidence)
+    except (
+        AttributeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        rfc8785.CanonicalizationError,
+    ):
+        return _ValidationOutcome(
+            (),
+            (),
+            (_rejection("malformed-support"),),
+        )
+
+
+def _path_provenance(path: _OwnerPath) -> tuple[str, ...]:
+    return tuple(
+        sorted(record.record_id for record in (*path.path_records, *path.raw_support))
+    )
+
+
+def _path_group_key(
+    path: _OwnerPath,
+) -> tuple[OwnerRoleKey, OwnerSemanticState, tuple[str, ...]]:
+    return path.role, path.semantic_state, _path_provenance(path)
+
+
 def _canonical_groups(
     outcome: _ValidationOutcome,
 ) -> tuple[_CanonicalAlternativeGroup, ...]:
@@ -1339,12 +1420,8 @@ def _canonical_groups(
         list[tuple[str, ...]],
     ] = {}
     for path in outcome.paths:
-        provenance = tuple(
-            sorted(record.record_id for record in (*path.path_records, *path.raw_support))
-        )
-        grouped_paths.setdefault((path.role, path.semantic_state, provenance), []).append(
-            provenance
-        )
+        provenance = _path_provenance(path)
+        grouped_paths.setdefault(_path_group_key(path), []).append(provenance)
     groups = [
         _CanonicalAlternativeGroup(
             role,
@@ -1356,13 +1433,20 @@ def _canonical_groups(
         for (role, state, _), provenance in grouped_paths.items()
     ]
     grouped_rejections: dict[
-        tuple[OwnerRoleKey, str], list[tuple[str, ...]]
+        tuple[OwnerRoleKey, str, tuple[str, ...]], list[tuple[str, ...]]
     ] = {}
     for rejection in outcome.role_rejections:
         if rejection.role is None:
             continue
-        grouped_rejections.setdefault((rejection.role, rejection.reason), []).append(
-            tuple(sorted((*rejection.candidate_record_ids, *rejection.raw_support_record_ids)))
+        provenance = tuple(
+            sorted(
+                (*rejection.candidate_record_ids, *rejection.raw_support_record_ids)
+            )
+        )
+        grouped_rejections.setdefault(
+            (rejection.role, rejection.reason, provenance), []
+        ).append(
+            provenance
         )
     groups.extend(
         _CanonicalAlternativeGroup(
@@ -1372,7 +1456,7 @@ def _canonical_groups(
             len(provenance),
             tuple(sorted(provenance)),
         )
-        for (role, reason), provenance in grouped_rejections.items()
+        for (role, reason, _), provenance in grouped_rejections.items()
     )
     return tuple(
         sorted(
@@ -1381,7 +1465,9 @@ def _canonical_groups(
                 {
                     "role": item.role.as_json(),
                     "semantic_state": (
-                        None if item.semantic_state is None else item.semantic_state.as_json()
+                        None
+                        if item.semantic_state is None
+                        else item.semantic_state.as_json()
                     ),
                     "rejection_reason": item.rejection_reason,
                     "multiplicity": item.multiplicity,
@@ -1392,10 +1478,41 @@ def _canonical_groups(
     )
 
 
+def _representative_paths(
+    outcome: _ValidationOutcome,
+    canonical_groups: tuple[_CanonicalAlternativeGroup, ...],
+) -> tuple[_OwnerPath, ...]:
+    by_group: dict[
+        tuple[OwnerRoleKey, OwnerSemanticState, tuple[str, ...]], _OwnerPath
+    ] = {}
+    for path in outcome.paths:
+        by_group.setdefault(_path_group_key(path), path)
+    representatives = tuple(
+        by_group[(group.role, group.semantic_state, group.provenance_record_ids[0])]
+        for group in canonical_groups
+        if group.semantic_state is not None
+        and group.rejection_reason is None
+        and group.provenance_record_ids
+    )
+    return tuple(
+        sorted(
+            representatives,
+            key=lambda path: canonical_bytes(
+                {
+                    "role": path.role.as_json(),
+                    "semantic_state": path.semantic_state.as_json(),
+                    "provenance_record_ids": _path_provenance(path),
+                }
+            ),
+        )
+    )
+
+
 def _role_resolutions(
     outcome: _ValidationOutcome,
-    certificates: tuple[EvidenceNode, ...],
+    certificate_record_ids: tuple[str, ...],
     certificate_paths: tuple[_OwnerPath, ...],
+    canonical_groups: tuple[_CanonicalAlternativeGroup, ...],
 ) -> tuple[OwnerRoleResolution, ...]:
     roles = {path.role for path in outcome.paths}
     roles.update(
@@ -1405,10 +1522,18 @@ def _role_resolutions(
     )
     resolutions: list[OwnerRoleResolution] = []
     for role in sorted(roles):
-        role_paths = tuple(path for path in outcome.paths if path.role == role)
-        role_certificates = tuple(
-            certificate
-            for certificate, path in zip(certificates, certificate_paths, strict=True)
+        role_groups = tuple(
+            group
+            for group in canonical_groups
+            if group.role == role
+            and group.semantic_state is not None
+            and group.rejection_reason is None
+        )
+        role_certificate_ids = tuple(
+            certificate_record_id
+            for certificate_record_id, path in zip(
+                certificate_record_ids, certificate_paths, strict=True
+            )
             if path.role == role
         )
         rejections = tuple(
@@ -1421,7 +1546,11 @@ def _role_resolutions(
                 key=lambda item: item.rejection_id,
             )
         )
-        semantic_states = {path.semantic_state for path in role_paths}
+        semantic_states = {
+            group.semantic_state
+            for group in role_groups
+            if group.semantic_state is not None
+        }
         if outcome.global_rejections:
             status = OwnerResolutionStatus.INCOMPLETE
         elif any(item.reason in _CONTRADICTORY_REASONS for item in rejections):
@@ -1430,11 +1559,11 @@ def _role_resolutions(
             status = OwnerResolutionStatus.INCOMPLETE
         elif len(semantic_states) > 1:
             status = OwnerResolutionStatus.CONTRADICTORY
-        elif len(role_paths) > 1 or any(
+        elif len(role_groups) > 1 or any(
             item.reason == "plausible-owner-alternative" for item in rejections
         ):
             status = OwnerResolutionStatus.AMBIGUOUS
-        elif len(role_paths) == 1:
+        elif len(role_groups) == 1:
             status = OwnerResolutionStatus.UNIQUE
         elif rejections:
             status = OwnerResolutionStatus.INCOMPLETE
@@ -1444,24 +1573,62 @@ def _role_resolutions(
             OwnerRoleResolution(
                 role,
                 status,
-                tuple(sorted(item.record_id for item in role_certificates)),
+                tuple(sorted(set(role_certificate_ids))),
                 rejections,
             )
         )
     return tuple(resolutions)
 
 
+def _validate_owner_evidence(evidence: ObjectBindingEvidence) -> OwnerCertificateResult:
+    outcome = _validate_diagnostic_core(evidence)
+    canonical_groups = _canonical_groups(outcome)
+    certificate_paths = _representative_paths(outcome, canonical_groups)
+    try:
+        candidate_certificate_ids = tuple(
+            _certificate_record_id(path, evidence) for path in certificate_paths
+        )
+    except (TypeError, ValueError, rfc8785.CanonicalizationError):
+        if not outcome.global_rejections:
+            outcome = _ValidationOutcome(
+                (),
+                outcome.role_rejections,
+                (_rejection("malformed-support"),),
+            )
+        canonical_groups = _canonical_groups(outcome)
+        certificate_paths = ()
+        candidate_certificate_ids = ()
+    result = OwnerCertificateResult(
+        (),
+        _role_resolutions(
+            outcome,
+            candidate_certificate_ids,
+            certificate_paths,
+            canonical_groups,
+        ),
+        outcome.global_rejections,
+    )
+    object.__setattr__(result, "_canonical_groups", canonical_groups)
+    return result
+
+
 def validate_owner_evidence(evidence: ObjectBindingEvidence) -> OwnerCertificateResult:
     """Diagnose arbitrary owner evidence without granting certificate authority."""
 
-    outcome = _validate_core(evidence)
-    result = OwnerCertificateResult(
-        (),
-        _role_resolutions(outcome, (), ()),
-        outcome.global_rejections,
-    )
-    object.__setattr__(result, "_canonical_groups", _canonical_groups(outcome))
-    return result
+    try:
+        return _validate_owner_evidence(evidence)
+    except (
+        AttributeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        rfc8785.CanonicalizationError,
+    ):
+        return OwnerCertificateResult(
+            (),
+            (),
+            (_rejection("malformed-support"),),
+        )
 
 
 def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificateResult:
@@ -1477,6 +1644,32 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
             (_rejection("untrusted-diagnostic-materialization"),),
         )
     outcome = _validate_core(evidence)
+    canonical_groups = _canonical_groups(outcome)
+    ordered_paths = _representative_paths(outcome, canonical_groups)
+    try:
+        candidate_certificate_ids = tuple(
+            _certificate_record_id(path, evidence) for path in ordered_paths
+        )
+    except (TypeError, ValueError, rfc8785.CanonicalizationError):
+        if outcome.global_rejections:
+            return _trusted_result(
+                (),
+                _role_resolutions(outcome, (), (), canonical_groups),
+                outcome.global_rejections,
+                canonical_groups,
+            )
+        malformed = _ValidationOutcome(
+            (),
+            outcome.role_rejections,
+            (_rejection("malformed-support"),),
+        )
+        malformed_groups = _canonical_groups(malformed)
+        return _trusted_result(
+            (),
+            _role_resolutions(malformed, (), (), malformed_groups),
+            malformed.global_rejections,
+            malformed_groups,
+        )
     blocking_global_rejections = tuple(
         rejection
         for rejection in outcome.global_rejections
@@ -1485,44 +1678,38 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
     if blocking_global_rejections:
         return _trusted_result(
             (),
-            _role_resolutions(outcome, (), ()),
-            outcome.global_rejections,
-            _canonical_groups(outcome),
-        )
-    ordered_paths = tuple(
-        sorted(
-            outcome.paths,
-            key=lambda path: canonical_bytes(
-                {
-                    "role": path.role.as_json(),
-                    "semantic_state": path.semantic_state.as_json(),
-                    "path_record_ids": tuple(
-                        record.record_id for record in path.path_records
-                    ),
-                    "raw_support_record_ids": tuple(
-                        record.record_id for record in path.raw_support
-                    ),
-                }
+            _role_resolutions(
+                outcome,
+                candidate_certificate_ids,
+                ordered_paths,
+                canonical_groups,
             ),
+            outcome.global_rejections,
+            canonical_groups,
         )
-    )
     try:
         certificates = tuple(_certificate(path, evidence) for path in ordered_paths)
-    except rfc8785.CanonicalizationError:
+    except (TypeError, ValueError, rfc8785.CanonicalizationError):
         malformed = _ValidationOutcome(
             (),
             outcome.role_rejections,
             (_rejection("malformed-support"),),
         )
+        malformed_groups = _canonical_groups(malformed)
         return _trusted_result(
             (),
-            _role_resolutions(malformed, (), ()),
+            _role_resolutions(malformed, (), (), malformed_groups),
             malformed.global_rejections,
-            _canonical_groups(malformed),
+            malformed_groups,
         )
     return _trusted_result(
         certificates,
-        _role_resolutions(outcome, certificates, ordered_paths),
+        _role_resolutions(
+            outcome,
+            tuple(certificate.record_id for certificate in certificates),
+            ordered_paths,
+            canonical_groups,
+        ),
         outcome.global_rejections,
-        _canonical_groups(outcome),
+        canonical_groups,
     )
