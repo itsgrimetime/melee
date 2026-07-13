@@ -222,6 +222,40 @@ def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
         data[0x278] = 0xC3
     elif mutation == "relocation_to_instruction_interior":
         struct.pack_into("<I", data, 0x480, 0x00401004)
+    elif mutation == "late_backward_target":
+        data[0x270:0x275] = bytes.fromhex("e9 8c ff ff ff")
+    elif mutation == "late_target_inside_owned_block":
+        data[0x270:0x275] = bytes.fromhex("e9 d1 ff ff ff")
+    elif mutation == "lea_is_not_data":
+        data[0x270:0x277] = bytes.fromhex("8d 05 68 10 40 00 c3")
+    elif mutation == "write_is_not_data":
+        data[0x270:0x276] = bytes.fromhex("a3 68 10 40 00 c3")
+    elif mutation == "control_operand_is_not_data":
+        data[0x270:0x277] = bytes.fromhex("ff 15 a0 20 40 00 c3")
+    elif mutation == "data_overlaps_instruction":
+        data[0x270:0x276] = bytes.fromhex("a1 60 10 40 00 c3")
+    elif mutation == "partial_relocation_pointer":
+        struct.pack_into("<H", data, 0x808, 0x1080)
+    elif mutation == "exec_relocation_immediate":
+        struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x300B, 0)
+    elif mutation == "exec_relocation_partial_field":
+        struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x300C, 0)
+    elif mutation == "transformed_initializer":
+        data[0x20A:0x219] = bytes.fromhex(
+            "b8 50 10 40 00 83 c0 00 a3 90 20 40 00 eb 07"
+        )
+    elif mutation == "cross_block_initializer_value":
+        data[0x20A:0x219] = bytes.fromhex(
+            "b8 50 10 40 00 eb 00 a3 90 20 40 00 90 90 90"
+        )
+    elif mutation == "far_call":
+        data[0x270:0x278] = bytes.fromhex(
+            "9a 60 10 40 00 1b 00 c3"
+        )
+    elif mutation == "far_jump":
+        data[0x270:0x277] = bytes.fromhex("ea 60 10 40 00 1b 00")
+    elif mutation == "padding_partitioned_by_data":
+        data[0x270:0x276] = bytes.fromhex("a1 68 10 40 00 c3")
     elif mutation is not None:
         raise ValueError(f"unknown synthetic CFG mutation: {mutation}")
 

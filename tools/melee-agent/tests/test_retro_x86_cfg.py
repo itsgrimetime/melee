@@ -5,6 +5,7 @@ from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
+from capstone import CS_ARCH_X86, CS_MODE_32, Cs
 
 REPO = Path(__file__).resolve().parents[3]
 TESTS = Path(__file__).resolve().parent
@@ -39,10 +40,12 @@ def load_cfg_image(tmp_path, mutation=None):
 
 
 def audit_anchor(image, address=0x00401070):
+    decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+    decoded = next(decoder.disasm(image.read(address, 15), address, count=1))
     return AuditAnchor(
         name="synthetic-audit-anchor",
         address=address,
-        instruction_bytes=image.read(address, 1),
+        instruction_bytes=bytes(decoded.bytes),
         evidence="synthetic-fixture",
     )
 
@@ -128,7 +131,7 @@ def test_seed_inventory_records_every_production_category_and_bytes(
     assert relocation.address == 0x00401060
     assert relocation.provenance_address == 0x00402080
     assert relocation.provenance_bytes == "60104000"
-    assert relocation.detail == "i386-relocation-type-3"
+    assert relocation.detail == "i386-relocation-type-3;width=4"
     initializer_rows = [
         row
         for row in cfg.seed_inventory.records
@@ -271,6 +274,245 @@ def test_relocation_targeting_instruction_interior_fails_closed(tmp_path):
     image = load_cfg_image(tmp_path, "relocation_to_instruction_interior")
     with pytest.raises(CfgRecoveryError, match="instruction interior"):
         recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "target", "predecessor"),
+    [
+        ("late_backward_target", 0x00401001, 0x00401000),
+        ("late_target_inside_owned_block", 0x00401046, 0x00401040),
+    ],
+)
+def test_late_target_split_retains_predecessor_fallthrough(
+    tmp_path, mutation, target, predecessor
+):
+    image = load_cfg_image(tmp_path, mutation)
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    assert any(block.start == target for block in cfg.blocks)
+    assert any(
+        edge.source == predecessor
+        and edge.target == target
+        and edge.kind == "fallthrough"
+        for edge in cfg.edges
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "forbidden_start"),
+    [
+        ("lea_is_not_data", 0x00401068),
+        ("write_is_not_data", 0x00401068),
+        ("control_operand_is_not_data", 0x004020A0),
+    ],
+)
+def test_only_semantic_memory_reads_produce_data_evidence(
+    tmp_path, mutation, forbidden_start
+):
+    image = load_cfg_image(tmp_path, mutation)
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    assert not any(
+        region.start <= forbidden_start < region.end
+        for region in cfg.data_regions
+    )
+
+
+def test_data_evidence_cannot_overlap_instruction_or_padding(tmp_path):
+    image = load_cfg_image(tmp_path, "data_overlaps_instruction")
+    with pytest.raises(CfgRecoveryError, match="ownership overlap"):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_partial_width_relocation_does_not_prove_executable_pointer(tmp_path):
+    image = load_cfg_image(tmp_path, "partial_relocation_pointer")
+    seeds = inventory(image)
+    assert not any(
+        row.category == "relocation-executable-pointer"
+        for row in seeds.records
+    )
+
+
+def test_executable_highlow_exact_immediate_field_seeds_with_provenance(
+    tmp_path,
+):
+    image = load_cfg_image(tmp_path, "exec_relocation_immediate")
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    relocation = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-executable-pointer"
+        and row.provenance_address == 0x0040100B
+    )
+    assert relocation.address == 0x00401050
+    assert relocation.provenance_bytes == "50104000"
+    assert "width=4" in relocation.detail
+    assert not any(
+        region.start < 0x0040100F and 0x0040100B < region.end
+        for region in cfg.data_regions
+    )
+
+
+def test_executable_relocation_crossing_operand_boundary_fails(tmp_path):
+    image = load_cfg_image(tmp_path, "exec_relocation_partial_field")
+    with pytest.raises(CfgRecoveryError, match="relocation.*boundary"):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "mutation", ["transformed_initializer", "cross_block_initializer_value"]
+)
+def test_executable_initializer_taint_never_silently_disappears(
+    tmp_path, mutation
+):
+    image = load_cfg_image(tmp_path, mutation)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_entry_export_and_anchor_bind_to_complete_first_instruction(
+    synthetic_cfg_image,
+):
+    cfg = recover_cfg(
+        synthetic_cfg_image,
+        inventory(synthetic_cfg_image),
+        generous_limits(synthetic_cfg_image),
+    )
+    export = next(
+        row for row in cfg.seed_inventory.records if row.category == "export"
+    )
+    assert export.provenance_bytes == "dd0580104000"
+
+    prefix_anchor = AuditAnchor(
+        name="prefix-anchor",
+        address=0x00401001,
+        instruction_bytes=synthetic_cfg_image.read(0x00401001, 1),
+        evidence="synthetic-fixture",
+    )
+    with pytest.raises(CfgRecoveryError, match="complete instruction"):
+        recover_cfg(
+            synthetic_cfg_image,
+            build_seed_inventory(synthetic_cfg_image, (prefix_anchor,)),
+            generous_limits(synthetic_cfg_image),
+        )
+
+
+@pytest.mark.parametrize(
+    "cap_name",
+    [
+        "max_instructions",
+        "max_blocks",
+        "max_edges",
+        "max_functions",
+        "max_finite_targets",
+        "max_finite_values",
+        "max_states_per_block",
+        "max_fixpoint_updates",
+    ],
+)
+def test_recover_cfg_enforces_every_task3_production_cap(
+    synthetic_cfg_image, cap_name
+):
+    limits = replace(generous_limits(synthetic_cfg_image), **{cap_name: 1})
+    with pytest.raises(AnalysisLimitError) as raised:
+        recover_cfg(synthetic_cfg_image, inventory(synthetic_cfg_image), limits)
+    assert raised.value.limit_name == cap_name
+    assert raised.value.configured == 1
+    assert raised.value.observed >= 1
+
+
+def test_high_water_marks_cover_all_caps_and_zero_only_deferred_dimensions(
+    synthetic_cfg_image,
+):
+    cfg = recover_cfg(
+        synthetic_cfg_image,
+        inventory(synthetic_cfg_image),
+        generous_limits(synthetic_cfg_image),
+    )
+    high_water = {
+        row.limit_name: row.observed for row in cfg.high_water_marks
+    }
+    assert set(high_water) == {
+        field.name for field in fields(AnalysisLimits)
+    }
+    assert high_water["max_finite_values"] > 0
+    assert high_water["max_states_per_block"] > 0
+    assert high_water["max_fixpoint_updates"] > 0
+    for deferred in (
+        "max_jump_tables",
+        "max_jump_table_entries",
+        "max_contexts_per_entry",
+        "max_scc_iterations",
+        "max_summary_iterations",
+    ):
+        assert high_water[deferred] == 0
+
+
+@pytest.mark.parametrize("mutation", ["far_call", "far_jump"])
+def test_far_control_transfer_is_unresolved_not_direct(tmp_path, mutation):
+    image = load_cfg_image(tmp_path, mutation)
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    assert not any(call.address == 0x00401070 for call in cfg.direct_calls)
+    assert not any(
+        edge.source == 0x00401070
+        and edge.kind in {
+            "direct-call",
+            "conditional-branch",
+            "unconditional-branch",
+        }
+        for edge in cfg.edges
+    )
+    assert any(
+        row.address == 0x00401070 and row.kind == "indirect-flow"
+        for row in cfg.ownership_diagnostics
+    )
+
+
+def test_decode_lookahead_is_bounded_by_executable_raw_tail(
+    synthetic_cfg_image,
+):
+    text = synthetic_cfg_image.sections[0]
+    tail_address = text.va + text.raw_size - 1
+    raw_tail = text.raw_offset + text.raw_size - 1
+    data = bytearray(synthetic_cfg_image.data)
+    data[raw_tail] = 0xC3
+    tail_section = replace(
+        text,
+        va=tail_address,
+        raw_offset=raw_tail,
+        raw_size=1,
+        virt_size=0x10,
+    )
+    tail_image = replace(
+        synthetic_cfg_image,
+        data=bytes(data),
+        entrypoint=tail_address,
+        sections=(tail_section, *synthetic_cfg_image.sections[1:]),
+        exports=(),
+        relocations=(),
+        executable_ranges=((tail_address, tail_address + 0x10),),
+    )
+    cfg = recover_cfg(tail_image, (tail_address,), generous_limits(tail_image))
+    assert [(row.address, row.size) for row in cfg.instructions] == [
+        (tail_address, 1)
+    ]
+
+
+def test_padding_gap_is_partitioned_around_proven_data(tmp_path):
+    image = load_cfg_image(tmp_path, "padding_partitioned_by_data")
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    assert any(
+        region.start == 0x00401068 and region.end == 0x0040106C
+        for region in cfg.data_regions
+    )
+    assert any(
+        region.start == 0x00401061 and region.end == 0x00401068
+        for region in cfg.padding_regions
+    )
+    assert any(
+        region.start == 0x0040106C and region.end == 0x00401070
+        for region in cfg.padding_regions
+    )
 
 
 def test_audit_anchor_requires_exact_instruction_byte_provenance(
