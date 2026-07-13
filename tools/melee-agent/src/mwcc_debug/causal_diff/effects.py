@@ -15,7 +15,11 @@ from .canonical import stable_id
 from .graph import FrontierGraph
 from .legacy_ownership import legacy_reachable_records
 from .models import ComparisonRecord, EvidenceNode
-from .owner_certificate import OwnerRoleKey, OwnerSemanticState
+from .owner_certificate import (
+    OwnerResolutionStatus,
+    OwnerRoleKey,
+    OwnerSemanticState,
+)
 from .store import canonical_record_bytes
 
 EffectDirection = Literal[
@@ -209,6 +213,77 @@ def _trusted_stored_certificate(
     return certificate
 
 
+def _sole_untainted_unique_certificate(
+    graph: FrontierGraph,
+    role: OwnerRoleKey,
+    record_id: str,
+) -> EvidenceNode | None:
+    result = graph.backend.owner_certificates
+    resolution = result.resolution_for(role)
+    certificate = _trusted_stored_certificate(graph, record_id)
+    if (
+        certificate is None
+        or result.global_rejections
+        or resolution.rejections
+        or resolution.status is not OwnerResolutionStatus.UNIQUE
+        or resolution.certificate_record_ids != (record_id,)
+        or _owner_role(certificate.attributes.get("role")) != role
+    ):
+        return None
+    return certificate
+
+
+def _certificate_covered_stack_roles(
+    graphs: tuple[FrontierGraph, FrontierGraph],
+    allocator_effects: tuple[AllocatorEffect, ...],
+    comparisons: tuple[ComparisonRecord, ...],
+) -> frozenset[str]:
+    graphs_by_compile = {str(graph.bundle.compile_id): graph for graph in graphs}
+    allocator_operands = {operand_key for effect in allocator_effects for operand_key in effect.operand_keys}
+    covered: set[str] = set()
+    for comparison in comparisons:
+        if (
+            comparison.relation_kind != "backend-owner-corresponds-to"
+            or comparison.provenance.parser != _OWNER_CORRESPONDENCE_PARSER
+            or comparison.left_record_id is None
+            or comparison.right_record_id is None
+            or frozenset(comparison.attributes) != {"role"}
+        ):
+            continue
+        role = _owner_role(comparison.attributes.get("role"))
+        left_graph = graphs_by_compile.get(comparison.left_compile_id)
+        right_graph = graphs_by_compile.get(comparison.right_compile_id)
+        if (
+            role is None
+            or role.operand_key not in allocator_operands
+            or left_graph is None
+            or right_graph is None
+            or not {
+                comparison.left_record_id,
+                comparison.right_record_id,
+            }.issubset(comparison.provenance.input_record_ids)
+        ):
+            continue
+        left = _sole_untainted_unique_certificate(
+            left_graph,
+            role,
+            comparison.left_record_id,
+        )
+        right = _sole_untainted_unique_certificate(
+            right_graph,
+            role,
+            comparison.right_record_id,
+        )
+        if (
+            left is not None
+            and right is not None
+            and left.compile_id == comparison.left_compile_id
+            and right.compile_id == comparison.right_compile_id
+        ):
+            covered.add(role.semantic_stack_role)
+    return frozenset(covered)
+
+
 def _certificate_stack_effects(
     alignment: AnchorAlignment,
     graphs: tuple[FrontierGraph, FrontierGraph],
@@ -395,6 +470,7 @@ def _stack_effects(
     alignment: AnchorAlignment,
     graphs: tuple[FrontierGraph, FrontierGraph],
     allocator_effects: tuple[AllocatorEffect, ...],
+    suppressed_role_keys: frozenset[str] = frozenset(),
 ) -> tuple[tuple[StackEffect, ...], tuple[EffectAbstention, ...]]:
     graphs_by_label = {_label(graph): graph for graph in graphs}
     roots_by_label: dict[str, set[str]] = {label: set() for label in graphs_by_label}
@@ -404,7 +480,10 @@ def _stack_effects(
     reachable = {label: _reachable_records(graphs_by_label[label], roots) for label, roots in roots_by_label.items()}
     first_label, second_label = sorted(graphs_by_label)
     first_graph, second_graph = graphs_by_label[first_label], graphs_by_label[second_label]
-    roles = sorted(set(first_graph.frame.expected_stack_roles) | set(second_graph.frame.expected_stack_roles))
+    roles = sorted(
+        (set(first_graph.frame.expected_stack_roles) | set(second_graph.frame.expected_stack_roles))
+        - suppressed_role_keys
+    )
     effects: list[StackEffect] = []
     abstentions: list[EffectAbstention] = []
     for role_key in roles:
@@ -552,10 +631,16 @@ def derive_effects(
     ordered = tuple(sorted(graph_pair, key=_label))
     comparison_records = tuple(comparisons)
     allocator_effects = _allocator_effects(alignment)
+    certificate_covered_roles = _certificate_covered_stack_roles(
+        ordered,
+        allocator_effects,
+        comparison_records,
+    )
     legacy_stack_effects, legacy_stack_abstentions = _stack_effects(
         alignment,
         ordered,
         allocator_effects,
+        suppressed_role_keys=certificate_covered_roles,
     )
     certificate_stack_effects, certificate_stack_abstentions = _certificate_stack_effects(
         alignment,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
@@ -35,6 +35,7 @@ from src.mwcc_debug.causal_diff.models import (
     EvidenceNode,
     Provenance,
 )
+from src.mwcc_debug.causal_diff.owner_certificate import OwnerCertificateResult
 from src.mwcc_debug.causal_diff.render import render_json, render_text
 from src.mwcc_debug.causal_diff.store import EvidenceQuery, InMemoryEvidenceStore
 from tests.owner_certificate_fixtures import (
@@ -591,6 +592,140 @@ def test_tied_allocator_certificate_pair_stops_only_at_source_binding_gate() -> 
     allocator_payload = only(payload["effects"]["allocator_effects"])
     assert allocator_payload["operand_key"] == "use:0+use:1"
     assert "operand_keys" not in allocator_payload
+
+
+def _certificate_stack_node(graph) -> EvidenceNode:
+    certificate = only(graph.backend.owner_certificates.certificate_nodes)
+    stack_id = certificate.attributes["stack_record_id"]
+    assert isinstance(stack_id, str)
+    stack = graph.store.get_node(stack_id)
+    assert stack is not None
+    assert stack.kind == "stack-object"
+    return stack
+
+
+def _with_parallel_frame_stack_candidates(graph_pair):
+    decorated = []
+    for graph in graph_pair:
+        certified_stack = _certificate_stack_node(graph)
+        start = certified_stack.attributes["offset"]
+        size = certified_stack.attributes["size"]
+        assert isinstance(start, int) and not isinstance(start, bool)
+        assert isinstance(size, int) and not isinstance(size, bool)
+        assert isinstance(certified_stack.role_key, str)
+        frame_stack = EvidenceNode.create(
+            compile_id=certified_stack.compile_id,
+            function=certified_stack.function,
+            kind="stack-object",
+            local_key=("realistic-frame-stack", certified_stack.record_id),
+            role_key=certified_stack.role_key,
+            producer_confidence=Confidence.OBSERVED,
+            adapter_confidence=Confidence.OBSERVED,
+            provenance=Provenance(
+                artifact_sha256="f" * 64,
+                parser="frame-reservations.v1",
+                raw_start=0,
+                raw_end=1,
+                derivation_rule="test-realistic-frame-stack",
+            ),
+            attributes={
+                "side": "current",
+                "start": start,
+                "end": start + size,
+                "size": size,
+                "symbol": certified_stack.role_key,
+            },
+        )
+        graph.store.add_nodes((frame_stack,))
+        decorated.append(
+            replace(
+                graph,
+                frame=replace(
+                    graph.frame,
+                    current_stack_nodes=MappingProxyType({certified_stack.role_key: frame_stack.record_id}),
+                ),
+            )
+        )
+    return tuple(decorated)
+
+
+def _with_certified_stack_frame_mapping(graph_pair):
+    decorated = []
+    for graph in graph_pair:
+        certified_stack = _certificate_stack_node(graph)
+        assert isinstance(certified_stack.role_key, str)
+        decorated.append(
+            replace(
+                graph,
+                frame=replace(
+                    graph.frame,
+                    current_stack_nodes=MappingProxyType({certified_stack.role_key: certified_stack.record_id}),
+                ),
+            )
+        )
+    return tuple(decorated)
+
+
+def test_certified_role_suppresses_parallel_legacy_stack_ambiguity() -> None:
+    graph_pair, alignment, comparisons = future_complete_pipeline_inputs()
+    graph_pair = _with_parallel_frame_stack_candidates(graph_pair)
+
+    effects = derive_effects(alignment, graph_pair, comparisons)
+    report = build_report(graph_pair, effects, comparisons)
+
+    stack = only(effects.stack_effects)
+    assert stack.owner_operand_key == "use:0"
+    assert effects.abstentions == ()
+    verdict = only(report.verdicts)
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+    assert report.missing_evidence == ("source-object-binding-missing",)
+
+
+def test_certified_role_suppresses_mapped_legacy_effect_and_extra_verdict() -> None:
+    graph_pair, alignment, comparisons = future_complete_pipeline_inputs()
+    graph_pair = _with_certified_stack_frame_mapping(graph_pair)
+
+    effects = derive_effects(alignment, graph_pair, comparisons)
+    report = build_report(graph_pair, effects, comparisons)
+
+    stack = only(effects.stack_effects)
+    assert stack.owner_operand_key == "use:0"
+    assert len(effects.pairs) == 1
+    verdict = only(report.verdicts)
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+    assert not any(item.status is VerdictStatus.NO_CAUSAL_DIFFERENCE for item in report.verdicts)
+
+
+def test_invalid_certificate_result_leaves_legacy_stack_behavior_unchanged() -> None:
+    graph_pair, alignment, comparisons = future_complete_pipeline_inputs()
+    graph_pair = _with_certified_stack_frame_mapping(graph_pair)
+    left, right = graph_pair
+    trusted = left.backend.owner_certificates
+    untrusted = OwnerCertificateResult(
+        trusted.certificate_nodes,
+        trusted.role_resolutions,
+        trusted.global_rejections,
+    )
+    graph_pair = (
+        replace(
+            left,
+            backend=replace(left.backend, owner_certificates=untrusted),
+        ),
+        right,
+    )
+
+    legacy_baseline = derive_effects(alignment, graph_pair, ())
+    with_invalid_certificate_records = derive_effects(
+        alignment,
+        graph_pair,
+        comparisons,
+    )
+
+    assert with_invalid_certificate_records == legacy_baseline
+    stack = only(with_invalid_certificate_records.stack_effects)
+    assert stack.owner_operand_key is None
 
 
 @pytest.mark.parametrize(
