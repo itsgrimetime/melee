@@ -4390,8 +4390,13 @@ def _select_order_augmented_window_order_leads(
         source = _solve_source_attribution_dict(
             _select_order_source_attr_for_ig(source_attributions, target_ig)
         )
-        if not source or source.get("kind") not in {"implicit-temp", "fpr-temp"}:
+        if not source or source.get("kind") not in {
+            "implicit-temp",
+            "fpr-temp",
+            "global-field-address",
+        }:
             continue
+        is_global_field_address = source.get("kind") == "global-field-address"
         leads.append({
             "target_ig": target_ig,
             "observed_reg": None,
@@ -4403,10 +4408,18 @@ def _select_order_augmented_window_order_leads(
             "already_target": False,
             "checkdiff_target_reg": target_reg,
             "checkdiff_target_reg_name": f"{reg_prefix}{target_reg}",
-            "source": "force-phys-attributed-temp",
+            "source": (
+                "force-phys-global-field-address"
+                if is_global_field_address else "force-phys-attributed-temp"
+            ),
             "reason": (
-                "force-phys target has synthetic source attribution but was "
-                "absent from window-order fallback leads"
+                "force-phys target has global field address attribution but "
+                "was absent from window-order fallback leads"
+                if is_global_field_address
+                else (
+                    "force-phys target has synthetic source attribution but was "
+                    "absent from window-order fallback leads"
+                )
             ),
         })
         present_targets.add(target_ig)

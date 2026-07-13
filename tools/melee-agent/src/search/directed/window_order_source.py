@@ -2431,6 +2431,8 @@ def _is_copy_coalesce_source_field_load(source_attr: Any) -> bool:
 
 def _field_load_like_source_kind(source_attr: Any) -> str | None:
     source_kind = _attr_value(source_attr, "kind")
+    if source_kind == "global-field-address":
+        return "global-field-address"
     if source_kind == "field-load":
         return "field-load"
     if _is_copy_coalesce_source_field_load(source_attr):
@@ -2441,6 +2443,8 @@ def _field_load_like_source_kind(source_attr: Any) -> str | None:
 
 
 def _field_load_probe_provenance_kind(source_attr: Any) -> str:
+    if _attr_value(source_attr, "kind") == "global-field-address":
+        return "global-field-address-source-order"
     if _attr_value(source_attr, "kind") == "copy/coalesce-source":
         return "copy-coalesce-source-field-load-source-order"
     if _pcode_field_load_like(source_attr):
@@ -6983,6 +6987,15 @@ def plan_window_order_source_probes(
                 source_attr = resolved_source_attr
                 source_kind = _attr_value(source_attr, "kind")
                 owner_target_ig = copy_product_source.source_ig
+        if (
+            source_kind == "global-field-address"
+            and _attr_value(source_attr, "owner_status") != "source-owned"
+        ):
+            diag["terminal_blocker"] = (
+                "global-field-address-source-owner-unresolved"
+            )
+            lead_diagnostics.append(diag)
+            continue
         if source_kind == "implicit-temp":
             synthetic = _implicit_add_owner(
                 source_text,

@@ -8,6 +8,7 @@ import subprocess
 import textwrap
 import types
 
+import pytest
 from typer.testing import CliRunner
 
 from src.cli import app
@@ -399,6 +400,300 @@ def test_explain_virtuals_resolves_chained_pcode_loads_to_typed_source() -> None
     assert copied_global.expression == "gGlobalObj"
     assert copied_global.type == "HSD_GObj*"
     assert copied_global.copy_chain == (88, 106)
+
+
+def _global_field_address_pcdump(
+    function: str,
+    *,
+    high_reloc: str = "HA",
+    high_symbol: str = "gAssetBlob",
+    low_symbol: str = "gAssetBlob",
+    offset: str = "180",
+    after_coloring: bool = False,
+) -> str:
+    before = textwrap.dedent(f"""\
+        Starting function {function}
+        BEFORE REGISTER COLORING
+        {function}
+        B0: Succ={{}} Pred={{}} Labels={{}}
+            lis r82,{high_reloc}({high_symbol})
+            addi r83,r82,LO({low_symbol})
+            mr r38,r83
+            addi r79,r38,{offset}
+    """)
+    if not after_coloring:
+        return before
+    return before + textwrap.dedent(f"""\
+        AFTER REGISTER COLORING
+        {function}
+        B0: Succ={{}} Pred={{}} Labels={{}}
+            lis r3,HA({low_symbol})
+            addi r3,r3,LO({low_symbol})
+            mr r4,r3
+            addi r29,r4,{offset}
+    """)
+
+
+def _global_field_address_source(
+    function: str,
+    alias_rhs: str,
+    *,
+    second_alias_rhs: str | None = None,
+    reference_field: bool = True,
+) -> str:
+    declarations = textwrap.dedent("""\
+        typedef unsigned char u8;
+        typedef struct AssetBlobHead {
+            /* 0x00 */ u8 prefix[0x1C];
+        } AssetBlobHead;
+        typedef struct AssetBlobView {
+            /* 0x00 */ u8 prefix[0xB4];
+            /* 0xB4 */ void* FaceB[4];
+        } AssetBlobView;
+        typedef struct WrongBlobView {
+            /* 0x00 */ u8 prefix[0xB4];
+            /* 0xB4 */ void* FaceB[4];
+        } WrongBlobView;
+        AssetBlobHead gAssetBlob;
+        AssetBlobHead gAssetBlobA;
+        AssetBlobHead gAssetBlobB;
+    """)
+    lines = [f"AssetBlobView* assets = {alias_rhs};"]
+    if second_alias_rhs is not None:
+        lines.append(f"AssetBlobView* other_assets = {second_alias_rhs};")
+    if reference_field:
+        lines.extend([
+            "void** joint_data;",
+            "joint_data = assets->FaceB;",
+            "sink(joint_data);",
+        ])
+    else:
+        lines.append("consume(assets);")
+    body = "\n".join(f"    {line}" for line in lines)
+    return declarations + f"\nvoid {function}(void)\n{{\n{body}\n}}\n"
+
+
+def _explain_global_field_address(
+    function: str,
+    alias_rhs: str,
+    *,
+    second_alias_rhs: str | None = None,
+    reference_field: bool = True,
+    after_coloring: bool = False,
+    **pcdump_options,
+):
+    report = explain_virtuals(
+        _global_field_address_pcdump(
+            function,
+            after_coloring=after_coloring,
+            **pcdump_options,
+        ),
+        function,
+        virtuals=[79],
+        source_text=_global_field_address_source(
+            function,
+            alias_rhs,
+            second_alias_rhs=second_alias_rhs,
+            reference_field=reference_field,
+        ),
+        source_file="sample.c",
+    )
+    source_info = report.virtuals[0].source
+    assert source_info is not None
+    return source_info
+
+
+def _assert_unresolved_global_field(
+    source_info,
+    *,
+    confidence: str,
+    expression: str = "addi r79,r38,180",
+    field_offset: int | None = 0xB4,
+) -> None:
+    assert source_info.kind == "global-field-address"
+    assert source_info.confidence == confidence
+    assert source_info.expression == expression
+    assert source_info.field_offset == field_offset
+    assert source_info.field_name is None
+    assert source_info.owner_status == "source-owner-unresolved"
+
+
+def test_explain_virtuals_resolves_global_address_field_through_copy_chain() -> None:
+    source_info = _explain_global_field_address(
+        "fn_80000015",
+        "(AssetBlobView*) &gAssetBlob",
+        after_coloring=True,
+    )
+
+    assert source_info.kind == "global-field-address"
+    assert source_info.confidence == "source-expression"
+    assert source_info.name == "gAssetBlob"
+    assert source_info.expression == "assets->FaceB"
+    assert source_info.base_virtual == 38
+    assert source_info.base_var == "assets"
+    assert source_info.base_confidence == "global-address-copy-chain"
+    assert source_info.field_offset == 0xB4
+    assert source_info.field_name == "FaceB"
+    assert source_info.owner_status == "source-owned"
+
+
+def test_explain_virtuals_abstains_on_ambiguous_global_address_field_alias() -> None:
+    source_info = _explain_global_field_address(
+        "fn_80000016",
+        "(AssetBlobView*) &gAssetBlob",
+        second_alias_rhs="(AssetBlobView*) &gAssetBlob",
+    )
+
+    _assert_unresolved_global_field(
+        source_info,
+        confidence="global-field-address-unresolved",
+    )
+    assert source_info.name == "gAssetBlob"
+    assert source_info.base_virtual == 38
+
+
+def test_explain_virtuals_keeps_global_field_identity_without_source_span() -> None:
+    source_info = _explain_global_field_address(
+        "fn_80000017",
+        "(AssetBlobView*) &gAssetBlob",
+        reference_field=False,
+    )
+
+    assert source_info.kind == "global-field-address"
+    assert source_info.confidence == "global-field-address-source-span-unresolved"
+    assert source_info.expression == "assets->FaceB"
+    assert source_info.base_var == "assets"
+    assert source_info.field_name == "FaceB"
+    assert source_info.source_line is None
+    assert source_info.owner_status == "source-owner-unresolved"
+
+
+def test_explain_virtuals_preserves_mismatched_ha_lo_global_evidence() -> None:
+    source_info = _explain_global_field_address(
+        "fn_80000018",
+        "(AssetBlobView*) &gAssetBlobB",
+        high_symbol="gAssetBlobA",
+        low_symbol="gAssetBlobB",
+    )
+
+    _assert_unresolved_global_field(
+        source_info,
+        confidence="global-address-provenance-conflict",
+    )
+    assert source_info.name == "gAssetBlobB"
+
+
+def test_explain_virtuals_preserves_global_conflict_over_copy_binding(
+    monkeypatch,
+) -> None:
+    binding = types.SimpleNamespace(
+        virtual=38,
+        var_name="assets",
+        kind="local",
+        confidence="best-guess",
+        type_str="AssetBlobView*",
+        decl_line=17,
+    )
+    monkeypatch.setattr(
+        virtual_attribution,
+        "list_bindings",
+        lambda source, function_name, pre_pass: [binding],
+    )
+
+    source_info = _explain_global_field_address(
+        "fn_80000018_bound_copy",
+        "(AssetBlobView*) &gAssetBlobB",
+        high_symbol="gAssetBlobA",
+        low_symbol="gAssetBlobB",
+    )
+
+    _assert_unresolved_global_field(
+        source_info,
+        confidence="global-address-provenance-conflict",
+    )
+
+
+@pytest.mark.parametrize("high_reloc", ["HI", "H"])
+def test_explain_virtuals_rejects_non_ha_global_address_high_relocation(
+    high_reloc: str,
+) -> None:
+    source_info = _explain_global_field_address(
+        f"fn_80000019_{high_reloc.lower()}",
+        "(AssetBlobView*) &gAssetBlob",
+        high_reloc=high_reloc,
+    )
+
+    _assert_unresolved_global_field(
+        source_info,
+        confidence="global-address-provenance-conflict",
+    )
+
+
+def test_explain_virtuals_rejects_mismatched_global_address_alias_cast() -> None:
+    source_info = _explain_global_field_address(
+        "fn_80000020",
+        "(WrongBlobView*) &gAssetBlob",
+    )
+
+    _assert_unresolved_global_field(
+        source_info,
+        confidence="global-field-address-unresolved",
+    )
+
+
+@pytest.mark.parametrize(
+    "alias_rhs",
+    [
+        "(AssetBlobView**) &gAssetBlob",
+        "&gAssetBlob",
+    ],
+    ids=["wrong-pointer-depth", "uncast-incompatible-global"],
+)
+def test_explain_virtuals_rejects_incompatible_global_address_view(
+    alias_rhs: str,
+) -> None:
+    source_info = _explain_global_field_address(
+        "fn_80000020_incompatible_view",
+        alias_rhs,
+    )
+
+    _assert_unresolved_global_field(
+        source_info,
+        confidence="global-field-address-unresolved",
+    )
+
+
+@pytest.mark.parametrize("offset", ["65536", "0xFFFF"])
+def test_explain_virtuals_rejects_invalid_signed_addi_field_offset(
+    offset: str,
+) -> None:
+    source_info = _explain_global_field_address(
+        "fn_80000021",
+        "(AssetBlobView*) &gAssetBlob",
+        offset=offset,
+    )
+
+    _assert_unresolved_global_field(
+        source_info,
+        confidence="global-field-address-invalid-immediate",
+        expression=f"addi r79,r38,{offset}",
+        field_offset=None,
+    )
+
+
+def test_explain_virtuals_preserves_negative_signed_addi_field_offset() -> None:
+    source_info = _explain_global_field_address(
+        "fn_80000022",
+        "(AssetBlobView*) &gAssetBlob",
+        offset="-1",
+    )
+
+    _assert_unresolved_global_field(
+        source_info,
+        confidence="global-field-address-unresolved",
+        expression="addi r79,r38,-1",
+        field_offset=-1,
+    )
 
 
 def test_source_from_load_rejects_low_confidence_scalar_field_base() -> None:

@@ -16,8 +16,11 @@ from .source_field_attribution import (
     SourceFieldContext,
     build_source_field_context,
     infer_global_field_source,
+    parse_symbolic_global_address_high_expression,
+    parse_symbolic_global_address_low_expression,
     parse_symbolic_global_load_expression,
     source_for_field_offset,
+    source_for_global_address_field,
     source_for_global_symbol,
 )
 from .symbol_bridge import (
@@ -36,6 +39,10 @@ _COPY_RE = re.compile(r"^r(?P<dest>\d+)\s*,\s*r(?P<src>\d+)\b")
 _LOAD_ADDRESS_RE = re.compile(
     r"^[rf](?P<dest>\d+)\s*,\s*(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))"
     r"\s*\(\s*r(?P<base>\d+)\s*\)"
+)
+_ADDI_IMMEDIATE_RE = re.compile(
+    r"^r(?P<dest>\d+)\s*,\s*r(?P<base>\d+)\s*,\s*"
+    r"(?P<offset>[-+]?(?:0x[0-9A-Fa-f]+|\d+))\s*$"
 )
 
 _IMPLICIT_TEMP_OPS = {
@@ -604,6 +611,242 @@ def _source_from_symbolic_global_load(
     )
 
 
+def _global_address_type(type_name: str | None) -> str | None:
+    if not type_name:
+        return None
+    return f"{type_name}*"
+
+
+def _is_exact_global_address_source(source: SourceAttribution | None) -> bool:
+    return bool(
+        source is not None
+        and source.name
+        and source.confidence in {
+            "global-address",
+            "global-address-copy-chain",
+        }
+    )
+
+
+def _is_global_address_evidence_source(
+    source: SourceAttribution | None,
+) -> bool:
+    return bool(
+        source is not None
+        and source.name
+        and (
+            source.kind == "global-address"
+            or source.confidence in {
+                "global-address",
+                "global-address-copy-chain",
+                "global-address-provenance-conflict",
+                "global-address-unresolved-copy-chain",
+            }
+        )
+    )
+
+
+def _parse_signed_16bit_immediate(text: str) -> int | None:
+    token = text.strip()
+    if not token:
+        return None
+    try:
+        value = int(token, 0)
+    except ValueError:
+        return None
+    if value < -0x8000 or value > 0x7FFF:
+        return None
+    unsigned_hex = token[0] not in {"+", "-"} and token.lower().startswith("0x")
+    if unsigned_hex and value >= 0x8000:
+        return None
+    return value
+
+
+def _source_from_symbolic_global_address(
+    site: InstructionSite,
+    *,
+    field_context: SourceFieldContext | None,
+    source_file: str | None,
+    resolve_virtual,
+) -> SourceAttribution | None:
+    expression = f"{site.opcode} {site.operands}".strip()
+    high = parse_symbolic_global_address_high_expression(expression)
+    if high is not None and field_context is not None:
+        _dest_virtual, symbol = high
+        resolved = source_for_global_symbol(field_context, symbol)
+        if resolved is None:
+            return None
+        return SourceAttribution(
+            kind="global-address-high",
+            confidence="global-address-high",
+            name=symbol,
+            type=_global_address_type(resolved.type),
+            source_file=source_file,
+            source_line=resolved.source_line,
+            source_col=resolved.source_col,
+            expression=f"&{symbol}",
+            base_var=symbol,
+            first_def=site,
+            owner_status="compiler-generated/global-address",
+        )
+
+    low = parse_symbolic_global_address_low_expression(expression)
+    if low is None or field_context is None:
+        return None
+    _dest_virtual, base_virtual, symbol = low
+    base_source = resolve_virtual(base_virtual)
+    exact_pair = (
+        base_source is not None
+        and base_source.kind == "global-address-high"
+        and base_source.confidence == "global-address-high"
+        and base_source.name == symbol
+    )
+    resolved = source_for_global_symbol(field_context, symbol)
+    if not exact_pair:
+        return SourceAttribution(
+            kind="global-address",
+            confidence="global-address-provenance-conflict",
+            name=symbol,
+            type=(
+                _global_address_type(resolved.type)
+                if resolved is not None else None
+            ),
+            source_file=source_file,
+            source_line=None if resolved is None else resolved.source_line,
+            source_col=None if resolved is None else resolved.source_col,
+            expression=expression,
+            base_virtual=base_virtual,
+            base_var=symbol,
+            base_confidence=(
+                None if base_source is None else base_source.confidence
+            ),
+            first_def=site,
+            owner_status="source-owner-unresolved",
+        )
+    if resolved is None:
+        return None
+    return SourceAttribution(
+        kind="global-address",
+        confidence="global-address",
+        name=symbol,
+        type=_global_address_type(resolved.type),
+        source_file=source_file,
+        source_line=resolved.source_line,
+        source_col=resolved.source_col,
+        expression=f"&{symbol}",
+        base_virtual=base_virtual,
+        base_var=symbol,
+        base_confidence=base_source.confidence,
+        first_def=site,
+        owner_status="source-owned",
+    )
+
+
+def _unresolved_global_field_address(
+    site: InstructionSite,
+    *,
+    base_source: SourceAttribution,
+    base_virtual: int,
+    symbol: str,
+    source_file: str | None,
+    confidence: str,
+    field_offset: int | None = None,
+) -> SourceAttribution:
+    return SourceAttribution(
+        kind="global-field-address",
+        confidence=confidence,
+        name=symbol,
+        source_file=source_file,
+        expression=f"{site.opcode} {site.operands}".strip(),
+        base_virtual=base_virtual,
+        base_var=symbol,
+        base_confidence=base_source.confidence,
+        field_offset=field_offset,
+        first_def=site,
+        copy_chain=base_source.copy_chain,
+        owner_status="source-owner-unresolved",
+    )
+
+
+def _source_from_global_field_address(
+    site: InstructionSite,
+    *,
+    field_context: SourceFieldContext | None,
+    source_file: str | None,
+    resolve_virtual,
+) -> SourceAttribution | None:
+    if site.opcode.lower() != "addi" or field_context is None:
+        return None
+    match = _ADDI_IMMEDIATE_RE.match(site.operands)
+    if match is None:
+        return None
+    base_virtual = int(match.group("base"))
+    base_source = resolve_virtual(base_virtual)
+    if not _is_global_address_evidence_source(base_source):
+        return None
+    assert base_source is not None
+    symbol = base_source.name
+    assert symbol is not None
+    offset = _parse_signed_16bit_immediate(match.group("offset"))
+    if offset is None:
+        return _unresolved_global_field_address(
+            site,
+            base_source=base_source,
+            base_virtual=base_virtual,
+            symbol=symbol,
+            source_file=source_file,
+            confidence="global-field-address-invalid-immediate",
+        )
+    if not _is_exact_global_address_source(base_source):
+        return _unresolved_global_field_address(
+            site,
+            base_source=base_source,
+            base_virtual=base_virtual,
+            symbol=symbol,
+            source_file=source_file,
+            confidence="global-address-provenance-conflict",
+            field_offset=offset,
+        )
+    resolved = source_for_global_address_field(
+        field_context,
+        symbol=symbol,
+        offset=offset,
+    )
+    if resolved is None:
+        return _unresolved_global_field_address(
+            site,
+            base_source=base_source,
+            base_virtual=base_virtual,
+            symbol=symbol,
+            source_file=source_file,
+            confidence="global-field-address-unresolved",
+            field_offset=offset,
+        )
+    source_owned = resolved.source_line is not None
+    return SourceAttribution(
+        kind="global-field-address",
+        confidence=(
+            resolved.confidence
+            if source_owned
+            else "global-field-address-source-span-unresolved"
+        ),
+        name=symbol,
+        type=resolved.type,
+        source_file=source_file,
+        source_line=resolved.source_line,
+        source_col=resolved.source_col,
+        expression=resolved.expression,
+        base_virtual=base_virtual,
+        base_var=resolved.base_var,
+        base_confidence=base_source.confidence,
+        field_offset=offset,
+        field_name=resolved.field_name,
+        first_def=site,
+        copy_chain=base_source.copy_chain,
+        owner_status="source-owned" if source_owned else "source-owner-unresolved",
+    )
+
+
 def _copy_source_from_virtual(
     site: InstructionSite,
     *,
@@ -620,9 +863,18 @@ def _copy_source_from_virtual(
     if source.confidence == "pcode-first-def":
         return None
     expression = source.expression or source.name
+    global_address_copy = _is_exact_global_address_source(source)
+    global_address_evidence_copy = _is_global_address_evidence_source(source)
     return SourceAttribution(
         kind="copy/coalesce-source",
-        confidence="copy-chain-source-span",
+        confidence=(
+            "global-address-copy-chain"
+            if global_address_copy
+            else (
+                "global-address-unresolved-copy-chain"
+                if global_address_evidence_copy else "copy-chain-source-span"
+            )
+        ),
         name=source.name,
         type=source.type,
         source_file=source.source_file or source_file,
@@ -968,6 +1220,31 @@ def _source_for_virtual(
                 )
             except Exception:
                 binding = None
+    if reg_kind == "r" and first_def is not None:
+        global_address_source = _source_from_symbolic_global_address(
+            first_def,
+            field_context=field_context,
+            source_file=source_file,
+            resolve_virtual=resolve_gpr,
+        )
+        if global_address_source is not None:
+            return finish(global_address_source)
+        if first_def.opcode.lower() == "mr":
+            global_copy_source = _copy_source_from_virtual(
+                first_def,
+                resolve_virtual=resolve_gpr,
+                source_file=source_file,
+            )
+            if _is_global_address_evidence_source(global_copy_source):
+                return finish(global_copy_source)
+        global_field_source = _source_from_global_field_address(
+            first_def,
+            field_context=field_context,
+            source_file=source_file,
+            resolve_virtual=resolve_gpr,
+        )
+        if global_field_source is not None:
+            return finish(global_field_source)
     if (
         binding is not None
         and getattr(binding, "confidence", None) != "low-confidence"

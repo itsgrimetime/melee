@@ -106,6 +106,22 @@ _STACK_ADDI_RE = re.compile(
     r"(?P<name>[A-Za-z_][A-Za-z_0-9]*)\b",
     re.IGNORECASE,
 )
+_GLOBAL_ADDRESS_HIGH_RE = re.compile(
+    r"\b(?:lis\s+r(?P<lis_dest>\d+)\s*,|"
+    r"addis\s+r(?P<addis_dest>\d+)\s*,\s*r0\s*,)\s*"
+    r"HA\s*\(\s*(?P<symbol>[A-Za-z_][A-Za-z_0-9]*)\s*\)",
+    re.IGNORECASE,
+)
+_GLOBAL_ADDRESS_LOW_RE = re.compile(
+    r"\baddi\s+r(?P<dest>\d+)\s*,\s*r(?P<base>\d+)\s*,\s*"
+    r"(?:LO|L)\s*\(\s*(?P<symbol>[A-Za-z_][A-Za-z_0-9]*)\s*\)",
+    re.IGNORECASE,
+)
+_LEADING_VALUE_CAST_RE = re.compile(
+    r"^\(\s*(?P<type>(?:const\s+|volatile\s+)?(?:struct\s+)?"
+    r"[A-Za-z_][A-Za-z_0-9]*(?:\s+[A-Za-z_][A-Za-z_0-9]*)*"
+    r"(?:\s*\*+)?)\s*\)\s*"
+)
 _ARRAY_TYPE_RE = re.compile(r"^(?P<element>.+?)\s*\[(?P<size>[^\]]*)\]\s*$")
 _FUNCTION_DEF_RE = re.compile(
     r"(?m)^[ \t]*"
@@ -206,6 +222,33 @@ def parse_symbolic_global_load_expression(
     return int(match.group("dest")), match.group("symbol")
 
 
+def parse_symbolic_global_address_high_expression(
+    expression: str | None,
+) -> tuple[int, str] | None:
+    if not isinstance(expression, str):
+        return None
+    match = _GLOBAL_ADDRESS_HIGH_RE.search(expression)
+    if match is None:
+        return None
+    dest = match.group("lis_dest") or match.group("addis_dest")
+    return int(dest), match.group("symbol")
+
+
+def parse_symbolic_global_address_low_expression(
+    expression: str | None,
+) -> tuple[int, int, str] | None:
+    if not isinstance(expression, str):
+        return None
+    match = _GLOBAL_ADDRESS_LOW_RE.search(expression)
+    if match is None:
+        return None
+    return (
+        int(match.group("dest")),
+        int(match.group("base")),
+        match.group("symbol"),
+    )
+
+
 def source_for_global_symbol(
     context: SourceFieldContext,
     symbol: str,
@@ -222,6 +265,78 @@ def source_for_global_symbol(
         base_var=symbol,
         confidence="global-symbol",
     )
+
+
+def source_for_global_address_field(
+    context: SourceFieldContext,
+    *,
+    symbol: str,
+    offset: int,
+) -> ResolvedSourceExpression | None:
+    """Resolve an exact ``(Type*) &global`` alias at a constant offset.
+
+    Global blobs often have a small declared head type and a larger local view.
+    Only a unique visible casted alias is strong enough to select that view.
+    """
+    if symbol not in context.global_types:
+        return None
+    expected_rhs = _compact_expr(f"&{symbol}")
+    candidates: dict[
+        tuple[str, str | None, str | None, str], ResolvedSourceExpression
+    ] = {}
+    function_text = _function_text(context)
+    for pattern in (_DECL_ASSIGNMENT_RE, _ASSIGNMENT_RE):
+        for match in pattern.finditer(function_text):
+            raw_rhs = match.group("rhs")
+            cast_match = _LEADING_VALUE_CAST_RE.match(raw_rhs)
+            cast_type = (
+                _clean_type(cast_match.group("type"))
+                if cast_match is not None else None
+            )
+            rhs = _strip_leading_value_cast(raw_rhs)
+            if _compact_expr(rhs) != expected_rhs:
+                continue
+            name = (
+                match.group("name")
+                if "name" in match.groupdict()
+                else match.group("lhs")
+            )
+            type_name = (
+                _clean_type(match.group("type"))
+                if "type" in match.groupdict()
+                else context.local_types.get(name)
+            )
+            if type_name is None:
+                continue
+            address_type = _clean_type(f"{context.global_types[symbol]}*")
+            if cast_type is not None:
+                if not _compatible_base_type(type_name, cast_type):
+                    continue
+            elif not _compatible_base_type(type_name, address_type):
+                continue
+            view_type = cast_type or type_name
+            field_path = _field_path_for_type(context, view_type, offset)
+            if field_path is None:
+                continue
+            resolved = _resolved_field_path_expression(
+                context,
+                base=name,
+                base_type=view_type,
+                field_path=field_path,
+                prefer_source_match=True,
+            )
+            if resolved is None:
+                continue
+            key = (
+                resolved.expression,
+                resolved.type,
+                resolved.field_name,
+                view_type,
+            )
+            candidates[key] = resolved
+    if len(candidates) != 1:
+        return None
+    return next(iter(candidates.values()))
 
 
 def parse_stack_array_base_expression(
@@ -880,11 +995,20 @@ def _compatible_base_type(left: str | None, right: str | None) -> bool:
         return True
     if not right:
         return False
-    if _clean_type(left) == _clean_type(right):
-        return True
-    left_struct = _struct_name_from_type(left)
-    right_struct = _struct_name_from_type(right)
-    return left_struct is not None and left_struct == right_struct
+    return _type_shape(left) == _type_shape(right)
+
+
+def _type_shape(type_name: str) -> tuple[str, int] | None:
+    text = _clean_type(type_name)
+    pointer_depth = text.count("*")
+    text = text.replace("*", " ")
+    text = re.sub(r"\b(?:const|volatile|register|static)\b", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if text.startswith("struct "):
+        text = text[len("struct "):].strip()
+    if not _SIMPLE_IDENT_RE.match(text):
+        return None
+    return text, pointer_depth
 
 
 def _body_returns_field_path(

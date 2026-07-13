@@ -8595,6 +8595,28 @@ def test_augmented_window_order_leads_prioritize_explicit_targets() -> None:
     assert leads[0]["source"] == "force-phys-attributed-temp"
 
 
+def test_augmented_window_order_leads_include_global_field_address_target() -> None:
+    leads = debug_cli._select_order_augmented_window_order_leads(
+        [],
+        force_phys={79: 29},
+        class_id=0,
+        source_attributions={
+            79: {
+                "kind": "global-field-address",
+                "confidence": "global-field-address-source-span-unresolved",
+                "expression": "assets->FaceB",
+                "field_offset": 0xB4,
+                "field_name": "FaceB",
+                "owner_status": "source-owner-unresolved",
+            },
+        },
+    )
+
+    assert [lead["target_ig"] for lead in leads] == [79]
+    assert leads[0]["source"] == "force-phys-global-field-address"
+    assert leads[0]["order_move"] == ["before", "force-phys"]
+
+
 def test_select_order_search_reserves_multiple_promoted_temp_lead_slots(
     tmp_path: pathlib.Path,
     monkeypatch,

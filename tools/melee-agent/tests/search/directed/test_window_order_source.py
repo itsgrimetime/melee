@@ -2481,6 +2481,130 @@ def test_window_order_plan_attributes_unattributed_implicit_add_to_indexed_byte_
     assert synthetic_probe["materialized_ranked_indexed_byte_source_candidates"]
 
 
+@pytest.mark.parametrize(
+    "source, field_name, confidence",
+    [
+        (
+            textwrap.dedent("""\
+                typedef unsigned char u8;
+                typedef struct Diagram { void* jobjs[9]; } Diagram;
+                void fn(Diagram* data)
+                {
+                    use(data->jobjs[8]);
+                }
+            """),
+            None,
+            "global-address-provenance-conflict",
+        ),
+        (
+            textwrap.dedent("""\
+                typedef unsigned char u8;
+                typedef struct AssetBlobView {
+                    /* 0x00 */ u8 prefix[0xB4];
+                    /* 0xB4 */ void* FaceB[4];
+                } AssetBlobView;
+                typedef struct Diagram { void* jobjs[9]; } Diagram;
+                void fn(Diagram* data)
+                {
+                    AssetBlobView* assets = (AssetBlobView*) &gAssetBlob;
+                    AssetBlobView* other_assets = (AssetBlobView*) &gAssetBlob;
+                    use(assets->FaceB, other_assets->FaceB, data->jobjs[8]);
+                }
+            """),
+            "FaceB",
+            "global-field-address-unresolved",
+        ),
+    ],
+)
+def test_window_order_plan_blocks_indexed_fallback_for_unresolved_global_field_address(
+    source: str,
+    field_name: str | None,
+    confidence: str,
+) -> None:
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 79, "order_move": ["before", 64]}],
+        source_attributions={
+            79: {
+                "kind": "global-field-address",
+                "confidence": confidence,
+                "name": "gAssetBlob",
+                "expression": "addi r79,r38,180",
+                "base_virtual": 38,
+                "base_var": "gAssetBlob",
+                "base_confidence": "global-address-copy-chain",
+                "field_offset": 0xB4,
+                "field_name": field_name,
+                "owner_status": "source-owner-unresolved",
+            },
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    assert diag["status"] == "blocked"
+    assert diag["terminal_blocker"] == (
+        "global-field-address-source-owner-unresolved"
+    )
+    assert "ranked_indexed_byte_source_candidates" not in diag
+
+
+def test_window_order_plan_materializes_resolved_global_field_address_owner() -> None:
+    source = textwrap.dedent("""\
+        typedef unsigned char u8;
+        typedef struct AssetBlobView {
+            /* 0x00 */ u8 prefix[0xB4];
+            /* 0xB4 */ void* FaceB[4];
+        } AssetBlobView;
+        typedef struct Diagram { void* jobjs[9]; } Diagram;
+        void fn(Diagram* data)
+        {
+            AssetBlobView* assets = (AssetBlobView*) &gAssetBlob;
+            void** joint_data;
+            joint_data = assets->FaceB;
+            use(joint_data, data->jobjs[8]);
+        }
+    """)
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 79, "order_move": ["before", 64]}],
+        source_attributions={
+            79: {
+                "kind": "global-field-address",
+                "confidence": "source-expression",
+                "name": "gAssetBlob",
+                "type": "void*",
+                "expression": "assets->FaceB",
+                "base_virtual": 38,
+                "base_var": "assets",
+                "base_confidence": "global-address-copy-chain",
+                "field_offset": 0xB4,
+                "field_name": "FaceB",
+                "owner_status": "source-owned",
+            },
+        },
+        max_probes=4,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert plan.probes
+    diag = plan.lead_diagnostics[0]
+    assert diag["status"] == "materialized"
+    assert "ranked_indexed_byte_source_candidates" not in diag
+    assert diag["source_attribution_kind"] == "global-field-address"
+    assert any(
+        probe.provenance["kind"] == "global-field-address-source-order"
+        for probe in plan.probes
+    )
+    assert all("jobjs[window_order_" not in probe.source_text for probe in plan.probes)
+
+
 def test_window_order_plan_attributes_rlwinm_byte_temp_to_indexed_byte_candidates(
 ) -> None:
     source = textwrap.dedent("""\
