@@ -86,7 +86,7 @@ def _request() -> NamespaceReviewRequest:
         class_id=0,
         register_class="GPR",
         namespace_schema="delta-minimize-role-namespace.v5",
-        parser_schema_hash=("opcode.v1+color.v5+objobjects.v2+stack-homes.v1+delta-extractor.v2+candidate-evidence.v3"),
+        parser_schema_hash=("opcode.v1+color.v5+objobjects.v2+stack-homes.v1+delta-extractor.v2+candidate-evidence.v4"),
         target_sha256=SHA["target"],
         delta_manifest_sha256=SHA["delta"],
         left_source_sha256=SHA["canonical_source"],
@@ -375,7 +375,7 @@ def test_models_reject_unsupported_schema_and_epoch_directly() -> None:
 @pytest.mark.parametrize(
     "parser_epoch",
     [
-        "opcode.v1+color.v4+objobjects.v2+stack-homes.v1+delta-extractor.v2+candidate-evidence.v3",
+        "opcode.v1+color.v4+objobjects.v2+stack-homes.v1+delta-extractor.v2+candidate-evidence.v4",
         "opcode.v1+color.v5+objobjects.v2+stack-homes.v1+delta-extractor.v2",
     ],
 )

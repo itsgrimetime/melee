@@ -138,12 +138,21 @@ def test_capture_candidate_caches_fresh_evidence_and_reuses_it(tmp_path: Path) -
     assert json.loads(json.dumps(first.to_dict())) == first.to_dict()
 
 
-def test_token_equivalent_candidates_reuse_complete_inspection(
+def test_token_equivalent_candidates_do_not_reuse_complete_inspection(
     tmp_path: Path,
 ) -> None:
-    first = _candidate(tmp_path, candidate_id="first")
+    first_path = tmp_path / "first.c"
+    first_text = "int candidate(void) {\n    return __LINE__;\n}\n"
+    first_path.write_text(first_text, encoding="utf-8")
+    first = MaterializedCandidate(
+        "first",
+        3,
+        hashlib.sha256(first_text.encode()).hexdigest(),
+        first_path,
+        (),
+    )
     second_path = tmp_path / "second.c"
-    second_text = "int  candidate ( void )  {\n    return 0 ;\n}\n"
+    second_text = "\nint  candidate ( void )  {\n    return __LINE__ ;\n}\n"
     second_path.write_text(second_text, encoding="utf-8")
     second = MaterializedCandidate(
         "second",
@@ -174,7 +183,7 @@ def test_token_equivalent_candidates_reuse_complete_inspection(
     second_evidence = capture_candidate(second, _config(tmp_path), backends=backends, store=store)
 
     assert second_evidence.inspect_text == first_evidence.inspect_text
-    assert calls == {"inspect": 1}
+    assert calls == {"inspect": 2}
 
 
 def test_default_inspector_uses_evaluation_repo_root(monkeypatch, tmp_path: Path) -> None:

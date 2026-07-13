@@ -12,8 +12,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from src.common.tree_sitter_c import get_parser
-
 from ...mwcc_debug import role_descriptor, role_reanchor
 from ...mwcc_debug.colorgraph_profile import build_colorgraph_profile, colorgraph_distance
 from ...mwcc_debug.diff_capture import DiffInput, read_inspect_input_if_available
@@ -368,30 +366,6 @@ def _validate_cached_artifacts(
     return True
 
 
-def _source_token_digest(path: Path) -> str | None:
-    try:
-        source = path.read_bytes()
-        root = get_parser().parse(source).root_node
-    except (OSError, ValueError):
-        return None
-    if root.has_error:
-        return None
-    digest = hashlib.sha256()
-    stack = [root]
-    while stack:
-        node = stack.pop()
-        if node.child_count:
-            stack.extend(reversed(node.children))
-            continue
-        if node.type == "comment":
-            continue
-        digest.update(node.type.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(source[node.start_byte : node.end_byte])
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
 def _complete_objobject_text(text: str, function: str) -> bool:
     try:
         return parse_objobject_profile(text, function).complete
@@ -407,12 +381,9 @@ def _inspection_cache(store: Any) -> dict[str, str]:
     return cache
 
 
-def _remember_inspection(store: Any, source: Path, function: str, text: str | None) -> None:
-    if text is None or not _complete_objobject_text(text, function):
-        return
-    digest = _source_token_digest(source)
-    if digest is not None:
-        _inspection_cache(store).setdefault(digest, text)
+def _remember_inspection(store: Any, source_hash: str, function: str, text: str | None) -> None:
+    if text is not None and _complete_objobject_text(text, function):
+        _inspection_cache(store).setdefault(source_hash, text)
 
 
 def _invoke_inspector(
@@ -497,7 +468,7 @@ def capture_candidate(
             source_hash,
             include_objobjects=config.include_objobjects,
         ):
-            _remember_inspection(store, source_path, config.function, evidence.inspect_text)
+            _remember_inspection(store, source_hash, config.function, evidence.inspect_text)
             return evidence
         store.invalidate_evidence(key)
     if store.evidence_path(key).exists():
@@ -568,12 +539,8 @@ def capture_candidate(
         pcdump_hash=pcdump_hash,
     )
     if evidence.viable and config.include_objobjects:
-        token_digest = _source_token_digest(source_path)
-        cached_inspection = _inspection_cache(store).get(token_digest) if token_digest is not None else None
-        if cached_inspection is not None and _complete_objobject_text(
-            cached_inspection,
-            config.function,
-        ):
+        cached_inspection = _inspection_cache(store).get(source_hash)
+        if cached_inspection is not None and _complete_objobject_text(cached_inspection, config.function):
             evidence = RawCandidateEvidence(
                 **{
                     **evidence.to_dict(),
@@ -615,7 +582,7 @@ def capture_candidate(
         evidence = RawCandidateEvidence(
             **{**evidence.to_dict(), "blockers": evidence.blockers, "inspect_text": inspect_text}
         )
-        _remember_inspection(store, source_path, config.function, inspect_text)
+        _remember_inspection(store, source_hash, config.function, inspect_text)
 
     store.write_evidence(key, evidence.to_dict())
     return evidence
