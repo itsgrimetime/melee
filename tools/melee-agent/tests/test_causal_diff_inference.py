@@ -17,6 +17,7 @@ from src.mwcc_debug.causal_diff.effects import (
     DerivedEffects,
     EffectPair,
     StackEffect,
+    derive_effects,
 )
 from src.mwcc_debug.causal_diff.inference import (
     AnalysisStatus,
@@ -37,6 +38,7 @@ from src.mwcc_debug.causal_diff.models import (
 from src.mwcc_debug.causal_diff.render import render_json, render_text
 from src.mwcc_debug.causal_diff.store import EvidenceQuery, InMemoryEvidenceStore
 from tests.owner_certificate_fixtures import (
+    future_complete_pipeline_inputs,
     only,
     run_synthetic_future_complete_pair,
     run_with_forged_certificate_node_but_no_trusted_result,
@@ -484,6 +486,45 @@ def _case(
 
 def proof_complete_unique() -> InferenceCase:
     return _case()
+
+
+def _forge_owner_relation_parser(
+    comparisons: tuple[ComparisonRecord, ...],
+    relation_kind: str,
+) -> tuple[ComparisonRecord, ...]:
+    return tuple(
+        replace(
+            comparison,
+            provenance=replace(
+                comparison.provenance,
+                parser="forged-owner-proof.v1",
+            ),
+        )
+        if comparison.relation_kind == relation_kind
+        else comparison
+        for comparison in comparisons
+    )
+
+
+@pytest.mark.parametrize(
+    "relation_kind",
+    (
+        "backend-owner-corresponds-to",
+        "backend-owner-state-changed",
+    ),
+)
+def test_certificate_inference_rejects_forged_relation_parser(relation_kind: str) -> None:
+    graph_pair, owner_alignment, comparisons = future_complete_pipeline_inputs()
+    valid_effects = derive_effects(owner_alignment, graph_pair, comparisons)
+    forged = _forge_owner_relation_parser(comparisons, relation_kind)
+
+    report = build_report(graph_pair, valid_effects, forged)
+    verdict = only(report.verdicts)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert "gate-6-unique-owner-chain" in verdict.failed_gates
+    assert "gate-8-evidence-integrity" in verdict.failed_gates
+    assert verdict.proof_paths == ()
 
 
 def test_unique_changed_certificate_pair_stops_only_at_source_binding_gate() -> None:

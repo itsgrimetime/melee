@@ -12,6 +12,7 @@ from src.mwcc_debug.causal_diff.asm_adapter import CheckdiffEvidence
 from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import BundleInputError, ValidatedBundle
 from src.mwcc_debug.causal_diff.differ import diff_frontiers
+from src.mwcc_debug.causal_diff.effects import derive_effects
 from src.mwcc_debug.causal_diff.frame_adapter import adapt_frame
 from src.mwcc_debug.causal_diff.graph import build_frontier_graph
 from src.mwcc_debug.causal_diff.models import (
@@ -32,6 +33,7 @@ from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 from tests.owner_certificate_fixtures import (
     ROLE,
     STATE,
+    future_complete_pipeline_inputs,
     graphs,
     only,
     owner_comparison,
@@ -1434,6 +1436,41 @@ def test_equal_certificate_semantics_emit_no_owner_delta() -> None:
         (owner_comparison(states=(STATE, STATE)),),
     )
     assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+
+
+def _forge_owner_relation_parser(
+    comparisons: tuple[ComparisonRecord, ...],
+    relation_kind: str,
+) -> tuple[ComparisonRecord, ...]:
+    return tuple(
+        replace(
+            comparison,
+            provenance=replace(
+                comparison.provenance,
+                parser="forged-owner-proof.v1",
+            ),
+        )
+        if comparison.relation_kind == relation_kind
+        else comparison
+        for comparison in comparisons
+    )
+
+
+@pytest.mark.parametrize(
+    "relation_kind",
+    (
+        "backend-owner-corresponds-to",
+        "backend-owner-state-changed",
+    ),
+)
+def test_certificate_stack_effect_rejects_forged_relation_parser(relation_kind: str) -> None:
+    graph_pair, owner_alignment, comparisons = future_complete_pipeline_inputs()
+    forged = _forge_owner_relation_parser(comparisons, relation_kind)
+
+    effects = derive_effects(owner_alignment, graph_pair, forged)
+
+    assert not any(effect.owner_operand_key is not None for effect in effects.stack_effects)
+    assert not any(pair.stack.owner_operand_key is not None for pair in effects.pairs)
 
 
 def test_certificate_delta_drives_owner_mediated_stack_effect() -> None:

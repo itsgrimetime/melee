@@ -25,6 +25,8 @@ EffectDirection = Literal[
     "both-mismatch-same",
     "both-mismatch-different",
 ]
+_OWNER_CORRESPONDENCE_PARSER = "causal-backend-owner-alignment.v2"
+_OWNER_DELTA_PARSER = "causal-frontier-differ.v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +217,7 @@ def _certificate_stack_effects(
         comparison
         for comparison in comparisons
         if comparison.relation_kind == "backend-owner-corresponds-to"
+        and comparison.provenance.parser == _OWNER_CORRESPONDENCE_PARSER
         and comparison.left_record_id is not None
         and comparison.right_record_id is not None
     )
@@ -223,6 +226,7 @@ def _certificate_stack_effects(
     for delta in sorted(comparisons, key=lambda item: item.record_id):
         if (
             delta.relation_kind != "backend-owner-state-changed"
+            or delta.provenance.parser != _OWNER_DELTA_PARSER
             or delta.left_record_id is None
             or delta.right_record_id is None
         ):

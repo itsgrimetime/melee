@@ -939,12 +939,20 @@ def _future_complete_alignment(
     )
 
 
-def _future_complete_inputs():
+def future_complete_pipeline_inputs() -> tuple[
+    tuple[FrontierGraph, FrontierGraph],
+    AnchorAlignment,
+    tuple[ComparisonRecord, ...],
+]:
     graph_pair = _future_complete_graph_pair()
     owner_alignment = _future_complete_alignment(graph_pair)
     comparisons = build_role_comparisons(owner_alignment, graph_pair)
     deltas = diff_frontiers(graph_pair, comparisons)
-    all_comparisons = comparisons + deltas
+    return graph_pair, owner_alignment, comparisons + deltas
+
+
+def _future_complete_inputs():
+    graph_pair, owner_alignment, all_comparisons = future_complete_pipeline_inputs()
     effects = derive_effects(owner_alignment, graph_pair, all_comparisons)
     return graph_pair, effects, all_comparisons
 

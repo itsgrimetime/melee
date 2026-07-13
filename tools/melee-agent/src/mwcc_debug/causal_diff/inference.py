@@ -28,6 +28,8 @@ _DELTA_RELATIONS = frozenset(
 )
 _PROOF_CONFIDENCES = frozenset({Confidence.OBSERVED, Confidence.DERIVED_UNIQUE})
 _DIAGNOSTIC_ONLY_PARSERS = frozenset({"mwcc-debug-pcdump.v1"})
+_OWNER_CORRESPONDENCE_PARSER = "causal-backend-owner-alignment.v2"
+_OWNER_DELTA_PARSER = "causal-frontier-differ.v1"
 _BACKEND_OWNER_AMBIGUOUS = "backend-owner-ambiguous"
 
 _GATE_1 = "gate-1-anchor-identity"
@@ -771,6 +773,7 @@ def _infer_certificate_pair(
         comparison
         for comparison in records
         if comparison.relation_kind == "backend-owner-corresponds-to"
+        and comparison.provenance.parser == _OWNER_CORRESPONDENCE_PARSER
         and comparison.left_record_id is not None
         and comparison.right_record_id is not None
         and frozenset((comparison.left_record_id, comparison.right_record_id)) == owner_ids
@@ -782,6 +785,7 @@ def _infer_certificate_pair(
         comparison
         for comparison in records
         if comparison.relation_kind == "backend-owner-state-changed"
+        and comparison.provenance.parser == _OWNER_DELTA_PARSER
         and comparison.left_record_id is not None
         and comparison.right_record_id is not None
         and frozenset((comparison.left_record_id, comparison.right_record_id)) == owner_ids
@@ -789,7 +793,8 @@ def _infer_certificate_pair(
         and delta_role.operand_key == expected_operand
         and delta_role.operand_key == pair.allocator.operand_key
     )
-    role = _owner_role(correspondences[0].attributes.get("role")) if len(correspondences) == 1 else None
+    relations_complete = len(correspondences) == 1 and len(deltas) == 1
+    role = _owner_role(correspondences[0].attributes.get("role")) if relations_complete else None
     stored_certificates = tuple(
         sorted(
             (certificate for record_id in owner_ids if (certificate := query.get_node(record_id)) is not None),
@@ -813,7 +818,7 @@ def _infer_certificate_pair(
         or (states[0].stack_offset, states[0].stack_size) == (states[1].stack_offset, states[1].stack_size)
     ):
         failed.append(_GATE_5)
-    if len(correspondences) != 1 or len(deltas) != 1 or len(owner_ids) != 2:
+    if not relations_complete or len(owner_ids) != 2:
         failed.append(_GATE_6)
 
     trusted_certificates: list[EvidenceNode] = []
@@ -830,11 +835,12 @@ def _infer_certificate_pair(
 
     proof_paths = (
         tuple(path for certificate in proof_certificates if (path := _certificate_proof_path(certificate)) is not None)
-        if len(proof_certificates) == 2
+        if relations_complete and len(proof_certificates) == 2
         else ()
     )
     integrity_failure = (
-        len(stored_certificates) != 2
+        not relations_complete
+        or len(stored_certificates) != 2
         or any(certificate.kind != "owner-proof-certificate" for certificate in stored_certificates)
         or (len(proof_certificates) == 2 and len(proof_paths) != 2)
         or role is None
