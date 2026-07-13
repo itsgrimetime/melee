@@ -26,6 +26,7 @@ from tools.mwcc_retro.backend_pcode_lineage import (
     validate_pcode_lineage,
 )
 from tools.mwcc_retro.backend_trace_assembler import verify_backend_trace_v2
+from tools.mwcc_retro.struct_map import INSTRUMENTATION_PROOF_SCHEMA
 
 from .bundles import BundleInputError, ValidatedBundle
 from .models import Confidence, EvidenceEdge, EvidenceNode, Provenance
@@ -94,22 +95,21 @@ class ObjectBindingEvidence:
         raise TypeError("ObjectBindingEvidence is runtime-final")
 
 
-def _trusted_object_binding_evidence(
-    nodes: tuple[EvidenceNode, ...],
-    edges: tuple[EvidenceEdge, ...],
-    capabilities: frozenset[str],
-    capture_run_id: str,
-    instrumentation_identity: OwnerInstrumentationIdentity | None,
-) -> ObjectBindingEvidence:
-    evidence = ObjectBindingEvidence(
-        nodes,
-        edges,
-        capabilities,
-        capture_run_id,
-        instrumentation_identity,
+def _is_lower_sha256(value: object) -> bool:
+    return type(value) is str and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _valid_owner_instrumentation_identity(value: object) -> bool:
+    return (
+        type(value) is tuple
+        and len(value) == 4
+        and _is_lower_sha256(value[0])
+        and type(value[1]) is str
+        and bool(value[1])
+        and _is_lower_sha256(value[2])
+        and type(value[3]) is str
+        and value[3] == INSTRUMENTATION_PROOF_SCHEMA
     )
-    object.__setattr__(evidence, "_adapter_token", _OBJECT_BINDING_ADAPTER_TOKEN)
-    return evidence
 
 
 def _confidence(value: object, default: Confidence) -> Confidence:
@@ -254,7 +254,7 @@ def emit_object_binding_evidence(
 
     capabilities = frozenset(source.capabilities)
     if not capabilities:
-        return _trusted_object_binding_evidence(
+        return ObjectBindingEvidence(
             (),
             (),
             capabilities,
@@ -901,7 +901,7 @@ def emit_object_binding_evidence(
                 )
             )
 
-    normalized = _trusted_object_binding_evidence(
+    normalized = ObjectBindingEvidence(
         _deduplicate_nodes(nodes),
         _deduplicate_edges(edges),
         capabilities,
@@ -966,8 +966,10 @@ def adapt_object_bindings(bundle: ValidatedBundle) -> ObjectBindingEvidence:
             proof.compiler_executable_sha256,
             proof.proof_id,
             proof.sha256,
-            str(installed_table["instrumentation_proof_schema"]),
+            installed_table["instrumentation_proof_schema"],
         )
+        if not _valid_owner_instrumentation_identity(instrumentation_identity):
+            raise ValueError("verified instrumentation identity is malformed")
     except BundleInputError:
         raise
     except (
@@ -985,7 +987,7 @@ def adapt_object_bindings(bundle: ValidatedBundle) -> ObjectBindingEvidence:
     artifact_sha256 = next(
         reference.sha256 for reference in bundle.manifest.artifacts.backend if reference.format == "backend-trace.v2"
     )
-    return emit_object_binding_evidence(
+    evidence = emit_object_binding_evidence(
         ObjectBindingAdapterInput(
             compile_id=bundle.compile_id,
             function=bundle.manifest.function,
@@ -998,6 +1000,8 @@ def adapt_object_bindings(bundle: ValidatedBundle) -> ObjectBindingEvidence:
             instrumentation_identity=instrumentation_identity,
         )
     )
+    object.__setattr__(evidence, "_adapter_token", _OBJECT_BINDING_ADAPTER_TOKEN)
+    return evidence
 
 
 __all__ = [

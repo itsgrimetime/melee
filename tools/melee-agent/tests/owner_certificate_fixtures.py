@@ -41,7 +41,6 @@ from src.mwcc_debug.causal_diff.models import (
 from src.mwcc_debug.causal_diff.object_binding_adapter import (
     ObjectBindingAdapterInput,
     ObjectBindingEvidence,
-    emit_object_binding_evidence,
 )
 from src.mwcc_debug.causal_diff.owner_certificate import (
     OwnerCertificateResult,
@@ -51,6 +50,7 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
 )
 from src.mwcc_debug.causal_diff.source_adapter import SourceEvidence
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
+from tests.owner_certificate_test_authority import emit_trusted_object_binding_evidence_for_test
 from tests.test_causal_diff_alignment import (
     _edge as _fixture_edge,
 )
@@ -83,7 +83,7 @@ def only(items: Iterable[_T]) -> _T:
 
 
 def complete_evidence(**adapter_overrides: object) -> ObjectBindingEvidence:
-    return emit_object_binding_evidence(_adapter_input(**adapter_overrides))
+    return emit_trusted_object_binding_evidence_for_test(_adapter_input(**adapter_overrides))
 
 
 def validated_current_v2_bundle(
@@ -378,7 +378,7 @@ def _evidence_from_paths(
         pcode_result=pcode_validation,
         instrumentation_identity=instrumentation_identity,
     )
-    return emit_object_binding_evidence(source)
+    return emit_trusted_object_binding_evidence_for_test(source)
 
 
 def evidence_with_two_mutation_outputs(
@@ -466,7 +466,7 @@ def evidence_with_certificate_and_role_rejection(
 
 def evidence_without_instrumentation_identity() -> ObjectBindingEvidence:
     source = replace(_adapter_input(), instrumentation_identity=None)
-    return emit_object_binding_evidence(source)
+    return emit_trusted_object_binding_evidence_for_test(source)
 
 
 def ambiguous_evidence(*, permuted: bool = False) -> ObjectBindingEvidence:
@@ -543,7 +543,7 @@ def evidence_with_allocator_origin_conflict() -> ObjectBindingEvidence:
         normalized=MappingProxyType(normalized),
     )
     source = replace(_adapter_input(), object_validation=object_validation)
-    return emit_object_binding_evidence(source)
+    return emit_trusted_object_binding_evidence_for_test(source)
 
 
 def disconnected_evidence() -> ObjectBindingEvidence:
@@ -599,7 +599,7 @@ def evidence_with_object_generation_conflict() -> ObjectBindingEvidence:
         normalized=MappingProxyType(normalized),
     )
     source = replace(_adapter_input(), object_validation=object_validation)
-    return emit_object_binding_evidence(source)
+    return emit_trusted_object_binding_evidence_for_test(source)
 
 
 def support(evidence: ObjectBindingEvidence, support_kind: str) -> EvidenceNode:

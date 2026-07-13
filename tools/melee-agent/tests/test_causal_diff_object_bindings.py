@@ -55,6 +55,7 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
     build_owner_certificates,
 )
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
+from tests.owner_certificate_test_authority import emit_trusted_object_binding_evidence_for_test
 from tests.test_causal_diff_alignment import _edge, _graph, _node, _only
 from tests.test_retro_backend_trace_assembler import (
     _trusted_table,
@@ -666,7 +667,7 @@ def _graph_with_v2_owner_evidence(*, certificates: bool, physical_register: int 
     from src.mwcc_debug.causal_diff.owner_certificate import build_owner_certificates
 
     graph = _graph("direct", missing_use=True)
-    evidence = emit_object_binding_evidence(
+    evidence = emit_trusted_object_binding_evidence_for_test(
         _adapter_input(
             compile_id=graph.bundle.compile_id,
             function="fn_test",
@@ -1349,6 +1350,48 @@ def _adapter_input(
     )
 
 
+@pytest.mark.parametrize(
+    "identity",
+    (
+        ("a", "b", "c", "d"),
+        (
+            "1" * 64,
+            "invented-proof",
+            "2" * 64,
+            "mwcc-retro-lifetime-proof.v1",
+        ),
+    ),
+)
+def test_public_diagnostic_emitter_cannot_mint_owner_certificate_authority(
+    identity,
+) -> None:
+    baseline = _adapter_input()
+    source = replace(
+        baseline,
+        object_validation=ObjectBindingValidation(
+            baseline.object_validation.normalized,
+            baseline.object_validation.capabilities,
+            (),
+        ),
+        pcode_validation=PCodeLineageValidation(
+            baseline.pcode_validation.normalized,
+            baseline.pcode_validation.anchor_bindings,
+            baseline.pcode_validation.capabilities,
+            (),
+        ),
+        instrumentation_identity=identity,
+    )
+
+    evidence = emit_object_binding_evidence(source)
+    result = build_owner_certificates(evidence)
+
+    assert evidence.nodes
+    assert evidence.edges
+    assert evidence._adapter_token is None
+    assert result.certificate_nodes == ()
+    assert {item.reason for item in result.global_rejections} == {"untrusted-diagnostic-materialization"}
+
+
 def test_future_complete_emitter_builds_every_exact_same_run_edge() -> None:
     evidence = emit_object_binding_evidence(_adapter_input())
 
@@ -1362,7 +1405,8 @@ def test_future_complete_emitter_builds_every_exact_same_run_edge() -> None:
     } <= {edge.kind for edge in evidence.edges}
     assert all(edge.confidence is not Confidence.HEURISTIC for edge in evidence.edges)
     assert all(edge.provenance.parser == "mwcc-retro-backend-trace.v2" for edge in evidence.edges)
-    assert _certifies(evidence)
+    assert evidence._adapter_token is None
+    assert not _certifies(evidence)
 
 
 @pytest.mark.parametrize(
@@ -1495,15 +1539,13 @@ def test_phase1_empty_source_fields_never_emit_source_ownership() -> None:
 
 
 def test_certificate_builder_requires_one_connected_owner_path() -> None:
-    first = emit_object_binding_evidence(_adapter_input())
-    unrelated = emit_object_binding_evidence(_adapter_input(virtual=91))
-    disconnected = ObjectBindingEvidence(
-        tuple({node.record_id: node for node in (*first.nodes, *unrelated.nodes)}.values()),
-        tuple(edge for edge in first.edges if edge.kind != "object-materializes-virtual")
+    first = emit_trusted_object_binding_evidence_for_test(_adapter_input())
+    unrelated = emit_trusted_object_binding_evidence_for_test(_adapter_input(virtual=91))
+    disconnected = replace(
+        first,
+        nodes=tuple({node.record_id: node for node in (*first.nodes, *unrelated.nodes)}.values()),
+        edges=tuple(edge for edge in first.edges if edge.kind != "object-materializes-virtual")
         + tuple(edge for edge in unrelated.edges if edge.kind == "object-materializes-virtual"),
-        ALL_CAPABILITIES,
-        first.capture_run_id,
-        None,
     )
 
     assert not _certifies(disconnected)
@@ -1552,7 +1594,7 @@ def test_certificate_builder_requires_one_connected_owner_path() -> None:
 def test_poisoned_required_support_invalidates_dependent_owner_path(
     poison_support,
 ) -> None:
-    evidence = emit_object_binding_evidence(_adapter_input())
+    evidence = emit_trusted_object_binding_evidence_for_test(_adapter_input())
     support = next(
         node
         for node in evidence.nodes
@@ -1570,7 +1612,7 @@ def test_poisoned_required_support_invalidates_dependent_owner_path(
 
 
 def test_semantically_foreign_support_cannot_be_cited_as_owner_proof() -> None:
-    evidence = emit_object_binding_evidence(_adapter_input())
+    evidence = emit_trusted_object_binding_evidence_for_test(_adapter_input())
     support = next(
         node
         for node in evidence.nodes
@@ -1691,7 +1733,7 @@ def test_foreign_typed_support_semantics_invalidate_owner_proof(
     mutate,
 ) -> None:
     poisoned, dependents = _poison_typed_support(
-        emit_object_binding_evidence(_adapter_input()),
+        emit_trusted_object_binding_evidence_for_test(_adapter_input()),
         support_kind,
         mutate,
         support_filter=support_filter,
@@ -1702,7 +1744,7 @@ def test_foreign_typed_support_semantics_invalidate_owner_proof(
 
 
 def test_every_support_kind_has_closed_typed_semantics_and_valid_dependents() -> None:
-    evidence = emit_object_binding_evidence(_adapter_input())
+    evidence = emit_trusted_object_binding_evidence_for_test(_adapter_input())
     base = {"capture_run_id", "verified_capability", "support_kind"}
     expected_shapes = {
         "object-stage-snapshot": (
@@ -1799,7 +1841,7 @@ def test_every_support_kind_has_closed_typed_semantics_and_valid_dependents() ->
 
 def _two_parent_lineage_evidence() -> ObjectBindingEvidence:
     parents = ("ol-parent-a", "ol-parent-b")
-    return emit_object_binding_evidence(
+    return emit_trusted_object_binding_evidence_for_test(
         _adapter_input(
             pcode_result=_pcode_result(parent_lineage_ids=parents),
         )
@@ -1881,7 +1923,7 @@ def test_mutation_lineage_accepts_exact_canonical_parent_topology() -> None:
 
 
 def test_assigned_physical_is_grounded_by_validated_decode_and_allocator_origin() -> None:
-    evidence = emit_object_binding_evidence(_adapter_input(physical_register=21))
+    evidence = emit_trusted_object_binding_evidence_for_test(_adapter_input(physical_register=21))
     anchor = next(node for node in evidence.nodes if node.kind == "assembly-operand-anchor")
     virtual = next(node for node in evidence.nodes if node.kind == "retail-virtual-register")
     allocator = next(node for node in evidence.nodes if node.kind == "allocator-node")
@@ -1934,7 +1976,7 @@ def test_foreign_assigned_physical_invalidates_owner_proof(
     support_kind,
     attribute,
 ) -> None:
-    evidence = emit_object_binding_evidence(_adapter_input(physical_register=21))
+    evidence = emit_trusted_object_binding_evidence_for_test(_adapter_input(physical_register=21))
 
     def poison(record):
         if record.kind != record_kind or (
@@ -2026,7 +2068,7 @@ def _replace_evidence_record(
     ),
 )
 def test_certificate_builder_rejects_every_poisoned_exact_path_record(poison) -> None:
-    left = poison(emit_object_binding_evidence(_adapter_input()))
+    left = poison(emit_trusted_object_binding_evidence_for_test(_adapter_input()))
 
     assert not _certifies(left)
 
@@ -2262,6 +2304,7 @@ def test_genuine_current_verified_bundle_abstains_before_backend_ownership(
 ) -> None:
     evidence = adapt_object_bindings(_verified_bundle(tmp_path, monkeypatch))
 
+    assert evidence._adapter_token is not None
     assert evidence.capabilities == frozenset({"compiler-object-bindings", "pcode-to-code-range"})
     assert {
         "object-materializes-virtual",

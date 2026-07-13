@@ -16,6 +16,7 @@ from .models import Confidence, EvidenceEdge, EvidenceNode, Provenance
 from .object_binding_adapter import (
     _OBJECT_BINDING_ADAPTER_TOKEN,
     ObjectBindingEvidence,
+    _valid_owner_instrumentation_identity,
 )
 from .store import canonical_record_bytes
 
@@ -314,10 +315,6 @@ def _record_json(record: EvidenceNode | EvidenceEdge) -> dict[str, object]:
     else:
         payload["role_key"] = record.role_key
     return payload
-
-
-def _valid_instrumentation_identity(value: object) -> bool:
-    return isinstance(value, tuple) and len(value) == 4 and all(isinstance(item, str) and bool(item) for item in value)
 
 
 def _unique_records(
@@ -1278,7 +1275,7 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
         global_rejections.append(_rejection("malformed-support"))
     elif not _REQUIRED_CAPABILITIES <= evidence.capabilities:
         global_rejections.append(_rejection("missing-required-capability"))
-    if not _valid_instrumentation_identity(evidence.instrumentation_identity):
+    if not _valid_owner_instrumentation_identity(evidence.instrumentation_identity):
         global_rejections.append(_rejection("missing-instrumentation-identity"))
     all_records = (*evidence.nodes, *evidence.edges)
     scope_rejection = _validate_common_scope(evidence, all_records)

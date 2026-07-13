@@ -36,6 +36,12 @@ REMOVED_ADAPTER_HELPERS = {
     "derive_backend_frame_recommendation",
     "bilateral_source_object_records",
 }
+EXPECTED_ADAPTER_EXPORTS = [
+    "ObjectBindingAdapterInput",
+    "ObjectBindingEvidence",
+    "adapt_object_bindings",
+    "emit_object_binding_evidence",
+]
 
 
 def _imported_names(tree: ast.AST) -> frozenset[str]:
@@ -47,6 +53,25 @@ def _imported_names(tree: ast.AST) -> frozenset[str]:
 def _string_constants(tree: ast.AST) -> frozenset[str]:
     return frozenset(
         node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
+
+
+def _adapter_token_setters(tree: ast.AST) -> frozenset[str]:
+    return frozenset(
+        function.name
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "object"
+            and node.func.attr == "__setattr__"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "_adapter_token"
+            for node in ast.walk(function)
+        )
     )
 
 
@@ -70,3 +95,16 @@ def test_legacy_owner_helpers_categorically_reject_v2_records() -> None:
 def test_diagnostic_adapter_exports_no_owner_proof_helpers() -> None:
     assert REMOVED_ADAPTER_HELPERS.isdisjoint(object_binding_adapter.__all__)
     assert not any(hasattr(object_binding_adapter, name) for name in REMOVED_ADAPTER_HELPERS)
+
+
+def test_only_verified_bundle_adapter_sets_owner_authority_token() -> None:
+    tree = ast.parse((CAUSAL_DIFF / "object_binding_adapter.py").read_text())
+
+    assert _adapter_token_setters(tree) == {"adapt_object_bindings"}
+    assert object_binding_adapter.__all__ == EXPECTED_ADAPTER_EXPORTS
+    assert "_OBJECT_BINDING_ADAPTER_TOKEN" not in object_binding_adapter.__all__
+    assert "emit_trusted_object_binding_evidence_for_test" not in object_binding_adapter.__all__
+    assert not hasattr(
+        object_binding_adapter,
+        "emit_trusted_object_binding_evidence_for_test",
+    )

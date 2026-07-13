@@ -14,7 +14,6 @@ from src.mwcc_debug.causal_diff.models import (
 )
 from src.mwcc_debug.causal_diff.object_binding_adapter import (
     ObjectBindingEvidence,
-    emit_object_binding_evidence,
 )
 from src.mwcc_debug.causal_diff.owner_certificate import (
     OwnerCertificateResult,
@@ -51,7 +50,7 @@ from tests.owner_certificate_fixtures import (
     second_role,
     support,
 )
-from tests.test_causal_diff_object_bindings import ALL_CAPABILITIES, _adapter_input, _object_result
+from tests.test_causal_diff_object_bindings import ALL_CAPABILITIES, _object_result
 
 ROLE = OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals")
 STATE = OwnerSemanticState(21, 0x44, 4)
@@ -69,7 +68,7 @@ def test_synthetic_future_complete_pair_reaches_only_gate_9():
 
 
 def test_complete_path_builds_one_content_addressed_certificate():
-    evidence = emit_object_binding_evidence(_adapter_input())
+    evidence = complete_evidence()
     result = build_owner_certificates(evidence)
     resolution = result.resolution_for(ROLE)
 
@@ -312,6 +311,19 @@ def test_replaced_object_binding_evidence_loses_adapter_trust():
         pytest.param(("one", "two", "", "four"), id="empty-member"),
         pytest.param(("one", "two", 3, "four"), id="non-string-member"),
         pytest.param(("one", "two", object(), "four"), id="unsupported-canonical-value"),
+        pytest.param(("a", "b", "c", "d"), id="arbitrary-four-strings"),
+        pytest.param(
+            ("A" * 64, "proof-test", "2" * 64, "mwcc-retro-lifetime-proof.v1"),
+            id="uppercase-compiler-digest",
+        ),
+        pytest.param(
+            ("1" * 64, "proof-test", "short", "mwcc-retro-lifetime-proof.v1"),
+            id="short-proof-digest",
+        ),
+        pytest.param(
+            ("1" * 64, "proof-test", "2" * 64, "mwcc-retro-lifetime-proof.v2"),
+            id="wrong-proof-schema",
+        ),
     ],
 )
 def test_invalid_instrumentation_identity_is_controlled_rejection(identity):
@@ -456,7 +468,7 @@ def test_disconnected_path_without_a_compatible_role_is_global_incomplete():
 
 
 def test_missing_required_capability_is_global_and_fail_closed():
-    evidence = emit_object_binding_evidence(_adapter_input(capabilities=ALL_CAPABILITIES - {"object-to-frame"}))
+    evidence = complete_evidence(capabilities=ALL_CAPABILITIES - {"object-to-frame"})
     result = build_owner_certificates(evidence)
 
     assert result.certificate_nodes == ()
