@@ -77,6 +77,37 @@ def test_complete_path_builds_one_content_addressed_certificate():
     )
 
 
+def test_trusted_result_retains_exact_certificate_cited_source_nodes():
+    evidence = evidence_with_role_statuses()
+    result = build_owner_certificates(evidence)
+    resolution = result.resolution_for(first_role())
+    certificate = result.certificate(resolution.certificate_record_ids[0])
+    assert certificate is not None
+
+    for attribute in ("pcode_record_id", "virtual_record_id", "allocator_record_id"):
+        support_id = certificate.attributes[attribute]
+        expected = next(node for node in evidence.nodes if node.record_id == support_id)
+        assert result.certificate_support_node(certificate.record_id, support_id) is expected
+
+    uncited = next(node for node in evidence.nodes if node.record_id not in certificate.provenance.input_record_ids)
+    assert result.certificate_support_node(certificate.record_id, uncited.record_id) is None
+    assert result.certificate_support_node("not-a-certificate", certificate.attributes["allocator_record_id"]) is None
+
+
+def test_direct_certificate_result_construction_has_no_support_authority():
+    trusted = build_owner_certificates(complete_evidence())
+    certificate = trusted.certificate_nodes[0]
+    support_id = certificate.attributes["allocator_record_id"]
+    direct = OwnerCertificateResult(
+        trusted.certificate_nodes,
+        trusted.role_resolutions,
+        trusted.global_rejections,
+    )
+
+    assert direct.is_trusted is False
+    assert direct.certificate_support_node(certificate.record_id, support_id) is None
+
+
 @pytest.mark.parametrize(
     "role",
     [
@@ -173,6 +204,10 @@ def test_certificate_round_trips_through_store_as_ordinary_evidence_node(
     forged_result = OwnerCertificateResult((reloaded,), (), ())
     assert forged_result.is_trusted is False
     assert forged_result.certificate(certificate.record_id) is None
+    support_id = certificate.attributes["allocator_record_id"]
+    expected_support = next(node for node in backend.object_bindings.nodes if node.record_id == support_id)
+    assert rebuilt.certificate_support_node(certificate.record_id, support_id) == expected_support
+    assert forged_result.certificate_support_node(certificate.record_id, support_id) is None
 
 
 def test_certificate_result_subclass_cannot_override_trust():
@@ -232,6 +267,8 @@ def test_replaced_certificate_results_lose_trust():
         assert cloned.is_trusted is False
         assert cloned.certificate(certificate.record_id) is None
         assert cloned.certificate(forged.record_id) is None
+        support_id = certificate.attributes["allocator_record_id"]
+        assert cloned.certificate_support_node(certificate.record_id, support_id) is None
 
 
 def test_replaced_object_binding_evidence_loses_adapter_trust():

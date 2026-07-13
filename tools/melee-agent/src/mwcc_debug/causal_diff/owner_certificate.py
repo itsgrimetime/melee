@@ -17,6 +17,7 @@ from .object_binding_adapter import (
     _OBJECT_BINDING_ADAPTER_TOKEN,
     ObjectBindingEvidence,
 )
+from .store import canonical_record_bytes
 
 _TRUST_TOKEN = object()
 _RUNTIME_ONLY_ATTRIBUTE_KEYS = frozenset(
@@ -168,12 +169,20 @@ class _CanonicalAlternativeGroup:
 
 
 @dataclass(frozen=True, slots=True)
+class _CertificateSupportBinding:
+    certificate_record_id: str
+    node: EvidenceNode
+    canonical_content: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class OwnerCertificateResult:
     certificate_nodes: tuple[EvidenceNode, ...]
     role_resolutions: tuple[OwnerRoleResolution, ...]
     global_rejections: tuple[OwnerCertificateRejection, ...]
     _token: object | None = field(default=None, init=False, repr=False, compare=False)
-    _canonical_groups: tuple[_CanonicalAlternativeGroup, ...] = field(
+    _canonical_groups: tuple[_CanonicalAlternativeGroup, ...] = field(default=(), init=False, repr=False, compare=False)
+    _certificate_support_bindings: tuple[_CertificateSupportBinding, ...] = field(
         default=(), init=False, repr=False, compare=False
     )
 
@@ -185,6 +194,28 @@ class OwnerCertificateResult:
         if not _result_is_trusted(self):
             return None
         return next((node for node in self.certificate_nodes if node.record_id == record_id), None)
+
+    def certificate_support_node(
+        self,
+        certificate_record_id: str,
+        support_record_id: str,
+    ) -> EvidenceNode | None:
+        if not _result_is_trusted(self):
+            return None
+        certificate = self.certificate(certificate_record_id)
+        if certificate is None or support_record_id not in certificate.provenance.input_record_ids:
+            return None
+        matches = tuple(
+            binding
+            for binding in self._certificate_support_bindings
+            if binding.certificate_record_id == certificate_record_id and binding.node.record_id == support_record_id
+        )
+        if len(matches) != 1:
+            return None
+        binding = matches[0]
+        if canonical_record_bytes(binding.node) != binding.canonical_content:
+            return None
+        return binding.node
 
     def resolution_for(self, role: OwnerRoleKey) -> OwnerRoleResolution:
         role.validate()
@@ -206,10 +237,7 @@ class OwnerCertificateResult:
 
 
 def _result_is_trusted(result: OwnerCertificateResult) -> bool:
-    return (
-        type(result) is OwnerCertificateResult
-        and object.__getattribute__(result, "_token") is _TRUST_TOKEN
-    )
+    return type(result) is OwnerCertificateResult and object.__getattribute__(result, "_token") is _TRUST_TOKEN
 
 
 def _trusted_result(
@@ -217,9 +245,15 @@ def _trusted_result(
     role_resolutions: tuple[OwnerRoleResolution, ...],
     global_rejections: tuple[OwnerCertificateRejection, ...],
     canonical_groups: tuple[_CanonicalAlternativeGroup, ...] = (),
+    certificate_support_bindings: tuple[_CertificateSupportBinding, ...] = (),
 ) -> OwnerCertificateResult:
     result = OwnerCertificateResult(certificate_nodes, role_resolutions, global_rejections)
     object.__setattr__(result, "_canonical_groups", canonical_groups)
+    object.__setattr__(
+        result,
+        "_certificate_support_bindings",
+        certificate_support_bindings,
+    )
     object.__setattr__(result, "_token", _TRUST_TOKEN)
     return result
 
@@ -241,11 +275,7 @@ class _OwnerPath:
 
 def _json_value(value: object) -> object:
     if isinstance(value, Mapping):
-        return {
-            str(key): _json_value(item)
-            for key, item in value.items()
-            if key not in _RUNTIME_ONLY_ATTRIBUTE_KEYS
-        }
+        return {str(key): _json_value(item) for key, item in value.items() if key not in _RUNTIME_ONLY_ATTRIBUTE_KEYS}
     if isinstance(value, (tuple, list)):
         return [_json_value(item) for item in value]
     if isinstance(value, (set, frozenset)):
@@ -287,11 +317,7 @@ def _record_json(record: EvidenceNode | EvidenceEdge) -> dict[str, object]:
 
 
 def _valid_instrumentation_identity(value: object) -> bool:
-    return (
-        isinstance(value, tuple)
-        and len(value) == 4
-        and all(isinstance(item, str) and bool(item) for item in value)
-    )
+    return isinstance(value, tuple) and len(value) == 4 and all(isinstance(item, str) and bool(item) for item in value)
 
 
 def _unique_records(
@@ -377,6 +403,35 @@ def _certificate(path: _OwnerPath, evidence: ObjectBindingEvidence) -> EvidenceN
     )
 
 
+def _certificate_support_bindings(
+    certificates: tuple[EvidenceNode, ...],
+    paths: tuple[_OwnerPath, ...],
+) -> tuple[_CertificateSupportBinding, ...]:
+    bindings: list[_CertificateSupportBinding] = []
+    for certificate, path in zip(certificates, paths, strict=True):
+        cited_ids = set(certificate.provenance.input_record_ids)
+        by_id: dict[str, _CertificateSupportBinding] = {}
+        for record in (*path.path_records, *path.raw_support):
+            if not isinstance(record, EvidenceNode) or record.record_id not in cited_ids:
+                continue
+            binding = _CertificateSupportBinding(
+                certificate.record_id,
+                record,
+                canonical_record_bytes(record),
+            )
+            prior = by_id.get(record.record_id)
+            if prior is not None and prior.canonical_content != binding.canonical_content:
+                raise _MalformedEvidence("certificate support ID has conflicting content")
+            by_id[record.record_id] = binding
+        bindings.extend(by_id[record_id] for record_id in sorted(by_id))
+    return tuple(
+        sorted(
+            bindings,
+            key=lambda item: (item.certificate_record_id, item.node.record_id),
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _CandidatePath:
     owner: EvidenceNode
@@ -447,9 +502,7 @@ _SUPPORT_SCHEMAS: Mapping[str, tuple[Mapping[str, object], ...]] = {
             lifecycle_sequence_at_capture=_is_int,
         ),
     ),
-    "pcode-generation": (
-        _support_schema(pcode_id=_is_nonempty_str, allocation_generation=_is_int),
-    ),
+    "pcode-generation": (_support_schema(pcode_id=_is_nonempty_str, allocation_generation=_is_int),),
     "pcode-code-range": (
         _support_schema(
             pcode_id=_is_nonempty_str,
@@ -588,11 +641,7 @@ def _registered_record(
     evidence: ObjectBindingEvidence,
     record_id: str,
 ) -> EvidenceNode | EvidenceEdge | OwnerCertificateRejection:
-    matches = tuple(
-        record
-        for record in (*evidence.nodes, *evidence.edges)
-        if record.record_id == record_id
-    )
+    matches = tuple(record for record in (*evidence.nodes, *evidence.edges) if record.record_id == record_id)
     if not matches or any(record != matches[0] for record in matches[1:]):
         return _rejection("unregistered-support", candidates=matches)
     return matches[0]
@@ -615,19 +664,12 @@ def _validate_common_scope(
         )
         for record in values
     )
-    if (
-        not _is_nonempty_str(evidence.capture_run_id)
-        or any(
-            not all(_is_nonempty_str(item) for item in domain)
-            for domain in domains
-        )
+    if not _is_nonempty_str(evidence.capture_run_id) or any(
+        not all(_is_nonempty_str(item) for item in domain) for domain in domains
     ):
         return _rejection("malformed-support", candidates=values)
     first_domain = domains[0]
-    if (
-        any(domain != first_domain for domain in domains[1:])
-        or first_domain[3:] != (_PARSER, evidence.capture_run_id)
-    ):
+    if any(domain != first_domain for domain in domains[1:]) or first_domain[3:] != (_PARSER, evidence.capture_run_id):
         return _rejection("mixed-record-scope", candidates=values)
     try:
         canonical_bytes([_record_json(record) for record in values])
@@ -641,9 +683,7 @@ def _support_attributes_are_exact(support: EvidenceNode) -> bool:
     schemas = _SUPPORT_SCHEMAS.get(str(support_kind), ())
     return any(
         set(support.attributes) == set(schema)
-        and all(
-            predicate(support.attributes[key]) for key, predicate in schema.items()
-        )
+        and all(predicate(support.attributes[key]) for key, predicate in schema.items())
         for schema in schemas
     )
 
@@ -805,14 +845,8 @@ def _supports_for_records(
             or record.confidence is Confidence.HEURISTIC
         ):
             return _rejection("malformed-support", role, (record,))
-        endpoints = (
-            (record.source_id, record.target_id)
-            if isinstance(record, EvidenceEdge)
-            else ()
-        )
-        if isinstance(record, EvidenceEdge) and not set(endpoints).issubset(
-            record.provenance.input_record_ids
-        ):
+        endpoints = (record.source_id, record.target_id) if isinstance(record, EvidenceEdge) else ()
+        if isinstance(record, EvidenceEdge) and not set(endpoints).issubset(record.provenance.input_record_ids):
             return _rejection("unregistered-support", role, (record,))
         support = _validated_support_records(evidence, record, endpoints, role)
         if isinstance(support, OwnerCertificateRejection):
@@ -865,8 +899,7 @@ def _validate_emission(
     anchor_edge = next(
         edge
         for edge in candidate.path_records
-        if isinstance(edge, EvidenceEdge)
-        and edge.kind == "assembly-anchor-emitted-by-pcode"
+        if isinstance(edge, EvidenceEdge) and edge.kind == "assembly-anchor-emitted-by-pcode"
     )
     pcode_lineage_edge = next(
         edge
@@ -881,8 +914,7 @@ def _validate_emission(
             for record in (candidate.pcode, candidate.anchor, anchor_edge)
         )
         or any(
-            code_range.record_id not in record.provenance.input_record_ids
-            for record in (candidate.anchor, anchor_edge)
+            code_range.record_id not in record.provenance.input_record_ids for record in (candidate.anchor, anchor_edge)
         )
         or any(
             emission.record_id not in record.provenance.input_record_ids
@@ -934,12 +966,10 @@ def _validate_emission(
         or direct_lineage.attributes.get("code_offset") != offset
         or direct_lineage.attributes.get("operand_lineage_id") != lineage_id
         or any(
-            edge.attributes.get("code_offset") != offset
-            or edge.attributes.get("machine_operand_key") != operand_key
+            edge.attributes.get("code_offset") != offset or edge.attributes.get("machine_operand_key") != operand_key
             for edge in candidate.path_records
             if isinstance(edge, EvidenceEdge)
-            and edge.kind
-            in {"assembly-anchor-emitted-by-pcode", "pcode-operand-lineage"}
+            and edge.kind in {"assembly-anchor-emitted-by-pcode", "pcode-operand-lineage"}
             and edge.source_id in {candidate.anchor.record_id, candidate.pcode.record_id}
         )
     ):
@@ -947,9 +977,7 @@ def _validate_emission(
     if not all(_is_physical(value) for value in values):
         return _rejection("malformed-support", role, candidate.path_records, support)
     if any(value != values[0] for value in values[1:]):
-        return _rejection(
-            "split-physical-assignment", role, candidate.path_records, support
-        )
+        return _rejection("split-physical-assignment", role, candidate.path_records, support)
     return values[0], (generation, code_range, emission, direct_lineage)
 
 
@@ -958,26 +986,19 @@ def _validate_lineage_output(
     candidate: _CandidatePath,
     role: OwnerRoleKey,
     support: tuple[EvidenceNode, ...],
-) -> tuple[
-    tuple[EvidenceNode | EvidenceEdge, ...], tuple[EvidenceNode, ...]
-] | OwnerCertificateRejection:
+) -> tuple[tuple[EvidenceNode | EvidenceEdge, ...], tuple[EvidenceNode, ...]] | OwnerCertificateRejection:
     mutation_support = tuple(
         item
         for item in _support_of_kind(support, "pcode-lineage-event", shape="mutation")
-        if item.attributes.get("operand_lineage_id")
-        == candidate.lineage.attributes.get("operand_lineage_id")
+        if item.attributes.get("operand_lineage_id") == candidate.lineage.attributes.get("operand_lineage_id")
         and item.attributes.get("side") == "outputs"
     )
     if len(mutation_support) != 1:
-        return _rejection(
-            "lineage-parent-mismatch", role, candidate.path_records, mutation_support
-        )
+        return _rejection("lineage-parent-mismatch", role, candidate.path_records, mutation_support)
     lineage_support = mutation_support[0]
     parent_ids = lineage_support.attributes.get("parent_lineage_ids")
     if not _is_string_tuple(parent_ids):
-        return _rejection(
-            "lineage-parent-mismatch", role, candidate.path_records, mutation_support
-        )
+        return _rejection("lineage-parent-mismatch", role, candidate.path_records, mutation_support)
     selected = tuple(
         edge
         for edge in evidence.edges
@@ -986,36 +1007,20 @@ def _validate_lineage_output(
         and edge.attributes.get("event_index") == lineage_support.attributes.get("event_index")
         and edge.attributes.get("lineage_event_side") == "outputs"
         and edge.attributes.get("mutation_kind") == lineage_support.attributes.get("mutation_kind")
-        and edge.attributes.get("operand_lineage_id")
-        == lineage_support.attributes.get("operand_lineage_id")
+        and edge.attributes.get("operand_lineage_id") == lineage_support.attributes.get("operand_lineage_id")
         and edge.attributes.get("parent_lineage_ids") == parent_ids
     )
     registered_nodes = {node.record_id: node for node in evidence.nodes}
-    parent_nodes = tuple(
-        registered_nodes.get(edge.source_id) for edge in selected
-    )
+    parent_nodes = tuple(registered_nodes.get(edge.source_id) for edge in selected)
     if any(node is None for node in parent_nodes):
-        return _rejection(
-            "lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support
-        )
-    actual = tuple(
-        sorted(
-            str(node.attributes.get("operand_lineage_id"))
-            for node in parent_nodes
-            if node is not None
-        )
-    )
+        return _rejection("lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support)
+    actual = tuple(sorted(str(node.attributes.get("operand_lineage_id")) for node in parent_nodes if node is not None))
     if actual != parent_ids:
-        return _rejection(
-            "lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support
-        )
+        return _rejection("lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support)
     if lineage_support.record_id not in candidate.lineage.provenance.input_record_ids or any(
-        lineage_support.record_id not in edge.provenance.input_record_ids
-        for edge in selected
+        lineage_support.record_id not in edge.provenance.input_record_ids for edge in selected
     ):
-        return _rejection(
-            "lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support
-        )
+        return _rejection("lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support)
     parent_records: tuple[EvidenceNode | EvidenceEdge, ...] = (
         *tuple(node for node in parent_nodes if node is not None),
         *selected,
@@ -1023,9 +1028,7 @@ def _validate_lineage_output(
     parent_support = _supports_for_records(evidence, parent_records, role)
     if isinstance(parent_support, OwnerCertificateRejection):
         return parent_support
-    return parent_records, tuple(
-        {item.record_id: item for item in (*mutation_support, *parent_support)}.values()
-    )
+    return parent_records, tuple({item.record_id: item for item in (*mutation_support, *parent_support)}.values())
 
 
 def _validate_allocator_origin(
@@ -1037,9 +1040,7 @@ def _validate_allocator_origin(
     rewrites = _support_of_kind(support, "pcode-rewrite")
     bindings = _support_of_kind(support, "object-virtual-binding")
     if len(rewrites) != 1 or len(bindings) != 1:
-        return _rejection(
-            "allocator-origin-contradiction", role, candidate.path_records, support
-        )
+        return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
     rewrite, binding = rewrites[0], bindings[0]
     object_edge = next(
         edge
@@ -1056,19 +1057,14 @@ def _validate_allocator_origin(
         for edge in candidate.path_records
         if isinstance(edge, EvidenceEdge) and edge.kind == "pcode-operand-uses-virtual"
     )
-    if (
-        any(
-            rewrite.record_id not in record.provenance.input_record_ids
-            for record in (virtual_edge, allocator_edge, candidate.allocator)
-        )
-        or any(
-            binding.record_id not in record.provenance.input_record_ids
-            for record in (object_edge, allocator_edge, candidate.allocator)
-        )
+    if any(
+        rewrite.record_id not in record.provenance.input_record_ids
+        for record in (virtual_edge, allocator_edge, candidate.allocator)
+    ) or any(
+        binding.record_id not in record.provenance.input_record_ids
+        for record in (object_edge, allocator_edge, candidate.allocator)
     ):
-        return _rejection(
-            "allocator-origin-contradiction", role, candidate.path_records, support
-        )
+        return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
     common = {
         "class_id": candidate.virtual.attributes.get("class_id"),
         "virtual": candidate.virtual.attributes.get("virtual"),
@@ -1083,9 +1079,7 @@ def _validate_allocator_origin(
     if not all(_is_physical(value) for value in physicals):
         return _rejection("malformed-support", role, candidate.path_records, support)
     if any(value != physicals[0] for value in physicals[1:]):
-        return _rejection(
-            "split-physical-assignment", role, candidate.path_records, support
-        )
+        return _rejection("split-physical-assignment", role, candidate.path_records, support)
     if (
         any(rewrite.attributes.get(key) != value for key, value in common.items())
         or any(binding.attributes.get(key) != value for key, value in common.items())
@@ -1093,24 +1087,18 @@ def _validate_allocator_origin(
         or allocator_edge.attributes.get("class_id") != common["class_id"]
         or candidate.allocator.attributes.get("class_id") != common["class_id"]
         or candidate.allocator.attributes.get("virtual") != common["virtual"]
-        or candidate.virtual.attributes.get("class")
-        != {0: "r", 1: "f"}.get(common["class_id"])
+        or candidate.virtual.attributes.get("class") != {0: "r", 1: "f"}.get(common["class_id"])
         or binding.attributes.get("object_id") != candidate.owner.attributes.get("object_id")
         or object_edge.attributes.get("object_id") != candidate.owner.attributes.get("object_id")
-        or binding.attributes.get("allocation_generation")
-        != candidate.owner.attributes.get("allocation_generation")
+        or binding.attributes.get("allocation_generation") != candidate.owner.attributes.get("allocation_generation")
         or binding.attributes.get("ig_id") != object_edge.attributes.get("ig_id")
         or binding.attributes.get("ig_id") != allocator_edge.attributes.get("ig_id")
         or binding.attributes.get("ig_id") != candidate.allocator.attributes.get("ig_id")
-        or rewrite.attributes.get("operand_lineage_id")
-        != candidate.lineage.attributes.get("operand_lineage_id")
+        or rewrite.attributes.get("operand_lineage_id") != candidate.lineage.attributes.get("operand_lineage_id")
         or rewrite.attributes.get("pcode_id") != candidate.pcode.attributes.get("pcode_id")
-        or rewrite.attributes.get("allocation_generation")
-        != candidate.pcode.attributes.get("allocation_generation")
+        or rewrite.attributes.get("allocation_generation") != candidate.pcode.attributes.get("allocation_generation")
     ):
-        return _rejection(
-            "allocator-origin-contradiction", role, candidate.path_records, support
-        )
+        return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
     return physicals[0], (rewrite, binding)
 
 
@@ -1122,9 +1110,7 @@ def _validate_object_identity(
     snapshots = _support_of_kind(support, "object-stage-snapshot")
     owner_snapshots = candidate.owner.attributes.get("stage_snapshots")
     if not isinstance(owner_snapshots, tuple) or len(snapshots) != len(owner_snapshots):
-        return _rejection(
-            "allocator-origin-contradiction", role, candidate.path_records, snapshots
-        )
+        return _rejection("allocator-origin-contradiction", role, candidate.path_records, snapshots)
     object_id = candidate.owner.attributes.get("object_id")
     generation = candidate.owner.attributes.get("allocation_generation")
     expected = tuple(
@@ -1159,9 +1145,7 @@ def _validate_object_identity(
             for item in snapshots
         )
     ):
-        return _rejection(
-            "allocator-origin-contradiction", role, candidate.path_records, snapshots
-        )
+        return _rejection("allocator-origin-contradiction", role, candidate.path_records, snapshots)
     return snapshots
 
 
@@ -1172,46 +1156,33 @@ def _validate_frame_binding(
 ) -> tuple[OwnerSemanticState, tuple[EvidenceNode, ...]] | OwnerCertificateRejection:
     frames = _support_of_kind(support, "object-frame-binding")
     if len(frames) != 1:
-        return _rejection(
-            "frame-binding-contradiction", role, candidate.path_records, support
-        )
+        return _rejection("frame-binding-contradiction", role, candidate.path_records, support)
     frame = frames[0]
     frame_edge = next(
         edge
         for edge in candidate.path_records
         if isinstance(edge, EvidenceEdge) and edge.kind == "object-has-stack-home"
     )
-    if any(
-        frame.record_id not in record.provenance.input_record_ids
-        for record in (candidate.stack, frame_edge)
-    ):
-        return _rejection(
-            "frame-binding-contradiction", role, candidate.path_records, (frame,)
-        )
+    if any(frame.record_id not in record.provenance.input_record_ids for record in (candidate.stack, frame_edge)):
+        return _rejection("frame-binding-contradiction", role, candidate.path_records, (frame,))
     areas = candidate.owner.attributes.get("areas")
     if not isinstance(areas, tuple) or not all(isinstance(item, str) for item in areas):
         return _rejection("malformed-support", role, candidate.path_records, (frame,))
     if (
         frame.attributes.get("object_id") != candidate.owner.attributes.get("object_id")
-        or frame.attributes.get("allocation_generation")
-        != candidate.owner.attributes.get("allocation_generation")
+        or frame.attributes.get("allocation_generation") != candidate.owner.attributes.get("allocation_generation")
         or frame.attributes.get("area") != candidate.stack.attributes.get("area")
         or frame.attributes.get("area") != frame_edge.attributes.get("area")
         or frame.attributes.get("area") not in areas
         or frame.attributes.get("semantic_stack_role") != candidate.stack.role_key
-        or frame.attributes.get("semantic_stack_role")
-        != frame_edge.attributes.get("semantic_stack_role")
-        or frame.attributes.get("final_r1_offset")
-        != candidate.stack.attributes.get("offset")
+        or frame.attributes.get("semantic_stack_role") != frame_edge.attributes.get("semantic_stack_role")
+        or frame.attributes.get("final_r1_offset") != candidate.stack.attributes.get("offset")
         or frame.attributes.get("size") != candidate.stack.attributes.get("size")
-        or candidate.stack.attributes.get("start")
-        != candidate.stack.attributes.get("offset")
+        or candidate.stack.attributes.get("start") != candidate.stack.attributes.get("offset")
         or candidate.stack.attributes.get("symbol") != candidate.stack.role_key
         or candidate.stack.attributes.get("side") != "current"
     ):
-        return _rejection(
-            "frame-binding-contradiction", role, candidate.path_records, (frame,)
-        )
+        return _rejection("frame-binding-contradiction", role, candidate.path_records, (frame,))
     try:
         state = OwnerSemanticState(
             0,
@@ -1240,21 +1211,14 @@ def _validate_candidate(
         (candidate.allocator, "allocator-node"),
         (candidate.stack, "stack-object"),
     )
-    if (
-        any(node.kind != kind for node, kind in expected_node_kinds)
-        or candidate.anchor.role_key != role.operand_key
-    ):
+    if any(node.kind != kind for node, kind in expected_node_kinds) or candidate.anchor.role_key != role.operand_key:
         return _rejection("malformed-support", role, candidate.path_records)
     support = _supports_for_records(evidence, candidate.path_records, role)
     if isinstance(support, OwnerCertificateRejection):
         return support
-    scope_rejection = _validate_common_scope(
-        evidence, (*candidate.path_records, *support)
-    )
+    scope_rejection = _validate_common_scope(evidence, (*candidate.path_records, *support))
     if scope_rejection is not None:
-        return _rejection(
-            scope_rejection.reason, role, candidate.path_records, support
-        )
+        return _rejection(scope_rejection.reason, role, candidate.path_records, support)
     emission = _validate_emission(evidence, candidate, role, support)
     if isinstance(emission, OwnerCertificateRejection):
         return emission
@@ -1264,18 +1228,11 @@ def _validate_candidate(
         return lineage
     lineage_records, lineage_support = lineage
     all_records = _unique_records((*candidate.path_records, *lineage_records))
-    all_support = tuple(
-        {
-            item.record_id: item
-            for item in (*support, *emission_support, *lineage_support)
-        }.values()
-    )
+    all_support = tuple({item.record_id: item for item in (*support, *emission_support, *lineage_support)}.values())
     object_identity = _validate_object_identity(candidate, role, all_support)
     if isinstance(object_identity, OwnerCertificateRejection):
         return object_identity
-    allocator = _validate_allocator_origin(
-        candidate, role, all_support, decoded_physical
-    )
+    allocator = _validate_allocator_origin(candidate, role, all_support, decoded_physical)
     if isinstance(allocator, OwnerCertificateRejection):
         return allocator
     physical, allocator_support = allocator
@@ -1315,9 +1272,8 @@ def _validate_candidate(
 
 def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
     global_rejections: list[OwnerCertificateRejection] = []
-    if (
-        not isinstance(evidence.capabilities, frozenset)
-        or not all(_is_nonempty_str(item) for item in evidence.capabilities)
+    if not isinstance(evidence.capabilities, frozenset) or not all(
+        _is_nonempty_str(item) for item in evidence.capabilities
     ):
         global_rejections.append(_rejection("malformed-support"))
     elif not _REQUIRED_CAPABILITIES <= evidence.capabilities:
@@ -1328,10 +1284,7 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
     scope_rejection = _validate_common_scope(evidence, all_records)
     if scope_rejection is not None:
         global_rejections.append(scope_rejection)
-    if scope_rejection is not None or any(
-        rejection.reason == "malformed-support"
-        for rejection in global_rejections
-    ):
+    if scope_rejection is not None or any(rejection.reason == "malformed-support" for rejection in global_rejections):
         return _ValidationOutcome(
             (),
             (),
@@ -1350,38 +1303,22 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
 
     candidate_anchor_ids = {candidate.anchor.record_id for candidate in candidates}
     roles = {path.role for path in paths}
-    roles.update(
-        rejection.role for rejection in rejections if rejection.role is not None
-    )
+    roles.update(rejection.role for rejection in rejections if rejection.role is not None)
     for anchor in evidence.nodes:
         if anchor.kind != "assembly-operand-anchor" or anchor.record_id in candidate_anchor_ids:
             continue
-        compatible = tuple(
-            role
-            for role in roles
-            if role.operand_key == anchor.attributes.get("machine_operand_key")
-        )
+        compatible = tuple(role for role in roles if role.operand_key == anchor.attributes.get("machine_operand_key"))
         for role in compatible:
-            rejections.append(
-                _rejection("plausible-owner-alternative", role, (anchor,))
-            )
+            rejections.append(_rejection("plausible-owner-alternative", role, (anchor,)))
     disconnected = tuple(
         anchor
         for anchor in evidence.nodes
         if anchor.kind == "assembly-operand-anchor"
         and anchor.record_id not in candidate_anchor_ids
-        and not any(
-            role.operand_key == anchor.attributes.get("machine_operand_key")
-            for role in roles
-        )
+        and not any(role.operand_key == anchor.attributes.get("machine_operand_key") for role in roles)
     )
-    if disconnected and not any(
-        rejection.reason == "missing-required-capability"
-        for rejection in global_rejections
-    ):
-        global_rejections.append(
-            _rejection("disconnected-owner-path", candidates=disconnected)
-        )
+    if disconnected and not any(rejection.reason == "missing-required-capability" for rejection in global_rejections):
+        global_rejections.append(_rejection("disconnected-owner-path", candidates=disconnected))
     return _ValidationOutcome(
         tuple(paths),
         tuple(sorted(rejections, key=lambda item: item.rejection_id)),
@@ -1401,9 +1338,7 @@ def _validate_provenance_shape(provenance: object) -> None:
     ):
         raise _MalformedEvidence("record provenance strings are malformed")
     for raw_offset in (provenance.raw_start, provenance.raw_end):
-        if raw_offset is not None and (
-            not _is_int(raw_offset) or not 0 <= raw_offset <= 0x7FFFFFFFFFFFFFFF
-        ):
+        if raw_offset is not None and (not _is_int(raw_offset) or not 0 <= raw_offset <= 0x7FFFFFFFFFFFFFFF):
             raise _MalformedEvidence("record provenance range is malformed")
     if (
         provenance.raw_start is not None
@@ -1415,8 +1350,7 @@ def _validate_provenance_shape(provenance: object) -> None:
 
 def _validate_record_shape(record: EvidenceNode | EvidenceEdge) -> None:
     if not all(
-        _is_nonempty_str(value)
-        for value in (record.record_id, record.compile_id, record.function, record.kind)
+        _is_nonempty_str(value) for value in (record.record_id, record.compile_id, record.function, record.kind)
     ):
         raise _MalformedEvidence("evidence record identity is malformed")
     if any(
@@ -1429,16 +1363,12 @@ def _validate_record_shape(record: EvidenceNode | EvidenceEdge) -> None:
     ):
         raise _MalformedEvidence("evidence record confidence is malformed")
     _validate_provenance_shape(record.provenance)
-    if not isinstance(record.attributes, Mapping) or not all(
-        isinstance(key, str) for key in record.attributes
-    ):
+    if not isinstance(record.attributes, Mapping) or not all(isinstance(key, str) for key in record.attributes):
         raise _MalformedEvidence("evidence record attributes are malformed")
     if isinstance(record, EvidenceNode):
         if record.role_key is not None and not _is_nonempty_str(record.role_key):
             raise _MalformedEvidence("evidence node role is malformed")
-    elif not _is_nonempty_str(record.source_id) or not _is_nonempty_str(
-        record.target_id
-    ):
+    elif not _is_nonempty_str(record.source_id) or not _is_nonempty_str(record.target_id):
         raise _MalformedEvidence("evidence edge endpoints are malformed")
 
 
@@ -1456,14 +1386,8 @@ def _validate_diagnostic_shape(evidence: ObjectBindingEvidence) -> None:
         type(evidence.capabilities) is not frozenset
         or not all(_is_nonempty_str(item) for item in evidence.capabilities)
         or not _is_nonempty_str(evidence.capture_run_id)
-        or (
-            evidence.abstention_reason is not None
-            and not _is_nonempty_str(evidence.abstention_reason)
-        )
-        or (
-            evidence.instrumentation_identity is not None
-            and not isinstance(evidence.instrumentation_identity, tuple)
-        )
+        or (evidence.abstention_reason is not None and not _is_nonempty_str(evidence.abstention_reason))
+        or (evidence.instrumentation_identity is not None and not isinstance(evidence.instrumentation_identity, tuple))
     ):
         raise _MalformedEvidence("owner evidence metadata is malformed")
     for record in (*evidence.nodes, *evidence.edges):
@@ -1478,9 +1402,7 @@ def _validate_diagnostic_core(evidence: ObjectBindingEvidence) -> _ValidationOut
 
 
 def _path_provenance(path: _OwnerPath) -> tuple[str, ...]:
-    return tuple(
-        sorted(record.record_id for record in (*path.path_records, *path.raw_support))
-    )
+    return tuple(sorted(record.record_id for record in (*path.path_records, *path.raw_support)))
 
 
 def _path_group_key(
@@ -1509,22 +1431,12 @@ def _canonical_groups(
         )
         for (role, state, _), provenance in grouped_paths.items()
     ]
-    grouped_rejections: dict[
-        tuple[OwnerRoleKey, str, tuple[str, ...]], list[tuple[str, ...]]
-    ] = {}
+    grouped_rejections: dict[tuple[OwnerRoleKey, str, tuple[str, ...]], list[tuple[str, ...]]] = {}
     for rejection in outcome.role_rejections:
         if rejection.role is None:
             continue
-        provenance = tuple(
-            sorted(
-                (*rejection.candidate_record_ids, *rejection.raw_support_record_ids)
-            )
-        )
-        grouped_rejections.setdefault(
-            (rejection.role, rejection.reason, provenance), []
-        ).append(
-            provenance
-        )
+        provenance = tuple(sorted((*rejection.candidate_record_ids, *rejection.raw_support_record_ids)))
+        grouped_rejections.setdefault((rejection.role, rejection.reason, provenance), []).append(provenance)
     groups.extend(
         _CanonicalAlternativeGroup(
             role,
@@ -1541,11 +1453,7 @@ def _canonical_groups(
             key=lambda item: canonical_bytes(
                 {
                     "role": item.role.as_json(),
-                    "semantic_state": (
-                        None
-                        if item.semantic_state is None
-                        else item.semantic_state.as_json()
-                    ),
+                    "semantic_state": (None if item.semantic_state is None else item.semantic_state.as_json()),
                     "rejection_reason": item.rejection_reason,
                     "multiplicity": item.multiplicity,
                     "provenance_record_ids": item.provenance_record_ids,
@@ -1559,17 +1467,13 @@ def _representative_paths(
     outcome: _ValidationOutcome,
     canonical_groups: tuple[_CanonicalAlternativeGroup, ...],
 ) -> tuple[_OwnerPath, ...]:
-    by_group: dict[
-        tuple[OwnerRoleKey, OwnerSemanticState, tuple[str, ...]], _OwnerPath
-    ] = {}
+    by_group: dict[tuple[OwnerRoleKey, OwnerSemanticState, tuple[str, ...]], _OwnerPath] = {}
     for path in outcome.paths:
         by_group.setdefault(_path_group_key(path), path)
     representatives = tuple(
         by_group[(group.role, group.semantic_state, group.provenance_record_ids[0])]
         for group in canonical_groups
-        if group.semantic_state is not None
-        and group.rejection_reason is None
-        and group.provenance_record_ids
+        if group.semantic_state is not None and group.rejection_reason is None and group.provenance_record_ids
     )
     return tuple(
         sorted(
@@ -1592,42 +1496,26 @@ def _role_resolutions(
     canonical_groups: tuple[_CanonicalAlternativeGroup, ...],
 ) -> tuple[OwnerRoleResolution, ...]:
     roles = {path.role for path in outcome.paths}
-    roles.update(
-        rejection.role
-        for rejection in outcome.role_rejections
-        if rejection.role is not None
-    )
+    roles.update(rejection.role for rejection in outcome.role_rejections if rejection.role is not None)
     resolutions: list[OwnerRoleResolution] = []
     for role in sorted(roles):
         role_groups = tuple(
             group
             for group in canonical_groups
-            if group.role == role
-            and group.semantic_state is not None
-            and group.rejection_reason is None
+            if group.role == role and group.semantic_state is not None and group.rejection_reason is None
         )
         role_certificate_ids = tuple(
             certificate_record_id
-            for certificate_record_id, path in zip(
-                certificate_record_ids, certificate_paths, strict=True
-            )
+            for certificate_record_id, path in zip(certificate_record_ids, certificate_paths, strict=True)
             if path.role == role
         )
         rejections = tuple(
             sorted(
-                (
-                    rejection
-                    for rejection in outcome.role_rejections
-                    if rejection.role == role
-                ),
+                (rejection for rejection in outcome.role_rejections if rejection.role == role),
                 key=lambda item: item.rejection_id,
             )
         )
-        semantic_states = {
-            group.semantic_state
-            for group in role_groups
-            if group.semantic_state is not None
-        }
+        semantic_states = {group.semantic_state for group in role_groups if group.semantic_state is not None}
         if outcome.global_rejections:
             status = OwnerResolutionStatus.INCOMPLETE
         elif any(item.reason in _CONTRADICTORY_REASONS for item in rejections):
@@ -1636,9 +1524,7 @@ def _role_resolutions(
             status = OwnerResolutionStatus.INCOMPLETE
         elif len(semantic_states) > 1:
             status = OwnerResolutionStatus.CONTRADICTORY
-        elif len(role_groups) > 1 or any(
-            item.reason == "plausible-owner-alternative" for item in rejections
-        ):
+        elif len(role_groups) > 1 or any(item.reason == "plausible-owner-alternative" for item in rejections):
             status = OwnerResolutionStatus.AMBIGUOUS
         elif len(role_groups) == 1:
             status = OwnerResolutionStatus.UNIQUE
@@ -1662,9 +1548,7 @@ def _validate_owner_evidence(evidence: ObjectBindingEvidence) -> OwnerCertificat
     canonical_groups = _canonical_groups(outcome)
     certificate_paths = _representative_paths(outcome, canonical_groups)
     try:
-        candidate_certificate_ids = tuple(
-            _certificate_record_id(path, evidence) for path in certificate_paths
-        )
+        candidate_certificate_ids = tuple(_certificate_record_id(path, evidence) for path in certificate_paths)
     except _MalformedEvidence:
         if not outcome.global_rejections:
             raise
@@ -1714,9 +1598,7 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
     canonical_groups = _canonical_groups(outcome)
     ordered_paths = _representative_paths(outcome, canonical_groups)
     try:
-        candidate_certificate_ids = tuple(
-            _certificate_record_id(path, evidence) for path in ordered_paths
-        )
+        candidate_certificate_ids = tuple(_certificate_record_id(path, evidence) for path in ordered_paths)
     except _MalformedEvidence:
         if outcome.global_rejections:
             return _trusted_result(
@@ -1738,9 +1620,7 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
             malformed_groups,
         )
     blocking_global_rejections = tuple(
-        rejection
-        for rejection in outcome.global_rejections
-        if rejection.reason != "disconnected-owner-path"
+        rejection for rejection in outcome.global_rejections if rejection.reason != "disconnected-owner-path"
     )
     if blocking_global_rejections:
         return _trusted_result(
@@ -1756,6 +1636,10 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
         )
     try:
         certificates = tuple(_certificate(path, evidence) for path in ordered_paths)
+        certificate_support_bindings = _certificate_support_bindings(
+            certificates,
+            ordered_paths,
+        )
     except _MalformedEvidence:
         malformed = _ValidationOutcome(
             (),
@@ -1779,4 +1663,5 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
         ),
         outcome.global_rejections,
         canonical_groups,
+        certificate_support_bindings,
     )
