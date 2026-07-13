@@ -33,6 +33,14 @@ _DIAGNOSTIC_ONLY_PARSERS = frozenset({"mwcc-debug-pcdump.v1"})
 _OWNER_CORRESPONDENCE_PARSER = "causal-backend-owner-alignment.v2"
 _OWNER_DELTA_PARSER = "causal-frontier-differ.v1"
 _BACKEND_OWNER_AMBIGUOUS = "backend-owner-ambiguous"
+_OWNER_ABSTENTION_REASONS = frozenset(
+    {
+        "backend-owner-ambiguous",
+        "backend-owner-contradictory",
+        "backend-owner-missing",
+        "backend-owner-path-incomplete",
+    }
+)
 
 _GATE_1 = "gate-1-anchor-identity"
 _GATE_2 = "gate-2-backend-role-identity"
@@ -703,6 +711,30 @@ def _certificate_proof_path(certificate: EvidenceNode) -> tuple[str, ...] | None
     return (certificate.record_id, *path_ids, *support_ids)
 
 
+def _certified_owner_abstentions(
+    records: Iterable[ComparisonRecord],
+) -> tuple[ComparisonRecord, ...]:
+    by_content: dict[bytes, ComparisonRecord] = {}
+    for record in records:
+        if (
+            record.relation_kind != "backend-owner-abstained"
+            or record.provenance.parser != _OWNER_CORRESPONDENCE_PARSER
+            or not owner_alignment_record_is_authoritative(record)
+            or record.attributes.get("reason") not in _OWNER_ABSTENTION_REASONS
+        ):
+            continue
+        by_content.setdefault(canonical_record_bytes(record), record)
+    return tuple(by_content[key] for key in sorted(by_content))
+
+
+def _owner_abstention_missing_evidence(
+    abstentions: Iterable[ComparisonRecord],
+) -> frozenset[str]:
+    return frozenset(
+        reason for record in abstentions if (reason := record.attributes.get("reason")) in _OWNER_ABSTENTION_REASONS
+    )
+
+
 def _matching_owner_abstention_records(
     records: tuple[ComparisonRecord, ...],
     role: OwnerRoleKey | None,
@@ -1259,6 +1291,60 @@ def _no_eligible_pair_verdict(analysis_id: str, effects: DerivedEffects) -> Caus
     )
 
 
+def _owner_abstention_only_verdict(
+    analysis_id: str,
+    effects: DerivedEffects,
+    abstentions: tuple[ComparisonRecord, ...],
+) -> CausalVerdict:
+    abstention_ids = tuple(sorted(record.record_id for record in abstentions))
+    pair_id = stable_id(
+        analysis_id,
+        "owner-abstention-without-eligible-effect-pair",
+        abstention_ids,
+    )
+    rejected = tuple(f"backend-owner-abstained:{record_id}" for record_id in abstention_ids)
+    failed_gates = (_GATE_6, _GATE_8)
+    verdict_id = stable_id(
+        pair_id,
+        "causal-verdict",
+        {
+            "status": VerdictStatus.ABSTAIN.value,
+            "rejected": rejected,
+            "failed_gates": failed_gates,
+        },
+    )
+    allocator_ids = tuple(sorted(item.effect_id for item in effects.allocator_effects))
+    stack_ids = tuple(sorted(item.effect_id for item in effects.stack_effects))
+    return CausalVerdict(
+        verdict_id=verdict_id,
+        status=VerdictStatus.ABSTAIN,
+        pair_id=pair_id,
+        cause=None,
+        proof_paths=(),
+        rejected_alternatives=rejected,
+        failed_gates=failed_gates,
+        allocator_delta={
+            "effect_id": stable_id(
+                analysis_id,
+                "allocator-effect-set",
+                allocator_ids,
+            ),
+            "effect_ids": allocator_ids,
+            "eligible_pair": False,
+        },
+        stack_delta={
+            "effect_id": stable_id(analysis_id, "stack-effect-set", stack_ids),
+            "effect_ids": stack_ids,
+            "eligible_pair": False,
+        },
+        recommendation=(
+            f"{_OPERATIONAL_SCOPE} Resolve the certified backend owner abstention "
+            "before drawing a no-causal-difference conclusion."
+        ),
+        follow_up_commands=_READ_ONLY_COMMANDS,
+    )
+
+
 def build_report(
     graphs: Iterable[FrontierGraph],
     effects: DerivedEffects,
@@ -1326,11 +1412,21 @@ def build_report(
             key=lambda verdict: (verdict.pair_id, verdict.verdict_id),
         )
     )
-    verdicts = (
-        (_no_eligible_pair_verdict(analysis_id, effects),)
-        if not inferred_verdicts and not effects.abstentions
-        else inferred_verdicts
-    )
+    certified_owner_abstentions = _certified_owner_abstentions(comparison_records)
+    if inferred_verdicts:
+        verdicts = inferred_verdicts
+    elif effects.abstentions:
+        verdicts = ()
+    elif certified_owner_abstentions:
+        verdicts = (
+            _owner_abstention_only_verdict(
+                analysis_id,
+                effects,
+                certified_owner_abstentions,
+            ),
+        )
+    else:
+        verdicts = (_no_eligible_pair_verdict(analysis_id, effects),)
     backend_missing = {
         reason
         for graph in graph_pair
@@ -1360,6 +1456,7 @@ def build_report(
                 else set()
             )
             | backend_missing
+            | _owner_abstention_missing_evidence(certified_owner_abstentions)
             | (
                 {_BACKEND_OWNER_AMBIGUOUS}
                 if any(

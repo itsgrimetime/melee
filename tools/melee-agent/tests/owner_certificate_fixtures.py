@@ -26,7 +26,7 @@ from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import ValidatedBundle
 from src.mwcc_debug.causal_diff.canonical import canonical_bytes
 from src.mwcc_debug.causal_diff.differ import diff_frontiers
-from src.mwcc_debug.causal_diff.effects import derive_effects
+from src.mwcc_debug.causal_diff.effects import DerivedEffects, derive_effects
 from src.mwcc_debug.causal_diff.frame_adapter import FrameEvidence
 from src.mwcc_debug.causal_diff.graph import FrontierGraph
 from src.mwcc_debug.causal_diff.inference import CausalDiffReport, build_report
@@ -1018,6 +1018,46 @@ def future_complete_pipeline_inputs() -> tuple[
     comparisons = build_role_comparisons(owner_alignment, graph_pair)
     deltas = diff_frontiers(graph_pair, comparisons)
     return graph_pair, owner_alignment, comparisons + deltas
+
+
+def future_owner_abstention_pipeline_inputs(
+    status: str,
+) -> tuple[
+    tuple[FrontierGraph, FrontierGraph],
+    AnchorAlignment,
+    tuple[ComparisonRecord, ...],
+    DerivedEffects,
+]:
+    graph_pair, owner_alignment, _comparisons = future_complete_pipeline_inputs()
+    left, right = graph_pair
+    evidence = _status_evidence(
+        status,
+        compile_id=str(left.bundle.compile_id),
+        capture_run_id=hashlib.sha256(str(left.bundle.label).encode()).hexdigest(),
+    )
+    result = build_owner_certificates(evidence)
+    store = InMemoryEvidenceStore()
+    store.add_nodes(evidence.nodes)
+    store.add_edges(evidence.edges)
+    store.add_nodes(result.certificate_nodes)
+    backend = BackendEvidence(
+        result=AdapterResult(
+            nodes=(*evidence.nodes, *result.certificate_nodes),
+            edges=evidence.edges,
+        ),
+        pcdump_text="",
+        role_compile=None,
+        nodes_by_class_ig=MappingProxyType({}),
+        nodes_by_virtual=MappingProxyType({}),
+        object_bindings=evidence,
+        owner_certificates=result,
+    )
+    graphs = (replace(left, store=store, backend=backend), right)
+    comparisons = build_role_comparisons(owner_alignment, graphs)
+    deltas = diff_frontiers(graphs, comparisons)
+    all_comparisons = (*comparisons, *deltas)
+    effects = derive_effects(owner_alignment, graphs, all_comparisons)
+    return graphs, owner_alignment, all_comparisons, effects
 
 
 def future_complete_tied_pipeline_inputs() -> tuple[

@@ -24,6 +24,7 @@ from src.mwcc_debug.causal_diff.canonical import canonical_bytes
 from src.mwcc_debug.causal_diff.models import Confidence
 from src.mwcc_debug.parser import Instruction
 from tests.owner_certificate_fixtures import (
+    _certified_frontier,
     future_complete_backend,
     validated_current_v2_bundle,
 )
@@ -301,6 +302,32 @@ def test_current_verified_v2_backend_honestly_abstains_from_owner_certificates(
     assert backend.object_bindings is not None
     assert backend.owner_certificates.certificate_nodes == ()
     assert backend.owner_abstention_reason == "backend-owner-path-incomplete"
+
+
+@pytest.mark.parametrize(
+    "status",
+    (
+        "unique-with-role-rejection",
+        "unique-with-global-rejection",
+        "ambiguous",
+        "contradictory",
+        "incomplete",
+    ),
+)
+def test_backend_owner_abstention_reason_survives_certificate_nodes(
+    status: str,
+) -> None:
+    backend = _certified_frontier("left", status).backend
+
+    assert backend.object_bindings is not None
+    assert backend.owner_abstention_reason == "backend-owner-path-incomplete"
+
+
+def test_backend_unique_untainted_certificate_has_no_owner_abstention_reason() -> None:
+    backend = _certified_frontier("left", "unique").backend
+
+    assert backend.object_bindings is not None
+    assert backend.owner_abstention_reason is None
 
 
 def test_backend_adds_certificate_and_all_inputs_in_one_adapter_result(

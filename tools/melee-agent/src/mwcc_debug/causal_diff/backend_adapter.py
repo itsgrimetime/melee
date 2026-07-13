@@ -16,7 +16,11 @@ from ..pressure_explorer.models import AllocatorFacts
 from .bundles import BundleInputError, ValidatedBundle
 from .models import AdapterResult, Confidence, EvidenceEdge, EvidenceNode, Provenance
 from .object_binding_adapter import ObjectBindingEvidence, adapt_object_bindings
-from .owner_certificate import OwnerCertificateResult, build_owner_certificates
+from .owner_certificate import (
+    OwnerCertificateResult,
+    OwnerResolutionStatus,
+    build_owner_certificates,
+)
 
 EMPTY_OWNER_CERTIFICATE_RESULT = OwnerCertificateResult((), (), ())
 
@@ -35,7 +39,20 @@ class BackendEvidence:
     def owner_abstention_reason(self) -> str | None:
         if self.object_bindings is None:
             return None
-        return None if self.owner_certificates.certificate_nodes else "backend-owner-path-incomplete"
+        result = self.owner_certificates
+        if (
+            not result.is_trusted
+            or result.global_rejections
+            or not result.certificate_nodes
+            or any(
+                resolution.status is not OwnerResolutionStatus.UNIQUE
+                or bool(resolution.rejections)
+                or len(resolution.certificate_record_ids) != 1
+                for resolution in result.role_resolutions
+            )
+        ):
+            return "backend-owner-path-incomplete"
+        return None
 
     @property
     def verified_capabilities(self) -> frozenset[str]:

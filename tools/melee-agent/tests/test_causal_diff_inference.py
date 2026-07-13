@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass, replace
 from types import MappingProxyType, SimpleNamespace
@@ -11,6 +12,7 @@ from src.mwcc_debug.causal_diff.alignment import (
     EffectAbstention,
     RolePair,
     build_role_comparisons,
+    owner_alignment_record_is_authoritative,
 )
 from src.mwcc_debug.causal_diff.canonical import stable_id
 from src.mwcc_debug.causal_diff.effects import (
@@ -42,6 +44,7 @@ from src.mwcc_debug.causal_diff.store import EvidenceQuery, InMemoryEvidenceStor
 from tests.owner_certificate_fixtures import (
     future_complete_pipeline_inputs,
     future_complete_tied_pipeline_inputs,
+    future_owner_abstention_pipeline_inputs,
     only,
     run_synthetic_future_complete_pair,
     run_with_forged_certificate_node_but_no_trusted_result,
@@ -882,6 +885,160 @@ def test_sealed_owner_abstention_remains_certified_gate_8_evidence() -> None:
     assert verdict.status is VerdictStatus.ABSTAIN
     assert verdict.failed_gates == ("gate-8-evidence-integrity",)
     assert verdict.rejected_alternatives == (f"backend-owner-abstained:{sealed.record_id}",)
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    (
+        ("unique-with-role-rejection", "backend-owner-ambiguous"),
+        ("unique-with-global-rejection", "backend-owner-path-incomplete"),
+        ("incomplete", "backend-owner-path-incomplete"),
+        ("contradictory", "backend-owner-contradictory"),
+        ("missing", "backend-owner-missing"),
+    ),
+)
+def test_sealed_owner_abstention_without_effect_pair_abstains(
+    status: str,
+    reason: str,
+) -> None:
+    graphs, _alignment, comparisons, effects = future_owner_abstention_pipeline_inputs(status)
+    owner_abstention = only(item for item in comparisons if item.relation_kind == "backend-owner-abstained")
+    assert owner_alignment_record_is_authoritative(owner_abstention)
+    assert owner_abstention.attributes["reason"] == reason
+    assert effects.pairs == ()
+    assert effects.abstentions == ()
+
+    report = build_report(graphs, effects, comparisons)
+    verdict = only(report.verdicts)
+
+    assert report.analysis_status is AnalysisStatus.ABSTAINED
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.cause is None
+    assert verdict.proof_paths == ()
+    assert verdict.failed_gates == (
+        "gate-6-unique-owner-chain",
+        "gate-8-evidence-integrity",
+    )
+    assert verdict.rejected_alternatives == (f"backend-owner-abstained:{owner_abstention.record_id}",)
+    assert reason in report.missing_evidence
+    assert exit_code_for_report(report) == 3
+
+
+def test_owner_abstention_only_duplicate_collapses_by_canonical_content() -> None:
+    graphs, _alignment, comparisons, effects = future_owner_abstention_pipeline_inputs("unique-with-role-rejection")
+    owner_abstention = only(item for item in comparisons if item.relation_kind == "backend-owner-abstained")
+
+    report = build_report(graphs, effects, (*comparisons, owner_abstention))
+    verdict = only(report.verdicts)
+
+    assert verdict.rejected_alternatives == (f"backend-owner-abstained:{owner_abstention.record_id}",)
+
+
+def test_owner_abstention_only_order_is_canonical_for_distinct_records() -> None:
+    graphs, _alignment, first_records, effects = future_owner_abstention_pipeline_inputs("unique-with-role-rejection")
+    _other_graphs, _other_alignment, second_records, _other_effects = future_owner_abstention_pipeline_inputs(
+        "contradictory"
+    )
+    first = only(item for item in first_records if item.relation_kind == "backend-owner-abstained")
+    second = only(item for item in second_records if item.relation_kind == "backend-owner-abstained")
+    generic = tuple(item for item in first_records if item.relation_kind != "backend-owner-abstained")
+    forward_records = (*generic, first, second)
+    reverse_records = tuple(reversed(forward_records))
+
+    forward = build_report(graphs, effects, forward_records)
+    reverse = build_report(graphs, effects, reverse_records)
+    expected = tuple(
+        f"backend-owner-abstained:{record_id}" for record_id in sorted((first.record_id, second.record_id))
+    )
+
+    assert only(forward.verdicts).rejected_alternatives == expected
+    assert render_json(forward) == render_json(reverse)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ("unsealed", "copied", "deserialized", "wrong-parser"),
+)
+def test_owner_abstention_unsealed_copied_deserialized_or_wrong_parser_is_not_certified(
+    variant: str,
+) -> None:
+    graphs, _alignment, comparisons, effects = future_owner_abstention_pipeline_inputs("unique-with-role-rejection")
+    sealed = only(item for item in comparisons if item.relation_kind == "backend-owner-abstained")
+    if variant == "unsealed":
+        candidate = replace(sealed)
+    elif variant == "copied":
+        candidate = copy.copy(sealed)
+    elif variant == "deserialized":
+        candidate = ComparisonRecord(
+            record_id=sealed.record_id,
+            analysis_id=sealed.analysis_id,
+            relation_kind=sealed.relation_kind,
+            left_compile_id=sealed.left_compile_id,
+            left_record_id=sealed.left_record_id,
+            right_compile_id=sealed.right_compile_id,
+            right_record_id=sealed.right_record_id,
+            confidence=sealed.confidence,
+            provenance=sealed.provenance,
+            attributes=sealed.attributes,
+        )
+    else:
+        candidate = replace(
+            sealed,
+            provenance=replace(sealed.provenance, parser="forged-owner-proof.v1"),
+        )
+    registered = tuple(candidate if item is sealed else item for item in comparisons)
+
+    report = build_report(graphs, effects, registered)
+
+    assert all(
+        not item.startswith("backend-owner-abstained:")
+        for verdict in report.verdicts
+        for item in verdict.rejected_alternatives
+    )
+    assert sealed.attributes["reason"] not in report.missing_evidence
+    assert only(report.verdicts).status is VerdictStatus.NO_CAUSAL_DIFFERENCE
+
+
+@pytest.mark.parametrize("variant", ("copied", "deserialized"))
+def test_owner_abstention_copied_or_deserialized_is_pair_integrity_only(
+    variant: str,
+) -> None:
+    graph_pair, owner_alignment, comparisons = future_complete_pipeline_inputs()
+    effects = derive_effects(owner_alignment, graph_pair, comparisons)
+    sealed = only(
+        item
+        for item in build_role_comparisons(
+            replace(
+                owner_alignment,
+                retail_offset=owner_alignment.retail_offset + 4,
+            ),
+            graph_pair,
+        )
+        if item.relation_kind == "backend-owner-abstained"
+    )
+    candidate = (
+        copy.copy(sealed)
+        if variant == "copied"
+        else ComparisonRecord(
+            record_id=sealed.record_id,
+            analysis_id=sealed.analysis_id,
+            relation_kind=sealed.relation_kind,
+            left_compile_id=sealed.left_compile_id,
+            left_record_id=sealed.left_record_id,
+            right_compile_id=sealed.right_compile_id,
+            right_record_id=sealed.right_record_id,
+            confidence=sealed.confidence,
+            provenance=sealed.provenance,
+            attributes=sealed.attributes,
+        )
+    )
+
+    verdict = only(build_report(graph_pair, effects, (*comparisons, candidate)).verdicts)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-8-evidence-integrity",)
+    assert verdict.rejected_alternatives == ()
+    assert candidate.record_id not in {record_id for path in verdict.proof_paths for record_id in path}
 
 
 def test_forged_stored_certificate_cannot_satisfy_inference() -> None:
