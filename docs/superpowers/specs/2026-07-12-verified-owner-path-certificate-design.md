@@ -9,6 +9,27 @@ retail producer schemas, promote the GC/1.2.5n proof registry, implement Phase
 repeated reconstruction of ownership proof in alignment, differencing,
 effects, and inference with one immutable, capture-scoped certificate.
 
+### Implemented status and explicit non-claims
+
+The Phase 1 certificate boundary is implemented. Certificate nodes use kind
+`owner-proof-certificate` and parser `causal-owner-certificate.v1`.
+Cross-frontier consumers recognize these exact certified relations and producer
+parsers:
+
+- `backend-owner-corresponds-to` and `backend-owner-abstained` are emitted by
+  `causal-backend-owner-alignment.v2`;
+- `backend-owner-state-changed` is emitted by
+  `causal-frontier-differ.v1`; and
+- effects and inference require the exact correspondence and state-delta parser
+  identities before a certificate-mediated effect or proof path is eligible.
+
+The implementation does **not** claim source ownership, a final `causes`
+verdict, a promoted GC/1.2.5n proof registry, or regenerated
+`mnDiagram_DrawFighterHeaders` v2 artifacts. Task 10 retail artifact
+regeneration remains open. A complete synthetic certificate pair therefore
+abstains only at `gate-9-source-object-binding`; this is an acceptance result,
+not a positive causal verdict.
+
 The refactor is required because four successive hardening passes exposed the
 same architectural defect in different forms: downstream consumers can combine
 individually plausible records into a path that the producer never proved as
@@ -321,6 +342,23 @@ The certificate builder is fail-closed:
   contradiction, or incomplete abstention according to the rejection class;
 - no source binding after a unique changed pair: gate-9 abstention.
 
+The implemented certificate rejection vocabulary is closed to:
+
+- `untrusted-diagnostic-materialization`;
+- `missing-required-capability`;
+- `missing-instrumentation-identity`;
+- `mixed-record-scope`;
+- `unregistered-support`;
+- `malformed-support`;
+- `disconnected-owner-path`;
+- `plausible-owner-alternative`;
+- `split-physical-assignment`;
+- `lineage-parent-mismatch`;
+- `allocator-origin-contradiction`; and
+- `frame-binding-contradiction`.
+
+Unknown reasons fail validation rather than widening this vocabulary.
+
 No error path compiles code, refreshes artifacts, writes source, promotes the
 registry, or mutates an input bundle.
 
@@ -347,6 +385,39 @@ rebuild-and-compare validation.
 
 Implementation uses strict red-green-refactor cycles and replaces Task 9's
 proof-bearing loose traversal with certificate tests.
+
+The architectural boundary is enforced by
+`tests/test_causal_diff_owner_architecture.py`, including
+`test_downstream_modules_cannot_reconstruct_raw_owner_proof` and
+`test_legacy_owner_helpers_categorically_reject_v2_records`. Final focused
+acceptance is exercised with:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m pytest \
+  tests/test_causal_diff_owner_certificates.py \
+  tests/test_causal_diff_owner_architecture.py \
+  tests/test_causal_diff_object_bindings.py \
+  tests/test_causal_diff_alignment.py \
+  tests/test_causal_diff_ownership.py \
+  tests/test_causal_diff_inference.py \
+  tests/test_causal_diff_store.py \
+  tests/test_causal_diff_draw_fighter_headers.py \
+  -q -p no:cacheprovider --no-cov --override-ini='addopts='
+```
+
+Every causal-diff test and the producer trust boundary are checked separately:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_causal_diff_*.py \
+  -q -p no:cacheprovider --no-cov --override-ini='addopts='
+PYTHONDONTWRITEBYTECODE=1 python -m pytest \
+  tests/test_retro_backend_instrumentation_proof.py \
+  tests/test_retro_backend_object_bindings.py \
+  tests/test_retro_backend_pcode_lineage.py \
+  tests/test_retro_backend_trace_assembler.py \
+  tests/test_retro_struct_map.py \
+  -q -p no:cacheprovider --no-cov --override-ini='addopts='
+```
 
 Required coverage includes:
 

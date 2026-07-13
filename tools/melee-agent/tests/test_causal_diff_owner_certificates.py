@@ -5,6 +5,7 @@ import pytest
 from src.mwcc_debug.causal_diff import owner_certificate
 from src.mwcc_debug.causal_diff.canonical import stable_id
 from src.mwcc_debug.causal_diff.graph import add_adapter_results_atomically
+from src.mwcc_debug.causal_diff.inference import VerdictStatus
 from src.mwcc_debug.causal_diff.models import (
     Confidence,
     EvidenceEdge,
@@ -43,8 +44,10 @@ from tests.owner_certificate_fixtures import (
     evidence_without_instrumentation_identity,
     first_role,
     future_complete_backend,
+    only,
     other_role,
     replace_record,
+    run_synthetic_future_complete_pair,
     second_role,
     support,
 )
@@ -52,6 +55,17 @@ from tests.test_causal_diff_object_bindings import ALL_CAPABILITIES, _adapter_in
 
 ROLE = OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals")
 STATE = OwnerSemanticState(21, 0x44, 4)
+
+
+def test_synthetic_future_complete_pair_reaches_only_gate_9():
+    report = run_synthetic_future_complete_pair()
+
+    assert any(item.relation_kind == "backend-owner-corresponds-to" for item in report.comparisons)
+    assert any(item.relation_kind == "backend-owner-state-changed" for item in report.comparisons)
+    verdict = only(report.verdicts)
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+    assert "source-object-binding-missing" in report.missing_evidence
 
 
 def test_complete_path_builds_one_content_addressed_certificate():

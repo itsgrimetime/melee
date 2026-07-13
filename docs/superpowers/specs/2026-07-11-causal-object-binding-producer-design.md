@@ -1131,6 +1131,16 @@ unavailable. There is no heuristic fallback.
 
 ## 9. Causal bundle and adapter integration
 
+**Implemented amendment:** Task 9's loose ownership traversal remains available
+only as diagnostic graph evidence. It is superseded as a proof API by the
+content-addressed owner certificate whose parser is
+`causal-owner-certificate.v1`, as specified in
+`2026-07-12-verified-owner-path-certificate-design.md`. Alignment,
+differencing, effects, and inference consume the certificate result and its
+certified comparisons; they do not reconstruct v2 ownership proof from the raw
+edges listed below. This amendment does not promote the currently empty retail
+proof registry or make current genuine v2 artifacts proof-capable.
+
 The causal bundle uses two distinct version identifiers:
 
 ```text
@@ -1449,6 +1459,11 @@ Run the bounded probe on:
 - one address-taken/multi-virtual local;
 - one FPR or spill-owned object; and
 - both exact `mnDiagram_DrawFighterHeaders` frontiers.
+
+**Task 10 remains open.** The artifact-regeneration work below has not been
+performed by the owner-certificate amendment. No DrawFighterHeaders v2 artifact
+or proof-registry entry is promoted by the certificate implementation; the
+committed v1 pilot fixtures remain the compatibility baseline.
 
 Regenerate the paired/direct `backend-trace.v2` artifacts containing
 `mwcc-retro-backend-trace.v2` payloads and their manifests with exact commands,

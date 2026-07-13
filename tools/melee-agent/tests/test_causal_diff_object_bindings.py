@@ -2270,7 +2270,7 @@ def test_genuine_current_verified_bundle_abstains_before_backend_ownership(
     assert not _certifies(evidence)
 
 
-def test_backend_adapter_merges_only_genuinely_reverified_v2_evidence(
+def test_current_genuine_v2_has_no_certificate_or_owner_verdict(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2278,6 +2278,7 @@ def test_backend_adapter_merges_only_genuinely_reverified_v2_evidence(
 
     backend = adapt_backends(bundle)
 
+    assert backend.owner_certificates.certificate_nodes == ()
     assert backend.object_bindings is not None
     assert backend.owner_abstention_reason == "backend-owner-path-incomplete"
     assert {

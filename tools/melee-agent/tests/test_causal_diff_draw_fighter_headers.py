@@ -192,7 +192,7 @@ def run_pilot(tmp_path: Path, store_factory=InMemoryEvidenceStore):
     )
 
 
-def test_draw_fighter_headers_exact_artifacts_abstain_without_backend_role_identity(
+def test_draw_fighter_headers_v1_report_is_unchanged(
     tmp_path: Path,
 ) -> None:
     report = run_pilot(tmp_path)
