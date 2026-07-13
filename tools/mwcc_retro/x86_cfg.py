@@ -449,6 +449,50 @@ class _RegisterEffect:
 
 
 @dataclass(frozen=True, slots=True)
+class _X87State:
+    """Finite physical x87/MMX payload, TOP, and tag abstraction."""
+
+    phys_taint: tuple[int, int, int, int, int, int, int, int]
+    top_mask: int
+    valid_must: int
+    valid_may: int
+
+    def __post_init__(self) -> None:
+        if len(self.phys_taint) != 8:
+            raise ValueError("x87 physical state must contain eight slots")
+        if not 0 < self.top_mask <= 0xFF:
+            raise ValueError("x87 TOP mask must contain one to eight values")
+        if self.valid_must & ~self.valid_may:
+            raise ValueError("x87 must-valid tags exceed may-valid tags")
+        if (self.valid_must | self.valid_may) & ~0xFF:
+            raise ValueError("x87 tag masks exceed eight physical slots")
+        if any(mask < 0 or mask >> 80 for mask in self.phys_taint):
+            raise ValueError("x87 physical taint exceeds 80-bit payload")
+
+    @classmethod
+    def clean_unknown(cls) -> _X87State:
+        return cls((0,) * 8, 0xFF, 0, 0xFF)
+
+
+@dataclass(slots=True)
+class _TaintState:
+    registers: dict[str, int]
+    x87: _X87State
+
+    @classmethod
+    def empty(cls) -> _TaintState:
+        return cls({}, _X87State((0,) * 8, 1, 0, 0xFF))
+
+
+@dataclass(frozen=True, slots=True)
+class _X87Effect:
+    kind: str
+    target: int = 0
+    pop_count: int = 0
+    dependencies: tuple[_ValueDependency, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryWriteSpec:
     """One audited memory sink and the values actually stored by it."""
 
@@ -463,6 +507,7 @@ class _InstructionValueFlow:
     join_overlapping_register_effects: bool = False
     taint_blocker_dependencies: tuple[_ValueDependency, ...] = ()
     taint_blocker_reason: str | None = None
+    x87_effect: _X87Effect | None = None
 
 
 _I386_RELOCATION_WIDTHS = {1: 2, 2: 2, 3: 4, 4: 2}
@@ -1216,7 +1261,7 @@ class _DirectCfgRecovery:
         if match:
             width = 64 if width_bits is None else width_bits
             return _RegisterSlice(
-                family=f"fp:{match.group(1)}",
+                family=f"x87-physical:{match.group(1)}",
                 mask=(1 << width) - 1,
                 name=name,
             )
@@ -1224,7 +1269,7 @@ class _DirectCfgRecovery:
         if match:
             width = 80 if width_bits is None else width_bits
             return _RegisterSlice(
-                family=f"fp:{match.group(1)}",
+                family=f"x87-logical:{match.group(1)}",
                 mask=(1 << width) - 1,
                 name=name,
             )
@@ -1413,9 +1458,9 @@ class _DirectCfgRecovery:
                 _ValueDependency(
                     "register",
                     register=_RegisterSlice(
-                        family=f"fp:{index}",
+                        family=f"x87-physical:{index}",
                         mask=(1 << 80) - 1,
-                        name=f"fp{index}",
+                        name=f"x87-physical-{index}",
                     ),
                 )
             )
@@ -1456,7 +1501,7 @@ class _DirectCfgRecovery:
         if not 0 <= index < 8:
             raise CfgRecoveryError(f"invalid x87 stack index: {index}")
         return _RegisterSlice(
-            family=f"fp:{index}",
+            family=f"x87-logical:{index}",
             mask=(1 << 80) - 1,
             name=f"st({index})",
         )
@@ -1468,57 +1513,6 @@ class _DirectCfgRecovery:
 
     def _x87_stack_dependencies(self) -> tuple[_ValueDependency, ...]:
         return tuple(self._x87_stack_dependency(index) for index in range(8))
-
-    def _x87_stack_effects(
-        self,
-        dependencies: dict[int, tuple[_ValueDependency, ...]],
-        *,
-        preserve_physical_aliases: bool = True,
-    ) -> tuple[_RegisterEffect, ...]:
-        return tuple(
-            _RegisterEffect(
-                self._x87_stack_slice(index),
-                (
-                    (
-                        self._x87_stack_dependency(index),
-                        *dependencies.get(index, ()),
-                    )
-                    if preserve_physical_aliases
-                    else dependencies.get(index, ())
-                ),
-            )
-            for index in range(8)
-        )
-
-    def _x87_push_effects(
-        self, value: tuple[_ValueDependency, ...]
-    ) -> tuple[_RegisterEffect, ...]:
-        dependencies = {0: value}
-        dependencies.update(
-            {
-                index: (self._x87_stack_dependency(index - 1),)
-                for index in range(1, 8)
-            }
-        )
-        return self._x87_stack_effects(dependencies)
-
-    def _x87_pop_effects(
-        self,
-        count: int = 1,
-        *,
-        replacements: dict[int, tuple[_ValueDependency, ...]] | None = None,
-    ) -> tuple[_RegisterEffect, ...]:
-        replacements = {} if replacements is None else replacements
-        dependencies = {}
-        for destination in range(8):
-            source = destination + count
-            if source >= 8:
-                dependencies[destination] = ()
-            else:
-                dependencies[destination] = replacements.get(
-                    source, (self._x87_stack_dependency(source),)
-                )
-        return self._x87_stack_effects(dependencies)
 
     def _x87_register_index(self, decoded, operand) -> int:
         if operand.type != X86_OP_REG:
@@ -1547,7 +1541,11 @@ class _DirectCfgRecovery:
 
     def _x87_value_flow(self, decoded) -> _InstructionValueFlow | None:
         if decoded.mnemonic in {"emms", "femms"}:
-            return _InstructionValueFlow()
+            return _InstructionValueFlow(
+                x87_effect=_X87Effect("empty-tags")
+            )
+        if decoded.id == 210:  # FXRSTOR
+            return _InstructionValueFlow(x87_effect=_X87Effect("restore"))
         if not self._has_x87_opcode(decoded):
             return None
         operands = decoded.operands
@@ -1568,19 +1566,19 @@ class _DirectCfgRecovery:
             else:
                 raise self._flow_error(decoded, "unsupported FLD source")
             return _InstructionValueFlow(
-                register_effects=self._x87_push_effects(value)
+                x87_effect=_X87Effect("push", dependencies=value)
             )
 
         if decoded.id in _X87_CONSTANT_LOADS:
             return _InstructionValueFlow(
-                register_effects=self._x87_push_effects(())
+                x87_effect=_X87Effect("push")
             )
         if decoded.id in _X87_MEMORY_LOADS:
             if len(operands) != 1 or operands[0].type != X86_OP_MEM:
                 raise self._flow_error(decoded, "unexpected x87 load form")
             return _InstructionValueFlow(
-                register_effects=self._x87_push_effects(
-                    (self._memory_dependency(0),)
+                x87_effect=_X87Effect(
+                    "push", dependencies=(self._memory_dependency(0),)
                 )
             )
 
@@ -1591,14 +1589,8 @@ class _DirectCfgRecovery:
             if not register_operands:
                 raise self._flow_error(decoded, "unexpected FXCH form")
             target = self._x87_register_index(decoded, register_operands[-1])
-            dependencies = {
-                index: (self._x87_stack_dependency(index),)
-                for index in range(8)
-            }
-            dependencies[0] = (self._x87_stack_dependency(target),)
-            dependencies[target] = (self._x87_stack_dependency(0),)
             return _InstructionValueFlow(
-                register_effects=self._x87_stack_effects(dependencies)
+                x87_effect=_X87Effect("swap", target=target)
             )
 
         if decoded.id in _X87_VALUE_WRITERS:
@@ -1606,7 +1598,6 @@ class _DirectCfgRecovery:
                 raise self._flow_error(decoded, "unexpected x87 store form")
             destination = operands[0]
             writes: tuple[MemoryWriteSpec, ...] = ()
-            replacements: dict[int, tuple[_ValueDependency, ...]] = {}
             if destination.type == X86_OP_MEM:
                 writes = (
                     MemoryWriteSpec(
@@ -1616,24 +1607,24 @@ class _DirectCfgRecovery:
                 )
             elif destination.type == X86_OP_REG and decoded.id in {713, 714}:
                 target = self._x87_register_index(decoded, destination)
-                replacements[target] = (self._x87_stack_dependency(0),)
-                if decoded.id == 713:
-                    return _InstructionValueFlow(
-                        register_effects=(
-                            _RegisterEffect(
-                                self._x87_stack_slice(target),
-                                replacements[target],
-                            ),
-                        )
+                return _InstructionValueFlow(
+                    x87_effect=_X87Effect(
+                        "store-register",
+                        target=target,
+                        pop_count=(1 if decoded.id == 714 else 0),
+                        dependencies=(self._x87_stack_dependency(0),),
                     )
+                )
             else:
                 raise self._flow_error(decoded, "unsupported x87 store form")
-            effects = (
-                self._x87_pop_effects(replacements=replacements)
+            effect = (
+                _X87Effect("pop", pop_count=1)
                 if decoded.id in _X87_POP_VALUE_WRITERS
-                else ()
+                else None
             )
-            return _InstructionValueFlow(effects, writes)
+            return _InstructionValueFlow(
+                memory_writes=writes, x87_effect=effect
+            )
 
         if mnemonic in _X87_BINARY_ARITHMETIC_MNEMONICS:
             is_pop = mnemonic.endswith("p")
@@ -1647,8 +1638,10 @@ class _DirectCfgRecovery:
                     self._memory_dependency(0),
                 )
                 return _InstructionValueFlow(
-                    register_effects=(
-                        _RegisterEffect(self._x87_stack_slice(0), dependencies),
+                    x87_effect=_X87Effect(
+                        "arithmetic",
+                        target=0,
+                        dependencies=dependencies,
                     )
                 )
             register_operands = [
@@ -1674,54 +1667,68 @@ class _DirectCfgRecovery:
                     )
                 )
             )
-            dependencies = (
-                self._x87_stack_dependency(target),
-                self._x87_stack_dependency(other),
-            )
-            if is_pop:
-                return _InstructionValueFlow(
-                    register_effects=self._x87_pop_effects(
-                        replacements={target: dependencies}
-                    )
-                )
             return _InstructionValueFlow(
-                register_effects=(
-                    _RegisterEffect(self._x87_stack_slice(target), dependencies),
+                x87_effect=_X87Effect(
+                    "arithmetic",
+                    target=target,
+                    pop_count=(1 if is_pop else 0),
+                    dependencies=(
+                        self._x87_stack_dependency(target),
+                        self._x87_stack_dependency(other),
+                    ),
                 )
             )
 
         pop_count = _X87_COMPARISON_POP_COUNTS.get(mnemonic)
         if pop_count is not None:
             return _InstructionValueFlow(
-                register_effects=self._x87_pop_effects(pop_count)
+                x87_effect=_X87Effect("pop", pop_count=pop_count)
             )
         if mnemonic in {"fcom", "fucom", "ftst", "fxam"}:
             return _InstructionValueFlow()
 
         if mnemonic == "ffree" and len(operands) == 1:
-            self._x87_register_index(decoded, operands[0])
-            return _InstructionValueFlow()
+            target = self._x87_register_index(decoded, operands[0])
+            return _InstructionValueFlow(
+                x87_effect=_X87Effect("free", target=target)
+            )
         if mnemonic == "ffreep" and len(operands) == 1:
             target = self._x87_register_index(decoded, operands[0])
             return _InstructionValueFlow(
-                register_effects=self._x87_pop_effects(
-                    replacements={target: ()}
+                x87_effect=_X87Effect(
+                    "free", target=target, pop_count=1
                 )
             )
 
         if mnemonic in {"fninit", "finit"}:
-            return _InstructionValueFlow()
+            return _InstructionValueFlow(x87_effect=_X87Effect("init"))
+        if mnemonic == "fdecstp":
+            return _InstructionValueFlow(
+                x87_effect=_X87Effect("rotate-top", target=-1)
+            )
+        if mnemonic == "fincstp":
+            return _InstructionValueFlow(
+                x87_effect=_X87Effect("rotate-top", target=1)
+            )
         if mnemonic == "fldenv":
-            return _InstructionValueFlow()
+            return _InstructionValueFlow(
+                x87_effect=_X87Effect("load-environment")
+            )
         if mnemonic == "frstor":
             return _InstructionValueFlow(
-                register_effects=self._x87_stack_effects(
-                    {}, preserve_physical_aliases=False
-                )
+                x87_effect=_X87Effect("restore")
+            )
+        if decoded.id in _FNSAVE_WRITERS:
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "fnsave-state", self._state_save_dependencies("fnsave")
+                    ),
+                ),
+                x87_effect=_X87Effect("init"),
             )
         if mnemonic in _X87_NON_STACK_MNEMONICS or decoded.id in (
-            _FNSAVE_WRITERS
-            | set(_X87_CONTROL_WRITERS)
+            set(_X87_CONTROL_WRITERS)
             | _NO_TRACKED_PAYLOAD_MEMORY_WRITERS
         ):
             return None
@@ -1779,7 +1786,8 @@ class _DirectCfgRecovery:
                 register_effects=tuple(
                     _RegisterEffect(self._named_register_slice(name), ())
                     for name in _CALL_CLOBBERED_REGISTER_NAMES
-                )
+                ),
+                x87_effect=_X87Effect("load-environment"),
             )
         if decoded.group(CS_GRP_JUMP) or decoded.group(CS_GRP_RET) or decoded.group(
             CS_GRP_IRET
@@ -2503,14 +2511,102 @@ class _DirectCfgRecovery:
             )
         return _InstructionValueFlow(tuple(effects), writes)
 
+    @staticmethod
+    def _x87_slot(family: str, prefix: str) -> int | None:
+        if not family.startswith(prefix):
+            return None
+        rendered = family.removeprefix(prefix)
+        if not rendered.isdigit() or not 0 <= int(rendered) < 8:
+            raise CfgRecoveryError(f"invalid x87 register family: {family}")
+        return int(rendered)
+
+    @staticmethod
+    def _possible_tops(top_mask: int) -> tuple[int, ...]:
+        return tuple(top for top in range(8) if top_mask & (1 << top))
+
+    @staticmethod
+    def _join_x87_states(states: tuple[_X87State, ...]) -> _X87State:
+        if not states:
+            raise CfgRecoveryError("cannot join an empty x87 state set")
+        physical = [0] * 8
+        top_mask = 0
+        valid_must = 0xFF
+        valid_may = 0
+        for state in states:
+            for index, taint in enumerate(state.phys_taint):
+                physical[index] |= taint
+            top_mask |= state.top_mask
+            valid_must &= state.valid_must
+            valid_may |= state.valid_may
+        return _X87State(
+            tuple(physical), top_mask, valid_must, valid_may
+        )
+
+    @classmethod
+    def _join_taint_states(
+        cls, left: _TaintState, right: _TaintState
+    ) -> _TaintState:
+        registers = dict(left.registers)
+        for family, mask in right.registers.items():
+            registers[family] = registers.get(family, 0) | mask
+        return _TaintState(
+            registers, cls._join_x87_states((left.x87, right.x87))
+        )
+
+    @staticmethod
+    def _x87_pop(
+        physical: list[int],
+        top: int,
+        valid_must: int,
+        valid_may: int,
+        count: int,
+    ) -> tuple[list[int], int, int, int]:
+        for _ in range(count):
+            slot_mask = 1 << top
+            valid_must &= ~slot_mask
+            valid_may &= ~slot_mask
+            top = (top + 1) & 7
+        return physical, top, valid_must, valid_may
+
     def _dependency_is_tainted(
-        self, dependency: _ValueDependency, state: dict[str, int]
+        self,
+        dependency: _ValueDependency,
+        state: _TaintState,
+        *,
+        exact_top: int | None = None,
     ) -> bool:
         if dependency.kind in {"register", "address-register"}:
             if dependency.register is None:
                 raise CfgRecoveryError("register dependency has no slice")
+            physical_slot = self._x87_slot(
+                dependency.register.family, "x87-physical:"
+            )
+            if physical_slot is not None:
+                return bool(
+                    state.x87.phys_taint[physical_slot]
+                    & dependency.register.mask
+                )
+            logical_index = self._x87_slot(
+                dependency.register.family, "x87-logical:"
+            )
+            if logical_index is not None:
+                tops = (
+                    (exact_top,)
+                    if exact_top is not None
+                    else self._possible_tops(state.x87.top_mask)
+                )
+                for top in tops:
+                    physical_slot = (top + logical_index) & 7
+                    if not state.x87.valid_may & (1 << physical_slot):
+                        continue
+                    if (
+                        state.x87.phys_taint[physical_slot]
+                        & dependency.register.mask
+                    ):
+                        return True
+                return False
             return bool(
-                state.get(dependency.register.family, 0)
+                state.registers.get(dependency.register.family, 0)
                 & dependency.register.mask
             )
         if dependency.kind in {"immediate", "address-immediate"}:
@@ -2523,9 +2619,150 @@ class _DirectCfgRecovery:
             f"unmodeled x86 value dependency kind: {dependency.kind}"
         )
 
+    def _instruction_uses_mmx(self, decoded) -> bool:
+        registers = {
+            operand.reg
+            for operand in decoded.operands
+            if operand.type == X86_OP_REG
+        }
+        registers.update(decoded.regs_read)
+        registers.update(decoded.regs_write)
+        return any(
+            re.fullmatch(r"mm[0-7]", self.decoder.reg_name(register))
+            for register in registers
+        )
+
+    def _apply_x87_effect(
+        self,
+        decoded,
+        effect: _X87Effect,
+        state: _TaintState,
+    ) -> _X87State:
+        old = state.x87
+        if effect.kind == "empty-tags":
+            return _X87State(old.phys_taint, old.top_mask, 0, 0)
+        if effect.kind == "init":
+            return _X87State(old.phys_taint, 1, 0, 0)
+        if effect.kind == "load-environment":
+            return _X87State(old.phys_taint, 0xFF, 0, 0xFF)
+        if effect.kind == "restore":
+            return _X87State.clean_unknown()
+        if effect.kind == "rotate-top":
+            rotated = 0
+            for top in self._possible_tops(old.top_mask):
+                rotated |= 1 << ((top + effect.target) & 7)
+            return _X87State(
+                old.phys_taint, rotated, old.valid_must, old.valid_may
+            )
+
+        tops = self._possible_tops(old.top_mask)
+        if len(tops) > 1 and any(old.phys_taint):
+            raise self._flow_error(
+                decoded,
+                "ambiguous x87 TOP with tainted physical payload: "
+                f"effect={effect.kind};top-mask={old.top_mask:#04x};"
+                f"valid-must={old.valid_must:#04x};"
+                f"valid-may={old.valid_may:#04x}",
+            )
+
+        branches: list[_X87State] = []
+        for top in tops:
+            physical = list(old.phys_taint)
+            valid_must = old.valid_must
+            valid_may = old.valid_may
+            next_top = top
+
+            if effect.kind == "push":
+                next_top = (top - 1) & 7
+                physical[next_top] = (
+                    (1 << 80) - 1
+                    if any(
+                        self._dependency_is_tainted(
+                            dependency, state, exact_top=top
+                        )
+                        for dependency in effect.dependencies
+                    )
+                    else 0
+                )
+                valid_must |= 1 << next_top
+                valid_may |= 1 << next_top
+            elif effect.kind == "swap":
+                other_slot = (top + effect.target) & 7
+                physical[top], physical[other_slot] = (
+                    physical[other_slot],
+                    physical[top],
+                )
+                top_bit = bool(valid_must & (1 << top))
+                other_bit = bool(valid_must & (1 << other_slot))
+                valid_must &= ~((1 << top) | (1 << other_slot))
+                if top_bit:
+                    valid_must |= 1 << other_slot
+                if other_bit:
+                    valid_must |= 1 << top
+                top_bit = bool(valid_may & (1 << top))
+                other_bit = bool(valid_may & (1 << other_slot))
+                valid_may &= ~((1 << top) | (1 << other_slot))
+                if top_bit:
+                    valid_may |= 1 << other_slot
+                if other_bit:
+                    valid_may |= 1 << top
+            elif effect.kind in {"store-register", "arithmetic"}:
+                destination = (top + effect.target) & 7
+                physical[destination] = (
+                    (1 << 80) - 1
+                    if any(
+                        self._dependency_is_tainted(
+                            dependency, state, exact_top=top
+                        )
+                        for dependency in effect.dependencies
+                    )
+                    else 0
+                )
+                valid_must |= 1 << destination
+                valid_may |= 1 << destination
+                physical, next_top, valid_must, valid_may = self._x87_pop(
+                    physical,
+                    next_top,
+                    valid_must,
+                    valid_may,
+                    effect.pop_count,
+                )
+            elif effect.kind == "pop":
+                physical, next_top, valid_must, valid_may = self._x87_pop(
+                    physical,
+                    next_top,
+                    valid_must,
+                    valid_may,
+                    effect.pop_count,
+                )
+            elif effect.kind == "free":
+                destination = (top + effect.target) & 7
+                valid_must &= ~(1 << destination)
+                valid_may &= ~(1 << destination)
+                physical, next_top, valid_must, valid_may = self._x87_pop(
+                    physical,
+                    next_top,
+                    valid_must,
+                    valid_may,
+                    effect.pop_count,
+                )
+            else:
+                raise self._flow_error(
+                    decoded, f"unmodeled x87 state effect: {effect.kind}"
+                )
+            branches.append(
+                _X87State(
+                    tuple(physical),
+                    1 << next_top,
+                    valid_must,
+                    valid_may,
+                )
+            )
+        return self._join_x87_states(tuple(branches))
+
     def _apply_instruction_value_flow(
-        self, decoded, state: dict[str, int]
-    ) -> dict[str, int]:
+        self, decoded, state: _TaintState
+    ) -> _TaintState:
         flow = self._instruction_value_flow(decoded)
         if flow.taint_blocker_reason is not None and any(
             self._dependency_is_tainted(dependency, state)
@@ -2562,13 +2799,27 @@ class _DirectCfgRecovery:
             )
 
         old_state = state
-        next_state = dict(old_state)
+        next_registers = dict(old_state.registers)
+        next_x87 = old_state.x87
         for family, mask in written_masks.items():
-            remaining = next_state.get(family, 0) & ~mask
+            if family.startswith(("x87-physical:", "x87-logical:")):
+                continue
+            remaining = next_registers.get(family, 0) & ~mask
             if remaining:
-                next_state[family] = remaining
+                next_registers[family] = remaining
             else:
-                next_state.pop(family, None)
+                next_registers.pop(family, None)
+
+        physical = list(next_x87.phys_taint)
+        wrote_physical = False
+        for effect in flow.register_effects:
+            physical_slot = self._x87_slot(
+                effect.destination.family, "x87-physical:"
+            )
+            if physical_slot is None:
+                continue
+            wrote_physical = True
+            physical[physical_slot] &= ~effect.destination.mask
         for effect in flow.register_effects:
             taint_mask = (
                 effect.destination.mask
@@ -2581,14 +2832,48 @@ class _DirectCfgRecovery:
                     "register effect taint lanes exceed written lanes: "
                     f"register={effect.destination.name}",
                 )
-            if any(
+            is_tainted = any(
                 self._dependency_is_tainted(dependency, old_state)
                 for dependency in effect.dependencies
-            ):
-                next_state[effect.destination.family] = (
-                    next_state.get(effect.destination.family, 0)
+            )
+            physical_slot = self._x87_slot(
+                effect.destination.family, "x87-physical:"
+            )
+            logical_slot = self._x87_slot(
+                effect.destination.family, "x87-logical:"
+            )
+            if logical_slot is not None:
+                raise self._flow_error(
+                    decoded,
+                    "generic value flow attempted a logical x87 write: "
+                    f"register={effect.destination.name}",
+                )
+            if physical_slot is not None:
+                if is_tainted:
+                    physical[physical_slot] |= taint_mask
+            elif is_tainted:
+                next_registers[effect.destination.family] = (
+                    next_registers.get(effect.destination.family, 0)
                     | taint_mask
                 )
+        if wrote_physical or self._instruction_uses_mmx(decoded):
+            # Every MMX instruction transitions the shared register file into
+            # MMX state: TOP=0 and every physical tag is valid.  EMMS later
+            # empties the tags but deliberately preserves TOP and payload.
+            next_x87 = _X87State(
+                tuple(physical),
+                1,
+                0xFF,
+                0xFF,
+            )
+        next_state = _TaintState(next_registers, next_x87)
+        if flow.x87_effect is not None:
+            next_state.x87 = self._apply_x87_effect(
+                decoded, flow.x87_effect, old_state
+            )
+        self._check_count(
+            "max_states_per_block", next_state.x87.top_mask.bit_count()
+        )
         return next_state
 
     @staticmethod
@@ -2851,11 +3136,20 @@ class _DirectCfgRecovery:
             if source_block is not None and edge.target in successors:
                 successors[source_block].add(edge.target)
 
-        entries: dict[int, dict[str, int]] = {
-            block.start: {} for block in blocks
+        entries: dict[int, _TaintState | None] = {
+            block.start: (
+                _TaintState.empty()
+                if block.start in self.function_addresses
+                else None
+            )
+            for block in blocks
         }
-        outputs: dict[int, dict[str, int]] = {}
-        pending = [block.start for block in blocks]
+        outputs: dict[int, _TaintState] = {}
+        pending = [
+            block_start
+            for block_start, entry in entries.items()
+            if entry is not None
+        ]
         heapq.heapify(pending)
         queued = set(pending)
         blocks_by_start = {block.start: block for block in blocks}
@@ -2863,7 +3157,12 @@ class _DirectCfgRecovery:
             block_start = heapq.heappop(pending)
             queued.remove(block_start)
             block = blocks_by_start[block_start]
-            tainted = dict(entries[block_start])
+            entry = entries[block_start]
+            if entry is None:
+                raise CfgRecoveryError(
+                    f"taint worklist reached bottom block: {block_start:#x}"
+                )
+            tainted = _TaintState(dict(entry.registers), entry.x87)
             for address in block.instruction_addresses:
                 decoded = self._owned_decoded(address)
                 tainted = self._apply_instruction_value_flow(
@@ -2875,9 +3174,12 @@ class _DirectCfgRecovery:
                 continue
             outputs[block_start] = output
             for successor in sorted(successors[block_start]):
-                updated = dict(entries[successor])
-                for family, mask in output.items():
-                    updated[family] = updated.get(family, 0) | mask
+                successor_entry = entries[successor]
+                updated = (
+                    _TaintState(dict(output.registers), output.x87)
+                    if successor_entry is None
+                    else self._join_taint_states(successor_entry, output)
+                )
                 if updated == entries[successor]:
                     continue
                 entries[successor] = updated

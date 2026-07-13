@@ -840,8 +840,8 @@ def test_clean_fstp_register_copy_and_pop_is_fully_modeled(tmp_path):
         "b8 50 10 40 00 0f 6e c0 0f 77 0f 7e c0 a3 90 20 40 00 c3",
         # FFREE changes a tag; it does not erase the aliased physical payload.
         "b8 50 10 40 00 0f 6e c0 dd c0 0f 7e c0 a3 90 20 40 00 c3",
-        # An x87 push cannot silently erase the old MM7 physical alias.
-        "b8 50 10 40 00 0f 6e f8 d9 e8 0f 7e f8 a3 90 20 40 00 c3",
+        # An x87 push into physical slot 7 cannot erase unrelated MM6.
+        "b8 50 10 40 00 0f 6e f0 d9 e8 0f 7e f0 a3 90 20 40 00 c3",
     ],
 )
 def test_x87_stack_and_tag_updates_preserve_mmx_physical_alias_taint(
@@ -854,15 +854,174 @@ def test_x87_stack_and_tag_updates_preserve_mmx_physical_alias_taint(
         recover_cfg(image, inventory(image), generous_limits(image))
 
 
+def test_fldenv_top_ambiguity_cannot_hide_physical_mmx_taint(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c8 d9 21 dd 19 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_tainted_x87_mutation_with_unknown_top_has_canonical_diagnostic(
+    tmp_path,
+):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c0 d9 21 d9 e8 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError,
+        match=(
+            r"address=0x401014;bytes=d9e8;id=330;mnemonic=fld1;"
+            r"operands=;reason=ambiguous x87 TOP with tainted physical "
+            r"payload: effect=push;top-mask=0xff;valid-must=0x00;"
+            r"valid-may=0xff"
+        ),
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_fst_logical_destination_does_not_clear_unrelated_physical_mmx(
+    tmp_path,
+):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c8 0f 77 d9 e8 dd d1 "
+        "0f 7e c8 89 02 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_clean_fld1_fstp_does_not_store_stale_physical_mmx_payload(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c0 0f 77 d9 e8 dd 19 c3",
+    )
+    recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_ffree_empty_logical_value_does_not_erase_physical_mmx_payload(
+    tmp_path,
+):
+    clean_logical_store = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c0 dd c0 d9 e8 dd 19 c3",
+    )
+    recover_cfg(
+        clean_logical_store,
+        inventory(clean_logical_store),
+        generous_limits(clean_logical_store),
+    )
+
+    physical_read = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c0 dd c0 d9 e8 dd 19 "
+        "0f 7e c0 89 02 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(
+            physical_read,
+            inventory(physical_read),
+            generous_limits(physical_read),
+        )
+
+
+@pytest.mark.parametrize("restore", ["dd 21", "0f ae 09"])
+def test_fresh_x87_state_restore_clears_physical_payload_taint(
+    tmp_path, restore
+):
+    image = load_cfg_program(
+        tmp_path,
+        f"b8 50 10 40 00 0f 6e c0 {restore} dd 19 c3",
+    )
+    recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_x87_state_save_sinks_stale_physical_payload_after_emms(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c0 0f 77 dd 31 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_fldenv_with_clean_physical_state_keeps_logical_stores_clean(tmp_path):
+    image = load_cfg_program(tmp_path, "d9 21 d9 e8 dd 19 c3")
+    recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        # One predecessor increments TOP, so ST(0) can resolve physical MM1.
+        "b8 50 10 40 00 0f 6e c8 85 c0 74 02 d9 f7 dd 19 c3",
+        # One predecessor empties tags while the other keeps MM0 valid.
+        "b8 50 10 40 00 0f 6e c0 85 c0 74 02 0f 77 dd 19 c3",
+    ],
+)
+def test_cfg_join_unions_top_and_may_tags_for_relevant_taint(
+    tmp_path, program
+):
+    image = load_cfg_program(tmp_path, program)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_cfg_join_with_differing_clean_top_and_tags_is_not_a_pointer_blocker(
+    tmp_path,
+):
+    image = load_cfg_program(
+        tmp_path,
+        "31 c0 85 c0 74 02 d9 f7 d9 e8 dd 19 c3",
+    )
+    recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_call_retains_physical_taint_and_invalidates_logical_control(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c8 e8 04 00 00 00 dd 19 c3 90 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_finit_resets_top_and_tags_but_retains_physical_payload(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "b8 50 10 40 00 0f 6e c0 db e3 d9 e8 dd 19 "
+        "0f 7e c0 89 02 c3",
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
 def test_unknown_hidden_x87_stack_form_blocks_only_relevant_taint(tmp_path):
     tainted = load_cfg_program(
         tmp_path,
-        "b8 50 10 40 00 0f 6e c8 d9 f7 c3",
+        "b8 50 10 40 00 0f 6e c8 d9 f8 c3",
     )
     with pytest.raises(CfgRecoveryError, match="unmodeled x87 stack effect"):
         recover_cfg(tainted, inventory(tainted), generous_limits(tainted))
 
-    clean = load_cfg_program(tmp_path, "d9 f7 c3")
+    clean = load_cfg_program(tmp_path, "d9 f8 c3")
     recover_cfg(clean, inventory(clean), generous_limits(clean))
 
 
@@ -932,7 +1091,7 @@ def test_high_water_marks_cover_all_caps_and_zero_only_deferred_dimensions(
         field.name for field in fields(AnalysisLimits)
     }
     assert high_water["max_finite_values"] > 0
-    assert high_water["max_states_per_block"] > 0
+    assert high_water["max_states_per_block"] == 8
     assert high_water["max_fixpoint_updates"] > 0
     for deferred in (
         "max_jump_tables",
