@@ -211,7 +211,7 @@ s32 mnDiagram_GetHitPercentage(int is_name_mode, u8 player_index)
 s32 mnDiagram_GetPlayPercentage(u8 is_name_mode, u8 player_index)
 {
     f32 total_play_time;
-    int i;
+    s32 i;
     f32 zero = 0.0f;
 
     if ((u8) is_name_mode != 0) {
@@ -326,7 +326,7 @@ int mnDiagram_GetFighterTotalKOs(u8 field_index)
     int total = 0;
     int i;
     for (i = 0; i < 25; i++) {
-        if (mn_IsFighterUnlocked(i) != 0) {
+        if (mn_IsFighterUnlocked(i)) {
             total +=
                 GetPersistentFighterData(field_index)->fighter_kos[(u8) i];
         }
@@ -339,7 +339,7 @@ static inline int mnDiagram_SumFighterKOs(u8 field_index)
     int total = 0;
     int i;
     for (i = 0; i < 25; i++) {
-        if (mn_IsFighterUnlocked(i) != 0) {
+        if (mn_IsFighterUnlocked(i)) {
             total +=
                 GetPersistentFighterData(field_index)->fighter_kos[(u8) i];
         }
@@ -374,7 +374,7 @@ static inline int mnDiagram_SumFighterFalls(u8 field_index)
     int total = 0;
     int i;
     for (i = 0; i < 25; i++) {
-        if (mn_IsFighterUnlocked(i)) {
+        if (mn_IsFighterUnlocked(i) != 0) {
             total +=
                 GetPersistentFighterData(i & 0xFF)->fighter_kos[field_index];
         }
@@ -394,6 +394,19 @@ static inline int mnDiagram_CountUnlockedFightersInline(void)
 {
     int i;
     int count = 0;
+    for (i = 0; i < 0x19; i++) {
+        if (mn_IsFighterUnlocked(i) != 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static inline int mnDiagram_CountUnlockedFightersForRowsInline(void)
+{
+    int i;
+    int count = 0;
+
     for (i = 0; i < 0x19; i++) {
         if (mn_IsFighterUnlocked(i)) {
             count++;
@@ -789,7 +802,7 @@ void mnDiagram_SortFightersByKOs(void)
 static inline int mnDiagram_SumNameKOs(u8 field_index)
 {
     int total;
-    int j;
+    s32 j;
     total = 0;
     for (j = total; j < 0x78; j++) {
         if (GetNameText(j & 0xFF)) {
@@ -1203,7 +1216,7 @@ void mnDiagram_InputProc(HSD_GObj* gobj)
     u8* ptr2;
     u8* ptr3;
     short new_var;
-    u8* sorted = mnDiagram_804A0750.sorted_fighters;
+    u8* sorted;
     Diagram* data = mnDiagram_804D6C10->user_data;
     u32 input = mn_80229624(4);
     s32 count = 0;
@@ -1985,7 +1998,7 @@ void mnDiagram_CreatePopup(s32 arg0, s32 arg1, s32 arg2)
     void** joint_data;
     Diagram* data;
     HSD_GObj* gobj;
-    HSD_JObj* jobj;
+    register HSD_JObj* jobj;
     mnDiagram_PopupData* user_data;
 
     tbl = GET_DIAGRAM_ANIM_TABLE();
@@ -2249,7 +2262,7 @@ void mnDiagram_UpdateScrollArrows(HSD_GObj* gobj)
 void mnDiagram_ExitAnimProc(HSD_GObj* gobj)
 {
     mnDiagram_AnimData* data;
-    register HSD_JObj* jobj;
+    HSD_JObj* jobj;
     f32* table;
 
     data = gobj->user_data;
@@ -2471,7 +2484,7 @@ void mnDiagram_DrawGridValues(void* arg0, s32 arg1, s32 arg2, u8 arg3)
     s32 var_r17_6;
     s32 var_r23;
     u8 var_r24;
-    u8* sorted;
+    u8* sorted = mnDiagram_804A0750.sorted_fighters;
 
     var_r30 = 0;
     do {
@@ -2664,11 +2677,6 @@ HSD_JObj* mnDiagram_CreateFighterIcon(int idx, int arg1)
     return temp_r3;
 }
 
-static inline void** mnDiagram_GetFaceB(void)
-{
-    return ((mnDiagram_Assets*) &mnDiagram_804A0750)->FaceB;
-}
-
 static inline HSD_JObj* mnDiagram_CreateFighterHeader(
     int fighter_id, mnDiagram_Assets* assets)
 {
@@ -2689,15 +2697,28 @@ static inline HSD_JObj* mnDiagram_CreateFighterHeader(
 static inline HSD_JObj* mnDiagram_CreateVisibleFighterHeader2(
     u8* sorted, int start, int rank, mnDiagram_Assets* assets)
 {
-    return mnDiagram_CreateFighterHeader(
-        mnDiagram_GetVisibleFighterCursorFrom2(sorted, start, rank), assets);
+    const int fighter_id =
+        mnDiagram_GetVisibleFighterCursorFrom2(sorted, start, rank);
+    return mnDiagram_CreateFighterHeader(fighter_id, assets);
 }
 
 static inline HSD_JObj* mnDiagram_CreateVisibleFighterHeader(
-    u8* sorted, int start, int rank, mnDiagram_Assets* assets)
+    mnDiagram_Assets* assets, u8* sorted, int start, int rank)
 {
-    return mnDiagram_CreateFighterHeader(
-        mnDiagram_GetVisibleFighterCursorFrom(sorted, start, rank), assets);
+    int fighter_id =
+        mnDiagram_GetVisibleFighterCursorFrom(sorted, start, rank);
+    HSD_JObj* jobj;
+    void** joint_data = assets->FaceB;
+    HSD_JObj* child;
+
+    jobj = HSD_JObjLoadJoint(joint_data[0]);
+    HSD_JObjAddAnimAll(jobj, joint_data[1], joint_data[2], joint_data[3]);
+    HSD_JObjReqAnimAll(jobj, mnDiagram_804DBF84);
+    HSD_JObjAnimAll(jobj);
+    lb_80011E24(jobj, &child, 2, -1);
+    HSD_JObjReqAnimAll(child, (f32) (fighter_id & 0xFF));
+    HSD_JObjAnimAll(child);
+    return jobj;
 }
 
 #pragma push
@@ -2705,7 +2726,7 @@ static inline HSD_JObj* mnDiagram_CreateVisibleFighterHeader(
 void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
 {
     HSD_JObj* header;
-    Diagram* data = GET_DIAGRAM(arg0);
+    Diagram* data = ((HSD_GObj*) arg0)->user_data;
     Diagram* data_alias = data;
     mnDiagram_Assets* assets = (mnDiagram_Assets*) &mnDiagram_804A0750;
     u8* sorted;
@@ -2717,9 +2738,8 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     for (i = 0; i < 7; i++) {
         sorted = (u8*) assets;
         if (mnDiagram_CountUnlockedFightersInline() > i) {
-            header = mnDiagram_CreateFighterHeader(
-                mnDiagram_GetVisibleFighterCursorFrom(sorted, arg2, i),
-                assets);
+            header = mnDiagram_CreateVisibleFighterHeader(assets, sorted, arg2,
+                                                          i);
             spacing = HSD_JObjGetTranslationX(data->jobjs[8]) -
                       HSD_JObjGetTranslationX(data->jobjs[7]);
             HSD_JObjSetTranslateX(header, spacing * i);
@@ -2731,7 +2751,7 @@ void mnDiagram_DrawFighterHeaders(void* arg0, int arg1, int arg2)
     // Row headers (fighter icons)
     for (i = 0; i < 0xA; i++) {
         sorted = (u8*) assets;
-        if (mnDiagram_CountUnlockedFightersInline() > i) {
+        if (mnDiagram_CountUnlockedFightersForRowsInline() > i) {
             header = mnDiagram_CreateVisibleFighterHeader2(sorted, arg1, i,
                                                            assets);
             parent = data_alias->jobjs[9];
