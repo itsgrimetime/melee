@@ -418,6 +418,135 @@ def test_run_evaluates_every_legal_mask_and_resumes(tmp_path: Path) -> None:
     assert second.cache_stats == {"parent_entries": 2, "candidate_entries": 4}
 
 
+def test_exact_parent_inspections_seed_candidates_across_objective_epochs(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+
+    first = run_delta_minimize(config, backends=fixture.backends())
+
+    assert first.objective_manifest["color_donor"] == "left"
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+    assert fixture.inspect_calls == 2
+
+    second = run_delta_minimize(
+        replace(config, donor_overrides={"color": "right"}),
+        backends=fixture.backends(),
+    )
+
+    assert second.objective_manifest["color_donor"] == "right"
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 8
+    assert fixture.inspect_calls == 4
+
+
+def test_projected_scoped_right_reuses_only_an_exact_parent_hash(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    left = "int unrelated(void) { return 1; }\nint f(void) { return 2; }\n"
+    right = "int unrelated(void) { return 3; }\nint f(void) { return 4; }\n"
+    config.left.write_text(left, encoding="utf-8")
+    config.right.write_text(right, encoding="utf-8")
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+
+    manifest = result.delta_manifest
+    assert manifest["left_hash"] == _hash(left)
+    assert manifest["right_hash"] == _hash(right)
+    assert manifest["scoped_right_hash"] not in {_hash(left), _hash(right)}
+    assert manifest["excluded_atom_ids"]
+    assert result.candidate_counts["legal"] == 2
+    assert [row["source_hash"] for row in result.candidates] == [
+        manifest["left_hash"],
+        manifest["scoped_right_hash"],
+    ]
+    assert fixture.score_calls == 2
+    assert fixture.inspect_calls == 1
+
+
+def test_incomplete_parent_inspection_is_not_seeded(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    base = fixture.backends()
+
+    def capture_incomplete_parent(candidate, config, store):
+        return replace(
+            fixture.capture_parent(candidate, config, store),
+            inspect_text="FUNCTION: other\nFrontend: OBJOBJECTS\n",
+        )
+
+    result = run_delta_minimize(
+        _config(tmp_path),
+        backends=replace(base, capture_parent=capture_incomplete_parent),
+    )
+
+    assert result.candidate_counts == {"legal": 4, "viable": 4, "complete": 4}
+    assert fixture.score_calls == 4
+    assert fixture.inspect_calls == 4
+
+
+def test_fresh_wrong_mode_parent_is_neither_persisted_nor_seeded(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    store = DeltaRunStore(config.out_dir)
+    base = fixture.backends()
+
+    def capture_wrong_mode(candidate, run_config, run_store):
+        return replace(
+            fixture.capture_parent(candidate, run_config, run_store),
+            inspection_mode="no-objobjects",
+        )
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-parent-evidence$"):
+        run_module._capture_parents(
+            config,
+            store,
+            replace(base, capture_parent=capture_wrong_mode),
+            LEFT,
+            RIGHT,
+        )
+
+    assert list((store.root / "evidence/parents").glob("*.json")) == []
+    assert getattr(store, "_delta_inspection_cache", {}) == {}
+    assert fixture.score_calls == 0
+    assert fixture.inspect_calls == 0
+
+
+def test_cached_wrong_mode_parent_is_invalidated_and_recaptured(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    store = DeltaRunStore(config.out_dir)
+    backends = fixture.backends()
+    provenance = fixture.parent_provenance(config)
+    left_candidate = run_module._parent_candidate("left", LEFT, store)
+    left_key = store.parent_evidence_key(left_candidate, config, provenance)
+    wrong_mode = replace(
+        fixture.capture_parent(left_candidate, config, store),
+        inspection_mode="no-objobjects",
+    )
+    store.write_parent_evidence(left_key, wrong_mode.to_dict())
+    fixture.parent_calls = 0
+
+    parents, stats = run_module._capture_parents(
+        config,
+        store,
+        backends,
+        LEFT,
+        RIGHT,
+    )
+
+    assert stats == {"parent_hits": 0, "parent_misses": 2}
+    assert fixture.parent_calls == 2
+    assert parents.left.inspection_mode == "objobjects"
+    rewritten = store.load_parent_evidence(left_key)
+    assert rewritten is not None
+    assert RawCandidateEvidence.from_dict(rewritten).inspection_mode == "objobjects"
+    assert getattr(store, "_delta_inspection_cache", {})[parents.left.source_hash] == (
+        parents.left.inspect_text
+    )
+
+
 def test_run_projects_unrelated_function_edit_out_of_three_atom_lattice(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
     config = _config(tmp_path, function="f")

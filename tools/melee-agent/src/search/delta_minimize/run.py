@@ -47,6 +47,7 @@ from .evaluator import (
     _file_hash,
     _frame_and_stack,
     _invoke_inspector,
+    _remember_inspection,
     _structural_status,
     _validate_cached_artifacts,
     capture_candidate,
@@ -1512,6 +1513,7 @@ def _capture_parents(
         raise DeltaMinimizeError("invalid-parent-evidence-provenance")
     raws: dict[str, RawCandidateEvidence] = {}
     stats = {"parent_hits": 0, "parent_misses": 0}
+    expected_mode = "objobjects" if config.include_objobjects else "no-objobjects"
     for side, source in (("left", left_source), ("right", right_source)):
         candidate = _parent_candidate(side, source, store)
         key = store.parent_evidence_key(candidate, config, provenance)
@@ -1519,12 +1521,15 @@ def _capture_parents(
         if cached is not None:
             try:
                 cached_raw = RawCandidateEvidence.from_dict(cached)
-                reusable = _validate_cached_artifacts(
-                    cached_raw,
-                    candidate.source_path,
-                    candidate.source_hash,
-                    include_objobjects=config.include_objobjects,
-                    require_checkdiff=active.parent_requires_checkdiff,
+                reusable = (
+                    cached_raw.inspection_mode == expected_mode
+                    and _validate_cached_artifacts(
+                        cached_raw,
+                        candidate.source_path,
+                        candidate.source_hash,
+                        include_objobjects=config.include_objobjects,
+                        require_checkdiff=active.parent_requires_checkdiff,
+                    )
                 )
             except DeltaMinimizeError:
                 reusable = False
@@ -1538,6 +1543,7 @@ def _capture_parents(
                 or raw.candidate_id != candidate.candidate_id
                 or raw.source_hash != candidate.source_hash
                 or raw.source_path != str(candidate.source_path)
+                or raw.inspection_mode != expected_mode
                 or not raw.viable
             ):
                 raise DeltaMinimizeError("invalid-parent-evidence")
@@ -1557,10 +1563,17 @@ def _capture_parents(
                 raw.candidate_id != candidate.candidate_id
                 or raw.source_hash != candidate.source_hash
                 or raw.source_path != str(candidate.source_path)
+                or raw.inspection_mode != expected_mode
                 or not raw.viable
             ):
                 raise DeltaMinimizeError("corrupt-cached-evidence")
             stats["parent_hits"] += 1
+        _remember_inspection(
+            store,
+            raw.source_hash,
+            config.function,
+            raw.inspect_text,
+        )
         raws[side] = raw
     bundle = ParentEvidenceBundle(
         left=raws["left"],
