@@ -418,6 +418,272 @@ def test_run_evaluates_every_legal_mask_and_resumes(tmp_path: Path) -> None:
     assert second.cache_stats == {"parent_entries": 2, "candidate_entries": 4}
 
 
+def test_run_projects_unrelated_function_edit_out_of_three_atom_lattice(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path, function="f")
+    left = """\
+int unrelated(void) { s32 value = 1; return value; }
+static int leaf(int x) { return x + 1; }
+static int helper(int x) { return leaf(x) + 2; }
+int f(int x) { return helper(x) + 3; }
+"""
+    right = """\
+int unrelated(void) { int value = 1; return value; }
+static int leaf(int x) { return x + 10; }
+static int helper(int x) { return leaf(x) + 20; }
+int f(int x) { return helper(x) + 30; }
+"""
+    config.left.write_text(left, encoding="utf-8")
+    config.right.write_text(right, encoding="utf-8")
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+    manifest = result.delta_manifest
+
+    assert result.schema_version == "delta-minimize-result.v2"
+    assert result.candidate_counts["legal"] == 8
+    assert fixture.score_calls == 8
+    assert fixture.parent_calls == 2
+    assert len(manifest["atoms"]) == 3
+    assert len(manifest["excluded_atom_ids"]) == 1
+    assert result.inputs["right_hash"] == _hash(right)
+    assert result.inputs["scoped_right_hash"] == manifest["scoped_right_hash"]
+    assert result.inputs["excluded_atom_ids"] == manifest["excluded_atom_ids"]
+    assert all(b"int value = 1" not in source for source in fixture.captured_sources.values())
+    assert all(b"s32 value = 1" in source for source in fixture.captured_sources.values())
+    assert b"return helper(x) + 30" in fixture.captured_sources[0b111]
+    assert fixture.captured_sources[0] == left.encode()
+    original_right_artifact = config.out_dir / "artifacts" / "sources" / f"{_hash(right)[:32]}.c"
+    assert original_right_artifact.read_text(encoding="utf-8") == right
+    assert manifest["scoped_right_hash"] != manifest["right_hash"]
+
+
+def test_run_zero_atom_projection_evaluates_left_once_with_donor_provenance(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path, function="f")
+    left = "int f(void) { return 1; }\nint unrelated(void) { return 2; }\n"
+    right = "int f(void) { return 1; }\nint unrelated(void) { return 20; }\n"
+    config.left.write_text(left, encoding="utf-8")
+    config.right.write_text(right, encoding="utf-8")
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+
+    assert result.candidate_counts["legal"] == 1
+    assert fixture.score_calls == 1
+    assert fixture.captured_sources == {0: left.encode()}
+    assert result.delta_manifest["atoms"] == []
+    assert result.delta_manifest["excluded_atom_ids"]
+    assert result.inputs["right_hash"] == _hash(right)
+    assert result.inputs["scoped_right_hash"] == _hash(left)
+
+
+def test_legacy_manifest_and_result_are_invalidated_and_regenerated(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+
+    def legacy_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        return replace(base.extract_manifest(left, right, function=function), schema_version="delta-manifest.v2")
+
+    first = run_delta_minimize(config, backends=replace(base, extract_manifest=legacy_extract))
+    legacy_result = first.to_dict()
+    legacy_result["schema_version"] = "delta-minimize-result.v1"
+    (config.out_dir / "result.json").write_text(json.dumps(legacy_result), encoding="utf-8")
+
+    second = run_delta_minimize(config, backends=base)
+    published_manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
+    published_result = json.loads((config.out_dir / "result.json").read_text(encoding="utf-8"))
+
+    assert second.schema_version == "delta-minimize-result.v2"
+    assert published_manifest["schema_version"] == "delta-manifest.v3"
+    assert published_result["schema_version"] == "delta-minimize-result.v2"
+    assert "scoped_right_hash" in published_manifest
+    assert "excluded_atom_ids" in published_manifest
+
+
+def test_malformed_current_result_scope_provenance_fails_closed(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    result_path = config.out_dir / "result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    del payload["inputs"]["scoped_right_hash"]
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-result$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+@pytest.mark.parametrize(
+    ("path", "bad_value"),
+    (
+        (("status",), 123),
+        (("candidates",), "not-a-list"),
+        (("candidate_counts", "legal"), "4"),
+        (("candidates", 0, "profile", "mask"), "0"),
+        (("delta_manifest", "atoms", 0, "patches", 0, "left_start"), "0"),
+        (("objective_manifest",), {}),
+        (("pareto",), None),
+        (("exact_four_axis",), False),
+    ),
+)
+def test_malformed_current_result_types_fail_closed(
+    tmp_path: Path,
+    path: tuple[str | int, ...],
+    bad_value: object,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    result_path = config.out_dir / "result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    target = payload
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = bad_value
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-result$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_valid_current_result_is_accepted_and_regenerated(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+
+    second = run_delta_minimize(config, backends=fixture.backends())
+
+    assert second.schema_version == "delta-minimize-result.v2"
+    assert second.candidate_counts == first.candidate_counts
+    assert json.loads((config.out_dir / "result.json").read_text(encoding="utf-8"))["schema_version"] == (
+        "delta-minimize-result.v2"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "duplicate-candidate",
+        "duplicate-source",
+        "complete-count",
+        "applied-atoms",
+        "ghost-pareto-candidate",
+        "ghost-best-next",
+        "ghost-exact-match",
+        "ghost-representative",
+        "pruned-frontier",
+    ),
+)
+def test_current_result_cross_field_mutations_fail_closed(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    result_path = config.out_dir / "result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    if mutation == "duplicate-candidate":
+        payload["candidates"][1] = deepcopy(payload["candidates"][0])
+    elif mutation == "duplicate-source":
+        for container in (
+            payload["candidates"][1],
+            payload["candidates"][1]["evidence"],
+            payload["candidates"][1]["profile"],
+        ):
+            container["source_hash"] = payload["candidates"][0]["source_hash"]
+            container["source_path"] = payload["candidates"][0]["source_path"]
+    elif mutation == "complete-count":
+        payload["candidate_counts"]["complete"] -= 1
+    elif mutation == "applied-atoms":
+        payload["candidates"][1]["applied_atoms"] = []
+    elif mutation == "ghost-pareto-candidate":
+        payload["pareto"]["candidate_ids"] = ["ghost"]
+    elif mutation == "ghost-best-next":
+        payload["best_next"] = "ghost"
+        payload["pareto"]["best_next"] = "ghost"
+    elif mutation == "ghost-exact-match":
+        payload["pareto"]["exact_match_candidate_ids"] = ["ghost"]
+    elif mutation == "ghost-representative":
+        payload["pareto"]["groups"][0]["representative"] = "ghost"
+    else:
+        payload["pareto"]["candidate_ids"].remove("mask-00")
+        payload["pareto"]["groups"] = [
+            group
+            for group in payload["pareto"]["groups"]
+            if group["candidate_ids"] != ["mask-00"]
+        ]
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-result$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("representative", "mask-01"),
+        ("minimal_from_left", ["mask-01"]),
+        ("minimal_from_right", ["mask-10"]),
+    ),
+)
+def test_current_result_noncanonical_pareto_group_choice_fails_closed(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    vector = AxisDistances(
+        (1, 0),
+        (1, 0, 0, 0, 0, 0),
+        (1, 0),
+        (1, 0, 0, 0),
+    )
+
+    def tied_profile(raw, _objective, *, parents):
+        assert parents.left.candidate_id == "parent-left"
+        return CandidateProfile(
+            candidate_id=raw.candidate_id,
+            mask=raw.mask,
+            source_hash=raw.source_hash,
+            source_path=raw.source_path,
+            viable=True,
+            compile_status="compiled",
+            axes=vector,
+            complete=True,
+        )
+
+    backends = replace(fixture.backends(), profile_candidate=tied_profile)
+    run_delta_minimize(config, backends=backends)
+    result_path = config.out_dir / "result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["pareto"]["groups"][0]["candidate_ids"] == [
+        "mask-00",
+        "mask-01",
+        "mask-10",
+        "mask-11",
+    ]
+    payload["pareto"]["groups"][0][field] = replacement
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-result$"):
+        run_delta_minimize(config, backends=backends)
+
+
+def test_current_manifest_scoped_hash_mutation_fails_closed(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "delta-manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["scoped_right_hash"] = "0" * 64
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
 def test_run_preserves_actionable_objective_ambiguity(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
     backends = replace(
@@ -959,7 +1225,7 @@ def test_extractor_schema_upgrade_rekeys_candidates_with_changed_atom_order(tmp_
     assert second.candidate_counts == first.candidate_counts
     assert fixture.score_calls == 8
     manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == "delta-manifest.v2"
+    assert manifest["schema_version"] == "delta-manifest.v3"
 
 
 def test_extractor_schema_upgrade_removes_stale_publications_before_enumeration(tmp_path: Path) -> None:
@@ -983,7 +1249,7 @@ def test_extractor_schema_upgrade_removes_stale_publications_before_enumeration(
     assert not (config.out_dir / "result.json").exists()
     assert not (config.out_dir / "candidates.json").exists()
     manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == "delta-manifest.v2"
+    assert manifest["schema_version"] == "delta-manifest.v3"
 
 
 def test_lower_candidate_budget_removes_stale_exact_publications(tmp_path: Path) -> None:
@@ -1029,7 +1295,7 @@ def test_extractor_schema_upgrade_removes_stale_publications_before_objective_fa
     assert not (config.out_dir / "result.json").exists()
     assert not (config.out_dir / "candidates.json").exists()
     manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == "delta-manifest.v2"
+    assert manifest["schema_version"] == "delta-manifest.v3"
 
 
 def test_objective_context_change_removes_stale_publications_before_ambiguity(tmp_path: Path) -> None:

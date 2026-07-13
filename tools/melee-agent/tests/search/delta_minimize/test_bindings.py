@@ -7,6 +7,9 @@ from src.search.delta_minimize.bindings import (
     FunctionBinding,
     build_binding_index,
     couple_semantic_atoms,
+    lexical_owners,
+    reachable_functions,
+    validate_target_definition,
 )
 from src.search.delta_minimize.delta import (
     DeltaAtom,
@@ -267,6 +270,27 @@ int draw(int x, int y) {
 """
 
 
+def assert_unowned_semantic_scope_error(left: str, right: str, *, function: str = "draw") -> None:
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-delta-scope$") as exc:
+        delta.extract_delta_manifest(left, right, function=function)
+    assert exc.value.details["reason"] == "unowned-semantic-delta"
+
+
+def test_binding_index_exposes_lexical_owners_and_outbound_call_closure():
+    source = """\
+int leaf(void) { return 1; }
+int helper(void) { return leaf(); }
+int target(void) { return helper(); }
+int inbound(void) { return target(); }
+"""
+    index = build_binding_index(source)
+    helper_start = source.index("return leaf")
+
+    validate_target_definition(index, "target", side="left")
+    assert lexical_owners(index, (helper_start, helper_start + len("return leaf"))) == ("helper",)
+    assert reachable_functions(index, "target") == frozenset({"target", "helper", "leaf"})
+
+
 def test_parameter_and_call_reorder_become_one_atom():
     manifest = delta.extract_delta_manifest(PARAM_LEFT, PARAM_RIGHT, function="draw")
 
@@ -432,33 +456,7 @@ int helper(int a, int b) { return a; }
 int draw(int x) { return helper(x, 0); }
 """
 
-    manifest = delta.extract_delta_manifest(left, right, function="draw")
-    masks = enumerate_legal_masks(manifest, max_candidates=4)
-
-    assert masks == (0b00, 0b01, 0b10, 0b11)
-    assert materialize_mask(left, manifest, 0) == left
-    assert materialize_mask(left, manifest, 0b11) == right
-    combinations = set()
-    for mask in masks:
-        candidate = materialize_mask(left, manifest, mask)
-        helper = build_binding_index(candidate).functions["helper"]
-        declaration = helper.declaration_signatures[0]
-        signature_shape = (
-            candidate[slice(*declaration.declarator_span)],
-            candidate[slice(*helper.definition_signature_span)].strip(),
-            helper.direct_calls[0].argument_texts,
-        )
-        assert candidate[slice(*declaration.shared_prefix_span)] == "int "
-        assert signature_shape in {
-            ("helper(int a)", "int helper(int a)", ("x",)),
-            (
-                "helper(int a, int b)",
-                "int helper(int a, int b)",
-                ("x", "0"),
-            ),
-        }
-        combinations.add(("marker = 2" in candidate, len(helper.parameter_names)))
-    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
+    assert_unowned_semantic_scope_error(left, right)
 
 
 def test_first_prototype_signature_does_not_absorb_following_marker():
@@ -473,28 +471,7 @@ int helper(int a, int b) { return a; }
 int draw(int x) { return helper(x, 0); }
 """
 
-    manifest = delta.extract_delta_manifest(left, right, function="draw")
-    masks = enumerate_legal_masks(manifest, max_candidates=4)
-
-    assert masks == (0b00, 0b01, 0b10, 0b11)
-    assert materialize_mask(left, manifest, 0) == left
-    assert materialize_mask(left, manifest, 0b11) == right
-    combinations = set()
-    for mask in masks:
-        candidate = materialize_mask(left, manifest, mask)
-        helper = build_binding_index(candidate).functions["helper"]
-        declaration = helper.declaration_signatures[0]
-        assert candidate[slice(*declaration.shared_prefix_span)] == "int "
-        assert candidate[slice(*declaration.declarator_span)] in {
-            "helper(int a)",
-            "helper(int a, int b)",
-        }
-        assert (helper.parameter_names, helper.direct_calls[0].argument_texts) in {
-            (("a",), ("x",)),
-            (("a", "b"), ("x", "0")),
-        }
-        combinations.add(("marker = 2" in candidate, len(helper.parameter_names)))
-    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
+    assert_unowned_semantic_scope_error(left, right)
 
 
 def test_prototype_suffix_insertion_at_owned_end_stays_independent():
@@ -509,23 +486,7 @@ int helper(int a, int b) { return a; }
 int draw(int x) { return helper(x, 0); }
 """
 
-    manifest = delta.extract_delta_manifest(left, right, function="draw")
-    masks = enumerate_legal_masks(manifest, max_candidates=4)
-
-    assert len(manifest.atoms) == 2
-    assert masks == (0b00, 0b01, 0b10, 0b11)
-    assert materialize_mask(left, manifest, 0) == left
-    assert materialize_mask(left, manifest, 0b11) == right
-    combinations = set()
-    for mask in masks:
-        candidate = materialize_mask(left, manifest, mask)
-        helper = build_binding_index(candidate).functions["helper"]
-        combinations.add(("marker = 1" in candidate, len(helper.parameter_names)))
-        assert (helper.parameter_names, helper.direct_calls[0].argument_texts) in {
-            (("a",), ("x",)),
-            (("a", "b"), ("x", "0")),
-        }
-    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
+    assert_unowned_semantic_scope_error(left, right)
 
 
 def test_prototype_preceding_sibling_insertion_stays_independent():
@@ -540,20 +501,7 @@ int helper(int a, int b) { return a; }
 int draw(int x) { return helper(x, 0); }
 """
 
-    manifest = delta.extract_delta_manifest(left, right, function="draw")
-    masks = enumerate_legal_masks(manifest, max_candidates=4)
-
-    assert len(manifest.atoms) == 2
-    assert masks == (0b00, 0b01, 0b10, 0b11)
-    combinations = {
-        (
-            "marker = 1" in candidate,
-            len(build_binding_index(candidate).functions["helper"].parameter_names),
-        )
-        for mask in masks
-        for candidate in (materialize_mask(left, manifest, mask),)
-    }
-    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
+    assert_unowned_semantic_scope_error(left, right)
 
 
 @pytest.mark.parametrize(
@@ -571,22 +519,7 @@ def test_prototype_sibling_removal_stays_independent(left_prototype, right_proto
     left = f"{left_prototype}\nint helper(int a) {{ return a; }}\nint draw(int x) {{ return helper(x); }}\n"
     right = f"{right_prototype}\nint helper(int a, int b) {{ return a; }}\nint draw(int x) {{ return helper(x, 0); }}\n"
 
-    manifest = delta.extract_delta_manifest(left, right, function="draw")
-    masks = enumerate_legal_masks(manifest, max_candidates=4)
-
-    assert len(manifest.atoms) == 2
-    assert masks == (0b00, 0b01, 0b10, 0b11)
-    assert materialize_mask(left, manifest, 0) == left
-    assert materialize_mask(left, manifest, 0b11) == right
-    combinations = {
-        (
-            "marker = 1" in candidate,
-            len(build_binding_index(candidate).functions["helper"].parameter_names),
-        )
-        for mask in masks
-        for candidate in (materialize_mask(left, manifest, mask),)
-    }
-    assert combinations == {(False, 1), (False, 2), (True, 1), (True, 2)}
+    assert_unowned_semantic_scope_error(left, right)
 
 
 def test_owned_start_and_name_interior_insertions_stay_coupled():
@@ -850,17 +783,10 @@ def test_function_pointer_object_is_not_indexed_as_a_function_declaration():
 
 
 def test_changed_function_pointer_object_with_unchanged_call_fails_closed():
-    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding") as exc:
-        delta.extract_delta_manifest(
-            FUNCTION_POINTER_OBJECT_LEFT,
-            FUNCTION_POINTER_OBJECT_RIGHT,
-            function="draw",
-        )
-    blockers = [
-        item for item in exc.value.details["blockers"] if item["reason"] == "function-pointer-object-declaration"
-    ]
-    changed_offset = FUNCTION_POINTER_OBJECT_LEFT.index("sub;", FUNCTION_POINTER_OBJECT_LEFT.index("(*helper)"))
-    assert any(blocker["span"][0] <= changed_offset < blocker["span"][1] for blocker in blockers)
+    assert_unowned_semantic_scope_error(
+        FUNCTION_POINTER_OBJECT_LEFT,
+        FUNCTION_POINTER_OBJECT_RIGHT,
+    )
 
 
 @pytest.mark.parametrize(
@@ -902,11 +828,7 @@ def test_function_pointer_object_allows_sibling_declarator_change(left_declarati
     left = prefix + left_declaration + "\nint draw(void) { return unrelated; }\n"
     right = prefix + right_declaration + "\nint draw(void) { return unrelated; }\n"
 
-    manifest = delta.extract_delta_manifest(left, right, function="draw")
-
-    assert len(manifest.atoms) == 1
-    assert materialize_mask(left, manifest, 0) == left
-    assert materialize_mask(left, manifest, 1) == right
+    assert_unowned_semantic_scope_error(left, right)
 
 
 @pytest.mark.parametrize(
@@ -931,11 +853,7 @@ def test_function_pointer_object_allows_inserted_sibling_declarator(
     left = prefix + left_declaration + "\nint draw(void) { return 1; }\n"
     right = prefix + right_declaration + "\nint draw(void) { return 1; }\n"
 
-    manifest = delta.extract_delta_manifest(left, right, function="draw")
-
-    assert len(manifest.atoms) == 1
-    assert materialize_mask(left, manifest, 0) == left
-    assert materialize_mask(left, manifest, 1) == right
+    assert_unowned_semantic_scope_error(left, right)
 
 
 @pytest.mark.parametrize(
@@ -993,8 +911,7 @@ def test_function_pointer_object_blocks_own_declarator_and_shared_prefix_changes
     left = prefix + left_declaration + "\nint draw(int value) { return helper(value); }\n"
     right = prefix + right_declaration + "\nint draw(int value) { return helper(value); }\n"
 
-    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
-        delta.extract_delta_manifest(left, right, function="draw")
+    assert_unowned_semantic_scope_error(left, right)
 
 
 def test_changed_local_declaration_shadowing_unchanged_call_fails_closed():
@@ -1115,23 +1032,18 @@ int draw(int x, int y) { return (helper != 0) + helper(y, x); }
     ],
     ids=("arity", "parameter-type", "return-type", "return-declarator"),
 )
-def test_unchanged_non_call_reference_blocks_function_type_change(
+def test_unreachable_function_type_change_is_excluded_despite_non_call_reference(
     left_definition,
     right_definition,
 ):
     reference = "\nint (*fp)(int) = helper;\nint draw(void) { return fp(1); }\n"
 
-    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding") as exc:
-        delta.extract_delta_manifest(
-            left_definition + reference,
-            right_definition + reference,
-            function="draw",
-        )
+    left = left_definition + reference
+    manifest = delta.extract_delta_manifest(left, right_definition + reference, function="draw")
 
-    assert any(
-        blocker["symbol"] == "helper" and blocker["reason"] == "non-call-function-reference"
-        for blocker in exc.value.details["blockers"]
-    )
+    assert manifest.atoms == ()
+    assert materialize_mask(left, manifest, 0) == left
+    assert manifest.excluded_atom_ids
 
 
 def test_unchanged_non_call_reference_blocks_renamed_function_binding():
@@ -1174,18 +1086,18 @@ int helper(int a) { return a; }
 int draw(int x) { return helper(x); }
 """
     right = """\
-int marker = 2, assist(int a);
+int marker = 1, assist(int a);
 int assist(int a) { return a; }
 int draw(int x) { return assist(x); }
 """
 
     manifest = delta.extract_delta_manifest(left, right, function="draw")
-    masks = enumerate_legal_masks(manifest, max_candidates=4)
+    masks = enumerate_legal_masks(manifest, max_candidates=2)
 
-    assert masks == (0b00, 0b01, 0b10, 0b11)
+    assert masks == (0b0, 0b1)
     assert materialize_mask(left, manifest, 0) == left
-    assert materialize_mask(left, manifest, 0b11) == right
-    combinations = set()
+    assert materialize_mask(left, manifest, 0b1) == right
+    names = set()
     for mask in masks:
         candidate = materialize_mask(left, manifest, mask)
         name = "assist" if "int assist(int a) {" in candidate else "helper"
@@ -1193,13 +1105,8 @@ int draw(int x) { return assist(x); }
         assert candidate[slice(*function.definition_name_span)] == name
         assert tuple(candidate[slice(*span)] for span in function.declaration_name_spans) == (name,)
         assert candidate[slice(*function.direct_calls[0].callee_name_span)] == name
-        combinations.add(("marker = 2" in candidate, name))
-    assert combinations == {
-        (False, "helper"),
-        (False, "assist"),
-        (True, "helper"),
-        (True, "assist"),
-    }
+        names.add(name)
+    assert names == {"helper", "assist"}
 
 
 def test_ambiguous_rename_fails_closed():
@@ -1257,8 +1164,7 @@ def test_changed_generic_preprocessor_directive_fails_closed(left_directive, rig
     left = f"{left_directive}\nint draw(void) {{ return 1; }}\n"
     right = f"{right_directive}\nint draw(void) {{ return 1; }}\n"
 
-    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
-        delta.extract_delta_manifest(left, right, function="draw")
+    assert_unowned_semantic_scope_error(left, right)
 
 
 def test_unchanged_generic_preprocessor_directives_do_not_block_coupling():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from itertools import zip_longest
@@ -12,6 +13,11 @@ from src.common.tree_sitter_c import get_parser, node_text
 
 from .contracts import DeltaMinimizeError
 
+_LEXICAL_TRIVIA_RE = re.compile(
+    r"(?:\s+|//[^\r\n]*(?:\r?\n|\r|$)|/\*.*?\*/)*\Z",
+    re.DOTALL,
+)
+
 
 @dataclass(frozen=True)
 class CallBinding:
@@ -20,6 +26,19 @@ class CallBinding:
     argument_span: tuple[int, int]
     argument_texts: tuple[str, ...]
     callee_name_span: tuple[int, int] | None = None
+
+
+@dataclass(frozen=True)
+class FunctionSpan:
+    name: str
+    span: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class CallEdge:
+    caller: str
+    callee: str
+    call_span: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -70,6 +89,10 @@ class BindingIndex:
     functions: Mapping[str, FunctionBinding]
     blockers: tuple[BindingBlocker, ...]
     locals: tuple[LocalBinding, ...] = ()
+    function_spans: tuple[FunctionSpan, ...] = ()
+    call_edges: tuple[CallEdge, ...] = ()
+    definition_counts: Mapping[str, int] | None = None
+    source: str = ""
 
 
 class UnionFind:
@@ -182,6 +205,12 @@ def build_binding_index(source: str) -> BindingIndex:
         unique_nodes[name] = definitions[0]
 
     calls_by_name: dict[str, list[CallBinding]] = defaultdict(list)
+    call_edges: list[CallEdge] = []
+    definition_names_by_span = {
+        (node.start_byte, node.end_byte): name
+        for name, definitions in function_nodes.items()
+        for node, _, _, _ in definitions
+    }
     supported_callee_spans: set[tuple[int, int]] = set()
     for call in _walk_type(root, "call_expression"):
         callee_node = call.child_by_field_name("function")
@@ -209,7 +238,7 @@ def build_binding_index(source: str) -> BindingIndex:
                     BindingBlocker(callee, "shadowing-declaration", span) for span in local_declarations[callee]
                 )
             continue
-        if callee not in unique_nodes:
+        if callee not in function_nodes:
             blockers.append(
                 BindingBlocker(
                     callee,
@@ -218,6 +247,14 @@ def build_binding_index(source: str) -> BindingIndex:
                     _span(callee_node, to_char),
                 )
             )
+            continue
+
+        if owner is not None:
+            caller = definition_names_by_span.get((owner.start_byte, owner.end_byte))
+            if caller is not None:
+                call_edges.append(CallEdge(caller, callee, call_span))
+        if callee not in unique_nodes:
+            blockers.append(BindingBlocker(callee, "duplicate-definition-call", call_span))
             continue
 
         calls_by_name[callee].append(
@@ -337,7 +374,142 @@ def build_binding_index(source: str) -> BindingIndex:
         functions=functions,
         blockers=tuple(blockers),
         locals=local_bindings,
+        function_spans=tuple(
+            FunctionSpan(name, _span(node, to_char))
+            for name, definitions in sorted(function_nodes.items())
+            for node, _, _, _ in definitions
+        ),
+        call_edges=tuple(sorted(call_edges, key=lambda edge: (edge.call_span, edge.caller, edge.callee))),
+        definition_counts={name: len(definitions) for name, definitions in function_nodes.items()},
+        source=source,
     )
+
+
+def validate_target_definition(index: BindingIndex, target: str, *, side: str) -> None:
+    """Require one target definition before deriving a call closure."""
+
+    counts = index.definition_counts or {
+        name: sum(span.name == name for span in index.function_spans)
+        for name in {span.name for span in index.function_spans}
+    }
+    count = counts.get(target, 0)
+    if count == 1:
+        return
+    raise DeltaMinimizeError(
+        "ambiguous-delta-scope",
+        {
+            "target": target,
+            "side": side,
+            "definition_count": count,
+            "reason": "missing-target-definition" if count == 0 else "duplicate-target-definition",
+        },
+    )
+
+
+def reachable_functions(index: BindingIndex, target: str, *, side: str | None = None) -> frozenset[str]:
+    """Return the TU-local caller-to-callee closure rooted at ``target``."""
+
+    outgoing: dict[str, set[str]] = defaultdict(set)
+    for edge in index.call_edges:
+        outgoing[edge.caller].add(edge.callee)
+    seen: set[str] = set()
+    pending = [target]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        count = (index.definition_counts or {}).get(current, 1 if current in index.functions else 0)
+        if count != 1:
+            raise DeltaMinimizeError(
+                "ambiguous-delta-scope",
+                {
+                    "target": target,
+                    "side": side or "unknown",
+                    "symbol": current,
+                    "definition_count": count,
+                    "reason": (
+                        "missing-reachable-definition" if count == 0 else "duplicate-reachable-definition"
+                    ),
+                },
+            )
+        seen.add(current)
+        pending.extend(sorted(outgoing.get(current, ()), reverse=True))
+    return frozenset(seen)
+
+
+def lexical_owners(index: BindingIndex, span: tuple[int, int]) -> tuple[str, ...]:
+    """Return every function definition that conservatively owns ``span``."""
+
+    start, end = span
+    if start == end:
+        owners = {
+            item.name
+            for item in index.function_spans
+            if item.span[0] < start < item.span[1]
+        }
+    else:
+        owners = {
+            item.name
+            for item in index.function_spans
+            if item.span[0] <= start and end <= item.span[1]
+        }
+        if not owners and index.source:
+            overlaps = [
+                item
+                for item in index.function_spans
+                if start < item.span[1] and item.span[0] < end
+            ]
+            if len(overlaps) == 1:
+                owner = overlaps[0]
+                if _span_belongs_to_function_binding(index, owner.name, (start, end)):
+                    owners = {owner.name}
+    return tuple(sorted(owners))
+
+
+def overlapping_functions(index: BindingIndex, span: tuple[int, int]) -> tuple[str, ...]:
+    """Return functions touched by a non-empty span, including partial overlaps."""
+
+    start, end = span
+    if start == end:
+        return ()
+    return tuple(
+        sorted(
+            {
+                item.name
+                for item in index.function_spans
+                if start < item.span[1] and item.span[0] < end
+            }
+        )
+    )
+
+
+def _is_lexical_trivia(text: str) -> bool:
+    return bool(_LEXICAL_TRIVIA_RE.fullmatch(text))
+
+
+def _span_belongs_to_function_binding(
+    index: BindingIndex,
+    name: str,
+    span: tuple[int, int],
+) -> bool:
+    """Allow declaration/definition fragments joined only by lexical trivia."""
+
+    function = index.functions.get(name)
+    if function is None:
+        return False
+    start, end = span
+    cursor = start
+    binding_spans = sorted((function.definition_span, *function.declaration_spans))
+    for owned_start, owned_end in binding_spans:
+        if owned_end <= cursor or owned_start >= end:
+            continue
+        gap_end = min(owned_start, end)
+        if cursor < gap_end and not _is_lexical_trivia(index.source[cursor:gap_end]):
+            return False
+        cursor = max(cursor, min(owned_end, end))
+        if cursor == end:
+            return True
+    return _is_lexical_trivia(index.source[cursor:end])
 
 
 def validate_supported_bindings(
@@ -377,17 +549,38 @@ def validate_supported_bindings(
         )
 
 
-def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, atoms):
+def couple_semantic_atoms(
+    left_index: BindingIndex,
+    right_index: BindingIndex,
+    atoms,
+    *,
+    seed_atom_ids: set[str] | frozenset[str] | None = None,
+    scope_functions: set[str] | frozenset[str] | None = None,
+    left_scope_functions: set[str] | frozenset[str] | None = None,
+    right_scope_functions: set[str] | frozenset[str] | None = None,
+):
     """Collapse atoms that must move together to preserve known bindings."""
 
     groups = UnionFind(tuple(atom.atom_id for atom in atoms))
     _union_overlaps(groups, atoms)
 
-    left_changed_spans = _changed_spans(atoms, side="left")
-    right_changed_spans = _changed_spans(atoms, side="right")
+    scoped_atoms = (
+        tuple(atom for atom in atoms if atom.atom_id in seed_atom_ids)
+        if seed_atom_ids is not None
+        else atoms
+    )
+    left_changed_spans = _changed_spans(scoped_atoms, side="left")
+    right_changed_spans = _changed_spans(scoped_atoms, side="right")
     left_changed = _changed_binding_names(left_index, left_changed_spans)
     right_changed = _changed_binding_names(right_index, right_changed_spans)
-    pairs = _pair_functions(left_index, right_index)
+    pairs = _pair_functions(
+        left_index,
+        right_index,
+        atoms=atoms,
+        selected_names=scope_functions,
+        left_selected_names=left_scope_functions,
+        right_selected_names=right_scope_functions,
+    )
     for left_function, right_function, _ in pairs:
         if left_function.name in left_changed or right_function.name in right_changed:
             left_changed.add(left_function.name)
@@ -445,6 +638,17 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
             if coupled:
                 semantic_labels[coupled[0]].append(f"{left_function.name} to {right_function.name} rename")
 
+    _couple_one_sided_functions(
+        groups,
+        atoms,
+        left_index,
+        right_index,
+        pairs,
+        semantic_labels,
+        left_scope_functions=left_scope_functions,
+        right_scope_functions=right_scope_functions,
+    )
+
     _couple_structural_delimiters(
         groups,
         atoms,
@@ -456,6 +660,7 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
         left_index,
         right_index,
         semantic_labels,
+        selected_functions=scope_functions,
     )
     _union_dependency_cycles(groups, atoms)
 
@@ -469,6 +674,43 @@ def couple_semantic_atoms(left_index: BindingIndex, right_index: BindingIndex, a
         labels_by_root,
         reclassified,
     )
+
+
+def _couple_one_sided_functions(
+    groups: UnionFind,
+    atoms,
+    left_index: BindingIndex,
+    right_index: BindingIndex,
+    pairs,
+    semantic_labels: dict[str, list[str]],
+    *,
+    left_scope_functions: set[str] | frozenset[str] | None,
+    right_scope_functions: set[str] | frozenset[str] | None,
+) -> None:
+    """Keep a reachable helper's one-sided binding graph syntactically whole."""
+
+    paired_left = {left.name for left, _, _ in pairs}
+    paired_right = {right.name for _, right, _ in pairs}
+    for side, index, other, selected, paired in (
+        ("left", left_index, right_index, left_scope_functions, paired_left),
+        ("right", right_index, left_index, right_scope_functions, paired_right),
+    ):
+        reachable = set(selected or ())
+        for name in sorted(index.functions.keys() - other.functions.keys()):
+            if name not in reachable or name in paired:
+                continue
+            function = index.functions[name]
+            spans = [
+                function.definition_span,
+                *function.declaration_spans,
+                *(call.call_span for call in function.direct_calls),
+            ]
+            selected_atoms = _atoms_for_directional_spans(atoms, spans, side=side)
+            _union_ids(groups, selected_atoms)
+            if selected_atoms:
+                semantic_labels[selected_atoms[0]].append(
+                    f"{name} function {'removal' if side == 'left' else 'introduction'}"
+                )
 
 
 def _couple_structural_delimiters(
@@ -541,32 +783,82 @@ def _couple_structural_delimiters(
                     semantic_labels[opening].append(f"{side} compound wrapper {function}")
 
 
-def _pair_functions(left_index: BindingIndex, right_index: BindingIndex):
+def _pair_functions(
+    left_index: BindingIndex,
+    right_index: BindingIndex,
+    *,
+    selected_names: set[str] | frozenset[str] | None = None,
+    left_selected_names: set[str] | frozenset[str] | None = None,
+    right_selected_names: set[str] | frozenset[str] | None = None,
+    atoms=None,
+):
+    selected = None if selected_names is None else set(selected_names)
     pairs = [
         (left_index.functions[name], right_index.functions[name], False)
         for name in left_index.functions.keys() & right_index.functions.keys()
+        if selected is None or name in selected
     ]
-    left_only = [binding for name, binding in left_index.functions.items() if name not in right_index.functions]
-    right_only = [binding for name, binding in right_index.functions.items() if name not in left_index.functions]
-    if not left_only and not right_only:
+    left_only = [
+        binding
+        for name, binding in left_index.functions.items()
+        if name not in right_index.functions and (selected is None or name in selected)
+    ]
+    right_only = [
+        binding
+        for name, binding in right_index.functions.items()
+        if name not in left_index.functions and (selected is None or name in selected)
+    ]
+    if not left_only or not right_only:
         return sorted(pairs, key=lambda item: item[0].definition_span)
-    if len(left_only) != len(right_only):
-        raise DeltaMinimizeError("ambiguous-delta-coupling")
+
+    left_reachable = set(left_selected_names or selected or ())
+    right_reachable = set(right_selected_names or selected or ())
+    left_only = [binding for binding in left_only if binding.name in left_reachable]
+    right_only = [binding for binding in right_only if binding.name in right_reachable]
+    if not left_only or not right_only:
+        return sorted(pairs, key=lambda item: item[0].definition_span)
 
     candidates = {
-        left.name: [right for right in right_only if sorted(left.parameter_names) == sorted(right.parameter_names)]
+        left.name: [
+            right
+            for right in right_only
+            if sorted(left.parameter_names) == sorted(right.parameter_names)
+            and _has_rename_pair_evidence(atoms or (), left, right)
+        ]
         for left in left_only
     }
-    if any(len(options) != 1 for options in candidates.values()):
+    ambiguous = {name: options for name, options in candidates.items() if len(options) > 1}
+    if ambiguous:
         raise DeltaMinimizeError(
             "ambiguous-delta-coupling",
-            {"candidate_symbols": {name: [item.name for item in options] for name, options in candidates.items()}},
+            {"candidate_symbols": {name: [item.name for item in options] for name, options in ambiguous.items()}},
         )
-    selected = [options[0] for options in candidates.values()]
-    if len({item.name for item in selected}) != len(selected):
+    selected_pairs = [(left, candidates[left.name][0]) for left in left_only if len(candidates[left.name]) == 1]
+    selected_rights = [right for _, right in selected_pairs]
+    if len({item.name for item in selected_rights}) != len(selected_rights):
         raise DeltaMinimizeError("ambiguous-delta-coupling")
-    pairs.extend((left, candidates[left.name][0], True) for left in left_only)
+    pairs.extend((left, right, True) for left, right in selected_pairs)
     return sorted(pairs, key=lambda item: item[0].definition_span)
+
+
+def _has_rename_pair_evidence(atoms, left: FunctionBinding, right: FunctionBinding) -> bool:
+    """Require paired definition and direct-call name edits before inferring a rename."""
+
+    left_definition = left.definition_name_span
+    right_definition = right.definition_name_span
+    if left_definition is None or right_definition is None:
+        return False
+    definition_changed = bool(_atoms_for_span(atoms, left_definition, right_definition))
+    if not definition_changed or len(left.direct_calls) != len(right.direct_calls):
+        return False
+    return bool(left.direct_calls) and all(
+        _atoms_for_span(
+            atoms,
+            left_call.callee_name_span or left_call.call_span,
+            right_call.callee_name_span or right_call.call_span,
+        )
+        for left_call, right_call in zip(left.direct_calls, right.direct_calls, strict=True)
+    )
 
 
 def _parameter_permutation(left: FunctionBinding, right: FunctionBinding) -> tuple[int, ...] | None:
@@ -948,11 +1240,14 @@ def _couple_local_binding_changes(
     left_index: BindingIndex,
     right_index: BindingIndex,
     semantic_labels: dict[str, list[str]],
+    selected_functions: set[str] | frozenset[str] | None = None,
 ) -> None:
     left_groups = _group_local_bindings(left_index.locals)
     right_groups = _group_local_bindings(right_index.locals)
     ambiguous: list[dict[str, object]] = []
     for key in sorted(left_groups.keys() | right_groups.keys()):
+        if selected_functions is not None and key[0] not in selected_functions:
+            continue
         left_values = left_groups.get(key, ())
         right_values = right_groups.get(key, ())
         if max(len(left_values), len(right_values)) < 2:
@@ -984,6 +1279,8 @@ def _couple_local_binding_changes(
         ("right", right, left),
     ):
         for key in sorted(bindings.keys() - other.keys()):
+            if selected_functions is not None and key[0] not in selected_functions:
+                continue
             binding = bindings[key]
             spans = [binding.declaration_span, *binding.use_spans]
             if binding.scope_is_compound:
