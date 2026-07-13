@@ -205,6 +205,19 @@ def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
     struct.pack_into("<I", data, 0x480, 0x00401060)
     struct.pack_into("<IIHH", data, 0x800, 0x2000, 12, 0x3080, 0)
 
+    if mutation in {
+        "partial_initializer_store",
+        "xchg_initializer_store",
+        "push_initializer_value",
+        "stos_initializer_value",
+        "full_load_clobbers_initializer_value",
+        "zeroing_clobbers_initializer_value",
+        "partial_clobber_retains_initializer_taint",
+        "call_clobbers_caller_saved_initializer_value",
+        "call_preserves_callee_saved_initializer_taint",
+    }:
+        data[0x20A:0x220] = b"\x90" * 0x16
+
     if mutation == "unexplained_zero_gap":
         data[0x230] = 0
     elif mutation == "partial_e8_data_reference":
@@ -240,6 +253,17 @@ def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
         struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x300B, 0)
     elif mutation == "exec_relocation_partial_field":
         struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x300C, 0)
+    elif mutation == "exec_relocation_data_slot":
+        struct.pack_into("<I", data, 0x280, 0x00401060)
+        struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x3080, 0)
+    elif mutation == "exec_relocation_data_slot_consistent_refs":
+        struct.pack_into("<I", data, 0x280, 0x00401060)
+        struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x3080, 0)
+        data[0x270:0x277] = bytes.fromhex("dd 05 80 10 40 00 c3")
+    elif mutation == "exec_relocation_data_slot_conflicting_refs":
+        struct.pack_into("<I", data, 0x280, 0x00401060)
+        struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x3080, 0)
+        data[0x270:0x276] = bytes.fromhex("a1 80 10 40 00 c3")
     elif mutation == "transformed_initializer":
         data[0x20A:0x219] = bytes.fromhex(
             "b8 50 10 40 00 83 c0 00 a3 90 20 40 00 eb 07"
@@ -247,6 +271,45 @@ def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
     elif mutation == "cross_block_initializer_value":
         data[0x20A:0x219] = bytes.fromhex(
             "b8 50 10 40 00 eb 00 a3 90 20 40 00 90 90 90"
+        )
+    elif mutation == "partial_initializer_store":
+        data[0x20A:0x217] = bytes.fromhex(
+            "b8 50 10 40 00 66 a3 90 20 40 00 eb 09"
+        )
+    elif mutation == "xchg_initializer_store":
+        data[0x20A:0x217] = bytes.fromhex(
+            "b8 50 10 40 00 87 05 90 20 40 00 eb 09"
+        )
+    elif mutation == "push_initializer_value":
+        data[0x20A:0x213] = bytes.fromhex(
+            "b8 50 10 40 00 50 58 eb 0d"
+        )
+    elif mutation == "stos_initializer_value":
+        data[0x20A:0x212] = bytes.fromhex(
+            "b8 50 10 40 00 ab eb 0e"
+        )
+    elif mutation == "full_load_clobbers_initializer_value":
+        data[0x20A:0x21C] = bytes.fromhex(
+            "b8 50 10 40 00 8b 05 80 20 40 00 "
+            "a3 90 20 40 00 eb 04"
+        )
+    elif mutation == "zeroing_clobbers_initializer_value":
+        data[0x20A:0x218] = bytes.fromhex(
+            "b8 50 10 40 00 31 c0 a3 90 20 40 00 eb 08"
+        )
+    elif mutation == "partial_clobber_retains_initializer_taint":
+        data[0x20A:0x219] = bytes.fromhex(
+            "b8 50 10 40 00 66 31 c0 a3 90 20 40 00 eb 07"
+        )
+    elif mutation == "call_clobbers_caller_saved_initializer_value":
+        data[0x20A:0x21B] = bytes.fromhex(
+            "b8 50 10 40 00 e8 2c 00 00 00 "
+            "a3 90 20 40 00 eb 05"
+        )
+    elif mutation == "call_preserves_callee_saved_initializer_taint":
+        data[0x20A:0x21C] = bytes.fromhex(
+            "bb 50 10 40 00 e8 2c 00 00 00 "
+            "89 1d 90 20 40 00 eb 04"
         )
     elif mutation == "far_call":
         data[0x270:0x278] = bytes.fromhex(

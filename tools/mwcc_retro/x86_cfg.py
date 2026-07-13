@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from capstone import (
     CS_AC_READ,
+    CS_AC_WRITE,
     CS_ARCH_X86,
     CS_GRP_CALL,
     CS_GRP_IRET,
@@ -28,6 +29,12 @@ from capstone.x86 import (
     X86_INS_JMP,
     X86_INS_LJMP,
     X86_INS_MOV,
+    X86_INS_ENTER,
+    X86_INS_PUSH,
+    X86_INS_PUSHAL,
+    X86_INS_PUSHAW,
+    X86_INS_SUB,
+    X86_INS_XOR,
     X86_OP_IMM,
     X86_OP_MEM,
     X86_OP_REG,
@@ -422,6 +429,10 @@ class _DataEvidence:
 
 
 _I386_RELOCATION_WIDTHS = {1: 2, 2: 2, 3: 4, 4: 2}
+_CALL_CLOBBERED_REGISTER_FAMILIES = frozenset({"eax", "ecx", "edx"})
+_IMPLICIT_MEMORY_WRITE_INSTRUCTIONS = frozenset(
+    {X86_INS_ENTER, X86_INS_PUSH, X86_INS_PUSHAL, X86_INS_PUSHAW}
+)
 _CANONICAL_NOP_ENCODINGS = tuple(
     sorted(
         (
@@ -465,6 +476,7 @@ class _DirectCfgRecovery:
         self.finite_targets: set[int] = set()
         self.finite_values: set[int] = set()
         self.produced_initializers: set[tuple[int, int]] = set()
+        self.accepted_initializer_instructions: set[int] = set()
         self.fixpoint_updates = 0
         self.high_water = {
             limit_name: 0
@@ -661,12 +673,21 @@ class _DirectCfgRecovery:
             if decoded.group(CS_GRP_CALL):
                 target = self._direct_target(decoded)
                 if target is None:
+                    is_far = decoded.id == X86_INS_LCALL
                     self.diagnostics.add(
                         OwnershipDiagnostic(
-                            kind="indirect-flow",
+                            kind=(
+                                "unsupported-far-flow"
+                                if is_far
+                                else "indirect-flow"
+                            ),
                             address=address,
                             detail=(
-                                f"unresolved indirect call: "
+                                "unsupported far call: "
+                                if is_far
+                                else "unresolved indirect call: "
+                            )
+                            + (
                                 f"{instruction.mnemonic} "
                                 f"{instruction.operands}"
                             ).rstrip(),
@@ -693,12 +714,21 @@ class _DirectCfgRecovery:
                     X86_INS_LJMP,
                 }
                 if target is None:
+                    is_far = decoded.id == X86_INS_LJMP
                     self.diagnostics.add(
                         OwnershipDiagnostic(
-                            kind="indirect-flow",
+                            kind=(
+                                "unsupported-far-flow"
+                                if is_far
+                                else "indirect-flow"
+                            ),
                             address=address,
                             detail=(
-                                f"unresolved indirect jump: "
+                                "unsupported far jump: "
+                                if is_far
+                                else "unresolved indirect jump: "
+                            )
+                            + (
                                 f"{instruction.mnemonic} "
                                 f"{instruction.operands}"
                             ).rstrip(),
@@ -918,6 +948,7 @@ class _DirectCfgRecovery:
             self.produced_initializers.add(initializer_key)
             self._record_fixpoint_update()
         self.seed_records.add(record)
+        self.accepted_initializer_instructions.add(instruction.address)
         self._enqueue(exact_value.value, is_function=True)
 
     def _update_exact_state(
@@ -983,6 +1014,7 @@ class _DirectCfgRecovery:
             if record.category != "function-pointer-initializer"
         }
         self.data_evidence = set()
+        self.accepted_initializer_instructions = set()
         for block in blocks:
             self._check_count("max_states_per_block", 1)
             state: dict[str, _ExactValue] = {}
@@ -1037,29 +1069,39 @@ class _DirectCfgRecovery:
             queued.remove(block_start)
             block = blocks_by_start[block_start]
             tainted = set(entries[block_start])
-            safe_local: set[str] = set()
             for address in block.instruction_addresses:
                 decoded = self._owned_decoded(address)
 
-                if (
-                    decoded.id == X86_INS_MOV
-                    and len(decoded.operands) == 2
-                    and decoded.operands[0].type == X86_OP_MEM
-                    and decoded.operands[1].type == X86_OP_REG
-                ):
-                    source_family = self._register_family(
-                        decoded.operands[1].reg
+                read_registers, written_registers = decoded.regs_access()
+                read_families = {
+                    self._register_family(register)
+                    for register in read_registers
+                }
+                has_memory_write = any(
+                    operand.type == X86_OP_MEM
+                    and bool(operand.access & CS_AC_WRITE)
+                    for operand in decoded.operands
+                ) or decoded.id in _IMPLICIT_MEMORY_WRITE_INSTRUCTIONS
+                has_executable_immediate = any(
+                    operand.type == X86_OP_IMM
+                    and _is_executable_span(
+                        self.image, operand.imm & 0xFFFF_FFFF, 1
                     )
-                    if (
-                        source_family in tainted
-                        and source_family not in safe_local
-                    ):
-                        raise CfgRecoveryError(
-                            "unresolved function-pointer initializer: "
-                            "executable value crossed a boundary or "
-                            f"unsupported transform before store at "
-                            f"{address:#x}"
-                        )
+                    for operand in decoded.operands
+                )
+                if (
+                    has_memory_write
+                    and (
+                        bool(read_families & tainted)
+                        or has_executable_immediate
+                    )
+                    and address not in self.accepted_initializer_instructions
+                ):
+                    raise CfgRecoveryError(
+                        "unresolved function-pointer initializer: "
+                        "unsupported semantic memory write of an executable "
+                        f"value at {address:#x}"
+                    )
 
                 handled_destination: str | None = None
                 if len(decoded.operands) == 2:
@@ -1078,10 +1120,8 @@ class _DirectCfgRecovery:
                                 1,
                             ):
                                 tainted.add(handled_destination)
-                                safe_local.add(handled_destination)
                             else:
                                 tainted.discard(handled_destination)
-                                safe_local.discard(handled_destination)
                             continue
                         if (
                             decoded.id == X86_INS_LEA
@@ -1096,10 +1136,8 @@ class _DirectCfgRecovery:
                                 1,
                             ):
                                 tainted.add(handled_destination)
-                                safe_local.add(handled_destination)
                             else:
                                 tainted.discard(handled_destination)
-                                safe_local.discard(handled_destination)
                             continue
                         if (
                             decoded.id == X86_INS_MOV
@@ -1109,24 +1147,46 @@ class _DirectCfgRecovery:
                             source_family = self._register_family(source.reg)
                             if source_family in tainted:
                                 tainted.add(handled_destination)
-                                if source_family in safe_local:
-                                    safe_local.add(handled_destination)
-                                else:
-                                    safe_local.discard(handled_destination)
                             else:
                                 tainted.discard(handled_destination)
-                                safe_local.discard(handled_destination)
                             continue
 
                 if decoded.group(CS_GRP_CALL):
-                    safe_local.clear()
+                    tainted.difference_update(
+                        _CALL_CLOBBERED_REGISTER_FAMILIES
+                    )
                     continue
-                _, written = decoded.regs_access()
-                for register in written:
+
+                zeroed_families: set[str] = set()
+                if (
+                    decoded.id in {X86_INS_SUB, X86_INS_XOR}
+                    and len(decoded.operands) == 2
+                    and all(
+                        operand.type == X86_OP_REG and operand.size == 4
+                        for operand in decoded.operands
+                    )
+                ):
+                    left_family = self._register_family(
+                        decoded.operands[0].reg
+                    )
+                    right_family = self._register_family(
+                        decoded.operands[1].reg
+                    )
+                    if left_family == right_family:
+                        zeroed_families.add(left_family)
+
+                for register in written_registers:
                     family = self._register_family(register)
-                    if family in tainted:
-                        safe_local.discard(family)
-                    elif family == handled_destination:
+                    register_is_full_width = (
+                        self.decoder.reg_name(register) == family
+                    )
+                    if (
+                        register_is_full_width
+                        and (
+                            family not in read_families
+                            or family in zeroed_families
+                        )
+                    ):
                         tainted.discard(family)
 
             output = tainted
@@ -1249,16 +1309,49 @@ class _DirectCfgRecovery:
                 for evidence in non_relocation_data
                 if evidence.start <= start and end <= evidence.end
             ]
-            if len(containing_data) == 1:
-                self.data_evidence.add(
-                    _DataEvidence(start=start, end=end, provenance=detail)
+            data_boundaries = {
+                (evidence.start, evidence.end)
+                for evidence in containing_data
+            }
+            if not data_boundaries:
+                raise CfgRecoveryError(
+                    "executable relocation has no exact instruction or data "
+                    f"boundary: relocation={start:#x}-{end:#x};"
+                    "data-attributions=0"
                 )
-                continue
-            raise CfgRecoveryError(
-                "executable relocation has no exact instruction or data "
-                f"boundary: relocation={start:#x}-{end:#x};"
-                f"data-attributions={len(containing_data)}"
+            if len(data_boundaries) != 1:
+                raise CfgRecoveryError(
+                    "executable relocation data boundary is ambiguous: "
+                    f"relocation={start:#x}-{end:#x};"
+                    f"attributions={len(containing_data)};"
+                    f"boundaries={len(data_boundaries)}"
+                )
+
+            data_start, data_end = next(iter(data_boundaries))
+            self.data_evidence.add(
+                _DataEvidence(start=start, end=end, provenance=detail)
             )
+            if relocation.type != 3 or width != 4:
+                continue
+
+            pointer = struct.unpack("<I", provenance)[0]
+            if not _is_executable_span(self.image, pointer, 1):
+                continue
+            record = SeedRecord(
+                address=pointer,
+                category="relocation-executable-pointer",
+                provenance_address=start,
+                provenance_bytes=provenance.hex(),
+                detail=(
+                    "i386-relocation-type-3;width=4;"
+                    f"data-boundary={data_start:#x}-{data_end:#x};"
+                    f"data-attributions={len(containing_data)}"
+                ),
+            )
+            if record not in self.seed_records:
+                self._record_fixpoint_update()
+            self.seed_records.add(record)
+            self._enqueue(pointer, is_function=True)
 
     def _merged_data_regions(self) -> tuple[ByteRegion, ...]:
         merged: list[ByteRegion] = []
@@ -1585,6 +1678,8 @@ class _DirectCfgRecovery:
         self._require_disjoint_ownership(data_regions, padding_regions)
         raw_e8_candidates = self._raw_e8_candidates(data_regions)
         self._require_complete_ownership(data_regions, padding_regions)
+        for limit_name in self.limits.__dataclass_fields__:
+            self.limits.check(limit_name, self.high_water[limit_name])
         high_water = tuple(
             AnalysisHighWater(limit_name, self.high_water[limit_name])
             for limit_name in self.limits.__dataclass_fields__

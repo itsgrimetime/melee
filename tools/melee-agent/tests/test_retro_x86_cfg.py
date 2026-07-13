@@ -358,9 +358,99 @@ def test_executable_relocation_crossing_operand_boundary_fails(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    [
+        "exec_relocation_data_slot",
+        "exec_relocation_data_slot_consistent_refs",
+    ],
+)
+def test_executable_highlow_data_slot_always_seeds_with_provenance(
+    tmp_path, mutation
+):
+    image = load_cfg_image(tmp_path, mutation)
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    relocation_rows = [
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-executable-pointer"
+        and row.provenance_address == 0x00401080
+    ]
+    assert len(relocation_rows) == 1
+    assert relocation_rows[0].address == 0x00401060
+    assert relocation_rows[0].provenance_bytes == "60104000"
+    assert "data-boundary=0x401080-0x401088" in relocation_rows[0].detail
+
+
+def test_executable_highlow_conflicting_data_boundaries_fail_closed(tmp_path):
+    image = load_cfg_image(
+        tmp_path, "exec_relocation_data_slot_conflicting_refs"
+    )
+    with pytest.raises(
+        CfgRecoveryError, match="data boundary is ambiguous.*attributions=2"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
     "mutation", ["transformed_initializer", "cross_block_initializer_value"]
 )
 def test_executable_initializer_taint_never_silently_disappears(
+    tmp_path, mutation
+):
+    image = load_cfg_image(tmp_path, mutation)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "partial_initializer_store",
+        "xchg_initializer_store",
+        "push_initializer_value",
+        "stos_initializer_value",
+    ],
+)
+def test_unsupported_memory_write_of_executable_value_fails_closed(
+    tmp_path, mutation
+):
+    image = load_cfg_image(tmp_path, mutation)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "full_load_clobbers_initializer_value",
+        "zeroing_clobbers_initializer_value",
+        "call_clobbers_caller_saved_initializer_value",
+    ],
+)
+def test_full_independent_write_or_call_clobber_kills_initializer_taint(
+    tmp_path, mutation
+):
+    image = load_cfg_image(tmp_path, mutation)
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    assert not any(
+        row.category == "function-pointer-initializer"
+        and 0x0040100A <= row.provenance_address < 0x00401020
+        for row in cfg.seed_inventory.records
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "partial_clobber_retains_initializer_taint",
+        "call_preserves_callee_saved_initializer_taint",
+    ],
+)
+def test_partial_write_and_callee_saved_call_retain_unsafe_taint(
     tmp_path, mutation
 ):
     image = load_cfg_image(tmp_path, mutation)
@@ -448,6 +538,27 @@ def test_high_water_marks_cover_all_caps_and_zero_only_deferred_dimensions(
         assert high_water[deferred] == 0
 
 
+@pytest.mark.parametrize(
+    "cap_name",
+    [
+        "max_jump_tables",
+        "max_jump_table_entries",
+        "max_contexts_per_entry",
+        "max_scc_iterations",
+        "max_summary_iterations",
+    ],
+)
+def test_recover_cfg_rejects_zero_cap_for_unobserved_dimension(
+    synthetic_cfg_image, cap_name
+):
+    limits = replace(generous_limits(synthetic_cfg_image), **{cap_name: 0})
+    with pytest.raises(AnalysisLimitError) as raised:
+        recover_cfg(synthetic_cfg_image, inventory(synthetic_cfg_image), limits)
+    assert raised.value.limit_name == cap_name
+    assert raised.value.configured == 0
+    assert raised.value.observed == 0
+
+
 @pytest.mark.parametrize("mutation", ["far_call", "far_jump"])
 def test_far_control_transfer_is_unresolved_not_direct(tmp_path, mutation):
     image = load_cfg_image(tmp_path, mutation)
@@ -463,7 +574,7 @@ def test_far_control_transfer_is_unresolved_not_direct(tmp_path, mutation):
         for edge in cfg.edges
     )
     assert any(
-        row.address == 0x00401070 and row.kind == "indirect-flow"
+        row.address == 0x00401070 and row.kind == "unsupported-far-flow"
         for row in cfg.ownership_diagnostics
     )
 
