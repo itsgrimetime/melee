@@ -378,7 +378,16 @@ Cover absolute and base+index tables, bounded callback sets, missing guard, conf
 
 Add context-sensitive finite-target fixtures for cdecl arguments and spills/reloads, finite returns through wrappers, globals/BSS registrars, object and descriptor fields, strictly parsed CRT/unwind registrations, and import/IAT terminal edges. An unknown target, a possible internal code pointer escaping through an unmodelled import, or an import return used as a target stays unresolved and blocks. Test that the forbidden Task 3 categories and `terminal-noninstruction-separator` cannot promote the cleanly decodable byte strings `41 42 43 c3` after an owned return or `41 42 43 44 a1 80 20 40 00 c3` after zeros/relocation evidence.
 
-Add residue tests proving the complete executable-byte partition is disjoint, exact-hashed, deterministic, and accepted only after every root, relocation, direct edge, finite target, and external escape is closed with zero potentially internal unresolved transfers. Raw `E8` scan hits never seed decoding and are partitioned as reachable instruction, reachable proved data, or unreachable executable residue.
+Add residue tests proving the complete executable-byte partition is disjoint, exact-hashed, deterministic, and accepted only after every root, relocation, direct edge, finite target, and external escape is closed with zero potentially internal unresolved transfers and every intersecting Ghidra fact is independently reconciled. Raw `E8` scan hits never seed decoding and are partitioned as reachable instruction, reachable proved data, or unreachable executable residue.
+
+Add provisional-residue/Ghidra reconciliation fixtures for an instruction,
+function entry, callback, caller chain, typed flow, data reference, and
+executable-pointer reference. Independently decode the exact raw bytes in each
+case. A separately proved incoming root/registration must expand and recompute
+raw closure; independent PE/control evidence may classify the bytes as
+unreachable or non-code; and absence of either proof must block. Assert that a
+Ghidra label alone never seeds code and that raw omission alone never proves
+unreachability.
 
 ```python
 def test_guarded_468_way_dispatch_is_recovered(dispatch_image):
@@ -408,10 +417,14 @@ each of the three dispatch instruction byte strings and their typed edges,
 the unsigned bound, every one of the 466 type-3 relocation slots, the two
 following exact unrelocated dwords and their rejection, handler/default exit
 convergence, an extra/missing reachable return, and an unresolved transfer in
-the closure. The skip-if-missing exact-binary integration recomputes the
-pre-repair 705-row corpus and asserts the repaired analysis reports zero
-potentially internal unresolved transfers; 705 is historical input coverage,
-not an acceptance constant.
+the closure. Store the pre-repair 705 rows once as a canonical frozen
+historical fixture with an asserted digest and require every frozen row to
+receive one current disposition: resolved internal control, terminal external,
+unreachable because its unsound source category was deleted, or current
+blocker. The current analyzer neither regenerates nor requires that count. The
+skip-if-missing exact-binary integration independently analyzes the current
+binary and requires zero current blockers, including fresh rows absent from
+the historical fixture.
 
 - [ ] **Step 2: Run RED**
 
@@ -433,17 +446,19 @@ publication, and a nonzero exact unresolved inventory.
 
 Derive table bounds only from reachable dominating guards or other proved finite domains. Record every entry and refuse an unbounded scan; neither a relocation run nor decodability beyond the domain extends a table. Implement the minimal provenance-bearing, context-sensitive fixed point for control targets: cdecl arguments and stack spills/reloads, finite call returns, globals/BSS registrar slots, object/descriptor fields, strictly parsed CRT/unwind records, and imports/IAT as typed terminal external edges. Resolve callbacks through the same engine and iterate roots, decoding, target facts, and ownership monotonically to the least fixed point.
 
-An unknown or import-return value used as a computed target, a possible internal code pointer that escapes to an unmodelled external callee, an initializer without finite use provenance, or any other potentially internal unresolved transfer is a hard blocker. The first exact pre-repair run produced 705 diagnostic rows; retain those addresses/forms as a regression corpus, not as an expected count or source of truth. The repaired exact run recomputes the inventory and must reduce its potentially internal unresolved count to zero.
+An unknown or import-return value used as a computed target, a possible internal code pointer that escapes to an unmodelled external callee, an initializer without finite use provenance, or any other potentially internal unresolved transfer is a hard blocker. Freeze the first exact pre-repair run's 705 rows and their canonical digest as historical classification coverage only. Do not reproduce, require, or compare a current analyzer count to 705. Account for each frozen row as currently resolved internal control, terminal external, unreachable because its unsound source category was deleted, or a current blocker. Independently require the freshly computed current unresolved inventory to be empty; a fresh row not present in the historical fixture is still a blocker.
 
-Only after that zero-unresolved result and complete root/relocation/direct/finite/external-escape closure, form the disjoint `unreachable-executable-residue` certificate from all remaining executable bytes. Store ordered intervals plus exact bytes/hashes and the complementary reachable ownership hash. Reject overlap, omission, reachability into residue, a changed partition, or any raw `E8` candidate outside the three closed classifications.
+Only after that zero-unresolved result and complete root/relocation/direct/finite/external-escape closure, form a provisional residue partition from all remaining executable bytes. Store ordered intervals plus exact bytes/hashes and the complementary reachable ownership hash. Reject overlap, omission, reachability into residue, a changed partition, or any raw `E8` candidate outside the three closed classifications. Step 4 must independently reconcile every intersecting Ghidra fact, recomputing closure when it yields new provenance, before the partition becomes an accepted `unreachable-executable-residue` certificate.
 
 - [ ] **Step 4: Export and compare Ghidra evidence**
 
-The Java script emits every recovered Ghidra instruction with exact bytes, function entry/body range, typed flow successor, computed target, data reference, and executable-pointer reference in numeric order. It asserts the exact program hash. At each shared byte-equal instruction source, Python compares canonical typed sets for all four semantic families. Any Ghidra-only fact at a shared source, byte mismatch, or raw unresolved address blocks. Raw-only facts, missing Ghidra owners, and non-shared ownership deltas are reported without deleting raw facts. Build the raw function-entry set from every canonical `RawCfg` row whose `is_function` field is true, not from a hard-coded provenance-category allowlist.
+The Java script emits every recovered Ghidra instruction with exact bytes, function entry/body range, typed flow successor, computed target, data reference, and executable-pointer reference in numeric order. It asserts the exact program hash. At each shared byte-equal instruction source, Python compares canonical typed sets for all four semantic families. Any Ghidra-only fact at a shared source, byte mismatch, or raw unresolved address blocks. Raw-only facts and missing Ghidra owners are reported without deleting raw facts.
+
+For every Ghidra instruction/function/flow/reference fact intersecting the provisional raw residue, independently verify the exact PE bytes and decode boundaries. Then either derive independent incoming root/control/registration provenance and recompute raw closure, prove from independent PE structures and already closed control facts that the bytes are unreachable or non-code, or block. Ghidra ownership never supplies the independent proof. An unexplained decoded island, callback, function, caller chain, computed target, or reference in residue blocks, and raw omission cannot prove its own unreachability. Report non-shared ownership deltas only after this reconciliation. Build the raw function-entry set from every canonical `RawCfg` row whose `is_function` field is true, not from a hard-coded provenance-category allowlist.
 
 - [ ] **Step 5: Integrate `probe-backend-map --static-only`**
 
-Keep the same command. At this task boundary, extend help/output to publish the transitional `raw-pe-cfg.v1.jsonl`, `raw-ghidra-crosscheck.v1.json`, and existing `backend-map-candidates.json` as one immutable generation. Task 7 replaces the logical transitional member set with the closed nine-file bundle while preserving the same resolver/transaction model. The command must execute in this order: load and exact-hash the PE, recover the bounded least-reachability CFG and zero-unresolved control-target closure, form the exact residue certificate, invoke the validated Ghidra exporter against the already prepared exact-hash project, parse its numeric inventory, compare it with the raw CFG, and only then publish. Blocking cross-check facts fail; a missing Ghidra owner with consistent bytes/flow is reported.
+Keep the same command. At this task boundary, extend help/output to publish the transitional `raw-pe-cfg.v1.jsonl`, `raw-ghidra-crosscheck.v1.json`, and existing `backend-map-candidates.json` as one immutable generation. Task 7 replaces the logical transitional member set with the closed nine-file bundle while preserving the same resolver/transaction model. The command must execute in this order: load and exact-hash the PE; recover the bounded least-reachability CFG and zero-unresolved control-target closure; form only a provisional residue partition; invoke the validated Ghidra exporter against the already prepared exact-hash project; parse and compare its numeric inventory; and reconcile every Ghidra fact intersecting residue. Any independently proved new root or edge restarts raw closure, provisional partitioning, and reconciliation until the monotone result is stable. Only then accept the residue certificate and publish. Blocking or unexplained cross-check facts fail; a missing Ghidra owner with consistent raw bytes/flow is reported.
 
 Create a same-filesystem staging directory under the output root and write all three members there. Flush and `fsync` each member; write last a canonical manifest binding the exact member names, sizes, hashes, compiler identity, and schema; flush/`fsync` it and the staging directory; rename the directory to an immutable generation name; and `fsync` the generations parent. Publish a flushed/`fsync`ed temporary `CURRENT` pointer containing the generation name and manifest hash with one atomic replace, then `fsync` the output root. `resolve_static_backend_bundle` follows only `CURRENT` and validates the pointer, manifest, and all members before returning any of them. On failure or restart, an old generation remains wholly visible and partial/orphan generations are ignored or cleaned; mixed generations are impossible.
 

@@ -206,14 +206,17 @@ emission.
 
 After the least fixed point has zero potentially internal unresolved
 transfers and every authoritative root, relocation obligation, direct edge,
-finite target, and external escape is closed, the analyzer partitions the
-remaining executable-section bytes into a disjoint
-`unreachable-executable-residue` certificate. The certificate records exact
-ordered intervals, bytes/hashes, and the reachable-instruction/data ownership
-hash it complements. It is invalid before closure, on overlap or omission, or
-if any residue byte is later reached. An independent raw `E8 rel32` scan never
-seeds decoding; each candidate is partitioned as a reachable owned
-instruction, reachable proved data, or exact-hashed unreachable residue.
+finite target, and external escape is closed, the analyzer forms a provisional
+partition of the remaining executable-section bytes. It becomes an accepted
+disjoint `unreachable-executable-residue` certificate only after the Ghidra
+reconciliation below has independently accounted for every intersecting
+instruction, function, flow, and reference fact without discovering a new
+root or edge. The certificate records exact ordered intervals, bytes/hashes,
+and the reachable-instruction/data ownership hash it complements. It is
+invalid before either closure, on overlap or omission, or if any residue byte
+is later reached. An independent raw `E8 rel32` scan never seeds decoding;
+each candidate is partitioned as a reachable owned instruction, reachable
+proved data, or exact-hashed unreachable residue.
 Conflicting decodes, branches into instruction interiors, a potentially
 internal unresolved transfer, an unexplained relocation/escape, or a
 non-exact executable-byte partition fails closed.
@@ -329,11 +332,22 @@ entries, and ownership. At each source where raw and Ghidra instructions have
 byte-equal decodes, the comparison uses canonical typed sets for every one of
 those semantic facts. A Ghidra-only fact at such a shared source blocks proof;
 a raw-only fact is a reported delta because Ghidra ownership is not complete.
-Byte conflicts and every raw unresolved address always block. Other ownership
-and non-shared-source deltas are reported without deleting raw facts. The
-`RawCfg` function-entry inventory includes every canonical seed/target row
-whose `is_function` field is true; it must not infer the inventory from a
-hard-coded subset of provenance categories.
+Byte conflicts and every raw unresolved address always block. A raw-only fact
+is reported, but every Ghidra instruction, function, typed flow, computed
+target, data reference, or executable-pointer reference that intersects the
+provisional raw residue receives an explicit reconciliation. The analyzer
+independently verifies the exact PE bytes and claimed decode boundaries, then
+does exactly one of the following: derives independent incoming
+root/control/registration provenance and recomputes raw closure; proves from
+independent PE structure and closed control facts that the bytes are
+unreachable or non-code; or blocks. Ghidra's label or ownership is only an
+investigation lead, never that independent proof. An unexplained decoded code
+island, callback, function, caller chain, flow, or reference in residue blocks;
+raw omission cannot be used circularly to prove unreachability. Other
+ownership deltas are reportable only after this reconciliation. The `RawCfg`
+function-entry inventory includes every canonical seed/target row whose
+`is_function` field is true; it must not infer the inventory from a hard-coded
+subset of provenance categories.
 
 ### Transactional audit publication
 
