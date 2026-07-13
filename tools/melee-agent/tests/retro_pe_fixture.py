@@ -172,9 +172,73 @@ def synthetic_pe_bytes(*, mutation: str | None = None) -> bytes:
     return bytes(data)
 
 
+def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
+    """Return a fully owned direct-CFG fixture derived from the strict PE."""
+    data = bytearray(synthetic_pe_bytes())
+
+    text_size = 0x88
+    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, text_size)
+    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, text_size)
+
+    text = bytearray(b"\x90" * text_size)
+    text[0x00:0x0A] = bytes.fromhex("55 8b ec e8 38 00 00 00 75 16")
+    text[0x0A:0x19] = bytes.fromhex(
+        "b8 50 10 40 00 89 c1 89 0d 90 20 40 00 eb 07"
+    )
+    text[0x20:0x2B] = bytes.fromhex(
+        "c7 05 94 20 40 00 7d 10 40 00 c3"
+    )
+    text[0x40:0x51] = bytes.fromhex(
+        "dd 05 80 10 40 00 83 f8 00 74 05 e8 10 00 00 00 c3"
+    )
+    text[0x60] = 0xC3
+    text[0x70] = 0xC3
+    text[0x7D:0x80] = bytes.fromhex("ff d0 c3")
+    # A valid raw E8 candidate wholly contained in the eight-byte FLD data.
+    text[0x80:0x88] = bytes.fromhex("e8 db ff ff ff 11 22 33")
+    data[0x200 : 0x200 + text_size] = text
+
+    # Export fixture_export from 0x401040.
+    struct.pack_into("<I", data, 0x430, 0x1040)
+
+    # A HIGHLOW relocation over a non-executable pointer slot proving 0x401060.
+    struct.pack_into("<I", data, 0x480, 0x00401060)
+    struct.pack_into("<IIHH", data, 0x800, 0x2000, 12, 0x3080, 0)
+
+    if mutation == "unexplained_zero_gap":
+        data[0x230] = 0
+    elif mutation == "partial_e8_data_reference":
+        data[0x240:0x246] = bytes.fromhex("a1 80 10 40 00 90")
+    elif mutation == "unsupported_cross_block_initializer":
+        data[0x20A:0x219] = bytes.fromhex(
+            "b8 90 20 40 00 eb 00 c7 00 78 10 40 00 eb 07"
+        )
+        data[0x278] = 0xC3
+    elif mutation == "unsupported_indexed_initializer":
+        data[0x20A:0x220] = bytes.fromhex(
+            "c7 04 8d 90 20 40 00 78 10 40 00 eb 09"
+            "90 90 90 90 90 90 90 90 90"
+        )
+        data[0x278] = 0xC3
+    elif mutation == "relocation_to_instruction_interior":
+        struct.pack_into("<I", data, 0x480, 0x00401004)
+    elif mutation is not None:
+        raise ValueError(f"unknown synthetic CFG mutation: {mutation}")
+
+    return bytes(data)
+
+
 def write_synthetic_pe(
     tmp_path: Path, *, mutation: str | None = None
 ) -> Path:
     path = tmp_path / f"synthetic-{mutation or 'valid'}.exe"
     path.write_bytes(synthetic_pe_bytes(mutation=mutation))
+    return path
+
+
+def write_synthetic_cfg_pe(
+    tmp_path: Path, *, mutation: str | None = None
+) -> Path:
+    path = tmp_path / f"synthetic-cfg-{mutation or 'valid'}.exe"
+    path.write_bytes(synthetic_cfg_pe_bytes(mutation=mutation))
     return path
