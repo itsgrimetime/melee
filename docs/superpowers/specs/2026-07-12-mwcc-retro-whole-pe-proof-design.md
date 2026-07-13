@@ -52,8 +52,11 @@ that recovered Ghidra function bodies are incomplete:
   function bodies.
 - 962 raw calls to selected PCode helpers versus 773 within recovered bodies.
 - 102 raw calls to the PCode unlink helper versus 59 within recovered bodies.
-- A 468-way opcode dispatch in `formatoperands` at `0x004C4BF0`, using a table
-  at `0x0056287C`, was not owned by a recovered Ghidra function.
+- A 466-way encoding dispatch in `formatoperands` at `0x004C4BF0`, using a
+  relocation-backed table at `0x0056287C`, was not owned by a recovered Ghidra
+  function. The separate metadata table still has 468 rows; IDs 466 `PENTRY`
+  and 467 `PEXIT` are zero-encoding pseudo-ops and do not have encoder-dispatch
+  targets.
 - The 468-row opcode metadata table begins at `0x005654B0`, with 16-byte rows.
 - Allocator rewrite at `0x004CE1A0` changes only the unsigned 16-bit payload at
   `PCodeArg +2`; it leaves kind and flags unchanged.
@@ -153,10 +156,17 @@ Computed branches and calls are resolved only from proven finite tables or
 proven finite abstract target sets. A jump table records the guard that bounds
 it, entry width, base, index range, every raw entry, and every executable
 target. `formatoperands` is an explicit acceptance case: the recovered graph
-must contain all opcode IDs `0..467`, all 468 targets, and the shared dispatch
-closure through its exit region. The analyzer does not special-case those
-targets as truth; it requires the ordinary table-recovery algorithm to derive
-them and uses the known facts as a regression assertion.
+must derive the unsigned guard `0..465`, all 466 relocation-backed executable
+targets at `0x0056287C`, and the shared dispatch closure through its exit
+region. At exact compiler SHA-256
+`ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c`,
+the first 466 table dwords hash to
+`575e165f8bfb3a01076871267f1fed9f5844219f9de565ff0941fd8b312afac7`;
+the following unrelocated dwords are non-code values `0x2d` and `0x4228`.
+The analyzer does not special-case the 466 targets as truth; it requires the
+ordinary table-recovery algorithm to derive them. The separate opcode proof
+still requires all metadata IDs `0..467`; Task 7 must prove how zero-encoding
+`PENTRY` and `PEXIT` survive or are eliminated before final emission.
 
 Conflicting decodes, branches into instruction interiors, unresolved relevant
 computed transfers, or unexplained executable regions fail closed.
