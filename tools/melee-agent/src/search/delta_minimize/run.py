@@ -1527,6 +1527,7 @@ def _capture_parents(
                         cached_raw,
                         candidate.source_path,
                         candidate.source_hash,
+                        function=config.function,
                         include_objobjects=config.include_objobjects,
                         require_checkdiff=active.parent_requires_checkdiff,
                     )
@@ -1551,6 +1552,7 @@ def _capture_parents(
                 raw,
                 candidate.source_path,
                 candidate.source_hash,
+                function=config.function,
                 include_objobjects=config.include_objobjects,
                 require_checkdiff=active.parent_requires_checkdiff,
             ):

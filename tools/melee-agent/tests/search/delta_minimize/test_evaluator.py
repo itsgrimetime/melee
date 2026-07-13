@@ -1727,8 +1727,70 @@ def test_compile_rejection_is_nonviable_not_incomplete(tmp_path: Path) -> None:
     assert profile.axes is None
 
 
-def test_compiled_candidate_missing_target_function_is_run_level_incomplete(
+def test_compiled_candidate_missing_target_function_is_cached_nonviable(
     tmp_path: Path,
+) -> None:
+    candidate = _candidate(tmp_path)
+    pcdump = tmp_path / "candidate.pcdump"
+    pcdump.write_text("Starting function other\n", encoding="utf-8")
+    calls = {"score": 0, "inspect": 0}
+
+    def score_rows(_rows, _config):
+        calls["score"] += 1
+        return [
+            {
+                "candidate_id": candidate.candidate_id,
+                "source_file": str(candidate.source_path),
+                "pcdump_path": str(pcdump),
+                "error": f"function '{FUNCTION}' not in compiled pcdump",
+                "score_error_kind": "candidate",
+                "score_returncode": 0,
+                "terminal_safe": True,
+            }
+        ]
+
+    def inspect_source(*_args, **_kwargs):
+        calls["inspect"] += 1
+        pytest.fail("a nonviable candidate must not be inspected")
+
+    store = _store(tmp_path)
+    config = _config(tmp_path)
+    backends = EvaluationBackends(score_rows, inspect_source)
+    first = capture_candidate(candidate, config, backends=backends, store=store)
+    second = capture_candidate(candidate, config, backends=backends, store=store)
+    profile = profile_candidate(first, _objective_stub(), parents=None)
+
+    assert second == first
+    assert first.compile_status == "rejected"
+    assert first.viable is False
+    assert first.pcdump_path == str(pcdump)
+    assert first.pcdump_hash == hashlib.sha256(pcdump.read_bytes()).hexdigest()
+    assert first.checkdiff_evidence is None
+    assert first.inspect_text is None
+    assert "candidate-target-function-missing" in first.blockers
+    assert profile.compile_status == "rejected"
+    assert profile.viable is False
+    assert profile.complete is True
+    assert profile.axes is None
+    assert profile.blockers == first.blockers
+    assert calls == {"score": 1, "inspect": 0}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "not-terminal-safe",
+        "wrong-function",
+        "missing-pcdump",
+        "infrastructure-kind",
+        "missing-kind",
+        "invalid-kind",
+        "target-present",
+    ),
+)
+def test_unproven_missing_target_candidate_remains_infrastructure(
+    tmp_path: Path,
+    mutation: str,
 ) -> None:
     candidate = _candidate(tmp_path)
     pcdump = tmp_path / "candidate.pcdump"
@@ -1740,26 +1802,128 @@ def test_compiled_candidate_missing_target_function_is_run_level_incomplete(
         "error": f"function '{FUNCTION}' not in compiled pcdump",
         "score_error_kind": "candidate",
         "score_returncode": 0,
-        "score_stderr": f"function '{FUNCTION}' not in compiled pcdump",
         "terminal_safe": True,
     }
+    if mutation == "not-terminal-safe":
+        row["terminal_safe"] = False
+    elif mutation == "wrong-function":
+        row["error"] = "function 'other' not in compiled pcdump"
+    elif mutation == "missing-pcdump":
+        row["pcdump_path"] = None
+    elif mutation == "infrastructure-kind":
+        row["score_error_kind"] = "infrastructure"
+    elif mutation == "missing-kind":
+        del row["score_error_kind"]
+    elif mutation == "invalid-kind":
+        row["score_error_kind"] = "bogus"
+    else:
+        pcdump.write_text(f"Starting function {FUNCTION}\n", encoding="utf-8")
 
     store = _store(tmp_path)
-    config = _config(tmp_path)
-    with pytest.raises(
-        DeltaMinimizeError,
-        match="^candidate-target-function-missing$",
-    ):
+    key = store.evidence_key(candidate, _config(tmp_path))
+    with pytest.raises(DeltaMinimizeError, match="^candidate-score-infrastructure$"):
         capture_candidate(
             candidate,
-            config,
+            _config(tmp_path),
             backends=EvaluationBackends(
                 lambda _rows, _config: [row],
                 lambda *_args, **_kwargs: pytest.fail(),
             ),
             store=store,
         )
-    assert store.load_evidence(store.evidence_key(candidate, config)) is None
+    assert store.load_evidence(key) is None
+
+
+def test_cached_missing_target_evidence_revalidates_its_pcdump(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(tmp_path)
+    pcdump = tmp_path / "candidate.pcdump"
+    calls = 0
+
+    def score_rows(_rows, _config):
+        nonlocal calls
+        calls += 1
+        pcdump.write_text(f"Starting function other generation {calls}\n", encoding="utf-8")
+        return [
+            {
+                "candidate_id": candidate.candidate_id,
+                "source_file": str(candidate.source_path),
+                "pcdump_path": str(pcdump),
+                "error": f"function '{FUNCTION}' not in compiled pcdump",
+                "score_error_kind": "candidate",
+                "score_returncode": 0,
+                "terminal_safe": True,
+            }
+        ]
+
+    store = _store(tmp_path)
+    config = _config(tmp_path)
+    backends = EvaluationBackends(score_rows, lambda *_args, **_kwargs: pytest.fail())
+    first = capture_candidate(candidate, config, backends=backends, store=store)
+    pcdump.write_text("tampered\n", encoding="utf-8")
+    second = capture_candidate(candidate, config, backends=backends, store=store)
+
+    assert calls == 2
+    assert second.pcdump_hash != first.pcdump_hash
+    assert second.pcdump_hash == hashlib.sha256(pcdump.read_bytes()).hexdigest()
+
+
+def test_cached_missing_target_evidence_revalidates_semantic_absence(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(tmp_path)
+    config = _config(tmp_path)
+    store = _store(tmp_path)
+    forged_pcdump = tmp_path / "forged.pcdump"
+    forged_pcdump.write_text(f"Starting function {FUNCTION}\n", encoding="utf-8")
+    forged = RawCandidateEvidence(
+        candidate_id=candidate.candidate_id,
+        mask=candidate.mask,
+        source_path=str(candidate.source_path),
+        source_hash=candidate.source_hash,
+        compile_status="rejected",
+        viable=False,
+        pcdump_path=str(forged_pcdump),
+        checkdiff_evidence=None,
+        inspect_text=None,
+        compiler_stderr="",
+        blockers=("candidate-target-function-missing",),
+        inspection_mode="objobjects",
+        pcdump_hash=hashlib.sha256(forged_pcdump.read_bytes()).hexdigest(),
+    )
+    key = store.evidence_key(candidate, config)
+    store.write_evidence(key, forged.to_dict())
+    fresh_pcdump = tmp_path / "fresh.pcdump"
+    calls = 0
+
+    def score_rows(_rows, _config):
+        nonlocal calls
+        calls += 1
+        fresh_pcdump.write_text("Starting function other\n", encoding="utf-8")
+        return [
+            {
+                "candidate_id": candidate.candidate_id,
+                "source_file": str(candidate.source_path),
+                "pcdump_path": str(fresh_pcdump),
+                "error": f"function '{FUNCTION}' not in compiled pcdump",
+                "score_error_kind": "candidate",
+                "score_returncode": 0,
+                "terminal_safe": True,
+            }
+        ]
+
+    rebuilt = capture_candidate(
+        candidate,
+        config,
+        backends=EvaluationBackends(score_rows, lambda *_args, **_kwargs: pytest.fail()),
+        store=store,
+    )
+
+    assert calls == 1
+    assert rebuilt.pcdump_path == str(fresh_pcdump)
+    assert rebuilt.pcdump_hash == hashlib.sha256(fresh_pcdump.read_bytes()).hexdigest()
+    assert store.load_evidence(key) == rebuilt.to_dict()
 
 
 @pytest.mark.parametrize("stderr", ["", "candidate failed"])

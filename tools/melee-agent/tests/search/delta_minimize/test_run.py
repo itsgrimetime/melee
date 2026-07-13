@@ -247,12 +247,14 @@ class _CountingFixture:
         *,
         incomplete_mask: int | None = None,
         rejected_mask: int | None = None,
+        missing_target_mask: int | None = None,
         infrastructure_mask: int | None = None,
         parent_infrastructure: bool = False,
     ):
         self.tmp_path = tmp_path
         self.incomplete_mask = incomplete_mask
         self.rejected_mask = rejected_mask
+        self.missing_target_mask = missing_target_mask
         self.infrastructure_mask = infrastructure_mask
         self.parent_infrastructure = parent_infrastructure
         self.parent_calls = 0
@@ -329,6 +331,19 @@ class _CountingFixture:
                     "score_error_kind": "candidate",
                     "error": "compile rejected",
                     "score_stderr": "mwcceppc_debug.exe compiler error: syntax error",
+                }
+            ]
+        if mask == self.missing_target_mask:
+            pcdump = self.tmp_path / f"{candidate_id}.pcdump"
+            pcdump.write_text("Starting function other\n", encoding="utf-8")
+            return [
+                {
+                    **row,
+                    "pcdump_path": str(pcdump),
+                    "error": "function 'f' not in compiled pcdump",
+                    "score_error_kind": "candidate",
+                    "score_returncode": 0,
+                    "terminal_safe": True,
                 }
             ]
         pcdump = self.tmp_path / f"{candidate_id}.pcdump"
@@ -828,7 +843,7 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fixture = _CountingFixture(tmp_path)
+    fixture = _CountingFixture(tmp_path, missing_target_mask=1)
     fixture.expected_object_hash = "e" * 64
     config = _config(tmp_path)
     left_dump = tmp_path / "parent-left.pcdump"
@@ -875,6 +890,14 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
     def discover(_config, parents, candidates, raw_candidates, manifest):
         nonlocal expected_request
         assert len(candidates) == len(raw_candidates) == 4
+        assert [raw.candidate_id for raw in raw_candidates] == [
+            "mask-00",
+            "mask-01",
+            "mask-10",
+            "mask-11",
+        ]
+        assert raw_candidates[1].viable is False
+        assert "candidate-target-function-missing" in raw_candidates[1].blockers
         domain = tuple(range(110))
         artifacts = [
             NamespaceArtifact(
@@ -903,6 +926,8 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
             ),
         ]
         for candidate, raw in zip(candidates, raw_candidates, strict=True):
+            if not raw.viable:
+                continue
             automatically_resolved = candidate.mask == 0
             artifacts.append(
                 NamespaceArtifact(
@@ -969,7 +994,7 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
     assert result.status == "incomplete"
     assert result.objective_manifest == {}
     assert result.delta_manifest["schema_version"]
-    assert result.candidate_counts == {"legal": 4, "viable": 4, "complete": 0}
+    assert result.candidate_counts == {"legal": 4, "viable": 3, "complete": 0}
     assert [row["candidate_id"] for row in result.candidates] == [
         "mask-00",
         "mask-01",
@@ -977,6 +1002,7 @@ def test_v2_namespace_discovery_captures_full_lattice_before_objective_publicati
         "mask-11",
     ]
     assert all("evidence" in row for row in result.candidates)
+    assert result.candidates[1]["evidence"]["compile_status"] == "rejected"
     assert result.pareto is None
     assert result.blockers == ("namespace-review-required",)
     assert not (config.out_dir / "objective-manifest.json").exists()
@@ -2309,6 +2335,105 @@ def test_compile_rejected_mask_stays_in_ledger_but_not_viable_count(tmp_path: Pa
     assert "mask-01" not in result.pareto.candidate_ids
 
 
+def test_missing_target_mask_is_nonviable_and_later_masks_complete(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path, missing_target_mask=1)
+    config = _config(tmp_path)
+    left = """\
+int f(void) {
+    int a = 1;
+    int b = 2;
+    int c = 3;
+    return a + b + c;
+}
+"""
+    right = """\
+int f(void) {
+    int a = 10;
+    int b = 20;
+    int c = 30;
+    return a + b + c;
+}
+"""
+    config.left.write_text(left, encoding="utf-8")
+    config.right.write_text(right, encoding="utf-8")
+    base = fixture.backends()
+
+    def complete_profile(raw, _objective, *, parents):
+        assert parents.left.candidate_id == "parent-left"
+        if not raw.viable:
+            return CandidateProfile(
+                candidate_id=raw.candidate_id,
+                mask=raw.mask,
+                source_hash=raw.source_hash,
+                source_path=raw.source_path,
+                viable=False,
+                compile_status=raw.compile_status,
+                axes=None,
+                complete=True,
+                blockers=raw.blockers,
+            )
+        return CandidateProfile(
+            candidate_id=raw.candidate_id,
+            mask=raw.mask,
+            source_hash=raw.source_hash,
+            source_path=raw.source_path,
+            viable=True,
+            compile_status="compiled",
+            axes=AxisDistances(
+                (raw.mask, 0),
+                (7 - raw.mask, 0, 0, 0, 0, 0),
+                (raw.mask % 2, 0),
+                (raw.mask // 2, 0, 0, 0),
+            ),
+            complete=True,
+        )
+
+    backends = replace(base, profile_candidate=complete_profile)
+    first = run_delta_minimize(config, backends=backends)
+    second = run_delta_minimize(config, backends=backends)
+
+    assert len(first.delta_manifest["atoms"]) == 3
+    assert first.inputs["scoped_right_hash"] == _hash(right)
+    assert first.candidate_counts == {"legal": 8, "viable": 7, "complete": 7}
+    assert first.cache_stats == {"parent_entries": 2, "candidate_entries": 8}
+    assert [row["candidate_id"] for row in first.candidates] == [
+        "mask-000",
+        "mask-001",
+        "mask-010",
+        "mask-011",
+        "mask-100",
+        "mask-101",
+        "mask-110",
+        "mask-111",
+    ]
+    rejected = first.candidates[1]
+    assert rejected["evidence"]["compile_status"] == "rejected"
+    assert rejected["evidence"]["viable"] is False
+    assert rejected["profile"]["complete"] is True
+    assert rejected["profile"]["axes"] is None
+    assert "candidate-target-function-missing" in rejected["profile"]["blockers"]
+    assert all(first.candidates[index]["profile"]["viable"] for index in (5, 6, 7))
+    assert first.status == "frontier"
+    assert first.exact_four_axis is True
+    assert first.blockers == ()
+    assert first.pareto is not None
+    assert "mask-001" not in first.pareto.candidate_ids
+    assert fixture.score_calls == 8
+    assert fixture.inspect_calls == 5
+    payload = json.loads((config.out_dir / "result.json").read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "delta-minimize-result.v2"
+    assert len(payload["candidates"]) == payload["candidate_counts"]["legal"] == 8
+    assert payload["cache_stats"]["candidate_entries"] == 8
+    assert payload["candidates"][1]["profile"]["complete"] is True
+    assert payload["candidates"][1]["profile"]["viable"] is False
+    assert payload["pareto"] == first.pareto.to_dict()
+    assert second.to_dict() == first.to_dict()
+    assert fixture.score_calls == 8
+    assert fixture.inspect_calls == 5
+
+
 def test_infrastructure_failure_writes_resumable_incomplete_result(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path, infrastructure_mask=2)
     config = _config(tmp_path)
@@ -2321,9 +2446,13 @@ def test_infrastructure_failure_writes_resumable_incomplete_result(tmp_path: Pat
     assert "candidate-score-infrastructure" in result.blockers
     assert (config.out_dir / "candidates.json").is_file()
     assert (config.out_dir / "result.json").is_file()
+    assert [row["candidate_id"] for row in result.candidates] == ["mask-00", "mask-01"]
+    assert result.cache_stats == {"parent_entries": 2, "candidate_entries": 2}
+    assert fixture.score_calls == 3
+    assert "mask-11" not in [row["candidate_id"] for row in result.candidates]
 
 
-def test_missing_target_function_stops_exact_publication(tmp_path: Path) -> None:
+def test_unproven_missing_target_function_stops_exact_publication(tmp_path: Path) -> None:
     fixture = _CountingFixture(tmp_path)
     base = fixture.backends()
 
@@ -2348,7 +2477,7 @@ def test_missing_target_function_stops_exact_publication(tmp_path: Path) -> None
     assert result.status == "incomplete"
     assert result.candidate_counts["legal"] == 4
     assert result.pareto is None
-    assert "candidate-target-function-missing" in result.blockers
+    assert "candidate-score-infrastructure" in result.blockers
 
 
 def test_inspector_compile_error_stops_publication_and_retries(tmp_path: Path) -> None:
