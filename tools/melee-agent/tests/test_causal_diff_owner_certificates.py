@@ -577,6 +577,36 @@ def test_multi_parent_lineage_is_stable_under_raw_container_reversal():
 
 
 @pytest.mark.parametrize(
+    "parent_kind",
+    ("pcode-operand", "compiler-object", "allocator-node", "stack-object"),
+)
+def test_lineage_parent_requires_pcode_operand_kind(parent_kind):
+    evidence = complete_evidence()
+    index = owner_certificate._index_evidence(evidence)
+    candidate = only(
+        item for item in owner_certificate._enumerate_candidates(index) if owner_certificate._role_for(item) == ROLE
+    )
+    parent_edge = only(
+        edge
+        for edge in index.edges_by_kind_target[("pcode-operand-lineage", candidate.lineage.record_id)]
+        if edge.attributes.get("lineage_event_side") == "outputs"
+    )
+    parent = index.node_by_id[parent_edge.source_id]
+    assert parent.kind == "pcode-operand"
+
+    diagnostic = owner_certificate.validate_owner_evidence(replace_record(evidence, replace(parent, kind=parent_kind)))
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
+
+    if parent_kind == "pcode-operand":
+        assert resolution.status is OwnerResolutionStatus.UNIQUE
+        assert len(resolution.certificate_record_ids) == 1
+    else:
+        assert resolution.status is not OwnerResolutionStatus.UNIQUE
+        assert resolution.certificate_record_ids == ()
+        assert {item.reason for item in resolution.rejections} == {"lineage-parent-mismatch"}
+
+
+@pytest.mark.parametrize(
     "parents",
     [
         (),

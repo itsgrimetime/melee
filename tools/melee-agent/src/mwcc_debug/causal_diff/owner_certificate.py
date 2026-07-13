@@ -1069,6 +1069,13 @@ def _validate_lineage_output(
                 mutation_support,
             )
         parent_pairs.append((parent_node, edge))
+    if any(parent_node.kind != "pcode-operand" for parent_node, _edge in parent_pairs):
+        return _rejection(
+            "lineage-parent-mismatch",
+            role,
+            (*candidate.path_records, *(parent_node for parent_node, _edge in parent_pairs), *selected),
+            mutation_support,
+        )
     parent_pairs.sort(
         key=lambda pair: (
             str(pair[0].attributes.get("operand_lineage_id")),
