@@ -226,6 +226,24 @@ def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
 
     if mutation == "unexplained_zero_gap":
         data[0x230] = 0
+    elif mutation == "mwcc_padding_encodings":
+        data[0x261:0x270] = bytes.fromhex(
+            "89 c0 8d 40 00 8d 44 20 00 8d 80 00 00 00 00"
+        )
+    elif mutation == "closed_unreachable_island":
+        data[0x261:0x270] = bytes.fromhex(
+            "89 c0 eb 0b 90 90 90 90 90 90 90 90 90 90 90"
+        )
+    elif mutation == "closed_unreferenced_aligned_function":
+        data[0x22B:0x230] = b"\0" * 5
+        data[0x230:0x239] = bytes.fromhex(
+            "55 8b ec 75 03 c3 90 90 c3"
+        )
+    elif mutation == "closed_aligned_function_owned_merge":
+        data[0x22B:0x230] = b"\0" * 5
+        data[0x230:0x240] = bytes.fromhex(
+            "55 8b ec 85 c0 74 09 8d 84 20 00 00 00 00 89 c0"
+        )
     elif mutation == "partial_e8_data_reference":
         data[0x240:0x246] = bytes.fromhex("a1 80 10 40 00 90")
     elif mutation == "unsupported_cross_block_initializer":
@@ -243,6 +261,21 @@ def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
         struct.pack_into("<I", data, 0x480, 0x00401004)
     elif mutation == "late_backward_target":
         data[0x270:0x275] = bytes.fromhex("e9 8c ff ff ff")
+    elif mutation == "interior_e8_crosses_owned_instructions":
+        struct.pack_into("<I", data, 0x430, 0x1070)
+        data[0x270:0x277] = bytes.fromhex("01 e8 00 00 00 00 c3")
+    elif mutation == "interior_e8_crosses_zero_function_alignment":
+        # Move the FLD operand out of .text and make its call prove the
+        # independently aligned function at 0x401080.  The raw E8 at 0x401071
+        # begins inside JLE, spans RET, and ends in the zero alignment gap.
+        data[0x240:0x246] = bytes.fromhex("dd 05 98 20 40 00")
+        data[0x24B:0x250] = bytes.fromhex("e8 30 00 00 00")
+        struct.pack_into("<I", data, 0x226, 0x00401080)
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x180)
+        data[0x270:0x280] = bytes.fromhex(
+            "7e e8 c3 00 00 00 00 00 00 00 00 00 00 00 00 00"
+        )
+        data[0x280:0x288] = bytes.fromhex("90 90 90 90 90 90 90 c3")
     elif mutation == "late_target_inside_owned_block":
         data[0x270:0x275] = bytes.fromhex("e9 d1 ff ff ff")
     elif mutation == "lea_is_not_data":
@@ -270,6 +303,18 @@ def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
         struct.pack_into("<I", data, 0x280, 0x00401060)
         struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x3080, 0)
         data[0x270:0x276] = bytes.fromhex("a1 80 10 40 00 c3")
+    elif mutation == "exec_relocation_aligned_prologue":
+        data[0x22B:0x230] = b"\0" * 5
+        data[0x230:0x23A] = bytes.fromhex(
+            "53 56 55 8b 1d 80 20 40 00 c3"
+        )
+        struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x3035, 0)
+    elif mutation == "exec_relocation_branched_prologue":
+        data[0x22B:0x230] = b"\0" * 5
+        data[0x230:0x23A] = bytes.fromhex(
+            "53 c3 90 90 a1 80 20 40 00 c3"
+        )
+        struct.pack_into("<IIHH", data, 0x800, 0x1000, 12, 0x3035, 0)
     elif mutation == "transformed_initializer":
         data[0x20A:0x219] = bytes.fromhex(
             "b8 50 10 40 00 83 c0 00 a3 90 20 40 00 eb 07"
@@ -370,4 +415,277 @@ def write_synthetic_cfg_pe(
 ) -> Path:
     path = tmp_path / f"synthetic-cfg-{mutation or 'valid'}.exe"
     path.write_bytes(synthetic_cfg_pe_bytes(mutation=mutation))
+    return path
+
+
+def synthetic_dispatch_pe_bytes(
+    *,
+    entry_count: int = 2,
+    mode: str = "absolute-jump",
+) -> bytes:
+    """Return a strict PE with one finite guarded indirect transfer."""
+    if not 1 <= entry_count <= 468:
+        raise ValueError("entry_count must be between 1 and 468")
+
+    original = synthetic_pe_bytes()
+    data = bytearray(0x1600)
+    data[:0x400] = original[:0x400]
+    data[0x400:0x800] = original[0x400:0x800]
+    data[0x1400:0x1600] = original[0x800:0xA00]
+
+    # Keep a compact executable section, grow .rdata for the 468-entry table,
+    # and move .reloc after it without changing either section RVA.
+    struct.pack_into("<II", data, SECTION_TABLE_OFFSET + 8, 0x100, 0x1000)
+    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x61)
+    struct.pack_into("<II", data, SECTION_TABLE_OFFSET + 40 + 8, 0x1000, 0x2000)
+    struct.pack_into("<II", data, SECTION_TABLE_OFFSET + 40 + 16, 0x1000, 0x400)
+    struct.pack_into("<II", data, SECTION_TABLE_OFFSET + 80 + 16, 0x200, 0x1400)
+
+    text = bytearray(b"\xCC" * 0x100)
+    table_va = 0x00402200
+    bound = entry_count - 1
+    if mode == "base-index-jump":
+        dispatch = (
+            b"\xBB" + struct.pack("<I", table_va)
+            + b"\x3D" + struct.pack("<I", bound)
+            + b"\x0F\x87\x09\x00\x00\x00"
+            + b"\xFF\x24\x83"
+        )
+    elif mode == "callback-table":
+        dispatch = (
+            b"\x3D" + struct.pack("<I", bound)
+            + b"\x0F\x87\x08\x00\x00\x00"
+            + b"\xFF\x14\x85" + struct.pack("<I", table_va)
+            + b"\xC3"
+        )
+    elif mode == "missing-guard":
+        dispatch = b"\xFF\x24\x85" + struct.pack("<I", table_va)
+    elif mode == "conflicting-width":
+        dispatch = (
+            b"\x3D" + struct.pack("<I", bound)
+            + b"\x0F\x87\x08\x00\x00\x00"
+            + b"\xFF\x24\xC5" + struct.pack("<I", table_va)
+        )
+    else:
+        selected_base = 0x004031FC if mode == "unmapped-entry" else table_va
+        dispatch = (
+            b"\x3D" + struct.pack("<I", bound)
+            + b"\x0F\x87\x08\x00\x00\x00"
+            + b"\xFF\x24\x85" + struct.pack("<I", selected_base)
+        )
+    text[: len(dispatch)] = dispatch
+    text[0x20] = 0xC3
+    text[0x60] = 0xC3
+    if mode in {
+        "unowned-relocated-dispatch",
+        "unowned-called-function-dispatch",
+        "unowned-terminal-jump-dispatch",
+        "two-unowned-relocations",
+    }:
+        if mode == "two-unowned-relocations":
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0xBA)
+        text[:] = b"\xCC" * len(text)
+        text[:6] = bytes.fromhex("e8 29 00 00 00 c3")
+        text[0x20] = 0xC3
+        text[0x2E:0x30] = bytes.fromhex("c3 00")
+        if mode == "unowned-terminal-jump-dispatch":
+            text[:6] = bytes.fromhex("e8 26 00 00 00 c3")
+            text[0x2B:0x30] = bytes.fromhex("e9 d0 ff ff ff")
+        text[0x30:0x42] = (
+            b"\x3D" + struct.pack("<I", bound)
+            + b"\x0F\x87\x15\x00\x00\x00"
+            + b"\xFF\x24\x85" + struct.pack("<I", table_va)
+        )
+        if mode == "unowned-called-function-dispatch":
+            text[0x30:0x47] = (
+                bytes.fromhex("e8 eb ff ff ff")
+                + b"\x3D" + struct.pack("<I", bound)
+                + b"\x0F\x87\x0A\x00\x00\x00"
+                + b"\xFF\x24\x85" + struct.pack("<I", table_va)
+            )
+        text[0x50] = 0xC3
+        text[0x60] = 0xC3
+        if mode == "two-unowned-relocations":
+            text[:6] = bytes.fromhex("e8 a9 00 00 00 c3")
+            text[0x2B:0x30] = b"\0" * 5
+            text[0x60] = 0xCC
+            text[0xAE:0xB0] = bytes.fromhex("c3 00")
+            text[0xB0:0xBA] = bytes.fromhex(
+                "53 56 55 8b 1d 80 20 40 00 c3"
+            )
+    elif mode == "unowned-branched-function-dispatch":
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0xA1)
+        text[:] = b"\xCC" * len(text)
+        text[0] = 0xC3
+        text[0x20] = 0xC3
+        text[0x37:0x40] = b"\0" * 9
+        text[0x40:0x4E] = bytes.fromhex(
+            "53 e8 da ff ff ff 85 c0 75 26 31 c0 5b c3"
+        )
+        text[0x70:0x88] = (
+            bytes.fromhex("0f b6 c0 83 e8 00")
+            + b"\x3D" + struct.pack("<I", bound)
+            + b"\x0F\x87\x0F\x00\x00\x00"
+            + b"\xFF\x24\x85" + struct.pack("<I", table_va)
+        )
+        text[0x90:0x92] = bytes.fromhex("5b c3")
+        text[0xA0] = 0xC3
+    elif mode == "unowned-long-guard-branch-dispatch":
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0xA1)
+        text[:] = b"\xCC" * len(text)
+        text[0] = 0xC3
+        text[0x20] = 0xC3
+        text[0x2B:0x30] = b"\0" * 5
+        text[0x30:0x35] = bytes.fromhex("85 c0 75 0c c3")
+        text[0x35:0x65] = b"\x90" * 0x30
+        text[0x40:0x44] = bytes.fromhex("85 c0 74 0c")
+        text[0x49:0x50] = bytes.fromhex("c3 8d 80 00 00 00 00")
+        text[0x65:0x77] = (
+            b"\x3D" + struct.pack("<I", bound)
+            + b"\x0F\x87\x20\x00\x00\x00"
+            + b"\xFF\x24\x85" + struct.pack("<I", table_va)
+        )
+        text[0x90] = 0xC3
+        text[0xA0] = 0xC3
+    elif mode == "aligned-branched-relocation":
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0xC3)
+        text[:] = b"\xCC" * len(text)
+        text[0] = 0xC3
+        text[0x20] = 0xC3
+        text[0xAB:0xB0] = b"\0" * 5
+        text[0xB0:0xC3] = bytes.fromhex(
+            "53 e8 6a ff ff ff 85 c0 75 02 90 90 "
+            "a1 80 20 40 00 5b c3"
+        )
+    elif mode == "relocation-inline-data":
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x56)
+        text[:] = b"\xCC" * len(text)
+        text[:6] = bytes.fromhex("e8 29 00 00 00 c3")
+        text[0x20] = 0xC3
+        text[0x2E:0x33] = bytes.fromhex("e9 cd ff ff ff")
+        text[0x33:0x50] = b"Hacked by Ninji 2023-07-15 $\x08"
+        text[0x50:0x56] = bytes.fromhex("e8 cb ff ff ff c3")
+    elif mode == "self-lea-zero-suffix":
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x56)
+        text[:] = b"\xCC" * len(text)
+        text[0] = 0xC3
+        text[0x20] = 0xC3
+        text[0x2B:0x30] = b"\0" * 5
+        text[0x30:0x56] = bytes.fromhex(
+            "a1 80 20 40 00 53 85 c0 74 14 8d 80 00 00 00 00 "
+            "81 60 02 fd ff ff ff 8b 40 2a 85 c0 75 f2 "
+            "8b 1d 80 20 40 00 5b c3"
+        )
+    elif mode == "self-lea-padding-dispatch":
+        text[:] = b"\xCC" * len(text)
+        text[:6] = bytes.fromhex("e8 24 00 00 00 c3")
+        text[0x20] = 0xC3
+        text[0x29] = 0xC3
+        text[0x2A:0x30] = bytes.fromhex("8d 80 00 00 00 00")
+        text[0x30:0x42] = (
+            b"\x3D" + struct.pack("<I", bound)
+            + b"\x0F\x87\x15\x00\x00\x00"
+            + b"\xFF\x24\x85" + struct.pack("<I", table_va)
+        )
+        text[0x50] = 0xC3
+        text[0x60] = 0xC3
+    elif mode == "owned-dispatch-interior":
+        text[:] = b"\xCC" * len(text)
+        text[0] = 0xC3
+        text[0x20] = 0xC3
+        text[0x2B:0x30] = b"\0" * 5
+        text[0x30:0x48] = (
+            bytes.fromhex("53 e8 ea ff ff ff")
+            + b"\x3D" + struct.pack("<I", bound)
+            + b"\x0F\x87\x0F\x00\x00\x00"
+            + b"\xFF\x24\x85" + struct.pack("<I", table_va)
+        )
+        text[0x50] = 0xC3
+        text[0x60] = 0xC3
+    elif mode == "owned-relocation-interior":
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x3C)
+        text[:] = b"\xCC" * len(text)
+        text[0] = 0xC3
+        text[0x2B:0x30] = b"\0" * 5
+        text[0x30:0x3C] = bytes.fromhex(
+            "31 c0 31 c9 80 b9 80 20 40 00 00 c3"
+        )
+    data[0x200:0x300] = text
+
+    # Export a real target and retain the relocation-proven second target.
+    export_rva = {
+        "owned-dispatch-interior": 0x1041,
+        "owned-relocation-interior": 0x1034,
+    }.get(mode, 0x1020)
+    struct.pack_into("<I", data, 0x430, export_rva)
+    struct.pack_into("<I", data, 0x480, 0x00401060)
+    if mode in {
+        "unowned-relocated-dispatch",
+        "unowned-terminal-jump-dispatch",
+    }:
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x303E, 0)
+    elif mode == "unowned-called-function-dispatch":
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x3043, 0)
+    elif mode == "two-unowned-relocations":
+        struct.pack_into(
+            "<IIHH", data, 0x1400, 0x1000, 12, 0x303E, 0x30B5
+        )
+    elif mode == "unowned-branched-function-dispatch":
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x3084, 0)
+    elif mode == "unowned-long-guard-branch-dispatch":
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x3073, 0)
+    elif mode == "aligned-branched-relocation":
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x30BD, 0)
+    elif mode == "relocation-inline-data":
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x3040, 0)
+    elif mode == "self-lea-zero-suffix":
+        struct.pack_into(
+            "<IIHH", data, 0x1400, 0x1000, 12, 0x3031, 0x3050
+        )
+    elif mode == "self-lea-padding-dispatch":
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x303E, 0)
+    elif mode == "owned-dispatch-interior":
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x3044, 0)
+    elif mode == "owned-relocation-interior":
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x3036, 0)
+    else:
+        struct.pack_into("<IIHH", data, 0x1400, 0x2000, 12, 0x3080, 0)
+    second_target = (
+        0x004010A0
+        if mode
+        in {
+            "unowned-branched-function-dispatch",
+            "unowned-long-guard-branch-dispatch",
+        }
+        else (
+            0x004010AE
+            if mode == "two-unowned-relocations"
+            else 0x00401060
+        )
+    )
+    targets = tuple(
+        0x00401020 if index % 2 == 0 else second_target
+        for index in range(entry_count)
+    )
+    if mode == "target-outside-text":
+        targets = (0x00402000, *targets[1:])
+    table_offset = 0x15FC if mode == "unmapped-entry" else 0x600
+    for index, target in enumerate(targets):
+        section_end = 0x1600 if mode == "unmapped-entry" else 0x1400
+        if table_offset + index * 4 + 4 <= section_end:
+            struct.pack_into("<I", data, table_offset + index * 4, target)
+
+    return bytes(data)
+
+
+def write_synthetic_dispatch_pe(
+    tmp_path: Path,
+    *,
+    entry_count: int = 2,
+    mode: str = "absolute-jump",
+) -> Path:
+    path = tmp_path / f"synthetic-dispatch-{mode}-{entry_count}.exe"
+    path.write_bytes(
+        synthetic_dispatch_pe_bytes(entry_count=entry_count, mode=mode)
+    )
     return path

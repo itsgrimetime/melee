@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import shlex
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import typer
@@ -17,14 +17,16 @@ retro_app = typer.Typer(
 # Package checkout discovery (this file is tools/melee-agent/src/cli/debug/retro.py).
 _PACKAGE_REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_PACKAGE_REPO))
-from src.mwcc_debug.diff_capture import _run_with_process_group_timeout  # noqa: E402
 from tools.mwcc_retro import (  # noqa: E402
+    TABLES_DIR,
     backend_events,
     backend_trace_assembler,
-    TABLES_DIR,
+)
+from tools.mwcc_retro import (
     setup as retro_setup,
 )
 
+from src.mwcc_debug.diff_capture import _run_with_process_group_timeout  # noqa: E402
 
 RETRO_DUMP_TIMEOUT_SECONDS = 600
 
@@ -385,7 +387,8 @@ def _run_object_parity_for_backend(*, src: str, melee_root: Path) -> dict:
     import shlex
     import tempfile
 
-    from tools.mwcc_retro import object_parity, setup as _setup
+    from tools.mwcc_retro import object_parity
+    from tools.mwcc_retro import setup as _setup
 
     setup_result = _setup.ensure_for_root(melee_root, force=False)
     cmd = _ninja_cmd_for_unit(src, melee_root=melee_root)
@@ -428,8 +431,8 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
     import shlex
     import subprocess
 
-    from tools.mwcc_retro import struct_map
     from tools.mwcc_retro import setup as _setup
+    from tools.mwcc_retro import struct_map
 
     setup_result = _setup.ensure_for_root(melee_root, force=False)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -568,6 +571,8 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
 def _remove_backend_probe_stale_artifacts(out_dir: Path) -> None:
     """Remove backend trace artifacts that would make probe output ambiguous."""
     names = {
+        "raw-pe-cfg.v1.jsonl",
+        "raw-ghidra-crosscheck.v1.json",
         "backend-map-candidates.json",
         "backend-map-probe.json",
         "backend-map-evidence.json",
@@ -1335,6 +1340,7 @@ def _run_backend_map_probe(
     out_dir.mkdir(parents=True, exist_ok=True)
     _remove_backend_probe_stale_artifacts(out_dir)
     exe = melee_root / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
+    _run_static_backend_map_audit(melee_root=melee_root, out_dir=out_dir)
     report = backend_discovery.build_gc125n_backend_candidate_report(exe)
     (out_dir / "backend-map-candidates.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n"
@@ -1377,6 +1383,127 @@ def _run_backend_map_probe(
     return outcome
 
 
+def _load_transient_ghidra_inventory(*, melee_root: Path):
+    """Validate the canonical project and consume one fresh temp export."""
+    import subprocess
+    import tempfile
+
+    from tools.mwcc_retro.backend_lifetime_audit import (
+        load_ghidra_inventory,
+    )
+
+    from src.mwcc_debug.ghidra_mwcc_setup import (
+        EXPECTED_COMPILER_SHA256,
+        PROGRAM_PATH,
+        PROJECT_NAME,
+    )
+
+    project_dir = melee_root / "tools" / "mwcc_debug" / "ghidra_project"
+    setup = setup_mwcc_ghidra(
+        melee_root=melee_root,
+        project_dir=project_dir,
+        analysis_timeout=300,
+        wall_timeout=420,
+        repair=False,
+    )
+    if (
+        setup.compiler_sha256 != EXPECTED_COMPILER_SHA256
+        or setup.project_name != PROJECT_NAME
+        or setup.program_path != PROGRAM_PATH
+        or setup.project_dir.resolve() != project_dir.resolve()
+    ):
+        raise RuntimeError("validated Ghidra project identity differs")
+    exporter = melee_root / "tools/mwcc_debug/scripts/ExportMwccRawCrosscheck.java"
+    if not exporter.is_file():
+        raise RuntimeError(f"missing Ghidra raw cross-check exporter: {exporter}")
+
+    with tempfile.TemporaryDirectory(prefix="mwcc-ghidra-crosscheck-") as temporary:
+        inventory_path = Path(temporary) / "inventory.jsonl"
+        if inventory_path.exists():
+            raise RuntimeError("fresh Ghidra inventory path unexpectedly exists")
+        command = [
+            str(setup.headless_path),
+            str(setup.project_dir),
+            setup.project_name,
+            "-process",
+            setup.program_path.removeprefix("/"),
+            "-noanalysis",
+            "-scriptPath",
+            str(exporter.parent),
+            "-postScript",
+            exporter.name,
+            EXPECTED_COMPILER_SHA256,
+            str(inventory_path),
+        ]
+        try:
+            process = _run_with_process_group_timeout(
+                command,
+                cwd=melee_root,
+                timeout=420,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Ghidra raw cross-check export timed out") from exc
+        combined = f"{process.stdout or ''}\n{process.stderr or ''}"
+        lowered = combined.lower()
+        if process.returncode != 0 or any(
+            marker in lowered
+            for marker in (
+                "analysis timed out",
+                "analysis cancelled",
+                "analysis canceled",
+                "processing cancelled",
+                "processing canceled",
+                "abort due to headless analyzer error",
+            )
+        ):
+            raise RuntimeError(
+                "Ghidra raw cross-check export failed: " + _tail(combined)
+            )
+        return load_ghidra_inventory(
+            inventory_path,
+            expected_sha256=EXPECTED_COMPILER_SHA256,
+        )
+
+
+def _run_static_backend_map_audit(*, melee_root: Path, out_dir: Path) -> None:
+    """Recover raw exact-hash CFG, cross-check Ghidra, then publish."""
+    from tools.mwcc_retro import backend_lifetime_audit, pe, x86_cfg
+
+    from src.mwcc_debug.ghidra_mwcc_setup import EXPECTED_COMPILER_SHA256
+
+    compiler = (
+        melee_root / "build/compilers/GC/1.2.5n/mwcceppc.exe"
+    )
+    image = pe.load(
+        compiler,
+        expected_sha256=EXPECTED_COMPILER_SHA256,
+        require_pe32_i386=True,
+    )
+    format_anchor = x86_cfg.AuditAnchor(
+        name="formatoperands",
+        address=0x004C4BF0,
+        instruction_bytes=b"\x53",
+        evidence="retail-encoder-dispatch-bound",
+    )
+    seeds = x86_cfg.build_seed_inventory(image, (format_anchor,))
+    cfg = x86_cfg.recover_cfg(
+        image,
+        seeds,
+        x86_cfg.AnalysisLimits.for_image(image),
+    )
+    format_dispatch = backend_lifetime_audit.validate_gc125n_formatoperands(cfg)
+    inventory = _load_transient_ghidra_inventory(melee_root=melee_root)
+    report = backend_lifetime_audit.compare_ghidra_inventory(cfg, inventory)
+    report.require_no_raw_decode_conflicts()
+    report.require_retained_regressions()
+    report = replace(report, formatoperands_dispatch=format_dispatch)
+
+    x86_cfg.write_jsonl_atomic(out_dir / "raw-pe-cfg.v1.jsonl", cfg)
+    backend_lifetime_audit.write_crosscheck_atomic(
+        out_dir / "raw-ghidra-crosscheck.v1.json", report
+    )
+
+
 def _launch_backend_ig_snapshot(
     *,
     src: str,
@@ -1384,8 +1511,8 @@ def _launch_backend_ig_snapshot(
     out_dir: Path,
     melee_root: Path,
 ) -> tuple[Path, Path]:
-    from tools.mwcc_retro import struct_map
     from tools.mwcc_retro import setup as _setup
+    from tools.mwcc_retro import struct_map
 
     _setup.ensure_for_root(melee_root, force=False)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1475,8 +1602,8 @@ def _launch_backend_pcode_snapshot(
     out_dir: Path,
     melee_root: Path,
 ) -> tuple[Path, Path]:
-    from tools.mwcc_retro import struct_map
     from tools.mwcc_retro import setup as _setup
+    from tools.mwcc_retro import struct_map
 
     _setup.ensure_for_root(melee_root, force=False)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1965,7 +2092,8 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
     """
     import subprocess
 
-    from tools.mwcc_retro import setup as _setup, trace_summary
+    from tools.mwcc_retro import setup as _setup
+    from tools.mwcc_retro import trace_summary
 
     if hasattr(_setup, "ensure_for_root"):
         res = _setup.ensure_for_root(melee_root, force=False)
@@ -2425,7 +2553,7 @@ def backend_cmd(
         help="Also compare the retail backend trace to the mwcc-debug pcdump.",
     ),
 ):
-    """Generate an exact retail GC/1.2.5n backend/regalloc trace."""
+    """Gated retail GC/1.2.5n backend/regalloc trace command."""
     active_root = _resolve_melee_root(melee_root)
     out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
     try:
@@ -2520,7 +2648,10 @@ def probe_backend_map_cmd(
     static_only: bool = typer.Option(
         False,
         "--static-only",
-        help="Only write backend-map-candidates.json; skip parity and live gdb probe.",
+        help=(
+            "Write raw-pe-cfg.v1.jsonl, raw-ghidra-crosscheck.v1.json, and "
+            "backend-map-candidates.json; skip parity and live gdb probe."
+        ),
     ),
 ):
     """Probe retail GC/1.2.5n backend map candidates without emitting traces."""
@@ -2545,6 +2676,13 @@ def probe_backend_map_cmd(
         )
         raise typer.Exit(2)
     typer.echo(f"backend map candidates: {out_dir / 'backend-map-candidates.json'}")
+    if (out_dir / "raw-pe-cfg.v1.jsonl").exists():
+        typer.echo(f"raw PE CFG: {out_dir / 'raw-pe-cfg.v1.jsonl'}")
+    if (out_dir / "raw-ghidra-crosscheck.v1.json").exists():
+        typer.echo(
+            "raw/Ghidra cross-check: "
+            f"{out_dir / 'raw-ghidra-crosscheck.v1.json'}"
+        )
     if (out_dir / "backend-map-probe.json").exists():
         typer.echo(f"backend map probe: {out_dir / 'backend-map-probe.json'}")
     if (out_dir / "backend-map-evidence.json").exists():
@@ -2724,7 +2862,7 @@ def verify_cmd(
 
 
 def _write_provenance(out_dir: Path, src, fn, compiler, table, outcome, melee_root):
-    from tools.mwcc_retro import RETROWIN32_PIN, CADMIC_PIN
+    from tools.mwcc_retro import CADMIC_PIN, RETROWIN32_PIN
     prov = {
         "true_compiler": compiler,
         "note": "dumps use a GC/1.1 name-spoof internally; true compiler above",

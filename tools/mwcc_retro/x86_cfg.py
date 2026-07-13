@@ -225,6 +225,23 @@ class OwnershipDiagnostic:
 
 
 @dataclass(frozen=True, slots=True)
+class JumpTable:
+    """One finite computed-transfer table proven from a dominating guard."""
+
+    address: int
+    flow_kind: str
+    guard_address: int
+    guard_operator: str
+    guard_bound: int
+    base: int
+    entry_width: int
+    index_min: int
+    index_max: int
+    raw_entries: tuple[int, ...]
+    targets: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class AnalysisHighWater:
     limit_name: str
     observed: int
@@ -239,6 +256,7 @@ class RawCfg:
     blocks: tuple[BasicBlock, ...]
     edges: tuple[CfgEdge, ...]
     direct_calls: tuple[DirectCall, ...]
+    jump_tables: tuple[JumpTable, ...]
     raw_e8_candidates: tuple[RawE8Candidate, ...]
     data_regions: tuple[ByteRegion, ...]
     padding_regions: tuple[ByteRegion, ...]
@@ -249,12 +267,29 @@ class RawCfg:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def jump_table_at(self, address: int) -> JumpTable:
+        """Return the uniquely recovered table at a computed transfer."""
+        matches = tuple(row for row in self.jump_tables if row.address == address)
+        if len(matches) != 1:
+            raise KeyError(f"no unique jump table at {address:#x}")
+        return matches[0]
+
 
 def _is_executable_span(image: Image, address: int, size: int) -> bool:
     end = address + size
     return any(
         start <= address and end <= range_end
         for start, range_end in image.executable_ranges
+    )
+
+
+def _is_mapped_span(image: Image, address: int, size: int) -> bool:
+    end = address + size
+    if image.image_base <= address and end <= image.image_base + image.size_of_headers:
+        return True
+    return any(
+        section.va <= address and end <= section.va + section.mapped_size
+        for section in image.sections
     )
 
 
@@ -413,6 +448,10 @@ def _diagnostic_key(
     return diagnostic.address, diagnostic.kind, diagnostic.detail
 
 
+def _jump_table_key(table: JumpTable) -> int:
+    return table.address
+
+
 @dataclass(frozen=True, slots=True)
 class _ExactValue:
     value: int
@@ -424,6 +463,127 @@ class _DataEvidence:
     start: int
     end: int
     provenance: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RelocationEntryCandidate:
+    relocation_va: int
+    category: str
+    entry: int
+    gap_start: int
+    evidence_address: int
+    evidence_bytes: str
+    boundary_evidence: str
+    span_end: int
+    internal_branch_targets: tuple[int, ...] = ()
+
+
+def _relocation_candidate_key(
+    candidate: _RelocationEntryCandidate,
+) -> tuple[int, int, int, int, int, str, int, str, str, tuple[int, ...]]:
+    return (
+        candidate.relocation_va,
+        candidate.entry,
+        candidate.gap_start,
+        candidate.span_end,
+        {
+            "relocation-computed-transfer": 0,
+            "relocation-inline-data-successor": 1,
+        }.get(candidate.category, 2),
+        candidate.category,
+        candidate.evidence_address,
+        candidate.evidence_bytes,
+        candidate.boundary_evidence,
+        candidate.internal_branch_targets,
+    )
+
+
+def _select_relocation_entry_candidates(
+    candidates: tuple[_RelocationEntryCandidate, ...],
+) -> tuple[_RelocationEntryCandidate, ...]:
+    """Choose the unique non-overlapping relocation-entry assignment."""
+    canonical_by_shape: dict[
+        tuple[int, int, int, int], _RelocationEntryCandidate
+    ] = {}
+    for candidate in sorted(candidates, key=_relocation_candidate_key):
+        shape = (
+            candidate.relocation_va,
+            candidate.entry,
+            candidate.gap_start,
+            candidate.span_end,
+        )
+        canonical_by_shape.setdefault(shape, candidate)
+
+    canonical_candidates = tuple(canonical_by_shape.values())
+    dominated_internal_entries = {
+        candidate
+        for candidate in canonical_candidates
+        if any(
+            other.relocation_va == candidate.relocation_va
+            and other.entry < candidate.entry
+            and candidate.entry in other.internal_branch_targets
+            and candidate.span_end <= other.span_end
+            for other in canonical_candidates
+        )
+    }
+    grouped: dict[int, list[_RelocationEntryCandidate]] = {}
+    for candidate in canonical_candidates:
+        if candidate in dominated_internal_entries:
+            continue
+        grouped.setdefault(candidate.relocation_va, []).append(candidate)
+    groups = tuple(
+        (relocation_va, tuple(sorted(rows, key=_relocation_candidate_key)))
+        for relocation_va, rows in sorted(grouped.items())
+    )
+    if not groups:
+        return ()
+
+    solutions: list[tuple[_RelocationEntryCandidate, ...]] = []
+
+    def compatible(
+        candidate: _RelocationEntryCandidate,
+        selected: tuple[_RelocationEntryCandidate, ...],
+    ) -> bool:
+        return all(
+            candidate.entry == other.entry
+            or candidate.span_end <= other.gap_start
+            or other.span_end <= candidate.gap_start
+            for other in selected
+        )
+
+    def visit(
+        index: int, selected: tuple[_RelocationEntryCandidate, ...]
+    ) -> None:
+        if len(solutions) > 1:
+            return
+        if index == len(groups):
+            solutions.append(selected)
+            return
+        for candidate in groups[index][1]:
+            if compatible(candidate, selected):
+                visit(index + 1, (*selected, candidate))
+
+    visit(0, ())
+    if not solutions:
+        relocations = ",".join(f"{row[0]:#x}" for row in groups)
+        raise CfgRecoveryError(
+            "relocation entry candidates have an overlap conflict: "
+            f"relocations={relocations}"
+        )
+    signatures = {
+        tuple(
+            (row.relocation_va, row.entry, row.gap_start, row.span_end)
+            for row in solution
+        )
+        for solution in solutions
+    }
+    if len(signatures) != 1:
+        relocations = ",".join(f"{row[0]:#x}" for row in groups)
+        raise CfgRecoveryError(
+            "relocation entry candidate set is ambiguous: "
+            f"relocations={relocations}"
+        )
+    return tuple(sorted(solutions[0], key=_relocation_candidate_key))
 
 
 @dataclass(frozen=True, slots=True)
@@ -749,6 +909,11 @@ _CANONICAL_NOP_ENCODINGS = tuple(
         (
             bytes.fromhex("90"),
             bytes.fromhex("66 90"),
+            bytes.fromhex("89 c0"),
+            bytes.fromhex("8d 40 00"),
+            bytes.fromhex("8d 44 20 00"),
+            bytes.fromhex("8d 80 00 00 00 00"),
+            bytes.fromhex("8d 84 20 00 00 00 00"),
             bytes.fromhex("0f 1f 00"),
             bytes.fromhex("0f 1f 40 00"),
             bytes.fromhex("0f 1f 44 00 00"),
@@ -817,8 +982,12 @@ class _DirectCfgRecovery:
         self.terminators: set[int] = set()
         self.edges: set[CfgEdge] = set()
         self.direct_calls: set[DirectCall] = set()
+        self.jump_tables: dict[int, JumpTable] = {}
+        self.jump_table_entry_count = 0
+        self.indirect_candidates: dict[int, tuple[str, bool]] = {}
         self.diagnostics: set[OwnershipDiagnostic] = set()
         self.data_evidence: set[_DataEvidence] = set()
+        self.structural_data_evidence: set[_DataEvidence] = set()
         self.function_addresses: set[int] = set()
         self.finite_targets: set[int] = set()
         self.finite_values: set[int] = set()
@@ -837,7 +1006,24 @@ class _DirectCfgRecovery:
         self.decoder.skipdata = False
 
         for address in seed_inventory.addresses:
-            self._enqueue(address, is_function=True)
+            categories = {
+                record.category
+                for record in seed_inventory.records
+                if record.address == address
+            }
+            self._enqueue(
+                address,
+                is_function=bool(
+                    categories
+                    & {
+                        "entrypoint",
+                        "export",
+                        "audit-anchor",
+                        "explicit-seed",
+                    }
+                ),
+            )
+            self._record_finite_target(address)
 
     def _check_count(self, limit_name: str, observed: int) -> None:
         self.high_water[limit_name] = max(
@@ -850,6 +1036,12 @@ class _DirectCfgRecovery:
             return
         self.finite_values.add(value)
         self._check_count("max_finite_values", len(self.finite_values))
+
+    def _record_finite_target(self, address: int) -> None:
+        if address in self.finite_targets:
+            return
+        self.finite_targets.add(address)
+        self._check_count("max_finite_targets", len(self.finite_targets))
 
     def _record_fixpoint_update(self) -> None:
         self.fixpoint_updates += 1
@@ -887,11 +1079,6 @@ class _DirectCfgRecovery:
                 self._add_edge(
                     predecessor.address, address, "fallthrough"
                 )
-        if address not in self.finite_targets:
-            self.finite_targets.add(address)
-            self._check_count(
-                "max_finite_targets", len(self.finite_targets)
-            )
         if is_function and address not in self.function_addresses:
             self.function_addresses.add(address)
             self._check_count("max_functions", len(self.function_addresses))
@@ -983,6 +1170,934 @@ class _DirectCfgRecovery:
             )
         )
 
+    def _previous_instruction(self, address: int) -> Instruction | None:
+        return next(
+            (
+                row
+                for row in self.instructions.values()
+                if row.address + row.size == address
+            ),
+            None,
+        )
+
+    def _computed_flow_blocker(
+        self, instruction: Instruction, detail: str
+    ) -> None:
+        self.diagnostics.add(
+            OwnershipDiagnostic(
+                kind="computed-flow-blocker",
+                address=instruction.address,
+                detail=detail,
+            )
+        )
+
+    def _resolve_register_constant_before(
+        self, address: int, register: int
+    ) -> int | None:
+        """Resolve a local exact register initializer without crossing a gap."""
+        family = self._register_family(register)
+        cursor = address
+        for _ in range(64):
+            previous = self._previous_instruction(cursor)
+            if previous is None:
+                return None
+            decoded = self._owned_decoded(previous.address)
+            if decoded.operands and decoded.operands[0].type == X86_OP_REG:
+                destination = self._register_family(decoded.operands[0].reg)
+                if destination == family:
+                    if (
+                        decoded.id == X86_INS_MOV
+                        and len(decoded.operands) == 2
+                        and decoded.operands[0].size == 4
+                        and decoded.operands[1].type == X86_OP_IMM
+                    ):
+                        return decoded.operands[1].imm & 0xFFFF_FFFF
+                    if (
+                        decoded.id == X86_INS_LEA
+                        and len(decoded.operands) == 2
+                        and decoded.operands[0].size == 4
+                        and decoded.operands[1].type == X86_OP_MEM
+                        and decoded.operands[1].mem.base == X86_REG_INVALID
+                        and decoded.operands[1].mem.index == X86_REG_INVALID
+                    ):
+                        return decoded.operands[1].mem.disp & 0xFFFF_FFFF
+                    return None
+            if any(
+                self._register_family(written) == family
+                for written in decoded.regs_write
+            ):
+                return None
+            cursor = previous.address
+            if previous.address in self.block_starts:
+                return None
+        return None
+
+    def _guard_for_index(
+        self, transfer_address: int, index_register: int
+    ) -> tuple[Instruction, str, int, int, int] | None:
+        """Return compare, operator, bound, min, max for a fallthrough guard."""
+        branch = self._previous_instruction(transfer_address)
+        if branch is None:
+            return None
+        branch_decoded = self._owned_decoded(branch.address)
+        operators = {"ja": (0, 0), "jae": (0, -1)}
+        adjustment = operators.get(branch_decoded.mnemonic)
+        if adjustment is None or not branch_decoded.group(CS_GRP_JUMP):
+            return None
+        if self._direct_target(branch_decoded) is None:
+            return None
+        incoming = {
+            (edge.source, edge.kind)
+            for edge in self.edges
+            if edge.target == transfer_address
+        }
+        if incoming != {(branch.address, "fallthrough")}:
+            return None
+        compare = self._previous_instruction(branch.address)
+        if compare is None:
+            return None
+        compare_decoded = self._owned_decoded(compare.address)
+        if (
+            compare_decoded.mnemonic != "cmp"
+            or len(compare_decoded.operands) != 2
+            or compare_decoded.operands[0].type != X86_OP_REG
+            or compare_decoded.operands[0].size != 4
+            or compare_decoded.operands[1].type != X86_OP_IMM
+            or self._register_family(compare_decoded.operands[0].reg)
+            != self._register_family(index_register)
+        ):
+            return None
+        bound = compare_decoded.operands[1].imm & 0xFFFF_FFFF
+        index_min = adjustment[0]
+        index_max = bound + adjustment[1]
+        if index_max < index_min:
+            return None
+        return compare, branch_decoded.mnemonic, bound, index_min, index_max
+
+    def _recover_indexed_table(
+        self, decoded, instruction: Instruction, *, flow_kind: str
+    ) -> bool:
+        if len(decoded.operands) != 1 or decoded.operands[0].type != X86_OP_MEM:
+            return False
+        operand = decoded.operands[0]
+        memory = operand.mem
+        if memory.index == X86_REG_INVALID:
+            return False
+        if memory.segment != X86_REG_INVALID:
+            self._computed_flow_blocker(
+                instruction,
+                "jump-table operand uses an unsupported segment override",
+            )
+            return False
+
+        guard = self._guard_for_index(instruction.address, memory.index)
+        if guard is None:
+            self._computed_flow_blocker(
+                instruction,
+                "computed transfer has no finite dominating guard",
+            )
+            return False
+        compare, operator, bound, index_min, index_max = guard
+        entry_width = operand.size
+        if entry_width != 4 or memory.scale != entry_width:
+            self._computed_flow_blocker(
+                instruction,
+                "jump-table entry width conflicts with index scale: "
+                f"width={entry_width};scale={memory.scale}",
+            )
+            return False
+        if memory.base == X86_REG_INVALID:
+            base = memory.disp & 0xFFFF_FFFF
+        else:
+            base_value = self._resolve_register_constant_before(
+                compare.address, memory.base
+            )
+            if base_value is None:
+                self._computed_flow_blocker(
+                    instruction,
+                    "jump-table base has no finite local initializer",
+                )
+                return False
+            base = base_value + memory.disp
+            if not 0 <= base <= 0xFFFF_FFFF:
+                self._computed_flow_blocker(
+                    instruction, "jump-table base address wraps 32 bits"
+                )
+                return False
+
+        entry_count = index_max - index_min + 1
+        last_entry = base + index_max * entry_width
+        if not 0 <= base <= last_entry <= 0xFFFF_FFFF - entry_width + 1:
+            self._computed_flow_blocker(
+                instruction, "jump-table entry range wraps 32 bits"
+            )
+            return False
+        new_total = self.jump_table_entry_count + entry_count
+        try:
+            self._check_count("max_jump_table_entries", new_total)
+        except AnalysisLimitError:
+            raise
+
+        entries: list[int] = []
+        entry_rows: list[tuple[int, bytes, int]] = []
+        for index in range(index_min, index_max + 1):
+            entry_address = base + index * entry_width
+            try:
+                raw = self.image.read(entry_address, entry_width)
+            except ValueError:
+                self._computed_flow_blocker(
+                    instruction,
+                    "jump-table entry is not wholly mapped: "
+                    f"index={index};address={entry_address:#x}",
+                )
+                return False
+            target = int.from_bytes(raw, "little")
+            if not _is_executable_span(self.image, target, 1):
+                self._computed_flow_blocker(
+                    instruction,
+                    "jump-table target is not executable: "
+                    f"index={index};entry={entry_address:#x};target={target:#x}",
+                )
+                return False
+            entries.append(target)
+            entry_rows.append((entry_address, raw, target))
+
+        table = JumpTable(
+            address=instruction.address,
+            flow_kind=flow_kind,
+            guard_address=compare.address,
+            guard_operator=operator,
+            guard_bound=bound,
+            base=base,
+            entry_width=entry_width,
+            index_min=index_min,
+            index_max=index_max,
+            raw_entries=tuple(entries),
+            targets=tuple(entries),
+        )
+        prior = self.jump_tables.get(instruction.address)
+        if prior is not None and prior != table:
+            raise CfgRecoveryError(
+                f"conflicting computed-flow table at {instruction.address:#x}"
+            )
+        if prior is None:
+            self.jump_tables[instruction.address] = table
+            self.jump_table_entry_count = new_total
+            self._check_count("max_jump_tables", len(self.jump_tables))
+            self.data_evidence.add(
+                _DataEvidence(
+                    start=base + index_min * entry_width,
+                    end=base + (index_max + 1) * entry_width,
+                    provenance=(
+                        f"guard={compare.address:#x};operator={operator};"
+                        f"bound={bound};transfer={instruction.address:#x}"
+                    ),
+                )
+            )
+            category = (
+                "callback-table-entry"
+                if flow_kind == "call"
+                else "jump-table-entry"
+            )
+            edge_kind = (
+                "indirect-call-table"
+                if flow_kind == "call"
+                else "indirect-jump-table"
+            )
+            for entry_address, raw, target in entry_rows:
+                self.seed_records.add(
+                    SeedRecord(
+                        address=target,
+                        category=category,
+                        provenance_address=entry_address,
+                        provenance_bytes=raw.hex(),
+                        detail=(
+                            f"table={instruction.address:#x};base={base:#x};"
+                            f"entry-width={entry_width}"
+                        ),
+                    )
+                )
+                self._add_edge(instruction.address, target, edge_kind)
+                self._record_finite_target(target)
+                self._enqueue(target, is_function=flow_kind == "call")
+            self._record_fixpoint_update()
+        return True
+
+    def _resolve_computed_flows(self) -> None:
+        candidate_addresses = set(self.indirect_candidates)
+        self.diagnostics = {
+            row
+            for row in self.diagnostics
+            if row.address not in candidate_addresses
+            or row.kind
+            not in {
+                "computed-flow-blocker",
+                "indirect-flow",
+                "unsupported-far-flow",
+            }
+        }
+        for address in sorted(candidate_addresses):
+            flow_kind, is_far = self.indirect_candidates[address]
+            instruction = self.instructions[address]
+            decoded = self._owned_decoded(address)
+            recovered = (
+                False
+                if is_far
+                else self._recover_indexed_table(
+                    decoded, instruction, flow_kind=flow_kind
+                )
+            )
+            if recovered or any(
+                row.address == address
+                and row.kind == "computed-flow-blocker"
+                for row in self.diagnostics
+            ):
+                continue
+            self.diagnostics.add(
+                OwnershipDiagnostic(
+                    kind=("unsupported-far-flow" if is_far else "indirect-flow"),
+                    address=address,
+                    detail=(
+                        f"unsupported far {flow_kind}: "
+                        if is_far
+                        else f"unresolved indirect {flow_kind}: "
+                    )
+                    + f"{instruction.mnemonic} {instruction.operands}".rstrip(),
+                )
+            )
+
+    def _relocation_computed_candidates(
+        self,
+        relocation,
+        *,
+        byte_owners: dict[int, int],
+        instructions: dict[int, Instruction],
+    ) -> tuple[_RelocationEntryCandidate, ...]:
+        candidates: list[_RelocationEntryCandidate] = []
+        lower = max(
+            relocation.va - 14,
+            next(
+                start
+                for start, end in self.image.executable_ranges
+                if start <= relocation.va < end
+            ),
+        )
+        for start in range(lower, relocation.va + 1):
+            try:
+                decoded = self._decode_one(start)
+            except CfgRecoveryError:
+                continue
+            if (
+                not (decoded.group(CS_GRP_CALL) or decoded.group(CS_GRP_JUMP))
+                or len(decoded.operands) != 1
+                or decoded.operands[0].type != X86_OP_MEM
+                or decoded.operands[0].mem.index == X86_REG_INVALID
+                or decoded.disp_size != 4
+                or decoded.address + decoded.disp_offset != relocation.va
+            ):
+                continue
+            nearest_entry = decoded.address & ~0xF
+            section_start = next(
+                section_start
+                for section_start, section_end in self.image.executable_ranges
+                if section_start <= decoded.address < section_end
+            )
+            entry_floor = max(section_start, decoded.address - 512)
+            for entry in range(nearest_entry, entry_floor - 1, -16):
+                if entry >= decoded.address or entry in byte_owners:
+                    continue
+                sequence = []
+                cursor = entry
+                while cursor <= decoded.address:
+                    try:
+                        row = self._decode_one(cursor)
+                    except CfgRecoveryError:
+                        sequence = []
+                        break
+                    sequence.append(row)
+                    cursor += row.size
+                    if (
+                        cursor > decoded.address
+                        and row.address != decoded.address
+                    ):
+                        sequence = []
+                        break
+                if (
+                    len(sequence) < 3
+                    or sequence[-1].address != decoded.address
+                    or sequence[-2].mnemonic not in {"ja", "jae"}
+                    or sequence[-3].mnemonic != "cmp"
+                    or len(sequence[-3].operands) != 2
+                    or sequence[-3].operands[0].type != X86_OP_REG
+                    or sequence[-3].operands[0].size != 4
+                    or sequence[-3].operands[1].type != X86_OP_IMM
+                    or self._register_family(sequence[-3].operands[0].reg)
+                    != self._register_family(decoded.operands[0].mem.index)
+                ):
+                    continue
+                prefix = sequence[:-2]
+                internal_branch_targets = tuple(
+                    sorted(
+                        {
+                            row.operands[0].imm
+                            for row in prefix
+                            if row.group(CS_GRP_JUMP)
+                            and len(row.operands) == 1
+                            and row.operands[0].type == X86_OP_IMM
+                            and entry <= row.operands[0].imm <= decoded.address
+                        }
+                    )
+                )
+                branch_free_prefix = not any(
+                    row.group(CS_GRP_RET)
+                    or row.group(CS_GRP_IRET)
+                    or (
+                        row.group(CS_GRP_JUMP)
+                        and row.mnemonic in {"jmp", "ljmp"}
+                    )
+                    for row in prefix
+                )
+                forward_guard_entries = tuple(
+                    row.operands[0].imm
+                    for row in prefix
+                    if row.group(CS_GRP_JUMP)
+                    and row.mnemonic not in {"jmp", "ljmp"}
+                    and len(row.operands) == 1
+                    and row.operands[0].type == X86_OP_IMM
+                    and row.address < row.operands[0].imm
+                    and entry <= row.operands[0].imm
+                    <= sequence[-3].address
+                )
+                has_forward_guard_entry = any(
+                    not any(
+                        row.group(CS_GRP_RET) or row.group(CS_GRP_IRET)
+                        for row in prefix
+                        if row.address >= guard_entry
+                    )
+                    for guard_entry in forward_guard_entries
+                )
+                if not (branch_free_prefix or has_forward_guard_entry):
+                    continue
+                has_intervening_aligned_boundary = False
+                for boundary in range(entry + 16, decoded.address, 16):
+                    zero_start = boundary
+                    while (
+                        zero_start > max(section_start, boundary - 32)
+                        and self.image.read(zero_start - 1, 1) == b"\0"
+                    ):
+                        zero_start -= 1
+                    if (
+                        boundary - zero_start >= 4
+                        and boundary not in internal_branch_targets
+                    ):
+                        has_intervening_aligned_boundary = True
+                        break
+                if has_intervening_aligned_boundary:
+                    continue
+                gap_start = entry
+                while (
+                    gap_start > max(section_start, entry - 32)
+                    and _is_executable_span(self.image, gap_start - 1, 1)
+                    and self.image.read(gap_start - 1, 1) == b"\0"
+                ):
+                    gap_start -= 1
+                gap_width = entry - gap_start
+                self_lea = self._zero_gap_self_lea(gap_start, entry)
+                if self_lea is not None:
+                    kind, self_lea_start = self_lea
+                    if kind == "internal-instruction":
+                        continue
+                    gap_start = self_lea_start
+                    gap_width = entry - gap_start
+                predecessor_owner = byte_owners.get(gap_start - 1)
+                predecessor = (
+                    instructions.get(predecessor_owner)
+                    if predecessor_owner is not None
+                    else None
+                )
+                follows_owned_terminal = (
+                    predecessor is not None
+                    and predecessor.address + predecessor.size == gap_start
+                    and (
+                        predecessor.mnemonic.startswith("ret")
+                        or predecessor.mnemonic.startswith("iret")
+                        or predecessor.mnemonic in {"jmp", "ljmp"}
+                    )
+                )
+                if gap_width < 4 and not follows_owned_terminal:
+                    continue
+                if any(
+                    address in byte_owners
+                    for address in range(gap_start, entry)
+                ):
+                    continue
+                span_end = decoded.address + decoded.size
+                expected_owners = {
+                    address: row.address
+                    for row in sequence
+                    for address in range(row.address, row.address + row.size)
+                }
+                if any(
+                    address in byte_owners
+                    and byte_owners[address] != expected_owners.get(address)
+                    for address in range(entry, span_end)
+                ):
+                    continue
+                candidates.append(
+                    _RelocationEntryCandidate(
+                        relocation_va=relocation.va,
+                        category="relocation-computed-transfer",
+                        entry=entry,
+                        gap_start=gap_start,
+                        evidence_address=decoded.address,
+                        evidence_bytes=self.image.read(
+                            decoded.address, decoded.size
+                        ).hex(),
+                        boundary_evidence=(
+                            f"zero-alignment={gap_start:#x}-{entry:#x}"
+                            + (
+                                ";owned-terminal="
+                                f"{predecessor.address:#x}:"
+                                f"{predecessor.mnemonic}"
+                                if follows_owned_terminal
+                                else ""
+                            )
+                        ),
+                        span_end=span_end,
+                        internal_branch_targets=internal_branch_targets,
+                    )
+                )
+        return tuple(sorted(set(candidates), key=_relocation_candidate_key))
+
+    def _relocation_inline_data_candidates(
+        self,
+        relocation,
+        *,
+        byte_owners: dict[int, int],
+        instructions: dict[int, Instruction],
+    ) -> tuple[_RelocationEntryCandidate, ...]:
+        section_start = next(
+            start
+            for start, end in self.image.executable_ranges
+            if start <= relocation.va < end
+        )
+        candidates: list[_RelocationEntryCandidate] = []
+        first_entry = (relocation.va + 4 + 15) & ~0xF
+        for entry in range(first_entry, first_entry + 65, 16):
+            if not _is_executable_span(self.image, entry, 1):
+                break
+            try:
+                decoded = self._decode_one(entry)
+            except CfgRecoveryError:
+                continue
+            if (
+                not decoded.group(CS_GRP_CALL)
+                or len(decoded.operands) != 1
+                or decoded.operands[0].type != X86_OP_IMM
+                or not _is_executable_span(
+                    self.image, decoded.operands[0].imm, 1
+                )
+            ):
+                continue
+            for data_start in range(max(section_start, entry - 32), entry):
+                predecessor_owner = byte_owners.get(data_start - 1)
+                predecessor = (
+                    instructions.get(predecessor_owner)
+                    if predecessor_owner is not None
+                    else None
+                )
+                if (
+                    predecessor is None
+                    or predecessor.address + predecessor.size != data_start
+                    or not (
+                        predecessor.mnemonic.startswith("ret")
+                        or predecessor.mnemonic.startswith("iret")
+                        or predecessor.mnemonic in {"jmp", "ljmp"}
+                    )
+                    or not (
+                        data_start <= relocation.va
+                        and relocation.va + 4 <= entry
+                    )
+                ):
+                    continue
+                blob = self.image.read(data_start, entry - data_start)
+                printable_count = 0
+                while (
+                    printable_count < len(blob)
+                    and 0x20 <= blob[printable_count] <= 0x7E
+                ):
+                    printable_count += 1
+                trailing = blob[printable_count:]
+                if (
+                    printable_count < 16
+                    or len(trailing) > 3
+                    or any(byte >= 0x20 for byte in trailing)
+                    or any(
+                        address in byte_owners
+                        for address in range(data_start, entry)
+                    )
+                ):
+                    continue
+                candidates.append(
+                    _RelocationEntryCandidate(
+                        relocation_va=relocation.va,
+                        category="relocation-inline-data-successor",
+                        entry=entry,
+                        gap_start=data_start,
+                        evidence_address=decoded.address,
+                        evidence_bytes=bytes(decoded.bytes).hex(),
+                        boundary_evidence=(
+                            f"terminal-inline-data={data_start:#x}-{entry:#x};"
+                            f"printable-prefix={printable_count};"
+                            f"trailing-control-bytes={len(trailing)};"
+                            f"owned-terminal={predecessor.address:#x}:"
+                            f"{predecessor.mnemonic}"
+                        ),
+                        span_end=decoded.address + decoded.size,
+                    )
+                )
+        return tuple(sorted(set(candidates), key=_relocation_candidate_key))
+
+    def _zero_gap_self_lea(
+        self, gap_start: int, entry: int
+    ) -> tuple[str, int] | None:
+        if gap_start >= entry:
+            return None
+        section_start = next(
+            start
+            for start, end in self.image.executable_ranges
+            if start <= gap_start < end
+        )
+        for start in range(max(section_start, entry - 15), gap_start):
+            try:
+                decoded = self._decode_one(start)
+            except CfgRecoveryError:
+                continue
+            if (
+                decoded.id != X86_INS_LEA
+                or decoded.address + decoded.size != entry
+                or len(decoded.operands) != 2
+                or decoded.operands[0].type != X86_OP_REG
+                or decoded.operands[1].type != X86_OP_MEM
+                or decoded.operands[1].mem.index != X86_REG_INVALID
+                or decoded.operands[1].mem.disp != 0
+                or self._register_family(decoded.operands[0].reg)
+                != self._register_family(decoded.operands[1].mem.base)
+            ):
+                continue
+            predecessors = []
+            for predecessor_start in range(
+                max(section_start, decoded.address - 15), decoded.address
+            ):
+                try:
+                    predecessor = self._decode_one(predecessor_start)
+                except CfgRecoveryError:
+                    continue
+                if predecessor.address + predecessor.size == decoded.address:
+                    predecessors.append(predecessor)
+            predecessor = max(
+                predecessors, key=lambda row: row.address, default=None
+            )
+            is_terminal = predecessor is not None and (
+                predecessor.group(CS_GRP_RET)
+                or predecessor.group(CS_GRP_IRET)
+                or (
+                    predecessor.group(CS_GRP_JUMP)
+                    and predecessor.mnemonic in {"jmp", "ljmp"}
+                )
+            )
+            return (
+                "terminal-padding" if is_terminal else "internal-instruction",
+                decoded.address,
+            )
+        return None
+
+    def _relocation_aligned_entry_candidates(
+        self,
+        relocation,
+        *,
+        byte_owners: dict[int, int],
+        instructions: dict[int, Instruction],
+    ) -> tuple[_RelocationEntryCandidate, ...]:
+        pointer = int.from_bytes(self.image.read(relocation.va, 4), "little")
+        if not _is_mapped_span(self.image, pointer, 1):
+            return ()
+        section_start = next(
+            start
+            for start, end in self.image.executable_ranges
+            if start <= relocation.va < end
+        )
+        candidates: list[_RelocationEntryCandidate] = []
+        for start in range(max(section_start, relocation.va - 14), relocation.va + 1):
+            try:
+                decoded = self._decode_one(start)
+            except CfgRecoveryError:
+                continue
+            field_matches = (
+                decoded.disp_size == 4
+                and decoded.address + decoded.disp_offset == relocation.va
+            ) or (
+                decoded.imm_size == 4
+                and decoded.address + decoded.imm_offset == relocation.va
+            )
+            if not field_matches:
+                continue
+
+            nearest_entry = decoded.address & ~0xF
+            for entry in range(
+                nearest_entry, max(section_start, decoded.address - 64), -16
+            ):
+                if entry in byte_owners:
+                    continue
+                sequence = []
+                cursor = entry
+                while cursor <= decoded.address:
+                    try:
+                        row = self._decode_one(cursor)
+                    except CfgRecoveryError:
+                        sequence = []
+                        break
+                    sequence.append(row)
+                    cursor += row.size
+                    if cursor > decoded.address and row.address != decoded.address:
+                        sequence = []
+                        break
+                if (
+                    not sequence
+                    or sequence[-1].address != decoded.address
+                ):
+                    continue
+
+                gap_start = entry
+                while (
+                    gap_start > max(section_start, entry - 32)
+                    and self.image.read(gap_start - 1, 1) == b"\0"
+                ):
+                    gap_start -= 1
+                predecessor_owner = byte_owners.get(gap_start - 1)
+                predecessor = (
+                    instructions.get(predecessor_owner)
+                    if predecessor_owner is not None
+                    else None
+                )
+                follows_owned_terminal = (
+                    predecessor is not None
+                    and predecessor.address + predecessor.size == gap_start
+                    and (
+                        predecessor.mnemonic.startswith("ret")
+                        or predecessor.mnemonic.startswith("iret")
+                        or predecessor.mnemonic in {"jmp", "ljmp"}
+                    )
+                )
+                prefix = sequence[:-1]
+                has_return = any(
+                    row.group(CS_GRP_RET) or row.group(CS_GRP_IRET)
+                    for row in prefix
+                )
+                branch_free_prefix = not any(
+                    row.group(CS_GRP_CALL) or row.group(CS_GRP_JUMP)
+                    for row in prefix
+                )
+                gap_width = entry - gap_start
+                self_lea = self._zero_gap_self_lea(gap_start, entry)
+                if self_lea is not None:
+                    kind, self_lea_start = self_lea
+                    if kind == "internal-instruction":
+                        continue
+                    gap_start = self_lea_start
+                    gap_width = entry - gap_start
+                if (
+                    has_return
+                    or (
+                        gap_width < 4
+                        and (
+                            not follows_owned_terminal
+                            or not branch_free_prefix
+                        )
+                    )
+                ):
+                    continue
+                has_intervening_aligned_boundary = False
+                for boundary in range(entry + 16, decoded.address, 16):
+                    zero_start = boundary
+                    while (
+                        zero_start > max(section_start, boundary - 32)
+                        and self.image.read(zero_start - 1, 1) == b"\0"
+                    ):
+                        zero_start -= 1
+                    if boundary - zero_start >= 4:
+                        has_intervening_aligned_boundary = True
+                        break
+                if has_intervening_aligned_boundary:
+                    continue
+                if any(
+                    address in byte_owners
+                    for address in range(gap_start, entry)
+                ):
+                    continue
+                span_end = decoded.address + decoded.size
+                expected_owners = {
+                    address: row.address
+                    for row in sequence
+                    for address in range(row.address, row.address + row.size)
+                }
+                if any(
+                    address in byte_owners
+                    and byte_owners[address] != expected_owners.get(address)
+                    for address in range(entry, span_end)
+                ):
+                    continue
+                candidates.append(
+                    _RelocationEntryCandidate(
+                        relocation_va=relocation.va,
+                        category="relocation-aligned-entry",
+                        entry=entry,
+                        gap_start=gap_start,
+                        evidence_address=decoded.address,
+                        evidence_bytes=bytes(decoded.bytes).hex(),
+                        boundary_evidence=(
+                            f"zero-alignment={gap_start:#x}-{entry:#x}"
+                            + (
+                                ";owned-terminal="
+                                f"{predecessor.address:#x}:"
+                                f"{predecessor.mnemonic}"
+                                if follows_owned_terminal
+                                else ""
+                            )
+                        ),
+                        span_end=span_end,
+                    )
+                )
+        return tuple(sorted(set(candidates), key=_relocation_candidate_key))
+
+    def _discover_relocation_computed_transfers(self) -> None:
+        byte_owners = dict(self.byte_owners)
+        instructions = dict(self.instructions)
+        discovered: list[_RelocationEntryCandidate] = []
+        for relocation in sorted(
+            self.image.relocations, key=lambda row: (row.va, row.type)
+        ):
+            if (
+                relocation.type != 3
+                or not _is_executable_span(self.image, relocation.va, 4)
+            ):
+                continue
+            relocation_owners = {
+                byte_owners[address]
+                for address in range(relocation.va, relocation.va + 4)
+                if address in byte_owners
+            }
+            if relocation_owners:
+                if (
+                    len(relocation_owners) != 1
+                    or any(
+                        byte_owners.get(address) not in relocation_owners
+                        for address in range(
+                            relocation.va, relocation.va + 4
+                        )
+                    )
+                ):
+                    continue
+                owner = next(iter(relocation_owners))
+                decoded_owner = self._decode_one(owner)
+                if (
+                    not (
+                        decoded_owner.disp_size == 4
+                        and decoded_owner.address
+                        + decoded_owner.disp_offset
+                        == relocation.va
+                    )
+                    and not (
+                        decoded_owner.imm_size == 4
+                        and decoded_owner.address
+                        + decoded_owner.imm_offset
+                        == relocation.va
+                    )
+                ):
+                    continue
+            else:
+                discovered.extend(
+                    self._relocation_inline_data_candidates(
+                        relocation,
+                        byte_owners=byte_owners,
+                        instructions=instructions,
+                    )
+                )
+            discovered.extend(
+                self._relocation_aligned_entry_candidates(
+                    relocation,
+                    byte_owners=byte_owners,
+                    instructions=instructions,
+                )
+            )
+            discovered.extend(
+                self._relocation_computed_candidates(
+                    relocation,
+                    byte_owners=byte_owners,
+                    instructions=instructions,
+                )
+            )
+
+        selected = _select_relocation_entry_candidates(tuple(discovered))
+        for candidate in selected:
+            if candidate.category == "relocation-aligned-entry":
+                detail = (
+                    f"instruction-bytes={candidate.evidence_bytes};"
+                    f"{candidate.boundary_evidence}"
+                )
+                evidence_provenance = (
+                    "relocation-aligned-entry;"
+                    f"relocation={candidate.relocation_va:#x};"
+                    f"entry={candidate.entry:#x}"
+                )
+            elif candidate.category == "relocation-inline-data-successor":
+                detail = (
+                    f"successor-instruction-bytes="
+                    f"{candidate.evidence_bytes};"
+                    f"aligned-entry={candidate.entry:#x};"
+                    f"{candidate.boundary_evidence}"
+                )
+                evidence_provenance = (
+                    "relocation-inline-data-successor;"
+                    f"relocation={candidate.relocation_va:#x};"
+                    f"entry={candidate.entry:#x}"
+                )
+            else:
+                detail = (
+                    f"transfer={candidate.evidence_address:#x};"
+                    f"instruction-bytes={candidate.evidence_bytes};"
+                    f"aligned-entry={candidate.entry:#x};"
+                    f"{candidate.boundary_evidence}"
+                )
+                evidence_provenance = (
+                    "computed-dispatch-alignment;"
+                    f"relocation={candidate.relocation_va:#x};"
+                    f"transfer={candidate.evidence_address:#x}"
+                )
+            record = SeedRecord(
+                address=candidate.entry,
+                category=candidate.category,
+                provenance_address=candidate.relocation_va,
+                provenance_bytes=self.image.read(
+                    candidate.relocation_va, 4
+                ).hex(),
+                detail=detail,
+            )
+            if record in self.seed_records:
+                continue
+            self.seed_records.add(record)
+            if candidate.gap_start < candidate.entry:
+                self.structural_data_evidence.add(
+                    _DataEvidence(
+                        start=candidate.gap_start,
+                        end=candidate.entry,
+                        provenance=evidence_provenance,
+                    )
+                )
+            self._record_finite_target(candidate.entry)
+            self._enqueue(candidate.entry, is_function=True)
+            self._record_fixpoint_update()
+
     def _decode_from(self, start: int) -> None:
         self._validate_target(start)
         owner = self.byte_owners.get(start)
@@ -1021,25 +2136,7 @@ class _DirectCfgRecovery:
                 target = self._direct_target(decoded)
                 if target is None:
                     is_far = decoded.id == X86_INS_LCALL
-                    self.diagnostics.add(
-                        OwnershipDiagnostic(
-                            kind=(
-                                "unsupported-far-flow"
-                                if is_far
-                                else "indirect-flow"
-                            ),
-                            address=address,
-                            detail=(
-                                "unsupported far call: "
-                                if is_far
-                                else "unresolved indirect call: "
-                            )
-                            + (
-                                f"{instruction.mnemonic} "
-                                f"{instruction.operands}"
-                            ).rstrip(),
-                        )
-                    )
+                    self.indirect_candidates[address] = ("call", is_far)
                 else:
                     self._record_direct_target(
                         instruction, target, "direct-call-target"
@@ -1048,6 +2145,7 @@ class _DirectCfgRecovery:
                         DirectCall(address=address, target=target)
                     )
                     self._add_edge(address, target, "direct-call")
+                    self._record_finite_target(target)
                     self._enqueue(target, is_function=True)
                 self._add_edge(address, next_address, "call-fallthrough")
                 self._enqueue(next_address)
@@ -1062,25 +2160,7 @@ class _DirectCfgRecovery:
                 }
                 if target is None:
                     is_far = decoded.id == X86_INS_LJMP
-                    self.diagnostics.add(
-                        OwnershipDiagnostic(
-                            kind=(
-                                "unsupported-far-flow"
-                                if is_far
-                                else "indirect-flow"
-                            ),
-                            address=address,
-                            detail=(
-                                "unsupported far jump: "
-                                if is_far
-                                else "unresolved indirect jump: "
-                            )
-                            + (
-                                f"{instruction.mnemonic} "
-                                f"{instruction.operands}"
-                            ).rstrip(),
-                        )
-                    )
+                    self.indirect_candidates[address] = ("jump", is_far)
                 else:
                     self._record_direct_target(
                         instruction, target, "direct-branch-target"
@@ -1091,6 +2171,7 @@ class _DirectCfgRecovery:
                         else "conditional-branch"
                     )
                     self._add_edge(address, target, edge_kind)
+                    self._record_finite_target(target)
                     self._enqueue(target)
                 if not is_unconditional:
                     self._add_edge(address, next_address, "fallthrough")
@@ -2372,9 +3453,11 @@ class _DirectCfgRecovery:
                         self._explicit_register_effect(decoded, operand, ())
                     )
                 if operand.access == 0:
-                    raise self._flow_error(
-                        decoded, f"register operand {index} has access=0"
-                    )
+                    if operand.reg not in decoded.regs_read:
+                        raise self._flow_error(
+                            decoded,
+                            f"register operand {index} has access=0",
+                        )
             elif operand.type == X86_OP_MEM:
                 if operand.access & CS_AC_READ:
                     explicit_inputs.append(self._memory_dependency(index))
@@ -2979,6 +4062,44 @@ class _DirectCfgRecovery:
         decoded,
         state: dict[str, _ExactValue],
     ) -> None:
+        if (
+            decoded.id in _PUSH_INSTRUCTIONS
+            and len(decoded.operands) == 1
+            and decoded.operands[0].type == X86_OP_IMM
+            and decoded.imm_size == 4
+        ):
+            target = decoded.operands[0].imm & 0xFFFF_FFFF
+            relocation_address = decoded.address + decoded.imm_offset
+            if _is_executable_span(self.image, target, 1) and any(
+                relocation.type == 3 and relocation.va == relocation_address
+                for relocation in self.image.relocations
+            ):
+                instruction = self.instructions[decoded.address]
+                record = SeedRecord(
+                    address=target,
+                    category="function-pointer-initializer",
+                    provenance_address=instruction.address,
+                    provenance_bytes=instruction.bytes_hex,
+                    detail=(
+                        "stack-argument-or-handler;"
+                        f"i386-relocation={relocation_address:#x};"
+                        f"propagation-chain={self._chain_step(instruction)}"
+                    ),
+                )
+                initializer_key = (
+                    record.address,
+                    record.provenance_address,
+                )
+                if initializer_key not in self.produced_initializers:
+                    self.produced_initializers.add(initializer_key)
+                    self._record_fixpoint_update()
+                self.seed_records.add(record)
+                self.accepted_initializer_instructions.add(
+                    instruction.address
+                )
+                self._record_finite_target(target)
+                self._enqueue(target, is_function=True)
+            return
         if decoded.id != X86_INS_MOV or len(decoded.operands) != 2:
             return
         destination, source = decoded.operands
@@ -2993,16 +4114,34 @@ class _DirectCfgRecovery:
         destination_address = self._exact_memory_address(
             destination.mem, state
         )
-        destination_is_valid = destination_address is not None
-        if destination_is_valid:
-            try:
-                self.image.read(destination_address, destination.size)
-            except ValueError:
-                destination_is_valid = False
-        if (
+        destination_is_valid = (
+            destination_address is not None
+            and _is_mapped_span(
+                self.image, destination_address, destination.size
+            )
+        )
+        relocation_proven_dynamic_field = (
             not destination_is_valid
+            and destination.size == 4
+            and source.type == X86_OP_IMM
+            and destination.mem.segment == X86_REG_INVALID
+            and destination.mem.base != X86_REG_INVALID
+            and destination.mem.index == X86_REG_INVALID
+            and destination.mem.disp != 0
+            and decoded.imm_size == 4
+            and any(
+                relocation.type == 3
+                and relocation.va == decoded.address + decoded.imm_offset
+                for relocation in self.image.relocations
+            )
+        )
+        if (
+            (not destination_is_valid and not relocation_proven_dynamic_field)
             or destination.size != 4
-            or _is_executable_span(self.image, destination_address, 4)
+            or (
+                destination_address is not None
+                and _is_executable_span(self.image, destination_address, 4)
+            )
         ):
             raise CfgRecoveryError(
                 "unresolved function-pointer initializer: "
@@ -3017,8 +4156,12 @@ class _DirectCfgRecovery:
             provenance_address=instruction.address,
             provenance_bytes=instruction.bytes_hex,
             detail=(
-                f"store-ea={destination_address:#x};"
-                f"propagation-chain={'>'.join(chain)}"
+                (
+                    f"store-ea={destination_address:#x};"
+                    if destination_address is not None
+                    else "store-ea=dynamic-relocation-proven-field;"
+                )
+                + f"propagation-chain={'>'.join(chain)}"
             ),
         )
         initializer_key = (record.address, record.provenance_address)
@@ -3027,6 +4170,7 @@ class _DirectCfgRecovery:
             self._record_fixpoint_update()
         self.seed_records.add(record)
         self.accepted_initializer_instructions.add(instruction.address)
+        self._record_finite_target(exact_value.value)
         self._enqueue(exact_value.value, is_function=True)
 
     def _update_exact_state(
@@ -3125,7 +4269,18 @@ class _DirectCfgRecovery:
             for record in self.seed_records
             if record.category != "function-pointer-initializer"
         }
-        self.data_evidence = set()
+        self.data_evidence = set(self.structural_data_evidence) | {
+            _DataEvidence(
+                start=table.base + table.index_min * table.entry_width,
+                end=table.base + (table.index_max + 1) * table.entry_width,
+                provenance=(
+                    f"guard={table.guard_address:#x};"
+                    f"operator={table.guard_operator};"
+                    f"bound={table.guard_bound};transfer={table.address:#x}"
+                ),
+            )
+            for table in self.jump_tables.values()
+        }
         self.accepted_initializer_instructions = set()
         for block in blocks:
             self._check_count("max_states_per_block", 1)
@@ -3162,7 +4317,7 @@ class _DirectCfgRecovery:
             block.start: set() for block in blocks
         }
         for edge in self.edges:
-            if edge.kind == "direct-call":
+            if edge.kind in {"direct-call", "indirect-call-table"}:
                 continue
             source_block = block_by_instruction.get(edge.source)
             if source_block is not None and edge.target in successors:
@@ -3318,7 +4473,8 @@ class _DirectCfgRecovery:
                     if record not in self.seed_records:
                         self._record_fixpoint_update()
                     self.seed_records.add(record)
-                    self._enqueue(pointer, is_function=True)
+                    self._record_finite_target(pointer)
+                    self._enqueue(pointer)
                 continue
 
             containing_data = [
@@ -3331,6 +4487,8 @@ class _DirectCfgRecovery:
                 for evidence in containing_data
             }
             if not data_boundaries:
+                if self.pending:
+                    continue
                 raise CfgRecoveryError(
                     "executable relocation has no exact instruction or data "
                     f"boundary: relocation={start:#x}-{end:#x};"
@@ -3368,7 +4526,8 @@ class _DirectCfgRecovery:
             if record not in self.seed_records:
                 self._record_fixpoint_update()
             self.seed_records.add(record)
-            self._enqueue(pointer, is_function=True)
+            self._record_finite_target(pointer)
+            self._enqueue(pointer)
 
     def _merged_data_regions(self) -> tuple[ByteRegion, ...]:
         merged: list[ByteRegion] = []
@@ -3408,8 +4567,76 @@ class _DirectCfgRecovery:
             )
         return tuple(merged)
 
+    def _record_terminal_zero_alignment_evidence(self) -> None:
+        """Own zero fill immediately before an independently proven function.
+
+        Retail MWCC aligns many functions with zero bytes.  Zero is also a
+        valid instruction encoding, so alignment is accepted only when the
+        right boundary is an already proven, 16-byte-aligned function entry
+        and the left boundary is an already owned return or unconditional
+        jump.  The 32-byte bound matches relocation-derived alignment proof.
+        """
+        for entry in sorted(self.function_addresses):
+            if entry % 16 or entry not in self.instructions:
+                continue
+            raw_range = next(
+                (
+                    (start, end)
+                    for start, end in self._executable_raw_ranges()
+                    if start <= entry < end
+                ),
+                None,
+            )
+            if raw_range is None:
+                continue
+            raw_start, _ = raw_range
+            gap_start = entry
+            while (
+                gap_start > max(raw_start, entry - 32)
+                and gap_start - 1 not in self.byte_owners
+                and self.image.read(gap_start - 1, 1) == b"\0"
+            ):
+                gap_start -= 1
+            if gap_start == entry:
+                continue
+            predecessor_owner = self.byte_owners.get(gap_start - 1)
+            predecessor = (
+                self.instructions.get(predecessor_owner)
+                if predecessor_owner is not None
+                else None
+            )
+            if (
+                predecessor is None
+                or predecessor.address + predecessor.size != gap_start
+            ):
+                continue
+            decoded = self._owned_decoded(predecessor.address)
+            if not (
+                decoded.group(CS_GRP_RET)
+                or decoded.group(CS_GRP_IRET)
+                or (
+                    decoded.group(CS_GRP_JUMP)
+                    and decoded.id in {X86_INS_JMP, X86_INS_LJMP}
+                )
+            ):
+                continue
+            evidence = _DataEvidence(
+                start=gap_start,
+                end=entry,
+                provenance=(
+                    "terminal-zero-alignment;"
+                    f"terminal={predecessor.address:#x}:"
+                    f"{predecessor.mnemonic};entry={entry:#x};"
+                    "alignment=16;max-gap=32"
+                ),
+            )
+            self.structural_data_evidence.add(evidence)
+            self.data_evidence.add(evidence)
+
     @staticmethod
     def _is_canonical_padding(blob: bytes) -> bool:
+        if blob and not blob.strip(b"\0"):
+            return True
         offset = 0
         while offset < len(blob):
             if blob[offset] == 0xCC:
@@ -3432,6 +4659,53 @@ class _DirectCfgRecovery:
         self, data_regions: tuple[ByteRegion, ...]
     ) -> tuple[ByteRegion, ...]:
         regions: list[ByteRegion] = []
+
+        def record_gap(
+            left: Instruction,
+            start: int,
+            end: int,
+            right_description: str,
+        ) -> None:
+            if start >= end or left.address not in self.terminators:
+                return
+            uncovered = [(start, end)]
+            for data_region in data_regions:
+                if data_region.end <= start or end <= data_region.start:
+                    continue
+                partitioned = []
+                for part_start, part_end in uncovered:
+                    if (
+                        data_region.end <= part_start
+                        or part_end <= data_region.start
+                    ):
+                        partitioned.append((part_start, part_end))
+                        continue
+                    if part_start < data_region.start:
+                        partitioned.append((part_start, data_region.start))
+                    if data_region.end < part_end:
+                        partitioned.append((data_region.end, part_end))
+                uncovered = partitioned
+            for part_start, part_end in uncovered:
+                blob = _read_provenance(
+                    self.image,
+                    part_start,
+                    part_end - part_start,
+                    "padding",
+                )
+                if not self._is_canonical_padding(blob):
+                    continue
+                regions.append(
+                    ByteRegion(
+                        start=part_start,
+                        end=part_end,
+                        provenance=(
+                            f"unreachable-after={left.address:#x};"
+                            f"{right_description};"
+                            "encoding=canonical-x86-nop-or-int3"
+                        ),
+                    )
+                )
+
         for raw_start, raw_end in self._executable_raw_ranges():
             instructions = sorted(
                 (
@@ -3442,49 +4716,20 @@ class _DirectCfgRecovery:
                 key=_instruction_key,
             )
             for left, right in zip(instructions, instructions[1:]):
-                start = left.address + left.size
-                end = right.address
-                if start >= end or left.address not in self.terminators:
-                    continue
-                uncovered = [(start, end)]
-                for data_region in data_regions:
-                    if data_region.end <= start or end <= data_region.start:
-                        continue
-                    partitioned = []
-                    for part_start, part_end in uncovered:
-                        if (
-                            data_region.end <= part_start
-                            or part_end <= data_region.start
-                        ):
-                            partitioned.append((part_start, part_end))
-                            continue
-                        if part_start < data_region.start:
-                            partitioned.append(
-                                (part_start, data_region.start)
-                            )
-                        if data_region.end < part_end:
-                            partitioned.append((data_region.end, part_end))
-                    uncovered = partitioned
-                for part_start, part_end in uncovered:
-                    blob = _read_provenance(
-                        self.image,
-                        part_start,
-                        part_end - part_start,
-                        "padding",
-                    )
-                    if not self._is_canonical_padding(blob):
-                        continue
-                    regions.append(
-                        ByteRegion(
-                            start=part_start,
-                            end=part_end,
-                            provenance=(
-                                f"unreachable-after={left.address:#x};"
-                                f"before={right.address:#x};"
-                                "encoding=canonical-x86-nop-or-int3"
-                            ),
-                        )
-                    )
+                record_gap(
+                    left,
+                    left.address + left.size,
+                    right.address,
+                    f"before={right.address:#x}",
+                )
+            if instructions:
+                left = instructions[-1]
+                record_gap(
+                    left,
+                    left.address + left.size,
+                    raw_end,
+                    f"before-executable-raw-end={raw_end:#x}",
+                )
         return tuple(sorted(regions, key=lambda row: (row.start, row.end)))
 
     def _executable_raw_ranges(self) -> tuple[tuple[int, int], ...]:
@@ -3558,7 +4803,9 @@ class _DirectCfgRecovery:
                 )
 
     def _raw_e8_candidates(
-        self, data_regions: tuple[ByteRegion, ...]
+        self,
+        data_regions: tuple[ByteRegion, ...],
+        padding_regions: tuple[ByteRegion, ...],
     ) -> tuple[RawE8Candidate, ...]:
         candidates = []
         for start, end in self._executable_raw_ranges():
@@ -3590,6 +4837,32 @@ class _DirectCfgRecovery:
                     )
                 ):
                     classification = "owned-call"
+                elif (
+                    self.byte_owners.get(address) not in {None, address}
+                    and all(
+                        byte_address in self.byte_owners
+                        for byte_address in range(address, address + 5)
+                    )
+                ):
+                    classification = "owned-instruction-bytes"
+                elif (
+                    self.byte_owners.get(address) not in {None, address}
+                    and all(
+                        byte_address in self.byte_owners
+                        or self._region_contains(
+                            data_regions,
+                            byte_address,
+                            byte_address + 1,
+                        )
+                        or self._region_contains(
+                            padding_regions,
+                            byte_address,
+                            byte_address + 1,
+                        )
+                        for byte_address in range(address, address + 5)
+                    )
+                ):
+                    classification = "owned-instruction-and-data"
                 elif self._region_contains(
                     data_regions, address, address + 5
                 ):
@@ -3637,6 +4910,191 @@ class _DirectCfgRecovery:
                 f"unexplained executable bytes: {rendered}"
             )
 
+    def _closed_island_candidate(
+        self, start: int, end: int
+    ) -> tuple[int, int, int, str] | None:
+        predecessor_owner = self.byte_owners.get(start - 1)
+        predecessor = (
+            self.instructions.get(predecessor_owner)
+            if predecessor_owner is not None
+            else None
+        )
+        if (
+            predecessor is None
+            or predecessor.address + predecessor.size != start
+            or predecessor.address not in self.terminators
+        ):
+            return None
+
+        candidate = start
+        while candidate < end and self.image.read(candidate, 1) == b"\0":
+            candidate += 1
+        zero_prefix_end = candidate
+        if candidate != start and (
+            candidate == end
+            or candidate % 16
+            or candidate - start > 32
+        ):
+            return None
+
+        cursor = candidate
+        while cursor < end:
+            try:
+                decoded = self._decode_one(cursor)
+            except CfgRecoveryError:
+                return None
+            instruction_end = decoded.address + decoded.size
+            if instruction_end > end or any(
+                address in self.byte_owners
+                for address in range(decoded.address, instruction_end)
+            ):
+                return None
+
+            if decoded.group(CS_GRP_CALL):
+                target = self._direct_target(decoded)
+                if target is None:
+                    return None
+                owner = self.byte_owners.get(target)
+                if owner is not None and owner != target:
+                    return None
+                cursor = instruction_end
+                continue
+
+            if decoded.group(CS_GRP_RET) or decoded.group(CS_GRP_IRET):
+                return (
+                    candidate,
+                    zero_prefix_end,
+                    decoded.address,
+                    decoded.mnemonic,
+                )
+
+            if decoded.group(CS_GRP_JUMP):
+                target = self._direct_target(decoded)
+                if target is None:
+                    return None
+                owner = self.byte_owners.get(target)
+                if owner is not None and owner != target:
+                    return None
+                if decoded.id in {X86_INS_JMP, X86_INS_LJMP}:
+                    return (
+                        candidate,
+                        zero_prefix_end,
+                        decoded.address,
+                        decoded.mnemonic,
+                    )
+
+            cursor = instruction_end
+        if candidate != start and end in self.instructions:
+            return candidate, zero_prefix_end, end, "owned-merge"
+        return None
+
+    def _discover_closed_executable_islands(self) -> bool:
+        """Seed only terminal-bounded residual code with a closed linear path."""
+        data_regions = self._merged_data_regions()
+        padding_regions = self._padding_regions(data_regions)
+        covered = set(self.byte_owners)
+        for region in (*data_regions, *padding_regions):
+            covered.update(range(region.start, region.end))
+
+        gaps: list[tuple[int, int]] = []
+        for raw_start, raw_end in self._executable_raw_ranges():
+            gap_start: int | None = None
+            for address in range(raw_start, raw_end):
+                if address not in covered and gap_start is None:
+                    gap_start = address
+                elif address in covered and gap_start is not None:
+                    gaps.append((gap_start, address))
+                    gap_start = None
+            if gap_start is not None:
+                gaps.append((gap_start, raw_end))
+
+        discovered = False
+        for start, end in gaps:
+            proof = self._closed_island_candidate(start, end)
+            if proof is None:
+                if (
+                    end - start == 1
+                    and end in self.instructions
+                    and start - 1 in self.byte_owners
+                ):
+                    predecessor = self.instructions[
+                        self.byte_owners[start - 1]
+                    ]
+                    predecessor_decoded = self._owned_decoded(
+                        predecessor.address
+                    )
+                    separator_decoded = self._decode_one(start)
+                    is_closed_predecessor = (
+                        predecessor.address + predecessor.size == start
+                        and (
+                            predecessor_decoded.group(CS_GRP_RET)
+                            or predecessor_decoded.group(CS_GRP_IRET)
+                            or predecessor_decoded.id
+                            in {X86_INS_JMP, X86_INS_LJMP}
+                        )
+                    )
+                    if (
+                        is_closed_predecessor
+                        and separator_decoded.address
+                        + separator_decoded.size
+                        > end
+                    ):
+                        evidence = _DataEvidence(
+                            start=start,
+                            end=end,
+                            provenance=(
+                                "terminal-noninstruction-separator;"
+                                f"terminal={predecessor.address:#x}:"
+                                f"{predecessor.mnemonic};"
+                                f"right-owner={end:#x};"
+                                f"bytes={self.image.read(start, 1).hex()}"
+                            ),
+                        )
+                        if evidence not in self.structural_data_evidence:
+                            self.structural_data_evidence.add(evidence)
+                            self.data_evidence.add(evidence)
+                            self._record_fixpoint_update()
+                            discovered = True
+                continue
+            candidate, zero_prefix_end, closure_address, closure_kind = proof
+            category = (
+                "closed-aligned-function"
+                if candidate != start
+                else "closed-executable-island"
+            )
+            first = self._decode_one(candidate)
+            record = SeedRecord(
+                address=candidate,
+                category=category,
+                provenance_address=self.byte_owners[start - 1],
+                provenance_bytes=bytes(first.bytes).hex(),
+                detail=(
+                    f"uncovered-range={start:#x}-{end:#x};"
+                    f"closed-terminal={closure_address:#x}:"
+                    f"{closure_kind};"
+                    f"zero-prefix={start:#x}-{zero_prefix_end:#x}"
+                ),
+            )
+            if record in self.seed_records:
+                continue
+            self.seed_records.add(record)
+            if candidate != start:
+                evidence = _DataEvidence(
+                    start=start,
+                    end=candidate,
+                    provenance=(
+                        "closed-aligned-function-zero-prefix;"
+                        f"entry={candidate:#x};max-gap=32"
+                    ),
+                )
+                self.structural_data_evidence.add(evidence)
+                self.data_evidence.add(evidence)
+            self._record_finite_target(candidate)
+            self._enqueue(candidate, is_function=candidate != start)
+            self._record_fixpoint_update()
+            discovered = True
+        return discovered
+
     def _bind_seed_instruction_provenance(self) -> None:
         rebound: set[SeedRecord] = set()
         for record in self.seed_records:
@@ -3680,20 +5138,29 @@ class _DirectCfgRecovery:
             while self.pending:
                 address = heapq.heappop(self.pending)
                 self._decode_from(address)
+            self._discover_relocation_computed_transfers()
+            if self.pending:
+                continue
             blocks = self._build_blocks()
             block_start_count = len(self.block_starts)
             self._scan_owned_blocks(blocks)
+            self._resolve_computed_flows()
             if (
                 not self.pending
                 and len(self.block_starts) == block_start_count
             ):
+                if self._discover_closed_executable_islands():
+                    continue
                 break
 
         self._bind_seed_instruction_provenance()
+        self._record_terminal_zero_alignment_evidence()
         data_regions = self._merged_data_regions()
         padding_regions = self._padding_regions(data_regions)
         self._require_disjoint_ownership(data_regions, padding_regions)
-        raw_e8_candidates = self._raw_e8_candidates(data_regions)
+        raw_e8_candidates = self._raw_e8_candidates(
+            data_regions, padding_regions
+        )
         self._require_complete_ownership(data_regions, padding_regions)
         for limit_name in self.limits.__dataclass_fields__:
             self.limits.check(limit_name, self.high_water[limit_name])
@@ -3710,6 +5177,9 @@ class _DirectCfgRecovery:
             edges=tuple(sorted(self.edges, key=_edge_key)),
             direct_calls=tuple(
                 sorted(self.direct_calls, key=_call_key)
+            ),
+            jump_tables=tuple(
+                sorted(self.jump_tables.values(), key=_jump_table_key)
             ),
             raw_e8_candidates=raw_e8_candidates,
             data_regions=data_regions,
@@ -3766,6 +5236,13 @@ def write_jsonl_atomic(path: Path, cfg: RawCfg) -> None:
         )
     for call in cfg.direct_calls:
         rows.append({"record_kind": "direct-call", **asdict(call)})
+    for table in cfg.jump_tables:
+        rows.append(
+            {
+                "record_kind": "jump-table",
+                **asdict(table),
+            }
+        )
     for candidate in cfg.raw_e8_candidates:
         rows.append({"record_kind": "raw-e8", **asdict(candidate)})
     for region in cfg.data_regions:

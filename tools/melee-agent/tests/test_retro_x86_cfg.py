@@ -12,13 +12,20 @@ REPO = Path(__file__).resolve().parents[3]
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(TESTS))
-from retro_pe_fixture import write_synthetic_cfg_pe  # noqa: E402
+from retro_pe_fixture import (  # noqa: E402
+    write_synthetic_cfg_pe,
+    write_synthetic_dispatch_pe,
+)
 from tools.mwcc_retro import pe  # noqa: E402
 from tools.mwcc_retro.x86_cfg import (  # noqa: E402
     AnalysisLimitError,
     AnalysisLimits,
     AuditAnchor,
     CfgRecoveryError,
+    DirectCall,
+    JumpTable,
+    _RelocationEntryCandidate,
+    _select_relocation_entry_candidates,
     build_seed_inventory,
     recover_cfg,
     write_jsonl_atomic,
@@ -86,6 +93,360 @@ def generous_limits(image):
         max_finite_targets=512,
         max_finite_values=512,
     )
+
+
+def load_dispatch_image(tmp_path, *, entry_count=2, mode="absolute-jump"):
+    path = write_synthetic_dispatch_pe(
+        tmp_path, entry_count=entry_count, mode=mode
+    )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return pe.load(path, expected_sha256=digest, require_pe32_i386=True)
+
+
+def dispatch_cfg(tmp_path, *, entry_count=2, mode="absolute-jump"):
+    image = load_dispatch_image(
+        tmp_path, entry_count=entry_count, mode=mode
+    )
+    return recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+
+def test_guarded_absolute_jump_table_records_complete_provenance(tmp_path):
+    cfg = dispatch_cfg(tmp_path)
+    table = cfg.jump_table_at(0x0040100B)
+    assert isinstance(table, JumpTable)
+    assert (
+        table.guard_address,
+        table.guard_operator,
+        table.guard_bound,
+        table.base,
+        table.entry_width,
+        table.index_min,
+        table.index_max,
+    ) == (0x00401000, "ja", 1, 0x00402200, 4, 0, 1)
+    assert table.raw_entries == (0x00401020, 0x00401060)
+    assert table.targets == (0x00401020, 0x00401060)
+    assert {row.category for row in cfg.seed_inventory.records} >= {
+        "jump-table-entry"
+    }
+    assert not [
+        row
+        for row in cfg.ownership_diagnostics
+        if row.address == table.address and row.kind == "indirect-flow"
+    ]
+
+
+def test_guarded_base_plus_index_jump_table_is_recovered(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="base-index-jump")
+    table = cfg.jump_table_at(0x00401010)
+    assert table.base == 0x00402200
+    assert table.targets == (0x00401020, 0x00401060)
+
+
+def test_relocated_dispatch_after_owned_return_proves_aligned_entry(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="unowned-relocated-dispatch")
+    table = cfg.jump_table_at(0x0040103B)
+    assert table.targets == (0x00401020, 0x00401060)
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-computed-transfer"
+    )
+    assert record.address == 0x00401030
+    assert record.provenance_address == 0x0040103E
+    assert "zero-alignment=0x40102f-0x401030" in record.detail
+
+
+def test_relocated_dispatch_allows_fallthrough_calls_in_function_prefix(
+    tmp_path,
+):
+    cfg = dispatch_cfg(tmp_path, mode="unowned-called-function-dispatch")
+    table = cfg.jump_table_at(0x00401040)
+    assert table.targets == (0x00401020, 0x00401060)
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-computed-transfer"
+    )
+    assert record.address == 0x00401030
+    assert record.provenance_address == 0x00401043
+    assert any(call.address == 0x00401030 for call in cfg.direct_calls)
+
+
+def test_relocated_dispatch_after_owned_terminal_jump_proves_entry(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="unowned-terminal-jump-dispatch")
+    table = cfg.jump_table_at(0x0040103B)
+    assert table.targets == (0x00401020, 0x00401060)
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-computed-transfer"
+    )
+    assert record.address == 0x00401030
+    assert "zero-alignment=0x401030-0x401030" in record.detail
+    assert "owned-terminal=0x40102b:jmp" in record.detail
+
+
+def test_relocated_internal_dispatch_proves_branched_aligned_function(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="unowned-branched-function-dispatch")
+    table = cfg.jump_table_at(0x00401081)
+    assert table.targets == (0x00401020, 0x004010A0)
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-computed-transfer"
+    )
+    assert record.address == 0x00401040
+    assert record.provenance_address == 0x00401084
+    assert "zero-alignment=0x401037-0x401040" in record.detail
+
+
+def test_relocated_dispatch_accepts_distant_explicit_post_return_rejoin(
+    tmp_path,
+):
+    cfg = dispatch_cfg(tmp_path, mode="unowned-long-guard-branch-dispatch")
+    table = cfg.jump_table_at(0x00401070)
+    assert table.targets == (0x00401020, 0x004010A0)
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-computed-transfer"
+    )
+    assert record.address == 0x00401030
+    assert record.provenance_address == 0x00401073
+    assert any(
+        edge.source == 0x00401032
+        and edge.target == 0x00401040
+        and edge.kind == "conditional-branch"
+        for edge in cfg.edges
+    )
+
+
+def test_relocation_discovery_is_independent_of_relocation_order(tmp_path):
+    image = load_dispatch_image(tmp_path, mode="two-unowned-relocations")
+    reversed_image = replace(image, relocations=tuple(reversed(image.relocations)))
+    original = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    reversed_cfg = recover_cfg(
+        reversed_image,
+        build_seed_inventory(reversed_image, ()),
+        generous_limits(reversed_image),
+    )
+    assert original.to_dict() == reversed_cfg.to_dict()
+    assert {
+        (row.category, row.address)
+        for row in original.seed_inventory.records
+        if row.category.startswith("relocation-")
+    } >= {
+        ("relocation-computed-transfer", 0x00401030),
+        ("relocation-aligned-entry", 0x004010B0),
+    }
+
+
+def test_zero_aligned_entry_allows_control_flow_before_relocation(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="aligned-branched-relocation")
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-aligned-entry"
+    )
+    assert record.address == 0x004010B0
+    assert record.provenance_address == 0x004010BD
+    assert "zero-alignment=0x4010ab-0x4010b0" in record.detail
+    instructions = {row.address: row for row in cfg.instructions}
+    assert instructions[0x004010B1].mnemonic == "call"
+    assert instructions[0x004010B8].mnemonic == "jne"
+    assert instructions[0x004010BC].mnemonic == "mov"
+
+
+def test_relocation_inside_terminal_inline_data_seeds_aligned_successor(
+    tmp_path,
+):
+    cfg = dispatch_cfg(tmp_path, mode="relocation-inline-data")
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-inline-data-successor"
+    )
+    assert record.address == 0x00401050
+    assert record.provenance_address == 0x00401040
+    assert "terminal-inline-data=0x401033-0x401050" in record.detail
+    assert "printable-prefix=28" in record.detail
+    assert "trailing-control-bytes=1" in record.detail
+    assert any(
+        row.start == 0x00401033 and row.end == 0x00401050
+        for row in cfg.data_regions
+    )
+    instructions = {row.address: row for row in cfg.instructions}
+    assert instructions[0x00401050].mnemonic == "call"
+
+
+def test_zero_gap_inside_self_lea_is_not_an_aligned_entry(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="self-lea-zero-suffix")
+    aligned_entries = {
+        row.address
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-aligned-entry"
+    }
+    assert 0x00401030 in aligned_entries
+    assert 0x00401040 not in aligned_entries
+    instructions = {row.address: row for row in cfg.instructions}
+    assert instructions[0x0040103A].mnemonic == "lea"
+    assert instructions[0x00401040].mnemonic == "and"
+    assert not any(
+        row.start < 0x00401040 and 0x0040103A < row.end
+        for row in cfg.data_regions
+    )
+
+
+def test_self_lea_after_return_is_valid_dispatch_padding(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="self-lea-padding-dispatch")
+    table = cfg.jump_table_at(0x0040103B)
+    assert table.targets == (0x00401020, 0x00401060)
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-computed-transfer"
+    )
+    assert record.address == 0x00401030
+    assert "zero-alignment=0x40102a-0x401030" in record.detail
+    assert any(
+        row.start == 0x0040102A and row.end == 0x00401030
+        for row in cfg.data_regions
+    )
+
+
+def test_owned_computed_transfer_still_discovers_unowned_prologue(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="owned-dispatch-interior")
+    table = cfg.jump_table_at(0x00401041)
+    assert table.targets == (0x00401020, 0x00401060)
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-computed-transfer"
+    )
+    assert record.address == 0x00401030
+    assert record.provenance_address == 0x00401044
+    assert DirectCall(address=0x00401031, target=0x00401020) in set(
+        cfg.direct_calls
+    )
+    raw_call = next(
+        row for row in cfg.raw_e8_candidates if row.address == 0x00401031
+    )
+    assert raw_call.classification == "owned-call"
+
+
+def test_owned_relocation_operand_still_discovers_unowned_prologue(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="owned-relocation-interior")
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-aligned-entry"
+    )
+    assert record.address == 0x00401030
+    assert record.provenance_address == 0x00401036
+    instructions = {row.address: row for row in cfg.instructions}
+    assert instructions[0x00401030].mnemonic == "xor"
+    assert instructions[0x00401032].mnemonic == "xor"
+    assert instructions[0x00401034].mnemonic == "cmp"
+
+
+def _entry_candidate(
+    relocation_va: int, entry: int, span_end: int
+) -> _RelocationEntryCandidate:
+    return _RelocationEntryCandidate(
+        relocation_va=relocation_va,
+        category="relocation-computed-transfer",
+        entry=entry,
+        gap_start=entry - 4,
+        evidence_address=span_end - 2,
+        evidence_bytes="ffe0",
+        boundary_evidence=f"zero-alignment={entry - 4:#x}-{entry:#x}",
+        span_end=span_end,
+    )
+
+
+def test_relocation_candidate_selection_is_canonical_and_order_independent():
+    candidates = (
+        _entry_candidate(0x401010, 0x401100, 0x401200),
+        _entry_candidate(0x401010, 0x401300, 0x401400),
+        _entry_candidate(0x401020, 0x401180, 0x401280),
+    )
+    expected = _select_relocation_entry_candidates(candidates)
+    observed = _select_relocation_entry_candidates(tuple(reversed(candidates)))
+    assert expected == observed
+    assert tuple(row.entry for row in expected) == (0x401300, 0x401180)
+
+
+def test_relocation_candidate_overlap_conflict_fails_closed():
+    candidates = (
+        _entry_candidate(0x401010, 0x401100, 0x401200),
+        _entry_candidate(0x401020, 0x401180, 0x401280),
+    )
+    with pytest.raises(CfgRecoveryError, match="overlap conflict"):
+        _select_relocation_entry_candidates(candidates)
+
+
+def test_relocation_candidate_prefers_outer_proof_over_internal_branch_entry():
+    outer = replace(
+        _entry_candidate(0x401010, 0x401100, 0x401200),
+        internal_branch_targets=(0x401180,),
+    )
+    internal = _entry_candidate(0x401010, 0x401180, 0x401200)
+    assert _select_relocation_entry_candidates((internal, outer)) == (outer,)
+
+
+def test_guarded_callback_table_adds_finite_function_seeds(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="callback-table")
+    table = cfg.jump_table_at(0x0040100B)
+    assert table.flow_kind == "call"
+    assert {(edge.target, edge.kind) for edge in cfg.edges if edge.source == table.address} >= {
+        (0x00401020, "indirect-call-table"),
+        (0x00401060, "indirect-call-table"),
+    }
+    callback_seeds = [
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "callback-table-entry"
+    ]
+    assert {row.address for row in callback_seeds} == {
+        0x00401020,
+        0x00401060,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("missing-guard", "finite dominating guard"),
+        ("conflicting-width", "entry width conflicts"),
+        ("unmapped-entry", "jump-table entry is not wholly mapped"),
+        ("target-outside-text", "jump-table target is not executable"),
+    ],
+)
+def test_computed_table_failures_remain_explicit_blockers(
+    tmp_path, mode, message
+):
+    image = load_dispatch_image(tmp_path, mode=mode)
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    assert any(
+        row.kind == "computed-flow-blocker" and message in row.detail
+        for row in cfg.ownership_diagnostics
+    )
+
+
+def test_guarded_468_way_dispatch_is_recovered(tmp_path):
+    cfg = dispatch_cfg(tmp_path, entry_count=468)
+    table = cfg.jump_table_at(0x0040100B)
+    assert table.index_min == 0
+    assert table.index_max == 467
+    assert len(table.raw_entries) == 468
+    assert len(table.targets) == 468
+    assert table.base == 0x00402200
 
 
 def test_structural_default_limits_derive_from_executable_raw_bytes(
@@ -243,6 +604,40 @@ def test_partial_five_byte_e8_data_containment_is_unresolved(tmp_path):
         recover_cfg(image, inventory(image), generous_limits(image))
 
 
+def test_interior_e8_crossing_owned_instructions_is_explained(tmp_path):
+    image = load_cfg_image(tmp_path, "interior_e8_crosses_owned_instructions")
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    row = next(
+        row for row in cfg.raw_e8_candidates if row.address == 0x00401071
+    )
+    assert row.target == 0x00401076
+    assert row.classification == "owned-instruction-bytes"
+    instructions = {row.address: row for row in cfg.instructions}
+    assert instructions[0x00401070].mnemonic == "add"
+    assert instructions[0x00401072].mnemonic == "add"
+    assert instructions[0x00401074].mnemonic == "add"
+
+
+def test_interior_e8_crossing_proven_zero_function_alignment_is_explained(
+    tmp_path,
+):
+    image = load_cfg_image(
+        tmp_path, "interior_e8_crosses_zero_function_alignment"
+    )
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    row = next(
+        row for row in cfg.raw_e8_candidates if row.address == 0x00401071
+    )
+    assert row.target == 0x00401139
+    assert row.classification == "owned-instruction-and-data"
+    assert any(
+        region.start == 0x00401073
+        and region.end == 0x00401080
+        and "terminal-zero-alignment" in region.provenance
+        for region in cfg.data_regions
+    )
+
+
 def test_canonical_padding_is_owned_but_zero_gap_is_unexplained(
     synthetic_cfg_image, tmp_path
 ):
@@ -259,6 +654,117 @@ def test_canonical_padding_is_owned_but_zero_gap_is_unexplained(
     image = load_cfg_image(tmp_path, "unexplained_zero_gap")
     with pytest.raises(CfgRecoveryError, match="unexplained executable bytes"):
         recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_retail_mwcc_nop_encodings_are_owned_as_padding(tmp_path):
+    image = load_cfg_image(tmp_path, "mwcc_padding_encodings")
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    assert any(
+        region.start == 0x00401061 and region.end == 0x00401070
+        for region in cfg.padding_regions
+    )
+
+
+def test_closed_unreachable_island_after_owned_terminal_is_recovered(tmp_path):
+    image = load_cfg_image(tmp_path, "closed_unreachable_island")
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "closed-executable-island"
+    )
+    assert record.address == 0x00401061
+    assert record.provenance_address == 0x00401060
+    assert any(
+        edge.source == 0x00401063
+        and edge.target == 0x00401070
+        and edge.kind == "unconditional-branch"
+        for edge in cfg.edges
+    )
+
+
+def test_closed_unreferenced_aligned_function_after_zero_prefix_is_recovered(
+    tmp_path,
+):
+    image = load_cfg_image(tmp_path, "closed_unreferenced_aligned_function")
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "closed-aligned-function"
+    )
+    assert record.address == 0x00401030
+    assert record.provenance_address == 0x0040102A
+    assert any(
+        region.start == 0x0040102B and region.end == 0x00401030
+        for region in cfg.data_regions
+    )
+    assert any(
+        edge.source == 0x00401033
+        and edge.target == 0x00401038
+        and edge.kind == "conditional-branch"
+        for edge in cfg.edges
+    )
+
+
+def test_closed_aligned_function_may_merge_into_owned_right_boundary(tmp_path):
+    image = load_cfg_image(tmp_path, "closed_aligned_function_owned_merge")
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "closed-aligned-function"
+    )
+    assert record.address == 0x00401030
+    assert "closed-terminal=0x401040:owned-merge" in record.detail
+
+
+def test_one_byte_terminal_separator_that_cannot_decode_is_data(
+    synthetic_cfg_image,
+):
+    text = synthetic_cfg_image.sections[0]
+    data = bytearray(synthetic_cfg_image.data)
+    data[text.raw_offset : text.raw_offset + 4] = bytes.fromhex("eb 01 14 c3")
+    tiny_section = replace(text, raw_size=4, virt_size=4)
+    image = replace(
+        synthetic_cfg_image,
+        data=bytes(data),
+        entrypoint=text.va,
+        sections=(tiny_section, *synthetic_cfg_image.sections[1:]),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text.va, text.va + 4),),
+    )
+    cfg = recover_cfg(image, (text.va,), generous_limits(image))
+    assert any(
+        region.start == text.va + 2
+        and region.end == text.va + 3
+        and "terminal-noninstruction-separator" in region.provenance
+        for region in cfg.data_regions
+    )
+
+
+def test_pure_zero_fill_after_terminal_owns_executable_raw_tail(
+    synthetic_cfg_image,
+):
+    text = synthetic_cfg_image.sections[0]
+    data = bytearray(synthetic_cfg_image.data)
+    data[text.raw_offset : text.raw_offset + 0x10] = b"\xc3" + b"\0" * 15
+    tail_section = replace(text, raw_size=0x10, virt_size=0x10)
+    image = replace(
+        synthetic_cfg_image,
+        data=bytes(data),
+        entrypoint=text.va,
+        sections=(tail_section, *synthetic_cfg_image.sections[1:]),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text.va, text.va + 0x10),),
+    )
+    cfg = recover_cfg(image, (text.va,), generous_limits(image))
+    assert any(
+        region.start == text.va + 1 and region.end == text.va + 0x10
+        for region in cfg.padding_regions
+    )
 
 
 def test_unsupported_cross_block_initializer_fails_closed(tmp_path):
@@ -412,6 +918,28 @@ def test_executable_highlow_conflicting_data_boundaries_fail_closed(tmp_path):
         recover_cfg(image, inventory(image), generous_limits(image))
 
 
+def test_executable_relocation_proves_aligned_branch_free_prologue(tmp_path):
+    image = load_cfg_image(tmp_path, "exec_relocation_aligned_prologue")
+    cfg = recover_cfg(image, inventory(image), generous_limits(image))
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocation-aligned-entry"
+    )
+    assert record.address == 0x00401030
+    assert record.provenance_address == 0x00401035
+    assert "zero-alignment=0x40102b-0x401030" in record.detail
+    instructions = {row.address: row for row in cfg.instructions}
+    assert instructions[0x00401030].mnemonic == "push"
+    assert instructions[0x00401033].mnemonic == "mov"
+
+
+def test_executable_relocation_rejects_return_before_relocation(tmp_path):
+    image = load_cfg_image(tmp_path, "exec_relocation_branched_prologue")
+    with pytest.raises(CfgRecoveryError, match="relocation.*boundary"):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
 @pytest.mark.parametrize(
     "mutation", ["transformed_initializer", "cross_block_initializer_value"]
 )
@@ -496,6 +1024,17 @@ def test_register_transform_retains_unsafe_initializer_taint(
     tmp_path, mutation
 ):
     image = load_cfg_image(tmp_path, mutation)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_shrd_implicit_cl_read_preserves_initializer_taint(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "bb 50 10 40 00 0f ad fb 89 1d 90 20 40 00 c3",
+    )
     with pytest.raises(
         CfgRecoveryError, match="unresolved function-pointer initializer"
     ):

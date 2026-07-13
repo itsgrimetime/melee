@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -35,6 +36,8 @@ def test_retro_probe_backend_map_help():
     assert r.exit_code == 0
     assert "Probe retail GC/1.2.5n backend map candidates" in r.output
     assert "--static-only" in r.output
+    assert "raw-pe-cfg.v1.jsonl" in r.output
+    assert "raw-ghidra-crosscheck.v1.json" in r.output
 
 
 def test_retro_probe_backend_ig_help():
@@ -367,6 +370,9 @@ def test_probe_backend_map_static_only_skips_live_launcher(monkeypatch, tmp_path
     def fake_probe(**kwargs):
         calls.append(kwargs)
         kwargs["out_dir"].mkdir(parents=True, exist_ok=True)
+        (kwargs["out_dir"] / "raw-pe-cfg.v1.jsonl").write_text("{}\n")
+        (kwargs["out_dir"] / "raw-ghidra-crosscheck.v1.json").write_text("{}\n")
+        (kwargs["out_dir"] / "backend-map-candidates.json").write_text("{}\n")
         return retro.DumpOutcome(exit_code=0, produced=["static"], missing=[])
 
     monkeypatch.setattr(retro, "_run_backend_map_probe", fake_probe)
@@ -387,6 +393,134 @@ def test_probe_backend_map_static_only_skips_live_launcher(monkeypatch, tmp_path
     )
     assert r.exit_code == 0, r.output
     assert calls and calls[0]["static_only"] is True
+    assert "raw PE CFG:" in r.output
+    assert "raw/Ghidra cross-check:" in r.output
+
+
+def test_static_backend_map_runs_raw_crosscheck_before_candidates(
+    monkeypatch, tmp_path
+):
+    from tools.mwcc_retro import backend_discovery
+
+    import src.cli.debug.retro as retro
+
+    order = []
+
+    def fake_static(*, melee_root, out_dir):
+        order.append("raw-crosscheck")
+        (out_dir / "raw-pe-cfg.v1.jsonl").write_text("{}\n")
+        (out_dir / "raw-ghidra-crosscheck.v1.json").write_text("{}\n")
+
+    def fake_candidates(_exe):
+        order.append("candidates")
+        return {"compiler": "1.2.5n"}
+
+    monkeypatch.setattr(retro, "_run_static_backend_map_audit", fake_static)
+    monkeypatch.setattr(
+        backend_discovery,
+        "build_gc125n_backend_candidate_report",
+        fake_candidates,
+    )
+    root = tmp_path / "root"
+    out = tmp_path / "out"
+    (root / "build/compilers/GC/1.2.5n").mkdir(parents=True)
+    (root / "build/compilers/GC/1.2.5n/mwcceppc.exe").write_bytes(b"PE")
+
+    outcome = retro._run_backend_map_probe(
+        src="unit.c",
+        fn="unit",
+        out_dir=out,
+        static_only=True,
+        melee_root=root,
+    )
+
+    assert outcome.exit_code == 0
+    assert order == ["raw-crosscheck", "candidates"]
+    assert (out / "backend-map-candidates.json").is_file()
+
+
+def test_transient_ghidra_inventory_is_exact_hash_and_deleted(
+    monkeypatch,
+):
+    import subprocess
+
+    import src.cli.debug.retro as retro
+    from src.mwcc_debug.ghidra_mwcc_setup import EXPECTED_COMPILER_SHA256
+
+    repo = Path(__file__).resolve().parents[3]
+    project = repo / "tools/mwcc_debug/ghidra_project"
+    observed = {}
+    monkeypatch.setattr(
+        retro,
+        "setup_mwcc_ghidra",
+        lambda **_kwargs: SimpleNamespace(
+            compiler_sha256=EXPECTED_COMPILER_SHA256,
+            project_name="mwcceppc",
+            program_path="/mwcceppc.exe",
+            project_dir=project,
+            headless_path=Path("/ghidra/analyzeHeadless"),
+        ),
+    )
+
+    def fake_runner(command, **_kwargs):
+        inventory = Path(command[-1])
+        observed["temporary"] = inventory.parent
+        inventory.write_text(
+            json.dumps(
+                {
+                    "record_kind": "metadata",
+                    "schema_version": "mwcc-ghidra-raw-crosscheck.v1",
+                    "compiler_sha256": EXPECTED_COMPILER_SHA256,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        assert command[-2] == EXPECTED_COMPILER_SHA256
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(retro, "_run_with_process_group_timeout", fake_runner)
+    inventory = retro._load_transient_ghidra_inventory(melee_root=repo)
+    assert inventory.compiler_sha256 == EXPECTED_COMPILER_SHA256
+    assert not observed["temporary"].exists()
+
+
+def test_transient_ghidra_inventory_is_deleted_after_parse_failure(monkeypatch):
+    import subprocess
+
+    import src.cli.debug.retro as retro
+    from src.mwcc_debug.ghidra_mwcc_setup import EXPECTED_COMPILER_SHA256
+
+    repo = Path(__file__).resolve().parents[3]
+    project = repo / "tools/mwcc_debug/ghidra_project"
+    observed = {}
+    monkeypatch.setattr(
+        retro,
+        "setup_mwcc_ghidra",
+        lambda **_kwargs: SimpleNamespace(
+            compiler_sha256=EXPECTED_COMPILER_SHA256,
+            project_name="mwcceppc",
+            program_path="/mwcceppc.exe",
+            project_dir=project,
+            headless_path=Path("/ghidra/analyzeHeadless"),
+        ),
+    )
+
+    def fake_runner(command, **_kwargs):
+        inventory = Path(command[-1])
+        observed["temporary"] = inventory.parent
+        inventory.write_text("not-json\n")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(retro, "_run_with_process_group_timeout", fake_runner)
+    try:
+        retro._load_transient_ghidra_inventory(melee_root=repo)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid transient inventory was accepted")
+    assert not observed["temporary"].exists()
 
 
 def test_probe_backend_map_reports_unexpected_failure(monkeypatch, tmp_path):
