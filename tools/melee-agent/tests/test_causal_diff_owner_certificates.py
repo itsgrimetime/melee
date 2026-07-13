@@ -530,6 +530,52 @@ def test_multi_output_event_uses_each_outputs_exact_parent_set():
     assert result.resolution_for(second_role()).status is OwnerResolutionStatus.UNIQUE
 
 
+def test_multi_parent_lineage_is_stable_under_raw_container_reversal():
+    evidence = evidence_with_two_mutation_outputs(
+        first_parents=("ol-a",),
+        second_parents=("ol-b", "ol-c"),
+    )
+    variants = tuple(
+        ObjectBindingEvidence(
+            tuple(reversed(evidence.nodes)) if reverse_nodes else evidence.nodes,
+            tuple(reversed(evidence.edges)) if reverse_edges else evidence.edges,
+            evidence.capabilities,
+            evidence.capture_run_id,
+            evidence.instrumentation_identity,
+        )
+        for reverse_nodes, reverse_edges in ((False, False), (True, False), (False, True), (True, True))
+    )
+    results = tuple(owner_certificate.validate_owner_evidence(variant) for variant in variants)
+
+    assert len({canonical_result(result) for result in results}) == 1
+    expected_certificate_ids = None
+    for result in results:
+        resolutions = tuple(
+            next(resolution for resolution in result.role_resolutions if resolution.role == role)
+            for role in (first_role(), second_role())
+        )
+        assert all(resolution.status is OwnerResolutionStatus.UNIQUE for resolution in resolutions)
+        certificate_ids = tuple(only(resolution.certificate_record_ids) for resolution in resolutions)
+        if expected_certificate_ids is None:
+            expected_certificate_ids = certificate_ids
+        assert certificate_ids == expected_certificate_ids
+
+    index = owner_certificate._index_evidence(evidence)
+    second_candidate = only(
+        candidate
+        for candidate in owner_certificate._enumerate_candidates(index)
+        if owner_certificate._role_for(candidate) == second_role()
+    )
+    parent_edges = tuple(
+        edge
+        for edge in index.edges_by_kind_target[("pcode-operand-lineage", second_candidate.lineage.record_id)]
+        if edge.attributes.get("lineage_event_side") == "outputs"
+    )
+    parent_nodes = tuple(index.node_by_id[edge.source_id] for edge in parent_edges)
+    assert tuple(sorted(node.attributes["operand_lineage_id"] for node in parent_nodes)) == ("ol-b", "ol-c")
+    assert tuple(node.record_id for node in parent_nodes) == tuple(edge.source_id for edge in parent_edges)
+
+
 @pytest.mark.parametrize(
     "parents",
     [

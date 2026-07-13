@@ -1058,10 +1058,29 @@ def _validate_lineage_output(
         and edge.attributes.get("operand_lineage_id") == lineage_support.attributes.get("operand_lineage_id")
         and edge.attributes.get("parent_lineage_ids") == parent_ids
     )
-    parent_nodes = tuple(index.node_by_id.get(edge.source_id) for edge in selected)
-    if any(node is None for node in parent_nodes):
-        return _rejection("lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support)
-    actual = tuple(sorted(str(node.attributes.get("operand_lineage_id")) for node in parent_nodes if node is not None))
+    parent_pairs: list[tuple[EvidenceNode, EvidenceEdge]] = []
+    for edge in selected:
+        parent_node = index.node_by_id.get(edge.source_id)
+        if parent_node is None:
+            return _rejection(
+                "lineage-parent-mismatch",
+                role,
+                (*candidate.path_records, *selected),
+                mutation_support,
+            )
+        parent_pairs.append((parent_node, edge))
+    parent_pairs.sort(
+        key=lambda pair: (
+            str(pair[0].attributes.get("operand_lineage_id")),
+            pair[0].record_id,
+            pair[1].record_id,
+            canonical_bytes(_safe_json(_record_json(pair[0]))),
+            canonical_bytes(_safe_json(_record_json(pair[1]))),
+        )
+    )
+    parent_nodes = tuple(node for node, _edge in parent_pairs)
+    selected = tuple(edge for _node, edge in parent_pairs)
+    actual = tuple(sorted(str(node.attributes.get("operand_lineage_id")) for node in parent_nodes))
     if actual != parent_ids:
         return _rejection("lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support)
     if lineage_support.record_id not in candidate.lineage.provenance.input_record_ids or any(
@@ -1069,7 +1088,7 @@ def _validate_lineage_output(
     ):
         return _rejection("lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support)
     parent_records: tuple[EvidenceNode | EvidenceEdge, ...] = (
-        *tuple(node for node in parent_nodes if node is not None),
+        *parent_nodes,
         *selected,
     )
     parent_support = _supports_for_records(evidence, index, parent_records, role)
