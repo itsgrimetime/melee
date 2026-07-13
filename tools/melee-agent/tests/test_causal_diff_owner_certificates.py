@@ -42,6 +42,7 @@ from tests.owner_certificate_fixtures import (
     evidence_with_role_statuses,
     evidence_with_split_physical_assignment,
     evidence_with_two_mutation_outputs,
+    evidence_with_zero_sized_owner,
     evidence_without_instrumentation_identity,
     first_role,
     future_complete_backend,
@@ -705,6 +706,30 @@ def test_heuristic_support_is_incomplete_and_never_certifies():
     assert resolution.status is OwnerResolutionStatus.INCOMPLETE
     assert resolution.certificate_record_ids == ()
     assert {item.reason for item in resolution.rejections} == {"malformed-support"}
+
+
+def test_roleless_candidate_rejection_is_global_and_visible():
+    result = build_owner_certificates(evidence_with_zero_sized_owner())
+
+    assert result.is_trusted
+    assert result.certificate_nodes == ()
+    assert result.role_resolutions == ()
+    rejection = only(result.global_rejections)
+    assert rejection.reason == "malformed-support"
+    assert rejection.role is None
+    assert rejection.candidate_record_ids
+    assert result.resolution_for(ROLE).status is OwnerResolutionStatus.INCOMPLETE
+
+
+def test_roleless_candidate_rejection_taints_an_otherwise_valid_role():
+    result = build_owner_certificates(evidence_with_zero_sized_owner(include_valid=True))
+    resolution = result.resolution_for(ROLE)
+
+    assert {item.reason for item in result.global_rejections} == {"malformed-support"}
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert len(resolution.certificate_record_ids) == 1
+    assert result.certificate_nodes == ()
+    assert result.certificate(resolution.certificate_record_ids[0]) is None
 
 
 def test_allocator_origin_conflict_is_contradictory():

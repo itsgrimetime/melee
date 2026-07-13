@@ -167,6 +167,7 @@ def _path(
     semantic_stack_role: str,
     physical_register: int = 21,
     stack_offset: int = 0x44,
+    type_size: int = 4,
     include_object: bool = True,
     rewrite_confidence: str = "observed",
 ) -> dict[str, object]:
@@ -182,6 +183,7 @@ def _path(
         "physical_register": physical_register,
         "emission_physical": physical_register,
         "stack_offset": stack_offset,
+        "type_size": type_size,
         "include_object": include_object,
         "rewrite_confidence": rewrite_confidence,
     }
@@ -221,6 +223,7 @@ def _evidence_from_paths(
                 **{
                     **dict(snapshot),
                     "runtime_address": runtime_address,
+                    "type_size": path["type_size"],
                 }
             )
             for snapshot in base_object_row["stage_snapshots"]
@@ -231,6 +234,7 @@ def _evidence_from_paths(
                     **dict(base_object_row),
                     "object_id": object_id,
                     "runtime_address": runtime_address,
+                    "type_size": path["type_size"],
                     "stage_snapshots": snapshots,
                 }
             )
@@ -253,6 +257,7 @@ def _evidence_from_paths(
                     "object_id": object_id,
                     "semantic_stack_role": path["semantic_stack_role"],
                     "final_r1_offset": path["stack_offset"],
+                    "size": path["type_size"],
                     "list_node_runtime_address": 0x5000 + index * 0x10,
                 }
             )
@@ -544,6 +549,24 @@ def evidence_with_heuristic_support() -> ObjectBindingEvidence:
             ),
         )
     )
+
+
+def evidence_with_zero_sized_owner(*, include_valid: bool = False) -> ObjectBindingEvidence:
+    invalid = _path(
+        1 if include_valid else 0,
+        operand_key="use:1" if include_valid else "use:0",
+        semantic_stack_role="zero-home" if include_valid else "row-home",
+        type_size=0,
+    )
+    paths = (
+        (
+            _path(0, operand_key="use:0", semantic_stack_role="row-home"),
+            invalid,
+        )
+        if include_valid
+        else (invalid,)
+    )
+    return _evidence_from_paths(paths)
 
 
 def evidence_with_allocator_origin_conflict() -> ObjectBindingEvidence:

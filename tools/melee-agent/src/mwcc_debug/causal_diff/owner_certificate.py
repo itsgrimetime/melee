@@ -1377,23 +1377,26 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
         )
     candidates = _enumerate_candidates(index)
     paths: list[_OwnerPath] = []
-    rejections: list[OwnerCertificateRejection] = []
+    role_rejections: list[OwnerCertificateRejection] = []
     for candidate in candidates:
         validated = _validate_candidate(evidence, index, candidate)
         if isinstance(validated, OwnerCertificateRejection):
-            rejections.append(validated)
+            if validated.role is None:
+                global_rejections.append(validated)
+            else:
+                role_rejections.append(validated)
         else:
             paths.append(validated)
 
     candidate_anchor_ids = {candidate.anchor.record_id for candidate in candidates}
     roles = {path.role for path in paths}
-    roles.update(rejection.role for rejection in rejections if rejection.role is not None)
+    roles.update(rejection.role for rejection in role_rejections if rejection.role is not None)
     for anchor in evidence.nodes:
         if anchor.kind != "assembly-operand-anchor" or anchor.record_id in candidate_anchor_ids:
             continue
         compatible = tuple(role for role in roles if role.operand_key == anchor.attributes.get("machine_operand_key"))
         for role in compatible:
-            rejections.append(_rejection("plausible-owner-alternative", role, (anchor,)))
+            role_rejections.append(_rejection("plausible-owner-alternative", role, (anchor,)))
     disconnected = tuple(
         anchor
         for anchor in evidence.nodes
@@ -1405,7 +1408,7 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
         global_rejections.append(_rejection("disconnected-owner-path", candidates=disconnected))
     return _ValidationOutcome(
         tuple(paths),
-        tuple(sorted(rejections, key=lambda item: item.rejection_id)),
+        tuple(sorted(role_rejections, key=lambda item: item.rejection_id)),
         tuple(sorted(global_rejections, key=lambda item: item.rejection_id)),
     )
 
