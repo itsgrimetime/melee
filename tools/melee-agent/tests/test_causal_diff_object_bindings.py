@@ -291,6 +291,12 @@ def _adapter_input(
             virtual=virtual,
             physical_register=physical_register,
         ),
+        instrumentation_identity=(
+            "1" * 64,
+            "proof-test",
+            "2" * 64,
+            "mwcc-retro-lifetime-proof.v1",
+        ),
     )
 
 
@@ -510,6 +516,7 @@ def test_proof_complete_requires_one_connected_owner_path() -> None:
         + tuple(edge for edge in unrelated.edges if edge.kind == "object-materializes-virtual"),
         ALL_CAPABILITIES,
         first.capture_run_id,
+        None,
         None,
     )
 
@@ -1621,6 +1628,7 @@ def test_report_names_current_verified_backend_owner_path_incompleteness() -> No
         frozenset({"compiler-object-bindings", "pcode-to-code-range"}),
         "a" * 64,
         "backend-owner-path-incomplete",
+        None,
     )
     graphs = tuple(
         SimpleNamespace(

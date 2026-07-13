@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
@@ -99,6 +99,8 @@ _REQUIRED_EDGE_SUPPORT_KINDS = {
 _REQUIRED_NODE_SUPPORT_KINDS = {
     "allocator-node": frozenset({"object-virtual-binding", "pcode-rewrite"}),
 }
+OwnerInstrumentationIdentity = tuple[str, str, str, str]
+_OBJECT_BINDING_ADAPTER_TOKEN = object()
 
 
 def _is_nonempty_str(value: object) -> bool:
@@ -242,6 +244,7 @@ class ObjectBindingAdapterInput:
     capabilities: frozenset[str]
     object_validation: ObjectBindingValidation
     pcode_validation: PCodeLineageValidation
+    instrumentation_identity: OwnerInstrumentationIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +254,8 @@ class ObjectBindingEvidence:
     capabilities: frozenset[str]
     capture_run_id: str
     abstention_reason: str | None
+    instrumentation_identity: OwnerInstrumentationIdentity | None
+    _adapter_token: object | None = field(default=None, repr=False, compare=False)
 
     @property
     def verified_capabilities(self) -> frozenset[str]:
@@ -405,6 +410,8 @@ def emit_object_binding_evidence(
             capabilities,
             source.capture_run_id,
             "backend-owner-path-incomplete",
+            source.instrumentation_identity,
+            _OBJECT_BINDING_ADAPTER_TOKEN,
         )
     nodes: list[EvidenceNode] = []
     edges: list[EvidenceEdge] = []
@@ -1052,6 +1059,8 @@ def emit_object_binding_evidence(
         capabilities,
         source.capture_run_id,
         None,
+        source.instrumentation_identity,
+        _OBJECT_BINDING_ADAPTER_TOKEN,
     )
     if not proof_complete(normalized):
         return ObjectBindingEvidence(
@@ -1060,6 +1069,8 @@ def emit_object_binding_evidence(
             normalized.capabilities,
             normalized.capture_run_id,
             "backend-owner-path-incomplete",
+            normalized.instrumentation_identity,
+            _OBJECT_BINDING_ADAPTER_TOKEN,
         )
     return normalized
 
@@ -1076,7 +1087,7 @@ def adapt_object_bindings(bundle: ValidatedBundle) -> ObjectBindingEvidence:
 
     trace_paths = bundle.backend_paths("backend-trace.v2")
     if not trace_paths:
-        return ObjectBindingEvidence((), (), frozenset(), "", None)
+        return ObjectBindingEvidence((), (), frozenset(), "", None, None)
     if len(trace_paths) != 1:
         raise BundleInputError("object binding adapter requires exactly one backend trace v2")
     candidate_path = bundle.candidate_object_path
@@ -1115,6 +1126,12 @@ def adapt_object_bindings(bundle: ValidatedBundle) -> ObjectBindingEvidence:
         capture_run_id = bindings.get("capture_run_id")
         if not isinstance(capture_run_id, str) or not capture_run_id:
             raise ValueError("verified bindings have no capture run ID")
+        instrumentation_identity = (
+            proof.compiler_executable_sha256,
+            proof.proof_id,
+            proof.sha256,
+            str(installed_table["instrumentation_proof_schema"]),
+        )
     except BundleInputError:
         raise
     except (
@@ -1142,6 +1159,7 @@ def adapt_object_bindings(bundle: ValidatedBundle) -> ObjectBindingEvidence:
             capabilities=verification.capabilities,
             object_validation=object_result,
             pcode_validation=lineage_result,
+            instrumentation_identity=instrumentation_identity,
         )
     )
 
