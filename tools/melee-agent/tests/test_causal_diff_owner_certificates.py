@@ -799,6 +799,45 @@ def test_diagnostic_validation_closes_malformed_persistence_values(field, value)
     assert diagnostic.is_trusted is False
 
 
+def test_diagnostic_boundary_maps_malformed_record_container_to_rejection():
+    evidence = complete_evidence()
+    malformed = replace(evidence, nodes={"unexpected": evidence.nodes[0]})
+
+    diagnostic = owner_certificate.validate_owner_evidence(malformed)
+
+    assert {item.reason for item in diagnostic.global_rejections} == {
+        "malformed-support"
+    }
+    assert diagnostic.certificate_nodes == ()
+    assert diagnostic.is_trusted is False
+
+
+def test_diagnostic_boundary_does_not_swallow_unknown_taxonomy(monkeypatch):
+    def reject_with_unknown_taxonomy(_evidence):
+        return owner_certificate._rejection("future-unknown-reason")
+
+    monkeypatch.setattr(
+        owner_certificate,
+        "_validate_core",
+        reject_with_unknown_taxonomy,
+    )
+
+    with pytest.raises(ValueError, match="unknown owner certificate rejection"):
+        owner_certificate.validate_owner_evidence(complete_evidence())
+
+
+def test_diagnostic_boundary_does_not_swallow_canonical_group_invariant(
+    monkeypatch,
+):
+    def missing_group(_outcome):
+        raise KeyError("missing canonical group")
+
+    monkeypatch.setattr(owner_certificate, "_canonical_groups", missing_group)
+
+    with pytest.raises(KeyError, match="missing canonical group"):
+        owner_certificate.validate_owner_evidence(complete_evidence())
+
+
 def test_five_role_statuses_are_resolved_independently():
     result = build_owner_certificates(evidence_with_role_statuses())
     ambiguous_role = OwnerRoleKey("use:1", "gpr", "ambiguous-home", 4, "locals")

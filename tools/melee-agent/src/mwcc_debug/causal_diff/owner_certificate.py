@@ -316,7 +316,11 @@ def _proof_content_sha256(
         "path_records": [_record_json(record) for record in path.path_records],
         "raw_support_records": [_record_json(record) for record in path.raw_support],
     }
-    return hashlib.sha256(canonical_bytes(proof_payload)).hexdigest()
+    try:
+        payload_bytes = canonical_bytes(proof_payload)
+    except rfc8785.CanonicalizationError as error:
+        raise _MalformedEvidence("owner proof content is not canonical JSON") from error
+    return hashlib.sha256(payload_bytes).hexdigest()
 
 
 def _certificate_record_id(
@@ -390,6 +394,10 @@ class _ValidationOutcome:
     paths: tuple[_OwnerPath, ...]
     role_rejections: tuple[OwnerCertificateRejection, ...]
     global_rejections: tuple[OwnerCertificateRejection, ...]
+
+
+class _MalformedEvidence(Exception):
+    """Signal malformed persisted input at a validated semantic boundary."""
 
 
 def _is_nonempty_str(value: object) -> bool:
@@ -619,7 +627,7 @@ def _validate_common_scope(
         return _rejection("mixed-record-scope", candidates=values)
     try:
         canonical_bytes([_record_json(record) for record in values])
-    except (TypeError, ValueError, rfc8785.CanonicalizationError):
+    except rfc8785.CanonicalizationError:
         return _rejection("malformed-support", candidates=values)
     return None
 
@@ -627,17 +635,13 @@ def _validate_common_scope(
 def _support_attributes_are_exact(support: EvidenceNode) -> bool:
     support_kind = support.attributes.get("support_kind")
     schemas = _SUPPORT_SCHEMAS.get(str(support_kind), ())
-    try:
-        return any(
-            set(support.attributes) == set(schema)
-            and all(
-                predicate(support.attributes[key])
-                for key, predicate in schema.items()
-            )
-            for schema in schemas
+    return any(
+        set(support.attributes) == set(schema)
+        and all(
+            predicate(support.attributes[key]) for key, predicate in schema.items()
         )
-    except (TypeError, ValueError):
-        return False
+        for schema in schemas
+    )
 
 
 def _validated_support_records(
@@ -1381,23 +1385,23 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
     )
 
 
-def _validate_diagnostic_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
-    """Fail closed at the public persistence-validation boundary."""
-
-    try:
-        return _validate_core(evidence)
-    except (
-        AttributeError,
-        KeyError,
-        TypeError,
-        ValueError,
-        rfc8785.CanonicalizationError,
+def _validate_diagnostic_shape(evidence: ObjectBindingEvidence) -> None:
+    if type(evidence) is not ObjectBindingEvidence:
+        raise _MalformedEvidence("unexpected owner evidence type")
+    if (
+        not isinstance(evidence.nodes, tuple)
+        or not all(type(node) is EvidenceNode for node in evidence.nodes)
+        or not isinstance(evidence.edges, tuple)
+        or not all(type(edge) is EvidenceEdge for edge in evidence.edges)
     ):
-        return _ValidationOutcome(
-            (),
-            (),
-            (_rejection("malformed-support"),),
-        )
+        raise _MalformedEvidence("owner evidence record containers are malformed")
+
+
+def _validate_diagnostic_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
+    """Validate the public persistence shape before semantic validation."""
+
+    _validate_diagnostic_shape(evidence)
+    return _validate_core(evidence)
 
 
 def _path_provenance(path: _OwnerPath) -> tuple[str, ...]:
@@ -1588,13 +1592,9 @@ def _validate_owner_evidence(evidence: ObjectBindingEvidence) -> OwnerCertificat
         candidate_certificate_ids = tuple(
             _certificate_record_id(path, evidence) for path in certificate_paths
         )
-    except (TypeError, ValueError, rfc8785.CanonicalizationError):
+    except _MalformedEvidence:
         if not outcome.global_rejections:
-            outcome = _ValidationOutcome(
-                (),
-                outcome.role_rejections,
-                (_rejection("malformed-support"),),
-            )
+            raise
         canonical_groups = _canonical_groups(outcome)
         certificate_paths = ()
         candidate_certificate_ids = ()
@@ -1617,13 +1617,7 @@ def validate_owner_evidence(evidence: ObjectBindingEvidence) -> OwnerCertificate
 
     try:
         return _validate_owner_evidence(evidence)
-    except (
-        AttributeError,
-        KeyError,
-        TypeError,
-        ValueError,
-        rfc8785.CanonicalizationError,
-    ):
+    except _MalformedEvidence:
         return OwnerCertificateResult(
             (),
             (),
@@ -1650,7 +1644,7 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
         candidate_certificate_ids = tuple(
             _certificate_record_id(path, evidence) for path in ordered_paths
         )
-    except (TypeError, ValueError, rfc8785.CanonicalizationError):
+    except _MalformedEvidence:
         if outcome.global_rejections:
             return _trusted_result(
                 (),
@@ -1689,7 +1683,7 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
         )
     try:
         certificates = tuple(_certificate(path, evidence) for path in ordered_paths)
-    except (TypeError, ValueError, rfc8785.CanonicalizationError):
+    except _MalformedEvidence:
         malformed = _ValidationOutcome(
             (),
             outcome.role_rejections,
