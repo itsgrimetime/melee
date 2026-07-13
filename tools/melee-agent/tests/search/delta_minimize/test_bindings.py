@@ -1503,6 +1503,97 @@ def test_unpaired_external_call_move_and_rename_fails_closed() -> None:
         delta.extract_delta_manifest(left, right, function="draw")
 
 
+def _exact_statement_move_atoms(
+    left: str,
+    right: str,
+    statement: str,
+) -> tuple[DeltaAtom, DeltaAtom]:
+    left_start = left.index(statement)
+    right_start = right.index(statement)
+    return (
+        DeltaAtom(
+            "statement-delete",
+            "statement",
+            (
+                DeltaPatch(
+                    left_start,
+                    left_start + len(statement),
+                    statement,
+                    right_start,
+                    right_start,
+                    "",
+                    "statement",
+                    "draw:delete",
+                ),
+            ),
+            affected_functions=("draw",),
+        ),
+        DeltaAtom(
+            "statement-insert",
+            "statement",
+            (
+                DeltaPatch(
+                    left_start,
+                    left_start,
+                    "",
+                    right_start,
+                    right_start + len(statement),
+                    statement,
+                    "statement",
+                    "draw:insert",
+                ),
+            ),
+            affected_functions=("draw",),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            "int draw(int x) { if (x) { external(x); } else { } return x; }\n",
+            "int draw(int x) { if (x) { } else { external(x); } return x; }\n",
+        ),
+        (
+            "int draw(int x) { if (x) { external(x); } return x; }\n",
+            "int draw(int x) { if (x) { } external(x); return x; }\n",
+        ),
+        (
+            "int draw(int x) { external(x); if (x) { } return x; }\n",
+            "int draw(int x) { if (x) { external(x); } return x; }\n",
+        ),
+    ],
+    ids=("if-body-to-else-body", "nested-to-outer", "outer-to-nested"),
+)
+def test_exact_statement_move_across_scopes_fails_closed(
+    left: str,
+    right: str,
+) -> None:
+    atoms = _exact_statement_move_atoms(left, right, "external(x);")
+
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="^ambiguous-statement-move$",
+    ) as exc:
+        couple_semantic_atoms(
+            build_binding_index(left),
+            build_binding_index(right),
+            atoms,
+            seed_atom_ids={atom.atom_id for atom in atoms},
+            scope_functions={"draw"},
+            left_scope_functions={"draw"},
+            right_scope_functions={"draw"},
+        )
+
+    assert exc.value.details["function"] == "draw"
+    assert exc.value.details["statement"] == "external(x);"
+    assert exc.value.details["scope_pairing"] in {
+        "mismatch",
+        "unproven-nested-scope",
+    }
+
+
 @pytest.mark.parametrize(
     ("left", "right"),
     [
@@ -1519,9 +1610,10 @@ def test_unpaired_external_call_move_and_rename_fails_closed() -> None:
 )
 def test_whole_one_sided_external_call_is_atomic(left: str, right: str) -> None:
     manifest = delta.extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=2)
 
-    assert materialize_mask(left, manifest, 0) == left
-    assert materialize_mask(left, manifest, (1 << len(manifest.atoms)) - 1) == right
+    assert masks == (0, 1)
+    assert tuple(materialize_mask(left, manifest, mask) for mask in masks) == (left, right)
 
 
 def test_whole_one_sided_indirect_call_still_fails_closed() -> None:

@@ -100,6 +100,16 @@ class BindingIndex:
     source: str = ""
 
 
+@dataclass(frozen=True)
+class _StatementOccurrence:
+    function: str
+    identity: tuple[str, ...]
+    span: tuple[int, int]
+    scope_identity: tuple[str, ...] | None
+    positional_scope_identity: tuple[str, ...] | None
+    brace_preflight_safe: bool
+
+
 class UnionFind:
     def __init__(self, values: Sequence[str]):
         self.parent = {value: value for value in values}
@@ -599,6 +609,16 @@ def couple_semantic_atoms(
     groups = UnionFind(tuple(atom.atom_id for atom in atoms))
     _union_overlaps(groups, atoms)
 
+    semantic_labels: dict[str, list[str]] = defaultdict(list)
+    _couple_statement_moves(
+        groups,
+        atoms,
+        left_index,
+        right_index,
+        semantic_labels,
+        selected_functions=scope_functions,
+    )
+
     scoped_atoms = (
         tuple(atom for atom in atoms if atom.atom_id in seed_atom_ids)
         if seed_atom_ids is not None
@@ -619,10 +639,12 @@ def couple_semantic_atoms(
     left_atomic_external_call_spans = _safe_atomic_external_call_spans(
         left_atomic_external_calls,
         right_atomic_external_calls,
+        groups=groups,
     )
     right_atomic_external_call_spans = _safe_atomic_external_call_spans(
         right_atomic_external_calls,
         left_atomic_external_calls,
+        groups=groups,
     )
     left_changed = _changed_binding_names(left_index, left_changed_spans)
     right_changed = _changed_binding_names(right_index, right_changed_spans)
@@ -663,7 +685,6 @@ def couple_semantic_atoms(
         right_atomic_external_call_spans,
     )
 
-    semantic_labels: dict[str, list[str]] = defaultdict(list)
     reclassified: dict[tuple[str, int], str] = {}
     for left_function, right_function, renamed in pairs:
         if _has_signature_patch(atoms, left_function, right_function):
@@ -733,6 +754,128 @@ def couple_semantic_atoms(
         labels_by_root,
         reclassified,
     )
+
+
+def _couple_statement_moves(
+    groups: UnionFind,
+    atoms,
+    left_index: BindingIndex,
+    right_index: BindingIndex,
+    semantic_labels: dict[str, list[str]],
+    *,
+    selected_functions: set[str] | frozenset[str] | None,
+) -> None:
+    """Couple a uniquely identifiable whole-statement deletion and insertion."""
+
+    left_occurrences = _statement_occurrences(left_index)
+    right_occurrences = _statement_occurrences(right_index)
+    left_by_key = _statement_occurrences_by_key(left_occurrences)
+    right_by_key = _statement_occurrences_by_key(right_occurrences)
+    left_control_components = _control_scope_components(left_index)
+    right_control_components = _control_scope_components(right_index)
+    _reject_cross_scope_statement_moves(
+        left_index,
+        left_by_key,
+        right_by_key,
+        left_control_components=left_control_components,
+        right_control_components=right_control_components,
+        selected_functions=selected_functions,
+    )
+    deleted: dict[
+        tuple[str, tuple[str, ...]],
+        list[tuple[str, _StatementOccurrence]],
+    ] = defaultdict(list)
+    inserted: dict[
+        tuple[str, tuple[str, ...]],
+        list[tuple[str, _StatementOccurrence]],
+    ] = defaultdict(list)
+
+    for atom in atoms:
+        for patch in atom.patches:
+            left_span = (patch.left_start, patch.left_end)
+            right_span = (patch.right_start, patch.right_end)
+            if left_span[0] != left_span[1] and right_span[0] == right_span[1]:
+                occurrence = _whole_statement_for_span(left_index, left_occurrences, left_span)
+                destination = deleted
+            elif left_span[0] == left_span[1] and right_span[0] != right_span[1]:
+                occurrence = _whole_statement_for_span(right_index, right_occurrences, right_span)
+                destination = inserted
+            else:
+                continue
+            if occurrence is None or (
+                selected_functions is not None and occurrence.function not in selected_functions
+            ):
+                continue
+            destination[(occurrence.function, occurrence.identity)].append(
+                (atom.atom_id, occurrence)
+            )
+
+    for key in sorted(deleted.keys() & inserted.keys()):
+        deleted_ids = tuple(
+            dict.fromkeys(atom_id for atom_id, _occurrence in deleted[key])
+        )
+        inserted_ids = tuple(
+            dict.fromkeys(atom_id for atom_id, _occurrence in inserted[key])
+        )
+        left_matches = left_by_key.get(key, ())
+        right_matches = right_by_key.get(key, ())
+        if (
+            len(deleted_ids) != 1
+            or len(inserted_ids) != 1
+            or len(left_matches) != 1
+            or len(right_matches) != 1
+        ):
+            function, _identity = key
+            statement = (
+                left_index.source[left_matches[0].span[0] : left_matches[0].span[1]].strip()
+                if left_matches
+                else right_index.source[right_matches[0].span[0] : right_matches[0].span[1]].strip()
+                if right_matches
+                else ""
+            )
+            raise DeltaMinimizeError(
+                "ambiguous-statement-move",
+                {
+                    "function": function,
+                    "statement": statement,
+                    "left_occurrences": len(left_matches),
+                    "right_occurrences": len(right_matches),
+                    "deletion_atoms": len(deleted_ids),
+                    "insertion_atoms": len(inserted_ids),
+                },
+            )
+        left_occurrence = deleted[key][0][1]
+        right_occurrence = inserted[key][0][1]
+        left_scope = left_occurrence.scope_identity
+        right_scope = right_occurrence.scope_identity
+        if not _statement_scopes_match(
+            left_occurrence,
+            right_occurrence,
+            left_control_components=left_control_components,
+            right_control_components=right_control_components,
+        ):
+            function, _identity = key
+            statement = left_index.source[
+                left_matches[0].span[0] : left_matches[0].span[1]
+            ].strip()
+            raise DeltaMinimizeError(
+                "ambiguous-statement-move",
+                {
+                    "function": function,
+                    "statement": statement,
+                    "left_occurrences": len(left_matches),
+                    "right_occurrences": len(right_matches),
+                    "deletion_atoms": len(deleted_ids),
+                    "insertion_atoms": len(inserted_ids),
+                    "scope_pairing": (
+                        "unproven-nested-scope"
+                        if left_scope is None or right_scope is None
+                        else "mismatch"
+                    ),
+                },
+            )
+        groups.union(deleted_ids[0], inserted_ids[0])
+        semantic_labels[deleted_ids[0]].append(f"{key[0]} statement move")
 
 
 def _couple_one_sided_functions(
@@ -1514,13 +1657,349 @@ def _one_sided_external_calls_by_atom(
 def _safe_atomic_external_call_spans(
     selected: Mapping[str, Sequence[tuple[int, int]]],
     opposite: Mapping[str, Sequence[tuple[int, int]]],
+    *,
+    groups: UnionFind,
 ) -> tuple[tuple[int, int], ...]:
-    eligible_atoms = selected.keys() if not opposite else selected.keys() & opposite.keys()
+    if not opposite:
+        return tuple(span for atom_id in sorted(selected) for span in selected[atom_id])
+
+    selected_by_root: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    opposite_roots = {groups.find(atom_id) for atom_id in opposite}
+    for atom_id, spans in selected.items():
+        selected_by_root[groups.find(atom_id)].extend(spans)
     return tuple(
         span
-        for atom_id in sorted(eligible_atoms)
-        for span in selected[atom_id]
+        for root in sorted(selected_by_root.keys() & opposite_roots)
+        for span in selected_by_root[root]
     )
+
+
+def _statement_occurrences(index: BindingIndex) -> tuple[_StatementOccurrence, ...]:
+    source_bytes = index.source.encode("utf-8")
+    root = get_parser().parse(source_bytes).root_node
+    to_char = _byte_to_char_offsets(index.source)
+    occurrences: list[_StatementOccurrence] = []
+    for node in _walk(root):
+        if not _is_movable_statement_node(node):
+            continue
+        span = _span(node, to_char)
+        owners = lexical_owners(index, span)
+        if len(owners) != 1:
+            continue
+        identity = _normalized_statement_identity(node, source_bytes)
+        if identity:
+            occurrences.append(
+                _StatementOccurrence(
+                    owners[0],
+                    identity,
+                    span,
+                    _statement_scope_identity(node, source_bytes),
+                    _statement_positional_scope_identity(node),
+                    node.type != "declaration",
+                )
+            )
+    return tuple(occurrences)
+
+
+def _is_movable_statement_node(node) -> bool:
+    return (
+        node.type.endswith("_statement") and node.type != "compound_statement"
+    ) or (
+        node.type == "declaration"
+        and node.parent is not None
+        and node.parent.type == "compound_statement"
+    )
+
+
+def _statement_scope_identity(node, source_bytes: bytes) -> tuple[str, ...] | None:
+    """Return a lexical/control path that is independent of statement order."""
+
+    components: list[str] = []
+    current = node
+    while current.parent is not None:
+        parent = current.parent
+        if parent.type == "function_definition":
+            if parent.child_by_field_name("body") == current:
+                components.append("function-body")
+            break
+        if parent.type == "compound_statement" and current.type == "compound_statement":
+            components.append(
+                f"compound_statement[{_same_type_sibling_ordinal(current)}]:block"
+            )
+        elif parent.type.endswith("_statement"):
+            field = _statement_child_field(parent, current)
+            if field in {"body", "consequence", "alternative"}:
+                components.append(_control_scope_component(parent, source_bytes, field))
+        current = parent
+    return tuple(reversed(components)) or None
+
+
+def _statement_positional_scope_identity(node) -> tuple[str, ...] | None:
+    """Return the legacy positional path used to recognize in-place header edits."""
+
+    components: list[str] = []
+    current = node
+    while current.parent is not None:
+        parent = current.parent
+        if parent.type == "function_definition":
+            if parent.child_by_field_name("body") == current:
+                components.append("function-body")
+            break
+        if parent.type == "compound_statement" and current.type == "compound_statement":
+            components.append(
+                f"compound_statement[{_same_type_sibling_ordinal(current)}]:block"
+            )
+        elif parent.type.endswith("_statement"):
+            field = _statement_child_field(parent, current)
+            if field in {"body", "consequence", "alternative"}:
+                components.append(
+                    f"{parent.type}[{_same_type_sibling_ordinal(parent)}]:{field}"
+                )
+        current = parent
+    return tuple(reversed(components)) or None
+
+
+def _statement_child_field(parent, child) -> str | None:
+    for field in ("body", "consequence", "alternative"):
+        if parent.child_by_field_name(field) == child:
+            return field
+    return None
+
+
+def _same_type_sibling_ordinal(node) -> int:
+    parent = node.parent
+    if parent is None:
+        return 0
+    return sum(
+        sibling.type == node.type and sibling.start_byte < node.start_byte
+        for sibling in parent.named_children
+    )
+
+
+def _control_statement_signature(node, source_bytes: bytes) -> tuple[str, ...]:
+    """Return control syntax while excluding controlled statement bodies."""
+
+    controlled_spans = {
+        (child.start_byte, child.end_byte)
+        for field in ("body", "consequence", "alternative")
+        if (child := node.child_by_field_name(field)) is not None
+    }
+    tokens: list[str] = []
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if (current.start_byte, current.end_byte) in controlled_spans:
+            continue
+        if current.type == "comment":
+            continue
+        if current.children:
+            stack.extend(reversed(current.children))
+            continue
+        token = source_bytes[current.start_byte : current.end_byte].decode("utf-8")
+        if token:
+            tokens.append(token)
+    return tuple(tokens)
+
+
+def _same_signature_sibling_ordinal(
+    node,
+    source_bytes: bytes,
+    signature: tuple[str, ...],
+) -> int:
+    parent = node.parent
+    if parent is None:
+        return 0
+    return sum(
+        sibling.type == node.type
+        and sibling.start_byte < node.start_byte
+        and _control_statement_signature(sibling, source_bytes) == signature
+        for sibling in parent.named_children
+    )
+
+
+def _control_scope_component(node, source_bytes: bytes, field: str) -> str:
+    signature = _control_statement_signature(node, source_bytes)
+    ordinal = _same_signature_sibling_ordinal(node, source_bytes, signature)
+    digest = hashlib.sha256("\0".join(signature).encode("utf-8")).hexdigest()[:12]
+    return f"{node.type}[{digest}:{ordinal}]:{field}"
+
+
+def _control_scope_components(index: BindingIndex) -> Mapping[str, frozenset[str]]:
+    """Index stable control components, including controls with empty bodies."""
+
+    source_bytes = index.source.encode("utf-8")
+    root = get_parser().parse(source_bytes).root_node
+    to_char = _byte_to_char_offsets(index.source)
+    components: dict[str, set[str]] = defaultdict(set)
+    for node in _walk(root):
+        if not node.type.endswith("_statement"):
+            continue
+        owners = lexical_owners(index, _span(node, to_char))
+        if len(owners) != 1:
+            continue
+        for field in ("body", "consequence", "alternative"):
+            if node.child_by_field_name(field) is not None:
+                components[owners[0]].add(
+                    _control_scope_component(node, source_bytes, field)
+                )
+    return {function: frozenset(values) for function, values in components.items()}
+
+
+def _statement_occurrences_by_key(
+    occurrences: Sequence[_StatementOccurrence],
+) -> dict[tuple[str, tuple[str, ...]], tuple[_StatementOccurrence, ...]]:
+    grouped: dict[tuple[str, tuple[str, ...]], list[_StatementOccurrence]] = defaultdict(list)
+    for occurrence in occurrences:
+        grouped[(occurrence.function, occurrence.identity)].append(occurrence)
+    return {key: tuple(values) for key, values in grouped.items()}
+
+
+def _reject_cross_scope_statement_moves(
+    left_index: BindingIndex,
+    left_by_key: Mapping[
+        tuple[str, tuple[str, ...]],
+        Sequence[_StatementOccurrence],
+    ],
+    right_by_key: Mapping[
+        tuple[str, tuple[str, ...]],
+        Sequence[_StatementOccurrence],
+    ],
+    *,
+    left_control_components: Mapping[str, frozenset[str]],
+    right_control_components: Mapping[str, frozenset[str]],
+    selected_functions: set[str] | frozenset[str] | None,
+) -> None:
+    """Reject moved statements even when tree differencing emits only braces."""
+
+    for key in sorted(left_by_key.keys() & right_by_key.keys()):
+        function, _identity = key
+        if selected_functions is not None and function not in selected_functions:
+            continue
+        left_matches = left_by_key[key]
+        right_matches = right_by_key[key]
+        if not all(
+            match.brace_preflight_safe for match in (*left_matches, *right_matches)
+        ):
+            # Local declarations participate in direct delete/insert coupling,
+            # but a structural wrapper legitimately changes their compound path.
+            continue
+        left_scopes = tuple(sorted(match.scope_identity or () for match in left_matches))
+        right_scopes = tuple(sorted(match.scope_identity or () for match in right_matches))
+        if left_scopes == right_scopes:
+            continue
+        if len(left_matches) == len(right_matches) == 1 and _statement_scopes_match(
+            left_matches[0],
+            right_matches[0],
+            left_control_components=left_control_components,
+            right_control_components=right_control_components,
+        ):
+            continue
+        statement = left_index.source[
+            left_matches[0].span[0] : left_matches[0].span[1]
+        ].strip()
+        raise DeltaMinimizeError(
+            "ambiguous-statement-move",
+            {
+                "function": function,
+                "statement": statement,
+                "left_occurrences": len(left_matches),
+                "right_occurrences": len(right_matches),
+                "scope_pairing": "mismatch",
+                "left_scopes": [list(scope) for scope in left_scopes],
+                "right_scopes": [list(scope) for scope in right_scopes],
+            },
+        )
+
+
+def _statement_scopes_match(
+    left: _StatementOccurrence,
+    right: _StatementOccurrence,
+    *,
+    left_control_components: Mapping[str, frozenset[str]],
+    right_control_components: Mapping[str, frozenset[str]],
+) -> bool:
+    if left.scope_identity is None or right.scope_identity is None:
+        return False
+    if left.scope_identity == right.scope_identity:
+        return True
+    if left.positional_scope_identity != right.positional_scope_identity:
+        return False
+
+    # A same-position header edit is the legacy in-place case. Do not use that
+    # fallback when either stable header still exists elsewhere: that proves a
+    # parent reorder and could conceal a move into a different control scope.
+    left_known = left_control_components.get(left.function, frozenset())
+    right_known = right_control_components.get(right.function, frozenset())
+    for left_component, right_component in zip(
+        left.scope_identity,
+        right.scope_identity,
+        strict=True,
+    ):
+        if left_component == right_component:
+            continue
+        if left_component in right_known or right_component in left_known:
+            return False
+    return True
+
+
+def _whole_statement_for_span(
+    index: BindingIndex,
+    occurrences: Sequence[_StatementOccurrence],
+    span: tuple[int, int],
+) -> _StatementOccurrence | None:
+    start, end = span
+    exact_candidates = [
+        occurrence
+        for occurrence in occurrences
+        if start <= occurrence.span[0]
+        and occurrence.span[1] <= end
+        and _is_lexical_trivia(index.source[start : occurrence.span[0]])
+        and _is_lexical_trivia(index.source[occurrence.span[1] : end])
+    ]
+    if len(exact_candidates) == 1:
+        return exact_candidates[0]
+    if exact_candidates:
+        return None
+
+    overlapping = []
+    for occurrence in occurrences:
+        occurrence_start, occurrence_end = occurrence.span
+        overlap = min(end, occurrence_end) - max(start, occurrence_start)
+        occurrence_length = occurrence_end - occurrence_start
+        # SequenceMatcher can lend an adjacent delimiter to the deletion and
+        # omit the moved statement's own delimiter. Require a strict majority
+        # of one unique AST occurrence before normalizing such a clipped span.
+        if overlap > 0 and overlap * 2 > occurrence_length:
+            overlapping.append((overlap, occurrence_length, occurrence))
+    if not overlapping:
+        return None
+
+    best_overlap, best_length, best = overlapping[0]
+    tied = False
+    for overlap, occurrence_length, occurrence in overlapping[1:]:
+        comparison = overlap * best_length - best_overlap * occurrence_length
+        if comparison > 0:
+            best_overlap, best_length, best = overlap, occurrence_length, occurrence
+            tied = False
+        elif comparison == 0:
+            tied = True
+    return None if tied else best
+
+
+def _normalized_statement_identity(node, source_bytes: bytes) -> tuple[str, ...]:
+    tokens: list[str] = []
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type == "comment":
+            continue
+        if current.children:
+            stack.extend(reversed(current.children))
+            continue
+        token = source_bytes[current.start_byte : current.end_byte].decode("utf-8")
+        if token:
+            tokens.append(token)
+    return tuple(tokens)
 
 
 def _changed_binding_names(index: BindingIndex, spans: Sequence[tuple[int, int]]) -> set[str]:

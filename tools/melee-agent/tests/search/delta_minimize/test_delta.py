@@ -1,5 +1,6 @@
 import pytest
 
+from src.common.tree_sitter_c import get_parser
 from src.search.delta_minimize import DeltaMinimizeError
 from src.search.delta_minimize.delta import (
     DeltaAtom,
@@ -56,6 +57,173 @@ def test_primitive_expression_atoms_materialize_each_observed_hybrid_once():
         "int f(int x) { return (x + 1) * 4; }\n",
     }
     assert len(set(enumerate_legal_masks(manifest, max_candidates=4))) == 4
+
+
+def test_statement_move_is_one_semantic_atom_and_all_masks_are_coherent():
+    left = "int draw(int x) { external(x); return x; }\n"
+    right = "int draw(int x) { return x; external(x); }\n"
+
+    manifest = extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+    candidates = tuple(materialize_mask(left, manifest, mask) for mask in masks)
+
+    assert masks == (0, 1)
+    assert candidates == (left, right)
+    assert len(candidates) == len(set(candidates))
+    for candidate in candidates:
+        assert not get_parser().parse(candidate.encode("utf-8")).root_node.has_error
+        assert candidate.count("external(x);") == 1
+        assert candidate.count("return x;") == 1
+
+
+def test_unique_external_call_move_is_one_semantic_atom():
+    left = "int draw(int x) { external(x); return some_really_long_expression; }\n"
+    right = "int draw(int x) { return some_really_long_expression; external(x); }\n"
+
+    manifest = extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert masks == (0, 1)
+    assert tuple(materialize_mask(left, manifest, mask) for mask in masks) == (left, right)
+
+
+def test_statement_move_identity_is_token_normalized():
+    left = "int draw(int x) { external(x); return /* moved */ x; }\n"
+    right = "int draw(int x) { return   x; external(x); }\n"
+
+    manifest = extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert masks == (0, 1)
+    assert tuple(materialize_mask(left, manifest, mask) for mask in masks) == (left, right)
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            "int draw(int x) { external(x); x++; return x; }\n",
+            "int draw(int x) { x++; external(x); return x; }\n",
+        ),
+        (
+            "int draw(int x) { external(x); int y = x; return y; }\n",
+            "int draw(int x) { int y = x; external(x); return y; }\n",
+        ),
+        (
+            "int draw(int x) { if (x) { external(x); x++; } return x; }\n",
+            "int draw(int x) { if (x) { x++; external(x); } return x; }\n",
+        ),
+    ],
+    ids=("increment", "declaration", "if-body"),
+)
+def test_clipped_same_scope_statement_move_has_only_exact_endpoints(
+    left: str,
+    right: str,
+) -> None:
+    manifest = extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert masks == (0, 1)
+    assert tuple(materialize_mask(left, manifest, mask) for mask in masks) == (left, right)
+
+
+def test_reordered_control_statements_keep_their_nested_scope_identity() -> None:
+    left = (
+        "int draw(int x) { if (x) { external(x); } "
+        "if (!x) { other(x); } return x; }\n"
+    )
+    right = (
+        "int draw(int x) { if (!x) { other(x); } "
+        "if (x) { external(x); } return x; }\n"
+    )
+
+    manifest = extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=4)
+
+    assert masks == (0, 1)
+    assert tuple(materialize_mask(left, manifest, mask) for mask in masks) == (left, right)
+
+
+def test_changed_control_header_keeps_unchanged_statement_in_the_same_scope() -> None:
+    left = "int draw(int x) { if (x) { external(x); } return x; }\n"
+    right = "int draw(int x) { if (x + 1) { external(x); } return x; }\n"
+
+    manifest = extract_delta_manifest(left, right, function="draw")
+    masks = enumerate_legal_masks(manifest, max_candidates=2)
+
+    assert masks == (0, 1)
+    assert tuple(materialize_mask(left, manifest, mask) for mask in masks) == (left, right)
+
+
+def test_statement_moved_between_reordered_control_scopes_still_fails_closed() -> None:
+    left = (
+        "int draw(int x) { if (x) { external(x); } "
+        "if (!x) { } return x; }\n"
+    )
+    right = (
+        "int draw(int x) { if (!x) { external(x); } "
+        "if (x) { } return x; }\n"
+    )
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-statement-move$") as exc:
+        extract_delta_manifest(left, right, function="draw")
+
+    assert exc.value.details["scope_pairing"] == "mismatch"
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            "int draw(int x) { external(x); return some_really_long_expression; external(x); }\n",
+            "int draw(int x) { return some_really_long_expression; external(x); external(x); }\n",
+        ),
+        (
+            "int draw(int x) { return x; external(x); return x; }\n",
+            "int draw(int x) { external(x); return x; return x; }\n",
+        ),
+    ],
+    ids=("duplicate-identical-calls", "ambiguous-repeated-statements"),
+)
+def test_ambiguous_statement_move_fails_closed(left: str, right: str):
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-statement-move$") as exc:
+        extract_delta_manifest(left, right, function="draw")
+
+    assert exc.value.details["left_occurrences"] == 2
+    assert exc.value.details["right_occurrences"] == 2
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            "int draw(int x) { if (x) { external(x); } else { } return x; }\n",
+            "int draw(int x) { if (x) { } else { external(x); } return x; }\n",
+        ),
+        (
+            "int draw(int x) { if (x) { external(x); } return x; }\n",
+            "int draw(int x) { if (x) { } external(x); return x; }\n",
+        ),
+        (
+            "int draw(int x) { external(x); if (x) { } return x; }\n",
+            "int draw(int x) { if (x) { external(x); } return x; }\n",
+        ),
+    ],
+    ids=("if-body-to-else-body", "nested-to-outer", "outer-to-nested"),
+)
+def test_extracted_statement_move_across_control_scopes_fails_closed(
+    left: str,
+    right: str,
+) -> None:
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="^ambiguous-statement-move$",
+    ) as exc:
+        extract_delta_manifest(left, right, function="draw")
+
+    assert exc.value.details["function"] == "draw"
+    assert exc.value.details["statement"] == "external(x);"
+    assert exc.value.details["scope_pairing"] == "mismatch"
 
 
 def test_local_temporary_wrapper_is_one_composite_atom():
