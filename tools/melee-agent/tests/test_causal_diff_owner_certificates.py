@@ -662,6 +662,34 @@ def test_lineage_parent_requires_pcode_operand_kind(parent_kind):
         assert {item.reason for item in resolution.rejections} == {"lineage-parent-mismatch"}
 
 
+def test_lineage_parent_edge_identity_must_match_source_lineage() -> None:
+    evidence = complete_evidence()
+    index = owner_certificate._index_evidence(evidence)
+    candidate = only(
+        item for item in owner_certificate._enumerate_candidates(index) if owner_certificate._role_for(item) == ROLE
+    )
+    parent_edge = only(
+        edge
+        for edge in index.edges_by_kind_target[("pcode-operand-lineage", candidate.lineage.record_id)]
+        if edge.attributes.get("lineage_event_side") == "outputs"
+    )
+    parent = index.node_by_id[parent_edge.source_id]
+    assert parent.attributes["operand_lineage_id"] == parent_edge.attributes["parent_lineage_id"]
+    changed = parent_edge.with_attributes(
+        {
+            **parent_edge.attributes,
+            "parent_lineage_id": "wrong-parent",
+        }
+    )
+
+    diagnostic = owner_certificate.validate_owner_evidence(replace_record(evidence, changed))
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is not OwnerResolutionStatus.UNIQUE
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {"lineage-parent-mismatch"}
+
+
 @pytest.mark.parametrize(
     "parents",
     [
@@ -730,6 +758,35 @@ def test_roleless_candidate_rejection_taints_an_otherwise_valid_role():
     assert len(resolution.certificate_record_ids) == 1
     assert result.certificate_nodes == ()
     assert result.certificate(resolution.certificate_record_ids[0]) is None
+
+
+@pytest.mark.parametrize(
+    ("attribute", "foreign_value"),
+    (
+        ("pcode_id", "foreign-pcode"),
+        ("operand_lineage_id", "foreign-lineage"),
+        ("machine_operand_key", "use:9"),
+    ),
+)
+def test_virtual_use_edge_identity_must_match_selected_owner_path(
+    attribute: str,
+    foreign_value: str,
+) -> None:
+    evidence = complete_evidence()
+    virtual_edge = only(edge for edge in evidence.edges if edge.kind == "pcode-operand-uses-virtual")
+    changed = virtual_edge.with_attributes(
+        {
+            **virtual_edge.attributes,
+            attribute: foreign_value,
+        }
+    )
+
+    diagnostic = owner_certificate.validate_owner_evidence(replace_record(evidence, changed))
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {"allocator-origin-contradiction"}
 
 
 def test_allocator_origin_conflict_is_contradictory():

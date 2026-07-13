@@ -1060,7 +1060,11 @@ def _validate_lineage_output(
     parent_pairs: list[tuple[EvidenceNode, EvidenceEdge]] = []
     for edge in selected:
         parent_node = index.node_by_id.get(edge.source_id)
-        if parent_node is None:
+        if (
+            parent_node is None
+            or parent_node.kind != "pcode-operand"
+            or edge.attributes.get("parent_lineage_id") != parent_node.attributes.get("operand_lineage_id")
+        ):
             return _rejection(
                 "lineage-parent-mismatch",
                 role,
@@ -1068,13 +1072,6 @@ def _validate_lineage_output(
                 mutation_support,
             )
         parent_pairs.append((parent_node, edge))
-    if any(parent_node.kind != "pcode-operand" for parent_node, _edge in parent_pairs):
-        return _rejection(
-            "lineage-parent-mismatch",
-            role,
-            (*candidate.path_records, *(parent_node for parent_node, _edge in parent_pairs), *selected),
-            mutation_support,
-        )
     parent_pairs.sort(
         key=lambda pair: (
             str(pair[0].attributes.get("operand_lineage_id")),
@@ -1168,6 +1165,9 @@ def _validate_allocator_origin(
         or binding.attributes.get("ig_id") != candidate.allocator.attributes.get("ig_id")
         or rewrite.attributes.get("operand_lineage_id") != candidate.lineage.attributes.get("operand_lineage_id")
         or rewrite.attributes.get("pcode_id") != candidate.pcode.attributes.get("pcode_id")
+        or virtual_edge.attributes.get("pcode_id") != candidate.pcode.attributes.get("pcode_id")
+        or virtual_edge.attributes.get("operand_lineage_id") != candidate.lineage.attributes.get("operand_lineage_id")
+        or virtual_edge.attributes.get("machine_operand_key") != role.operand_key
         or rewrite.attributes.get("allocation_generation") != candidate.pcode.attributes.get("allocation_generation")
     ):
         return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
