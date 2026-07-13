@@ -3533,6 +3533,13 @@ def _render_force_phys_target_yaml(
 _BOOTSTRAP_METADATA_NAME = "melee_agent_bootstrap.json"
 
 
+@dataclasses.dataclass(frozen=True)
+class _BootstrapFullUnitContext:
+    source: Path
+    unit: str | None
+    import_source: Path | None
+
+
 def _portable_path_for_base(path: Path, base: Path) -> Path | str:
     try:
         return path.relative_to(base)
@@ -3547,7 +3554,40 @@ def _repo_relative_path(path: Path, root: Path) -> str | None:
         return None
 
 
-def _read_bootstrap_full_unit_source(perm_dir: Path, function: str) -> Path | None:
+def _source_rel_for_unit(unit: str | None) -> str | None:
+    if unit is None:
+        return None
+    unit_path = Path(unit)
+    if unit_path.is_absolute() or ".." in unit_path.parts:
+        return None
+    return f"src/{unit_path.as_posix()}.c"
+
+
+def _bootstrap_repo_root(
+    import_source: Path | None,
+    unit: str | None,
+) -> Path | None:
+    unit_source_rel = _source_rel_for_unit(unit)
+    if (
+        import_source is None
+        or not import_source.is_absolute()
+        or unit_source_rel is None
+    ):
+        return None
+    resolved_import_source = import_source.resolve()
+    unit_source_path = Path(unit_source_rel)
+    repo_root = resolved_import_source
+    for _part in unit_source_path.parts:
+        repo_root = repo_root.parent
+    if (repo_root / unit_source_path).resolve() != resolved_import_source:
+        return None
+    return repo_root
+
+
+def _read_bootstrap_full_unit_context(
+    perm_dir: Path,
+    function: str,
+) -> _BootstrapFullUnitContext | None:
     metadata_path = perm_dir / _BOOTSTRAP_METADATA_NAME
     if not metadata_path.exists():
         return None
@@ -3566,7 +3606,27 @@ def _read_bootstrap_full_unit_source(perm_dir: Path, function: str) -> Path | No
     raw_source = data.get("source")
     if not isinstance(raw_source, str) or not raw_source:
         return None
-    return Path(raw_source).expanduser()
+    raw_unit = data.get("unit")
+    unit = raw_unit if isinstance(raw_unit, str) and raw_unit else None
+    raw_import_source = data.get("import_source")
+    import_source = (
+        Path(raw_import_source).expanduser()
+        if isinstance(raw_import_source, str) and raw_import_source
+        else None
+    )
+    source = Path(raw_source).expanduser()
+    if source.is_absolute():
+        source = source.resolve()
+    else:
+        repo_root = _bootstrap_repo_root(import_source, unit)
+        if repo_root is None:
+            return None
+        source = (repo_root / source).resolve()
+    return _BootstrapFullUnitContext(
+        source=source,
+        unit=unit,
+        import_source=import_source,
+    )
 
 
 def _validate_full_unit_source(path: Path, function: str) -> Path:
@@ -4088,9 +4148,18 @@ def setup_simplify_order_scorer(
         )
         raise typer.Exit(2)
     existing_compile_text = existing_compile_sh.read_text(encoding="utf-8")
+    bootstrap_full_unit_context = _read_bootstrap_full_unit_context(
+        perm_dir,
+        function,
+    )
     full_unit_source = (
-        source_file.expanduser() if source_file is not None
-        else _read_bootstrap_full_unit_source(perm_dir, function)
+        source_file.expanduser()
+        if source_file is not None
+        else (
+            bootstrap_full_unit_context.source
+            if bootstrap_full_unit_context is not None
+            else None
+        )
     )
     if full_unit_source is not None:
         full_unit_source = _validate_full_unit_source(full_unit_source, function)
@@ -4143,18 +4212,51 @@ def setup_simplify_order_scorer(
             shutil.copy2(baseline_dump, staged_baseline)
         baseline_dump_for_spec_path = staged_baseline
 
-        source_rel = _repo_relative_path(full_unit_source, DEFAULT_MELEE_ROOT)
-        if source_rel is not None and source_rel.startswith("src/"):
-            cflags, _mw_version = _ninja_cflags_for_unit(
-                source_rel, melee_root=DEFAULT_MELEE_ROOT
+        content_source_rel = _repo_relative_path(
+            full_unit_source,
+            DEFAULT_MELEE_ROOT,
+        )
+        compile_source_rel = (
+            content_source_rel
+            if content_source_rel is not None
+            and content_source_rel.startswith("src/")
+            else None
+        )
+        bootstrap_provenance = (
+            bootstrap_full_unit_context
+            if bootstrap_full_unit_context is not None
+            and bootstrap_full_unit_context.source.expanduser().resolve()
+            == full_unit_source.resolve()
+            else None
+        )
+        if compile_source_rel is None and bootstrap_provenance is not None:
+            compile_source_rel = _source_rel_for_unit(
+                bootstrap_provenance.unit
             )
-            cflags = _cflags_with_same_tu_include_dir(cflags, source_rel)
+            if compile_source_rel is None and bootstrap_provenance.import_source:
+                compile_source_rel = _repo_relative_path(
+                    bootstrap_provenance.import_source,
+                    DEFAULT_MELEE_ROOT,
+                )
+            if compile_source_rel is None:
+                compile_source_rel = _source_rel_for_unit(
+                    _find_unit_for_function(function, DEFAULT_MELEE_ROOT)
+                )
+
+        if compile_source_rel is not None and compile_source_rel.startswith("src/"):
+            cflags, _mw_version = _ninja_cflags_for_unit(
+                compile_source_rel, melee_root=DEFAULT_MELEE_ROOT
+            )
+            cflags = _cflags_with_same_tu_include_dir(cflags, compile_source_rel)
+            full_unit_stage_path = (
+                f"{Path(compile_source_rel).parent.as_posix()}"
+                "/.permuter_stage_$$.c"
+            )
+
+        if content_source_rel is not None and content_source_rel.startswith("src/"):
             full_unit_source_expr = (
                 '"${MELEE_ROOT:?MELEE_ROOT must be set}/'
-                f'{source_rel}"'
-            )
-            full_unit_stage_path = (
-                f"{Path(source_rel).parent.as_posix()}/.permuter_stage_$$.c"
+                f'{content_source_rel}"'
             )
             remote_portable_compile = True
         else:
