@@ -8,6 +8,7 @@ from types import MappingProxyType
 
 import pytest
 
+from src.mwcc_debug.causal_diff.alignment import _owner_correspondence
 from src.mwcc_debug.causal_diff.asm_adapter import CheckdiffEvidence
 from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import BundleInputError, ValidatedBundle
@@ -26,13 +27,17 @@ from src.mwcc_debug.causal_diff.models import (
 )
 from src.mwcc_debug.causal_diff.owner_certificate import (
     OwnerCertificateResult,
+    OwnerResolutionStatus,
     OwnerSemanticState,
 )
 from src.mwcc_debug.causal_diff.source_adapter import adapt_source
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 from tests.owner_certificate_fixtures import (
+    CHANGED_STATE,
     ROLE,
     STATE,
+    _certified_frontier,
+    _semantic_frontier,
     future_complete_pipeline_inputs,
     graphs,
     only,
@@ -1505,6 +1510,79 @@ def test_changed_certificate_semantics_emit_one_reconstructable_delta() -> None:
         comparison.left_record_id,
         comparison.right_record_id,
     }
+
+
+def test_owner_differ_rejects_selected_certificate_from_ambiguous_resolution() -> None:
+    left = _certified_frontier("left", "ambiguous")
+    right = _semantic_frontier("right", CHANGED_STATE)
+    left_resolution = left.backend.owner_certificates.resolution_for(ROLE)
+
+    assert left_resolution.status is OwnerResolutionStatus.AMBIGUOUS
+    assert len(left_resolution.certificate_record_ids) == 2
+    left_certificate = left.backend.owner_certificates.certificate(left_resolution.certificate_record_ids[0])
+    right_certificate = only(right.backend.owner_certificates.certificate_nodes)
+    assert left_certificate is not None
+    forged_selection = _owner_correspondence(
+        "d" * 64,
+        ROLE,
+        left_certificate,
+        right_certificate,
+        0,
+    )
+
+    deltas = diff_frontiers((left, right), (forged_selection,))
+
+    assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+
+
+def test_owner_differ_rejects_certificate_with_role_scoped_rejection() -> None:
+    left = _certified_frontier("left", "unique-with-role-rejection")
+    right = _semantic_frontier("right", CHANGED_STATE)
+    left_result = left.backend.owner_certificates
+    left_resolution = left_result.resolution_for(ROLE)
+
+    assert left_resolution.rejections
+    assert left_resolution.status is OwnerResolutionStatus.AMBIGUOUS
+    assert len(left_resolution.certificate_record_ids) == 1
+    left_certificate = left_result.certificate(left_resolution.certificate_record_ids[0])
+    right_certificate = only(right.backend.owner_certificates.certificate_nodes)
+    assert left_certificate is not None
+    forged_selection = _owner_correspondence(
+        "d" * 64,
+        ROLE,
+        left_certificate,
+        right_certificate,
+        0,
+    )
+
+    deltas = diff_frontiers((left, right), (forged_selection,))
+
+    assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+
+
+def test_owner_differ_rejects_certificate_from_globally_tainted_resolution() -> None:
+    left = _certified_frontier("left", "unique-with-global-rejection")
+    right = _semantic_frontier("right", CHANGED_STATE)
+    left_result = left.backend.owner_certificates
+    left_resolution = left_result.resolution_for(ROLE)
+
+    assert left_result.global_rejections
+    assert left_resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert len(left_resolution.certificate_record_ids) == 1
+    left_certificate = left_result.certificate(left_resolution.certificate_record_ids[0])
+    right_certificate = only(right.backend.owner_certificates.certificate_nodes)
+    assert left_certificate is not None
+    forged_selection = _owner_correspondence(
+        "d" * 64,
+        ROLE,
+        left_certificate,
+        right_certificate,
+        0,
+    )
+
+    deltas = diff_frontiers((left, right), (forged_selection,))
+
+    assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
 
 
 @pytest.mark.parametrize(

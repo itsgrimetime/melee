@@ -7,7 +7,11 @@ from typing import Iterable, Mapping
 from .canonical import canonical_bytes
 from .graph import FrontierGraph
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance
-from .owner_certificate import OwnerRoleKey, OwnerSemanticState
+from .owner_certificate import (
+    OwnerResolutionStatus,
+    OwnerRoleKey,
+    OwnerSemanticState,
+)
 from .store import canonical_record_bytes
 
 _PARSER_VERSION = "causal-frontier-differ.v1"
@@ -172,6 +176,23 @@ def _trusted_stored_certificate(
     return trusted
 
 
+def _authorized_unique_certificate(
+    graph: FrontierGraph,
+    role: OwnerRoleKey,
+    record_id: str,
+) -> EvidenceNode | None:
+    result = graph.backend.owner_certificates
+    resolution = result.resolution_for(role)
+    if (
+        result.global_rejections
+        or resolution.rejections
+        or resolution.status is not OwnerResolutionStatus.UNIQUE
+        or resolution.certificate_record_ids != (record_id,)
+    ):
+        return None
+    return _trusted_stored_certificate(graph, record_id)
+
+
 def _owner_state_deltas(
     *,
     analysis_id: str,
@@ -201,8 +222,19 @@ def _owner_state_deltas(
             or frozenset(comparison.attributes) != {"role"}
         ):
             continue
-        left = _trusted_stored_certificate(left_graph, comparison.left_record_id)
-        right = _trusted_stored_certificate(right_graph, comparison.right_record_id)
+        comparison_role = _owner_role(comparison.attributes.get("role"))
+        if comparison_role is None:
+            continue
+        left = _authorized_unique_certificate(
+            left_graph,
+            comparison_role,
+            comparison.left_record_id,
+        )
+        right = _authorized_unique_certificate(
+            right_graph,
+            comparison_role,
+            comparison.right_record_id,
+        )
         if (
             left is None
             or right is None
@@ -213,7 +245,6 @@ def _owner_state_deltas(
             continue
         left_role = _owner_role(left.attributes.get("role"))
         right_role = _owner_role(right.attributes.get("role"))
-        comparison_role = _owner_role(comparison.attributes.get("role"))
         left_state = _owner_semantic_state(left.attributes.get("semantic_state"))
         right_state = _owner_semantic_state(right.attributes.get("semantic_state"))
         if (

@@ -753,6 +753,40 @@ def _status_evidence(
     }
     if status == "unique":
         return complete_evidence(**common)
+    if status == "unique-with-role-rejection":
+        return _evidence_from_paths(
+            (
+                _path(
+                    0,
+                    operand_key=ROLE.operand_key,
+                    semantic_stack_role=ROLE.semantic_stack_role,
+                ),
+                _path(
+                    1,
+                    operand_key=ROLE.operand_key,
+                    semantic_stack_role=ROLE.semantic_stack_role,
+                    include_object=False,
+                ),
+            ),
+            **common,
+        )
+    if status == "unique-with-global-rejection":
+        return _evidence_from_paths(
+            (
+                _path(
+                    0,
+                    operand_key=ROLE.operand_key,
+                    semantic_stack_role=ROLE.semantic_stack_role,
+                ),
+                _path(
+                    1,
+                    operand_key="use:8",
+                    semantic_stack_role="orphan-home",
+                    include_object=False,
+                ),
+            ),
+            **common,
+        )
     if status == "missing":
         return _evidence_from_paths((), **common)
     if status == "ambiguous":
