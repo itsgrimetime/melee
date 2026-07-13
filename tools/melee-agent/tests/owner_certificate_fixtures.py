@@ -670,13 +670,9 @@ def canonical_result(result: object) -> bytes:
 
 
 def alignment() -> AnchorAlignment:
-    return AnchorAlignment(
-        analysis_id="d" * 64,
-        retail_offset=0x234,
-        operand_roles=(),
-        by_operand={},
+    return replace(
+        _future_complete_alignment(future_complete_graph_pair()),
         comparisons=(),
-        abstentions=(),
     )
 
 

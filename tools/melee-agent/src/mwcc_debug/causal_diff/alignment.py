@@ -323,7 +323,8 @@ def _verified_retail_local_role(
     retail_offset: int,
     role: OperandRole,
 ) -> tuple[_LocalRoleResolution | None, AbstentionReason]:
-    del retail_offset
+    if candidate.attributes.get("aligned_retail_offset") != retail_offset:
+        return None, AbstentionReason.MISSING_BACKEND_ROLE
     result = graph.backend.owner_certificates
     if not result.is_trusted:
         return None, AbstentionReason.MISSING_BACKEND_ROLE
@@ -339,6 +340,14 @@ def _verified_retail_local_role(
         for certificate_id in resolution.certificate_record_ids:
             certificate = _stored_certificate(graph, result, owner_role, certificate_id)
             if certificate is None:
+                continue
+            if not _certificate_matches_retail_anchor(
+                graph,
+                result,
+                certificate,
+                owner_role,
+                retail_offset,
+            ):
                 continue
             allocator_id = certificate.attributes.get("allocator_record_id")
             if not isinstance(allocator_id, str):
@@ -826,15 +835,41 @@ def _certificate_bound_node(
     return bound
 
 
+def _certificate_matches_retail_anchor(
+    graph: FrontierGraph,
+    result: OwnerCertificateResult,
+    certificate: EvidenceNode,
+    role: OwnerRoleKey,
+    retail_offset: int,
+) -> bool:
+    anchor_id = certificate.attributes.get("anchor_record_id")
+    if not isinstance(anchor_id, str):
+        return False
+    anchor = _certificate_bound_node(
+        graph,
+        result,
+        certificate,
+        anchor_id,
+        "assembly-operand-anchor",
+    )
+    return (
+        anchor is not None
+        and anchor.role_key == role.operand_key
+        and anchor.attributes.get("machine_operand_key") == role.operand_key
+        and anchor.attributes.get("code_offset") == retail_offset
+    )
+
+
 def _effective_owner_resolution(
     graph: FrontierGraph,
     view: _CertifiedOwnerView,
     role: OwnerRoleKey,
     resolution: OwnerRoleResolution,
+    retail_offset: int,
 ) -> tuple[OwnerResolutionStatus, tuple[EvidenceNode, ...]]:
     if view.result is None:
         return OwnerResolutionStatus.INCOMPLETE, ()
-    certificates = tuple(
+    stored_certificates = tuple(
         certificate
         for record_id in resolution.certificate_record_ids
         if (
@@ -847,12 +882,24 @@ def _effective_owner_resolution(
         )
         is not None
     )
+    matching_certificates = tuple(
+        certificate
+        for certificate in stored_certificates
+        if _certificate_matches_retail_anchor(
+            graph,
+            view.result,
+            certificate,
+            role,
+            retail_offset,
+        )
+    )
     status = resolution.status
-    if status is OwnerResolutionStatus.UNIQUE and (
-        len(resolution.certificate_record_ids) != 1 or len(certificates) != 1
-    ):
-        status = OwnerResolutionStatus.INCOMPLETE
-    return status, certificates
+    if status is OwnerResolutionStatus.UNIQUE:
+        if len(resolution.certificate_record_ids) != 1 or len(stored_certificates) != 1:
+            status = OwnerResolutionStatus.INCOMPLETE
+        elif len(matching_certificates) != 1:
+            status = OwnerResolutionStatus.MISSING
+    return status, matching_certificates
 
 
 def _rejection_summary(
@@ -1109,7 +1156,9 @@ def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[Frontier
     left_graph, right_graph = tuple(sorted(graph_pair, key=_label))
     left_view = _certified_owner_view(left_graph.backend.owner_certificates)
     right_view = _certified_owner_view(right_graph.backend.owner_certificates)
-    roles = tuple(sorted({*left_view.roles, *right_view.roles}))
+    roles = tuple(
+        role for role in sorted({*left_view.roles, *right_view.roles}) if role.operand_key in alignment.by_operand
+    )
     for ordinal, role in enumerate(roles):
         left_resolution = _owner_resolution(left_view, role)
         right_resolution = _owner_resolution(right_view, role)
@@ -1118,12 +1167,14 @@ def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[Frontier
             left_view,
             role,
             left_resolution,
+            alignment.retail_offset,
         )
         right_status, right_certificates = _effective_owner_resolution(
             right_graph,
             right_view,
             role,
             right_resolution,
+            alignment.retail_offset,
         )
         if left_status is right_status is OwnerResolutionStatus.UNIQUE:
             comparisons.append(

@@ -663,7 +663,7 @@ def _untrusted_owner_result_with_role(role: object) -> OwnerCertificateResult:
     )
 
 
-def _graph_with_v2_owner_evidence(*, certificates: bool, physical_register: int = 21):
+def _graph_with_v2_owner_evidence(*, certificates: bool, physical_register: int = 21, code_offset: int = 0x234):
     from src.mwcc_debug.causal_diff.owner_certificate import build_owner_certificates
 
     graph = _graph("direct", missing_use=True)
@@ -672,6 +672,10 @@ def _graph_with_v2_owner_evidence(*, certificates: bool, physical_register: int 
             compile_id=graph.bundle.compile_id,
             function="fn_test",
             physical_register=physical_register,
+            pcode_result=_pcode_result(
+                code_offset=code_offset,
+                physical_register=physical_register,
+            ),
         )
     )
     result = build_owner_certificates(evidence)
@@ -876,6 +880,25 @@ def test_allocator_entrypoints_preserve_valid_trusted_certificate_selection() ->
     assert automatic.verified_retail_path is True
     assert automatic.node.record_id == verified.node.record_id
     assert automatic_reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+
+def test_verified_retail_role_rejects_certificate_for_another_retail_anchor() -> None:
+    graph = _graph_with_v2_owner_evidence(
+        certificates=True,
+        code_offset=0x238,
+    )
+    candidate = _candidate_is_uniquely_aligned(graph, 0x234)
+    assert candidate is not None
+
+    resolution, reason = _verified_retail_local_role(
+        graph,
+        candidate,
+        0x234,
+        OperandRole("use:0", "use", 0, "r", 21),
+    )
+
+    assert resolution is None
+    assert reason is AbstentionReason.MISSING_BACKEND_ROLE
 
 
 def test_untrusted_result_can_fall_back_only_through_v2_filtered_legacy_chain() -> None:
@@ -1205,6 +1228,7 @@ def _pcode_result(
     virtual: int = 66,
     physical_register: int = 21,
     parent_lineage_ids: tuple[str, ...] = ("ol-parent",),
+    code_offset: int = 0x234,
 ) -> PCodeLineageValidation:
     normalized = MappingProxyType(
         {
@@ -1217,8 +1241,8 @@ def _pcode_result(
                         "code_ranges": (
                             MappingProxyType(
                                 {
-                                    "start": 0x234,
-                                    "end_exclusive": 0x238,
+                                    "start": code_offset,
+                                    "end_exclusive": code_offset + 4,
                                     "machine_operand_mappings": (
                                         MappingProxyType(
                                             {
@@ -1299,8 +1323,8 @@ def _pcode_result(
         normalized,
         MappingProxyType(
             {
-                (0x234, "use:0"): AnchorVirtualBinding(
-                    0x234,
+                (code_offset, "use:0"): AnchorVirtualBinding(
+                    code_offset,
                     "use:0",
                     "pc-0",
                     "ol-1",

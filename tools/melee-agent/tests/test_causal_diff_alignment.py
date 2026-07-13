@@ -652,6 +652,33 @@ def test_unique_pair_uses_certificate_endpoints_and_minimum_confidence() -> None
     assert comparison.attributes == {"role": OWNER_ROLE.as_json()}
 
 
+def test_owner_correspondence_requires_both_certificates_at_requested_anchor() -> None:
+    fixtures = _owner_fixtures()
+    graph_pair = fixtures.future_complete_graph_pair()
+    mismatched_alignment = replace(
+        fixtures.alignment(),
+        retail_offset=fixtures.alignment().retail_offset + 4,
+    )
+
+    comparisons = build_role_comparisons(mismatched_alignment, graph_pair)
+
+    assert not any(item.relation_kind == "backend-owner-corresponds-to" for item in comparisons)
+    abstention = _only(item for item in comparisons if item.relation_kind == "backend-owner-abstained")
+    assert abstention.attributes["left_status"] == "missing"
+    assert abstention.attributes["right_status"] == "missing"
+
+
+def test_owner_comparisons_ignore_roles_absent_from_requested_operands() -> None:
+    fixtures = _owner_fixtures()
+    alignment = replace(fixtures.alignment(), by_operand={})
+
+    comparisons = build_role_comparisons(alignment, fixtures.future_complete_graph_pair())
+
+    assert not any(
+        item.relation_kind in {"backend-owner-corresponds-to", "backend-owner-abstained"} for item in comparisons
+    )
+
+
 def test_abstention_is_permutation_stable_and_binds_alternative_content() -> None:
     fixtures = _owner_fixtures()
     graph_pair = fixtures.graphs_with_statuses("ambiguous", "unique")
