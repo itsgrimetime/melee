@@ -46,13 +46,15 @@ this option remains available later without changing causal semantics.
 PCode, allocator, and frame evidence into proof-capable backend ownership.
 
 The module consumes one `ObjectBindingEvidence` from one compile and one capture.
-It returns `OwnerCertificateResult`, containing a canonical tuple of zero or more
-`VerifiedOwnerPathCertificate` values plus explicit rejection records. It never
-joins frontiers and never compares capture-local IDs across runs.
+It derives every connected capture-local role; it does not accept
+`requested_roles`. It returns `OwnerCertificateResult`, containing canonical
+certificate nodes, per-role resolutions, and explicit global rejections. It
+never joins frontiers and never compares capture-local IDs across runs.
 
-Alignment, differencing, effects, and inference may consume certificates. They
-must not independently traverse loose ownership edges, call a weaker record
-predicate, or infer missing relations from matching numeric IDs.
+Alignment, differencing, effects, and inference may consume the result and its
+registered certificate nodes. They must not independently traverse loose
+ownership edges, call a weaker record predicate, or infer missing relations
+from matching numeric IDs.
 
 Legacy v1 and patched-DLL artifacts never produce certificates. Current genuine
 v2 artifacts also produce no certificate because the installed proof registry
@@ -60,12 +62,48 @@ does not grant the required object-to-virtual and object-to-frame capabilities.
 Their exact result remains `backend-owner-path-incomplete` with no ownership
 recommendation or causal verdict.
 
-## Certificate model
+The refactor removes public `proof_complete()`, `exact_owner_path_record()`, and
+backend-frame recommendation helpers from `object_binding_adapter.py`.
+Ownership-edge vocabularies and raw `ObjectBindingEvidence` are not imported by
+`alignment.py`, `differ.py`, `effects.py`, or `inference.py`. An architectural
+AST/import test enforces both rules and also rejects ownership-edge traversal in
+those modules.
 
-The implementation introduces frozen, JSON-compatible dataclasses with closed
-fields.
+Diagnostic ownership nodes, edges, and capabilities remain in `BackendEvidence`
+for reporting and later persistence, but their Python type and adapter result do
+not expose a proof-capable flag. Only the module-private certificate builder may
+interpret them as proof.
+
+Direct construction or deserialization of a certificate node is not a trusted
+path. Current analysis consumes the in-memory `OwnerCertificateResult` returned
+by the builder. A future persisted certificate is trusted only after reloading
+its cited immutable evidence, rebuilding the certificate through
+`owner_certificate.py`, and byte-comparing the rebuilt node. A certificate node
+without that result/revalidation context remains diagnostic and cannot satisfy
+an inference gate.
+
+## Certificate and resolution model
+
+The persisted certificate is a first-class `EvidenceNode` with kind
+`owner-proof-certificate`. This deliberately reuses the existing store
+contract: it has `record_id`, `compile_id`, `confidence`, `provenance`, and
+closed JSON-compatible attributes. Its provenance names every path and raw
+support record, so a later `ComparisonRecord` can cite the certificate node and
+the store can resolve both the input record and its confidence.
+
+The implementation also introduces frozen, module-constructed views with closed
+fields. Their constructors are private to `owner_certificate.py`; downstream
+code receives them only through `OwnerCertificateResult`.
 
 ```python
+class OwnerResolutionStatus(StrEnum):
+    UNIQUE = "unique"
+    MISSING = "missing"
+    AMBIGUOUS = "ambiguous"
+    CONTRADICTORY = "contradictory"
+    INCOMPLETE = "incomplete"
+
+
 @dataclass(frozen=True, slots=True)
 class OwnerRoleKey:
     operand_key: str
@@ -83,13 +121,8 @@ class OwnerSemanticState:
 
 
 @dataclass(frozen=True, slots=True)
-class VerifiedOwnerPathCertificate:
-    schema: Literal["owner-proof-certificate.v1"]
-    certificate_id: str
-    compile_id: str
-    capture_run_id: str
-    function: str
-    artifact_sha256: str
+class _VerifiedOwnerPathCertificate:
+    record: EvidenceNode  # kind == "owner-proof-certificate"
     role: OwnerRoleKey
     semantic_state: OwnerSemanticState
     owner_record_id: str
@@ -101,6 +134,7 @@ class VerifiedOwnerPathCertificate:
     stack_record_id: str
     path_record_ids: tuple[str, ...]
     raw_support_record_ids: tuple[str, ...]
+    proof_content_sha256: str
     effective_confidence: Confidence
 
 
@@ -114,21 +148,47 @@ class OwnerCertificateRejection:
 
 
 @dataclass(frozen=True, slots=True)
-class OwnerCertificateResult:
-    certificates: tuple[VerifiedOwnerPathCertificate, ...]
+class OwnerRoleResolution:
+    role: OwnerRoleKey
+    status: OwnerResolutionStatus
+    certificate_record_ids: tuple[str, ...]
     rejections: tuple[OwnerCertificateRejection, ...]
-    missing_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerCertificateResult:
+    certificate_nodes: tuple[EvidenceNode, ...]
+    role_resolutions: tuple[OwnerRoleResolution, ...]
+    global_rejections: tuple[OwnerCertificateRejection, ...]
 ```
 
-`certificate_id` is content-derived from the schema, compile ID, capture-run ID,
-function, role, semantic state, canonical path record IDs, and raw support record
-IDs. It is capture-scoped by design. Runtime pointers are never fields and never
-participate in an ID.
+The node uses parser `causal-owner-certificate.v1`. Its local identity is
+`proof_content_sha256`, a digest over the complete canonical validated proof
+payload: schema; compile/capture/function/artifact identity; role; semantic
+state; full canonical content of every cited path/support record (record kind,
+confidence, attributes, and provenance); and the trusted instrumentation tuple
+`(compiler_executable_sha256, proof_id, proof_sha256, registry_schema)`. The
+resulting `record_id` therefore changes even when a source record retains its ID
+through `with_attributes()` but changes its content. Runtime pointers are
+excluded from both the proof payload and ID.
 
 The cross-frontier semantic identity is only `OwnerRoleKey`. The cross-frontier
 changed state is only `OwnerSemanticState`. Compile IDs, capture IDs, object IDs,
 PCode IDs, lineage IDs, virtual/IG numbers, record IDs, raw snapshots, and
 runtime addresses remain provenance and cannot create a semantic delta.
+
+The canonical vocabularies are closed before hashing:
+
+- `operand_key`: `^(def|use):(0|[1-9][0-9]*)$`;
+- `register_class`: exactly `gpr` or `fpr`;
+- `semantic_stack_role`: `^[a-z][a-z0-9-]{0,63}$`;
+- `frame_area`: exactly `arguments`, `locals`, or `temps`;
+- `type_size` and `stack_size`: integer, not `bool`, in `1..0x7FFFFFFF`;
+- `assigned_physical_register`: integer, not `bool`, in `0..31`; and
+- `stack_offset`: integer, not `bool`, in `-0x80000000..0x7FFFFFFF`.
+
+Aliases such as `r`, `f`, or `GPR` are normalized before certificate
+construction and are never accepted in a certificate payload.
 
 ## Certificate construction invariants
 
@@ -164,44 +224,69 @@ parser domain.
 11. All required raw support relations use closed, typed schemas. Unknown keys,
     missing keys, semantically foreign records, and internally inconsistent but
     coordinated mutations invalidate the candidate.
-12. Every finite alternative is preserved. Zero valid candidates is incomplete;
-    more than one valid candidate is ambiguous. Neither case is converted to a
-    negative ownership fact.
+12. The canonical proof-content digest covers full path/support record content
+    and the independently trusted instrumentation tuple, not record IDs alone.
+13. Every finite alternative is preserved in its role resolution. A certificate
+    and a role-compatible rejection can never resolve as unique. Zero valid
+    candidates is missing or incomplete; more than one valid or plausible
+    candidate is ambiguous. Contradictory positive facts are contradictory.
+    None of these cases is converted to a negative ownership fact.
 
-`build_owner_certificates()` validates these invariants as one operation. It
-does not expose a public per-record boolean predicate that downstream consumers
-could combine into a different proof.
+`build_owner_certificates(evidence)` validates these invariants as one
+operation. It does not expose a public per-record boolean predicate that
+downstream consumers could combine into a different proof.
+
+Certificate nodes and their cited diagnostic nodes/edges are added to the
+existing evidence store atomically. Every certificate provenance input resolves
+to a registered record with `.confidence`; comparisons and deltas cite the
+certificate node IDs under the existing store contract.
 
 ## Data flow
 
 1. `adapt_object_bindings()` independently reloads and verifies the immutable
    v2 trace and candidate object, runs the existing producer validators, and
    emits diagnostic graph evidence exactly as today.
-2. `build_owner_certificates(evidence, requested_roles)` constructs canonical
-   certificates and rejections from that evidence.
-3. `BackendEvidence` carries both diagnostic graph records and the certificate
-   result. Diagnostic records remain useful for reporting and a future database,
-   but they do not grant ownership by themselves.
-4. Alignment selects certificates by `OwnerRoleKey`. Exactly one certificate on
-   each side produces `backend-owner-corresponds-to`; zero yields incomplete;
-   any multiplicity yields `backend-owner-ambiguous` with all alternatives.
-5. Differencing compares the two `OwnerSemanticState` values. Equal states emit
+2. `build_owner_certificates(evidence)` enumerates every connected capture-local
+   path, derives its canonical `OwnerRoleKey`, constructs certificate nodes, and
+   resolves all observed roles. Caller-supplied roles and duplicate requests
+   cannot manufacture certificates or ambiguity.
+3. Certificate nodes are included in the same `AdapterResult` as their cited
+   diagnostic records so store ingestion remains atomic. `BackendEvidence`
+   carries the diagnostic records plus the in-memory `OwnerCertificateResult`.
+4. Alignment normalizes its requested role and looks it up in the result. A role
+   absent from the result is `missing`. A global `role=None` rejection taints
+   every lookup as `incomplete`. Exactly one certificate with no compatible or
+   global rejection is `unique`. More than one certificate, or one certificate
+   plus a plausible role-compatible rejection, is `ambiguous`. Conflicting
+   positive facts are `contradictory`; malformed, unsupported, or truncated
+   candidates are `incomplete`.
+5. Only `unique` on both sides produces `backend-owner-corresponds-to`. Every
+   other bilateral combination emits a deterministic abstention comparison with
+   all relevant certificates and rejections.
+6. Differencing compares the two `OwnerSemanticState` values. Equal states emit
    no owner delta. Different states emit one owner delta whose provenance cites
    the correspondence and both certificates and whose confidence is their
    minimum.
-6. Effects and inference consume the certificate comparison/delta directly.
+7. Effects and inference consume the certificate comparison/delta directly.
    Human proof paths are rendered from `path_record_ids` and
    `raw_support_record_ids`; no downstream graph search re-establishes proof.
-7. Phase 1 still has no source binding. A unique changed owner certificate pair
+8. Phase 1 still has no source binding. A unique changed owner certificate pair
    therefore reaches only `gate-9-source-object-binding` and abstains with
    `source-object-binding-missing`.
 
 ## Ambiguity and canonical ordering
 
-Alternatives are represented as a canonical multiset of certificate summaries,
-not by caller order and not by `ComparisonRecord.record_id` alone.
+Each `OwnerRoleResolution` contains the certificates and rejections relevant to
+that role. `role=None` rejections live in `global_rejections` and force every
+alignment lookup to `incomplete`; they are never silently assigned to one role.
+Mixed roles therefore retain independent statuses—for example, one unique role,
+one missing role, and one ambiguous role can coexist in one result.
 
-The summary contains the certificate ID, role, semantic state, effective
+Alternatives are represented as a canonical multiset of certificate and
+rejection summaries, not by caller order and not by
+`ComparisonRecord.record_id` alone.
+
+The summary contains the certificate record ID, role, semantic state, effective
 confidence, and canonical provenance IDs. Alternatives are sorted by canonical
 JSON bytes. Exact duplicates retain a multiplicity count and their complete,
 canonically sorted provenance summaries. Reversing input order must produce
@@ -211,6 +296,11 @@ Diagnostic alternatives that fail certificate construction are retained as
 `OwnerCertificateRejection` values with content-derived rejection IDs. A
 heuristic or malformed alternative can force abstention but can never become a
 certificate or be promoted to derived-unique.
+
+The role status is derived from the complete multiset after canonical grouping,
+never by counting certificates before rejections. One valid certificate plus
+one role-compatible heuristic alternative is ambiguous, not unique. Repeating
+the same requested role does not change the multiset or status.
 
 ## Error handling and abstention
 
@@ -227,6 +317,8 @@ The certificate builder is fail-closed:
 - split physical-register subproof: no certificate;
 - incomplete or multi-parent lineage origin: no certificate;
 - multiple role-compatible certificates: explicit ambiguity abstention;
+- one certificate plus a role-compatible rejection: explicit ambiguity,
+  contradiction, or incomplete abstention according to the rejection class;
 - no source binding after a unique changed pair: gate-9 abstention.
 
 No error path compiles code, refreshes artifacts, writes source, promotes the
@@ -234,16 +326,22 @@ registry, or mutates an input bundle.
 
 ## Persistence compatibility
 
-The certificate is a versioned derived record, not a database implementation.
-Its content-derived ID, closed schema, raw support references, compile/capture
-scope, and JSON-compatible values allow a later provenance store to persist and
-index it without changing causal inference.
+The certificate node is a versioned derived evidence record, not a database
+implementation. Its proof-content-derived ID, closed schema, raw support
+references, compile/capture scope, `.confidence`, `.provenance`, and
+JSON-compatible values allow the existing store to ingest/query it and a later
+provenance store to persist/index it without changing causal inference.
 
 The later database may store certificates, rejections, raw evidence, and
 comparison records separately. Cross-frontier comparisons remain
 analysis-scoped. Phase 2 may introduce a companion source-binding certificate
 or `owner-proof-certificate.v2`; it must not mutate historical v1 certificates
 or reinterpret their IDs.
+
+Persistence does not make a certificate self-authenticating. A store round-trip
+preserves bytes and references, but proof-capable loading requires the cited raw
+evidence and instrumentation registry identity to be available for deterministic
+rebuild-and-compare validation.
 
 ## Testing and acceptance
 
@@ -259,11 +357,24 @@ Required coverage includes:
 - mutation parent subset, replacement, superset, duplicate, order, side, kind,
   and event-index failures;
 - zero, one, and multiple certificates for a role;
+- one valid certificate plus one role-compatible rejection never resolving as
+  unique;
+- independent unique, missing, ambiguous, contradictory, and incomplete role
+  resolutions in one result, including `role=None` global rejection behavior;
+- duplicate role lookups not manufacturing a certificate or ambiguity;
 - identical semantics across different captures producing no delta;
 - real allocator or stack semantic changes producing one reconstructable delta;
 - input permutation and duplicate alternatives producing byte-identical output;
 - mixed v1/pcdump/v2 numeric collisions producing no certificate;
 - every certificate and delta confidence bounded by all cited inputs;
+- certificate-node ingestion/query round-trip under `InMemoryEvidenceStore` and
+  the store-conformance suite;
+- direct certificate-node forgery or deserialization without rebuild context
+  remaining non-proof-capable;
+- a cited record changing content through `with_attributes()` while retaining
+  its record ID changing the proof-content digest and certificate record ID;
+- architectural import checks proving only `owner_certificate.py` interprets
+  loose v2 ownership evidence;
 - current genuine v2 evidence returning `backend-owner-path-incomplete` with no
   recommendation or verdict;
 - existing v1 `mnDiagram_DrawFighterHeaders` behavior unchanged;
