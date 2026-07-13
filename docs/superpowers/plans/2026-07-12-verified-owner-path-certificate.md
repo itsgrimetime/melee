@@ -21,7 +21,7 @@
 - Certificate IDs cover every proof-semantic field and all cited record content; runtime-only pointer attributes are excluded by a closed key set.
 - Certificate nodes and their cited diagnostic nodes/edges enter the evidence store in one atomic adapter batch.
 - `alignment.py`, `differ.py`, `effects.py`, and `inference.py` must not import `ObjectBindingEvidence`, call object-binding proof helpers, or traverse the six raw v2 owner edge kinds.
-- No task compiles code, refreshes producer artifacts, promotes the instrumentation registry, writes source, or adds Phase 2 source binding.
+- No analysis or error path compiles code, refreshes producer artifacts, promotes the instrumentation registry, writes source, or adds Phase 2 source binding; Task 6's explicit repository build is verification only.
 - Every task uses red-green-refactor, ends with a focused commit, and receives specification-compliance review followed by code-quality review.
 - The focused baseline at commit `f5fcfc6da` is 188 passing tests from `test_causal_diff_object_bindings.py`, `test_causal_diff_ownership.py`, `test_causal_diff_inference.py`, and `test_causal_diff_store.py`.
 
