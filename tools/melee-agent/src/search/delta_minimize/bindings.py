@@ -1097,11 +1097,29 @@ def _union_ids(groups: UnionFind, atom_ids: Sequence[str]) -> None:
             groups.union(first, atom_id)
 
 
+def _is_explicit_void_parameter_list(parameter_list, source_bytes: bytes) -> bool:
+    parameters = tuple(parameter_list.named_children)
+    if len(parameters) != 1:
+        return False
+    parameter = parameters[0]
+    if parameter.type != "parameter_declaration":
+        return False
+    if parameter.child_by_field_name("declarator") is not None:
+        return False
+    type_node = parameter.child_by_field_name("type")
+    return (
+        type_node is not None
+        and type_node.type == "primitive_type"
+        and node_text(source_bytes, type_node).strip() == "void"
+        and node_text(source_bytes, parameter).strip() == "void"
+    )
+
+
 def _parameter_names(parameter_list, source_bytes: bytes) -> tuple[str, ...] | None:
+    if _is_explicit_void_parameter_list(parameter_list, source_bytes):
+        return ()
     names: list[str] = []
     for parameter in parameter_list.named_children:
-        if parameter.type == "primitive_type" and node_text(source_bytes, parameter) == "void":
-            continue
         if parameter.type != "parameter_declaration":
             return None
         identifier = _declarator_identifier(parameter.child_by_field_name("declarator"))
@@ -1112,10 +1130,11 @@ def _parameter_names(parameter_list, source_bytes: bytes) -> tuple[str, ...] | N
 
 
 def _parameter_texts(parameter_list, source_bytes: bytes) -> tuple[str, ...]:
+    if _is_explicit_void_parameter_list(parameter_list, source_bytes):
+        return ()
     return tuple(
         node_text(source_bytes, parameter).strip()
         for parameter in parameter_list.named_children
-        if not (parameter.type == "primitive_type" and node_text(source_bytes, parameter) == "void")
     )
 
 

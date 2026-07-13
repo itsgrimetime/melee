@@ -669,6 +669,71 @@ def test_function_returning_function_pointer_uses_declared_function_parameters()
     assert not any(blocker.symbol == "factory" for blocker in index.blockers)
 
 
+def test_explicit_void_prototype_and_definition_index_as_zero_parameters():
+    source = """\
+static int helper(void);
+static int helper(void) { return 1; }
+int draw(void) { return helper(); }
+"""
+    index = build_binding_index(source)
+    helper = index.functions["helper"]
+
+    assert helper.parameter_names == ()
+    assert helper.parameter_texts == ()
+    assert tuple(source[slice(*span)] for span in helper.declaration_parameter_spans) == ("(void)",)
+    assert not any(
+        blocker.symbol == "helper" and blocker.reason == "k-and-r-or-unnamed-parameters"
+        for blocker in index.blockers
+    )
+
+
+def test_explicit_void_helper_can_replace_direct_data_access():
+    prefix = """\
+static int assets;
+static int helper(void);
+static int helper(void) { return assets; }
+"""
+    left = prefix + "int draw(void) { return assets; }\n"
+    right = prefix + "int draw(void) { return helper(); }\n"
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+    full_mask = (1 << len(manifest.atoms)) - 1
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, full_mask) == right
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "static int helper(int) { return 1; }",
+        "static int helper(value) int value; { return value; }",
+        "static int helper(void, int value) { return value; }",
+    ],
+    ids=("unnamed-typed", "k-and-r-identifier-list", "void-not-sole"),
+)
+def test_nonprototype_parameter_shapes_remain_blocked(definition):
+    source = f"{definition}\nint draw(void) {{ return 1; }}\n"
+    index = build_binding_index(source)
+
+    assert any(
+        blocker.symbol == "helper" and blocker.reason == "k-and-r-or-unnamed-parameters"
+        for blocker in index.blockers
+    )
+
+
+def test_empty_old_style_definition_keeps_existing_zero_name_model():
+    source = "static int helper() { return 1; }\nint draw(void) { return helper(); }\n"
+    index = build_binding_index(source)
+    helper = index.functions["helper"]
+
+    assert helper.parameter_names == ()
+    assert helper.parameter_texts == ()
+    assert not any(
+        blocker.symbol == "helper" and blocker.reason == "k-and-r-or-unnamed-parameters"
+        for blocker in index.blockers
+    )
+
+
 def test_function_returning_function_pointer_parameter_is_visible_in_body():
     source = """\
 static int add(int x, int y) { return x + y; }
