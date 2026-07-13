@@ -701,7 +701,7 @@ def _certificate_proof_path(certificate: EvidenceNode) -> tuple[str, ...] | None
     return (certificate.record_id, *path_ids, *support_ids)
 
 
-def _matching_owner_abstentions(
+def _matching_owner_abstention_records(
     records: tuple[ComparisonRecord, ...],
     role: OwnerRoleKey | None,
     owner_ids: frozenset[str],
@@ -757,7 +757,12 @@ def _infer_certificate_pair(
         or role_comparison.attributes.get("expert_assertion")
         or role_comparison.attributes.get("verdict_cap") == VerdictStatus.CANDIDATE_CAUSE.value
     )
-    role_registered = any(comparison.record_id == role_comparison.record_id for comparison in records)
+    role_registrations = tuple(
+        comparison for comparison in records if comparison.record_id == role_comparison.record_id
+    )
+    role_registered = len(role_registrations) == 1 and canonical_record_bytes(
+        role_registrations[0]
+    ) == canonical_record_bytes(role_comparison)
     if not role_registered or expert_asserted or not _record_is_proof_capable(role_comparison):
         return _verdict(
             pair,
@@ -891,10 +896,16 @@ def _infer_certificate_pair(
             or not _record_is_proof_capable(correspondence)
             or not _record_is_proof_capable(delta)
         )
-    abstentions = _matching_owner_abstentions(records, role, owner_ids)
-    if abstentions:
-        cited_records.extend(abstentions)
-    if integrity_failure or abstentions or _evidence_integrity_failure(cited_records):
+    matching_abstentions = _matching_owner_abstention_records(records, role, owner_ids)
+    certified_abstentions = tuple(
+        item for item in matching_abstentions if item.provenance.parser == _OWNER_CORRESPONDENCE_PARSER
+    )
+    forged_abstentions = tuple(
+        item for item in matching_abstentions if item.provenance.parser != _OWNER_CORRESPONDENCE_PARSER
+    )
+    if matching_abstentions:
+        cited_records.extend(matching_abstentions)
+    if integrity_failure or certified_abstentions or forged_abstentions or _evidence_integrity_failure(cited_records):
         failed.append(_GATE_8)
 
     if failed:
@@ -903,7 +914,9 @@ def _infer_certificate_pair(
             status=VerdictStatus.ABSTAIN,
             cause=None,
             proof_paths=proof_paths,
-            rejected_alternatives=tuple(sorted(f"backend-owner-abstained:{item.record_id}" for item in abstentions)),
+            rejected_alternatives=tuple(
+                sorted(f"backend-owner-abstained:{item.record_id}" for item in certified_abstentions)
+            ),
             failed_gates=tuple(dict.fromkeys(failed)),
         )
     return _verdict(

@@ -506,6 +506,42 @@ def _forge_owner_relation_parser(
     )
 
 
+def _owner_abstention_for_parser(
+    comparisons: tuple[ComparisonRecord, ...],
+    parser: str,
+) -> ComparisonRecord:
+    owner = only(item for item in comparisons if item.relation_kind == "backend-owner-corresponds-to")
+    return ComparisonRecord.create(
+        analysis_id=owner.analysis_id,
+        relation_kind="backend-owner-abstained",
+        left_compile_id=owner.left_compile_id,
+        left_record_id=owner.left_record_id,
+        right_compile_id=owner.right_compile_id,
+        right_record_id=owner.right_record_id,
+        producer_confidence=Confidence.HEURISTIC,
+        adapter_confidence=Confidence.HEURISTIC,
+        provenance=replace(
+            owner.provenance,
+            parser=parser,
+            derivation_rule=f"certified-owner-abstention:{'e' * 64}",
+        ),
+        input_confidences=(owner.confidence, owner.confidence),
+        attributes={
+            "reason": "backend-owner-ambiguous",
+            "role": owner.attributes["role"],
+            "left_status": "ambiguous",
+            "right_status": "unique",
+            "certificate_record_ids": {
+                "left": (owner.left_record_id,),
+                "right": (owner.right_record_id,),
+            },
+            "rejections": {"left": (), "right": ()},
+            "alternatives": (),
+        },
+        occurrence_ordinal=99,
+    )
+
+
 @pytest.mark.parametrize(
     "relation_kind",
     (
@@ -538,6 +574,70 @@ def test_unique_changed_certificate_pair_stops_only_at_source_binding_gate() -> 
         owner.left_record_id,
         owner.right_record_id,
     }
+
+
+@pytest.mark.parametrize(
+    "registration_variant",
+    (
+        "same-id-different-content",
+        "duplicate-exact",
+        "duplicate-mixed",
+    ),
+)
+def test_certificate_role_registration_requires_one_canonical_record(
+    registration_variant: str,
+) -> None:
+    graph_pair, owner_alignment, comparisons = future_complete_pipeline_inputs()
+    effects = derive_effects(owner_alignment, graph_pair, comparisons)
+    role_comparison = only(effects.pairs).allocator.role_correspondence.comparison
+    asserted = role_comparison.with_attributes(
+        {
+            **role_comparison.attributes,
+            "expert_assertion": True,
+            "verdict_cap": "candidate-cause",
+        }
+    )
+
+    if registration_variant == "same-id-different-content":
+        registered = tuple(asserted if item.record_id == role_comparison.record_id else item for item in comparisons)
+    elif registration_variant == "duplicate-exact":
+        registered = (*comparisons, role_comparison)
+    else:
+        registered = (*comparisons, asserted)
+
+    verdict = only(build_report(graph_pair, effects, registered).verdicts)
+
+    assert asserted.record_id == role_comparison.record_id
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-2-backend-role-identity",)
+    assert verdict.proof_paths == ()
+
+
+def test_wrong_parser_owner_abstention_is_forged_integrity_evidence_only() -> None:
+    graph_pair, owner_alignment, comparisons = future_complete_pipeline_inputs()
+    effects = derive_effects(owner_alignment, graph_pair, comparisons)
+    forged = _owner_abstention_for_parser(comparisons, "forged-owner-proof.v1")
+
+    verdict = only(build_report(graph_pair, effects, (*comparisons, forged)).verdicts)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-8-evidence-integrity",)
+    assert verdict.rejected_alternatives == ()
+
+
+def test_exact_parser_owner_abstention_remains_certified_gate_8_evidence() -> None:
+    graph_pair, owner_alignment, comparisons = future_complete_pipeline_inputs()
+    effects = derive_effects(owner_alignment, graph_pair, comparisons)
+    certified = _owner_abstention_for_parser(
+        comparisons,
+        "causal-backend-owner-alignment.v2",
+    )
+
+    verdict = only(build_report(graph_pair, effects, (*comparisons, certified)).verdicts)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-8-evidence-integrity",)
+    assert verdict.rejected_alternatives == (f"backend-owner-abstained:{certified.record_id}",)
 
 
 def test_forged_stored_certificate_cannot_satisfy_inference() -> None:
