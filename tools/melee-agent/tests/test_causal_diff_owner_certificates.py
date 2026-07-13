@@ -22,6 +22,7 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
     OwnerSemanticState,
     build_owner_certificates,
 )
+from src.mwcc_debug.causal_diff.store import canonical_record_bytes
 from tests.owner_certificate_fixtures import (
     STORE_FACTORIES,
     ambiguous_evidence,
@@ -177,6 +178,28 @@ def _with_conflicting_path_record(
     )
 
 
+def _with_python_equal_path_conflict(
+    evidence: ObjectBindingEvidence,
+    record_kind: str,
+    *,
+    prepend: bool,
+) -> ObjectBindingEvidence:
+    records = evidence.nodes if record_kind in _PATH_NODE_KINDS else evidence.edges
+    original = _path_record(evidence, record_kind)
+    assert original.attributes["class_id"] == 0
+    conflicting = original.with_attributes({**original.attributes, "class_id": False})
+    assert conflicting == original
+    assert canonical_record_bytes(conflicting) != canonical_record_bytes(original)
+    changed_records = (conflicting, *records) if prepend else (*records, conflicting)
+    return ObjectBindingEvidence(
+        changed_records if record_kind in _PATH_NODE_KINDS else evidence.nodes,
+        changed_records if record_kind in _PATH_EDGE_KINDS else evidence.edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+
 @pytest.mark.parametrize("record_kind", (*_PATH_NODE_KINDS, *_PATH_EDGE_KINDS))
 def test_conflicting_path_id_permutation_is_globally_stable(record_kind):
     evidence = complete_evidence()
@@ -193,6 +216,38 @@ def test_conflicting_path_id_permutation_is_globally_stable(record_kind):
         assert result.certificate_nodes == ()
         assert len(result.global_rejections) == 1
         rejection = only(item for item in result.global_rejections if item.reason == "unregistered-support")
+        assert rejection.role is None
+        assert rejection.candidate_record_ids == (original.record_id, original.record_id)
+
+
+@pytest.mark.parametrize(
+    "record_kind",
+    ("retail-virtual-register", "maps-to-allocator-node"),
+)
+def test_python_equal_same_id_conflicts_are_global_and_permutation_stable(record_kind: str) -> None:
+    evidence = complete_evidence()
+    original = _path_record(evidence, record_kind)
+    prepend = owner_certificate.validate_owner_evidence(
+        _with_python_equal_path_conflict(
+            evidence,
+            record_kind,
+            prepend=True,
+        )
+    )
+    append = owner_certificate.validate_owner_evidence(
+        _with_python_equal_path_conflict(
+            evidence,
+            record_kind,
+            prepend=False,
+        )
+    )
+
+    assert canonical_result(prepend) == canonical_result(append)
+    for result in (prepend, append):
+        assert result.certificate_nodes == ()
+        assert result.role_resolutions == ()
+        rejection = only(result.global_rejections)
+        assert rejection.reason == "unregistered-support"
         assert rejection.role is None
         assert rejection.candidate_record_ids == (original.record_id, original.record_id)
 

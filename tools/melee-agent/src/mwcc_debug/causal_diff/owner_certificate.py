@@ -497,23 +497,22 @@ def _index_evidence(evidence: ObjectBindingEvidence) -> _OwnerEvidenceIndex:
     )
 
 
+def _record_content(record: EvidenceNode | EvidenceEdge) -> bytes:
+    return canonical_record_bytes(record)
+
+
 def _conflicting_record_groups(
     index: _OwnerEvidenceIndex,
 ) -> tuple[tuple[EvidenceNode | EvidenceEdge, ...], ...]:
     groups = tuple(
-        tuple(
-            sorted(
-                records,
-                key=lambda record: canonical_bytes(_safe_json(_record_json(record))),
-            )
-        )
+        tuple(sorted(records, key=_record_content))
         for records in index.records_by_id.values()
-        if any(record != records[0] for record in records[1:])
+        if any(_record_content(record) != _record_content(records[0]) for record in records[1:])
     )
     return tuple(
         sorted(
             groups,
-            key=lambda records: tuple(canonical_bytes(_safe_json(_record_json(record))) for record in records),
+            key=lambda records: tuple(_record_content(record) for record in records),
         )
     )
 
@@ -705,7 +704,7 @@ def _registered_record(
     record_id: str,
 ) -> EvidenceNode | EvidenceEdge | OwnerCertificateRejection:
     matches = index.records_by_id.get(record_id, ())
-    if not matches or any(record != matches[0] for record in matches[1:]):
+    if not matches or any(_record_content(record) != _record_content(matches[0]) for record in matches[1:]):
         return _rejection("unregistered-support", candidates=matches)
     return matches[0]
 
@@ -886,7 +885,7 @@ def _supports_for_records(
     by_id: dict[str, EvidenceNode] = {}
     for record in records:
         registered = _registered_record(index, record.record_id)
-        if isinstance(registered, OwnerCertificateRejection) or registered != record:
+        if isinstance(registered, OwnerCertificateRejection) or _record_content(registered) != _record_content(record):
             return _rejection("unregistered-support", role, (record,))
         if (
             record.producer_confidence is Confidence.HEURISTIC
