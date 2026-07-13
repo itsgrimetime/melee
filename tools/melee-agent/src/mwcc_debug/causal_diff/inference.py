@@ -10,39 +10,11 @@ from typing import Iterable, Literal, Mapping
 from .canonical import canonical_bytes, stable_id
 from .effects import DerivedEffects, EffectPair
 from .graph import FrontierGraph
+from .legacy_ownership import legacy_simple_paths
 from .models import AdapterResult, ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode
-from .object_binding_adapter import (
-    ObjectBindingEvidence,
-    exact_owner_path_record,
-    owner_edge_requires_exact_v2,
-)
-from .store import EvidenceQuery
+from .owner_certificate import OwnerCertificateResult, OwnerRoleKey, OwnerSemanticState
+from .store import EvidenceQuery, canonical_record_bytes
 
-_PATH_EDGE_KINDS = frozenset(
-    {
-        "uses-virtual",
-        "defines-virtual",
-        "maps-to-allocator-node",
-        "has-color-decision",
-        "interferes-with",
-        "coalesces-with",
-        "statement-has-enode",
-        "enode-child",
-        "enode-references-object",
-        "object-owned-by-scope",
-        "expression-represents-enode",
-        "lowers-to",
-        "materializes-as-stack-object",
-        "bridge-candidate-materializes-stack-object",
-        "bridge-has-stack-access",
-        "bridge-has-source-expression",
-        "assembly-anchor-emitted-by-pcode",
-        "pcode-operand-lineage",
-        "pcode-operand-uses-virtual",
-        "object-materializes-virtual",
-        "object-has-stack-home",
-    }
-)
 _OWNER_KINDS = frozenset({"compiler-object", "source-expression", "objobject", "inline-scope"})
 _DELTA_RELATIONS = frozenset(
     {
@@ -308,55 +280,19 @@ def _record_for_id(query: EvidenceQuery, record_id: str) -> EvidenceNode | Evide
     return query.get_node(record_id) or query.get_edge(record_id)
 
 
-def _all_simple_paths(
+def _legacy_simple_path_search(
     query: EvidenceQuery,
     source_id: str,
     target_id: str,
     max_depth: int,
-    *,
-    owner_evidence_by_compile: Mapping[str, ObjectBindingEvidence] | None = None,
 ) -> _PathEnumeration:
-    """Enumerate simple paths up to ``max_depth`` evidence edges."""
+    """Enumerate legacy-only paths while retaining the depth truncation signal."""
 
-    if source_id == target_id:
-        return _PathEnumeration(((source_id,),), truncated=False)
-    paths: list[tuple[str, ...]] = []
-    truncated = False
-
-    def visit(
-        node_id: str,
-        visited: frozenset[str],
-        path: tuple[str, ...],
-        depth: int,
-    ) -> None:
-        nonlocal truncated
-        neighbors: list[tuple[str, EvidenceEdge]] = []
-        for edge in query.neighbors(node_id, _PATH_EDGE_KINDS, "both"):
-            evidence = (owner_evidence_by_compile or {}).get(edge.compile_id)
-            if owner_edge_requires_exact_v2(evidence, edge):
-                if evidence is None or not exact_owner_path_record(evidence, edge):
-                    continue
-            other = edge.target_id if edge.source_id == node_id else edge.source_id
-            if other in visited:
-                continue
-            neighbors.append((other, edge))
-        if depth >= max_depth:
-            truncated |= bool(neighbors)
-            return
-        for other, edge in sorted(
-            neighbors,
-            key=lambda item: (item[1].kind, item[0], item[1].record_id),
-        ):
-            next_path = (*path, edge.record_id, other)
-            if other == target_id:
-                paths.append(next_path)
-            else:
-                visit(other, visited | {other}, next_path, depth + 1)
-
-    visit(source_id, frozenset({source_id}), (source_id,), 0)
+    paths = legacy_simple_paths(query, source_id, target_id, max_depth)
+    one_deeper = legacy_simple_paths(query, source_id, target_id, max_depth + 1)
     return _PathEnumeration(
-        tuple(sorted(set(paths), key=lambda path: (len(path), path))),
-        truncated=truncated,
+        paths,
+        truncated=any(path not in paths for path in one_deeper),
     )
 
 
@@ -404,6 +340,44 @@ def _evidence_integrity_failure(records: Iterable[object]) -> bool:
     return any(
         _truthy_attribute(record, truthy_failures) or _false_attribute(record, false_failures) for record in records
     )
+
+
+def _owner_role(value: object) -> OwnerRoleKey | None:
+    if not isinstance(value, Mapping) or frozenset(value) != {
+        "operand_key",
+        "register_class",
+        "semantic_stack_role",
+        "type_size",
+        "frame_area",
+    }:
+        return None
+    try:
+        role = OwnerRoleKey(**value)
+        role.validate()
+    except (TypeError, ValueError):
+        return None
+    return role
+
+
+def _owner_state(value: object) -> OwnerSemanticState | None:
+    if not isinstance(value, Mapping) or frozenset(value) != {
+        "assigned_physical_register",
+        "stack_offset",
+        "stack_size",
+    }:
+        return None
+    try:
+        state = OwnerSemanticState(**value)
+        state.validate()
+    except (TypeError, ValueError):
+        return None
+    return state
+
+
+def _record_id_tuple(value: object) -> tuple[str, ...] | None:
+    if not isinstance(value, tuple) or not all(isinstance(item, str) and item for item in value):
+        return None
+    return value
 
 
 def _bilateral_node_deltas(
@@ -487,7 +461,6 @@ def _owner_alternatives(
     query: EvidenceQuery,
     comparisons: tuple[ComparisonRecord, ...],
     evidence_depth: int,
-    owner_evidence_by_compile: Mapping[str, ObjectBindingEvidence] | None = None,
 ) -> _OwnerEnumeration:
     allocator_by_compile = {
         pair.allocator.role_correspondence.left.compile_id: pair.allocator.role_correspondence.left,
@@ -529,19 +502,17 @@ def _owner_alternatives(
             stack_target = stack_by_compile.get(owner.compile_id)
             if allocator is None or stack_target is None:
                 continue
-            allocator_search = _all_simple_paths(
+            allocator_search = _legacy_simple_path_search(
                 query,
                 owner.record_id,
                 allocator.record_id,
                 evidence_depth,
-                owner_evidence_by_compile=owner_evidence_by_compile,
             )
-            stack_search = _all_simple_paths(
+            stack_search = _legacy_simple_path_search(
                 query,
                 owner.record_id,
                 stack_target.record_id,
                 evidence_depth,
-                owner_evidence_by_compile=owner_evidence_by_compile,
             )
             truncated |= allocator_search.truncated or stack_search.truncated
             if not allocator_search.paths or not stack_search.paths:
@@ -724,13 +695,227 @@ def _verdict(
     )
 
 
+def _certificate_proof_path(certificate: EvidenceNode) -> tuple[str, ...] | None:
+    path_ids = _record_id_tuple(certificate.attributes.get("path_record_ids"))
+    support_ids = _record_id_tuple(certificate.attributes.get("raw_support_record_ids"))
+    if path_ids is None or support_ids is None or certificate.provenance.input_record_ids != (*path_ids, *support_ids):
+        return None
+    return (certificate.record_id, *path_ids, *support_ids)
+
+
+def _matching_owner_abstentions(
+    records: tuple[ComparisonRecord, ...],
+    role: OwnerRoleKey | None,
+    owner_ids: frozenset[str],
+) -> tuple[ComparisonRecord, ...]:
+    return tuple(
+        comparison
+        for comparison in records
+        if comparison.relation_kind == "backend-owner-abstained"
+        and (
+            (role is not None and _owner_role(comparison.attributes.get("role")) == role)
+            or bool(
+                owner_ids
+                & {
+                    record_id
+                    for record_id in (
+                        comparison.left_record_id,
+                        comparison.right_record_id,
+                    )
+                    if record_id is not None
+                }
+            )
+        )
+    )
+
+
+def _infer_certificate_pair(
+    pair: EffectPair,
+    query: EvidenceQuery,
+    records: tuple[ComparisonRecord, ...],
+    owner_certificate_results_by_compile: Mapping[str, OwnerCertificateResult],
+) -> CausalVerdict:
+    """Evaluate a certificate-mediated pair without traversing raw owner edges."""
+
+    role_pair = pair.allocator.role_correspondence
+    role_comparison = role_pair.comparison
+    owner_ids = frozenset(pair.stack.owner_record_ids)
+    identity_records = (
+        query.get_node(role_pair.left.record_id),
+        query.get_node(role_pair.right.record_id),
+    )
+    if not all(record is not None for record in identity_records):
+        return _verdict(
+            pair,
+            status=VerdictStatus.ABSTAIN,
+            cause=None,
+            proof_paths=(),
+            rejected_alternatives=(),
+            failed_gates=(_GATE_1,),
+        )
+
+    expert_asserted = bool(
+        role_pair.asserted_labels
+        or role_comparison.attributes.get("expert_assertion")
+        or role_comparison.attributes.get("verdict_cap") == VerdictStatus.CANDIDATE_CAUSE.value
+    )
+    role_registered = any(comparison.record_id == role_comparison.record_id for comparison in records)
+    if not role_registered or expert_asserted or not _record_is_proof_capable(role_comparison):
+        return _verdict(
+            pair,
+            status=VerdictStatus.ABSTAIN,
+            cause=None,
+            proof_paths=(),
+            rejected_alternatives=(),
+            failed_gates=(_GATE_2,),
+        )
+
+    expected_operand = pair.stack.owner_operand_key
+    correspondences = tuple(
+        comparison
+        for comparison in records
+        if comparison.relation_kind == "backend-owner-corresponds-to"
+        and comparison.left_record_id is not None
+        and comparison.right_record_id is not None
+        and frozenset((comparison.left_record_id, comparison.right_record_id)) == owner_ids
+        and (comparison_role := _owner_role(comparison.attributes.get("role"))) is not None
+        and comparison_role.operand_key == expected_operand
+        and comparison_role.operand_key == pair.allocator.operand_key
+    )
+    deltas = tuple(
+        comparison
+        for comparison in records
+        if comparison.relation_kind == "backend-owner-state-changed"
+        and comparison.left_record_id is not None
+        and comparison.right_record_id is not None
+        and frozenset((comparison.left_record_id, comparison.right_record_id)) == owner_ids
+        and (delta_role := _owner_role(comparison.attributes.get("role"))) is not None
+        and delta_role.operand_key == expected_operand
+        and delta_role.operand_key == pair.allocator.operand_key
+    )
+    role = _owner_role(correspondences[0].attributes.get("role")) if len(correspondences) == 1 else None
+    stored_certificates = tuple(
+        sorted(
+            (certificate for record_id in owner_ids if (certificate := query.get_node(record_id)) is not None),
+            key=lambda item: item.record_id,
+        )
+    )
+    states = tuple(_owner_state(certificate.attributes.get("semantic_state")) for certificate in stored_certificates)
+
+    failed: list[str] = []
+    if len(states) != 2 or any(state is None for state in states) or states[0] == states[1]:
+        failed.append(_GATE_3)
+    if (
+        len(states) != 2
+        or any(state is None for state in states)
+        or states[0].assigned_physical_register == states[1].assigned_physical_register
+    ):
+        failed.append(_GATE_4)
+    if (
+        len(states) != 2
+        or any(state is None for state in states)
+        or (states[0].stack_offset, states[0].stack_size) == (states[1].stack_offset, states[1].stack_size)
+    ):
+        failed.append(_GATE_5)
+    if len(correspondences) != 1 or len(deltas) != 1 or len(owner_ids) != 2:
+        failed.append(_GATE_6)
+
+    trusted_certificates: list[EvidenceNode] = []
+    for stored in stored_certificates:
+        result = owner_certificate_results_by_compile.get(stored.compile_id)
+        trusted = None if result is None else result.certificate(stored.record_id)
+        if trusted is not None:
+            trusted_certificates.append(trusted)
+    if len(trusted_certificates) != 2:
+        failed.append(_GATE_7)
+
+    proof_paths = tuple(
+        path for certificate in stored_certificates if (path := _certificate_proof_path(certificate)) is not None
+    )
+    integrity_failure = (
+        len(stored_certificates) != 2
+        or any(certificate.kind != "owner-proof-certificate" for certificate in stored_certificates)
+        or len(proof_paths) != 2
+        or role is None
+        or role.semantic_stack_role != pair.stack.role_key
+        or any(_owner_role(certificate.attributes.get("role")) != role for certificate in stored_certificates)
+        or len(trusted_certificates) == 2
+        and any(
+            canonical_record_bytes(stored) != canonical_record_bytes(trusted)
+            for stored, trusted in zip(
+                stored_certificates, sorted(trusted_certificates, key=lambda item: item.record_id)
+            )
+        )
+    )
+    cited_records: list[object] = [
+        role_comparison,
+        *stored_certificates,
+        *correspondences,
+        *deltas,
+    ]
+    if len(correspondences) == 1 and len(deltas) == 1:
+        correspondence = correspondences[0]
+        delta = deltas[0]
+        left_state = _owner_state(delta.attributes.get("left_semantic_state"))
+        right_state = _owner_state(delta.attributes.get("right_semantic_state"))
+        certificates_by_id = {certificate.record_id: certificate for certificate in stored_certificates}
+        left = certificates_by_id.get(delta.left_record_id or "")
+        right = certificates_by_id.get(delta.right_record_id or "")
+        integrity_failure |= (
+            frozenset(correspondence.attributes) != {"role"}
+            or frozenset(delta.attributes) != {"role", "left_semantic_state", "right_semantic_state"}
+            or correspondence.left_compile_id != delta.left_compile_id
+            or correspondence.right_compile_id != delta.right_compile_id
+            or correspondence.left_record_id != delta.left_record_id
+            or correspondence.right_record_id != delta.right_record_id
+            or left is None
+            or right is None
+            or left.compile_id != delta.left_compile_id
+            or right.compile_id != delta.right_compile_id
+            or _owner_role(delta.attributes.get("role")) != role
+            or left_state != _owner_state(left.attributes.get("semantic_state"))
+            or right_state != _owner_state(right.attributes.get("semantic_state"))
+            or not {left.record_id, right.record_id}.issubset(correspondence.provenance.input_record_ids)
+            or not {
+                correspondence.record_id,
+                left.record_id,
+                right.record_id,
+            }.issubset(delta.provenance.input_record_ids)
+            or not _record_is_proof_capable(correspondence)
+            or not _record_is_proof_capable(delta)
+        )
+    abstentions = _matching_owner_abstentions(records, role, owner_ids)
+    if abstentions:
+        cited_records.extend(abstentions)
+    if integrity_failure or abstentions or _evidence_integrity_failure(cited_records):
+        failed.append(_GATE_8)
+
+    if failed:
+        return _verdict(
+            pair,
+            status=VerdictStatus.ABSTAIN,
+            cause=None,
+            proof_paths=proof_paths,
+            rejected_alternatives=tuple(sorted(f"backend-owner-abstained:{item.record_id}" for item in abstentions)),
+            failed_gates=tuple(dict.fromkeys(failed)),
+        )
+    return _verdict(
+        pair,
+        status=VerdictStatus.ABSTAIN,
+        cause=None,
+        proof_paths=tuple(sorted(proof_paths)),
+        rejected_alternatives=(),
+        failed_gates=(_GATE_9,),
+    )
+
+
 def infer_pair(
     pair: EffectPair,
     query: EvidenceQuery,
     comparisons: Iterable[ComparisonRecord],
     *,
     evidence_depth: int = 4,
-    owner_evidence_by_compile: Mapping[str, ObjectBindingEvidence] | None = None,
+    owner_certificate_results_by_compile: Mapping[str, OwnerCertificateResult] | None = None,
 ) -> CausalVerdict:
     """Apply the normative strict-inference table to one eligible effect pair."""
 
@@ -751,6 +936,13 @@ def infer_pair(
             key=lambda record: record.record_id,
         )
     )
+    if pair.stack.owner_operand_key is not None:
+        return _infer_certificate_pair(
+            pair,
+            query,
+            records,
+            owner_certificate_results_by_compile or {},
+        )
     owner_ambiguities = tuple(
         comparison
         for comparison in records
@@ -782,7 +974,6 @@ def infer_pair(
         query,
         records,
         evidence_depth,
-        owner_evidence_by_compile,
     )
     alternatives = owner_enumeration.alternatives
     rejected = owner_enumeration.rejected
@@ -1084,13 +1275,13 @@ def build_report(
         },
     )
     analysis_id = _analysis_id(effects, comparison_records, fallback_analysis_id)
-    owner_evidence_by_compile = {
-        str(graph.bundle.compile_id): evidence
+    owner_certificate_results_by_compile = {
+        str(graph.bundle.compile_id): result
         for graph in graph_pair
         if (
-            evidence := getattr(
+            result := getattr(
                 getattr(graph, "backend", None),
-                "object_bindings",
+                "owner_certificates",
                 None,
             )
         )
@@ -1104,7 +1295,7 @@ def build_report(
                     query,
                     comparison_records,
                     evidence_depth=evidence_depth,
-                    owner_evidence_by_compile=owner_evidence_by_compile,
+                    owner_certificate_results_by_compile=owner_certificate_results_by_compile,
                 )
                 for pair in sorted(effects.pairs, key=lambda item: item.pair_id)
             ),
@@ -1121,8 +1312,8 @@ def build_report(
         for graph in graph_pair
         if (
             reason := getattr(
-                getattr(getattr(graph, "backend", None), "object_bindings", None),
-                "abstention_reason",
+                getattr(graph, "backend", None),
+                "owner_abstention_reason",
                 None,
             )
         )

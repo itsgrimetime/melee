@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Literal
+from typing import Iterable, Literal, Mapping
 
 from .alignment import (
     AbstentionReason,
@@ -13,11 +13,10 @@ from .alignment import (
 )
 from .canonical import stable_id
 from .graph import FrontierGraph
-from .models import EvidenceNode
-from .object_binding_adapter import (
-    exact_owner_path_record,
-    owner_edge_requires_exact_v2,
-)
+from .legacy_ownership import legacy_reachable_records
+from .models import ComparisonRecord, EvidenceNode
+from .owner_certificate import OwnerRoleKey, OwnerSemanticState
+from .store import canonical_record_bytes
 
 EffectDirection = Literal[
     "first-exact-second-mismatch",
@@ -31,7 +30,6 @@ _OWNERSHIP_EDGE_KINDS = frozenset(
     {
         "uses-virtual",
         "defines-virtual",
-        "maps-to-allocator-node",
         "statement-has-enode",
         "enode-child",
         "enode-references-object",
@@ -42,11 +40,6 @@ _OWNERSHIP_EDGE_KINDS = frozenset(
         "bridge-candidate-materializes-stack-object",
         "bridge-has-stack-access",
         "bridge-has-source-expression",
-        "assembly-anchor-emitted-by-pcode",
-        "pcode-operand-lineage",
-        "pcode-operand-uses-virtual",
-        "object-materializes-virtual",
-        "object-has-stack-home",
     }
 )
 
@@ -75,6 +68,7 @@ class StackEffect:
     second_offset: int | None
     direction: EffectDirection
     owner_record_ids: tuple[str, ...]
+    owner_operand_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,28 +169,189 @@ def _allocator_effects(alignment: AnchorAlignment) -> tuple[AllocatorEffect, ...
 
 
 def _reachable_records(graph: FrontierGraph, roots: Iterable[str]) -> tuple[frozenset[str], frozenset[str]]:
-    visited = set(roots)
-    edge_ids: set[str] = set()
-    frontier = sorted(visited)
-    while frontier:
-        current = frontier.pop(0)
-        for edge in graph.store.neighbors(current, _OWNERSHIP_EDGE_KINDS, "both"):
-            object_bindings = getattr(
-                getattr(graph, "backend", None),
-                "object_bindings",
-                None,
+    return legacy_reachable_records(graph, roots)
+
+
+def _owner_role(value: object) -> OwnerRoleKey | None:
+    if not isinstance(value, Mapping) or frozenset(value) != {
+        "operand_key",
+        "register_class",
+        "semantic_stack_role",
+        "type_size",
+        "frame_area",
+    }:
+        return None
+    try:
+        role = OwnerRoleKey(**value)
+        role.validate()
+    except (TypeError, ValueError):
+        return None
+    return role
+
+
+def _owner_state(value: object) -> OwnerSemanticState | None:
+    if not isinstance(value, Mapping) or frozenset(value) != {
+        "assigned_physical_register",
+        "stack_offset",
+        "stack_size",
+    }:
+        return None
+    try:
+        state = OwnerSemanticState(**value)
+        state.validate()
+    except (TypeError, ValueError):
+        return None
+    return state
+
+
+def _trusted_stored_certificate(
+    graph: FrontierGraph,
+    record_id: str,
+) -> EvidenceNode | None:
+    certificate = graph.backend.owner_certificates.certificate(record_id)
+    stored = graph.store.get_node(record_id)
+    if (
+        certificate is None
+        or stored is None
+        or stored.kind != "owner-proof-certificate"
+        or canonical_record_bytes(stored) != canonical_record_bytes(certificate)
+    ):
+        return None
+    return certificate
+
+
+def _certificate_stack_effects(
+    alignment: AnchorAlignment,
+    graphs: tuple[FrontierGraph, FrontierGraph],
+    allocator_effects: tuple[AllocatorEffect, ...],
+    comparisons: tuple[ComparisonRecord, ...],
+) -> tuple[tuple[StackEffect, ...], tuple[EffectAbstention, ...]]:
+    graphs_by_compile = {str(graph.bundle.compile_id): graph for graph in graphs}
+    allocator_operands = {effect.operand_key for effect in allocator_effects}
+    correspondences = tuple(
+        comparison
+        for comparison in comparisons
+        if comparison.relation_kind == "backend-owner-corresponds-to"
+        and comparison.left_record_id is not None
+        and comparison.right_record_id is not None
+    )
+    effects: list[StackEffect] = []
+    abstentions: list[EffectAbstention] = []
+    for delta in sorted(comparisons, key=lambda item: item.record_id):
+        if (
+            delta.relation_kind != "backend-owner-state-changed"
+            or delta.left_record_id is None
+            or delta.right_record_id is None
+        ):
+            continue
+        matching = tuple(
+            comparison
+            for comparison in correspondences
+            if comparison.left_compile_id == delta.left_compile_id
+            and comparison.left_record_id == delta.left_record_id
+            and comparison.right_compile_id == delta.right_compile_id
+            and comparison.right_record_id == delta.right_record_id
+            and comparison.attributes.get("role") == delta.attributes.get("role")
+        )
+        if len(matching) != 1:
+            continue
+        correspondence = matching[0]
+        required_provenance = {
+            correspondence.record_id,
+            delta.left_record_id,
+            delta.right_record_id,
+        }
+        if not required_provenance.issubset(delta.provenance.input_record_ids):
+            continue
+        left_graph = graphs_by_compile.get(delta.left_compile_id)
+        right_graph = graphs_by_compile.get(delta.right_compile_id)
+        if left_graph is None or right_graph is None:
+            continue
+        left = _trusted_stored_certificate(left_graph, delta.left_record_id)
+        right = _trusted_stored_certificate(right_graph, delta.right_record_id)
+        if left is None or right is None:
+            continue
+        roles = tuple(
+            _owner_role(value)
+            for value in (
+                correspondence.attributes.get("role"),
+                delta.attributes.get("role"),
+                left.attributes.get("role"),
+                right.attributes.get("role"),
             )
-            if owner_edge_requires_exact_v2(object_bindings, edge) and (
-                object_bindings is None or not exact_owner_path_record(object_bindings, edge)
-            ):
-                continue
-            edge_ids.add(edge.record_id)
-            other = edge.target_id if edge.source_id == current else edge.source_id
-            if other not in visited:
-                visited.add(other)
-                frontier.append(other)
-        frontier.sort()
-    return frozenset(visited), frozenset(edge_ids)
+        )
+        left_state = _owner_state(delta.attributes.get("left_semantic_state"))
+        right_state = _owner_state(delta.attributes.get("right_semantic_state"))
+        if (
+            any(role is None for role in roles)
+            or len(set(roles)) != 1
+            or left_state is None
+            or right_state is None
+            or left_state != _owner_state(left.attributes.get("semantic_state"))
+            or right_state != _owner_state(right.attributes.get("semantic_state"))
+        ):
+            continue
+        role = roles[0]
+        assert role is not None
+        if role.operand_key not in allocator_operands:
+            continue
+        if (left_state.stack_offset, left_state.stack_size) == (
+            right_state.stack_offset,
+            right_state.stack_size,
+        ):
+            continue
+        expected_values = {
+            interval
+            for graph in (left_graph, right_graph)
+            if (interval := graph.frame.expected_stack_roles.get(role.semantic_stack_role)) is not None
+        }
+        if not expected_values:
+            abstentions.append(
+                EffectAbstention(
+                    role.operand_key,
+                    AbstentionReason.MISSING_EXPECTED_LAYOUT,
+                )
+            )
+            continue
+        if len(expected_values) != 1:
+            abstentions.append(
+                EffectAbstention(
+                    role.operand_key,
+                    AbstentionReason.CONTRADICTORY_EXPECTED_LAYOUT,
+                )
+            )
+            continue
+        expected = next(iter(expected_values))
+        left_exact = left_state.stack_offset == expected[0] and left_state.stack_size == expected[1] - expected[0]
+        right_exact = right_state.stack_offset == expected[0] and right_state.stack_size == expected[1] - expected[0]
+        effects.append(
+            StackEffect(
+                effect_id=stable_id(
+                    alignment.analysis_id,
+                    "certified-stack-effect",
+                    {
+                        "role": role.as_json(),
+                        "correspondence": correspondence.record_id,
+                        "delta": delta.record_id,
+                        "left": (left.record_id, left_state.as_json()),
+                        "right": (right.record_id, right_state.as_json()),
+                    },
+                ),
+                role_key=role.semantic_stack_role,
+                expected_offset=expected[0],
+                first_label=_label(left_graph),
+                first_offset=left_state.stack_offset,
+                second_label=_label(right_graph),
+                second_offset=right_state.stack_offset,
+                direction=_direction(True, left_exact, right_exact),
+                owner_record_ids=tuple(sorted((left.record_id, right.record_id))),
+                owner_operand_key=role.operand_key,
+            )
+        )
+    return (
+        tuple(sorted(effects, key=lambda effect: (effect.role_key, effect.effect_id))),
+        tuple(abstentions),
+    )
 
 
 def _stack_shape(node: EvidenceNode | None) -> tuple[object, ...] | None:
@@ -363,6 +518,8 @@ def _effect_pairs(
     for allocator in allocator_effects:
         allocator_quality = _quality_by_label(allocator.first_label, allocator.second_label, allocator.direction)
         for stack in stack_effects:
+            if stack.owner_operand_key is not None and stack.owner_operand_key != allocator.operand_key:
+                continue
             stack_quality = _quality_by_label(stack.first_label, stack.second_label, stack.direction)
             eligible = [
                 label
@@ -391,22 +548,47 @@ def _effect_pairs(
     return tuple(sorted(pairs, key=lambda pair: (pair.allocator.effect_id, pair.stack.effect_id, pair.pair_id)))
 
 
-def derive_effects(alignment: AnchorAlignment, graphs: Iterable[FrontierGraph]) -> DerivedEffects:
+def derive_effects(
+    alignment: AnchorAlignment,
+    graphs: Iterable[FrontierGraph],
+    comparisons: Iterable[ComparisonRecord] = (),
+) -> DerivedEffects:
     """Derive effects with label-sorted direction independent of CLI order."""
 
     graph_pair = tuple(graphs)
     if len(graph_pair) != 2:
         raise ValueError("effect derivation requires exactly two frontiers")
     ordered = tuple(sorted(graph_pair, key=_label))
+    comparison_records = tuple(comparisons)
     allocator_effects = _allocator_effects(alignment)
-    stack_effects, stack_abstentions = _stack_effects(alignment, ordered, allocator_effects)
+    legacy_stack_effects, legacy_stack_abstentions = _stack_effects(
+        alignment,
+        ordered,
+        allocator_effects,
+    )
+    certificate_stack_effects, certificate_stack_abstentions = _certificate_stack_effects(
+        alignment,
+        ordered,
+        allocator_effects,
+        comparison_records,
+    )
+    stack_effects = tuple(
+        sorted(
+            (*legacy_stack_effects, *certificate_stack_effects),
+            key=lambda effect: (effect.role_key, effect.effect_id),
+        )
+    )
     return DerivedEffects(
         allocator_effects=allocator_effects,
         stack_effects=stack_effects,
         pairs=_effect_pairs(alignment.analysis_id, allocator_effects, stack_effects),
         abstentions=tuple(
             sorted(
-                (*alignment.abstentions, *stack_abstentions),
+                (
+                    *alignment.abstentions,
+                    *legacy_stack_abstentions,
+                    *certificate_stack_abstentions,
+                ),
                 key=lambda item: (item.operand_key, item.reason.value),
             )
         ),

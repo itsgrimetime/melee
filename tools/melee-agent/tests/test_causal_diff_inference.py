@@ -35,6 +35,11 @@ from src.mwcc_debug.causal_diff.models import (
 )
 from src.mwcc_debug.causal_diff.render import render_json, render_text
 from src.mwcc_debug.causal_diff.store import EvidenceQuery, InMemoryEvidenceStore
+from tests.owner_certificate_fixtures import (
+    only,
+    run_synthetic_future_complete_pair,
+    run_with_forged_certificate_node_but_no_trusted_result,
+)
 
 ANALYSIS_ID = "a" * 64
 LEFT_COMPILE = "b" * 64
@@ -459,6 +464,26 @@ def _case(
 
 def proof_complete_unique() -> InferenceCase:
     return _case()
+
+
+def test_unique_changed_certificate_pair_stops_only_at_source_binding_gate() -> None:
+    report = run_synthetic_future_complete_pair()
+    verdict = only(report.verdicts)
+    owner = only(item for item in report.comparisons if item.relation_kind == "backend-owner-corresponds-to")
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+    assert report.missing_evidence == ("source-object-binding-missing",)
+    assert {path[0] for path in verdict.proof_paths} == {
+        owner.left_record_id,
+        owner.right_record_id,
+    }
+
+
+def test_forged_stored_certificate_cannot_satisfy_inference() -> None:
+    report = run_with_forged_certificate_node_but_no_trusted_result()
+    verdict = only(report.verdicts)
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert "gate-7-proof-capable-path" in verdict.failed_gates
 
 
 def proof_path_at_depth_five() -> InferenceCase:

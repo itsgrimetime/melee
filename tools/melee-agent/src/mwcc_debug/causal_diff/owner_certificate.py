@@ -1386,7 +1386,6 @@ def _validate_diagnostic_shape(evidence: ObjectBindingEvidence) -> None:
         type(evidence.capabilities) is not frozenset
         or not all(_is_nonempty_str(item) for item in evidence.capabilities)
         or not _is_nonempty_str(evidence.capture_run_id)
-        or (evidence.abstention_reason is not None and not _is_nonempty_str(evidence.abstention_reason))
         or (evidence.instrumentation_identity is not None and not isinstance(evidence.instrumentation_identity, tuple))
     ):
         raise _MalformedEvidence("owner evidence metadata is malformed")

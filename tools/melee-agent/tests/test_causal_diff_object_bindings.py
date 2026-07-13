@@ -34,11 +34,7 @@ from src.mwcc_debug.causal_diff.backend_adapter import adapt_backends
 from src.mwcc_debug.causal_diff.bundles import BundleInputError, load_bundle
 from src.mwcc_debug.causal_diff.canonical import canonical_bytes
 from src.mwcc_debug.causal_diff.effects import DerivedEffects, _reachable_records
-from src.mwcc_debug.causal_diff.inference import (
-    _PATH_EDGE_KINDS,
-    _all_simple_paths,
-    build_report,
-)
+from src.mwcc_debug.causal_diff.inference import build_report
 from src.mwcc_debug.causal_diff.models import (
     BackendArtifactRef,
     Confidence,
@@ -49,17 +45,14 @@ from src.mwcc_debug.causal_diff.object_binding_adapter import (
     ObjectBindingAdapterInput,
     ObjectBindingEvidence,
     adapt_object_bindings,
-    bilateral_source_object_records,
-    derive_backend_frame_recommendation,
     emit_object_binding_evidence,
-    exact_owner_path_record,
-    proof_complete,
 )
 from src.mwcc_debug.causal_diff.owner_certificate import (
     OwnerCertificateResult,
     OwnerResolutionStatus,
     OwnerRoleKey,
     OwnerRoleResolution,
+    build_owner_certificates,
 )
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 from tests.test_causal_diff_alignment import _edge, _graph, _node, _only
@@ -76,6 +69,10 @@ ALL_CAPABILITIES = frozenset(
         "pcode-to-code-range",
     }
 )
+
+
+def _certifies(evidence: ObjectBindingEvidence) -> bool:
+    return bool(build_owner_certificates(evidence).certificate_nodes)
 
 
 def test_legacy_ownership_module_is_available() -> None:
@@ -1311,7 +1308,7 @@ def test_future_complete_emitter_builds_every_exact_same_run_edge() -> None:
     } <= {edge.kind for edge in evidence.edges}
     assert all(edge.confidence is not Confidence.HEURISTIC for edge in evidence.edges)
     assert all(edge.provenance.parser == "mwcc-retro-backend-trace.v2" for edge in evidence.edges)
-    assert proof_complete(evidence)
+    assert _certifies(evidence)
 
 
 @pytest.mark.parametrize(
@@ -1331,7 +1328,7 @@ def test_each_edge_family_requires_its_exact_verified_capability(
     evidence = emit_object_binding_evidence(_adapter_input(capabilities=ALL_CAPABILITIES - {removed}))
 
     assert forbidden not in {edge.kind for edge in evidence.edges}
-    assert not proof_complete(evidence)
+    assert not _certifies(evidence)
 
 
 def test_zero_capabilities_emit_no_object_binding_records() -> None:
@@ -1441,10 +1438,9 @@ def test_phase1_empty_source_fields_never_emit_source_ownership() -> None:
     evidence = emit_object_binding_evidence(_adapter_input())
 
     assert "object-to-source" not in {edge.kind for edge in evidence.edges}
-    assert bilateral_source_object_records((evidence, evidence)) == ()
 
 
-def test_proof_complete_requires_one_connected_owner_path() -> None:
+def test_certificate_builder_requires_one_connected_owner_path() -> None:
     first = emit_object_binding_evidence(_adapter_input())
     unrelated = emit_object_binding_evidence(_adapter_input(virtual=91))
     disconnected = ObjectBindingEvidence(
@@ -1454,22 +1450,9 @@ def test_proof_complete_requires_one_connected_owner_path() -> None:
         ALL_CAPABILITIES,
         first.capture_run_id,
         None,
-        None,
     )
 
-    assert not proof_complete(disconnected)
-
-
-def test_exact_owner_predicate_rejects_unregistered_record_with_known_id() -> None:
-    evidence = emit_object_binding_evidence(_adapter_input())
-    registered = next(edge for edge in evidence.edges if edge.kind == "maps-to-allocator-node")
-    unregistered = replace(
-        registered,
-        attributes=MappingProxyType({**registered.attributes, "unregistered-snapshot": True}),
-    )
-
-    assert unregistered.record_id == registered.record_id
-    assert not exact_owner_path_record(evidence, unregistered)
+    assert not _certifies(disconnected)
 
 
 @pytest.mark.parametrize(
@@ -1529,8 +1512,7 @@ def test_poisoned_required_support_invalidates_dependent_owner_path(
     dependent = next(edge for edge in poisoned.edges if edge.kind == "object-has-stack-home")
 
     assert support.record_id in dependent.provenance.input_record_ids
-    assert not exact_owner_path_record(poisoned, dependent)
-    assert not proof_complete(poisoned)
+    assert not _certifies(poisoned)
 
 
 def test_semantically_foreign_support_cannot_be_cited_as_owner_proof() -> None:
@@ -1548,10 +1530,7 @@ def test_semantically_foreign_support_cannot_be_cited_as_owner_proof() -> None:
         evidence,
         nodes=tuple(poisoned_support if node.record_id == support.record_id else node for node in evidence.nodes),
     )
-    dependent = next(edge for edge in poisoned.edges if edge.kind == "object-has-stack-home")
-
-    assert not exact_owner_path_record(poisoned, dependent)
-    assert not proof_complete(poisoned)
+    assert not _certifies(poisoned)
 
 
 def _poison_typed_support(
@@ -1665,8 +1644,7 @@ def test_foreign_typed_support_semantics_invalidate_owner_proof(
     )
 
     assert dependents
-    assert all(not exact_owner_path_record(poisoned, dependent) for dependent in dependents)
-    assert not proof_complete(poisoned)
+    assert not _certifies(poisoned)
 
 
 def test_every_support_kind_has_closed_typed_semantics_and_valid_dependents() -> None:
@@ -1759,7 +1737,7 @@ def test_every_support_kind_has_closed_typed_semantics_and_valid_dependents() ->
             if record.kind != "backend-support-record" and support.record_id in record.provenance.input_record_ids
         )
         assert dependents
-        assert all(exact_owner_path_record(evidence, dependent) for dependent in dependents)
+        assert _certifies(evidence)
         accepted_kinds.add(support_kind)
 
     assert accepted_kinds == set(expected_shapes)
@@ -1822,8 +1800,7 @@ def test_mutation_lineage_requires_exact_canonical_parent_topology(mutate) -> No
     )
 
     assert dependents
-    assert all(not exact_owner_path_record(poisoned, dependent) for dependent in dependents)
-    assert not proof_complete(poisoned)
+    assert not _certifies(poisoned)
 
 
 def test_mutation_lineage_accepts_exact_canonical_parent_topology() -> None:
@@ -1846,8 +1823,7 @@ def test_mutation_lineage_accepts_exact_canonical_parent_topology() -> None:
         "ol-parent-b",
     )
     assert dependents
-    assert all(exact_owner_path_record(evidence, dependent) for dependent in dependents)
-    assert proof_complete(evidence)
+    assert _certifies(evidence)
 
 
 def test_assigned_physical_is_grounded_by_validated_decode_and_allocator_origin() -> None:
@@ -1877,7 +1853,7 @@ def test_assigned_physical_is_grounded_by_validated_decode_and_allocator_origin(
     } == {21}
     assert origin_support.record_id in allocator.provenance.input_record_ids
     assert origin_support.record_id in mapping.provenance.input_record_ids
-    assert proof_complete(evidence)
+    assert _certifies(evidence)
 
 
 @pytest.mark.parametrize(
@@ -1922,7 +1898,7 @@ def test_foreign_assigned_physical_invalidates_owner_proof(
         edges=tuple(poison(edge) for edge in evidence.edges),
     )
 
-    assert not proof_complete(poisoned)
+    assert not _certifies(poisoned)
 
 
 def _replace_evidence_record(
@@ -1995,13 +1971,13 @@ def _replace_evidence_record(
         ),
     ),
 )
-def test_proof_complete_rejects_every_poisoned_exact_path_record(poison) -> None:
+def test_certificate_builder_rejects_every_poisoned_exact_path_record(poison) -> None:
     left = poison(emit_object_binding_evidence(_adapter_input()))
 
-    assert not proof_complete(left)
+    assert not _certifies(left)
 
 
-def test_effect_traversal_reaches_stack_only_over_exact_owner_edges() -> None:
+def test_effect_legacy_traversal_rejects_v2_owner_edges() -> None:
     evidence = emit_object_binding_evidence(_adapter_input())
     store = InMemoryEvidenceStore()
     store.add_nodes(evidence.nodes)
@@ -2015,17 +1991,8 @@ def test_effect_traversal_reaches_stack_only_over_exact_owner_edges() -> None:
 
     reachable, traversed_edges = _reachable_records(graph, (allocator.record_id,))
 
-    assert stack.record_id in reachable
-    assert {
-        edge.record_id
-        for edge in evidence.edges
-        if edge.kind
-        in {
-            "maps-to-allocator-node",
-            "object-materializes-virtual",
-            "object-has-stack-home",
-        }
-    } <= traversed_edges
+    assert stack.record_id not in reachable
+    assert not traversed_edges
 
 
 def test_effect_traversal_rejects_parser_poisoned_owner_edge() -> None:
@@ -2112,78 +2079,7 @@ def test_effect_traversal_rejects_untagged_legacy_map_into_v2_owner_path() -> No
     )
 
 
-def test_inference_traverses_the_same_exact_owner_path_vocabulary() -> None:
-    assert {
-        "assembly-anchor-emitted-by-pcode",
-        "pcode-operand-lineage",
-        "pcode-operand-uses-virtual",
-        "object-materializes-virtual",
-        "object-has-stack-home",
-    } <= _PATH_EDGE_KINDS
-
-
-def test_inference_path_search_rejects_capability_stripped_owner_edges() -> None:
-    evidence = emit_object_binding_evidence(_adapter_input())
-    stripped = replace(
-        evidence,
-        capabilities=evidence.capabilities - {"object-to-frame"},
-    )
-    store = InMemoryEvidenceStore()
-    store.add_nodes(stripped.nodes)
-    store.add_edges(stripped.edges)
-    allocator = next(node for node in stripped.nodes if node.kind == "allocator-node")
-    stack = next(node for node in stripped.nodes if node.kind == "stack-object")
-
-    result = _all_simple_paths(
-        store,
-        allocator.record_id,
-        stack.record_id,
-        8,
-        owner_evidence_by_compile={allocator.compile_id: stripped},
-    )
-
-    assert result.paths == ()
-
-
-def test_inference_rejects_untagged_legacy_map_into_v2_owner_path() -> None:
-    evidence = emit_object_binding_evidence(_adapter_input())
-    poisoned = _replace_evidence_record(
-        evidence,
-        "maps-to-allocator-node",
-        lambda edge: replace(
-            edge,
-            provenance=replace(edge.provenance, parser="mwcc-debug-pcdump.v1"),
-            attributes=MappingProxyType(
-                {key: value for key, value in edge.attributes.items() if key != "capture_run_id"}
-            ),
-        ),
-    )
-    store = InMemoryEvidenceStore()
-    store.add_nodes(poisoned.nodes)
-    store.add_edges(poisoned.edges)
-    allocator = next(node for node in poisoned.nodes if node.kind == "allocator-node")
-    stack = next(node for node in poisoned.nodes if node.kind == "stack-object")
-
-    result = _all_simple_paths(
-        store,
-        allocator.record_id,
-        stack.record_id,
-        8,
-        owner_evidence_by_compile={allocator.compile_id: poisoned},
-    )
-
-    assert result.paths == ()
-
-
 def test_report_names_current_verified_backend_owner_path_incompleteness() -> None:
-    current = ObjectBindingEvidence(
-        (),
-        (),
-        frozenset({"compiler-object-bindings", "pcode-to-code-range"}),
-        "a" * 64,
-        "backend-owner-path-incomplete",
-        None,
-    )
     graphs = tuple(
         SimpleNamespace(
             bundle=SimpleNamespace(
@@ -2191,7 +2087,7 @@ def test_report_names_current_verified_backend_owner_path_incompleteness() -> No
                 compile_id=f"compile-{label}",
                 manifest=SimpleNamespace(function="fn"),
             ),
-            backend=SimpleNamespace(object_bindings=current),
+            backend=SimpleNamespace(owner_abstention_reason="backend-owner-path-incomplete"),
             store=InMemoryEvidenceStore(),
             warnings=(),
         )
@@ -2317,9 +2213,7 @@ def test_genuine_current_verified_bundle_abstains_before_backend_ownership(
         "object-materializes-virtual",
         "object-has-stack-home",
     }.isdisjoint(edge.kind for edge in evidence.edges)
-    assert not proof_complete(evidence)
-    assert evidence.abstention_reason == "backend-owner-path-incomplete"
-    assert derive_backend_frame_recommendation(evidence) is None
+    assert not _certifies(evidence)
 
 
 def test_backend_adapter_merges_only_genuinely_reverified_v2_evidence(
@@ -2331,7 +2225,7 @@ def test_backend_adapter_merges_only_genuinely_reverified_v2_evidence(
     backend = adapt_backends(bundle)
 
     assert backend.object_bindings is not None
-    assert backend.object_bindings.abstention_reason == ("backend-owner-path-incomplete")
+    assert backend.owner_abstention_reason == "backend-owner-path-incomplete"
     assert {
         "object-materializes-virtual",
         "object-has-stack-home",

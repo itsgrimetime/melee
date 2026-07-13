@@ -6,6 +6,7 @@ from typing import Iterable
 
 from .graph import FrontierGraph
 from .models import EvidenceEdge, EvidenceNode
+from .store import EvidenceQuery
 
 _V2_PARSER = "mwcc-retro-backend-trace.v2"
 
@@ -124,16 +125,18 @@ def legacy_reachable_records(
 
 
 def legacy_simple_paths(
-    graph: FrontierGraph,
+    query: EvidenceQuery | FrontierGraph,
     source_id: str,
     target_id: str,
     max_depth: int,
 ) -> tuple[tuple[str, ...], ...]:
     """Enumerate deterministic legacy-only paths as alternating node/edge IDs."""
 
+    if isinstance(query, FrontierGraph):
+        query = query.store
     if max_depth < 0:
         raise ValueError("max_depth must be non-negative")
-    if not all(_legacy_record(graph.store.get_node(record_id)) for record_id in (source_id, target_id)):
+    if not all(_legacy_record(query.get_node(record_id)) for record_id in (source_id, target_id)):
         return ()
     if source_id == target_id:
         return ((source_id,),)
@@ -149,8 +152,12 @@ def legacy_simple_paths(
         if depth >= max_depth:
             return
         neighbors = []
-        for edge in graph.store.neighbors(node_id, direction="both"):
-            if not _legacy_edge(graph, edge):
+        for edge in query.neighbors(node_id, direction="both"):
+            if not (
+                _legacy_record(edge)
+                and _legacy_record(query.get_node(edge.source_id))
+                and _legacy_record(query.get_node(edge.target_id))
+            ):
                 continue
             other = edge.target_id if edge.source_id == node_id else edge.source_id
             if other in visited:

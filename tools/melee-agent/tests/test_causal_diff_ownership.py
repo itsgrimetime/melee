@@ -35,6 +35,7 @@ from tests.owner_certificate_fixtures import (
     graphs,
     only,
     owner_comparison,
+    run_synthetic_future_complete_pair,
 )
 from tests.test_stack_slot_bridge import PCDUMP as BRIDGE_PCDUMP
 from tests.test_stack_slot_bridge import SOURCE as BRIDGE_SOURCE
@@ -1433,6 +1434,18 @@ def test_equal_certificate_semantics_emit_no_owner_delta() -> None:
         (owner_comparison(states=(STATE, STATE)),),
     )
     assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+
+
+def test_certificate_delta_drives_owner_mediated_stack_effect() -> None:
+    report = run_synthetic_future_complete_pair()
+    stack = only(report.effects.stack_effects)
+    owner = only(item for item in report.comparisons if item.relation_kind == "backend-owner-corresponds-to")
+    assert set(stack.owner_record_ids) == {
+        owner.left_record_id,
+        owner.right_record_id,
+    }
+    assert stack.first_offset == 0x48
+    assert stack.second_offset == 0x44
 
 
 def test_changed_certificate_semantics_emit_one_reconstructable_delta() -> None:

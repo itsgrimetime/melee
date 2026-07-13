@@ -153,7 +153,6 @@ def test_direct_diagnostic_evidence_construction_cannot_build_proof():
         evidence.edges,
         evidence.capabilities,
         evidence.capture_run_id,
-        evidence.abstention_reason,
         evidence.instrumentation_identity,
     )
     result = build_owner_certificates(forged)
@@ -667,7 +666,6 @@ def test_exact_duplicate_alternatives_retain_one_group_and_multiplicity():
         (*evidence.edges, duplicate),
         evidence.capabilities,
         evidence.capture_run_id,
-        evidence.abstention_reason,
         evidence.instrumentation_identity,
     )
     result = owner_certificate.validate_owner_evidence(tokenless)
@@ -829,7 +827,6 @@ def test_diagnostic_boundary_maps_malformed_record_container_to_rejection():
         pytest.param("capabilities", frozenset({3}), id="capability-non-string"),
         pytest.param("capture-run-id", "", id="capture-run-id-empty"),
         pytest.param("capture-run-id", [], id="capture-run-id-list"),
-        pytest.param("abstention-reason", [], id="abstention-reason-list"),
         pytest.param("instrumentation-identity", [], id="identity-list"),
         pytest.param("instrumentation-identity", {}, id="identity-mapping"),
     ],
@@ -847,8 +844,6 @@ def test_diagnostic_boundary_rejects_malformed_structural_fields(field, value):
         malformed = replace(evidence, capabilities=value)
     elif field == "capture-run-id":
         malformed = replace(evidence, capture_run_id=value)
-    elif field == "abstention-reason":
-        malformed = replace(evidence, abstention_reason=value)
     elif field == "instrumentation-identity":
         malformed = replace(evidence, instrumentation_identity=value)
     elif field.startswith("edge-"):

@@ -15,13 +15,21 @@ from tools.mwcc_retro.backend_pcode_lineage import (
 )
 
 from src.mwcc_debug.causal_diff import backend_adapter
-from src.mwcc_debug.causal_diff.alignment import AnchorAlignment, build_role_comparisons
+from src.mwcc_debug.causal_diff.alignment import (
+    AnchorAlignment,
+    OperandRole,
+    RolePair,
+    build_role_comparisons,
+)
 from src.mwcc_debug.causal_diff.asm_adapter import CheckdiffEvidence
 from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import ValidatedBundle
 from src.mwcc_debug.causal_diff.canonical import canonical_bytes
+from src.mwcc_debug.causal_diff.differ import diff_frontiers
+from src.mwcc_debug.causal_diff.effects import derive_effects
 from src.mwcc_debug.causal_diff.frame_adapter import FrameEvidence
 from src.mwcc_debug.causal_diff.graph import FrontierGraph
+from src.mwcc_debug.causal_diff.inference import CausalDiffReport, build_report
 from src.mwcc_debug.causal_diff.models import (
     AdapterResult,
     ComparisonRecord,
@@ -43,6 +51,15 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
 )
 from src.mwcc_debug.causal_diff.source_adapter import SourceEvidence
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
+from tests.test_causal_diff_alignment import (
+    _edge as _fixture_edge,
+)
+from tests.test_causal_diff_alignment import (
+    _graph as _legacy_graph,
+)
+from tests.test_causal_diff_alignment import (
+    _node as _fixture_node,
+)
 from tests.test_causal_diff_object_bindings import (
     _adapter_input,
     _object_result,
@@ -855,3 +872,155 @@ def node(record_id: str) -> EvidenceNode:
         if (candidate := graph.store.get_node(record_id)) is not None
     )
     return only(matches)
+
+
+def _future_complete_graph_pair() -> tuple[FrontierGraph, FrontierGraph]:
+    expected_stack = MappingProxyType({ROLE.semantic_stack_role: (0x44, 0x48)})
+    return tuple(
+        replace(
+            graph,
+            frame=replace(
+                graph.frame,
+                expected_stack_roles=expected_stack,
+            ),
+        )
+        for graph in (
+            _semantic_frontier("direct", OwnerSemanticState(21, 0x48, 4)),
+            _semantic_frontier("paired", OwnerSemanticState(22, 0x44, 4)),
+        )
+    )
+
+
+def _future_complete_alignment(
+    graph_pair: tuple[FrontierGraph, FrontierGraph],
+) -> AnchorAlignment:
+    left, right = tuple(sorted(graph_pair, key=lambda graph: str(graph.bundle.label)))
+    left_certificate = only(left.backend.owner_certificates.certificate_nodes)
+    right_certificate = only(right.backend.owner_certificates.certificate_nodes)
+    left_allocator = left.store.get_node(str(left_certificate.attributes["allocator_record_id"]))
+    right_allocator = right.store.get_node(str(right_certificate.attributes["allocator_record_id"]))
+    assert left_allocator is not None and right_allocator is not None
+    analysis_id = "d" * 64
+    correspondence = ComparisonRecord.create(
+        analysis_id=analysis_id,
+        relation_kind="role-corresponds-to",
+        left_compile_id=left_allocator.compile_id,
+        left_record_id=left_allocator.record_id,
+        right_compile_id=right_allocator.compile_id,
+        right_record_id=right_allocator.record_id,
+        producer_confidence=Confidence.OBSERVED,
+        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        provenance=Provenance(
+            artifact_sha256=analysis_id,
+            parser="causal-anchor-alignment.v1",
+            raw_start=None,
+            raw_end=None,
+            derivation_rule="synthetic-future-complete-role",
+            input_record_ids=(left_allocator.record_id, right_allocator.record_id),
+        ),
+        input_confidences=(left_allocator.confidence, right_allocator.confidence),
+        attributes={"operand_key": ROLE.operand_key},
+    )
+    pair = RolePair(
+        ROLE.operand_key,
+        str(left.bundle.label),
+        left_allocator,
+        str(right.bundle.label),
+        right_allocator,
+        correspondence,
+    )
+    return AnchorAlignment(
+        analysis_id=analysis_id,
+        retail_offset=0x234,
+        operand_roles=(OperandRole(ROLE.operand_key, "use", 0, "r", 21),),
+        by_operand={ROLE.operand_key: pair},
+        comparisons=(correspondence,),
+        abstentions=(),
+    )
+
+
+def _future_complete_inputs():
+    graph_pair = _future_complete_graph_pair()
+    owner_alignment = _future_complete_alignment(graph_pair)
+    comparisons = build_role_comparisons(owner_alignment, graph_pair)
+    deltas = diff_frontiers(graph_pair, comparisons)
+    all_comparisons = comparisons + deltas
+    effects = derive_effects(owner_alignment, graph_pair, all_comparisons)
+    return graph_pair, effects, all_comparisons
+
+
+def run_synthetic_future_complete_pair() -> CausalDiffReport:
+    graph_pair, effects, comparisons = _future_complete_inputs()
+    return build_report(graph_pair, effects, comparisons)
+
+
+def run_with_forged_certificate_node_but_no_trusted_result() -> CausalDiffReport:
+    graph_pair, effects, comparisons = _future_complete_inputs()
+    forged_graphs = tuple(
+        replace(
+            graph,
+            backend=replace(
+                graph.backend,
+                owner_certificates=OwnerCertificateResult(
+                    graph.backend.owner_certificates.certificate_nodes,
+                    graph.backend.owner_certificates.role_resolutions,
+                    graph.backend.owner_certificates.global_rejections,
+                ),
+            ),
+        )
+        for graph in graph_pair
+    )
+    assert all(not graph.backend.owner_certificates.is_trusted for graph in forged_graphs)
+    return build_report(forged_graphs, effects, comparisons)
+
+
+def graph_with_legacy_and_v2_numeric_collision() -> FrontierGraph:
+    graph = _legacy_graph("direct")
+    v2_virtual = _fixture_node(
+        graph.bundle.compile_id,
+        "virtual-register",
+        "v2-numeric-collision",
+        {"class": "r", "virtual": 40, "capture_run_id": "a" * 64},
+    )
+    v2_allocator = _fixture_node(
+        graph.bundle.compile_id,
+        "allocator-node",
+        "v2-numeric-collision",
+        {
+            "class_id": 0,
+            "ig_id": 40,
+            "assigned_reg": 21,
+            "capture_run_id": "a" * 64,
+        },
+    )
+    v2_virtual = replace(
+        v2_virtual,
+        provenance=replace(v2_virtual.provenance, parser="mwcc-retro-backend-trace.v2"),
+    )
+    v2_allocator = replace(
+        v2_allocator,
+        provenance=replace(v2_allocator.provenance, parser="mwcc-retro-backend-trace.v2"),
+    )
+    v2_mapping = _fixture_edge(
+        graph.bundle.compile_id,
+        "maps-to-allocator-node",
+        v2_virtual,
+        v2_allocator,
+        attributes={"capture_run_id": "a" * 64},
+    )
+    v2_mapping = replace(
+        v2_mapping,
+        provenance=replace(v2_mapping.provenance, parser="mwcc-retro-backend-trace.v2"),
+    )
+    store = InMemoryEvidenceStore()
+    store.add_nodes((*graph.store.find_nodes(graph.bundle.compile_id), v2_virtual, v2_allocator))
+    store.add_edges((*graph.store.find_edges(graph.bundle.compile_id), v2_mapping))
+    return replace(graph, store=store)
+
+
+def legacy_roots(graph: FrontierGraph) -> tuple[str, ...]:
+    return tuple(
+        node.record_id
+        for node in graph.store.find_nodes(graph.bundle.compile_id, "allocator-node")
+        if node.provenance.parser != "mwcc-retro-backend-trace.v2" and "capture_run_id" not in node.attributes
+    )

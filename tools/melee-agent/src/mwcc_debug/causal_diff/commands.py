@@ -78,9 +78,9 @@ def run_causal_diff(
     graph_pair = (graphs[0], graphs[1])
     alignment = align_anchor(graph_pair, options.retail_offset, options.assertions)
     comparisons = build_role_comparisons(alignment, graph_pair)
-    effects = derive_effects(alignment, graph_pair)
     deltas = diff_frontiers(graph_pair, comparisons)
     all_comparisons = comparisons + deltas
+    effects = derive_effects(alignment, graph_pair, all_comparisons)
     store.add_comparisons(all_comparisons)
     return build_report(
         graph_pair,
