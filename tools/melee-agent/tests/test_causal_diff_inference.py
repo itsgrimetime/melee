@@ -39,6 +39,7 @@ from tests.owner_certificate_fixtures import (
     only,
     run_synthetic_future_complete_pair,
     run_with_forged_certificate_node_but_no_trusted_result,
+    run_with_stored_certificate_content_mismatch,
 )
 
 ANALYSIS_ID = "a" * 64
@@ -484,6 +485,15 @@ def test_forged_stored_certificate_cannot_satisfy_inference() -> None:
     verdict = only(report.verdicts)
     assert verdict.status is VerdictStatus.ABSTAIN
     assert "gate-7-proof-capable-path" in verdict.failed_gates
+    assert verdict.proof_paths == ()
+
+
+def test_stored_certificate_mismatch_cannot_contribute_proof_paths() -> None:
+    report = run_with_stored_certificate_content_mismatch()
+    verdict = only(report.verdicts)
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert "gate-8-evidence-integrity" in verdict.failed_gates
+    assert verdict.proof_paths == ()
 
 
 def proof_path_at_depth_five() -> InferenceCase:
@@ -584,6 +594,26 @@ def test_evidence_depth_abstains_when_proof_path_is_truncated() -> None:
     assert shallow.failed_gates == ("gate-8-evidence-integrity",)
     assert "traversal-truncated:evidence-depth=4" in shallow.rejected_alternatives
     assert deep.status is VerdictStatus.CAUSES
+
+
+def test_evidence_depth_abstains_for_non_target_boundary_continuation() -> None:
+    case = proof_complete_unique()
+    assert isinstance(case.query, InMemoryEvidenceStore)
+    owner = next(iter(case.query.find_nodes(LEFT_COMPILE, "compiler-object")))
+    branch = tuple(_node(LEFT_COMPILE, "legacy-branch", f"branch-{index}") for index in range(5))
+    case.query.add_nodes(branch)
+    case.query.add_edges(
+        tuple(
+            _edge(LEFT_COMPILE, "lowers-to", source, target)
+            for source, target in zip((owner, *branch[:-1]), branch, strict=True)
+        )
+    )
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons, evidence_depth=4)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-8-evidence-integrity",)
+    assert "traversal-truncated:evidence-depth=4" in verdict.rejected_alternatives
 
 
 def test_build_report_threads_evidence_depth_to_inference() -> None:

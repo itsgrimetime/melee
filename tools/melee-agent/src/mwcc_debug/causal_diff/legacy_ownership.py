@@ -124,24 +124,25 @@ def legacy_reachable_records(
     return frozenset(visited), frozenset(edge_ids)
 
 
-def legacy_simple_paths(
+def legacy_simple_paths_with_truncation(
     query: EvidenceQuery | FrontierGraph,
     source_id: str,
     target_id: str,
     max_depth: int,
-) -> tuple[tuple[str, ...], ...]:
-    """Enumerate deterministic legacy-only paths as alternating node/edge IDs."""
+) -> tuple[tuple[tuple[str, ...], ...], bool]:
+    """Enumerate legacy-only paths and conservatively report depth truncation."""
 
     if isinstance(query, FrontierGraph):
         query = query.store
     if max_depth < 0:
         raise ValueError("max_depth must be non-negative")
     if not all(_legacy_record(query.get_node(record_id)) for record_id in (source_id, target_id)):
-        return ()
+        return (), False
     if source_id == target_id:
-        return ((source_id,),)
+        return ((source_id,),), False
 
     paths: list[tuple[str, ...]] = []
+    truncated = False
 
     def visit(
         node_id: str,
@@ -149,8 +150,7 @@ def legacy_simple_paths(
         path: tuple[str, ...],
         depth: int,
     ) -> None:
-        if depth >= max_depth:
-            return
+        nonlocal truncated
         neighbors = []
         for edge in query.neighbors(node_id, direction="both"):
             if not (
@@ -163,6 +163,9 @@ def legacy_simple_paths(
             if other in visited:
                 continue
             neighbors.append((other, edge))
+        if depth >= max_depth:
+            truncated |= bool(neighbors)
+            return
         for other, edge in sorted(
             neighbors,
             key=lambda item: (item[1].kind, item[0], item[1].record_id),
@@ -174,7 +177,18 @@ def legacy_simple_paths(
                 visit(other, visited | {other}, next_path, depth + 1)
 
     visit(source_id, frozenset({source_id}), (source_id,), 0)
-    return tuple(sorted(set(paths), key=lambda path: (len(path), path)))
+    return tuple(sorted(set(paths), key=lambda path: (len(path), path))), truncated
+
+
+def legacy_simple_paths(
+    query: EvidenceQuery | FrontierGraph,
+    source_id: str,
+    target_id: str,
+    max_depth: int,
+) -> tuple[tuple[str, ...], ...]:
+    """Enumerate deterministic legacy-only paths as alternating node/edge IDs."""
+
+    return legacy_simple_paths_with_truncation(query, source_id, target_id, max_depth)[0]
 
 
 __all__ = [
@@ -183,4 +197,5 @@ __all__ = [
     "legacy_pcode_occurrences",
     "legacy_reachable_records",
     "legacy_simple_paths",
+    "legacy_simple_paths_with_truncation",
 ]

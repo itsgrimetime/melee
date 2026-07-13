@@ -10,7 +10,7 @@ from typing import Iterable, Literal, Mapping
 from .canonical import canonical_bytes, stable_id
 from .effects import DerivedEffects, EffectPair
 from .graph import FrontierGraph
-from .legacy_ownership import legacy_simple_paths
+from .legacy_ownership import legacy_simple_paths_with_truncation
 from .models import AdapterResult, ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode
 from .owner_certificate import OwnerCertificateResult, OwnerRoleKey, OwnerSemanticState
 from .store import EvidenceQuery, canonical_record_bytes
@@ -288,12 +288,8 @@ def _legacy_simple_path_search(
 ) -> _PathEnumeration:
     """Enumerate legacy-only paths while retaining the depth truncation signal."""
 
-    paths = legacy_simple_paths(query, source_id, target_id, max_depth)
-    one_deeper = legacy_simple_paths(query, source_id, target_id, max_depth + 1)
-    return _PathEnumeration(
-        paths,
-        truncated=any(path not in paths for path in one_deeper),
-    )
+    paths, truncated = legacy_simple_paths_with_truncation(query, source_id, target_id, max_depth)
+    return _PathEnumeration(paths, truncated)
 
 
 def _record_is_proof_capable(record: EvidenceNode | EvidenceEdge | ComparisonRecord) -> bool:
@@ -821,21 +817,26 @@ def _infer_certificate_pair(
         failed.append(_GATE_6)
 
     trusted_certificates: list[EvidenceNode] = []
+    proof_certificates: list[EvidenceNode] = []
     for stored in stored_certificates:
         result = owner_certificate_results_by_compile.get(stored.compile_id)
         trusted = None if result is None else result.certificate(stored.record_id)
         if trusted is not None:
             trusted_certificates.append(trusted)
+            if canonical_record_bytes(stored) == canonical_record_bytes(trusted):
+                proof_certificates.append(trusted)
     if len(trusted_certificates) != 2:
         failed.append(_GATE_7)
 
-    proof_paths = tuple(
-        path for certificate in stored_certificates if (path := _certificate_proof_path(certificate)) is not None
+    proof_paths = (
+        tuple(path for certificate in proof_certificates if (path := _certificate_proof_path(certificate)) is not None)
+        if len(proof_certificates) == 2
+        else ()
     )
     integrity_failure = (
         len(stored_certificates) != 2
         or any(certificate.kind != "owner-proof-certificate" for certificate in stored_certificates)
-        or len(proof_paths) != 2
+        or (len(proof_certificates) == 2 and len(proof_paths) != 2)
         or role is None
         or role.semantic_stack_role != pair.stack.role_key
         or any(_owner_role(certificate.attributes.get("role")) != role for certificate in stored_certificates)

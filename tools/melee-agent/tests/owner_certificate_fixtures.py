@@ -974,6 +974,28 @@ def run_with_forged_certificate_node_but_no_trusted_result() -> CausalDiffReport
     return build_report(forged_graphs, effects, comparisons)
 
 
+def run_with_stored_certificate_content_mismatch() -> CausalDiffReport:
+    graph_pair, effects, comparisons = _future_complete_inputs()
+    mismatched_graphs = []
+    for graph in graph_pair:
+        certificate = only(graph.backend.owner_certificates.certificate_nodes)
+        mismatched = replace(
+            certificate,
+            attributes=MappingProxyType(
+                {
+                    **certificate.attributes,
+                    "proof_content_sha256": "f" * 64,
+                }
+            ),
+        )
+        store = InMemoryEvidenceStore()
+        store.add_nodes(node for node in graph.backend.result.nodes if node.record_id != certificate.record_id)
+        store.add_edges(graph.backend.result.edges)
+        store.add_nodes((mismatched,))
+        mismatched_graphs.append(replace(graph, store=store))
+    return build_report(tuple(mismatched_graphs), effects, comparisons)
+
+
 def graph_with_legacy_and_v2_numeric_collision() -> FrontierGraph:
     graph = _legacy_graph("direct")
     v2_virtual = _fixture_node(
