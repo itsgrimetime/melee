@@ -24,7 +24,7 @@ from src.mwcc_debug.causal_diff.alignment import (
 from src.mwcc_debug.causal_diff.asm_adapter import CheckdiffEvidence
 from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import ValidatedBundle
-from src.mwcc_debug.causal_diff.canonical import canonical_bytes
+from src.mwcc_debug.causal_diff.canonical import canonical_bytes, stable_id
 from src.mwcc_debug.causal_diff.differ import diff_frontiers
 from src.mwcc_debug.causal_diff.effects import DerivedEffects, derive_effects
 from src.mwcc_debug.causal_diff.frame_adapter import FrameEvidence
@@ -932,6 +932,83 @@ def evidence_with_intermediate_generation_forgery() -> ObjectBindingEvidence:
     return ObjectBindingEvidence(
         nodes,
         evidence.edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+
+def evidence_with_coordinated_intermediate_generation_forgery(
+    generation: int,
+    *,
+    permuted: bool = False,
+) -> ObjectBindingEvidence:
+    evidence = evidence_with_mutation_identity_history("clone-extra-branch")
+    original_generation = only(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-generation"
+        and node.attributes.get("pcode_id") == "pc-base"
+    )
+    original_pcode = only(
+        node
+        for node in evidence.nodes
+        if node.kind == "retail-pcode"
+        and node.attributes.get("pcode_id") == "pc-base"
+    )
+    forged_generation = replace(
+        original_generation,
+        record_id=stable_id(
+            original_generation.compile_id,
+            original_generation.kind,
+            ("coordinated-generation-forgery", "pc-base", generation),
+        ),
+        attributes={
+            **original_generation.attributes,
+            "allocation_generation": generation,
+        },
+    )
+    forged_pcode = replace(
+        original_pcode,
+        record_id=stable_id(
+            original_pcode.compile_id,
+            original_pcode.kind,
+            ("coordinated-generation-forgery", "pc-base", generation),
+        ),
+        provenance=replace(
+            original_pcode.provenance,
+            input_record_ids=(forged_generation.record_id,),
+        ),
+        attributes={
+            **original_pcode.attributes,
+            "allocation_generation": generation,
+        },
+    )
+    nodes = (
+        *(
+            node.with_attributes(
+                {**node.attributes, "allocation_generation": generation}
+            )
+            if (
+                node.kind == "backend-support-record"
+                and node.attributes.get("support_kind") == "pcode-lineage-event"
+                and node.attributes.get("pcode_id") == "pc-base"
+                and "event_index" in node.attributes
+            )
+            else node
+            for node in evidence.nodes
+        ),
+        forged_generation,
+        forged_pcode,
+    )
+    edges = evidence.edges
+    if permuted:
+        nodes = tuple(reversed(nodes))
+        edges = tuple(reversed(edges))
+    return ObjectBindingEvidence(
+        nodes,
+        edges,
         evidence.capabilities,
         evidence.capture_run_id,
         evidence.instrumentation_identity,

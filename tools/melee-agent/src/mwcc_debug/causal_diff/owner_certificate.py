@@ -502,11 +502,8 @@ class _OwnerEvidenceIndex:
     edges_by_kind_source: Mapping[tuple[str, str], tuple[EvidenceEdge, ...]]
     edges_by_kind_target: Mapping[tuple[str, str], tuple[EvidenceEdge, ...]]
     mutation_support: tuple[EvidenceNode, ...]
-    pcode_nodes_by_identity: Mapping[tuple[str, int], tuple[EvidenceNode, ...]]
-    pcode_generation_support_by_identity: Mapping[
-        tuple[str, int],
-        tuple[EvidenceNode, ...],
-    ]
+    pcode_nodes_by_id: Mapping[str, tuple[EvidenceNode, ...]]
+    pcode_generation_support_by_id: Mapping[str, tuple[EvidenceNode, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,41 +534,35 @@ def _index_evidence(evidence: ObjectBindingEvidence) -> _OwnerEvidenceIndex:
     edges_by_kind_source: dict[tuple[str, str], list[EvidenceEdge]] = {}
     edges_by_kind_target: dict[tuple[str, str], list[EvidenceEdge]] = {}
     mutation_support: list[EvidenceNode] = []
-    pcode_nodes_by_identity: dict[tuple[str, int], list[EvidenceNode]] = {}
-    pcode_node_ids_by_identity: dict[tuple[str, int], set[str]] = {}
-    pcode_generation_support_by_identity: dict[
-        tuple[str, int],
-        list[EvidenceNode],
-    ] = {}
-    pcode_generation_support_ids_by_identity: dict[
-        tuple[str, int],
-        set[str],
-    ] = {}
+    pcode_nodes_by_id: dict[str, list[EvidenceNode]] = {}
+    pcode_node_record_ids_by_id: dict[str, set[str]] = {}
+    pcode_generation_support_by_id: dict[str, list[EvidenceNode]] = {}
+    pcode_generation_support_record_ids_by_id: dict[str, set[str]] = {}
 
     for node in evidence.nodes:
         records_by_id.setdefault(node.record_id, []).append(node)
         node_by_id[node.record_id] = node
-        identity = _pcode_identity(node)
-        if node.kind == "retail-pcode" and identity is not None:
-            seen_ids = pcode_node_ids_by_identity.setdefault(identity, set())
-            if node.record_id not in seen_ids:
-                pcode_nodes_by_identity.setdefault(identity, []).append(node)
-                seen_ids.add(node.record_id)
+        pcode_id = node.attributes.get("pcode_id")
+        if node.kind == "retail-pcode" and _is_nonempty_str(pcode_id):
+            seen_record_ids = pcode_node_record_ids_by_id.setdefault(
+                pcode_id,
+                set(),
+            )
+            if node.record_id not in seen_record_ids:
+                pcode_nodes_by_id.setdefault(pcode_id, []).append(node)
+                seen_record_ids.add(node.record_id)
         if (
             node.kind == "backend-support-record"
             and node.attributes.get("support_kind") == "pcode-generation"
-            and identity is not None
+            and _is_nonempty_str(pcode_id)
         ):
-            seen_ids = pcode_generation_support_ids_by_identity.setdefault(
-                identity,
+            seen_record_ids = pcode_generation_support_record_ids_by_id.setdefault(
+                pcode_id,
                 set(),
             )
-            if node.record_id not in seen_ids:
-                pcode_generation_support_by_identity.setdefault(
-                    identity,
-                    [],
-                ).append(node)
-                seen_ids.add(node.record_id)
+            if node.record_id not in seen_record_ids:
+                pcode_generation_support_by_id.setdefault(pcode_id, []).append(node)
+                seen_record_ids.add(node.record_id)
         if (
             node.kind == "backend-support-record"
             and node.attributes.get("support_kind") == "pcode-lineage-event"
@@ -591,8 +582,20 @@ def _index_evidence(evidence: ObjectBindingEvidence) -> _OwnerEvidenceIndex:
         _freeze_groups(edges_by_kind_source),
         _freeze_groups(edges_by_kind_target),
         tuple(mutation_support),
-        _freeze_groups(pcode_nodes_by_identity),
-        _freeze_groups(pcode_generation_support_by_identity),
+        MappingProxyType(
+            {
+                pcode_id: tuple(sorted(nodes, key=lambda node: node.record_id))
+                for pcode_id, nodes in sorted(pcode_nodes_by_id.items())
+            }
+        ),
+        MappingProxyType(
+            {
+                pcode_id: tuple(sorted(nodes, key=lambda node: node.record_id))
+                for pcode_id, nodes in sorted(
+                    pcode_generation_support_by_id.items()
+                )
+            }
+        ),
     )
 
 
@@ -631,7 +634,11 @@ def _is_int(value: object) -> bool:
 def _pcode_identity(node: EvidenceNode) -> tuple[str, int] | None:
     pcode_id = node.attributes.get("pcode_id")
     allocation_generation = node.attributes.get("allocation_generation")
-    if not (_is_nonempty_str(pcode_id) and _is_int(allocation_generation)):
+    if not (
+        _is_nonempty_str(pcode_id)
+        and _is_int(allocation_generation)
+        and allocation_generation > 0
+    ):
         return None
     return pcode_id, allocation_generation
 
@@ -1537,12 +1544,15 @@ def _validate_mutation_pcode_identity(
     identity: tuple[str, int],
     event_support: tuple[EvidenceNode, ...],
 ) -> tuple[EvidenceNode, EvidenceNode] | OwnerCertificateRejection:
-    pcode_matches = index.pcode_nodes_by_identity.get(identity, ())
-    generation_matches = index.pcode_generation_support_by_identity.get(
-        identity,
-        (),
-    )
-    if len(pcode_matches) != 1 or len(generation_matches) != 1:
+    pcode_id = identity[0]
+    pcode_matches = index.pcode_nodes_by_id.get(pcode_id, ())
+    generation_matches = index.pcode_generation_support_by_id.get(pcode_id, ())
+    if (
+        len(pcode_matches) != 1
+        or len(generation_matches) != 1
+        or _pcode_identity(pcode_matches[0]) != identity
+        or _pcode_identity(generation_matches[0]) != identity
+    ):
         return _rejection(
             "lineage-parent-mismatch",
             role,

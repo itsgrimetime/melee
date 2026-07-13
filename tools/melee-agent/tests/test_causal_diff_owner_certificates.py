@@ -39,6 +39,7 @@ from tests.owner_certificate_fixtures import (
     evidence_with_certificate_and_role_rejection,
     evidence_with_coordinated_allocator_change,
     evidence_with_coordinated_allocator_omission,
+    evidence_with_coordinated_intermediate_generation_forgery,
     evidence_with_create_lineage_history,
     evidence_with_duplicate_exact_rewrite,
     evidence_with_event_generation_conflict,
@@ -1293,6 +1294,65 @@ def test_intermediate_mutation_generation_requires_registered_pcode_identity() -
         evidence_with_intermediate_generation_forgery()
     )
     resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    rejection = only(resolution.rejections)
+    assert rejection.reason == "lineage-parent-mismatch"
+    assert rejection.candidate_record_ids
+
+
+def test_pcode_id_must_have_one_generation_globally() -> None:
+    evidence = evidence_with_coordinated_intermediate_generation_forgery(999)
+    reverse = evidence_with_coordinated_intermediate_generation_forgery(
+        999,
+        permuted=True,
+    )
+
+    results = tuple(
+        owner_certificate.validate_owner_evidence(item)
+        for item in (evidence, reverse)
+    )
+
+    assert canonical_result(results[0]) == canonical_result(results[1])
+    conflicting_pcodes = {
+        node.record_id
+        for node in evidence.nodes
+        if node.kind == "retail-pcode"
+        and node.attributes.get("pcode_id") == "pc-base"
+    }
+    conflicting_generation_support = {
+        node.record_id
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-generation"
+        and node.attributes.get("pcode_id") == "pc-base"
+    }
+    assert len(conflicting_pcodes) == 2
+    assert len(conflicting_generation_support) == 2
+    for result in results:
+        resolution = next(
+            item for item in result.role_resolutions if item.role == ROLE
+        )
+        assert result.certificate_nodes == ()
+        assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+        rejection = only(resolution.rejections)
+        assert rejection.reason == "lineage-parent-mismatch"
+        assert conflicting_pcodes <= set(rejection.candidate_record_ids)
+        assert conflicting_generation_support <= set(
+            rejection.raw_support_record_ids
+        )
+
+
+@pytest.mark.parametrize("generation", (0, -1))
+def test_mutation_pcode_generation_must_be_positive(generation: int) -> None:
+    result = owner_certificate.validate_owner_evidence(
+        evidence_with_coordinated_intermediate_generation_forgery(generation)
+    )
+    resolution = next(
+        item for item in result.role_resolutions if item.role == ROLE
+    )
 
     assert result.certificate_nodes == ()
     assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
