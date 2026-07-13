@@ -22,8 +22,12 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
     OwnerSemanticState,
     build_owner_certificates,
 )
-from src.mwcc_debug.causal_diff.store import canonical_record_bytes
+from src.mwcc_debug.causal_diff.store import (
+    InMemoryEvidenceStore,
+    canonical_record_bytes,
+)
 from tests.owner_certificate_fixtures import (
+    PARTIAL_OWNER_STAGES,
     STORE_FACTORIES,
     ambiguous_evidence,
     canonical_result,
@@ -39,6 +43,8 @@ from tests.owner_certificate_fixtures import (
     evidence_with_lineage_variant,
     evidence_with_mutation_parent_override,
     evidence_with_object_generation_conflict,
+    evidence_with_partial_independent_paths,
+    evidence_with_partial_owner_branch,
     evidence_with_role_statuses,
     evidence_with_split_physical_assignment,
     evidence_with_two_mutation_outputs,
@@ -71,7 +77,130 @@ class _CountingTuple(tuple):
             yield item
 
 
-@pytest.mark.parametrize("path_count", [8, 32])
+def test_partial_owner_virtual_branch_is_store_valid() -> None:
+    evidence = evidence_with_partial_owner_branch("virtual")
+    store = InMemoryEvidenceStore()
+
+    store.add_nodes(evidence.nodes)
+    store.add_edges(evidence.edges)
+
+
+@pytest.mark.parametrize("stage", PARTIAL_OWNER_STAGES)
+def test_role_compatible_partial_owner_branch_prevents_unique(stage: str) -> None:
+    result = owner_certificate.validate_owner_evidence(evidence_with_partial_owner_branch(stage, shared_role=True))
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is not OwnerResolutionStatus.UNIQUE
+    assert resolution.rejections
+
+
+@pytest.mark.parametrize("stage", PARTIAL_OWNER_STAGES)
+def test_unscopable_partial_owner_branch_is_global(stage: str) -> None:
+    result = owner_certificate.validate_owner_evidence(evidence_with_partial_owner_branch(stage, shared_role=False))
+
+    assert result.global_rejections
+    assert all(item.role is None for item in result.global_rejections)
+    assert result.resolution_for(ROLE).status is OwnerResolutionStatus.INCOMPLETE
+
+
+def test_second_virtual_without_object_is_a_role_alternative() -> None:
+    result = owner_certificate.validate_owner_evidence(evidence_with_partial_owner_branch("virtual"))
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.AMBIGUOUS
+    assert {item.reason for item in resolution.rejections} == {"plausible-owner-alternative"}
+
+
+def test_dangling_frame_target_is_role_incomplete() -> None:
+    result = owner_certificate.validate_owner_evidence(evidence_with_partial_owner_branch("frame"))
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"unregistered-support"}
+
+
+@pytest.mark.parametrize("stage", PARTIAL_OWNER_STAGES)
+def test_partial_owner_branch_is_stable_under_record_permutation(stage: str) -> None:
+    evidence = evidence_with_partial_owner_branch(stage)
+    variants = tuple(
+        ObjectBindingEvidence(
+            tuple(reversed(evidence.nodes)) if reverse_nodes else evidence.nodes,
+            tuple(reversed(evidence.edges)) if reverse_edges else evidence.edges,
+            evidence.capabilities,
+            evidence.capture_run_id,
+            evidence.instrumentation_identity,
+        )
+        for reverse_nodes, reverse_edges in (
+            (False, False),
+            (True, False),
+            (False, True),
+            (True, True),
+        )
+    )
+    results = tuple(owner_certificate.validate_owner_evidence(variant) for variant in variants)
+
+    assert len({canonical_result(result) for result in results}) == 1
+    assert len({only(result.resolution_for(ROLE).certificate_record_ids) for result in results}) == 1
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected_status", "expected_reason"),
+    [
+        pytest.param(
+            "virtual",
+            OwnerResolutionStatus.AMBIGUOUS,
+            "plausible-owner-alternative",
+            id="valid-stop",
+        ),
+        pytest.param(
+            "frame",
+            OwnerResolutionStatus.INCOMPLETE,
+            "unregistered-support",
+            id="missing-endpoint",
+        ),
+    ],
+)
+def test_exact_duplicate_partial_owner_branch_collapses_semantic_rejection(
+    stage: str,
+    expected_status: OwnerResolutionStatus,
+    expected_reason: str,
+) -> None:
+    forward = owner_certificate.validate_owner_evidence(evidence_with_partial_owner_branch(stage, duplicate=True))
+    reverse = owner_certificate.validate_owner_evidence(
+        evidence_with_partial_owner_branch(
+            stage,
+            duplicate=True,
+            permuted=True,
+        )
+    )
+    resolution = next(item for item in forward.role_resolutions if item.role == ROLE)
+    rejection_groups = tuple(
+        group for group in forward._canonical_groups if group.role == ROLE and group.rejection_reason == expected_reason
+    )
+
+    assert resolution.status is expected_status
+    assert len(resolution.rejections) == 1
+    assert len({item.rejection_id for item in resolution.rejections}) == 1
+    assert only(rejection_groups).multiplicity == 2
+    assert canonical_result(forward) == canonical_result(reverse)
+
+
+def test_complete_mutation_parent_lineage_is_not_a_partial_alternative() -> None:
+    evidence = complete_evidence()
+    index = owner_certificate._index_evidence(evidence)
+    enumeration = owner_certificate._enumerate_candidate_branches(index)
+    mutation_parent_edges = tuple(
+        edge
+        for edge in evidence.edges
+        if edge.kind == "pcode-operand-lineage" and index.node_by_id[edge.source_id].kind == "pcode-operand"
+    )
+
+    assert mutation_parent_edges
+    assert enumeration.partial == ()
+    assert {edge.record_id for edge in mutation_parent_edges}.issubset(enumeration.traversed_edge_ids)
+
+
+@pytest.mark.parametrize("path_count", [8, 32, 128])
 def test_candidate_index_is_built_once_without_per_candidate_source_rescans(path_count):
     evidence = evidence_with_independent_paths(path_count)
     counter = {"visits": 0}
@@ -87,11 +216,44 @@ def test_candidate_index_is_built_once_without_per_candidate_source_rescans(path
     assert counter["visits"] == len(evidence.nodes) + len(evidence.edges)
 
     counter["visits"] = 0
-    candidates = owner_certificate._enumerate_candidates(index)
-    validated = tuple(owner_certificate._validate_candidate(counted, index, candidate) for candidate in candidates)
+    enumeration = owner_certificate._enumerate_candidate_branches(index)
+    validated = tuple(
+        owner_certificate._validate_candidate(counted, index, candidate) for candidate in enumeration.complete
+    )
 
-    assert len(candidates) == path_count
+    assert len(enumeration.complete) == path_count
+    assert enumeration.partial == ()
     assert all(not isinstance(item, owner_certificate.OwnerCertificateRejection) for item in validated)
+    assert counter["visits"] == 0
+
+
+@pytest.mark.parametrize("path_count", [8, 32, 128])
+def test_partial_candidate_index_is_built_once_without_source_rescans(
+    path_count: int,
+) -> None:
+    evidence = evidence_with_partial_independent_paths(path_count)
+    counter = {"visits": 0}
+    counted = ObjectBindingEvidence(
+        _CountingTuple(evidence.nodes, counter),
+        _CountingTuple(evidence.edges, counter),
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+    index = owner_certificate._index_evidence(counted)
+    assert counter["visits"] == len(evidence.nodes) + len(evidence.edges)
+
+    counter["visits"] = 0
+    enumeration = owner_certificate._enumerate_candidate_branches(index)
+    rejections = owner_certificate._partial_rejections(
+        enumeration,
+        tuple(owner_certificate._role_for(candidate) for candidate in enumeration.complete),
+    )
+
+    assert len(enumeration.complete) == path_count
+    assert len(enumeration.partial) == path_count
+    assert len(rejections[0]) == path_count
     assert counter["visits"] == 0
 
 

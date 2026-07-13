@@ -613,6 +613,30 @@ def test_nonunique_bilateral_resolution_emits_one_abstention(
 
 
 @pytest.mark.parametrize(
+    ("stage", "reason"),
+    [
+        pytest.param("virtual", "backend-owner-ambiguous", id="valid-stop"),
+        pytest.param("frame", "backend-owner-path-incomplete", id="missing-endpoint"),
+    ],
+)
+def test_partial_owner_branch_forces_bilateral_abstention(
+    stage: str,
+    reason: str,
+) -> None:
+    fixtures = _owner_fixtures()
+    comparisons = build_role_comparisons(
+        fixtures.alignment(),
+        fixtures.graphs_with_partial_owner_branch(stage),
+    )
+    owner_records = tuple(record for record in comparisons if record.relation_kind.startswith("backend-owner-"))
+    abstention = _only(record for record in owner_records if record.relation_kind == "backend-owner-abstained")
+
+    assert not any(record.relation_kind == "backend-owner-corresponds-to" for record in owner_records)
+    assert owner_alignment_record_is_authoritative(abstention)
+    assert abstention.attributes["reason"] == reason
+
+
+@pytest.mark.parametrize(
     ("left_status", "right_status", "reason"),
     [
         ("ambiguous", "contradictory", "backend-owner-contradictory"),

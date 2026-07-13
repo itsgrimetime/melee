@@ -94,6 +94,15 @@ def test_downstream_modules_cannot_reconstruct_raw_owner_proof() -> None:
         assert _string_constants(tree).isdisjoint(FORBIDDEN_EDGE_LITERALS)
 
 
+def test_all_partial_owner_edge_literals_remain_confined_from_downstream() -> None:
+    observed = set()
+    for path in DOWNSTREAM_PATHS:
+        observed.update(_string_constants(ast.parse(path.read_text())))
+
+    assert len(FORBIDDEN_EDGE_LITERALS) == 6
+    assert observed.isdisjoint(FORBIDDEN_EDGE_LITERALS)
+
+
 def test_legacy_owner_helpers_categorically_reject_v2_records() -> None:
     graph = graph_with_legacy_and_v2_numeric_collision()
     record_ids, edge_ids = legacy_reachable_records(graph, legacy_roots(graph))

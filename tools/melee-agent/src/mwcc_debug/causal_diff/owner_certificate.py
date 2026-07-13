@@ -442,6 +442,47 @@ class _CandidatePath:
     path_records: tuple[EvidenceNode | EvidenceEdge, ...]
 
 
+class _OwnerPathStage(StrEnum):
+    ANCHOR = "anchor"
+    PCODE_LINEAGE = "pcode-lineage"
+    VIRTUAL = "virtual"
+    OBJECT = "object"
+    ALLOCATOR = "allocator"
+    FRAME = "frame"
+
+
+@dataclass(frozen=True, slots=True)
+class _OwnerRoleHint:
+    operand_key: str | None = None
+    register_class: str | None = None
+    semantic_stack_role: str | None = None
+    type_size: int | None = None
+    frame_area: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PartialOwnerPath:
+    stage: _OwnerPathStage
+    hint: _OwnerRoleHint
+    records: tuple[EvidenceNode | EvidenceEdge, ...]
+    stop_reason: str
+
+    def __post_init__(self) -> None:
+        if self.stop_reason not in {
+            "plausible-owner-alternative",
+            "unregistered-support",
+            "malformed-support",
+        }:
+            raise ValueError("invalid partial owner path stop reason")
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateEnumeration:
+    complete: tuple[_CandidatePath, ...]
+    partial: tuple[_PartialOwnerPath, ...]
+    traversed_edge_ids: frozenset[str]
+
+
 @dataclass(frozen=True, slots=True)
 class _ValidationOutcome:
     paths: tuple[_OwnerPath, ...]
@@ -859,6 +900,300 @@ def _enumerate_candidates(index: _OwnerEvidenceIndex) -> tuple[_CandidatePath, .
                                 )
                             )
     return tuple(candidates)
+
+
+_OWNER_EDGE_STAGES = MappingProxyType(
+    {
+        "assembly-anchor-emitted-by-pcode": _OwnerPathStage.ANCHOR,
+        "pcode-operand-lineage": _OwnerPathStage.PCODE_LINEAGE,
+        "pcode-operand-uses-virtual": _OwnerPathStage.VIRTUAL,
+        "object-materializes-virtual": _OwnerPathStage.OBJECT,
+        "maps-to-allocator-node": _OwnerPathStage.ALLOCATOR,
+        "object-has-stack-home": _OwnerPathStage.FRAME,
+    }
+)
+
+
+def _branch_sort_key(
+    records: tuple[EvidenceNode | EvidenceEdge, ...],
+) -> bytes:
+    return canonical_bytes([_record_json(record) for record in records])
+
+
+def _node_for_edge_endpoint(
+    index: _OwnerEvidenceIndex,
+    edge: EvidenceEdge,
+    endpoint: str,
+) -> EvidenceNode | None:
+    record_id = edge.source_id if endpoint == "source" else edge.target_id
+    return index.node_by_id.get(record_id)
+
+
+def _consistent_hint_value(values: Iterable[object]) -> object | None:
+    known = tuple(value for value in values if value is not None)
+    return known[0] if known and all(value == known[0] for value in known[1:]) else None
+
+
+def _hint_for_branch(
+    records: tuple[EvidenceNode | EvidenceEdge, ...],
+) -> _OwnerRoleHint:
+    operand_values: list[object] = []
+    register_values: list[object] = []
+    stack_role_values: list[object] = []
+    type_size_values: list[object] = []
+    frame_area_values: list[object] = []
+    for record in records:
+        operand_values.append(record.attributes.get("machine_operand_key"))
+        if isinstance(record, EvidenceNode):
+            if record.kind == "assembly-operand-anchor":
+                operand_values.append(record.role_key)
+            elif record.kind == "retail-virtual-register":
+                register_values.append({0: "gpr", 1: "fpr"}.get(record.attributes.get("class_id")))
+            elif record.kind == "compiler-object":
+                type_size = record.attributes.get("type_size")
+                type_size_values.append(type_size if _is_int(type_size) and type_size > 0 else None)
+            elif record.kind == "stack-object":
+                stack_role_values.append(record.role_key)
+                frame_area_values.append(record.attributes.get("area"))
+        elif record.kind == "object-has-stack-home":
+            stack_role_values.append(record.attributes.get("semantic_stack_role"))
+            frame_area_values.append(record.attributes.get("area"))
+    operand = _consistent_hint_value(operand_values)
+    register_class = _consistent_hint_value(register_values)
+    semantic_stack_role = _consistent_hint_value(stack_role_values)
+    type_size = _consistent_hint_value(type_size_values)
+    frame_area = _consistent_hint_value(frame_area_values)
+    return _OwnerRoleHint(
+        operand if isinstance(operand, str) else None,
+        register_class if isinstance(register_class, str) else None,
+        semantic_stack_role if isinstance(semantic_stack_role, str) else None,
+        type_size if _is_int(type_size) and type_size > 0 else None,
+        frame_area if isinstance(frame_area, str) else None,
+    )
+
+
+def _edge_endpoint_kinds_are_valid(
+    edge: EvidenceEdge,
+    source: EvidenceNode,
+    target: EvidenceNode,
+) -> bool:
+    if edge.kind == "pcode-operand-lineage":
+        return (source.kind, target.kind) in {
+            ("retail-pcode", "pcode-operand"),
+            ("pcode-operand", "pcode-operand"),
+        }
+    return (source.kind, target.kind) == {
+        "assembly-anchor-emitted-by-pcode": (
+            "assembly-operand-anchor",
+            "retail-pcode",
+        ),
+        "pcode-operand-uses-virtual": (
+            "pcode-operand",
+            "retail-virtual-register",
+        ),
+        "object-materializes-virtual": (
+            "compiler-object",
+            "retail-virtual-register",
+        ),
+        "maps-to-allocator-node": (
+            "retail-virtual-register",
+            "allocator-node",
+        ),
+        "object-has-stack-home": ("compiler-object", "stack-object"),
+    }.get(edge.kind)
+
+
+def _partial_for_edge(
+    index: _OwnerEvidenceIndex,
+    edge: EvidenceEdge,
+) -> _PartialOwnerPath:
+    source = _node_for_edge_endpoint(index, edge, "source")
+    target = _node_for_edge_endpoint(index, edge, "target")
+    records = tuple(record for record in (source, edge, target) if record is not None)
+    if source is None or target is None:
+        reason = "unregistered-support"
+    elif not _edge_endpoint_kinds_are_valid(edge, source, target):
+        reason = "malformed-support"
+    else:
+        reason = "plausible-owner-alternative"
+    return _PartialOwnerPath(
+        _OWNER_EDGE_STAGES[edge.kind],
+        _hint_for_branch(records),
+        records,
+        reason,
+    )
+
+
+def _enumerate_candidate_branches(
+    index: _OwnerEvidenceIndex,
+) -> _CandidateEnumeration:
+    complete = tuple(
+        sorted(
+            _enumerate_candidates(index),
+            key=lambda candidate: _branch_sort_key(candidate.path_records),
+        )
+    )
+    accounted_edge_ids = {
+        record.record_id
+        for candidate in complete
+        for record in candidate.path_records
+        if isinstance(record, EvidenceEdge) and record.kind in _OWNER_EDGE_STAGES
+    }
+
+    # Mutation-parent lineage edges are a side proof validated by
+    # _validate_lineage_output, not another retail-PCode continuation.
+    complete_lineage_ids = {candidate.lineage.record_id for candidate in complete}
+    for edge in index.edges_by_kind.get("pcode-operand-lineage", ()):
+        source = index.node_by_id.get(edge.source_id)
+        if edge.target_id in complete_lineage_ids and source is not None and source.kind != "retail-pcode":
+            accounted_edge_ids.add(edge.record_id)
+
+    remaining_edges = tuple(
+        edge
+        for kind in _OWNER_EDGE_STAGES
+        for edge in sorted(index.edges_by_kind.get(kind, ()), key=_record_content)
+        if edge.record_id not in accounted_edge_ids
+    )
+    complete_node_ids = {
+        record.record_id
+        for candidate in complete
+        for record in candidate.path_records
+        if isinstance(record, EvidenceNode)
+    }
+    edge_indices_by_noncomplete_node: dict[str, list[int]] = {}
+    for edge_index, edge in enumerate(remaining_edges):
+        for record_id in (edge.source_id, edge.target_id):
+            if record_id not in complete_node_ids:
+                edge_indices_by_noncomplete_node.setdefault(record_id, []).append(edge_index)
+
+    partial: list[_PartialOwnerPath] = []
+    visited_edge_indices: set[int] = set()
+    stage_order = {stage: index for index, stage in enumerate(_OwnerPathStage)}
+    for initial_index in range(len(remaining_edges)):
+        if initial_index in visited_edge_indices:
+            continue
+        component_indices: set[int] = set()
+        pending = [initial_index]
+        while pending:
+            edge_index = pending.pop()
+            if edge_index in component_indices:
+                continue
+            component_indices.add(edge_index)
+            edge = remaining_edges[edge_index]
+            for record_id in (edge.source_id, edge.target_id):
+                if record_id in complete_node_ids:
+                    continue
+                pending.extend(edge_indices_by_noncomplete_node.get(record_id, ()))
+        visited_edge_indices.update(component_indices)
+        component_edges = tuple(remaining_edges[edge_index] for edge_index in sorted(component_indices))
+        edge_occurrences: dict[str, int] = {}
+        representative_edges: dict[str, EvidenceEdge] = {}
+        for edge in component_edges:
+            edge_occurrences[edge.record_id] = edge_occurrences.get(edge.record_id, 0) + 1
+            representative_edges.setdefault(edge.record_id, edge)
+        record_by_id: dict[str, EvidenceNode | EvidenceEdge] = {}
+        for edge in representative_edges.values():
+            source = _node_for_edge_endpoint(index, edge, "source")
+            target = _node_for_edge_endpoint(index, edge, "target")
+            for record in (source, edge, target):
+                if record is not None:
+                    record_by_id.setdefault(record.record_id, record)
+        records = tuple(sorted(record_by_id.values(), key=_record_content))
+        edge_partials = tuple(_partial_for_edge(index, edge) for edge in representative_edges.values())
+        reason = (
+            "unregistered-support"
+            if any(item.stop_reason == "unregistered-support" for item in edge_partials)
+            else (
+                "malformed-support"
+                if any(item.stop_reason == "malformed-support" for item in edge_partials)
+                else "plausible-owner-alternative"
+            )
+        )
+        stage = max(
+            (item.stage for item in edge_partials),
+            key=stage_order.__getitem__,
+        )
+        branch = _PartialOwnerPath(
+            stage,
+            _hint_for_branch(records),
+            records,
+            reason,
+        )
+        partial.extend(branch for _ in range(max(edge_occurrences.values())))
+    anchor_edge_source_ids = {
+        edge.source_id
+        for edge in index.edges_by_kind.get(
+            "assembly-anchor-emitted-by-pcode",
+            (),
+        )
+    }
+    complete_anchor_ids = {candidate.anchor.record_id for candidate in complete}
+    partial.extend(
+        _PartialOwnerPath(
+            _OwnerPathStage.ANCHOR,
+            _hint_for_branch((anchor,)),
+            (anchor,),
+            "plausible-owner-alternative",
+        )
+        for anchor in sorted(index.node_by_id.values(), key=_record_content)
+        if anchor.kind == "assembly-operand-anchor"
+        and anchor.record_id not in anchor_edge_source_ids
+        and anchor.record_id not in complete_anchor_ids
+    )
+    partial.sort(
+        key=lambda item: canonical_bytes(
+            {
+                "stage": item.stage.value,
+                "hint": {
+                    "operand_key": item.hint.operand_key,
+                    "register_class": item.hint.register_class,
+                    "semantic_stack_role": item.hint.semantic_stack_role,
+                    "type_size": item.hint.type_size,
+                    "frame_area": item.hint.frame_area,
+                },
+                "stop_reason": item.stop_reason,
+                "records": [_record_json(record) for record in item.records],
+            }
+        )
+    )
+    traversed = frozenset(edge.record_id for kind in _OWNER_EDGE_STAGES for edge in index.edges_by_kind.get(kind, ()))
+    return _CandidateEnumeration(complete, tuple(partial), traversed)
+
+
+def _role_matches_hint(role: OwnerRoleKey, hint: _OwnerRoleHint) -> bool:
+    comparisons = (
+        (hint.operand_key, role.operand_key),
+        (hint.register_class, role.register_class),
+        (hint.semantic_stack_role, role.semantic_stack_role),
+        (hint.type_size, role.type_size),
+        (hint.frame_area, role.frame_area),
+    )
+    known = tuple((actual, expected) for actual, expected in comparisons if actual is not None)
+    return bool(known) and all(actual == expected for actual, expected in known)
+
+
+def _partial_rejections(
+    enumeration: _CandidateEnumeration,
+    observed_roles: Iterable[OwnerRoleKey],
+) -> tuple[
+    tuple[OwnerCertificateRejection, ...],
+    tuple[OwnerCertificateRejection, ...],
+]:
+    roles = tuple(sorted(set(observed_roles)))
+    role_rejections: list[OwnerCertificateRejection] = []
+    global_rejections: list[OwnerCertificateRejection] = []
+    for partial in enumeration.partial:
+        compatible = tuple(role for role in roles if _role_matches_hint(role, partial.hint))
+        if compatible:
+            role_rejections.extend(_rejection(partial.stop_reason, role, partial.records) for role in compatible)
+            continue
+        global_reason = (
+            partial.stop_reason
+            if partial.stop_reason in {"unregistered-support", "malformed-support"}
+            else "disconnected-owner-path"
+        )
+        global_rejections.append(_rejection(global_reason, candidates=partial.records))
+    return tuple(role_rejections), tuple(global_rejections)
 
 
 def _role_for(candidate: _CandidatePath) -> OwnerRoleKey | OwnerCertificateRejection:
@@ -1375,10 +1710,10 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
             (),
             tuple(sorted(global_rejections, key=lambda item: item.rejection_id)),
         )
-    candidates = _enumerate_candidates(index)
+    enumeration = _enumerate_candidate_branches(index)
     paths: list[_OwnerPath] = []
     role_rejections: list[OwnerCertificateRejection] = []
-    for candidate in candidates:
+    for candidate in enumeration.complete:
         validated = _validate_candidate(evidence, index, candidate)
         if isinstance(validated, OwnerCertificateRejection):
             if validated.role is None:
@@ -1388,24 +1723,18 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
         else:
             paths.append(validated)
 
-    candidate_anchor_ids = {candidate.anchor.record_id for candidate in candidates}
     roles = {path.role for path in paths}
     roles.update(rejection.role for rejection in role_rejections if rejection.role is not None)
-    for anchor in evidence.nodes:
-        if anchor.kind != "assembly-operand-anchor" or anchor.record_id in candidate_anchor_ids:
-            continue
-        compatible = tuple(role for role in roles if role.operand_key == anchor.attributes.get("machine_operand_key"))
-        for role in compatible:
-            role_rejections.append(_rejection("plausible-owner-alternative", role, (anchor,)))
-    disconnected = tuple(
-        anchor
-        for anchor in evidence.nodes
-        if anchor.kind == "assembly-operand-anchor"
-        and anchor.record_id not in candidate_anchor_ids
-        and not any(role.operand_key == anchor.attributes.get("machine_operand_key") for role in roles)
+    partial_role_rejections, partial_global_rejections = _partial_rejections(
+        enumeration,
+        roles,
     )
-    if disconnected and not any(rejection.reason == "missing-required-capability" for rejection in global_rejections):
-        global_rejections.append(_rejection("disconnected-owner-path", candidates=disconnected))
+    if any(rejection.reason == "missing-required-capability" for rejection in global_rejections):
+        partial_global_rejections = tuple(
+            rejection for rejection in partial_global_rejections if rejection.reason != "disconnected-owner-path"
+        )
+    role_rejections.extend(partial_role_rejections)
+    global_rejections.extend(partial_global_rejections)
     return _ValidationOutcome(
         tuple(paths),
         tuple(sorted(role_rejections, key=lambda item: item.rejection_id)),
@@ -1595,12 +1924,13 @@ def _role_resolutions(
             for certificate_record_id, path in zip(certificate_record_ids, certificate_paths, strict=True)
             if path.role == role
         )
-        rejections = tuple(
-            sorted(
-                (rejection for rejection in outcome.role_rejections if rejection.role == role),
-                key=lambda item: item.rejection_id,
-            )
-        )
+        rejection_by_id: dict[str, OwnerCertificateRejection] = {}
+        for rejection in sorted(
+            (rejection for rejection in outcome.role_rejections if rejection.role == role),
+            key=lambda item: item.rejection_id,
+        ):
+            rejection_by_id.setdefault(rejection.rejection_id, rejection)
+        rejections = tuple(rejection_by_id.values())
         semantic_states = {group.semantic_state for group in role_groups if group.semantic_state is not None}
         if outcome.global_rejections:
             status = OwnerResolutionStatus.INCOMPLETE

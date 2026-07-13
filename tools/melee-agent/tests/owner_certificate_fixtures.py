@@ -73,6 +73,14 @@ STORE_FACTORIES = (pytest.param(InMemoryEvidenceStore, id="in-memory"),)
 ROLE = OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals")
 STATE = OwnerSemanticState(21, 0x44, 4)
 CHANGED_STATE = OwnerSemanticState(22, 0x48, 4)
+PARTIAL_OWNER_STAGES = (
+    "anchor",
+    "pcode-lineage",
+    "virtual",
+    "object",
+    "allocator",
+    "frame",
+)
 
 
 def only(items: Iterable[_T]) -> _T:
@@ -84,6 +92,263 @@ def only(items: Iterable[_T]) -> _T:
 
 def complete_evidence(**adapter_overrides: object) -> ObjectBindingEvidence:
     return emit_trusted_object_binding_evidence_for_test(_adapter_input(**adapter_overrides))
+
+
+def evidence_with_partial_owner_branch(
+    stage: str,
+    *,
+    duplicate: bool = False,
+    permuted: bool = False,
+    shared_role: bool = True,
+    base_evidence: ObjectBindingEvidence | None = None,
+    registered_malformed: bool = False,
+) -> ObjectBindingEvidence:
+    if stage not in PARTIAL_OWNER_STAGES:
+        raise ValueError(f"unknown partial owner stage: {stage}")
+    evidence = complete_evidence() if base_evidence is None else base_evidence
+    nodes_by_kind = {node.kind: node for node in evidence.nodes}
+    edges_by_kind = {edge.kind: edge for edge in evidence.edges if edge.kind != "pcode-operand-lineage"}
+    direct_lineage = only(
+        edge
+        for edge in evidence.edges
+        if edge.kind == "pcode-operand-lineage"
+        and evidence.nodes[
+            next(index for index, node in enumerate(evidence.nodes) if node.record_id == edge.source_id)
+        ].kind
+        == "retail-pcode"
+    )
+    operand_key = ROLE.operand_key if shared_role else "use:8"
+
+    def partial_node(
+        template: EvidenceNode,
+        tag: str,
+        *,
+        role_key: str | None = None,
+        attributes: Mapping[str, object] | None = None,
+    ) -> EvidenceNode:
+        return EvidenceNode.create(
+            compile_id=template.compile_id,
+            function=template.function,
+            kind=template.kind,
+            local_key=(evidence.capture_run_id, "partial-owner", stage, tag),
+            role_key=template.role_key if role_key is None else role_key,
+            producer_confidence=template.producer_confidence,
+            adapter_confidence=template.adapter_confidence,
+            provenance=replace(
+                template.provenance,
+                derivation_rule=f"partial-owner-{stage}-{tag}",
+                input_record_ids=(),
+            ),
+            input_confidences=(),
+            attributes=template.attributes if attributes is None else attributes,
+        )
+
+    def partial_edge(
+        template: EvidenceEdge,
+        source: EvidenceNode,
+        target_id: str,
+        *,
+        target_confidence: Confidence | None = None,
+        attributes: Mapping[str, object] | None = None,
+    ) -> EvidenceEdge:
+        return EvidenceEdge.create(
+            compile_id=template.compile_id,
+            function=template.function,
+            kind=template.kind,
+            source_id=source.record_id,
+            target_id=target_id,
+            occurrence_ordinal=99,
+            producer_confidence=template.producer_confidence,
+            adapter_confidence=template.adapter_confidence,
+            provenance=replace(
+                template.provenance,
+                derivation_rule=f"partial-owner-{stage}-{template.kind}",
+                input_record_ids=(source.record_id, target_id),
+            ),
+            input_confidences=(
+                source.confidence,
+                source.confidence if target_confidence is None else target_confidence,
+            ),
+            attributes=template.attributes if attributes is None else attributes,
+        )
+
+    added_nodes: tuple[EvidenceNode, ...]
+    added_edges: tuple[EvidenceEdge, ...]
+    if stage == "anchor":
+        anchor_template = nodes_by_kind["assembly-operand-anchor"]
+        anchor = partial_node(
+            anchor_template,
+            "anchor",
+            role_key=operand_key,
+            attributes={
+                **anchor_template.attributes,
+                "machine_operand_key": operand_key,
+            },
+        )
+        edge_template = edges_by_kind["assembly-anchor-emitted-by-pcode"]
+        edge = partial_edge(
+            edge_template,
+            anchor,
+            f"missing-partial-pcode-{operand_key}",
+            attributes={
+                **edge_template.attributes,
+                "machine_operand_key": operand_key,
+            },
+        )
+        added_nodes, added_edges = (anchor,), (edge,)
+    elif stage == "pcode-lineage":
+        lineage = partial_node(nodes_by_kind["pcode-operand"], "lineage")
+        pcode = nodes_by_kind["retail-pcode"]
+        edge = partial_edge(
+            direct_lineage,
+            pcode,
+            lineage.record_id,
+            target_confidence=lineage.confidence,
+            attributes={
+                **direct_lineage.attributes,
+                "machine_operand_key": operand_key,
+            },
+        )
+        added_nodes, added_edges = (lineage,), (edge,)
+    elif stage == "virtual":
+        virtual_template = nodes_by_kind["retail-virtual-register"]
+        class_id = 0 if shared_role else 1
+        virtual = partial_node(
+            virtual_template,
+            "virtual",
+            attributes={
+                **virtual_template.attributes,
+                "class_id": class_id,
+                "class": "r" if class_id == 0 else "f",
+                "virtual": 99,
+            },
+        )
+        lineage = only(
+            node
+            for node in evidence.nodes
+            if node.kind == "pcode-operand" and node.attributes.get("operand_lineage_id") == "ol-1"
+        )
+        edge_template = edges_by_kind["pcode-operand-uses-virtual"]
+        edge = partial_edge(
+            edge_template,
+            lineage,
+            virtual.record_id,
+            target_confidence=virtual.confidence,
+            attributes={
+                **edge_template.attributes,
+                "machine_operand_key": operand_key,
+            },
+        )
+        added_nodes, added_edges = (virtual,), (edge,)
+    elif stage == "object":
+        owner_template = nodes_by_kind["compiler-object"]
+        owner = partial_node(
+            owner_template,
+            "object",
+            attributes={
+                **owner_template.attributes,
+                "object_id": "partial-owner-object",
+                "type_size": ROLE.type_size if shared_role else ROLE.type_size * 2,
+            },
+        )
+        virtual = nodes_by_kind["retail-virtual-register"]
+        edge_template = edges_by_kind["object-materializes-virtual"]
+        edge = partial_edge(
+            edge_template,
+            owner,
+            virtual.record_id,
+            target_confidence=virtual.confidence,
+            attributes={
+                **edge_template.attributes,
+                "object_id": owner.attributes["object_id"],
+            },
+        )
+        added_nodes, added_edges = (owner,), (edge,)
+    elif stage == "allocator":
+        virtual_template = nodes_by_kind["retail-virtual-register"]
+        class_id = 0 if shared_role else 1
+        virtual = partial_node(
+            virtual_template,
+            "allocator-virtual",
+            attributes={
+                **virtual_template.attributes,
+                "class_id": class_id,
+                "class": "r" if class_id == 0 else "f",
+                "virtual": 99,
+            },
+        )
+        edge_template = edges_by_kind["maps-to-allocator-node"]
+        edge = partial_edge(
+            edge_template,
+            virtual,
+            f"missing-partial-allocator-{operand_key}",
+            attributes={
+                **edge_template.attributes,
+                "class_id": class_id,
+            },
+        )
+        added_nodes, added_edges = (virtual,), (edge,)
+    else:
+        owner_template = nodes_by_kind["compiler-object"]
+        owner = (
+            owner_template
+            if shared_role
+            else partial_node(
+                owner_template,
+                "frame-owner",
+                attributes={
+                    **owner_template.attributes,
+                    "object_id": "partial-frame-owner",
+                    "type_size": ROLE.type_size * 2,
+                },
+            )
+        )
+        edge_template = edges_by_kind["object-has-stack-home"]
+        malformed_target = (
+            partial_node(nodes_by_kind["allocator-node"], "malformed-frame-target") if registered_malformed else None
+        )
+        edge = partial_edge(
+            edge_template,
+            owner,
+            (malformed_target.record_id if malformed_target is not None else f"missing-partial-frame-{operand_key}"),
+            target_confidence=(malformed_target.confidence if malformed_target is not None else None),
+            attributes={
+                **edge_template.attributes,
+                "area": ROLE.frame_area if shared_role else "temps",
+                "semantic_stack_role": (ROLE.semantic_stack_role if shared_role else "orphan-home"),
+            },
+        )
+        added_nodes = (
+            (() if owner is owner_template else (owner,))
+            if malformed_target is None
+            else (
+                *(() if owner is owner_template else (owner,)),
+                malformed_target,
+            )
+        )
+        added_edges = (edge,)
+
+    if duplicate:
+        added_nodes = (*added_nodes, *added_nodes)
+        added_edges = (*added_edges, *added_edges)
+    nodes = (*evidence.nodes, *added_nodes)
+    edges = (*evidence.edges, *added_edges)
+    if permuted:
+        nodes = tuple(reversed(nodes))
+        edges = tuple(reversed(edges))
+    augmented = ObjectBindingEvidence(
+        nodes,
+        edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+    object.__setattr__(
+        augmented,
+        "_adapter_token",
+        object.__getattribute__(evidence, "_adapter_token"),
+    )
+    return augmented
 
 
 def validated_current_v2_bundle(
@@ -498,6 +763,80 @@ def evidence_with_independent_paths(count: int) -> ObjectBindingEvidence:
     )
 
 
+def evidence_with_partial_independent_paths(count: int) -> ObjectBindingEvidence:
+    evidence = evidence_with_independent_paths(count)
+    virtual_template = next(node for node in evidence.nodes if node.kind == "retail-virtual-register")
+    edge_template = next(edge for edge in evidence.edges if edge.kind == "pcode-operand-uses-virtual")
+    lineage_by_operand = {
+        str(edge.attributes["machine_operand_key"]): only(
+            node for node in evidence.nodes if node.record_id == edge.source_id
+        )
+        for edge in evidence.edges
+        if edge.kind == "pcode-operand-uses-virtual"
+    }
+    added_nodes: list[EvidenceNode] = []
+    added_edges: list[EvidenceEdge] = []
+    for index in range(count):
+        operand_key = f"use:{index}"
+        lineage = lineage_by_operand[operand_key]
+        virtual = EvidenceNode.create(
+            compile_id=virtual_template.compile_id,
+            function=virtual_template.function,
+            kind=virtual_template.kind,
+            local_key=(evidence.capture_run_id, "partial-indexed-virtual", index),
+            role_key=virtual_template.role_key,
+            producer_confidence=virtual_template.producer_confidence,
+            adapter_confidence=virtual_template.adapter_confidence,
+            provenance=replace(
+                virtual_template.provenance,
+                derivation_rule="partial-indexed-virtual",
+                input_record_ids=(),
+            ),
+            input_confidences=(),
+            attributes={
+                **virtual_template.attributes,
+                "class_id": 0,
+                "class": "r",
+                "virtual": 10_000 + index,
+            },
+        )
+        edge = EvidenceEdge.create(
+            compile_id=edge_template.compile_id,
+            function=edge_template.function,
+            kind=edge_template.kind,
+            source_id=lineage.record_id,
+            target_id=virtual.record_id,
+            occurrence_ordinal=100 + index,
+            producer_confidence=edge_template.producer_confidence,
+            adapter_confidence=edge_template.adapter_confidence,
+            provenance=replace(
+                edge_template.provenance,
+                derivation_rule="partial-indexed-virtual-edge",
+                input_record_ids=(lineage.record_id, virtual.record_id),
+            ),
+            input_confidences=(lineage.confidence, virtual.confidence),
+            attributes={
+                **edge_template.attributes,
+                "machine_operand_key": operand_key,
+            },
+        )
+        added_nodes.append(virtual)
+        added_edges.append(edge)
+    augmented = ObjectBindingEvidence(
+        (*evidence.nodes, *added_nodes),
+        (*evidence.edges, *added_edges),
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+    object.__setattr__(
+        augmented,
+        "_adapter_token",
+        object.__getattribute__(evidence, "_adapter_token"),
+    )
+    return augmented
+
+
 def evidence_with_role_statuses() -> ObjectBindingEvidence:
     return _evidence_from_paths(
         (
@@ -829,7 +1168,12 @@ def _status_evidence(
     raise ValueError(f"unknown owner status: {status}")
 
 
-def _certified_frontier(label: str, status: str) -> FrontierGraph:
+def _certified_frontier(
+    label: str,
+    status: str,
+    *,
+    partial_stage: str | None = None,
+) -> FrontierGraph:
     compile_id = f"certificate-{label}"
     capture_run_id = hashlib.sha256(label.encode()).hexdigest()
     evidence = _status_evidence(
@@ -837,6 +1181,12 @@ def _certified_frontier(label: str, status: str) -> FrontierGraph:
         compile_id=compile_id,
         capture_run_id=capture_run_id,
     )
+    if partial_stage is not None:
+        evidence = evidence_with_partial_owner_branch(
+            partial_stage,
+            base_evidence=evidence,
+            registered_malformed=partial_stage == "frame",
+        )
     result = build_owner_certificates(evidence)
     store = InMemoryEvidenceStore()
     store.add_nodes(evidence.nodes)
@@ -874,6 +1224,15 @@ def graphs_with_statuses(
 
 def future_complete_graph_pair() -> tuple[FrontierGraph, FrontierGraph]:
     return graphs_with_statuses("unique", "unique")
+
+
+def graphs_with_partial_owner_branch(
+    stage: str,
+) -> tuple[FrontierGraph, FrontierGraph]:
+    return (
+        _certified_frontier("left", "unique", partial_stage=stage),
+        _certified_frontier("right", "unique"),
+    )
 
 
 def _semantic_frontier(label: str, state: OwnerSemanticState) -> FrontierGraph:
