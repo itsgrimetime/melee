@@ -41,11 +41,14 @@ from tests.owner_certificate_fixtures import (
     evidence_with_coordinated_allocator_omission,
     evidence_with_create_lineage_history,
     evidence_with_duplicate_exact_rewrite,
+    evidence_with_event_generation_conflict,
     evidence_with_global_and_role_rejection,
     evidence_with_heuristic_support,
     evidence_with_independent_paths,
     evidence_with_invalid_lineage_history,
     evidence_with_lineage_variant,
+    evidence_with_mutation_identity_history,
+    evidence_with_mutation_identity_override,
     evidence_with_mutation_parent_override,
     evidence_with_object_generation_conflict,
     evidence_with_partial_independent_paths,
@@ -1160,6 +1163,98 @@ def test_lineage_history_is_order_independent():
     reverse_result = owner_certificate.validate_owner_evidence(reverse)
 
     assert canonical_result(forward_result) == canonical_result(reverse_result)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    (
+        pytest.param("pcode_id", "foreign-pcode", id="foreign-pcode"),
+        pytest.param("allocation_generation", 999, id="wrong-generation"),
+    ),
+)
+def test_mutation_history_identity_must_reach_selected_emitted_pcode(
+    attribute: str,
+    value: object,
+) -> None:
+    results = tuple(
+        owner_certificate.validate_owner_evidence(
+            evidence_with_mutation_identity_override(
+                attribute,
+                value,
+                permuted=permuted,
+            )
+        )
+        for permuted in (False, True)
+    )
+
+    assert canonical_result(results[0]) == canonical_result(results[1])
+    for result in results:
+        resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+        assert result.certificate_nodes == ()
+        assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+        assert resolution.certificate_record_ids == ()
+        rejection = only(resolution.rejections)
+        assert rejection.reason == "lineage-parent-mismatch"
+        assert rejection.candidate_record_ids
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ("disconnected-input", "overwrite-live"),
+)
+def test_invalid_mutation_identity_replay_never_certifies(variant: str) -> None:
+    result = owner_certificate.validate_owner_evidence(
+        evidence_with_mutation_identity_history(variant)
+    )
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    rejection = only(resolution.rejections)
+    assert rejection.reason == "lineage-parent-mismatch"
+    assert rejection.candidate_record_ids
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ("clone-extra-branch", "replace-final"),
+)
+def test_valid_mutation_identity_replay_builds_owner_certificate(
+    variant: str,
+) -> None:
+    evidence = evidence_with_mutation_identity_history(variant)
+    result = build_owner_certificates(evidence)
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.UNIQUE
+    assert resolution.rejections == ()
+    assert len(resolution.certificate_record_ids) == 1
+    certificate = only(result.certificate_nodes)
+    mutation_support_ids = {
+        node.record_id
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-lineage-event"
+        and "event_index" in node.attributes
+    }
+    assert mutation_support_ids <= set(
+        certificate.attributes["raw_support_record_ids"]
+    )
+
+
+def test_one_allocation_generation_is_required_per_pcode_within_event() -> None:
+    result = owner_certificate.validate_owner_evidence(
+        evidence_with_event_generation_conflict()
+    )
+    resolution = next(item for item in result.role_resolutions if item.role == first_role())
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    rejection = only(resolution.rejections)
+    assert rejection.reason == "lineage-parent-mismatch"
+    assert rejection.candidate_record_ids
 
 
 @pytest.mark.parametrize(

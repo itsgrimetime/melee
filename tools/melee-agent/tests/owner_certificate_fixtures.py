@@ -437,6 +437,53 @@ def _event(
     )
 
 
+def _identity_event(
+    *,
+    mutation_kind: str,
+    inputs: tuple[tuple[str, tuple[str, ...]], ...],
+    outputs: tuple[
+        tuple[str, tuple[tuple[str, tuple[str, ...] | None], ...]],
+        ...,
+    ],
+) -> Mapping[str, object]:
+    return _mapping(
+        mutation_kind=mutation_kind,
+        inputs=tuple(
+            _mapping(
+                pcode_id=pcode_id,
+                operands=tuple(
+                    _mapping(operand_lineage_id=lineage_id, operand_index=index)
+                    for index, lineage_id in enumerate(lineage_ids, start=1)
+                ),
+            )
+            for pcode_id, lineage_ids in inputs
+        ),
+        outputs=tuple(
+            _mapping(
+                pcode_id=pcode_id,
+                operands=tuple(
+                    _mapping(
+                        **{
+                            "operand_lineage_id": lineage_id,
+                            "operand_index": index,
+                            **(
+                                {}
+                                if parent_lineage_ids is None
+                                else {"parent_lineage_ids": parent_lineage_ids}
+                            ),
+                        }
+                    )
+                    for index, (lineage_id, parent_lineage_ids) in enumerate(
+                        operands,
+                        start=1,
+                    )
+                ),
+            )
+            for pcode_id, operands in outputs
+        ),
+    )
+
+
 def _path(
     index: int,
     *,
@@ -472,6 +519,7 @@ def _evidence_from_paths(
     events: tuple[Mapping[str, object], ...] | None = None,
     reverse_pcode_inputs: bool = False,
     reverse_event_inputs: bool = False,
+    event_only_pcode_generations: Mapping[str, int] = MappingProxyType({}),
     instrumentation_identity: object = (
         "1" * 64,
         "proof-test",
@@ -611,6 +659,19 @@ def _evidence_from_paths(
                 ),
             )
         )
+    for index, (pcode_id, generation) in enumerate(
+        sorted(event_only_pcode_generations.items())
+    ):
+        if pcode_id in paths_by_pcode:
+            raise ValueError(f"event-only PCode {pcode_id} also has an emitted path")
+        instructions.append(
+            _mapping(
+                pcode_id=pcode_id,
+                runtime_address=0x7000 + index * 0x10,
+                allocation_generation=generation,
+                code_ranges=(),
+            )
+        )
     if events is None:
         events = tuple(
             _event(
@@ -711,6 +772,136 @@ def evidence_with_create_lineage_history(*, preserve: bool = False) -> ObjectBin
             )
         )
     return _evidence_from_paths((path,), events=tuple(events))
+
+
+def evidence_with_mutation_identity_override(
+    attribute: str,
+    value: object,
+    *,
+    permuted: bool = False,
+) -> ObjectBindingEvidence:
+    if attribute not in {"pcode_id", "allocation_generation"}:
+        raise ValueError(f"unsupported mutation identity attribute: {attribute}")
+    evidence = complete_evidence()
+    nodes = tuple(
+        node.with_attributes({**node.attributes, attribute: value})
+        if (
+            node.kind == "backend-support-record"
+            and node.attributes.get("support_kind") == "pcode-lineage-event"
+            and "event_index" in node.attributes
+        )
+        else node
+        for node in evidence.nodes
+    )
+    if permuted:
+        nodes = tuple(reversed(nodes))
+    edges = tuple(reversed(evidence.edges)) if permuted else evidence.edges
+    return ObjectBindingEvidence(
+        nodes,
+        edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+
+def evidence_with_mutation_identity_history(variant: str) -> ObjectBindingEvidence:
+    selected_pcode = "pc-final"
+    path = {
+        **_path(0, operand_key="use:0", semantic_stack_role="row-home"),
+        "pcode_id": selected_pcode,
+    }
+    create = _identity_event(
+        mutation_kind="create",
+        inputs=(),
+        outputs=(("pc-base", (("ol-1", ()),)),),
+    )
+    clone = _identity_event(
+        mutation_kind="clone",
+        inputs=(("pc-base", ("ol-1",)),),
+        outputs=(
+            (selected_pcode, (("ol-1", None),)),
+            ("pc-extra", (("ol-1", None),)),
+        ),
+    )
+    events_by_variant = {
+        "clone-extra-branch": (create, clone),
+        "replace-final": (
+            create,
+            _identity_event(
+                mutation_kind="replace",
+                inputs=(("pc-base", ("ol-1",)),),
+                outputs=((selected_pcode, (("ol-1", None),)),),
+            ),
+        ),
+        "disconnected-input": (
+            create,
+            _identity_event(
+                mutation_kind="replace",
+                inputs=(("pc-disconnected", ("ol-1",)),),
+                outputs=((selected_pcode, (("ol-1", None),)),),
+            ),
+        ),
+        "overwrite-live": (
+            create,
+            _identity_event(
+                mutation_kind="clone",
+                inputs=(("pc-base", ("ol-1",)),),
+                outputs=(
+                    ("pc-kept", (("ol-1", None),)),
+                    (selected_pcode, (("ol-1", None),)),
+                ),
+            ),
+            _identity_event(
+                mutation_kind="replace",
+                inputs=(("pc-kept", ("ol-1",)),),
+                outputs=((selected_pcode, (("ol-1", None),)),),
+            ),
+        ),
+    }
+    events = events_by_variant.get(variant)
+    if events is None:
+        raise ValueError(f"unknown mutation identity history: {variant}")
+    event_pcodes = {
+        str(state["pcode_id"])
+        for event in events
+        for side in ("inputs", "outputs")
+        for state in event[side]
+        if state["pcode_id"] != selected_pcode
+    }
+    return _evidence_from_paths(
+        (path,),
+        events=events,
+        event_only_pcode_generations=MappingProxyType(
+            {pcode_id: 1 for pcode_id in event_pcodes}
+        ),
+    )
+
+
+def evidence_with_event_generation_conflict() -> ObjectBindingEvidence:
+    evidence = evidence_with_two_mutation_outputs(
+        first_parents=("ol-a",),
+        second_parents=("ol-b",),
+    )
+    nodes = tuple(
+        node.with_attributes(
+            {**node.attributes, "allocation_generation": 999}
+        )
+        if (
+            node.kind == "backend-support-record"
+            and node.attributes.get("support_kind") == "pcode-lineage-event"
+            and node.attributes.get("operand_lineage_id") in {"ol-b", "ol-2"}
+        )
+        else node
+        for node in evidence.nodes
+    )
+    return ObjectBindingEvidence(
+        nodes,
+        evidence.edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
 
 
 def evidence_with_invalid_lineage_history(

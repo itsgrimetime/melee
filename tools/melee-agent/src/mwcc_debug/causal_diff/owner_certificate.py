@@ -1500,10 +1500,17 @@ def _validate_lineage_output(
             (
                 item.attributes.get("side"),
                 item.attributes.get("pcode_id"),
+                item.attributes.get("allocation_generation"),
                 item.attributes.get("operand_lineage_id"),
             )
             for item in event_support
         )
+        generations_by_pcode: dict[object, set[object]] = {}
+        for item in event_support:
+            generations_by_pcode.setdefault(
+                item.attributes.get("pcode_id"),
+                set(),
+            ).add(item.attributes.get("allocation_generation"))
         mutation_kinds = {item.attributes.get("mutation_kind") for item in event_support}
         event_parent_ids = tuple(
             sorted(
@@ -1535,6 +1542,10 @@ def _validate_lineage_output(
         if (
             event_index < 0
             or len(identities) != len(set(identities))
+            or any(
+                len(generations) != 1
+                for generations in generations_by_pcode.values()
+            )
             or len(mutation_kinds) != 1
             or not input_parent_summaries_match
             or not outputs
@@ -1599,6 +1610,42 @@ def _validate_lineage_output(
         )
     definition, definition_support = definitions[0]
     if any(event.event_index <= definition.event_index for event in preservations):
+        return _rejection(
+            "lineage-parent-mismatch",
+            role,
+            candidate.path_records,
+            tuple(item for event in events for item in event.all_support),
+        )
+
+    def pcode_identity(item: EvidenceNode) -> tuple[object, object]:
+        return (
+            item.attributes.get("pcode_id"),
+            item.attributes.get("allocation_generation"),
+        )
+
+    live_identities = {pcode_identity(item) for item in definition.outputs}
+    for event in sorted(preservations, key=lambda item: item.event_index):
+        consumed = {pcode_identity(item) for item in event.inputs}
+        produced = {pcode_identity(item) for item in event.outputs}
+        remaining = live_identities - consumed
+        if (
+            not consumed
+            or not produced
+            or not consumed <= live_identities
+            or bool(produced & remaining)
+        ):
+            return _rejection(
+                "lineage-parent-mismatch",
+                role,
+                candidate.path_records,
+                event.all_support,
+            )
+        live_identities = remaining | produced
+    selected_identity = (
+        candidate.pcode.attributes.get("pcode_id"),
+        candidate.pcode.attributes.get("allocation_generation"),
+    )
+    if selected_identity not in live_identities:
         return _rejection(
             "lineage-parent-mismatch",
             role,
