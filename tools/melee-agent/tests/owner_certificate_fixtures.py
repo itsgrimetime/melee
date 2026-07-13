@@ -806,7 +806,9 @@ def evidence_with_mutation_identity_override(
 
 
 def evidence_with_mutation_identity_history(variant: str) -> ObjectBindingEvidence:
-    selected_pcode = "pc-final"
+    selected_pcode = (
+        "pc-base" if variant == "update-replace-overlap" else "pc-final"
+    )
     path = {
         **_path(0, operand_key="use:0", semantic_stack_role="row-home"),
         "pcode_id": selected_pcode,
@@ -858,6 +860,40 @@ def evidence_with_mutation_identity_history(variant: str) -> ObjectBindingEviden
                 outputs=((selected_pcode, (("ol-1", None),)),),
             ),
         ),
+        "update-replace-overlap": (
+            _identity_event(
+                mutation_kind="update",
+                inputs=(("pc-base", ("ol-parent-0",)),),
+                outputs=(("pc-base", (("ol-1", ("ol-parent-0",)),)),),
+            ),
+            _identity_event(
+                mutation_kind="replace",
+                inputs=(("pc-base", ("ol-1",)),),
+                outputs=(("pc-base", (("ol-1", None),)),),
+            ),
+        ),
+        "clone-update-multi-output": (
+            create,
+            _identity_event(
+                mutation_kind="clone",
+                inputs=(("pc-base", ("ol-1",)),),
+                outputs=(
+                    ("pc-left", (("ol-1", None),)),
+                    ("pc-right", (("ol-1", None),)),
+                ),
+            ),
+            _identity_event(
+                mutation_kind="update",
+                inputs=(
+                    ("pc-left", ("ol-1",)),
+                    ("pc-right", ("ol-1",)),
+                ),
+                outputs=(
+                    ("pc-left", (("ol-1", None),)),
+                    (selected_pcode, (("ol-1", None),)),
+                ),
+            ),
+        ),
     }
     events = events_by_variant.get(variant)
     if events is None:
@@ -875,6 +911,30 @@ def evidence_with_mutation_identity_history(variant: str) -> ObjectBindingEviden
         event_only_pcode_generations=MappingProxyType(
             {pcode_id: 1 for pcode_id in event_pcodes}
         ),
+    )
+
+
+def evidence_with_intermediate_generation_forgery() -> ObjectBindingEvidence:
+    evidence = evidence_with_mutation_identity_history("clone-extra-branch")
+    nodes = tuple(
+        node.with_attributes(
+            {**node.attributes, "allocation_generation": 999}
+        )
+        if (
+            node.kind == "backend-support-record"
+            and node.attributes.get("support_kind") == "pcode-lineage-event"
+            and node.attributes.get("pcode_id") == "pc-base"
+            and "event_index" in node.attributes
+        )
+        else node
+        for node in evidence.nodes
+    )
+    return ObjectBindingEvidence(
+        nodes,
+        evidence.edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
     )
 
 

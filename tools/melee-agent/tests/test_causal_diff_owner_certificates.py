@@ -45,6 +45,7 @@ from tests.owner_certificate_fixtures import (
     evidence_with_global_and_role_rejection,
     evidence_with_heuristic_support,
     evidence_with_independent_paths,
+    evidence_with_intermediate_generation_forgery,
     evidence_with_invalid_lineage_history,
     evidence_with_lineage_variant,
     evidence_with_mutation_identity_history,
@@ -1200,7 +1201,12 @@ def test_mutation_history_identity_must_reach_selected_emitted_pcode(
 
 @pytest.mark.parametrize(
     "variant",
-    ("disconnected-input", "overwrite-live"),
+    (
+        "disconnected-input",
+        "overwrite-live",
+        "update-replace-overlap",
+        "clone-update-multi-output",
+    ),
 )
 def test_invalid_mutation_identity_replay_never_certifies(variant: str) -> None:
     result = owner_certificate.validate_owner_evidence(
@@ -1241,6 +1247,59 @@ def test_valid_mutation_identity_replay_builds_owner_certificate(
     assert mutation_support_ids <= set(
         certificate.attributes["raw_support_record_ids"]
     )
+    mutation_identities = {
+        (
+            node.attributes["pcode_id"],
+            node.attributes["allocation_generation"],
+        )
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-lineage-event"
+        and "event_index" in node.attributes
+    }
+    pcode_nodes = tuple(
+        node
+        for node in evidence.nodes
+        if node.kind == "retail-pcode"
+        and (
+            node.attributes.get("pcode_id"),
+            node.attributes.get("allocation_generation"),
+        )
+        in mutation_identities
+    )
+    generation_support = tuple(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-generation"
+        and (
+            node.attributes.get("pcode_id"),
+            node.attributes.get("allocation_generation"),
+        )
+        in mutation_identities
+    )
+    assert len(pcode_nodes) == len(mutation_identities)
+    assert len(generation_support) == len(mutation_identities)
+    assert {node.record_id for node in pcode_nodes} <= set(
+        certificate.attributes["path_record_ids"]
+    )
+    assert {node.record_id for node in generation_support} <= set(
+        certificate.attributes["raw_support_record_ids"]
+    )
+
+
+def test_intermediate_mutation_generation_requires_registered_pcode_identity() -> None:
+    result = owner_certificate.validate_owner_evidence(
+        evidence_with_intermediate_generation_forgery()
+    )
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    rejection = only(resolution.rejections)
+    assert rejection.reason == "lineage-parent-mismatch"
+    assert rejection.candidate_record_ids
 
 
 def test_one_allocation_generation_is_required_per_pcode_within_event() -> None:

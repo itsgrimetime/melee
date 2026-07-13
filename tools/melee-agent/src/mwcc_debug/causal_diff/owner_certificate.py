@@ -502,6 +502,11 @@ class _OwnerEvidenceIndex:
     edges_by_kind_source: Mapping[tuple[str, str], tuple[EvidenceEdge, ...]]
     edges_by_kind_target: Mapping[tuple[str, str], tuple[EvidenceEdge, ...]]
     mutation_support: tuple[EvidenceNode, ...]
+    pcode_nodes_by_identity: Mapping[tuple[str, int], tuple[EvidenceNode, ...]]
+    pcode_generation_support_by_identity: Mapping[
+        tuple[str, int],
+        tuple[EvidenceNode, ...],
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,6 +516,8 @@ class _LineageMutationEvent:
     inputs: tuple[EvidenceNode, ...]
     outputs: tuple[EvidenceNode, ...]
     all_support: tuple[EvidenceNode, ...]
+    input_identities: tuple[tuple[str, int], ...]
+    output_identities: tuple[tuple[str, int], ...]
 
 
 _IndexKey = TypeVar("_IndexKey")
@@ -530,10 +537,41 @@ def _index_evidence(evidence: ObjectBindingEvidence) -> _OwnerEvidenceIndex:
     edges_by_kind_source: dict[tuple[str, str], list[EvidenceEdge]] = {}
     edges_by_kind_target: dict[tuple[str, str], list[EvidenceEdge]] = {}
     mutation_support: list[EvidenceNode] = []
+    pcode_nodes_by_identity: dict[tuple[str, int], list[EvidenceNode]] = {}
+    pcode_node_ids_by_identity: dict[tuple[str, int], set[str]] = {}
+    pcode_generation_support_by_identity: dict[
+        tuple[str, int],
+        list[EvidenceNode],
+    ] = {}
+    pcode_generation_support_ids_by_identity: dict[
+        tuple[str, int],
+        set[str],
+    ] = {}
 
     for node in evidence.nodes:
         records_by_id.setdefault(node.record_id, []).append(node)
         node_by_id[node.record_id] = node
+        identity = _pcode_identity(node)
+        if node.kind == "retail-pcode" and identity is not None:
+            seen_ids = pcode_node_ids_by_identity.setdefault(identity, set())
+            if node.record_id not in seen_ids:
+                pcode_nodes_by_identity.setdefault(identity, []).append(node)
+                seen_ids.add(node.record_id)
+        if (
+            node.kind == "backend-support-record"
+            and node.attributes.get("support_kind") == "pcode-generation"
+            and identity is not None
+        ):
+            seen_ids = pcode_generation_support_ids_by_identity.setdefault(
+                identity,
+                set(),
+            )
+            if node.record_id not in seen_ids:
+                pcode_generation_support_by_identity.setdefault(
+                    identity,
+                    [],
+                ).append(node)
+                seen_ids.add(node.record_id)
         if (
             node.kind == "backend-support-record"
             and node.attributes.get("support_kind") == "pcode-lineage-event"
@@ -553,6 +591,8 @@ def _index_evidence(evidence: ObjectBindingEvidence) -> _OwnerEvidenceIndex:
         _freeze_groups(edges_by_kind_source),
         _freeze_groups(edges_by_kind_target),
         tuple(mutation_support),
+        _freeze_groups(pcode_nodes_by_identity),
+        _freeze_groups(pcode_generation_support_by_identity),
     )
 
 
@@ -586,6 +626,14 @@ def _is_sha256(value: object) -> bool:
 
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _pcode_identity(node: EvidenceNode) -> tuple[str, int] | None:
+    pcode_id = node.attributes.get("pcode_id")
+    allocation_generation = node.attributes.get("allocation_generation")
+    if not (_is_nonempty_str(pcode_id) and _is_int(allocation_generation)):
+        return None
+    return pcode_id, allocation_generation
 
 
 def _validated_instruction_anchor(
@@ -1451,6 +1499,87 @@ def _valid_lineage_mutation_support(
     )
 
 
+def _valid_mutation_identity_shape(
+    mutation_kind: str,
+    input_identities: tuple[tuple[str, int], ...],
+    output_identities: tuple[tuple[str, int], ...],
+) -> bool:
+    input_ids = tuple(identity[0] for identity in input_identities)
+    output_ids = tuple(identity[0] for identity in output_identities)
+    if mutation_kind == "create":
+        return not input_ids and bool(output_ids)
+    if mutation_kind == "update":
+        return (
+            len(input_ids) == 1
+            and len(output_ids) == 1
+            and input_ids == output_ids
+        )
+    if mutation_kind == "clone":
+        return (
+            len(input_ids) == 1
+            and len(output_ids) >= 2
+            and sum(pcode_id == input_ids[0] for pcode_id in output_ids) <= 1
+        )
+    if mutation_kind == "replace":
+        return bool(input_ids) and bool(output_ids) and not set(input_ids) & set(
+            output_ids
+        )
+    if mutation_kind == "delete":
+        return bool(input_ids) and not output_ids
+    return False
+
+
+def _validate_mutation_pcode_identity(
+    evidence: ObjectBindingEvidence,
+    index: _OwnerEvidenceIndex,
+    candidate: _CandidatePath,
+    role: OwnerRoleKey,
+    identity: tuple[str, int],
+    event_support: tuple[EvidenceNode, ...],
+) -> tuple[EvidenceNode, EvidenceNode] | OwnerCertificateRejection:
+    pcode_matches = index.pcode_nodes_by_identity.get(identity, ())
+    generation_matches = index.pcode_generation_support_by_identity.get(
+        identity,
+        (),
+    )
+    if len(pcode_matches) != 1 or len(generation_matches) != 1:
+        return _rejection(
+            "lineage-parent-mismatch",
+            role,
+            (*candidate.path_records, *pcode_matches),
+            (*event_support, *generation_matches),
+        )
+    pcode = pcode_matches[0]
+    generation = generation_matches[0]
+    validated_support = _validated_support_records(
+        evidence,
+        index,
+        pcode,
+        (),
+        role,
+    )
+    if (
+        isinstance(validated_support, OwnerCertificateRejection)
+        or validated_support != (generation,)
+        or pcode.producer_confidence is Confidence.HEURISTIC
+        or pcode.adapter_confidence is Confidence.HEURISTIC
+        or pcode.confidence is Confidence.HEURISTIC
+        or pcode.compile_id != candidate.pcode.compile_id
+        or pcode.function != candidate.pcode.function
+        or pcode.provenance.artifact_sha256
+        != candidate.pcode.provenance.artifact_sha256
+        or pcode.provenance.parser != _PARSER
+        or pcode.attributes.get("capture_run_id") != evidence.capture_run_id
+    ):
+        return _rejection(
+            "lineage-parent-mismatch",
+            role,
+            (*candidate.path_records, pcode),
+            (*event_support, generation),
+        )
+    return pcode, generation
+
+
 def _validate_lineage_output(
     evidence: ObjectBindingEvidence,
     index: _OwnerEvidenceIndex,
@@ -1496,6 +1625,26 @@ def _validate_lineage_output(
         )
         if any(not _valid_lineage_mutation_support(evidence, candidate, item) for item in event_support):
             return _rejection("malformed-support", role, candidate.path_records, event_support)
+        input_identities = tuple(
+            sorted(
+                {
+                    identity
+                    for item in event_support
+                    if item.attributes.get("side") == "inputs"
+                    if (identity := _pcode_identity(item)) is not None
+                }
+            )
+        )
+        output_identities = tuple(
+            sorted(
+                {
+                    identity
+                    for item in event_support
+                    if item.attributes.get("side") == "outputs"
+                    if (identity := _pcode_identity(item)) is not None
+                }
+            )
+        )
         identities = tuple(
             (
                 item.attributes.get("side"),
@@ -1512,6 +1661,11 @@ def _validate_lineage_output(
                 set(),
             ).add(item.attributes.get("allocation_generation"))
         mutation_kinds = {item.attributes.get("mutation_kind") for item in event_support}
+        mutation_kind = (
+            str(next(iter(mutation_kinds)))
+            if len(mutation_kinds) == 1
+            else ""
+        )
         event_parent_ids = tuple(
             sorted(
                 {
@@ -1547,6 +1701,11 @@ def _validate_lineage_output(
                 for generations in generations_by_pcode.values()
             )
             or len(mutation_kinds) != 1
+            or not _valid_mutation_identity_shape(
+                mutation_kind,
+                input_identities,
+                output_identities,
+            )
             or not input_parent_summaries_match
             or not outputs
         ):
@@ -1554,12 +1713,43 @@ def _validate_lineage_output(
         events.append(
             _LineageMutationEvent(
                 event_index,
-                str(next(iter(mutation_kinds))),
+                mutation_kind,
                 inputs,
                 outputs,
                 event_support,
+                input_identities,
+                output_identities,
             )
         )
+
+    authenticated_pcodes: list[EvidenceNode] = []
+    authenticated_generation_support: list[EvidenceNode] = []
+    all_event_support = tuple(
+        item for event in events for item in event.all_support
+    )
+    event_identities = tuple(
+        sorted(
+            {
+                identity
+                for event in events
+                for identity in (*event.input_identities, *event.output_identities)
+            }
+        )
+    )
+    for identity in event_identities:
+        authenticated = _validate_mutation_pcode_identity(
+            evidence,
+            index,
+            candidate,
+            role,
+            identity,
+            all_event_support,
+        )
+        if isinstance(authenticated, OwnerCertificateRejection):
+            return authenticated
+        pcode, generation = authenticated
+        authenticated_pcodes.append(pcode)
+        authenticated_generation_support.append(generation)
 
     definitions: list[tuple[_LineageMutationEvent, EvidenceNode]] = []
     preservations: list[_LineageMutationEvent] = []
@@ -1617,16 +1807,22 @@ def _validate_lineage_output(
             tuple(item for event in events for item in event.all_support),
         )
 
-    def pcode_identity(item: EvidenceNode) -> tuple[object, object]:
-        return (
-            item.attributes.get("pcode_id"),
-            item.attributes.get("allocation_generation"),
-        )
-
-    live_identities = {pcode_identity(item) for item in definition.outputs}
+    live_identities = {
+        identity
+        for item in definition.outputs
+        if (identity := _pcode_identity(item)) is not None
+    }
     for event in sorted(preservations, key=lambda item: item.event_index):
-        consumed = {pcode_identity(item) for item in event.inputs}
-        produced = {pcode_identity(item) for item in event.outputs}
+        consumed = {
+            identity
+            for item in event.inputs
+            if (identity := _pcode_identity(item)) is not None
+        }
+        produced = {
+            identity
+            for item in event.outputs
+            if (identity := _pcode_identity(item)) is not None
+        }
         remaining = live_identities - consumed
         if (
             not consumed
@@ -1641,11 +1837,8 @@ def _validate_lineage_output(
                 event.all_support,
             )
         live_identities = remaining | produced
-    selected_identity = (
-        candidate.pcode.attributes.get("pcode_id"),
-        candidate.pcode.attributes.get("allocation_generation"),
-    )
-    if selected_identity not in live_identities:
+    selected_identity = _pcode_identity(candidate.pcode)
+    if selected_identity is None or selected_identity not in live_identities:
         return _rejection(
             "lineage-parent-mismatch",
             role,
@@ -1736,18 +1929,28 @@ def _validate_lineage_output(
             (*candidate.path_records, *selected),
             tuple(item for event in events for item in event.all_support),
         )
-    parent_records: tuple[EvidenceNode | EvidenceEdge, ...] = (
+    lineage_records: tuple[EvidenceNode | EvidenceEdge, ...] = (
         *parent_nodes,
         *selected,
+        *authenticated_pcodes,
     )
-    parent_support = _supports_for_records(evidence, index, parent_records, role)
+    parent_support = _supports_for_records(
+        evidence,
+        index,
+        lineage_records,
+        role,
+    )
     if isinstance(parent_support, OwnerCertificateRejection):
         return parent_support
     event_support = tuple(item for event in events for item in event.all_support)
-    return parent_records, tuple(
+    return lineage_records, tuple(
         {
             item.record_id: item
-            for item in (*event_support, *parent_support)
+            for item in (
+                *event_support,
+                *authenticated_generation_support,
+                *parent_support,
+            )
         }.values()
     )
 
