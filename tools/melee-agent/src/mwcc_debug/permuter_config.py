@@ -269,7 +269,8 @@ _BOOTSTRAP_SETTINGS_STALE_TOOLCHAIN_KEYS = {
 _TOP_LEVEL_KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z_0-9]*)\s*=")
 
 
-def _existing_randomize_funcs(toml_text: str) -> list[str] | None:
+def parse_existing_randomize_funcs(toml_text: str) -> list[str] | None:
+    """Return a valid top-level ``randomize_funcs`` string list, if present."""
     try:
         parsed = tomllib.loads(toml_text)
     except tomllib.TOMLDecodeError:
@@ -293,7 +294,7 @@ def repair_bootstrap_settings_toml(
     user-tuned sections such as [weight_overrides], but the root toolchain
     keys must match the project-local compile.sh and dtk objdump wrapper.
     """
-    randomize_funcs = _existing_randomize_funcs(toml_text)
+    randomize_funcs = parse_existing_randomize_funcs(toml_text)
     lines = toml_text.splitlines(keepends=True)
 
     table_start = len(lines)

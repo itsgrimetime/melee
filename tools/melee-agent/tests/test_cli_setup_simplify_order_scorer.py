@@ -521,6 +521,55 @@ def test_setup_preserves_existing_weight_overrides(
     assert "scorer" in parsed
 
 
+def test_force_setup_preserves_existing_randomize_funcs_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    function = "fn_test"
+    randomize_funcs = [function, "helper_z", "helper_a"]
+    existing_settings = textwrap.dedent("""\
+        func_name = "fn_test"
+        randomize_funcs = ["fn_test", "helper_z", "helper_a"]
+        compiler_type = "mwcc"
+
+        [weight_overrides]
+        perm_xor_zero = 5.0
+
+        [scorer]
+        command = "/bin/false"
+        timeout_seconds = 99.0
+    """)
+    perm_root = _make_perm_dir(
+        tmp_path,
+        function=function,
+        settings_toml=existing_settings,
+    )
+    perm_dir = perm_root / "nonmatchings" / function
+    (perm_dir / "simplify_order_target.yaml").write_text("stale\n")
+    baseline = _make_baseline_dump(tmp_path, function)
+    _stub_wibo_and_compiler(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "permute", "setup-simplify-order-scorer",
+            "--function", function,
+            "--want-first", "42",
+            "--baseline-dump", str(baseline),
+            "--perm-root", str(perm_root),
+            "--scorer-timeout", "15.0",
+            "--force",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+
+    parsed = tomllib.loads((perm_dir / "settings.toml").read_text())
+    assert parsed["randomize_funcs"] == randomize_funcs
+    assert parsed["weight_overrides"] == {"perm_xor_zero": 5.0}
+    assert "score-simplify-order" in parsed["scorer"]["command"]
+    assert parsed["scorer"]["command"] != "/bin/false"
+    assert parsed["scorer"]["timeout_seconds"] == 15.0
+
+
 def test_setup_passes_custom_scorer_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

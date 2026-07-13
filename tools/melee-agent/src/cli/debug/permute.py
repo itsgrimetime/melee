@@ -3888,6 +3888,7 @@ def setup_simplify_order_scorer(
         SettingsTomlSpec,
         build_spec,
         parse_existing_overrides,
+        parse_existing_randomize_funcs,
         render_settings_toml,
         render_simplify_order_target_yaml,
         write_settings_toml,
@@ -4241,9 +4242,12 @@ def setup_simplify_order_scorer(
 
     settings_path = perm_dir / "settings.toml"
     existing_overrides: dict[str, float] = {}
+    existing_randomize_funcs: list[str] | None = None
     if settings_path.exists():
-        existing_overrides = parse_existing_overrides(
-            settings_path.read_text(encoding="utf-8")
+        existing_settings = settings_path.read_text(encoding="utf-8")
+        existing_overrides = parse_existing_overrides(existing_settings)
+        existing_randomize_funcs = parse_existing_randomize_funcs(
+            existing_settings
         )
 
     # Build the scorer command: a fully-quoted invocation of
@@ -4277,6 +4281,7 @@ def setup_simplify_order_scorer(
         existing_overrides=existing_overrides,
         merge=True,
         scorer=scorer_cfg,
+        randomize_funcs=existing_randomize_funcs,
     )
     write_settings_toml(new_spec, settings_path)
 
