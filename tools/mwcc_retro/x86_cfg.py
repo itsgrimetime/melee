@@ -6,12 +6,14 @@ import hashlib
 import heapq
 import json
 import os
+import re
 import struct
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import capstone
 from capstone import (
     CS_AC_READ,
     CS_AC_WRITE,
@@ -23,6 +25,7 @@ from capstone import (
     CS_MODE_32,
     Cs,
 )
+from capstone import x86_const
 from capstone.x86 import (
     X86_INS_LCALL,
     X86_INS_LEA,
@@ -30,11 +33,6 @@ from capstone.x86 import (
     X86_INS_LJMP,
     X86_INS_MOV,
     X86_INS_ENTER,
-    X86_INS_PUSH,
-    X86_INS_PUSHAL,
-    X86_INS_PUSHAW,
-    X86_INS_SUB,
-    X86_INS_XOR,
     X86_OP_IMM,
     X86_OP_MEM,
     X86_OP_REG,
@@ -428,10 +426,206 @@ class _DataEvidence:
     provenance: str
 
 
+@dataclass(frozen=True, slots=True)
+class _RegisterSlice:
+    family: str
+    mask: int
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ValueDependency:
+    kind: str
+    register: _RegisterSlice | None = None
+    value: int | None = None
+    operand_index: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _RegisterEffect:
+    destination: _RegisterSlice
+    dependencies: tuple[_ValueDependency, ...]
+    taint_mask: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryWriteSpec:
+    """One audited memory sink and the values actually stored by it."""
+
+    classification: str
+    dependencies: tuple[_ValueDependency, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _InstructionValueFlow:
+    register_effects: tuple[_RegisterEffect, ...] = ()
+    memory_writes: tuple[MemoryWriteSpec, ...] = ()
+
+
 _I386_RELOCATION_WIDTHS = {1: 2, 2: 2, 3: 4, 4: 2}
-_CALL_CLOBBERED_REGISTER_FAMILIES = frozenset({"eax", "ecx", "edx"})
-_IMPLICIT_MEMORY_WRITE_INSTRUCTIONS = frozenset(
-    {X86_INS_ENTER, X86_INS_PUSH, X86_INS_PUSHAL, X86_INS_PUSHAW}
+_AUDITED_CAPSTONE_VERSION = "5.0.7"
+_AUDITED_X86_INS_ENDING = 1524
+_AUDITED_X86_ENUM_COUNT = 1525
+_AUDITED_X86_ENUM_SHA256 = (
+    "1f5c37794e44d07e6fa47775c27d1b2418876ceadb08090eb75421f33d5e36b0"
+)
+_CALL_CLOBBERED_REGISTER_NAMES = ("eax", "ecx", "edx")
+
+# Capstone 5.0.7 reports these operand-0 memory destinations as reads.  The
+# audit contract above makes this metadata correction table fail closed when
+# the decoder schema changes.
+_MEMORY_DESTINATION_ACCESS_OVERRIDES = frozenset(
+    {
+        30,
+        167,
+        377,
+        378,
+        380,
+        407,
+        471,
+        472,
+        474,
+        475,
+        479,
+        480,
+        481,
+        482,
+        494,
+        495,
+        534,
+        535,
+        536,
+        804,
+        805,
+        816,
+        861,
+        866,
+        871,
+        1005,
+        1006,
+        1021,
+        1022,
+        1023,
+        1025,
+        1026,
+        1027,
+        1028,
+        1029,
+        1030,
+        1031,
+        1032,
+        1033,
+        1035,
+        1036,
+        1038,
+        1039,
+        1043,
+        1044,
+        1045,
+        1046,
+        1049,
+        1050,
+        1051,
+        1135,
+        1136,
+        1178,
+        1179,
+        1180,
+        1181,
+        1230,
+        1231,
+        1317,
+        1318,
+        1319,
+        1320,
+        1439,
+        1440,
+        1449,
+        1450,
+    }
+)
+_MASKMOV_IMPLICIT_WRITERS = frozenset({359, 376, 1004})
+_MASKED_EXPLICIT_WRITERS = frozenset({1005, 1006, 1230, 1231})
+_LOW_LANE_WRITERS = frozenset({377, 378, 1021, 1025})
+_HIGH_HALF_WRITERS = frozenset({471, 472, 1035, 1036})
+_SCALAR_EXTRACT_WIDTHS = {
+    167: 32,
+    407: 16,
+    534: 8,
+    535: 32,
+    536: 64,
+    871: 32,
+    1178: 8,
+    1179: 32,
+    1180: 64,
+    1181: 16,
+}
+_VECTOR_EXTRACT_WIDTHS = {861: 128, 866: 128}
+_SCATTER_WRITERS = frozenset(
+    {1317, 1318, 1319, 1320, 1439, 1440, 1449, 1450}
+)
+_CET_MEMORY_WRITERS = frozenset({1485, 1486, 1487, 1488})
+_FNSAVE_WRITERS = frozenset({204})
+_FXSAVE_WRITERS = frozenset({212, 213})
+_XSAVE_WRITERS = frozenset(
+    {1511, 1512, 1513, 1514, 1515, 1516, 1517, 1518}
+)
+_CMPXCHG_INSTRUCTIONS = frozenset({113, 114, 115})
+_XCHG_INSTRUCTIONS = frozenset({1493})
+_XADD_INSTRUCTIONS = frozenset({1491})
+_CMOV_INSTRUCTIONS = frozenset(range(80, 105))
+_MOVS_INSTRUCTIONS = frozenset({485, 486, 491})
+_STOS_INSTRUCTIONS = frozenset({708, 709, 711})
+_LODS_INSTRUCTIONS = frozenset({344, 345, 347})
+_INS_INSTRUCTIONS = frozenset({233, 236, 237})
+_OUTS_INSTRUCTIONS = frozenset({516, 517, 518})
+_POPF_INSTRUCTIONS = frozenset({589, 590, 591})
+_PUSH_INSTRUCTIONS = frozenset({609})
+_PUSHA_INSTRUCTIONS = frozenset({610, 611})
+_PUSHF_INSTRUCTIONS = frozenset({612, 613, 614})
+_X87_VALUE_WRITERS = frozenset({174, 251, 252, 253, 713, 714})
+_X87_CONTROL_WRITERS = {
+    195: "fpcw",  # FNSTCW
+    196: "fpsw",  # FNSTSW memory form
+    707: "mxcsr",  # STMXCSR
+}
+_NO_TRACKED_PAYLOAD_MEMORY_WRITERS = frozenset(
+    {
+        # External/constant/engine memory payloads.
+        78,  # CLZERO
+        233,
+        236,
+        237,  # INS*
+        466,  # MOVDIR64B
+        1522,  # XSTORE
+        # VIA PadLock and virtualization state.
+        459,  # MONTMUL
+        1058,  # VMSAVE
+        1495,
+        1496,
+        1497,
+        1498,
+        1499,
+        1520,
+        1521,
+        # Descriptor, x87 environment, and architectural state saves.
+        208,  # FNSTENV
+        675,  # SGDT
+        691,  # SIDT
+    }
+)
+_NON_WRITER_EXCLUSIONS = frozenset(
+    {
+        # Scatter prefetch hints do not architecturally store payload.
+        1441,
+        1442,
+        1443,
+        1444,
+        1445,
+        1446,
+        1447,
+        1448,
+    }
 )
 _CANONICAL_NOP_ENCODINGS = tuple(
     sorted(
@@ -452,6 +646,41 @@ _CANONICAL_NOP_ENCODINGS = tuple(
 )
 
 
+def _validate_capstone_audit_contract() -> None:
+    enum_rows = sorted(
+        (name, value)
+        for name, value in vars(x86_const).items()
+        if name.startswith("X86_INS_") and isinstance(value, int)
+    )
+    enum_digest = hashlib.sha256(
+        "\n".join(f"{name}={value}" for name, value in enum_rows).encode()
+    ).hexdigest()
+    observed = (
+        capstone.__version__,
+        x86_const.X86_INS_ENDING,
+        len(enum_rows),
+        enum_digest,
+    )
+    expected = (
+        _AUDITED_CAPSTONE_VERSION,
+        _AUDITED_X86_INS_ENDING,
+        _AUDITED_X86_ENUM_COUNT,
+        _AUDITED_X86_ENUM_SHA256,
+    )
+    if observed != expected:
+        raise CfgRecoveryError(
+            "Capstone audit contract mismatch: "
+            f"observed-version={observed[0]};"
+            f"observed-ending={observed[1]};"
+            f"observed-enum-count={observed[2]};"
+            f"observed-enum-sha256={observed[3]};"
+            f"expected-version={expected[0]};"
+            f"expected-ending={expected[1]};"
+            f"expected-enum-count={expected[2]};"
+            f"expected-enum-sha256={expected[3]}"
+        )
+
+
 class _DirectCfgRecovery:
     """Address-priority direct decoder with exact instruction ownership."""
 
@@ -461,6 +690,7 @@ class _DirectCfgRecovery:
         seed_inventory: SeedInventory,
         limits: AnalysisLimits,
     ) -> None:
+        _validate_capstone_audit_contract()
         self.image = image
         self.limits = limits
         self.seed_records = set(seed_inventory.records)
@@ -830,6 +1060,1150 @@ class _DirectCfgRecovery:
         }
         return families.get(name, name)
 
+    def _flow_error(self, decoded, reason: str) -> CfgRecoveryError:
+        instruction = self.instructions[decoded.address]
+        return CfgRecoveryError(
+            "ambiguous x86 value-flow semantics: "
+            f"address={decoded.address:#x};bytes={instruction.bytes_hex};"
+            f"id={decoded.id};mnemonic={decoded.mnemonic};"
+            f"operands={decoded.op_str};reason={reason}"
+        )
+
+    def _register_slice(
+        self, register: int, width_bits: int | None = None
+    ) -> _RegisterSlice:
+        name = self.decoder.reg_name(register)
+        gpr_aliases = {
+            "al": ("gpr:a", 0, 8),
+            "ah": ("gpr:a", 8, 8),
+            "ax": ("gpr:a", 0, 16),
+            "eax": ("gpr:a", 0, 32),
+            "rax": ("gpr:a", 0, 64),
+            "bl": ("gpr:b", 0, 8),
+            "bh": ("gpr:b", 8, 8),
+            "bx": ("gpr:b", 0, 16),
+            "ebx": ("gpr:b", 0, 32),
+            "rbx": ("gpr:b", 0, 64),
+            "cl": ("gpr:c", 0, 8),
+            "ch": ("gpr:c", 8, 8),
+            "cx": ("gpr:c", 0, 16),
+            "ecx": ("gpr:c", 0, 32),
+            "rcx": ("gpr:c", 0, 64),
+            "dl": ("gpr:d", 0, 8),
+            "dh": ("gpr:d", 8, 8),
+            "dx": ("gpr:d", 0, 16),
+            "edx": ("gpr:d", 0, 32),
+            "rdx": ("gpr:d", 0, 64),
+            "si": ("gpr:si", 0, 16),
+            "esi": ("gpr:si", 0, 32),
+            "rsi": ("gpr:si", 0, 64),
+            "di": ("gpr:di", 0, 16),
+            "edi": ("gpr:di", 0, 32),
+            "rdi": ("gpr:di", 0, 64),
+            "bp": ("gpr:bp", 0, 16),
+            "ebp": ("gpr:bp", 0, 32),
+            "rbp": ("gpr:bp", 0, 64),
+            "sp": ("gpr:sp", 0, 16),
+            "esp": ("gpr:sp", 0, 32),
+            "rsp": ("gpr:sp", 0, 64),
+            "ip": ("gpr:ip", 0, 16),
+            "eip": ("gpr:ip", 0, 32),
+            "rip": ("gpr:ip", 0, 64),
+        }
+        if name in gpr_aliases:
+            family, offset, natural_width = gpr_aliases[name]
+            width = natural_width if width_bits is None else width_bits
+            if width <= 0 or offset + width > 64:
+                raise CfgRecoveryError(
+                    f"invalid register slice width: register={name};"
+                    f"width={width}"
+                )
+            return _RegisterSlice(
+                family=family,
+                mask=((1 << width) - 1) << offset,
+                name=name,
+            )
+
+        match = re.fullmatch(r"(?:xmm|ymm|zmm)(\d+)", name)
+        if match:
+            natural_width = {
+                "x": 128,
+                "y": 256,
+                "z": 512,
+            }[name[0]]
+            width = natural_width if width_bits is None else width_bits
+            if width <= 0 or width > natural_width:
+                raise CfgRecoveryError(
+                    f"invalid vector slice width: register={name};"
+                    f"width={width}"
+                )
+            return _RegisterSlice(
+                family=f"vector:{match.group(1)}",
+                mask=(1 << width) - 1,
+                name=name,
+            )
+
+        match = re.fullmatch(r"mm(\d+)", name)
+        if match:
+            width = 64 if width_bits is None else width_bits
+            return _RegisterSlice(
+                family=f"fp:{match.group(1)}",
+                mask=(1 << width) - 1,
+                name=name,
+            )
+        match = re.fullmatch(r"st\((\d+)\)", name)
+        if match:
+            width = 80 if width_bits is None else width_bits
+            return _RegisterSlice(
+                family=f"fp:{match.group(1)}",
+                mask=(1 << width) - 1,
+                name=name,
+            )
+        match = re.fullmatch(r"k(\d+)", name)
+        if match:
+            width = 64 if width_bits is None else width_bits
+            return _RegisterSlice(
+                family=f"mask:{match.group(1)}",
+                mask=(1 << width) - 1,
+                name=name,
+            )
+
+        fixed_widths = {
+            "eflags": ("flags", 32),
+            "rflags": ("flags", 64),
+            "fpsw": ("fpsw", 16),
+            "fpcw": ("fpcw", 16),
+            "mxcsr": ("mxcsr", 32),
+            "cs": ("segment:cs", 16),
+            "ds": ("segment:ds", 16),
+            "es": ("segment:es", 16),
+            "fs": ("segment:fs", 16),
+            "gs": ("segment:gs", 16),
+            "ss": ("segment:ss", 16),
+        }
+        if name in fixed_widths:
+            family, natural_width = fixed_widths[name]
+            width = natural_width if width_bits is None else width_bits
+            return _RegisterSlice(
+                family=family, mask=(1 << width) - 1, name=name
+            )
+
+        match = re.fullmatch(r"(?:cr|dr|bnd|tmm)(\d+)", name)
+        if match:
+            width = 64 if width_bits is None else width_bits
+            return _RegisterSlice(
+                family=f"opaque:{name}",
+                mask=(1 << width) - 1,
+                name=name,
+            )
+        raise CfgRecoveryError(f"unmodeled x86 register alias: {name or register}")
+
+    def _named_register_slice(self, name: str) -> _RegisterSlice:
+        synthetic = {
+            "fpcw": _RegisterSlice("fpcw", (1 << 16) - 1, "fpcw"),
+            "mxcsr": _RegisterSlice("mxcsr", (1 << 32) - 1, "mxcsr"),
+        }
+        if name in synthetic:
+            return synthetic[name]
+        register_id = getattr(x86_const, f"X86_REG_{name.upper()}", None)
+        if register_id is None:
+            raise CfgRecoveryError(f"unknown audited register name: {name}")
+        return self._register_slice(register_id)
+
+    def _register_dependency(
+        self, register: int, width_bits: int | None = None
+    ) -> _ValueDependency:
+        return _ValueDependency(
+            "register", register=self._register_slice(register, width_bits)
+        )
+
+    @staticmethod
+    def _memory_dependency(index: int) -> _ValueDependency:
+        return _ValueDependency("memory", operand_index=index)
+
+    @staticmethod
+    def _immediate_dependency(value: int, index: int) -> _ValueDependency:
+        return _ValueDependency(
+            "immediate", value=value & 0xFFFF_FFFF, operand_index=index
+        )
+
+    def _operand_dependency(
+        self, decoded, index: int, *, max_width_bits: int | None = None
+    ) -> _ValueDependency:
+        operand = decoded.operands[index]
+        if operand.type == X86_OP_REG:
+            width = operand.size * 8
+            if max_width_bits is not None:
+                width = min(width, max_width_bits)
+            return self._register_dependency(operand.reg, width)
+        if operand.type == X86_OP_MEM:
+            return self._memory_dependency(index)
+        if operand.type == X86_OP_IMM:
+            return self._immediate_dependency(operand.imm, index)
+        raise self._flow_error(decoded, f"unsupported operand type at {index}")
+
+    def _register_subslice_dependency(
+        self, decoded, index: int, offset_bits: int, width_bits: int
+    ) -> _ValueDependency:
+        operand = decoded.operands[index]
+        if operand.type != X86_OP_REG:
+            raise self._flow_error(
+                decoded, f"operand {index} is not a register slice"
+            )
+        whole = self._register_slice(operand.reg, operand.size * 8)
+        mask = ((1 << width_bits) - 1) << offset_bits
+        if mask & ~whole.mask:
+            raise self._flow_error(
+                decoded,
+                f"register slice exceeds operand {index}: "
+                f"offset={offset_bits};width={width_bits}",
+            )
+        return _ValueDependency(
+            "register",
+            register=_RegisterSlice(whole.family, mask, whole.name),
+            operand_index=index,
+        )
+
+    def _explicit_register_effect(
+        self,
+        decoded,
+        operand,
+        dependencies: tuple[_ValueDependency, ...],
+    ) -> _RegisterEffect:
+        natural = self._register_slice(operand.reg, operand.size * 8)
+        name = natural.name
+        first_byte = bytes(decoded.bytes)[0]
+        written_mask = natural.mask
+        # VEX XMM writes zero the upper YMM alias; EVEX XMM/YMM writes zero
+        # every lane above the selected vector length in the ZMM alias.
+        if name.startswith("xmm") and first_byte in {0xC4, 0xC5}:
+            written_mask = (1 << 256) - 1
+        elif name.startswith(("xmm", "ymm")) and first_byte == 0x62:
+            written_mask = (1 << 512) - 1
+        destination = _RegisterSlice(
+            family=natural.family,
+            mask=written_mask,
+            name=natural.name,
+        )
+        return _RegisterEffect(
+            destination=destination,
+            dependencies=dependencies,
+            taint_mask=natural.mask,
+        )
+
+    def _implicit_dependency_slices(
+        self, decoded
+    ) -> tuple[_ValueDependency, ...]:
+        explicit_registers = {
+            operand.reg
+            for operand in decoded.operands
+            if operand.type == X86_OP_REG
+        }
+        for operand in decoded.operands:
+            if operand.type != X86_OP_MEM:
+                continue
+            explicit_registers.update(
+                register
+                for register in (
+                    operand.mem.segment,
+                    operand.mem.base,
+                    operand.mem.index,
+                )
+                if register != X86_REG_INVALID
+            )
+        return tuple(
+            self._register_dependency(register)
+            for register in decoded.regs_read
+            if register not in explicit_registers
+        )
+
+    def _address_dependencies(
+        self, decoded, memory
+    ) -> tuple[_ValueDependency, ...]:
+        dependencies = []
+        for register in (memory.base, memory.index):
+            if register == X86_REG_INVALID:
+                continue
+            name = self.decoder.reg_name(register)
+            if name in {"eiz", "riz"}:
+                continue
+            dependencies.append(
+                _ValueDependency(
+                    "address-register", register=self._register_slice(register)
+                )
+            )
+        dependencies.append(
+            _ValueDependency("address-immediate", value=memory.disp & 0xFFFF_FFFF)
+        )
+        return tuple(dependencies)
+
+    def _state_save_dependencies(self, kind: str) -> tuple[_ValueDependency, ...]:
+        dependencies: list[_ValueDependency] = []
+        for index in range(8):
+            dependencies.append(
+                _ValueDependency(
+                    "register",
+                    register=_RegisterSlice(
+                        family=f"fp:{index}",
+                        mask=(1 << 80) - 1,
+                        name=f"fp{index}",
+                    ),
+                )
+            )
+        if kind in {"fxsave", "xsave"}:
+            vector_count = 8 if kind == "fxsave" else 32
+            vector_width = 128 if kind == "fxsave" else 512
+            for index in range(vector_count):
+                dependencies.append(
+                    _ValueDependency(
+                        "register",
+                        register=_RegisterSlice(
+                            family=f"vector:{index}",
+                            mask=(1 << vector_width) - 1,
+                            name=(
+                                f"xmm{index}"
+                                if kind == "fxsave"
+                                else f"zmm{index}"
+                            ),
+                        ),
+                    )
+                )
+        if kind == "xsave":
+            for index in range(8):
+                dependencies.append(
+                    _ValueDependency(
+                        "register",
+                        register=_RegisterSlice(
+                            family=f"mask:{index}",
+                            mask=(1 << 64) - 1,
+                            name=f"k{index}",
+                        ),
+                    )
+                )
+        return tuple(dependencies)
+
+    def _zero_idiom_flow(self, decoded) -> _InstructionValueFlow | None:
+        operands = decoded.operands
+        zero_mnemonics = {
+            "pxor",
+            "sub",
+            "vpxor",
+            "vpxord",
+            "vpxorq",
+            "vxorpd",
+            "vxorps",
+            "xor",
+            "xorpd",
+            "xorps",
+        }
+        if decoded.mnemonic not in zero_mnemonics or len(operands) < 2:
+            return None
+        sources = operands[-2:]
+        if any(operand.type != X86_OP_REG for operand in sources):
+            return None
+        left = self._register_slice(
+            sources[0].reg, sources[0].size * 8
+        )
+        right = self._register_slice(
+            sources[1].reg, sources[1].size * 8
+        )
+        if left.family != right.family or left.mask != right.mask:
+            return None
+        destination = operands[0]
+        if destination.type != X86_OP_REG:
+            return None
+        effects = [self._explicit_register_effect(decoded, destination, ())]
+        effects.extend(
+            _RegisterEffect(self._register_slice(register), ())
+            for register in decoded.regs_write
+        )
+        return _InstructionValueFlow(register_effects=tuple(effects))
+
+    def _instruction_value_flow(self, decoded) -> _InstructionValueFlow:
+        operands = decoded.operands
+
+        if decoded.group(CS_GRP_CALL):
+            return _InstructionValueFlow(
+                register_effects=tuple(
+                    _RegisterEffect(self._named_register_slice(name), ())
+                    for name in _CALL_CLOBBERED_REGISTER_NAMES
+                )
+            )
+        if decoded.group(CS_GRP_JUMP) or decoded.group(CS_GRP_RET) or decoded.group(
+            CS_GRP_IRET
+        ):
+            return _InstructionValueFlow()
+
+        zero_flow = self._zero_idiom_flow(decoded)
+        if zero_flow is not None:
+            return zero_flow
+
+        if decoded.id == X86_INS_LEA:
+            if (
+                len(operands) != 2
+                or operands[0].type != X86_OP_REG
+                or operands[1].type != X86_OP_MEM
+            ):
+                raise self._flow_error(decoded, "unexpected LEA form")
+            return _InstructionValueFlow(
+                register_effects=(
+                    _RegisterEffect(
+                        self._register_slice(
+                            operands[0].reg, operands[0].size * 8
+                        ),
+                        self._address_dependencies(decoded, operands[1].mem),
+                    ),
+                )
+            )
+
+        if decoded.id in _CMOV_INSTRUCTIONS:
+            if len(operands) != 2 or operands[0].type != X86_OP_REG:
+                raise self._flow_error(decoded, "unexpected CMOV form")
+            destination = self._register_slice(
+                operands[0].reg, operands[0].size * 8
+            )
+            dependencies = (
+                _ValueDependency("register", register=destination),
+                self._operand_dependency(decoded, 1),
+                *self._implicit_dependency_slices(decoded),
+            )
+            return _InstructionValueFlow(
+                register_effects=(
+                    _RegisterEffect(destination, tuple(dependencies)),
+                )
+            )
+
+        if decoded.id in _XCHG_INSTRUCTIONS:
+            if len(operands) != 2:
+                raise self._flow_error(decoded, "unexpected XCHG form")
+            left, right = operands
+            effects: list[_RegisterEffect] = []
+            writes: list[MemoryWriteSpec] = []
+            if left.type == X86_OP_REG:
+                effects.append(
+                    _RegisterEffect(
+                        self._register_slice(left.reg, left.size * 8),
+                        (self._operand_dependency(decoded, 1),),
+                    )
+                )
+            elif left.type == X86_OP_MEM:
+                writes.append(
+                    MemoryWriteSpec(
+                        "xchg-memory",
+                        (self._operand_dependency(decoded, 1),),
+                    )
+                )
+            else:
+                raise self._flow_error(decoded, "invalid XCHG operand 0")
+            if right.type == X86_OP_REG:
+                effects.append(
+                    _RegisterEffect(
+                        self._register_slice(right.reg, right.size * 8),
+                        (self._operand_dependency(decoded, 0),),
+                    )
+                )
+            elif right.type == X86_OP_MEM:
+                writes.append(
+                    MemoryWriteSpec(
+                        "xchg-memory",
+                        (self._operand_dependency(decoded, 0),),
+                    )
+                )
+            else:
+                raise self._flow_error(decoded, "invalid XCHG operand 1")
+            if len(writes) > 1:
+                raise self._flow_error(decoded, "memory-to-memory XCHG")
+            return _InstructionValueFlow(tuple(effects), tuple(writes))
+
+        if decoded.id in _XADD_INSTRUCTIONS:
+            if len(operands) != 2 or operands[1].type != X86_OP_REG:
+                raise self._flow_error(decoded, "unexpected XADD form")
+            destination_dep = self._operand_dependency(decoded, 0)
+            source_dep = self._operand_dependency(decoded, 1)
+            source_effect = _RegisterEffect(
+                self._register_slice(operands[1].reg, operands[1].size * 8),
+                (destination_dep,),
+            )
+            flag_effects = (
+                _RegisterEffect(
+                    self._named_register_slice("eflags"),
+                    (destination_dep, source_dep),
+                ),
+            )
+            if operands[0].type == X86_OP_MEM:
+                return _InstructionValueFlow(
+                    (source_effect, *flag_effects),
+                    (
+                        MemoryWriteSpec(
+                            "xadd-memory", (destination_dep, source_dep)
+                        ),
+                    ),
+                )
+            if operands[0].type != X86_OP_REG:
+                raise self._flow_error(decoded, "invalid XADD destination")
+            return _InstructionValueFlow(
+                (
+                    _RegisterEffect(
+                        self._register_slice(
+                            operands[0].reg, operands[0].size * 8
+                        ),
+                        (destination_dep, source_dep),
+                    ),
+                    source_effect,
+                    *flag_effects,
+                )
+            )
+
+        if decoded.id in _CMPXCHG_INSTRUCTIONS:
+            if decoded.id in {113, 115}:
+                if len(operands) != 1 or operands[0].type != X86_OP_MEM:
+                    raise self._flow_error(
+                        decoded, "unexpected CMPXCHG8B/16B form"
+                    )
+                payload_names = ("ebx", "ecx") if decoded.id == 115 else (
+                    "rbx",
+                    "rcx",
+                )
+                accumulator_names = (
+                    ("eax", "edx") if decoded.id == 115 else ("rax", "rdx")
+                )
+                memory_dep = self._memory_dependency(0)
+                return _InstructionValueFlow(
+                    (
+                        *tuple(
+                            _RegisterEffect(
+                                self._named_register_slice(name), (memory_dep,)
+                            )
+                            for name in accumulator_names
+                        ),
+                        _RegisterEffect(
+                            self._named_register_slice("eflags"),
+                            tuple(
+                                _ValueDependency(
+                                    "register",
+                                    register=self._named_register_slice(name),
+                                )
+                                for name in accumulator_names
+                            )
+                            + (memory_dep,),
+                        ),
+                    ),
+                    (
+                        MemoryWriteSpec(
+                            "cmpxchg-wide-memory",
+                            tuple(
+                                _ValueDependency(
+                                    "register",
+                                    register=self._named_register_slice(name),
+                                )
+                                for name in payload_names
+                            ),
+                        ),
+                    ),
+                )
+            if len(operands) != 2:
+                raise self._flow_error(decoded, "unexpected CMPXCHG form")
+            destination, source = operands
+            width = destination.size * 8
+            accumulator_name = {8: "al", 16: "ax", 32: "eax", 64: "rax"}.get(
+                width
+            )
+            if accumulator_name is None or source.type != X86_OP_REG:
+                raise self._flow_error(decoded, "unsupported CMPXCHG width/form")
+            accumulator = self._named_register_slice(accumulator_name)
+            destination_dep = self._operand_dependency(decoded, 0)
+            source_dep = self._operand_dependency(decoded, 1)
+            accumulator_dep = _ValueDependency("register", register=accumulator)
+            effects = [
+                _RegisterEffect(
+                    accumulator, (accumulator_dep, destination_dep)
+                )
+            ]
+            writes: tuple[MemoryWriteSpec, ...] = ()
+            if destination.type == X86_OP_MEM:
+                writes = (
+                    MemoryWriteSpec("cmpxchg-memory", (source_dep,)),
+                )
+            elif destination.type == X86_OP_REG:
+                destination_slice = self._register_slice(
+                    destination.reg, width
+                )
+                if destination_slice.family == accumulator.family and (
+                    destination_slice.mask & accumulator.mask
+                ):
+                    raise self._flow_error(
+                        decoded, "overlapping CMPXCHG accumulator destination"
+                    )
+                effects.append(
+                    _RegisterEffect(
+                        destination_slice, (destination_dep, source_dep)
+                    )
+                )
+            else:
+                raise self._flow_error(decoded, "invalid CMPXCHG destination")
+            effects.append(
+                _RegisterEffect(
+                    self._named_register_slice("eflags"),
+                    (accumulator_dep, destination_dep),
+                )
+            )
+            return _InstructionValueFlow(tuple(effects), writes)
+
+        if decoded.id in _MASKMOV_IMPLICIT_WRITERS:
+            if (
+                len(operands) != 2
+                or any(operand.type != X86_OP_REG for operand in operands)
+            ):
+                raise self._flow_error(decoded, "unexpected MASKMOV form")
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "maskmov-implicit-edi",
+                        (self._operand_dependency(decoded, 0),),
+                    ),
+                )
+            )
+
+        if decoded.id == X86_INS_ENTER:
+            if len(operands) != 2 or any(
+                operand.type != X86_OP_IMM for operand in operands
+            ):
+                raise self._flow_error(decoded, "unexpected ENTER form")
+            ebp = self._named_register_slice("ebp")
+            esp = self._named_register_slice("esp")
+            return _InstructionValueFlow(
+                register_effects=(
+                    _RegisterEffect(
+                        ebp, (_ValueDependency("register", register=esp),)
+                    ),
+                ),
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "enter-frame-link",
+                        (_ValueDependency("register", register=ebp),),
+                    ),
+                ),
+            )
+
+        if decoded.id in _PUSH_INSTRUCTIONS:
+            if len(operands) != 1:
+                raise self._flow_error(decoded, "unexpected PUSH form")
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "push", (self._operand_dependency(decoded, 0),)
+                    ),
+                )
+            )
+        if decoded.id in _PUSHA_INSTRUCTIONS:
+            width_names = (
+                ("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
+                if decoded.id == 610
+                else (
+                    "eax",
+                    "ecx",
+                    "edx",
+                    "ebx",
+                    "esp",
+                    "ebp",
+                    "esi",
+                    "edi",
+                )
+            )
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "pusha",
+                        tuple(
+                            _ValueDependency(
+                                "register",
+                                register=self._named_register_slice(name),
+                            )
+                            for name in width_names
+                        ),
+                    ),
+                )
+            )
+        if decoded.id in _PUSHF_INSTRUCTIONS:
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "pushf",
+                        (
+                            _ValueDependency(
+                                "register",
+                                register=self._named_register_slice("eflags"),
+                            ),
+                        ),
+                    ),
+                )
+            )
+
+        if decoded.id == 585:
+            if len(operands) != 1:
+                raise self._flow_error(decoded, "unexpected POP form")
+            if operands[0].type == X86_OP_REG:
+                return _InstructionValueFlow(
+                    register_effects=(
+                        _RegisterEffect(
+                            self._register_slice(
+                                operands[0].reg, operands[0].size * 8
+                            ),
+                            (self._memory_dependency(0),),
+                        ),
+                    )
+                )
+            if operands[0].type == X86_OP_MEM:
+                return _InstructionValueFlow(
+                    memory_writes=(
+                        MemoryWriteSpec(
+                            "pop-memory", (self._memory_dependency(0),)
+                        ),
+                    )
+                )
+            raise self._flow_error(decoded, "invalid POP destination")
+        if decoded.id in {586, 587}:
+            names = (
+                ("ax", "cx", "dx", "bx", "bp", "si", "di")
+                if decoded.id == 586
+                else ("eax", "ecx", "edx", "ebx", "ebp", "esi", "edi")
+            )
+            return _InstructionValueFlow(
+                register_effects=tuple(
+                    _RegisterEffect(self._named_register_slice(name), ())
+                    for name in names
+                )
+            )
+        if decoded.id in _POPF_INSTRUCTIONS:
+            return _InstructionValueFlow(
+                register_effects=(
+                    _RegisterEffect(self._named_register_slice("eflags"), ()),
+                )
+            )
+        if decoded.id == 333:  # LEAVE
+            ebp = self._named_register_slice("ebp")
+            return _InstructionValueFlow(
+                register_effects=(
+                    _RegisterEffect(
+                        self._named_register_slice("esp"),
+                        (_ValueDependency("register", register=ebp),),
+                    ),
+                    _RegisterEffect(ebp, (self._memory_dependency(0),)),
+                )
+            )
+
+        if decoded.id in _STOS_INSTRUCTIONS:
+            if len(operands) != 2 or operands[1].type != X86_OP_REG:
+                raise self._flow_error(decoded, "unexpected STOS form")
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "stos", (self._operand_dependency(decoded, 1),)
+                    ),
+                )
+            )
+        if decoded.id in _MOVS_INSTRUCTIONS:
+            if (
+                len(operands) != 2
+                or operands[0].type != X86_OP_MEM
+                or operands[1].type != X86_OP_MEM
+            ):
+                raise self._flow_error(decoded, "unexpected MOVS form")
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec("movs", (self._memory_dependency(1),)),
+                )
+            )
+        if decoded.id in _LODS_INSTRUCTIONS:
+            if (
+                len(operands) != 2
+                or operands[0].type != X86_OP_REG
+                or operands[1].type != X86_OP_MEM
+            ):
+                raise self._flow_error(decoded, "unexpected LODS form")
+            return _InstructionValueFlow(
+                register_effects=(
+                    _RegisterEffect(
+                        self._register_slice(
+                            operands[0].reg, operands[0].size * 8
+                        ),
+                        (self._memory_dependency(1),),
+                    ),
+                )
+            )
+        if decoded.id in _INS_INSTRUCTIONS:
+            return _InstructionValueFlow(
+                memory_writes=(MemoryWriteSpec("ins-external-input", ()),)
+            )
+        if decoded.id in _OUTS_INSTRUCTIONS:
+            return _InstructionValueFlow()
+
+        if decoded.id in _FNSAVE_WRITERS:
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "fnsave-state", self._state_save_dependencies("fnsave")
+                    ),
+                )
+            )
+        if decoded.id in _X87_VALUE_WRITERS:
+            if len(operands) != 1 or operands[0].type != X86_OP_MEM:
+                raise self._flow_error(
+                    decoded, "unexpected x87 memory-store form"
+                )
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "x87-value-store",
+                        (
+                            _ValueDependency(
+                                "register",
+                                register=_RegisterSlice(
+                                    family="fp:0",
+                                    mask=(1 << 80) - 1,
+                                    name="st(0)",
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+            )
+        if decoded.id in _X87_CONTROL_WRITERS and operands and (
+            operands[0].type == X86_OP_MEM
+        ):
+            register_name = _X87_CONTROL_WRITERS[decoded.id]
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "x87-control-store",
+                        (
+                            _ValueDependency(
+                                "register",
+                                register=self._named_register_slice(
+                                    register_name
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+            )
+        if decoded.id in _FXSAVE_WRITERS:
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "fxsave-state", self._state_save_dependencies("fxsave")
+                    ),
+                )
+            )
+        if decoded.id in _XSAVE_WRITERS:
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "xsave-state", self._state_save_dependencies("xsave")
+                    ),
+                )
+            )
+
+        if decoded.id in _CET_MEMORY_WRITERS:
+            if (
+                len(operands) != 2
+                or operands[0].type != X86_OP_MEM
+                or operands[1].type != X86_OP_REG
+            ):
+                raise self._flow_error(decoded, "unexpected CET write form")
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "cet-shadow-stack",
+                        (self._operand_dependency(decoded, 1),),
+                    ),
+                )
+            )
+
+        if decoded.id in _SCATTER_WRITERS:
+            if (
+                len(operands) != 3
+                or operands[0].type != X86_OP_MEM
+                or operands[1].type != X86_OP_REG
+                or operands[2].type != X86_OP_REG
+            ):
+                raise self._flow_error(decoded, "unexpected scatter-store form")
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec(
+                        "scatter-store",
+                        (
+                            self._operand_dependency(
+                                decoded,
+                                2,
+                                max_width_bits=operands[0].size * 8,
+                            ),
+                        ),
+                    ),
+                )
+            )
+
+        if decoded.id in _NO_TRACKED_PAYLOAD_MEMORY_WRITERS:
+            return _InstructionValueFlow(
+                memory_writes=(
+                    MemoryWriteSpec("audited-non-pointer-payload", ()),
+                )
+            )
+        if decoded.id in _NON_WRITER_EXCLUSIONS:
+            return _InstructionValueFlow()
+
+        explicit_inputs: list[_ValueDependency] = []
+        explicit_effects: list[_RegisterEffect] = []
+        memory_write_indices: list[int] = []
+        for index, operand in enumerate(operands):
+            if operand.type == X86_OP_REG:
+                if operand.access & CS_AC_READ:
+                    explicit_inputs.append(
+                        self._operand_dependency(decoded, index)
+                    )
+                if operand.access & CS_AC_WRITE:
+                    explicit_effects.append(
+                        self._explicit_register_effect(decoded, operand, ())
+                    )
+                if operand.access == 0:
+                    raise self._flow_error(
+                        decoded, f"register operand {index} has access=0"
+                    )
+            elif operand.type == X86_OP_MEM:
+                if operand.access & CS_AC_READ:
+                    explicit_inputs.append(self._memory_dependency(index))
+                if operand.access & CS_AC_WRITE:
+                    memory_write_indices.append(index)
+                if operand.access == 0:
+                    raise self._flow_error(
+                        decoded, f"memory operand {index} has access=0"
+                    )
+            elif operand.type == X86_OP_IMM:
+                explicit_inputs.append(
+                    self._immediate_dependency(operand.imm, index)
+                )
+            else:
+                raise self._flow_error(
+                    decoded, f"operand {index} has unsupported type"
+                )
+
+        if (
+            decoded.id in _MEMORY_DESTINATION_ACCESS_OVERRIDES
+            and operands
+            and operands[0].type == X86_OP_MEM
+        ):
+            if 0 not in memory_write_indices:
+                memory_write_indices.append(0)
+
+        implicit_inputs = self._implicit_dependency_slices(decoded)
+        dependencies = tuple((*explicit_inputs, *implicit_inputs))
+        effects = [
+            _RegisterEffect(
+                effect.destination, dependencies, effect.taint_mask
+            )
+            for effect in explicit_effects
+        ]
+        for register in decoded.regs_write:
+            implicit_output = self._register_slice(register)
+            overlaps = [
+                effect.destination
+                for effect in explicit_effects
+                if effect.destination.family == implicit_output.family
+                and bool(effect.destination.mask & implicit_output.mask)
+            ]
+            if overlaps:
+                if any(output.mask != implicit_output.mask for output in overlaps):
+                    raise self._flow_error(
+                        decoded,
+                        "explicit/implicit output metadata disagree: "
+                        f"register={implicit_output.name}",
+                    )
+                continue
+            effects.append(_RegisterEffect(implicit_output, dependencies))
+
+        if len(memory_write_indices) > 1:
+            raise self._flow_error(decoded, "multiple memory destinations")
+        writes: tuple[MemoryWriteSpec, ...] = ()
+        if memory_write_indices:
+            destination_index = memory_write_indices[0]
+            destination_width = operands[destination_index].size * 8
+            if decoded.id in _MASKED_EXPLICIT_WRITERS:
+                if len(operands) != 3 or operands[2].type != X86_OP_REG:
+                    raise self._flow_error(
+                        decoded, "unexpected masked-store form"
+                    )
+                payload_dependencies = (
+                    self._operand_dependency(decoded, 2),
+                )
+            elif decoded.id in _SCALAR_EXTRACT_WIDTHS:
+                if (
+                    len(operands) != 3
+                    or operands[1].type != X86_OP_REG
+                    or operands[2].type != X86_OP_IMM
+                ):
+                    raise self._flow_error(
+                        decoded, "unexpected scalar-extract store form"
+                    )
+                width = _SCALAR_EXTRACT_WIDTHS[decoded.id]
+                lane_count = max(1, (operands[1].size * 8) // width)
+                lane = operands[2].imm % lane_count
+                payload_dependencies = (
+                    self._register_subslice_dependency(
+                        decoded, 1, lane * width, width
+                    ),
+                )
+            elif decoded.id in _VECTOR_EXTRACT_WIDTHS:
+                if (
+                    len(operands) != 3
+                    or operands[1].type != X86_OP_REG
+                    or operands[2].type != X86_OP_IMM
+                ):
+                    raise self._flow_error(
+                        decoded, "unexpected vector-extract store form"
+                    )
+                width = _VECTOR_EXTRACT_WIDTHS[decoded.id]
+                lane_count = max(1, (operands[1].size * 8) // width)
+                lane = operands[2].imm % lane_count
+                payload_dependencies = (
+                    self._register_subslice_dependency(
+                        decoded, 1, lane * width, width
+                    ),
+                )
+            elif decoded.id in _HIGH_HALF_WRITERS:
+                source_indices = [
+                    index
+                    for index, operand in enumerate(operands)
+                    if index != destination_index and operand.type == X86_OP_REG
+                ]
+                if len(source_indices) != 1:
+                    raise self._flow_error(
+                        decoded, "unexpected high-half store form"
+                    )
+                payload_dependencies = (
+                    self._register_subslice_dependency(
+                        decoded, source_indices[0], 64, 64
+                    ),
+                )
+            elif decoded.id in _LOW_LANE_WRITERS:
+                source_indices = [
+                    index
+                    for index, operand in enumerate(operands)
+                    if index != destination_index and operand.type == X86_OP_REG
+                ]
+                if len(source_indices) != 1:
+                    raise self._flow_error(
+                        decoded, "unexpected low-lane store form"
+                    )
+                payload_dependencies = (
+                    self._register_subslice_dependency(
+                        decoded,
+                        source_indices[0],
+                        0,
+                        destination_width,
+                    ),
+                )
+            else:
+                payload_dependencies = tuple(
+                    self._operand_dependency(decoded, index)
+                    for index, operand in enumerate(operands)
+                    if index != destination_index
+                    and (
+                        operand.type == X86_OP_IMM
+                        or bool(operand.access & CS_AC_READ)
+                    )
+                )
+                payload_dependencies = (
+                    *payload_dependencies,
+                    *implicit_inputs,
+                )
+            writes = (
+                MemoryWriteSpec("explicit-memory-destination", payload_dependencies),
+            )
+        return _InstructionValueFlow(tuple(effects), writes)
+
+    def _dependency_is_tainted(
+        self, dependency: _ValueDependency, state: dict[str, int]
+    ) -> bool:
+        if dependency.kind in {"register", "address-register"}:
+            if dependency.register is None:
+                raise CfgRecoveryError("register dependency has no slice")
+            return bool(
+                state.get(dependency.register.family, 0)
+                & dependency.register.mask
+            )
+        if dependency.kind in {"immediate", "address-immediate"}:
+            if dependency.value is None:
+                raise CfgRecoveryError("immediate dependency has no value")
+            return _is_executable_span(self.image, dependency.value, 1)
+        if dependency.kind == "memory":
+            return False
+        raise CfgRecoveryError(
+            f"unmodeled x86 value dependency kind: {dependency.kind}"
+        )
+
+    def _apply_instruction_value_flow(
+        self, decoded, state: dict[str, int]
+    ) -> dict[str, int]:
+        flow = self._instruction_value_flow(decoded)
+        if decoded.address not in self.accepted_initializer_instructions:
+            for write in flow.memory_writes:
+                if any(
+                    self._dependency_is_tainted(dependency, state)
+                    for dependency in write.dependencies
+                ):
+                    raise CfgRecoveryError(
+                        "unresolved function-pointer initializer: "
+                        "unsupported semantic memory write of an executable "
+                        f"value at {decoded.address:#x};"
+                        f"classification={write.classification}"
+                    )
+
+        written_masks: dict[str, int] = {}
+        for effect in flow.register_effects:
+            overlap = written_masks.get(effect.destination.family, 0) & (
+                effect.destination.mask
+            )
+            if overlap:
+                raise self._flow_error(
+                    decoded,
+                    "overlapping simultaneous register effects: "
+                    f"family={effect.destination.family};mask={overlap:#x}",
+                )
+            written_masks[effect.destination.family] = (
+                written_masks.get(effect.destination.family, 0)
+                | effect.destination.mask
+            )
+
+        old_state = state
+        next_state = dict(old_state)
+        for family, mask in written_masks.items():
+            remaining = next_state.get(family, 0) & ~mask
+            if remaining:
+                next_state[family] = remaining
+            else:
+                next_state.pop(family, None)
+        for effect in flow.register_effects:
+            taint_mask = (
+                effect.destination.mask
+                if effect.taint_mask is None
+                else effect.taint_mask
+            )
+            if taint_mask & ~effect.destination.mask:
+                raise self._flow_error(
+                    decoded,
+                    "register effect taint lanes exceed written lanes: "
+                    f"register={effect.destination.name}",
+                )
+            if any(
+                self._dependency_is_tainted(dependency, old_state)
+                for dependency in effect.dependencies
+            ):
+                next_state[effect.destination.family] = (
+                    next_state.get(effect.destination.family, 0)
+                    | taint_mask
+                )
+        return next_state
+
     @staticmethod
     def _chain_step(instruction: Instruction) -> str:
         return f"{instruction.address:#x}:{instruction.bytes_hex}"
@@ -996,7 +2370,12 @@ class _DirectCfgRecovery:
                         )
                     return
 
-        _, written = decoded.regs_access()
+        written = {
+            operand.reg
+            for operand in decoded.operands
+            if operand.type == X86_OP_REG and operand.access & CS_AC_WRITE
+        }
+        written.update(decoded.regs_write)
         for register in written:
             state.pop(self._register_family(register), None)
 
@@ -1056,10 +2435,10 @@ class _DirectCfgRecovery:
             if source_block is not None and edge.target in successors:
                 successors[source_block].add(edge.target)
 
-        entries: dict[int, set[str]] = {
-            block.start: set() for block in blocks
+        entries: dict[int, dict[str, int]] = {
+            block.start: {} for block in blocks
         }
-        outputs: dict[int, set[str]] = {}
+        outputs: dict[int, dict[str, int]] = {}
         pending = [block.start for block in blocks]
         heapq.heapify(pending)
         queued = set(pending)
@@ -1068,137 +2447,21 @@ class _DirectCfgRecovery:
             block_start = heapq.heappop(pending)
             queued.remove(block_start)
             block = blocks_by_start[block_start]
-            tainted = set(entries[block_start])
+            tainted = dict(entries[block_start])
             for address in block.instruction_addresses:
                 decoded = self._owned_decoded(address)
-
-                read_registers, written_registers = decoded.regs_access()
-                read_families = {
-                    self._register_family(register)
-                    for register in read_registers
-                }
-                has_memory_write = any(
-                    operand.type == X86_OP_MEM
-                    and bool(operand.access & CS_AC_WRITE)
-                    for operand in decoded.operands
-                ) or decoded.id in _IMPLICIT_MEMORY_WRITE_INSTRUCTIONS
-                has_executable_immediate = any(
-                    operand.type == X86_OP_IMM
-                    and _is_executable_span(
-                        self.image, operand.imm & 0xFFFF_FFFF, 1
-                    )
-                    for operand in decoded.operands
+                tainted = self._apply_instruction_value_flow(
+                    decoded, tainted
                 )
-                if (
-                    has_memory_write
-                    and (
-                        bool(read_families & tainted)
-                        or has_executable_immediate
-                    )
-                    and address not in self.accepted_initializer_instructions
-                ):
-                    raise CfgRecoveryError(
-                        "unresolved function-pointer initializer: "
-                        "unsupported semantic memory write of an executable "
-                        f"value at {address:#x}"
-                    )
-
-                handled_destination: str | None = None
-                if len(decoded.operands) == 2:
-                    destination, source = decoded.operands
-                    if (
-                        destination.type == X86_OP_REG
-                        and destination.size == 4
-                    ):
-                        handled_destination = self._register_family(
-                            destination.reg
-                        )
-                        if decoded.id == X86_INS_MOV and source.type == X86_OP_IMM:
-                            if _is_executable_span(
-                                self.image,
-                                source.imm & 0xFFFF_FFFF,
-                                1,
-                            ):
-                                tainted.add(handled_destination)
-                            else:
-                                tainted.discard(handled_destination)
-                            continue
-                        if (
-                            decoded.id == X86_INS_LEA
-                            and source.type == X86_OP_MEM
-                            and source.mem.segment == X86_REG_INVALID
-                            and source.mem.base == X86_REG_INVALID
-                            and source.mem.index == X86_REG_INVALID
-                        ):
-                            if _is_executable_span(
-                                self.image,
-                                source.mem.disp & 0xFFFF_FFFF,
-                                1,
-                            ):
-                                tainted.add(handled_destination)
-                            else:
-                                tainted.discard(handled_destination)
-                            continue
-                        if (
-                            decoded.id == X86_INS_MOV
-                            and source.type == X86_OP_REG
-                            and source.size == 4
-                        ):
-                            source_family = self._register_family(source.reg)
-                            if source_family in tainted:
-                                tainted.add(handled_destination)
-                            else:
-                                tainted.discard(handled_destination)
-                            continue
-
-                if decoded.group(CS_GRP_CALL):
-                    tainted.difference_update(
-                        _CALL_CLOBBERED_REGISTER_FAMILIES
-                    )
-                    continue
-
-                zeroed_families: set[str] = set()
-                if (
-                    decoded.id in {X86_INS_SUB, X86_INS_XOR}
-                    and len(decoded.operands) == 2
-                    and all(
-                        operand.type == X86_OP_REG and operand.size == 4
-                        for operand in decoded.operands
-                    )
-                ):
-                    left_family = self._register_family(
-                        decoded.operands[0].reg
-                    )
-                    right_family = self._register_family(
-                        decoded.operands[1].reg
-                    )
-                    if left_family == right_family:
-                        zeroed_families.add(left_family)
-
-                propagates_unsafe_input = (
-                    bool(read_families & tainted) and not zeroed_families
-                )
-                for register in written_registers:
-                    family = self._register_family(register)
-                    register_is_full_width = (
-                        self.decoder.reg_name(register) == family
-                    )
-                    if family in zeroed_families:
-                        tainted.discard(family)
-                    elif propagates_unsafe_input:
-                        tainted.add(family)
-                    elif (
-                        register_is_full_width
-                        and family not in read_families
-                    ):
-                        tainted.discard(family)
 
             output = tainted
             if outputs.get(block_start) == output:
                 continue
             outputs[block_start] = output
             for successor in sorted(successors[block_start]):
-                updated = entries[successor] | output
+                updated = dict(entries[successor])
+                for family, mask in output.items():
+                    updated[family] = updated.get(family, 0) | mask
                 if updated == entries[successor]:
                     continue
                 entries[successor] = updated

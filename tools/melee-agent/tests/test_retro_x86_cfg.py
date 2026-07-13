@@ -4,6 +4,7 @@ import sys
 from dataclasses import fields, replace
 from pathlib import Path
 
+import capstone
 import pytest
 from capstone import CS_ARCH_X86, CS_MODE_32, Cs
 
@@ -36,6 +37,26 @@ def load_cfg_image(tmp_path, mutation=None):
         path,
         expected_sha256=digest,
         require_pe32_i386=True,
+    )
+
+
+def load_cfg_program(tmp_path, program_hex):
+    path = write_synthetic_cfg_pe(tmp_path)
+    data = bytearray(path.read_bytes())
+    program = bytes.fromhex(program_hex)
+    assert len(program) <= 0x16
+    data[0x20A:0x220] = b"\x90" * 0x16
+    data[0x20A : 0x20A + len(program)] = program
+    path.write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    return pe.load(path, expected_sha256=digest, require_pe32_i386=True)
+
+
+def decode_one(encoded):
+    decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+    decoder.detail = True
+    return decoder, next(
+        decoder.disasm(bytes.fromhex(encoded), 0x00401000, count=1)
     )
 
 
@@ -479,6 +500,201 @@ def test_register_transform_retains_unsafe_initializer_taint(
         CfgRecoveryError, match="unresolved function-pointer initializer"
     ):
         recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_capstone_semantic_contract_is_pinned_before_recovery(
+    synthetic_cfg_image, monkeypatch
+):
+    monkeypatch.setattr(capstone, "__version__", "5.0.7-audited-drift")
+    with pytest.raises(CfgRecoveryError, match="Capstone audit contract"):
+        recover_cfg(
+            synthetic_cfg_image,
+            inventory(synthetic_cfg_image),
+            generous_limits(synthetic_cfg_image),
+        )
+
+
+@pytest.mark.parametrize(
+    ("encoded", "instruction_id", "operand_access", "register_reads"),
+    [
+        ("0f f7 c1", 376, (1, 1), ("edi",)),
+        ("66 0f f7 c1", 359, (1, 1), ("edi",)),
+        ("c5 f9 f7 c1", 1004, (1, 1), ("edi",)),
+        ("0f ae 01", 212, (2,), ()),
+        ("dd 31", 204, (2,), ()),
+        ("dd 19", 714, (1,), ()),
+        ("0f ae 21", 1511, (2,), ("rdx", "rax")),
+        ("0f 38 f6 08", 1485, (0, 0), ()),
+        ("66 0f 38 f5 08", 1487, (0, 0), ()),
+        ("0f 7e 00", 377, (1, 1), ()),
+        ("0f 11 00", 495, (1, 1), ()),
+        ("c5 fc 11 00", 1051, (1, 1), ()),
+        ("c4 e2 75 2e 00", 1006, (1, 1, 1), ()),
+        ("c4 e2 75 8e 00", 1230, (1, 1, 1), ()),
+        ("62 f2 7d 49 a2 04 88", 1440, (1, 1, 0), ()),
+        ("62 f2 7d 49 a0 04 88", 1317, (1, 1, 0), ()),
+    ],
+)
+def test_audited_capstone_writer_metadata_contract(
+    encoded, instruction_id, operand_access, register_reads
+):
+    decoder, decoded = decode_one(encoded)
+    assert decoded.id == instruction_id
+    assert tuple(operand.access for operand in decoded.operands) == operand_access
+    assert tuple(decoder.reg_name(reg) for reg in decoded.regs_read) == (
+        register_reads
+    )
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        # A tainted base is an address, not the loaded payload.
+        "bb 50 10 40 00 81 c3 00 10 00 00 8b 03 a3 90 20 40 00 c3",
+        # A tainted store address does not taint a clean payload.
+        "bb 50 10 40 00 31 c0 89 03 c3",
+        # STOS consumes EAX, not its EDI destination address.
+        "bf 50 10 40 00 31 c0 ab c3",
+        # MOVS copies a fresh memory value; ESI is only its source address.
+        "be 50 10 40 00 81 c6 00 10 00 00 a5 c3",
+        # LODS loads a fresh value even when its source address is tainted.
+        "be 50 10 40 00 81 c6 00 10 00 00 ad a3 90 20 40 00 c3",
+        # XCHG moves the clean old EAX into EBX positionally.
+        "bb 50 10 40 00 31 c0 87 d8 89 1d 90 20 40 00 c3",
+        # MASKMOVQ's mask operand is not the stored payload.
+        "b8 50 10 40 00 0f 6e c8 0f f7 c1 c3",
+        # VMASKMOVDQU's mask operand is not the stored payload.
+        "b8 50 10 40 00 66 0f 6e c8 c5 f9 f7 c1 c3",
+        # Masked stores do not store their mask register.
+        "b8 50 10 40 00 66 0f 6e c8 c4 e2 75 2e 01 c3",
+        "b8 50 10 40 00 66 0f 6e c8 c4 e2 75 8e 01 c3",
+        # Scatter index registers are addresses, not payload.
+        "b8 50 10 40 00 66 0f 6e c8 62 f2 7d 49 a2 04 89 c3",
+        # INS consumes DX as a port selector, not a stored payload.
+        "ba 50 10 40 00 6d c3",
+        # MOVDIR64B consumes EAX as a destination address.
+        "b8 50 10 40 00 66 0f 38 f8 00 c3",
+        # OUTS targets an I/O port and gather only reads memory.
+        "be 50 10 40 00 6f c3",
+        "b8 50 10 40 00 66 0f 6e c8 c4 e2 6d 90 04 89 c3",
+    ],
+)
+def test_address_mask_and_protocol_dependencies_are_not_payloads(
+    tmp_path, program
+):
+    image = load_cfg_program(tmp_path, program)
+    recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        # Implicit MASKMOV destinations.
+        "b8 50 10 40 00 0f 6e c0 0f f7 c1 c3",
+        "b8 50 10 40 00 66 0f 6e c0 66 0f f7 c1 c3",
+        "b8 50 10 40 00 66 0f 6e c0 c5 f9 f7 c1 c3",
+        # ENTER pushes the old EBP value.
+        "bd 50 10 40 00 c8 00 00 00 c3",
+        # State saves contain hidden MMX/x87/vector payloads.
+        "b8 50 10 40 00 0f 6e c0 dd 31 c3",
+        "b8 50 10 40 00 0f 6e c0 dd 19 c3",
+        "b8 50 10 40 00 66 0f 6e c0 0f ae 01 c3",
+        "b8 50 10 40 00 66 0f 6e c0 0f ae 21 c3",
+        # CET stores have access=0 for both operands.
+        "b9 50 10 40 00 31 c0 0f 38 f6 08 c3",
+        "b9 50 10 40 00 31 c0 66 0f 38 f5 08 c3",
+        # Representative legacy and VEX access-metadata defects.
+        "b8 50 10 40 00 0f 6e c0 0f 7e 01 c3",
+        "b8 50 10 40 00 66 0f 6e c0 0f 11 01 c3",
+        "b8 50 10 40 00 66 0f 6e c0 c5 fc 11 01 c3",
+        # Masked and scatter stores consume operand 2, not their masks/VSIB.
+        "b8 50 10 40 00 66 0f 6e c0 c4 e2 75 2e 01 c3",
+        "b8 50 10 40 00 66 0f 6e c0 c4 e2 75 8e 01 c3",
+        "b8 50 10 40 00 66 0f 6e c0 62 f2 7d 49 a2 04 89 c3",
+        "b8 50 10 40 00 66 0f 6e c0 62 f2 7d 49 a0 04 89 c3",
+    ],
+)
+def test_semantic_memory_writers_reject_only_tainted_payload(
+    tmp_path, program
+):
+    image = load_cfg_program(tmp_path, program)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        # Full GPR/vector loads replace every written lane.
+        "b8 50 10 40 00 8b 01 a3 90 20 40 00 c3",
+        "b8 50 10 40 00 66 0f 6e c0 0f 10 01 0f 11 01 c3",
+        # Vector zero idiom clears the full destination.
+        "b8 50 10 40 00 66 0f 6e c0 66 0f ef c0 0f 11 01 c3",
+        # A VEX XMM write also clears the upper YMM alias lanes.
+        "b8 50 10 40 00 62 f2 7d 28 7c c0 c5 f8 10 01 "
+        "c5 fc 11 01 c3",
+        # FXSAVE stores XMM state, not the untouched upper YMM lanes.
+        "b8 50 10 40 00 62 f2 7d 28 7c c0 66 0f ef c0 0f ae 01 c3",
+        # Register XADD places the clean old destination in its source.
+        "bb 50 10 40 00 31 c0 0f c1 d8 89 1d 90 20 40 00 c3",
+        # POP replaces the full destination with a fresh stack value.
+        "b8 50 10 40 00 58 a3 90 20 40 00 c3",
+        # A state-save address by itself is not saved payload.
+        "b9 50 10 40 00 dd 31 c3",
+    ],
+)
+def test_full_lane_replacements_and_address_only_state_are_clean(
+    tmp_path, program
+):
+    image = load_cfg_program(tmp_path, program)
+    recover_cfg(image, inventory(image), generous_limits(image))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        # Partial GPR/vector loads preserve untouched tainted lanes.
+        "b8 50 10 40 00 8a 01 a3 90 20 40 00 c3",
+        "b8 50 10 40 00 66 0f 6e c0 0f 12 01 0f 11 01 c3",
+        # A legacy XMM write preserves upper YMM lanes.
+        "b8 50 10 40 00 62 f2 7d 28 7c c0 0f 10 01 "
+        "c5 fc 11 01 c3",
+        # CMOV can preserve its old destination.
+        "b8 50 10 40 00 31 db 85 c9 0f 45 c3 a3 90 20 40 00 c3",
+        # PUSH immediate, PUSHA, and PUSHF store their real payloads.
+        "68 50 10 40 00 c3",
+        "bb 50 10 40 00 60 c3",
+        "b8 50 10 40 00 83 c0 00 9c c3",
+        # XADD/CMPXCHG memory forms conditionally store the source value.
+        "b8 50 10 40 00 0f c1 01 c3",
+        "b9 50 10 40 00 0f b1 0b c3",
+        # XSAVE can store upper YMM/ZMM state selected at runtime.
+        "b8 50 10 40 00 62 f2 7d 28 7c c0 66 0f ef c0 0f ae 21 c3",
+    ],
+)
+def test_partial_conditional_and_stack_payloads_remain_tainted(
+    tmp_path, program
+):
+    image = load_cfg_program(tmp_path, program)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
+def test_unhandled_ambiguous_form_fails_with_detailed_diagnostic(tmp_path):
+    image = load_cfg_program(tmp_path, "0f b1 d8 c3")  # CMPXCHG EAX, EBX
+    with pytest.raises(CfgRecoveryError) as raised:
+        recover_cfg(image, inventory(image), generous_limits(image))
+    diagnostic = str(raised.value)
+    assert "ambiguous x86 value-flow semantics" in diagnostic
+    assert "address=0x40100a" in diagnostic
+    assert "bytes=0fb1d8" in diagnostic
+    assert "id=" in diagnostic
+    assert "mnemonic=cmpxchg" in diagnostic
+    assert "overlapping CMPXCHG" in diagnostic
 
 
 def test_entry_export_and_anchor_bind_to_complete_first_instruction(
