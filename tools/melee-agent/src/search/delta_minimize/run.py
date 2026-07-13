@@ -161,6 +161,7 @@ _RESULT_INPUT_SCOPE_FIELDS = frozenset({"scoped_right_hash", "excluded_atom_ids"
 _RESULT_INPUT_NAMESPACE_FIELDS = frozenset(
     {"namespace_review_request", "namespace_review_unresolved"}
 )
+_RESULT_INPUT_BLOCKING_ERROR_FIELDS = frozenset({"blocking_error"})
 _CANDIDATE_ROW_FIELDS = frozenset(
     {
         "candidate_id",
@@ -1114,7 +1115,12 @@ def _validate_current_result(payload: Mapping[str, Any]) -> None:
 
 
 def _validate_result_inputs(inputs: Mapping[str, Any], manifest: Mapping[str, Any]) -> None:
-    allowed = _RESULT_INPUT_BASE_FIELDS | _RESULT_INPUT_SCOPE_FIELDS | _RESULT_INPUT_NAMESPACE_FIELDS
+    allowed = (
+        _RESULT_INPUT_BASE_FIELDS
+        | _RESULT_INPUT_SCOPE_FIELDS
+        | _RESULT_INPUT_NAMESPACE_FIELDS
+        | _RESULT_INPUT_BLOCKING_ERROR_FIELDS
+    )
     if (
         not _RESULT_INPUT_BASE_FIELDS <= set(inputs) <= allowed
         or any(not isinstance(inputs[name], str) or not inputs[name] for name in ("left", "right", "out_dir"))
@@ -1161,6 +1167,20 @@ def _validate_result_inputs(inputs: Mapping[str, Any], manifest: Mapping[str, An
             )
         ):
             raise ValueError
+
+    blocking_error_fields = set(inputs) & _RESULT_INPUT_BLOCKING_ERROR_FIELDS
+    if blocking_error_fields:
+        blocking_error = inputs["blocking_error"]
+        if (
+            namespace_fields
+            or not isinstance(blocking_error, Mapping)
+            or set(blocking_error) != {"reason", "details"}
+            or not isinstance(blocking_error["reason"], str)
+            or not blocking_error["reason"]
+            or not isinstance(blocking_error["details"], Mapping)
+        ):
+            raise ValueError
+        _json_value(blocking_error["details"])
 
 
 def _validate_result_compiler_provenance(payload: Mapping[str, Any]) -> None:
@@ -1298,6 +1318,7 @@ def _validate_result_state(payload: Mapping[str, Any]) -> None:
     counts = payload["candidate_counts"]
     compiler_present = bool(payload["compiler_provenance"])
     inputs = payload["inputs"]
+    blocking_error = inputs.get("blocking_error")
 
     if status == "incomplete":
         if exact or pareto_present or payload["best_next"] is not None or not blockers:
@@ -1329,7 +1350,24 @@ def _validate_result_state(payload: Mapping[str, Any]) -> None:
             compiler_present
             or candidates
             or any(counts.values())
-            or set(inputs) & (_RESULT_INPUT_SCOPE_FIELDS | _RESULT_INPUT_NAMESPACE_FIELDS)
+            or set(inputs)
+            & (
+                _RESULT_INPUT_SCOPE_FIELDS
+                | _RESULT_INPUT_NAMESPACE_FIELDS
+                | _RESULT_INPUT_BLOCKING_ERROR_FIELDS
+            )
+        ):
+            raise ValueError
+        return
+
+    if blocking_error is not None:
+        if (
+            not compiler_present
+            or set(inputs) & _RESULT_INPUT_NAMESPACE_FIELDS
+            or blockers != [blocking_error["reason"]]
+            or counts["complete"] != 0
+            or len(candidates) not in {0, counts["legal"]}
+            or any(set(row) != _RAW_CANDIDATE_ROW_FIELDS for row in candidates)
         ):
             raise ValueError
         return
@@ -1369,8 +1407,19 @@ def _validate_result_cross_fields(
     if counts["legal"] != len(legal_masks):
         raise ValueError
     masks = tuple(row["mask"] for row in candidates)
+    blocking_incomplete = (
+        payload["status"] == "incomplete"
+        and not payload["objective_manifest"]
+        and "blocking_error" in payload["inputs"]
+    )
     complete_coverage = payload["status"] != "incomplete" or not payload["objective_manifest"]
-    expected_masks = legal_masks if complete_coverage else legal_masks[: len(masks)]
+    expected_masks = (
+        ()
+        if blocking_incomplete and not candidates
+        else legal_masks
+        if complete_coverage
+        else legal_masks[: len(masks)]
+    )
     if masks != expected_masks:
         raise ValueError
 
@@ -1740,7 +1789,10 @@ def _load_or_infer_objective(
                 "ambiguous-stack-home-donor",
             }:
                 raise
-            raise DeltaMinimizeError("invalid-objective-manifest") from error
+            details: dict[str, Any] = {"cause": error.reason}
+            if error.details:
+                details["cause_details"] = error.details
+            raise DeltaMinimizeError("invalid-objective-manifest", details) from error
         objective_payload = objective.to_dict()
         store.write_objective_manifest(objective_payload)
         store.write_json(
@@ -2294,6 +2346,72 @@ def _namespace_incomplete_result(
     )
 
 
+def _blocking_incomplete_result(
+    config: DeltaMinimizeConfig,
+    parents: ParentEvidenceBundle,
+    manifest: DeltaManifest,
+    candidates: tuple[MaterializedCandidate, ...],
+    raw_candidates: tuple[RawCandidateEvidence, ...] | None,
+    error: DeltaMinimizeError,
+) -> DeltaMinimizeResult:
+    """Publish a resumable ledger for a post-lattice semantic boundary."""
+
+    if raw_candidates is not None and len(raw_candidates) != len(candidates):
+        raise DeltaMinimizeError("invalid-blocking-result-input")
+    raw_rows = tuple(
+        {
+            "candidate_id": raw.candidate_id,
+            "mask": raw.mask,
+            "source_hash": raw.source_hash,
+            "source_path": raw.source_path,
+            "evidence": raw.to_dict(),
+        }
+        for raw in raw_candidates or ()
+    )
+    return DeltaMinimizeResult(
+        schema_version=RESULT_SCHEMA,
+        status="incomplete",
+        exact_four_axis=False,
+        function=config.function,
+        objective_manifest={},
+        delta_manifest=_manifest_to_dict(manifest),
+        candidate_counts={
+            "legal": len(candidates),
+            "viable": sum(raw.viable for raw in raw_candidates or ()),
+            "complete": 0,
+        },
+        candidates=raw_rows,
+        pareto=None,
+        best_next=None,
+        cache_stats={"parent_entries": 2, "candidate_entries": len(raw_rows)},
+        blockers=(error.reason,),
+        inputs={
+            "left": str(config.left),
+            "right": str(config.right),
+            "left_hash": manifest.left_hash,
+            "right_hash": manifest.right_hash,
+            "scoped_right_hash": manifest.scoped_right_hash,
+            "excluded_atom_ids": list(manifest.excluded_atom_ids),
+            "out_dir": str(config.out_dir),
+            "target_path": None if config.target_path is None else str(config.target_path),
+            "namespace_review_path": (
+                None if config.namespace_review_path is None else str(config.namespace_review_path)
+            ),
+            "donor_overrides": dict(config.donor_overrides),
+            "include_objobjects": config.include_objobjects,
+            "blocking_error": error.to_dict(),
+        },
+        compiler_provenance={
+            "cflags_hash": parents.cflags_hash,
+            "compiler_fingerprint": parents.compiler_fingerprint,
+            "expected_object_hash": parents.expected_object_hash,
+            "inspector_version": parents.inspector_version,
+            "parser_schema_hash": parents.parser_schema_hash,
+        },
+        candidate_budget=config.max_candidates,
+    )
+
+
 def run_delta_minimize(
     config: DeltaMinimizeConfig,
     *,
@@ -2367,13 +2485,29 @@ def run_delta_minimize(
             store,
             active,
         )
-        namespace_state = _resolve_namespaces_for_run(
-            config,
-            parents,
-            candidates,
-            raw_candidates,
-            manifest,
-        )
+        try:
+            namespace_state = _resolve_namespaces_for_run(
+                config,
+                parents,
+                candidates,
+                raw_candidates,
+                manifest,
+            )
+        except DeltaMinimizeError as error:
+            if error.reason != "namespace-domain-mismatch":
+                raise
+            store.invalidate_objective_publications()
+            result = _blocking_incomplete_result(
+                config,
+                parents,
+                manifest,
+                candidates,
+                raw_candidates,
+                error,
+            )
+            store.write_candidates({"candidates": list(result.candidates)})
+            store.write_result(result.to_dict())
+            return result
         if namespace_state.unresolved_ids:
             store.write_namespace_review_request(namespace_state.request)
             store.invalidate_objective_publications()
@@ -2390,14 +2524,30 @@ def run_delta_minimize(
             namespace_state,
             store,
         )
-    objective = _load_or_infer_objective(
-        config,
-        parents,
-        store,
-        active,
-        namespace_state=namespace_state,
-        namespace_provenance=namespace_provenance,
-    )
+    try:
+        objective = _load_or_infer_objective(
+            config,
+            parents,
+            store,
+            active,
+            namespace_state=namespace_state,
+            namespace_provenance=namespace_provenance,
+        )
+    except DeltaMinimizeError as error:
+        if error.reason != "invalid-objective-manifest":
+            raise
+        store.invalidate_objective_publications()
+        result = _blocking_incomplete_result(
+            config,
+            parents,
+            manifest,
+            candidates,
+            raw_candidates,
+            error,
+        )
+        store.write_candidates({"candidates": list(result.candidates)})
+        store.write_result(result.to_dict())
+        return result
     objective_hash = _hash_json(objective.to_dict())
     if namespace_state is None:
         store.bind_provenance(

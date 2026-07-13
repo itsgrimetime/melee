@@ -839,6 +839,128 @@ def test_run_preserves_actionable_objective_ambiguity(tmp_path: Path) -> None:
         run_delta_minimize(_config(tmp_path), backends=backends)
 
 
+def test_post_lattice_objective_failure_publishes_structured_incomplete_result(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    backends = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(
+            DeltaMinimizeError(
+                "incomplete-objective-role-map",
+                {"artifact_id": "parent:right"},
+            )
+        ),
+    )
+
+    result = run_delta_minimize(config, backends=backends)
+
+    assert result.status == "incomplete"
+    assert result.blockers == ("invalid-objective-manifest",)
+    assert result.inputs["blocking_error"] == {
+        "reason": "invalid-objective-manifest",
+        "details": {
+            "cause": "incomplete-objective-role-map",
+            "cause_details": {"artifact_id": "parent:right"},
+        },
+    }
+    assert result.candidate_counts == {"legal": 4, "viable": 0, "complete": 0}
+    assert result.candidates == ()
+    assert fixture.score_calls == 0
+    assert json.loads((config.out_dir / "candidates.json").read_text(encoding="utf-8")) == {
+        "candidates": []
+    }
+    assert json.loads((config.out_dir / "result.json").read_text(encoding="utf-8")) == result.to_dict()
+
+
+def test_changed_context_objective_failure_invalidates_prior_objective_publications(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    publication_paths = (
+        config.out_dir / "objective-manifest.json",
+        config.out_dir / "objective-inputs.json",
+        config.out_dir / "objective" / "color-target-current.json",
+    )
+    assert all(path.is_file() for path in publication_paths)
+    failing_backends = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(
+            DeltaMinimizeError("incomplete-objective-role-map")
+        ),
+    )
+
+    result = run_delta_minimize(
+        replace(config, donor_overrides={"color": "right"}),
+        backends=failing_backends,
+    )
+
+    assert result.status == "incomplete"
+    assert result.blockers == ("invalid-objective-manifest",)
+    assert all(not path.exists() for path in publication_paths)
+
+
+def test_namespace_domain_mismatch_publishes_full_raw_lattice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    target = tmp_path / "target.yaml"
+    target.write_text("reviewed target\n", encoding="utf-8")
+    config = _config(tmp_path, target_path=target)
+    loaded_target = SimpleNamespace(
+        schema_version=COLOR_TARGET_SCHEMA_V2,
+        function="f",
+        force_phys={1: 3},
+    )
+    monkeypatch.setattr(run_module, "load_color_target", lambda *_args, **_kwargs: loaded_target)
+    monkeypatch.setattr(
+        run_module,
+        "_resolve_namespaces_for_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            DeltaMinimizeError(
+                "namespace-domain-mismatch",
+                {
+                    "artifact_count": 113,
+                    "artifact_id": "parent:right",
+                    "canonical_count": 110,
+                },
+            )
+        ),
+    )
+    stale_publication_paths = (
+        config.out_dir / "objective-manifest.json",
+        config.out_dir / "objective-inputs.json",
+        config.out_dir / "objective" / "color-target-current.json",
+    )
+    for path in stale_publication_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+
+    assert result.status == "incomplete"
+    assert result.blockers == ("namespace-domain-mismatch",)
+    assert result.inputs["blocking_error"] == {
+        "reason": "namespace-domain-mismatch",
+        "details": {
+            "artifact_count": 113,
+            "artifact_id": "parent:right",
+            "canonical_count": 110,
+        },
+    }
+    assert result.candidate_counts == {"legal": 4, "viable": 4, "complete": 0}
+    assert len(result.candidates) == 4
+    assert fixture.score_calls == 4
+    assert json.loads((config.out_dir / "candidates.json").read_text(encoding="utf-8")) == {
+        "candidates": list(result.candidates)
+    }
+    assert all(not path.exists() for path in stale_publication_paths)
+
+
 def test_v2_namespace_discovery_captures_full_lattice_before_objective_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

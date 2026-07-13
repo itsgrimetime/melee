@@ -345,8 +345,20 @@ def resolve_namespace_map(
     if canonical_domain != domain:
         raise DeltaMinimizeError("invalid-canonical-namespace-domain")
     artifact_domain = _coherent_allocator_domain(artifact_compile, class_id)
+    if artifact_domain is None:
+        raise DeltaMinimizeError(
+            "invalid-namespace-artifact-domain",
+            {"artifact_id": artifact_id},
+        )
     if artifact_domain != domain:
-        raise DeltaMinimizeError("invalid-namespace-artifact-domain")
+        raise DeltaMinimizeError(
+            "namespace-domain-mismatch",
+            {
+                "artifact_count": len(artifact_domain),
+                "artifact_id": artifact_id,
+                "canonical_count": len(domain),
+            },
+        )
 
     exact = [
         item
