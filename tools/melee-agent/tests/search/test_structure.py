@@ -1452,7 +1452,7 @@ def test_loop_shape_expanded_helper_replaces_scan_and_goto_heavy_skips_helper(
     actual_source = Path("src/melee/mn/mndiagram.c").read_text()
     _, heavy_variants = generate_loop_shape_expanded_variants(
         actual_source,
-        "mnDiagram_8024227C",
+        "mnDiagram_80242C0C",
         tmp_path / "heavy",
         baseline_percent=None,
         max_candidates=40,
@@ -1760,14 +1760,18 @@ def test_loop_shape_expanded_covers_actual_mndiagram_visible_scans(
 ) -> None:
     source_path = Path("src/melee/mn/mndiagram.c")
     source = source_path.read_text()
-    expected = {
-        "mnDiagram_802427B4": {"assets->sorted_names", "GetNameText"},
-        "mnDiagram_80242C0C": {"assets->sorted_fighters", "mn_IsFighterUnlocked"},
-        "mnDiagram_8024227C": {"assets->sorted_names", "assets->sorted_fighters"},
-        "mnDiagram_802417D0": {"local-alias-sorted-fighters", "alias-offset-sorted-names"},
+    direct_scans = {
+        "mnDiagram_80242C0C": {
+            "local-alias-sorted-fighters",
+            "mn_IsFighterUnlocked",
+        },
+        "mnDiagram_802417D0": {
+            "local-alias-sorted-fighters",
+            "alias-offset-sorted-names",
+        },
     }
 
-    for function, required in expected.items():
+    for function, required in direct_scans.items():
         axis, variants = generate_loop_shape_expanded_variants(
             source,
             function,
@@ -1785,6 +1789,18 @@ def test_loop_shape_expanded_covers_actual_mndiagram_visible_scans(
         assert required <= haystack
         assert all(Path(variant.source_retained or "").exists() for variant in variants)
 
+    for function in ("mnDiagram_802427B4", "mnDiagram_8024227C"):
+        axis, variants = generate_loop_shape_expanded_variants(
+            source,
+            function,
+            tmp_path / function,
+            baseline_percent=None,
+            max_candidates=32,
+        )
+        assert axis.status == "blocked", function
+        assert axis.blocker == "no-loop-shape-expanded-candidates", function
+        assert variants == [], function
+
     variants_417d0 = generate_loop_shape_expanded_variants(
         source,
         "mnDiagram_802417D0",
@@ -1795,19 +1811,6 @@ def test_loop_shape_expanded_covers_actual_mndiagram_visible_scans(
     assert any(
         "sorted + 0x1C" in Path(variant.source_retained or "").read_text()
         for variant in variants_417d0
-    )
-
-    variants_4227c = generate_loop_shape_expanded_variants(
-        source,
-        "mnDiagram_8024227C",
-        tmp_path / "mnDiagram_8024227C-snippets",
-        baseline_percent=None,
-        max_candidates=40,
-    )[1]
-    assert any(
-        "loop_7" in Path(variant.source_retained or "").read_text()
-        and "var_r17" in Path(variant.source_retained or "").read_text()
-        for variant in variants_4227c
     )
 
 

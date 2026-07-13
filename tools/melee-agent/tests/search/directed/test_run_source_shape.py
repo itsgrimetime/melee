@@ -151,23 +151,29 @@ def test_source_shape_proposal_targets_explicit_zero_return_to_named_int_functio
     )
 
 
-def test_source_shape_proposal_skips_explicit_zero_return_for_named_void_function():
+def test_source_shape_proposal_skips_explicit_zero_return_for_named_void_function_but_keeps_valid_probes(
+) -> None:
     src = (
         "void target(int arg0) {\n"
         "    repeated(arg0);\n"
         "}\n"
     )
 
-    assert (
-        _source_shape_proposal(
-            src,
-            frozenset(),
-            function="target",
-            unit="melee/test/target",
-            force_phys={},
-        )
-        is None
-    )
+    tried: set[str] = set()
+    family_ids: list[str] = []
+    while proposal := _source_shape_proposal(
+        src,
+        frozenset(tried),
+        function="target",
+        unit="melee/test/target",
+        force_phys={},
+    ):
+        key, _, meta = proposal
+        tried.add(key)
+        family_ids.append(meta["probe"]["family_id"])
+
+    assert "function_codegen_pragma_shape" in family_ids
+    assert "explicit_zero_return" not in family_ids
 
 
 def test_apply_candidate_text_uses_transform_text_before_at_suffix_stripping():

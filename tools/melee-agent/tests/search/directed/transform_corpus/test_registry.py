@@ -441,6 +441,7 @@ def test_indexed_byte_address_temp_metadata_is_executable() -> None:
         "steer_indexed_byte_implicit_store_index_temp",
         "steer_indexed_byte_implicit_init_loop_indexed_store",
         "steer_indexed_byte_max_current_value_temp",
+        "steer_indexed_byte_helper_result_temp",
     )
     assert family.semantic_risk == "medium"
     assert "non-struct byte-array" in family.source_region_selector
@@ -685,6 +686,7 @@ def test_plan_transform_experiments_names_mndiagram_coloring_cluster() -> None:
         "pcode_only_gpr_address_temp_repair",
         "pcode_only_gpr_copy_product_case_c_repair",
         "pcode_only_gpr_bool_mask_temp_repair",
+        "pcode_only_gpr_global_load_lifetime_repair",
         "retained_gpr_case_c_sensitivity_search",
         "pcode_only_fpr_fsubs_cast_owner_repair",
         "pcode_only_fpr_callarg_temp_repair",
@@ -696,6 +698,7 @@ def test_plan_transform_experiments_names_mndiagram_coloring_cluster() -> None:
         "pcode_only_gpr_address_temp_repair",
         "pcode_only_gpr_copy_product_case_c_repair",
         "pcode_only_gpr_bool_mask_temp_repair",
+        "pcode_only_gpr_global_load_lifetime_repair",
         "retained_gpr_case_c_sensitivity_search",
         "pcode_only_fpr_fsubs_cast_owner_repair",
         "pcode_only_fpr_callarg_temp_repair",
@@ -771,6 +774,7 @@ def test_plan_transform_experiments_keeps_ranked_fighter_force_phys_coloring() -
         "pcode_only_gpr_address_temp_repair",
         "pcode_only_gpr_copy_product_case_c_repair",
         "pcode_only_gpr_bool_mask_temp_repair",
+        "pcode_only_gpr_global_load_lifetime_repair",
         "retained_gpr_case_c_sensitivity_search",
         "pcode_only_fpr_fsubs_cast_owner_repair",
         "pcode_only_fpr_callarg_temp_repair",
@@ -789,6 +793,7 @@ def test_plan_transform_experiments_keeps_ranked_fighter_force_phys_coloring() -
         "pcode_only_gpr_address_temp_repair",
         "pcode_only_gpr_copy_product_case_c_repair",
         "pcode_only_gpr_bool_mask_temp_repair",
+        "pcode_only_gpr_global_load_lifetime_repair",
         "retained_gpr_case_c_sensitivity_search",
         "pcode_only_fpr_fsubs_cast_owner_repair",
         "pcode_only_fpr_callarg_temp_repair",
