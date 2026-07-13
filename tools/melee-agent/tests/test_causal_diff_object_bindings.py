@@ -96,7 +96,61 @@ def _store_with_replaced_record(graph, changed):
 
 
 _LEGACY_ROLE = OperandRole("use:0", "use", 0, "r", 21)
+LEGACY_EFFECT_EDGE_KINDS = (
+    "uses-virtual",
+    "defines-virtual",
+    "maps-to-allocator-node",
+    "statement-has-enode",
+    "enode-child",
+    "enode-references-object",
+    "object-owned-by-scope",
+    "expression-represents-enode",
+    "lowers-to",
+    "materializes-as-stack-object",
+    "bridge-candidate-materializes-stack-object",
+    "bridge-has-stack-access",
+    "bridge-has-source-expression",
+)
 _TWO_INSTRUCTION_NEIGHBORHOOD = ("mr r#,r#", "mr r#,r#")
+
+
+def _effect_reachability_for_edge_kind(
+    edge_kind: str,
+) -> tuple[EvidenceNode, EvidenceEdge, frozenset[str], frozenset[str]]:
+    compile_id = "e" * 64
+    source = _node(compile_id, "compiler-object", ("source", edge_kind), {})
+    target = _node(compile_id, "stack-object", ("target", edge_kind), {})
+    edge = _edge(compile_id, edge_kind, source, target)
+    store = InMemoryEvidenceStore()
+    store.add_nodes((source, target))
+    store.add_edges((edge,))
+    graph = SimpleNamespace(store=store)
+    records, edges = _reachable_records(graph, (source.record_id,))
+    return target, edge, records, edges
+
+
+@pytest.mark.parametrize("edge_kind", LEGACY_EFFECT_EDGE_KINDS)
+def test_effect_reachability_preserves_exact_v1_edge_vocabulary(edge_kind: str) -> None:
+    target, edge, record_ids, edge_ids = _effect_reachability_for_edge_kind(edge_kind)
+
+    assert target.record_id in record_ids
+    assert edge.record_id in edge_ids
+
+
+@pytest.mark.parametrize(
+    "edge_kind",
+    (
+        "has-color-decision",
+        "interferes-with",
+        "coalesces-with",
+        "unrelated-diagnostic-link",
+    ),
+)
+def test_effect_reachability_rejects_edges_outside_its_legacy_vocabulary(edge_kind: str) -> None:
+    target, edge, record_ids, edge_ids = _effect_reachability_for_edge_kind(edge_kind)
+
+    assert target.record_id not in record_ids
+    assert edge.record_id not in edge_ids
 
 
 def _neighborhood_occurrence(

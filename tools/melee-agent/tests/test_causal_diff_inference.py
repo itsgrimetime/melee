@@ -26,6 +26,7 @@ from src.mwcc_debug.causal_diff.inference import (
     exit_code_for_report,
     infer_pair,
 )
+from src.mwcc_debug.causal_diff.legacy_ownership import legacy_simple_paths
 from src.mwcc_debug.causal_diff.models import (
     ComparisonRecord,
     Confidence,
@@ -45,6 +46,24 @@ from tests.owner_certificate_fixtures import (
 ANALYSIS_ID = "a" * 64
 LEFT_COMPILE = "b" * 64
 RIGHT_COMPILE = "c" * 64
+LEGACY_INFERENCE_EDGE_KINDS = (
+    "uses-virtual",
+    "defines-virtual",
+    "maps-to-allocator-node",
+    "statement-has-enode",
+    "enode-child",
+    "enode-references-object",
+    "object-owned-by-scope",
+    "expression-represents-enode",
+    "lowers-to",
+    "materializes-as-stack-object",
+    "bridge-candidate-materializes-stack-object",
+    "bridge-has-stack-access",
+    "bridge-has-source-expression",
+    "has-color-decision",
+    "interferes-with",
+    "coalesces-with",
+)
 
 
 def _provenance(*record_ids: str) -> Provenance:
@@ -567,6 +586,20 @@ def expert_asserted_complete_path() -> InferenceCase:
     return _case(expert_asserted=True)
 
 
+@pytest.mark.parametrize("edge_kind", LEGACY_INFERENCE_EDGE_KINDS)
+def test_legacy_inference_path_preserves_exact_v1_edge_vocabulary(edge_kind: str) -> None:
+    store = InMemoryEvidenceStore()
+    source = _node(LEFT_COMPILE, "compiler-object", f"source-{edge_kind}")
+    target = _node(LEFT_COMPILE, "allocator-node", f"target-{edge_kind}")
+    edge = _edge(LEFT_COMPILE, edge_kind, source, target)
+    store.add_nodes((source, target))
+    store.add_edges((edge,))
+
+    assert legacy_simple_paths(store, source.record_id, target.record_id, 1) == (
+        (source.record_id, edge.record_id, target.record_id),
+    )
+
+
 @pytest.mark.parametrize(
     ("case", "expected"),
     [
@@ -582,6 +615,63 @@ def expert_asserted_complete_path() -> InferenceCase:
 )
 def test_normative_verdict_table(case: InferenceCase, expected: VerdictStatus) -> None:
     assert infer_pair(case.pair, case.query, case.comparisons).status is expected
+
+
+def test_unrelated_legacy_edge_kind_cannot_manufacture_shared_owner_proof() -> None:
+    case = complete_no_shared_path()
+    assert isinstance(case.query, InMemoryEvidenceStore)
+    baseline = infer_pair(case.pair, case.query, case.comparisons)
+    assert baseline.status is VerdictStatus.NO_CAUSAL_DIFFERENCE
+
+    owner_comparison = next(
+        comparison
+        for comparison in case.comparisons
+        if comparison.relation_kind == "node-changed"
+        and comparison.left_record_id is not None
+        and (left := case.query.get_node(comparison.left_record_id)) is not None
+        and left.kind == "compiler-object"
+    )
+    owners = tuple(
+        case.query.get_node(record_id)
+        for record_id in (owner_comparison.left_record_id, owner_comparison.right_record_id)
+        if record_id is not None
+    )
+    allocators = {
+        case.pair.allocator.role_correspondence.left.compile_id: case.pair.allocator.role_correspondence.left,
+        case.pair.allocator.role_correspondence.right.compile_id: case.pair.allocator.role_correspondence.right,
+    }
+    stacks = {
+        stack.compile_id: stack
+        for record_id in case.pair.stack.owner_record_ids
+        if (stack := case.query.get_node(record_id)) is not None
+    }
+    assert len(owners) == len(allocators) == len(stacks) == 2
+    case.query.add_edges(
+        tuple(
+            edge
+            for owner in owners
+            if owner is not None
+            for edge in (
+                _edge(
+                    owner.compile_id,
+                    "unrelated-diagnostic-link",
+                    owner,
+                    allocators[owner.compile_id],
+                ),
+                _edge(
+                    owner.compile_id,
+                    "unrelated-diagnostic-link",
+                    owner,
+                    stacks[owner.compile_id],
+                ),
+            )
+        )
+    )
+
+    verdict = infer_pair(case.pair, case.query, case.comparisons)
+
+    assert verdict.status is VerdictStatus.NO_CAUSAL_DIFFERENCE
+    assert verdict.proof_paths == ()
 
 
 def test_evidence_depth_abstains_when_proof_path_is_truncated() -> None:

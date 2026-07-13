@@ -26,23 +26,6 @@ EffectDirection = Literal[
     "both-mismatch-different",
 ]
 
-_OWNERSHIP_EDGE_KINDS = frozenset(
-    {
-        "uses-virtual",
-        "defines-virtual",
-        "statement-has-enode",
-        "enode-child",
-        "enode-references-object",
-        "object-owned-by-scope",
-        "expression-represents-enode",
-        "lowers-to",
-        "materializes-as-stack-object",
-        "bridge-candidate-materializes-stack-object",
-        "bridge-has-stack-access",
-        "bridge-has-source-expression",
-    }
-)
-
 
 @dataclass(frozen=True, slots=True)
 class AllocatorEffect:

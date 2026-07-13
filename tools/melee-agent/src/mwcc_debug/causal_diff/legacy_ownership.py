@@ -9,6 +9,31 @@ from .models import EvidenceEdge, EvidenceNode
 from .store import EvidenceQuery
 
 _V2_PARSER = "mwcc-retro-backend-trace.v2"
+_LEGACY_EFFECT_EDGE_KINDS = frozenset(
+    {
+        "uses-virtual",
+        "defines-virtual",
+        "maps-to-allocator-node",
+        "statement-has-enode",
+        "enode-child",
+        "enode-references-object",
+        "object-owned-by-scope",
+        "expression-represents-enode",
+        "lowers-to",
+        "materializes-as-stack-object",
+        "bridge-candidate-materializes-stack-object",
+        "bridge-has-stack-access",
+        "bridge-has-source-expression",
+    }
+)
+
+_LEGACY_INFERENCE_EDGE_KINDS = _LEGACY_EFFECT_EDGE_KINDS | frozenset(
+    {
+        "has-color-decision",
+        "interferes-with",
+        "coalesces-with",
+    }
+)
 
 
 def _legacy_record(record: EvidenceNode | EvidenceEdge | None) -> bool:
@@ -112,7 +137,11 @@ def legacy_reachable_records(
     frontier = sorted(visited)
     while frontier:
         current = frontier.pop(0)
-        for edge in graph.store.neighbors(current, direction="both"):
+        for edge in graph.store.neighbors(
+            current,
+            _LEGACY_EFFECT_EDGE_KINDS,
+            direction="both",
+        ):
             if not _legacy_edge(graph, edge):
                 continue
             edge_ids.add(edge.record_id)
@@ -152,7 +181,11 @@ def legacy_simple_paths_with_truncation(
     ) -> None:
         nonlocal truncated
         neighbors = []
-        for edge in query.neighbors(node_id, direction="both"):
+        for edge in query.neighbors(
+            node_id,
+            _LEGACY_INFERENCE_EDGE_KINDS,
+            direction="both",
+        ):
             if not (
                 _legacy_record(edge)
                 and _legacy_record(query.get_node(edge.source_id))
