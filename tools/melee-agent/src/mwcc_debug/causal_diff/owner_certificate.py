@@ -404,6 +404,10 @@ def _is_nonempty_str(value: object) -> bool:
     return isinstance(value, str) and bool(value)
 
 
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -1385,6 +1389,59 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
     )
 
 
+def _validate_provenance_shape(provenance: object) -> None:
+    if type(provenance) is not Provenance:
+        raise _MalformedEvidence("record provenance has an unexpected type")
+    if (
+        not _is_sha256(provenance.artifact_sha256)
+        or not _is_nonempty_str(provenance.parser)
+        or not _is_nonempty_str(provenance.derivation_rule)
+        or not isinstance(provenance.input_record_ids, tuple)
+        or not all(_is_nonempty_str(item) for item in provenance.input_record_ids)
+    ):
+        raise _MalformedEvidence("record provenance strings are malformed")
+    for raw_offset in (provenance.raw_start, provenance.raw_end):
+        if raw_offset is not None and (
+            not _is_int(raw_offset) or not 0 <= raw_offset <= 0x7FFFFFFFFFFFFFFF
+        ):
+            raise _MalformedEvidence("record provenance range is malformed")
+    if (
+        provenance.raw_start is not None
+        and provenance.raw_end is not None
+        and provenance.raw_start > provenance.raw_end
+    ):
+        raise _MalformedEvidence("record provenance range is reversed")
+
+
+def _validate_record_shape(record: EvidenceNode | EvidenceEdge) -> None:
+    if not all(
+        _is_nonempty_str(value)
+        for value in (record.record_id, record.compile_id, record.function, record.kind)
+    ):
+        raise _MalformedEvidence("evidence record identity is malformed")
+    if any(
+        type(value) is not Confidence
+        for value in (
+            record.producer_confidence,
+            record.adapter_confidence,
+            record.confidence,
+        )
+    ):
+        raise _MalformedEvidence("evidence record confidence is malformed")
+    _validate_provenance_shape(record.provenance)
+    if not isinstance(record.attributes, Mapping) or not all(
+        isinstance(key, str) for key in record.attributes
+    ):
+        raise _MalformedEvidence("evidence record attributes are malformed")
+    if isinstance(record, EvidenceNode):
+        if record.role_key is not None and not _is_nonempty_str(record.role_key):
+            raise _MalformedEvidence("evidence node role is malformed")
+    elif not _is_nonempty_str(record.source_id) or not _is_nonempty_str(
+        record.target_id
+    ):
+        raise _MalformedEvidence("evidence edge endpoints are malformed")
+
+
 def _validate_diagnostic_shape(evidence: ObjectBindingEvidence) -> None:
     if type(evidence) is not ObjectBindingEvidence:
         raise _MalformedEvidence("unexpected owner evidence type")
@@ -1395,6 +1452,22 @@ def _validate_diagnostic_shape(evidence: ObjectBindingEvidence) -> None:
         or not all(type(edge) is EvidenceEdge for edge in evidence.edges)
     ):
         raise _MalformedEvidence("owner evidence record containers are malformed")
+    if (
+        type(evidence.capabilities) is not frozenset
+        or not all(_is_nonempty_str(item) for item in evidence.capabilities)
+        or not _is_nonempty_str(evidence.capture_run_id)
+        or (
+            evidence.abstention_reason is not None
+            and not _is_nonempty_str(evidence.abstention_reason)
+        )
+        or (
+            evidence.instrumentation_identity is not None
+            and not isinstance(evidence.instrumentation_identity, tuple)
+        )
+    ):
+        raise _MalformedEvidence("owner evidence metadata is malformed")
+    for record in (*evidence.nodes, *evidence.edges):
+        _validate_record_shape(record)
 
 
 def _validate_diagnostic_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:

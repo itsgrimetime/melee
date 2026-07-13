@@ -812,6 +812,154 @@ def test_diagnostic_boundary_maps_malformed_record_container_to_rejection():
     assert diagnostic.is_trusted is False
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("node-record-id", "", id="node-record-id-empty"),
+        pytest.param("node-record-id", [], id="node-record-id-list"),
+        pytest.param("node-record-id", {}, id="node-record-id-mapping"),
+        pytest.param("node-compile-id", "", id="node-compile-id-empty"),
+        pytest.param("node-compile-id", [], id="node-compile-id-list"),
+        pytest.param("node-function", {}, id="node-function-mapping"),
+        pytest.param("node-kind", "", id="node-kind-empty"),
+        pytest.param("node-kind", [], id="node-kind-list"),
+        pytest.param("node-role", [], id="node-role-list"),
+        pytest.param("node-role", {}, id="node-role-mapping"),
+        pytest.param("edge-record-id", [], id="edge-record-id-list"),
+        pytest.param("edge-source-id", "", id="edge-source-id-empty"),
+        pytest.param("edge-source-id", [], id="edge-source-id-list"),
+        pytest.param("edge-target-id", {}, id="edge-target-id-mapping"),
+        pytest.param("producer-confidence", "observed", id="producer-confidence"),
+        pytest.param("adapter-confidence", "observed", id="adapter-confidence"),
+        pytest.param("confidence", "observed", id="combined-confidence"),
+        pytest.param("provenance", {}, id="provenance-object"),
+        pytest.param("artifact", "not-a-sha256", id="artifact-digest"),
+        pytest.param("artifact", [], id="artifact-list"),
+        pytest.param("parser", "", id="parser-empty"),
+        pytest.param("parser", {}, id="parser-mapping"),
+        pytest.param("derivation", "", id="derivation-empty"),
+        pytest.param("derivation", [], id="derivation-list"),
+        pytest.param("raw-start", True, id="raw-start-bool"),
+        pytest.param("raw-start", -1, id="raw-start-negative"),
+        pytest.param("raw-end", {}, id="raw-end-mapping"),
+        pytest.param("raw-range", (10, 5), id="raw-range-reversed"),
+        pytest.param(
+            "input-record-ids",
+            (["unhashable"],),
+            id="input-record-id-list",
+        ),
+        pytest.param(
+            "input-record-ids",
+            ("valid", 3),
+            id="input-record-id-non-string",
+        ),
+        pytest.param("nodes", [], id="nodes-list"),
+        pytest.param("edges", {}, id="edges-mapping"),
+        pytest.param("capabilities", ["object-to-frame"], id="capabilities-list"),
+        pytest.param("capabilities", frozenset({3}), id="capability-non-string"),
+        pytest.param("capture-run-id", "", id="capture-run-id-empty"),
+        pytest.param("capture-run-id", [], id="capture-run-id-list"),
+        pytest.param("abstention-reason", [], id="abstention-reason-list"),
+        pytest.param("instrumentation-identity", [], id="identity-list"),
+        pytest.param("instrumentation-identity", {}, id="identity-mapping"),
+    ],
+)
+def test_diagnostic_boundary_rejects_malformed_structural_fields(field, value):
+    evidence = complete_evidence()
+    node = support(evidence, "pcode-emission")
+    edge = next(
+        item
+        for item in evidence.edges
+        if item.kind == "assembly-anchor-emitted-by-pcode"
+    )
+
+    if field == "nodes":
+        malformed = replace(evidence, nodes=value)
+    elif field == "edges":
+        malformed = replace(evidence, edges=value)
+    elif field == "capabilities":
+        malformed = replace(evidence, capabilities=value)
+    elif field == "capture-run-id":
+        malformed = replace(evidence, capture_run_id=value)
+    elif field == "abstention-reason":
+        malformed = replace(evidence, abstention_reason=value)
+    elif field == "instrumentation-identity":
+        malformed = replace(evidence, instrumentation_identity=value)
+    elif field.startswith("edge-"):
+        edge_field = {
+            "edge-record-id": "record_id",
+            "edge-source-id": "source_id",
+            "edge-target-id": "target_id",
+        }[field]
+        changed_edge = replace(edge, **{edge_field: value})
+        edge_index = evidence.edges.index(edge)
+        malformed = replace(
+            evidence,
+            edges=tuple(
+                changed_edge if index == edge_index else item
+                for index, item in enumerate(evidence.edges)
+            ),
+        )
+    else:
+        if field == "node-record-id":
+            changed_node = replace(node, record_id=value)
+        elif field == "node-compile-id":
+            changed_node = replace(node, compile_id=value)
+        elif field == "node-function":
+            changed_node = replace(node, function=value)
+        elif field == "node-kind":
+            changed_node = replace(node, kind=value)
+        elif field == "node-role":
+            changed_node = replace(node, role_key=value)
+        elif field in {
+            "producer-confidence",
+            "adapter-confidence",
+            "confidence",
+        }:
+            changed_node = replace(node, **{field.replace("-", "_"): value})
+        elif field == "provenance":
+            changed_node = replace(node, provenance=value)
+        else:
+            provenance_field = {
+                "artifact": "artifact_sha256",
+                "parser": "parser",
+                "derivation": "derivation_rule",
+                "raw-start": "raw_start",
+                "raw-end": "raw_end",
+                "input-record-ids": "input_record_ids",
+            }.get(field)
+            if field == "raw-range":
+                changed_provenance = replace(
+                    node.provenance,
+                    raw_start=value[0],
+                    raw_end=value[1],
+                )
+            else:
+                changed_provenance = replace(
+                    node.provenance,
+                    **{provenance_field: value},
+                )
+            changed_node = replace(node, provenance=changed_provenance)
+        node_index = evidence.nodes.index(node)
+        malformed = replace(
+            evidence,
+            nodes=tuple(
+                changed_node if index == node_index else item
+                for index, item in enumerate(evidence.nodes)
+            ),
+        )
+
+    diagnostic = owner_certificate.validate_owner_evidence(malformed)
+
+    assert {item.reason for item in diagnostic.global_rejections} == {
+        "malformed-support"
+    }
+    assert diagnostic.role_resolutions == ()
+    assert diagnostic.resolution_for(ROLE).certificate_record_ids == ()
+    assert diagnostic.certificate_nodes == ()
+    assert diagnostic.is_trusted is False
+
+
 def test_diagnostic_boundary_does_not_swallow_unknown_taxonomy(monkeypatch):
     def reject_with_unknown_taxonomy(_evidence):
         return owner_certificate._rejection("future-unknown-reason")
