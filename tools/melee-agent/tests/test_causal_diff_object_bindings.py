@@ -1229,7 +1229,12 @@ def _pcode_result(
     physical_register: int = 21,
     parent_lineage_ids: tuple[str, ...] = ("ol-parent",),
     code_offset: int = 0x234,
+    code_range_start: int | None = None,
+    code_range_end: int | None = None,
+    instruction_offset_within_range: object = 0,
 ) -> PCodeLineageValidation:
+    range_start = code_offset if code_range_start is None else code_range_start
+    range_end = code_offset + 4 if code_range_end is None else code_range_end
     normalized = MappingProxyType(
         {
             "pcode_instructions": (
@@ -1241,8 +1246,8 @@ def _pcode_result(
                         "code_ranges": (
                             MappingProxyType(
                                 {
-                                    "start": code_offset,
-                                    "end_exclusive": code_offset + 4,
+                                    "start": range_start,
+                                    "end_exclusive": range_end,
                                     "machine_operand_mappings": (
                                         MappingProxyType(
                                             {
@@ -1250,6 +1255,7 @@ def _pcode_result(
                                                 "emission_pcode_operand_index": 1,
                                                 "operand_lineage_id": "ol-1",
                                                 "physical_register": physical_register,
+                                                "instruction_offset_within_range": (instruction_offset_within_range),
                                             }
                                         ),
                                     ),
@@ -1431,6 +1437,41 @@ def test_future_complete_emitter_builds_every_exact_same_run_edge() -> None:
     assert all(edge.provenance.parser == "mwcc-retro-backend-trace.v2" for edge in evidence.edges)
     assert evidence._adapter_token is None
     assert not _certifies(evidence)
+
+
+def test_emitter_associates_nonzero_instruction_offset_with_absolute_anchor_support() -> None:
+    evidence = emit_trusted_object_binding_evidence_for_test(
+        _adapter_input(
+            pcode_result=_pcode_result(
+                code_offset=0x238,
+                code_range_start=0x234,
+                code_range_end=0x23C,
+                instruction_offset_within_range=4,
+            )
+        )
+    )
+    range_support = next(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record" and node.attributes.get("support_kind") == "pcode-code-range"
+    )
+    emission_support = next(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record" and node.attributes.get("support_kind") == "pcode-emission"
+    )
+    anchor = next(node for node in evidence.nodes if node.kind == "assembly-operand-anchor")
+    anchor_edge = next(edge for edge in evidence.edges if edge.kind == "assembly-anchor-emitted-by-pcode")
+
+    assert range_support.attributes["start"] == 0x234
+    assert range_support.attributes["end_exclusive"] == 0x23C
+    assert emission_support.attributes["code_offset"] == 0x238
+    assert anchor.attributes["code_offset"] == 0x238
+    assert range_support.record_id in anchor.provenance.input_record_ids
+    assert emission_support.record_id in anchor.provenance.input_record_ids
+    assert anchor_edge.attributes["code_offset"] == 0x238
+    assert range_support.record_id in anchor_edge.provenance.input_record_ids
+    assert emission_support.record_id in anchor_edge.provenance.input_record_ids
 
 
 @pytest.mark.parametrize(

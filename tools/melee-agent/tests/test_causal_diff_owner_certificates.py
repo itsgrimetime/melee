@@ -1,4 +1,5 @@
 from dataclasses import replace
+from types import MappingProxyType
 
 import pytest
 
@@ -59,7 +60,11 @@ from tests.owner_certificate_fixtures import (
     second_role,
     support,
 )
-from tests.test_causal_diff_object_bindings import ALL_CAPABILITIES, _object_result
+from tests.test_causal_diff_object_bindings import (
+    ALL_CAPABILITIES,
+    _object_result,
+    _pcode_result,
+)
 
 ROLE = OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals")
 STATE = OwnerSemanticState(21, 0x44, 4)
@@ -717,6 +722,167 @@ def test_independent_complete_results_have_equal_canonical_content():
     assert first is not second
     assert first.certificate_nodes[0] is not second.certificate_nodes[0]
     assert canonical_result(first) == canonical_result(second)
+
+
+def test_nonzero_instruction_offset_builds_owner_certificate():
+    evidence = complete_evidence(
+        pcode_result=_pcode_result(
+            code_offset=0x238,
+            code_range_start=0x234,
+            code_range_end=0x23C,
+            instruction_offset_within_range=4,
+        )
+    )
+
+    result = build_owner_certificates(evidence)
+    resolution = result.resolution_for(ROLE)
+
+    assert len(result.certificate_nodes) == 1
+    assert resolution.status is OwnerResolutionStatus.UNIQUE
+    assert resolution.rejections == ()
+    assert result.global_rejections == ()
+
+
+@pytest.mark.parametrize(
+    "instruction_offset_within_range",
+    [
+        pytest.param(True, id="boolean"),
+        pytest.param("0", id="non-integer"),
+        pytest.param(-4, id="negative"),
+        pytest.param(2, id="unaligned"),
+        pytest.param(4, id="outside-four-byte-range"),
+    ],
+)
+def test_malformed_instruction_offset_never_certifies(
+    instruction_offset_within_range,
+):
+    evidence = complete_evidence(
+        pcode_result=_pcode_result(
+            instruction_offset_within_range=instruction_offset_within_range,
+        )
+    )
+
+    result = build_owner_certificates(evidence)
+    resolution = result.resolution_for(ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"malformed-support"}
+
+
+def test_missing_instruction_offset_is_malformed_support():
+    evidence = complete_evidence()
+    pcode = next(node for node in evidence.nodes if node.kind == "retail-pcode")
+    code_range = pcode.attributes["code_ranges"][0]
+    mapping = code_range["machine_operand_mappings"][0]
+    malformed_mapping = MappingProxyType(
+        {key: value for key, value in mapping.items() if key != "instruction_offset_within_range"}
+    )
+    malformed_range = MappingProxyType(
+        {
+            **code_range,
+            "machine_operand_mappings": (malformed_mapping,),
+        }
+    )
+    changed = pcode.with_attributes(
+        {
+            **pcode.attributes,
+            "code_ranges": (malformed_range,),
+        }
+    )
+    tokenless = replace_record(evidence, changed)
+
+    result = owner_certificate.validate_owner_evidence(tokenless)
+    resolution = result.resolution_for(ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"malformed-support"}
+
+
+@pytest.mark.parametrize(
+    "instruction_offset_within_range",
+    [
+        pytest.param(True, id="boolean"),
+        pytest.param("0", id="non-integer"),
+        pytest.param(-4, id="negative"),
+        pytest.param(2, id="unaligned"),
+        pytest.param(8, id="outside-eight-byte-range"),
+        pytest.param(4, id="absolute-anchor-mismatch"),
+    ],
+)
+def test_persisted_instruction_offset_is_revalidated_at_owner_boundary(
+    instruction_offset_within_range,
+):
+    evidence = complete_evidence(
+        pcode_result=_pcode_result(
+            code_range_end=0x23C,
+            instruction_offset_within_range=0,
+        )
+    )
+    pcode = next(node for node in evidence.nodes if node.kind == "retail-pcode")
+    code_range = pcode.attributes["code_ranges"][0]
+    mapping = code_range["machine_operand_mappings"][0]
+    changed_mapping = MappingProxyType(
+        {
+            **mapping,
+            "instruction_offset_within_range": instruction_offset_within_range,
+        }
+    )
+    changed_range = MappingProxyType(
+        {
+            **code_range,
+            "machine_operand_mappings": (changed_mapping,),
+        }
+    )
+    changed = pcode.with_attributes(
+        {
+            **pcode.attributes,
+            "code_ranges": (changed_range,),
+        }
+    )
+    tokenless = replace_record(evidence, changed)
+
+    result = owner_certificate.validate_owner_evidence(tokenless)
+    resolution = result.resolution_for(ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"malformed-support"}
+
+
+@pytest.mark.parametrize(
+    ("bound", "value"),
+    [
+        pytest.param("start", 564.0, id="float-start"),
+        pytest.param("end_exclusive", 568.0, id="float-end"),
+    ],
+)
+def test_persisted_float_code_range_bound_never_certifies(bound, value):
+    evidence = complete_evidence()
+    pcode = next(node for node in evidence.nodes if node.kind == "retail-pcode")
+    code_range = pcode.attributes["code_ranges"][0]
+    changed_range = MappingProxyType(
+        {
+            **code_range,
+            bound: value,
+        }
+    )
+    changed = pcode.with_attributes(
+        {
+            **pcode.attributes,
+            "code_ranges": (changed_range,),
+        }
+    )
+    tokenless = replace_record(evidence, changed)
+
+    result = owner_certificate.validate_owner_evidence(tokenless)
+    resolution = result.resolution_for(ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.certificate_record_ids == ()
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"malformed-support"}
 
 
 def test_split_physical_assignment_never_certifies():

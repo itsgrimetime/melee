@@ -570,6 +570,43 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _validated_instruction_anchor(
+    range_start: object,
+    range_end: object,
+    instruction_offset: object,
+) -> int | None:
+    if not (
+        _is_int(range_start)
+        and _is_int(range_end)
+        and _is_int(instruction_offset)
+        and 0 <= range_start < range_end
+        and 0 <= instruction_offset
+        and instruction_offset % 4 == 0
+        and instruction_offset + 4 <= range_end - range_start
+    ):
+        return None
+    return range_start + instruction_offset
+
+
+def _raw_mapping_matches_supported_anchor(
+    code_range: Mapping[str, object],
+    mapping: Mapping[str, object],
+    supported_start: object,
+    supported_end: object,
+    absolute_anchor: object,
+) -> bool:
+    raw_start = code_range.get("start")
+    raw_end = code_range.get("end_exclusive")
+    if not (_is_int(raw_start) and _is_int(raw_end)):
+        return False
+    mapping_anchor = _validated_instruction_anchor(
+        raw_start,
+        raw_end,
+        mapping.get("instruction_offset_within_range"),
+    )
+    return raw_start == supported_start and raw_end == supported_end and mapping_anchor == absolute_anchor
+
+
 def _is_physical(value: object) -> bool:
     return _is_int(value) and 0 <= value <= 31
 
@@ -1314,16 +1351,23 @@ def _validate_emission(
     offset = candidate.anchor.attributes.get("code_offset")
     operand_key = candidate.anchor.attributes.get("machine_operand_key")
     lineage_id = candidate.lineage.attributes.get("operand_lineage_id")
+    range_start = code_range.attributes.get("start")
+    range_end = code_range.attributes.get("end_exclusive")
     mappings = tuple(
         mapping
         for item in candidate.pcode.attributes.get("code_ranges", ())
         if isinstance(item, Mapping)
-        and item.get("start") == offset
-        and item.get("end_exclusive") == code_range.attributes.get("end_exclusive")
         for mapping in item.get("machine_operand_mappings", ())
         if isinstance(mapping, Mapping)
         and mapping.get("machine_operand_key") == operand_key
         and mapping.get("operand_lineage_id") == lineage_id
+        and _raw_mapping_matches_supported_anchor(
+            item,
+            mapping,
+            range_start,
+            range_end,
+            offset,
+        )
     )
     values = (
         candidate.anchor.attributes.get("physical_register"),
@@ -1337,11 +1381,14 @@ def _validate_emission(
             or item.attributes.get("allocation_generation") != allocation_generation
             for item in (generation, code_range, emission, direct_lineage)
         )
-        or code_range.attributes.get("start") != offset
         or not (
             _is_int(offset)
-            and _is_int(code_range.attributes.get("end_exclusive"))
-            and offset < code_range.attributes["end_exclusive"]
+            and _validated_instruction_anchor(
+                range_start,
+                range_end,
+                mappings[0].get("instruction_offset_within_range"),
+            )
+            == offset
         )
         or emission.attributes.get("code_offset") != offset
         or emission.attributes.get("machine_operand_key") != operand_key

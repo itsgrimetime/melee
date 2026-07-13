@@ -590,6 +590,7 @@ def _evidence_from_paths(
                                 emission_pcode_operand_index=index,
                                 operand_lineage_id=path["lineage_id"],
                                 physical_register=path["emission_physical"],
+                                instruction_offset_within_range=0,
                             )
                             for index, path in enumerate(offset_paths, start=1)
                         ),

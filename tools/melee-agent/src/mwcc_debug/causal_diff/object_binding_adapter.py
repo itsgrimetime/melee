@@ -49,6 +49,26 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _validated_instruction_anchor(
+    code_range: Mapping[str, object],
+    mapping: Mapping[str, object],
+) -> int | None:
+    start = code_range.get("start")
+    end_exclusive = code_range.get("end_exclusive")
+    instruction_offset = mapping.get("instruction_offset_within_range")
+    if not (
+        _is_int(start)
+        and _is_int(end_exclusive)
+        and _is_int(instruction_offset)
+        and 0 <= start < end_exclusive
+        and 0 <= instruction_offset
+        and instruction_offset % 4 == 0
+        and instruction_offset + 4 <= end_exclusive - start
+    ):
+        return None
+    return start + instruction_offset
+
+
 def _is_physical(value: object) -> bool:
     return _is_int(value) and 0 <= value <= 31
 
@@ -268,7 +288,7 @@ def emit_object_binding_evidence(
     by_lineage: dict[str, EvidenceNode] = {}
     by_virtual: dict[tuple[int, int], EvidenceNode] = {}
     pcode_generation_support: dict[str, EvidenceNode] = {}
-    pcode_range_support: dict[tuple[str, int], EvidenceNode] = {}
+    pcode_range_support: dict[tuple[str, str, int, str], EvidenceNode] = {}
     emission_support: dict[tuple[str, str, int, str], tuple[EvidenceNode, ...]] = {}
     rewrite_support: dict[tuple[object, ...], EvidenceNode] = {}
     lineage_support: dict[str, list[EvidenceNode]] = {}
@@ -436,18 +456,20 @@ def emit_object_binding_evidence(
                         "end_exclusive": code_range.get("end_exclusive"),
                     },
                 )
-                if range_support is not None and isinstance(code_range.get("start"), int):
-                    pcode_range_support[(pcode_id, code_range["start"])] = range_support
                 for mapping_index, mapping in enumerate(_rows(code_range.get("machine_operand_mappings"))):
                     operand_key = mapping.get("machine_operand_key")
                     lineage_id = mapping.get("operand_lineage_id")
-                    offset = code_range.get("start")
-                    if (
-                        not isinstance(operand_key, str)
-                        or not isinstance(lineage_id, str)
-                        or not isinstance(offset, int)
-                    ):
+                    absolute_anchor = _validated_instruction_anchor(code_range, mapping)
+                    if not isinstance(operand_key, str) or not isinstance(lineage_id, str) or absolute_anchor is None:
                         continue
+                    support_key = (
+                        pcode_id,
+                        lineage_id,
+                        absolute_anchor,
+                        operand_key,
+                    )
+                    if range_support is not None:
+                        pcode_range_support[support_key] = range_support
                     emission = support_node(
                         _PCODE_RANGE,
                         "pcode-emission",
@@ -455,7 +477,7 @@ def emit_object_binding_evidence(
                         {
                             "pcode_id": pcode_id,
                             "allocation_generation": row.get("allocation_generation"),
-                            "code_offset": offset,
+                            "code_offset": absolute_anchor,
                             "machine_operand_key": operand_key,
                             "operand_lineage_id": lineage_id,
                             "physical_register": mapping.get("physical_register"),
@@ -469,13 +491,13 @@ def emit_object_binding_evidence(
                         {
                             "pcode_id": pcode_id,
                             "allocation_generation": row.get("allocation_generation"),
-                            "code_offset": offset,
+                            "code_offset": absolute_anchor,
                             "operand_lineage_id": lineage_id,
                             "event_kind": "emission-lineage",
                         },
                         Confidence.DERIVED_UNIQUE,
                     )
-                    emission_support[(pcode_id, lineage_id, offset, operand_key)] = tuple(
+                    emission_support[support_key] = tuple(
                         item for item in (emission, direct_lineage) if item is not None
                     )
             node = _node(
@@ -534,6 +556,12 @@ def emit_object_binding_evidence(
             lineage = by_lineage.get(binding.operand_lineage_id)
             if pcode is None or lineage is None:
                 continue
+            support_key = (
+                binding.pcode_id,
+                binding.operand_lineage_id,
+                offset,
+                operand_key,
+            )
             anchor = _node(
                 source,
                 kind="assembly-operand-anchor",
@@ -549,17 +577,9 @@ def emit_object_binding_evidence(
                 support=tuple(
                     item
                     for item in (
-                        pcode_range_support.get((binding.pcode_id, offset)),
+                        pcode_range_support.get(support_key),
                         pcode_generation_support.get(binding.pcode_id),
-                        *emission_support.get(
-                            (
-                                binding.pcode_id,
-                                binding.operand_lineage_id,
-                                offset,
-                                operand_key,
-                            ),
-                            (),
-                        ),
+                        *emission_support.get(support_key, ()),
                     )
                     if item is not None
                 ),
@@ -582,17 +602,9 @@ def emit_object_binding_evidence(
                     support=tuple(
                         item
                         for item in (
-                            pcode_range_support.get((binding.pcode_id, offset)),
+                            pcode_range_support.get(support_key),
                             pcode_generation_support.get(binding.pcode_id),
-                            *emission_support.get(
-                                (
-                                    binding.pcode_id,
-                                    binding.operand_lineage_id,
-                                    offset,
-                                    operand_key,
-                                ),
-                                (),
-                            ),
+                            *emission_support.get(support_key, ()),
                         )
                         if item is not None
                     ),
@@ -612,15 +624,7 @@ def emit_object_binding_evidence(
                         "code_offset": offset,
                         "machine_operand_key": operand_key,
                     },
-                    support=emission_support.get(
-                        (
-                            binding.pcode_id,
-                            binding.operand_lineage_id,
-                            offset,
-                            operand_key,
-                        ),
-                        (),
-                    ),
+                    support=emission_support.get(support_key, ()),
                 )
             )
             virtual_key = (binding.class_id, binding.virtual)
