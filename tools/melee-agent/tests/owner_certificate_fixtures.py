@@ -304,9 +304,7 @@ def _evidence_from_paths(
                         _mapping(
                             **{
                                 **dict(group),
-                                "operands": tuple(
-                                    reversed(tuple(group["operands"]))
-                                ),
+                                "operands": tuple(reversed(tuple(group["operands"]))),
                             }
                         )
                         for group in event["inputs"]
@@ -376,9 +374,7 @@ def evidence_with_mutation_parent_override(
         and node.attributes.get("support_kind") == "pcode-lineage-event"
         and "event_index" in node.attributes
     )
-    changed = lineage_support.with_attributes(
-        {**lineage_support.attributes, "parent_lineage_ids": parents}
-    )
+    changed = lineage_support.with_attributes({**lineage_support.attributes, "parent_lineage_ids": parents})
     # Public emission creates one coherent event. The proof-incapable persistence
     # seam then changes only the named parent fact; no competing event is added.
     return replace_record(evidence, changed)
@@ -401,9 +397,7 @@ def evidence_with_lineage_variant(variant: str) -> ObjectBindingEvidence:
     }.get(variant, (None, None))
     if field is None:
         raise ValueError(f"unknown lineage variant: {variant}")
-    changed = lineage_support.with_attributes(
-        {**lineage_support.attributes, field: value}
-    )
+    changed = lineage_support.with_attributes({**lineage_support.attributes, field: value})
     # Corrupt exactly one field of the sole publicly emitted mutation event.
     return replace_record(evidence, changed)
 
@@ -568,8 +562,7 @@ def support(evidence: ObjectBindingEvidence, support_kind: str) -> EvidenceNode:
     return only(
         node
         for node in evidence.nodes
-        if node.kind == "backend-support-record"
-        and node.attributes.get("support_kind") == support_kind
+        if node.kind == "backend-support-record" and node.attributes.get("support_kind") == support_kind
     )
 
 

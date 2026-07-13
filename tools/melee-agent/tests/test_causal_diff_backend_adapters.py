@@ -10,6 +10,7 @@ from typing import Callable
 
 import pytest
 
+from src.mwcc_debug.causal_diff import backend_adapter
 from src.mwcc_debug.causal_diff.asm_adapter import adapt_checkdiff
 from src.mwcc_debug.causal_diff.backend_adapter import _confidence, _operand_roles, adapt_backends
 from src.mwcc_debug.causal_diff.bundles import (
@@ -313,6 +314,26 @@ def test_backend_adds_certificate_and_all_inputs_in_one_adapter_result(
     assert set(certificate.provenance.input_record_ids) <= {
         record.record_id for record in (*backend.result.nodes, *backend.result.edges)
     }
+
+
+def test_backend_builds_owner_certificates_exactly_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    build = backend_adapter.build_owner_certificates
+
+    def counted_build(evidence):
+        nonlocal calls
+        calls += 1
+        return build(evidence)
+
+    monkeypatch.setattr(backend_adapter, "build_owner_certificates", counted_build)
+
+    backend = future_complete_backend(tmp_path, monkeypatch)
+
+    assert backend.owner_certificates.certificate_nodes
+    assert calls == 1
 
 
 def test_pcdump_role_chain_records_are_diagnostic(

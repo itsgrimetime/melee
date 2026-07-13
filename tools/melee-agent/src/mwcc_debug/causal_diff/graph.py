@@ -50,6 +50,141 @@ class _Signature:
     scope_path: tuple[str, ...] = ()
 
 
+def _destination_dependency_closure(
+    store: EvidenceStore,
+    root_ids: Iterable[str],
+) -> tuple[tuple[EvidenceNode, ...], tuple[EvidenceEdge, ...]]:
+    """Load destination records and every record needed to validate them."""
+
+    nodes: dict[str, EvidenceNode] = {}
+    edges: dict[str, EvidenceEdge] = {}
+    pending = [(record_id, False) for record_id in sorted(set(root_ids))]
+    checked: set[tuple[str, bool]] = set()
+
+    while pending:
+        record_id, required = pending.pop()
+        check = (record_id, required)
+        if check in checked:
+            continue
+        checked.add(check)
+
+        node = store.get_node(record_id)
+        edge = store.get_edge(record_id)
+        if node is None and edge is None:
+            if required:
+                raise ValueError(f"destination dependency record not found: {record_id}")
+            continue
+
+        records: tuple[EvidenceNode | EvidenceEdge, ...] = tuple(
+            record for record in (node, edge) if record is not None
+        )
+        if node is not None:
+            nodes[node.record_id] = node
+        if edge is not None:
+            edges[edge.record_id] = edge
+        for record in records:
+            dependency_ids = set(record.provenance.input_record_ids)
+            if isinstance(record, EvidenceEdge):
+                dependency_ids.update((record.source_id, record.target_id))
+            pending.extend((dependency_id, True) for dependency_id in sorted(dependency_ids))
+
+    return (
+        tuple(nodes[record_id] for record_id in sorted(nodes)),
+        tuple(edges[record_id] for record_id in sorted(edges)),
+    )
+
+
+def _preflight_contains(store: InMemoryEvidenceStore, record_id: str) -> bool:
+    return store.get_node(record_id) is not None or store.get_edge(record_id) is not None
+
+
+def _ready_nodes(
+    preflight: InMemoryEvidenceStore,
+    nodes: Mapping[str, EvidenceNode],
+    edges: Mapping[str, EvidenceEdge],
+) -> tuple[EvidenceNode, ...]:
+    ready = set(nodes)
+    while True:
+        blocked = {
+            record_id
+            for record_id in ready
+            if any(
+                dependency_id in edges
+                or dependency_id in nodes
+                and dependency_id not in ready
+                or dependency_id not in nodes
+                and not _preflight_contains(preflight, dependency_id)
+                for dependency_id in nodes[record_id].provenance.input_record_ids
+            )
+        }
+        if not blocked:
+            return tuple(nodes[record_id] for record_id in sorted(ready))
+        remaining = ready - blocked
+        if remaining == ready:
+            return ()
+        ready = remaining
+
+
+def _ready_edges(
+    preflight: InMemoryEvidenceStore,
+    nodes: Mapping[str, EvidenceNode],
+    edges: Mapping[str, EvidenceEdge],
+) -> tuple[EvidenceEdge, ...]:
+    ready = set(edges)
+    while True:
+        blocked = set()
+        for record_id in ready:
+            edge = edges[record_id]
+            endpoints_ready = all(
+                preflight.get_node(endpoint) is not None for endpoint in (edge.source_id, edge.target_id)
+            )
+            provenance_ready = all(
+                dependency_id not in nodes
+                and (
+                    dependency_id in ready
+                    or dependency_id not in edges
+                    and _preflight_contains(preflight, dependency_id)
+                )
+                for dependency_id in edge.provenance.input_record_ids
+            )
+            if not endpoints_ready or not provenance_ready:
+                blocked.add(record_id)
+        if not blocked:
+            return tuple(edges[record_id] for record_id in sorted(ready))
+        remaining = ready - blocked
+        if remaining == ready:
+            return ()
+        ready = remaining
+
+
+def _seed_destination_closure(
+    preflight: InMemoryEvidenceStore,
+    nodes: Iterable[EvidenceNode],
+    edges: Iterable[EvidenceEdge],
+) -> None:
+    pending_nodes = {node.record_id: node for node in nodes}
+    pending_edges = {edge.record_id: edge for edge in edges}
+
+    while pending_nodes or pending_edges:
+        progressed = False
+        node_batch = _ready_nodes(preflight, pending_nodes, pending_edges)
+        if node_batch:
+            preflight.add_nodes(node_batch)
+            for node in node_batch:
+                pending_nodes.pop(node.record_id)
+            progressed = True
+
+        edge_batch = _ready_edges(preflight, pending_nodes, pending_edges)
+        if edge_batch:
+            preflight.add_edges(edge_batch)
+            for edge in edge_batch:
+                pending_edges.pop(edge.record_id)
+            progressed = True
+
+        if not progressed:
+            raise ValueError("destination dependency closure cannot be preflighted")
+
+
 def add_adapter_results_atomically(store: EvidenceStore, results: Iterable[AdapterResult]) -> None:
     """Preflight a batch, then ingest diagnostics, edges, and certificates."""
 
@@ -58,30 +193,24 @@ def add_adapter_results_atomically(store: EvidenceStore, results: Iterable[Adapt
     diagnostic_nodes = tuple(node for node in nodes if node.kind != "owner-proof-certificate")
     certificate_nodes = tuple(node for node in nodes if node.kind == "owner-proof-certificate")
     edges = tuple(edge for result in normalized for edge in result.edges)
+    if not nodes and not edges:
+        return
 
     preflight = InMemoryEvidenceStore()
     referenced_ids = {record_id for record in (*nodes, *edges) for record_id in record.provenance.input_record_ids}
     referenced_ids.update(endpoint for edge in edges for endpoint in (edge.source_id, edge.target_id))
-    external_nodes = tuple(
-        record for record_id in sorted(referenced_ids) if (record := store.get_node(record_id)) is not None
-    )
-    external_edges = tuple(
-        record for record_id in sorted(referenced_ids) if (record := store.get_edge(record_id)) is not None
-    )
+    referenced_ids.update(record.record_id for record in (*nodes, *edges))
+    external_nodes, external_edges = _destination_dependency_closure(store, referenced_ids)
     batch_ids = {record.record_id for record in (*nodes, *edges)}
     for certificate in certificate_nodes:
         for record_id in certificate.provenance.input_record_ids:
             if record_id not in batch_ids and store.get_node(record_id) is None and store.get_edge(record_id) is None:
                 raise ValueError(f"provenance input record not found: {record_id}")
 
-    preflight.add_nodes((*external_nodes, *diagnostic_nodes))
-    preflight.add_edges((*external_edges, *edges))
+    _seed_destination_closure(preflight, external_nodes, external_edges)
+    preflight.add_nodes(diagnostic_nodes)
+    preflight.add_edges(edges)
     preflight.add_nodes(certificate_nodes)
-
-    for record in (*nodes, *edges):
-        existing = store.get_node(record.record_id) or store.get_edge(record.record_id)
-        if existing is not None and existing != record:
-            raise ValueError(f"record ID collision: {record.record_id}")
 
     store.add_nodes(diagnostic_nodes)
     store.add_edges(edges)

@@ -37,6 +37,17 @@ class _RecordingEvidenceStore(InMemoryEvidenceStore):
         super().add_edges(batch)
 
 
+class _IncompleteDependencyStore(_RecordingEvidenceStore):
+    def __init__(self, edge: EvidenceEdge) -> None:
+        super().__init__()
+        self._external_edge = edge
+
+    def get_edge(self, record_id: str) -> EvidenceEdge | None:
+        if record_id == self._external_edge.record_id:
+            return self._external_edge
+        return super().get_edge(record_id)
+
+
 def _prov(*, input_record_ids: tuple[str, ...] = ()) -> Provenance:
     return Provenance(
         artifact_sha256="a" * 64,
@@ -59,6 +70,25 @@ def _node(compile_id: str, local_key: str, role_key: str) -> EvidenceNode:
         adapter_confidence=Confidence.OBSERVED,
         provenance=_prov(),
         attributes={"virtual": int(local_key)},
+    )
+
+
+def _certificate(
+    local_key: str,
+    *inputs: EvidenceNode | EvidenceEdge,
+    attributes: dict[str, object] | None = None,
+) -> EvidenceNode:
+    return EvidenceNode.create(
+        compile_id="compile-a",
+        function="fn_test",
+        kind="owner-proof-certificate",
+        local_key=local_key,
+        role_key="row-counter",
+        producer_confidence=Confidence.DERIVED_UNIQUE,
+        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        provenance=_prov(input_record_ids=tuple(record.record_id for record in inputs)),
+        input_confidences=tuple(record.confidence for record in inputs),
+        attributes={} if attributes is None else attributes,
     )
 
 
@@ -247,6 +277,211 @@ def test_atomic_ingestion_leaves_destination_unchanged_on_bad_edge() -> None:
     assert store.batches == []
     assert store.find_nodes(source.compile_id) == ()
     assert store.find_edges(source.compile_id) == ()
+
+
+@pytest.mark.parametrize("results", ((), (AdapterResult(),)))
+def test_atomic_ingestion_empty_results_is_call_level_no_op(
+    results: tuple[AdapterResult, ...],
+) -> None:
+    store = _RecordingEvidenceStore()
+
+    add_adapter_results_atomically(store, results)
+
+    assert store.batches == []
+
+
+def test_atomic_ingestion_is_idempotent_for_repeated_adapter_result(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    backend = future_complete_backend(tmp_path, monkeypatch)
+    store = _RecordingEvidenceStore()
+    add_adapter_results_atomically(store, (backend.result,))
+    before_nodes = store.find_nodes(backend.result.nodes[0].compile_id)
+    before_edges = store.find_edges(backend.result.nodes[0].compile_id)
+    store.batches.clear()
+
+    add_adapter_results_atomically(store, (backend.result,))
+
+    assert store.find_nodes(backend.result.nodes[0].compile_id) == before_nodes
+    assert store.find_edges(backend.result.nodes[0].compile_id) == before_edges
+
+
+def test_certificate_only_batch_resolves_recursive_destination_node_dependencies() -> None:
+    base = _node("compile-a", "66", "row-counter")
+    derived = EvidenceNode.create(
+        compile_id="compile-a",
+        function="fn_test",
+        kind="virtual-register",
+        local_key="67",
+        role_key="row-count",
+        producer_confidence=Confidence.DERIVED_UNIQUE,
+        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        provenance=_prov(input_record_ids=(base.record_id,)),
+        input_confidences=(base.confidence,),
+        attributes={"virtual": 67},
+    )
+    certificate = _certificate("resident-node", derived)
+    store = _RecordingEvidenceStore()
+    store.add_nodes((base,))
+    store.add_nodes((derived,))
+    store.batches.clear()
+
+    add_adapter_results_atomically(
+        store,
+        (AdapterResult(nodes=(certificate,)),),
+    )
+
+    assert store.batches == [("nodes", ()), ("edges", ()), ("nodes", (certificate.record_id,))]
+    assert store.get_node(certificate.record_id) == certificate
+
+
+def test_certificate_only_batch_resolves_destination_edge_and_endpoints() -> None:
+    source = _node("compile-a", "66", "row-counter")
+    target = _node("compile-a", "67", "row-count")
+    edge = EvidenceEdge.create(
+        compile_id="compile-a",
+        function="fn_test",
+        kind="lowers-to",
+        source_id=source.record_id,
+        target_id=target.record_id,
+        occurrence_ordinal=0,
+        producer_confidence=Confidence.DERIVED_UNIQUE,
+        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        provenance=_prov(input_record_ids=(source.record_id, target.record_id)),
+        input_confidences=(source.confidence, target.confidence),
+        attributes={},
+    )
+    certificate = _certificate("resident-edge", edge)
+    store = _RecordingEvidenceStore()
+    store.add_nodes((source, target))
+    store.add_edges((edge,))
+    store.batches.clear()
+
+    add_adapter_results_atomically(
+        store,
+        (AdapterResult(nodes=(certificate,)),),
+    )
+
+    assert store.batches == [("nodes", ()), ("edges", ()), ("nodes", (certificate.record_id,))]
+    assert store.get_node(certificate.record_id) == certificate
+
+
+def test_missing_destination_dependency_closure_makes_zero_destination_calls() -> None:
+    source = _node("compile-a", "66", "row-counter")
+    target = _node("compile-a", "67", "row-count")
+    edge = EvidenceEdge.create(
+        compile_id="compile-a",
+        function="fn_test",
+        kind="lowers-to",
+        source_id=source.record_id,
+        target_id=target.record_id,
+        occurrence_ordinal=0,
+        producer_confidence=Confidence.DERIVED_UNIQUE,
+        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        provenance=_prov(),
+        attributes={},
+    )
+    certificate = _certificate("incomplete-resident-edge", edge)
+    store = _IncompleteDependencyStore(edge)
+
+    with pytest.raises(ValueError, match="destination dependency record not found"):
+        add_adapter_results_atomically(
+            store,
+            (AdapterResult(nodes=(certificate,)),),
+        )
+
+    assert store.batches == []
+    assert store.find_nodes(certificate.compile_id) == ()
+    assert store.find_edges(certificate.compile_id) == ()
+
+
+def test_canonical_collision_hidden_by_python_equality_is_preflight_atomic() -> None:
+    certificate = _certificate("canonical-collision", attributes={"marker": 1})
+    equality_hidden_collision = certificate.with_attributes({"marker": True})
+    assert equality_hidden_collision == certificate
+    diagnostic = _node("compile-a", "68", "new-diagnostic")
+    store = _RecordingEvidenceStore()
+    store.add_nodes((equality_hidden_collision,))
+    before_nodes = store.find_nodes(certificate.compile_id)
+    store.batches.clear()
+
+    with pytest.raises(ValueError, match="record ID collision"):
+        add_adapter_results_atomically(
+            store,
+            (AdapterResult(nodes=(diagnostic, certificate)),),
+        )
+
+    assert store.batches == []
+    assert store.find_nodes(certificate.compile_id) == before_nodes
+    assert store.get_node(diagnostic.record_id) is None
+
+
+def test_atomic_cross_category_collision_makes_zero_destination_calls() -> None:
+    collision = _node("compile-a", "99", "collision")
+    source = _node("compile-a", "66", "row-counter")
+    target = _node("compile-a", "67", "row-count")
+    edge = EvidenceEdge.create(
+        compile_id="compile-a",
+        function="fn_test",
+        kind="lowers-to",
+        source_id=source.record_id,
+        target_id=target.record_id,
+        occurrence_ordinal=0,
+        producer_confidence=Confidence.DERIVED_UNIQUE,
+        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        provenance=_prov(),
+        attributes={},
+    )
+    colliding_edge = replace(edge, record_id=collision.record_id)
+    store = _RecordingEvidenceStore()
+    store.add_nodes((collision,))
+    before_nodes = store.find_nodes(collision.compile_id)
+    store.batches.clear()
+
+    with pytest.raises(ValueError, match="record ID collision"):
+        add_adapter_results_atomically(
+            store,
+            (AdapterResult(nodes=(source, target), edges=(colliding_edge,)),),
+        )
+
+    assert store.batches == []
+    assert store.find_nodes(collision.compile_id) == before_nodes
+    assert store.find_edges(collision.compile_id) == ()
+
+
+def test_atomic_reverse_cross_category_collision_makes_zero_destination_calls() -> None:
+    source = _node("compile-a", "66", "row-counter")
+    target = _node("compile-a", "67", "row-count")
+    edge = EvidenceEdge.create(
+        compile_id="compile-a",
+        function="fn_test",
+        kind="lowers-to",
+        source_id=source.record_id,
+        target_id=target.record_id,
+        occurrence_ordinal=0,
+        producer_confidence=Confidence.DERIVED_UNIQUE,
+        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        provenance=_prov(),
+        attributes={},
+    )
+    colliding_node = replace(_node("compile-a", "99", "collision"), record_id=edge.record_id)
+    store = _RecordingEvidenceStore()
+    store.add_nodes((source, target))
+    store.add_edges((edge,))
+    before_nodes = store.find_nodes(source.compile_id)
+    before_edges = store.find_edges(source.compile_id)
+    store.batches.clear()
+
+    with pytest.raises(ValueError, match="record ID collision"):
+        add_adapter_results_atomically(
+            store,
+            (AdapterResult(nodes=(colliding_node,)),),
+        )
+
+    assert store.batches == []
+    assert store.find_nodes(source.compile_id) == before_nodes
+    assert store.find_edges(source.compile_id) == before_edges
 
 
 def test_record_id_collisions_are_rejected_across_record_categories() -> None:
