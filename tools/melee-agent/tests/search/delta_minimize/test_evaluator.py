@@ -1822,14 +1822,92 @@ def test_inspector_timeout_is_run_level_incomplete_and_not_cached(tmp_path: Path
     def timeout(*_args, **_kwargs):
         raise subprocess.TimeoutExpired("inspect", 7)
 
-    with pytest.raises(DeltaMinimizeError, match="inspector-timeout"):
+    with pytest.raises(DeltaMinimizeError, match="inspector-timeout") as exc_info:
         capture_candidate(
             candidate,
             _config(tmp_path),
             backends=EvaluationBackends(lambda _rows, _config: [_score_row(candidate, pcdump)], timeout),
             store=store,
         )
+    assert exc_info.value.reason == "inspector-timeout"
     assert store.load_evidence(store.evidence_key(candidate, _config(tmp_path))) is None
+
+
+def test_inspector_timeout_never_recovers_complete_final_output(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path)
+    pcdump = tmp_path / "candidate.pcdump"
+    pcdump.write_text("pcdump", encoding="utf-8")
+    store = _store(tmp_path)
+
+    def timeout_after_write(_source, _function, output, **_kwargs):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            f"FUNCTION: {FUNCTION}\nFrontend: OBJOBJECTS\n"
+            "ObjObject @ 0x10\n  Kind: DLOCAL\n  Name: late\n"
+            f"  Type: int\n  Scope: {FUNCTION}\n  Expression: late\n"
+            "Compilation finished.\n",
+            encoding="utf-8",
+        )
+        raise subprocess.TimeoutExpired("inspect", 7)
+
+    config = _config(tmp_path)
+    with pytest.raises(DeltaMinimizeError, match="^inspector-timeout$"):
+        capture_candidate(
+            candidate,
+            config,
+            backends=EvaluationBackends(
+                lambda _rows, _config: [_score_row(candidate, pcdump)],
+                timeout_after_write,
+            ),
+            store=store,
+        )
+
+    assert store.load_evidence(store.evidence_key(candidate, config)) is None
+
+
+@pytest.mark.parametrize(
+    "staging_text",
+    [
+        "FUNCTION: partial\n",
+        (
+            f"FUNCTION: {FUNCTION}\nFrontend: OBJOBJECTS\n"
+            "ObjObject @ 0x10\n  Kind: DLOCAL\n  Name: unpromoted\n"
+            f"  Type: int\n  Scope: {FUNCTION}\n  Expression: unpromoted\n"
+            "Compilation finished.\n"
+        ),
+    ],
+    ids=["partial", "complete-looking"],
+)
+def test_inspector_failure_never_recovers_unpromoted_staging_output(
+    tmp_path: Path,
+    staging_text: str,
+) -> None:
+    candidate = _candidate(tmp_path)
+    pcdump = tmp_path / "candidate.pcdump"
+    pcdump.write_text("pcdump", encoding="utf-8")
+    store = _store(tmp_path)
+
+    def failed_with_staging(_source, _function, output, **_kwargs):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.with_name(f"{output.name}.stage.invocation-a").write_text(
+            staging_text,
+            encoding="utf-8",
+        )
+        raise DeltaMinimizeError("inspector-failed")
+
+    config = _config(tmp_path)
+    with pytest.raises(DeltaMinimizeError, match="^inspector-failed$"):
+        capture_candidate(
+            candidate,
+            config,
+            backends=EvaluationBackends(
+                lambda _rows, _config: [_score_row(candidate, pcdump)],
+                failed_with_staging,
+            ),
+            store=store,
+        )
+
+    assert store.load_evidence(store.evidence_key(candidate, config)) is None
 
 
 def test_inspector_compile_error_is_run_level_and_retried(

@@ -1,6 +1,7 @@
 """Tests for source input resolution used by debug inspect diff."""
 from __future__ import annotations
 
+import re
 import signal
 import subprocess
 import sys
@@ -15,10 +16,10 @@ import src.mwcc_debug.diff_capture as diff_capture
 from src.mwcc_debug.diff_capture import (
     CompileFailure,
     DiffInput,
+    _run_with_process_group_timeout,
     compile_source_variant,
     read_inspect_input_if_available,
     resolve_diff_input,
-    _run_with_process_group_timeout,
 )
 
 
@@ -637,13 +638,17 @@ def test_read_inspect_runs_workflow_for_candidate_source(
     assert text is not None
     assert "FUNCTION: fn_test" in text
     cmd = captured["cmd"]
-    assert cmd[:4] == ["tools/workflow/mwcc-inspect.sh", "--function", "fn_test", "--output"]
+    assert cmd[0] == "tools/workflow/mwcc-inspect.sh"
+    assert re.fullmatch(r"inspect-[0-9a-f]{24}", cmd[cmd.index("--invocation-id") + 1])
+    assert 0 < float(cmd[cmd.index("--deadline-seconds") + 1]) <= 45
+    assert cmd[cmd.index("--function") + 1] == "fn_test"
     assert cmd[-1] == str(candidate)
     out_path = Path(cmd[cmd.index("--output") + 1])
     assert out_path.parent == repo / "build" / "mwcc_inspect" / "candidates"
-    assert out_path.name.startswith("b-candidate-")
+    assert out_path.name.startswith(".b-candidate-")
+    assert ".result.inspect-" in out_path.name
     assert captured["cwd"] == repo
-    assert captured["timeout"] == 45
+    assert 0 < captured["timeout"] <= 45
 
 
 def test_read_inspect_honors_caller_output_path(
@@ -680,7 +685,72 @@ def test_read_inspect_honors_caller_output_path(
 
     assert text == "FUNCTION: fn_test\n"
     cmd = captured["cmd"]
-    assert cmd[cmd.index("--output") + 1] == str(requested_output)
+    result_path = Path(cmd[cmd.index("--output") + 1])
+    assert result_path.parent == requested_output.parent
+    assert result_path.name.startswith(f".{requested_output.name}.result.inspect-")
+    assert requested_output.read_text(encoding="utf-8") == "FUNCTION: fn_test\n"
+
+
+def test_read_inspect_concurrent_outputs_never_cross_return_or_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path
+    src = repo / "src" / "melee" / "mn" / "sample.c"
+    src.parent.mkdir(parents=True)
+    src.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    canonical = repo / "build" / "mwcc_inspect" / "sample.txt"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("baseline\n", encoding="utf-8")
+    both_started = threading.Barrier(2)
+    first_returned = threading.Event()
+    artifacts = {
+        "inspect-concurrent-a": "FUNCTION: fn_test\nA\n",
+        "inspect-concurrent-b": "FUNCTION: fn_test\nB\n",
+    }
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        invocation = cmd[cmd.index("--invocation-id") + 1]
+        both_started.wait(timeout=2)
+        if invocation.endswith("-b"):
+            assert first_returned.wait(timeout=2)
+        result_path = Path(cmd[cmd.index("--output") + 1])
+        result_path.write_text(artifacts[invocation], encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture._run_with_process_group_timeout",
+        fake_run,
+    )
+    diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
+    results: dict[str, str | None] = {}
+
+    def worker(invocation: str) -> None:
+        results[invocation] = read_inspect_input_if_available(
+            diff_input,
+            function="fn_test",
+            melee_root=repo,
+            timeout=10,
+            output_path=canonical,
+            invocation_id=invocation,
+        )
+        if invocation.endswith("-a"):
+            first_returned.set()
+
+    threads = [
+        threading.Thread(target=worker, args=("inspect-concurrent-a",)),
+        threading.Thread(target=worker, args=("inspect-concurrent-b",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+        assert not thread.is_alive()
+
+    assert results["inspect-concurrent-a"] == artifacts["inspect-concurrent-a"]
+    assert results["inspect-concurrent-b"] == artifacts["inspect-concurrent-b"]
+    assert canonical.read_text(encoding="utf-8") == artifacts["inspect-concurrent-a"]
+    assert not list(canonical.parent.glob(f".{canonical.name}.result.*"))
 
 
 def test_read_inspect_runs_workflow_for_repo_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -700,7 +770,8 @@ def test_read_inspect_runs_workflow_for_repo_source(monkeypatch: pytest.MonkeyPa
             captured["cwd"] = cwd
 
         def communicate(self, timeout: int):
-            (out_dir / "sample.txt").write_text(
+            result_path = Path(captured["cmd"][captured["cmd"].index("--output") + 1])
+            result_path.write_text(
                 "FUNCTION: fn_test\nSTATEMENTS\n  return;\n",
                 encoding="utf-8",
             )
@@ -725,14 +796,15 @@ def test_read_inspect_runs_workflow_for_repo_source(monkeypatch: pytest.MonkeyPa
 
     assert text is not None
     assert "FUNCTION: fn_test" in text
-    assert captured["cmd"] == [
-        "tools/workflow/mwcc-inspect.sh",
-        "--function",
-        "fn_test",
-        "--output",
-        str(out_dir / "sample.txt"),
-        str(src),
-    ]
+    cmd = captured["cmd"]
+    assert cmd[0] == "tools/workflow/mwcc-inspect.sh"
+    assert re.fullmatch(r"inspect-[0-9a-f]{24}", cmd[cmd.index("--invocation-id") + 1])
+    assert 0 < float(cmd[cmd.index("--deadline-seconds") + 1]) <= 30
+    assert cmd[cmd.index("--function") + 1] == "fn_test"
+    result_path = Path(cmd[cmd.index("--output") + 1])
+    assert result_path.parent == out_dir
+    assert result_path.name.startswith(".sample.txt.result.inspect-")
+    assert cmd[-1] == str(src)
     assert captured["start_new_session"] is True
 
 
@@ -787,86 +859,136 @@ def test_compile_source_variant_restores_staged_source_on_timeout(monkeypatch: p
     assert "original = 1" in real_src.read_text(encoding="utf-8")
 
 
-def test_read_inspect_returns_none_on_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_read_inspect_propagates_timeout_and_cancels_exact_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     repo = tmp_path
     src = repo / "src" / "melee" / "mn" / "sample.c"
     src.parent.mkdir(parents=True)
     src.write_text("void fn_test(void) {}\n", encoding="utf-8")
 
-    class FakeProc:
-        pid = 4321
+    calls: list[tuple[list[str], float]] = []
 
-        def communicate(self, timeout: int):
-            raise subprocess.TimeoutExpired(cmd=["tools/workflow/mwcc-inspect.sh"], timeout=timeout)
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        calls.append((cmd, timeout))
+        if "--cancel" in cmd:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
 
-        def wait(self, timeout: int):
-            return 0
-
-    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: FakeProc())
-    monkeypatch.setattr("os.killpg", lambda pgid, sig: None)
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture._run_with_process_group_timeout",
+        fake_run,
+    )
     diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
 
-    result = read_inspect_input_if_available(
-        diff_input,
-        function="fn_test",
-        melee_root=repo,
-        timeout=30,
-    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        read_inspect_input_if_available(
+            diff_input,
+            function="fn_test",
+            melee_root=repo,
+            timeout=30,
+            invocation_id="inspect-test-123",
+        )
 
-    assert result is None
-
-
-def test_read_inspect_timeout_kills_process_group(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    repo = tmp_path
-    src = repo / "src" / "melee" / "mn" / "sample.c"
-    src.parent.mkdir(parents=True)
-    src.write_text("void fn_test(void) {}\n", encoding="utf-8")
-    calls: dict[str, object] = {}
-
-    class FakeProc:
-        pid = 4321
-        returncode = None
-
-        def communicate(self, timeout: int):
-            raise subprocess.TimeoutExpired(cmd=["tools/workflow/mwcc-inspect.sh"], timeout=timeout)
-
-        def wait(self, timeout: int):
-            calls["wait_timeout"] = timeout
-            self.returncode = -signal.SIGKILL
-
-    def fake_popen(cmd, cwd, stdout, stderr, text, start_new_session, env=None):
-        calls["cmd"] = cmd
-        calls["cwd"] = cwd
-        calls["start_new_session"] = start_new_session
-        calls["env"] = env
-        return FakeProc()
-
-    def fake_killpg(pgid: int, sig: int) -> None:
-        calls["killpg"] = (pgid, sig)
-
-    monkeypatch.setattr("subprocess.Popen", fake_popen)
-    monkeypatch.setattr("os.killpg", fake_killpg)
-    diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
-
-    result = read_inspect_input_if_available(
-        diff_input,
-        function="fn_test",
-        melee_root=repo,
-        timeout=30,
-    )
-
-    assert result is None
-    assert calls["cmd"] == [
+    assert len(calls) == 2
+    run_cmd, run_timeout = calls[0]
+    assert run_cmd[:4] == [
         "tools/workflow/mwcc-inspect.sh",
-        "--function",
-        "fn_test",
-        "--output",
-        str(repo / "build" / "mwcc_inspect" / "sample.txt"),
-        str(src),
+        "--invocation-id",
+        "inspect-test-123",
+        "--deadline-seconds",
     ]
-    assert calls["start_new_session"] is True
-    assert calls["killpg"] == (4321, signal.SIGKILL)
-    assert calls["wait_timeout"] == 5
+    assert 0 < float(run_cmd[4]) <= 30
+    assert run_timeout <= 30
+    cancel_cmd, cancel_timeout = calls[1]
+    assert cancel_cmd == [
+        "tools/workflow/mwcc-inspect.sh",
+        "--cancel",
+        "inspect-test-123",
+        "--cleanup-timeout",
+        "15",
+    ]
+    assert cancel_timeout == 30
+
+
+def test_read_inspect_cleanup_failure_remains_typed_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path
+    src = repo / "src" / "melee" / "mn" / "sample.c"
+    src.parent.mkdir(parents=True)
+    src.write_text("void fn_test(void) {}\n", encoding="utf-8")
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        if "--cancel" in cmd:
+            return SimpleNamespace(
+                returncode=124,
+                stdout="",
+                stderr="remote cancellation did not finish",
+            )
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture._run_with_process_group_timeout",
+        fake_run,
+    )
+    diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        read_inspect_input_if_available(
+            diff_input,
+            function="fn_test",
+            melee_root=repo,
+            timeout=30,
+            invocation_id="inspect-test-cleanup-failure",
+        )
+
+    captured = capsys.readouterr()
+    assert "timeout cleanup failed for inspect-test-cleanup-failure" in captured.err
+    assert "remote cancellation did not finish" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr"),
+    [
+        (124, "[mwcc-inspect] timeout-status=deadline invocation=typed-timeout\n"),
+        (
+            125,
+            "taskkill failed\n"
+            "[mwcc-inspect] timeout-status=cleanup-failed invocation=typed-timeout\n",
+        ),
+    ],
+    ids=["deadline", "cleanup-failed"],
+)
+def test_read_inspect_shell_timeout_status_remains_typed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    returncode: int,
+    stderr: str,
+) -> None:
+    src = tmp_path / "src" / "melee" / "mn" / "sample.c"
+    src.parent.mkdir(parents=True)
+    src.write_text("void fn_test(void) {}\n", encoding="utf-8")
+
+    def fake_run(cmd, *, cwd, timeout, env=None):
+        return SimpleNamespace(returncode=returncode, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture._run_with_process_group_timeout",
+        fake_run,
+    )
+    diff_input = DiffInput(label="A", token=str(src), kind="source", path=src)
+    with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+        read_inspect_input_if_available(
+            diff_input,
+            function="fn_test",
+            melee_root=tmp_path,
+            timeout=30,
+            invocation_id="typed-timeout",
+        )
+    assert exc_info.value.stderr == stderr
 
 
 def test_process_group_timeout_bounds_hung_communicate(

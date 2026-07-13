@@ -2,7 +2,8 @@
 # Run mwcc-inspector on a single Melee TU on the remote Windows host.
 #
 # Usage:
-#   tools/workflow/mwcc-inspect.sh [--function fn_name] [--output out.txt] <path/to/source.c>
+#   tools/workflow/mwcc-inspect.sh [options] <path/to/source.c>
+#   tools/workflow/mwcc-inspect.sh --cancel INVOCATION_ID
 #
 # What it does:
 #   1. Chooses a remote base ref for the TU
@@ -24,7 +25,8 @@ set -euo pipefail
 
 usage() {
   printf '%s\n' \
-    "Usage: $0 [--function fn_name] [--output out.txt] <path/to/source.c>" \
+    "Usage: $0 [options] <path/to/source.c>" \
+    "       $0 --cancel INVOCATION_ID [--cleanup-timeout SECONDS]" \
     "" \
     "Inspects the MWCC compilation of a single Melee TU on the remote Windows host" \
     "and captures structured IR output (ENodes, ObjObjects, Statements)." \
@@ -32,6 +34,10 @@ usage() {
     "Options:" \
     "  -f, --function FN        Function used to resolve the TU for candidate sources" \
     "  -o, --output PATH        Local output path (default: build/mwcc_inspect/<TU>.txt)" \
+    "      --invocation-id ID   Unique safe token owning this inspector invocation" \
+    "      --deadline-seconds N Remaining monotonic budget for this invocation" \
+    "      --cancel ID          Cancel and await exactly this remote invocation" \
+    "      --cleanup-timeout N  Bounded cancellation wait (default: 5 seconds)" \
     "  -h, --help               Show this help" \
     "" \
     "Env vars:" \
@@ -47,6 +53,10 @@ usage() {
 
 FUNCTION=""
 OUT_FILE=""
+INVOCATION_ID=""
+DEADLINE_SECONDS=""
+CANCEL_ID=""
+CLEANUP_TIMEOUT="5"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -f|--function)
@@ -65,6 +75,26 @@ while [[ $# -gt 0 ]]; do
         exit 64
       fi
       OUT_FILE="$2"
+      shift 2
+      ;;
+    --invocation-id)
+      [[ $# -ge 2 ]] || { echo "ERROR: $1 requires an ID" >&2; exit 64; }
+      INVOCATION_ID="$2"
+      shift 2
+      ;;
+    --deadline-seconds)
+      [[ $# -ge 2 ]] || { echo "ERROR: $1 requires seconds" >&2; exit 64; }
+      DEADLINE_SECONDS="$2"
+      shift 2
+      ;;
+    --cancel)
+      [[ $# -ge 2 ]] || { echo "ERROR: $1 requires an ID" >&2; exit 64; }
+      CANCEL_ID="$2"
+      shift 2
+      ;;
+    --cleanup-timeout)
+      [[ $# -ge 2 ]] || { echo "ERROR: $1 requires seconds" >&2; exit 64; }
+      CLEANUP_TIMEOUT="$2"
       shift 2
       ;;
     -h|--help)
@@ -86,16 +116,129 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ $# -ne 1 ]]; then
-  usage
-  exit 64
+valid_invocation_id() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+}
+
+valid_positive_seconds() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v value="$1" 'BEGIN { exit !(value > 0) }'
+}
+
+monotonic_now() {
+  perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC \
+    -e 'printf "%.9f\n", clock_gettime(CLOCK_MONOTONIC)'
+}
+
+remaining_budget() {
+  awk -v budget="$1" -v started="$2" -v now="$(monotonic_now)" \
+    'BEGIN { remaining = budget - (now - started); if (remaining < 0) remaining = 0; printf "%.6f\n", remaining }'
+}
+
+HOST="${MWCC_INSPECT_HOST:-nzxt-local}"
+SSH_CONNECT_TIMEOUT="${MWCC_INSPECT_CONNECT_TIMEOUT:-10}"
+REMOTE_DIR="${MWCC_INSPECT_REMOTE_DIR:-/c/Users/mikes/code/melee}"
+REMOTE_CLI="${MWCC_INSPECT_CLI:-/c/Users/mikes/code/melee-decomp/mwcc-inspector-package/mwcc-inspector/MwccInspectorCLI/bin/GC 1.0 Debug/net8.0/MwccInspectorCLI.exe}"
+REMOTE_MWCCEPPC="${REMOTE_DIR}/build/compilers/GC/1.2.5n/mwcceppc.exe"
+REMOTE_BASH="${MWCC_INSPECT_REMOTE_BASH:-C:\\devkitPro\\msys2\\usr\\bin\\bash.exe}"
+REMOTE_JOB_ROOT="${REMOTE_DIR}/build/mwcc-inspect-jobs"
+LOCAL_SUPERVISOR="$(cd "$(dirname "$0")" && pwd)/mwcc-inspect-supervisor.sh"
+
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+remote_bash() {
+  ssh -o "AddressFamily=${MWCC_INSPECT_ADDRESS_FAMILY:-inet}" \
+    -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT}" "${HOST}" "${REMOTE_BASH}" -s
+}
+
+trusted_remote_supervisor() {
+  local supervisor_b64 supervisor_sha
+  supervisor_b64="$(base64 < "${LOCAL_SUPERVISOR}" | tr -d '\r\n')"
+  supervisor_sha="$(shasum -a 256 "${LOCAL_SUPERVISOR}" | awk '{print $1}')"
+  {
+    printf 'set -euo pipefail\n'
+    printf 'TRUSTED_SUPERVISOR_B64=%s\n' "$(shell_quote "${supervisor_b64}")"
+    printf 'TRUSTED_SUPERVISOR_SHA256=%s\n' "$(shell_quote "${supervisor_sha}")"
+    printf 'set --'
+    local arg
+    for arg in "$@"; do
+      printf ' %s' "$(shell_quote "${arg}")"
+    done
+    printf '\n'
+    cat <<'REMOTE_TRUSTED_SUPERVISOR'
+trusted_supervisor="$(mktemp "${TMPDIR:-/tmp}/mwcc-inspect-supervisor.XXXXXX")"
+cleanup_trusted_supervisor() { rm -f "${trusted_supervisor}"; }
+trap cleanup_trusted_supervisor EXIT HUP INT TERM
+if ! printf '%s' "${TRUSTED_SUPERVISOR_B64}" | base64 -d > "${trusted_supervisor}" 2>/dev/null; then
+  printf '%s' "${TRUSTED_SUPERVISOR_B64}" | base64 -D > "${trusted_supervisor}"
+fi
+trusted_sha="$(sha256sum "${trusted_supervisor}" | awk '{print $1}')"
+[[ "${trusted_sha}" == "${TRUSTED_SUPERVISOR_SHA256}" ]] || {
+  echo "[mwcc-inspect:remote] trusted supervisor transport hash mismatch" >&2
+  exit 125
+}
+chmod 700 "${trusted_supervisor}"
+set +e
+"${trusted_supervisor}" "$@" </dev/null
+trusted_rc=$?
+set -e
+rm -f "${trusted_supervisor}"
+trap - EXIT HUP INT TERM
+exit "${trusted_rc}"
+REMOTE_TRUSTED_SUPERVISOR
+  } | remote_bash
+}
+
+cancel_remote_job() {
+  local job_id="$1"
+  local cleanup_timeout="$2"
+  echo "[mwcc-inspect:remote] stage=cancel job=${job_id}" >&2
+  trusted_remote_supervisor cancel-stored-token \
+    --job-dir "${REMOTE_JOB_ROOT}/${job_id}" --job-id "${job_id}" \
+    --wait-seconds "${cleanup_timeout}"
+}
+
+finalize_remote_success() {
+  local job_id="$1"
+  trusted_remote_supervisor finalize-stored-token \
+    --job-dir "${REMOTE_JOB_ROOT}/${job_id}" --job-id "${job_id}"
+}
+
+if [[ -n "${CANCEL_ID}" ]]; then
+  if [[ $# -ne 0 || -n "${INVOCATION_ID}" || -n "${DEADLINE_SECONDS}" ]]; then
+    echo "ERROR: --cancel cannot be combined with a source invocation" >&2
+    exit 64
+  fi
+  if ! valid_invocation_id "${CANCEL_ID}"; then
+    echo "ERROR: invalid invocation ID: ${CANCEL_ID}" >&2
+    exit 64
+  fi
+  if ! [[ "${CLEANUP_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: --cleanup-timeout must be a positive integer" >&2
+    exit 64
+  fi
+  cancel_remote_job "${CANCEL_ID}" "${CLEANUP_TIMEOUT}"
+  exit $?
 fi
 
-SRC="$1"
-if [[ ! -f "${SRC}" ]]; then
-  echo "Source file not found: ${SRC}" >&2
-  exit 66
+if [[ $# -ne 1 ]]; then usage; exit 64; fi
+if [[ -z "${INVOCATION_ID}" ]]; then
+  INVOCATION_ID="inspect-$(openssl rand -hex 12)"
 fi
+if ! valid_invocation_id "${INVOCATION_ID}"; then
+  echo "ERROR: invalid invocation ID: ${INVOCATION_ID}" >&2
+  exit 64
+fi
+DEADLINE_SECONDS="${DEADLINE_SECONDS:-${MWCC_INSPECT_TIMEOUT:-300}}"
+if ! valid_positive_seconds "${DEADLINE_SECONDS}"; then
+  echo "ERROR: --deadline-seconds must be positive" >&2
+  exit 64
+fi
+STARTED_AT="$(monotonic_now)"
+
+SRC="$1"
+[[ -f "${SRC}" ]] || { echo "Source file not found: ${SRC}" >&2; exit 66; }
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC_ABS="$(cd "$(dirname "${SRC}")" && pwd)/$(basename "${SRC}")"
@@ -145,22 +288,6 @@ if [[ -z "${OUT_FILE}" ]]; then
     OUT_FILE="${OUT_DIR}/candidates/${CANDIDATE_STEM}-${CANDIDATE_HASH}.txt"
   fi
 fi
-
-HOST="${MWCC_INSPECT_HOST:-nzxt-local}"
-SSH_CONNECT_TIMEOUT="${MWCC_INSPECT_CONNECT_TIMEOUT:-10}"
-REMOTE_DIR="${MWCC_INSPECT_REMOTE_DIR:-/c/Users/mikes/code/melee}"
-REMOTE_CLI="${MWCC_INSPECT_CLI:-/c/Users/mikes/code/melee-decomp/mwcc-inspector-package/mwcc-inspector/MwccInspectorCLI/bin/GC 1.0 Debug/net8.0/MwccInspectorCLI.exe}"
-REMOTE_MWCCEPPC="${REMOTE_DIR}/build/compilers/GC/1.2.5n/mwcceppc.exe"
-# The remote's default ssh shell is cmd.exe; we need msys2 bash so /c/ paths work.
-REMOTE_BASH="${MWCC_INSPECT_REMOTE_BASH:-C:\\devkitPro\\msys2\\usr\\bin\\bash.exe}"
-
-shell_quote() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-}
-
-remote_bash() {
-  ssh -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT}" "${HOST}" "${REMOTE_BASH}" -s
-}
 
 # 1. Verify whether the remote can use the checked-out source, or needs upload.
 LOCAL_HEAD=$(git -C "${REPO_ROOT}" rev-parse HEAD)
@@ -217,26 +344,204 @@ if [[ "${UPLOAD_SOURCE}" == "1" ]]; then
 fi
 echo "[mwcc-inspect] Remote ref: ${REMOTE_REF}"
 
+REMOTE_JOB_DIR="${REMOTE_JOB_ROOT}/${INVOCATION_ID}"
+JOB_TOKEN="$(openssl rand -hex 32)"
 REMOTE_TMP=""
 REMOTE_SOURCE="${REL_SRC}"
 if [[ "${UPLOAD_SOURCE}" == "1" ]]; then
-  echo "[mwcc-inspect] Preparing remote candidate source..."
-  REMOTE_TMP=$(remote_bash <<REMOTE_PREP | tr -d '\r'
-set -euo pipefail
-mkdir -p $(shell_quote "${REMOTE_DIR}/build")
-mktemp -d $(shell_quote "${REMOTE_DIR}/build/mwcc-inspect-${TU_BASE}.XXXXXX")
-exit
-REMOTE_PREP
-)
-  if [[ -z "${REMOTE_TMP}" ]]; then
-    echo "[mwcc-inspect] remote candidate tempdir was empty after mktemp" >&2
-    exit 1
-  fi
-  if [[ "${REMOTE_TMP}" != /* ]]; then
-    echo "[mwcc-inspect] remote candidate tempdir was not absolute: ${REMOTE_TMP}" >&2
-    exit 1
-  fi
+  REMOTE_TMP="${REMOTE_JOB_DIR}/candidate"
   REMOTE_SOURCE="${REMOTE_TMP}/${REL_SRC}"
+fi
+
+LOCAL_STAGE="${OUT_FILE}.stage.${INVOCATION_ID}"
+LOCAL_ERR="${OUT_FILE}.stderr.${INVOCATION_ID}"
+if ! (set -o noclobber; : > "${LOCAL_STAGE}") 2>/dev/null; then
+  echo "ERROR: invocation staging path already exists for ${INVOCATION_ID}" >&2
+  exit 73
+fi
+if ! (set -o noclobber; : > "${LOCAL_ERR}") 2>/dev/null; then
+  rm -f "${LOCAL_STAGE}"
+  echo "ERROR: invocation stderr path already exists for ${INVOCATION_ID}" >&2
+  exit 73
+fi
+REMOTE_JOB_ACTIVE=0
+REMOTE_JOB_TERMINAL_SUCCESS=0
+local_cleanup() {
+  local status=$?
+  rm -f "${LOCAL_STAGE}" "${LOCAL_ERR}"
+  if [[ "${REMOTE_JOB_TERMINAL_SUCCESS}" == "1" ]]; then
+    set +e
+    finalize_remote_success "${INVOCATION_ID}" >/dev/null 2>&1
+    set -e
+  elif [[ "${REMOTE_JOB_ACTIVE}" == "1" ]]; then
+    set +e
+    cancel_remote_job "${INVOCATION_ID}" "${CLEANUP_TIMEOUT}" >/dev/null 2>&1
+    set -e
+  fi
+  return "${status}"
+}
+trap local_cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+set +e
+{
+  printf 'set -euo pipefail\n'
+  printf 'JOB_ID=%s\n' "$(shell_quote "${INVOCATION_ID}")"
+  printf 'JOB_ROOT=%s\n' "$(shell_quote "${REMOTE_JOB_ROOT}")"
+  printf 'JOB_DIR=%s\n' "$(shell_quote "${REMOTE_JOB_DIR}")"
+  printf 'REMOTE_TMP=%s\n' "$(shell_quote "${REMOTE_TMP}")"
+  printf 'TOKEN=%s\n' "$(shell_quote "${JOB_TOKEN}")"
+  cat <<'REMOTE_INIT'
+echo "[mwcc-inspect:remote] stage=job-init job=${JOB_ID}" >&2
+umask 077
+mkdir -p "${JOB_ROOT}"
+if [[ -e "${JOB_DIR}" || -L "${JOB_DIR}" ]]; then
+  echo "[mwcc-inspect:remote] invocation already exists: ${JOB_ID}" >&2
+  exit 73
+fi
+create_private_job_directory() {
+  local platform="${MWCC_INSPECT_PLATFORM:-$(uname -s)}"
+  case "${platform}" in
+    MSYS*|MINGW*|CYGWIN*)
+      ;;
+    *)
+      mkdir -m 700 "${JOB_DIR}"
+      return $?
+      ;;
+  esac
+
+  local security_output
+  if [[ -n "${MWCC_INSPECT_WINDOWS_ACL_INIT_CMD:-}" ]]; then
+    security_output="$("${MWCC_INSPECT_WINDOWS_ACL_INIT_CMD}" "${JOB_DIR}")" || return 1
+    security_output="${security_output//$'\r'/}"
+    [[ "${security_output}" =~ ^MWCC_INSPECT_WINDOWS_ACL_READY:S-1-[0-9-]+$ ]]
+    return $?
+  fi
+
+  local cygpath_cmd="${MWCC_INSPECT_CYGPATH:-cygpath}"
+  local powershell_cmd="${MWCC_INSPECT_POWERSHELL:-powershell.exe}"
+  local iconv_cmd="${MWCC_INSPECT_ICONV:-iconv}"
+  local base64_cmd="${MWCC_INSPECT_BASE64:-base64}"
+  command -v "${cygpath_cmd}" >/dev/null 2>&1 || return 1
+  command -v "${powershell_cmd}" >/dev/null 2>&1 || return 1
+  command -v "${iconv_cmd}" >/dev/null 2>&1 || return 1
+  command -v "${base64_cmd}" >/dev/null 2>&1 || return 1
+
+  local native_job_dir powershell_source encoded
+  native_job_dir="$("${cygpath_cmd}" -w "${JOB_DIR}")" || return 1
+  powershell_source="$(cat <<'POWERSHELL'
+try {
+  $ErrorActionPreference = 'Stop'
+  $ProgressPreference = 'SilentlyContinue'
+  $path = $env:MWCC_INSPECT_SECURITY_PATH
+  if ([System.IO.Directory]::Exists($path) -or [System.IO.File]::Exists($path)) {
+    throw 'job path already exists'
+  }
+
+  $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $acl = New-Object System.Security.AccessControl.DirectorySecurity
+  $acl.SetOwner($currentSid)
+  $acl.SetAccessRuleProtection($true, $false)
+  $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    $currentSid,
+    [System.Security.AccessControl.FileSystemRights]::FullControl,
+    ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+      [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+    [System.Security.AccessControl.PropagationFlags]::None,
+    [System.Security.AccessControl.AccessControlType]::Allow
+  )
+  [void]$acl.AddAccessRule($rule)
+  $item = [System.IO.Directory]::CreateDirectory($path, $acl)
+
+  if (-not $item.Exists) { throw 'job path is not a directory' }
+  if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'job path is a reparse point'
+  }
+  $createdAcl = $item.GetAccessControl()
+  if ($createdAcl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $currentSid.Value) {
+    throw 'job owner is not the current Windows SID'
+  }
+  if (-not $createdAcl.AreAccessRulesProtected) { throw 'job ACL inheritance is enabled' }
+  $rules = @($createdAcl.GetAccessRules(
+    $true,
+    $true,
+    [System.Security.Principal.SecurityIdentifier]
+  ))
+  if ($rules.Count -lt 1) { throw 'job ACL has no access rules' }
+  $full = [System.Security.AccessControl.FileSystemRights]::FullControl
+  $container = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit
+  $object = [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+  foreach ($entry in $rules) {
+    if ($entry.IsInherited) { throw 'job ACL contains an inherited rule' }
+    if ($entry.IdentityReference.Value -ne $currentSid.Value) {
+      throw "job ACL contains a foreign SID: $($entry.IdentityReference.Value)"
+    }
+    if ($entry.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
+      throw 'job ACL contains a non-Allow rule'
+    }
+    if (($entry.FileSystemRights -band $full) -ne $full) {
+      throw 'current Windows SID lacks FullControl'
+    }
+    if (
+      ($entry.InheritanceFlags -band $container) -ne $container -or
+      ($entry.InheritanceFlags -band $object) -ne $object
+    ) {
+      throw 'current Windows SID rule is not inheritable'
+    }
+  }
+  Write-Output ('MWCC_INSPECT_WINDOWS_ACL_READY:' + $currentSid.Value)
+  exit 0
+} catch {
+  [Console]::Error.WriteLine($_.Exception.ToString())
+  exit 1
+}
+POWERSHELL
+)"
+  encoded="$(printf '%s' "${powershell_source}" | \
+    "${iconv_cmd}" -f UTF-8 -t UTF-16LE | "${base64_cmd}" | tr -d '\r\n')" || return 1
+  [[ -n "${encoded}" ]] || return 1
+  local MWCC_INSPECT_SECURITY_PATH="${native_job_dir}"
+  export MWCC_INSPECT_SECURITY_PATH
+  security_output="$(MSYS2_ARG_CONV_EXCL='*' \
+    "${powershell_cmd}" -NoProfile -NonInteractive \
+      -EncodedCommand "${encoded}" </dev/null)" || return 1
+  security_output="${security_output//$'\r'/}"
+  [[ "${security_output}" =~ ^MWCC_INSPECT_WINDOWS_ACL_READY:S-1-[0-9-]+$ ]]
+}
+if ! create_private_job_directory; then
+  echo "[mwcc-inspect:remote] failed to establish private Windows job ACL: ${JOB_ID}" >&2
+  rmdir "${JOB_DIR}" 2>/dev/null || true
+  exit 125
+fi
+[[ -d "${JOB_DIR}" && ! -L "${JOB_DIR}" ]] || exit 125
+printf '%s\n' "${TOKEN}" > "${JOB_DIR}/token"
+chmod 600 "${JOB_DIR}/token"
+cat > "${JOB_DIR}/supervisor" <<'MWCC_INSPECT_SUPERVISOR_EOF'
+REMOTE_INIT
+  cat "${LOCAL_SUPERVISOR}"
+  cat <<'REMOTE_INIT'
+MWCC_INSPECT_SUPERVISOR_EOF
+chmod 700 "${JOB_DIR}/supervisor"
+if [[ -n "${REMOTE_TMP}" ]]; then
+  mkdir -p "${REMOTE_TMP}"
+fi
+exit 0
+REMOTE_INIT
+} | remote_bash
+REMOTE_INIT_EXIT=$?
+set -e
+if [[ "${REMOTE_INIT_EXIT}" -ne 0 ]]; then
+  if [[ "${REMOTE_INIT_EXIT}" -ne 73 ]]; then
+    cancel_remote_job "${INVOCATION_ID}" "${CLEANUP_TIMEOUT}" >/dev/null 2>&1 || true
+  fi
+  exit "${REMOTE_INIT_EXIT}"
+fi
+REMOTE_JOB_ACTIVE=1
+
+if [[ "${UPLOAD_SOURCE}" == "1" ]]; then
+  echo "[mwcc-inspect] Preparing remote candidate source..."
   remote_bash <<REMOTE_MKDIR
 set -euo pipefail
 mkdir -p $(shell_quote "${REMOTE_TMP}/$(dirname "${REL_SRC}")")
@@ -278,15 +583,39 @@ fi
 
 echo "[mwcc-inspect] Running on ${HOST}…"
 
-# The default ssh shell on Windows is cmd.exe; we explicitly invoke msys2 bash
-# with `-s` so it reads the script from stdin. Build the script with printf so
-# POSIX/coder login shells never get a chance to reinterpret bash's `-lc`
-# argument or heredoc quoting.
-TMP_OUT="$(mktemp "${OUT_FILE}.tmp.XXXXXX")"
-TMP_ERR="$(mktemp "${OUT_FILE}.stderr.XXXXXX")"
+REMAINING_SECONDS="$(remaining_budget "${DEADLINE_SECONDS}" "${STARTED_AT}")"
+if ! valid_positive_seconds "${REMAINING_SECONDS}"; then
+  echo "[mwcc-inspect] invocation ${INVOCATION_ID} timed out before remote launch" >&2
+  cancel_remote_job "${INVOCATION_ID}" "${CLEANUP_TIMEOUT}" || true
+  REMOTE_JOB_ACTIVE=0
+  exit 124
+fi
+
 set +e
 {
   printf 'set -euo pipefail\n'
+  printf 'JOB_ID=%s\n' "$(shell_quote "${INVOCATION_ID}")"
+  printf 'JOB_DIR=%s\n' "$(shell_quote "${REMOTE_JOB_DIR}")"
+  printf 'TOKEN=%s\n' "$(shell_quote "${JOB_TOKEN}")"
+  printf 'DEADLINE_SECONDS=%s\n' "$(shell_quote "${REMAINING_SECONDS}")"
+  cat <<'REMOTE_MONOTONIC'
+remote_monotonic_now() {
+  if [[ -n "${MWCC_INSPECT_MONOTONIC_CMD:-}" ]]; then
+    "${MWCC_INSPECT_MONOTONIC_CMD}"
+  elif [[ -r /proc/uptime ]]; then
+    local uptime ignored
+    read -r uptime ignored < /proc/uptime
+    printf '%s\n' "${uptime}"
+  elif command -v perl >/dev/null 2>&1; then
+    perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC \
+      -e 'printf "%.9f\n", clock_gettime(CLOCK_MONOTONIC)'
+  else
+    echo "remote monotonic clock unavailable" >&2
+    return 125
+  fi
+}
+REMOTE_PHASE_STARTED="$(remote_monotonic_now)" || exit 125
+REMOTE_MONOTONIC
   printf 'cd %s\n' "$(shell_quote "${REMOTE_DIR}")"
   printf 'echo "[mwcc-inspect:remote] stage=checkout ref=%s" >&2\n' "$(shell_quote "${REMOTE_REF}")"
   printf 'echo "[mwcc-inspect:remote] stage=fetch ref=%s" >&2\n' "$(shell_quote "${REMOTE_REF}")"
@@ -299,10 +628,6 @@ set +e
   printf 'REMOTE_SOURCE=%s\n' "$(shell_quote "${REMOTE_SOURCE}")"
   printf 'REMOTE_TMP=%s\n' "$(shell_quote "${REMOTE_TMP}")"
   printf 'REMOTE_DIR=%s\n' "$(shell_quote "${REMOTE_DIR}")"
-  printf 'if [[ -n "${REMOTE_TMP}" ]]; then\n'
-  printf '  cleanup() { rm -rf "${REMOTE_TMP}"; }\n'
-  printf '  trap cleanup EXIT\n'
-  printf 'fi\n'
   printf 'REL_SRC_LOCAL=%s\n' "$(shell_quote "${REL_SRC}")"
   printf 'MWCC_ARGS_REMOTE=%s\n' "$(shell_quote "${MWCC_ARGS}")"
   printf 'if [[ -n "${REMOTE_TMP}" ]]; then\n'
@@ -310,52 +635,117 @@ set +e
   printf '  MWCC_ARGS_REMOTE="$(sed -E "s@(^|[[:space:]])-i[[:space:]]+([^/[:space:]][^[:space:]]*)@\\1-i ${REMOTE_DIR}/\\2@g" <<< "${MWCC_ARGS_REMOTE}")"\n'
   printf '  MWCC_ARGS_REMOTE="-i ${REMOTE_TMP}/src -i ${REMOTE_TMP}/src/melee ${MWCC_ARGS_REMOTE}"\n'
   printf 'fi\n'
-  printf 'echo "[mwcc-inspect:remote] stage=inspector source=${REMOTE_SOURCE}" >&2\n'
-  printf '%s %s ${MWCC_ARGS_REMOTE}\n' \
+  printf 'REMOTE_NOW="$(remote_monotonic_now)" || exit 125\n'
+  printf 'DEADLINE_SECONDS="$(awk -v budget="${DEADLINE_SECONDS}" -v started="${REMOTE_PHASE_STARTED}" -v now="${REMOTE_NOW}" '\''BEGIN { remaining = budget - (now - started); if (remaining < 0) remaining = 0; printf "%%.6f", remaining }'\'')"\n'
+  printf 'awk -v value="${DEADLINE_SECONDS}" '\''BEGIN { exit !(value > 0) }'\'' || exit 124\n'
+  printf 'export MWCC_ARGS_REMOTE\n'
+  printf 'COMMAND="${JOB_DIR}/inspector-command"\n'
+  printf 'cat > "${COMMAND}" <<'"'"'MWCC_INSPECT_COMMAND_EOF'"'"'\n'
+  printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+  printf 'cd %s\n' "$(shell_quote "${REMOTE_DIR}")"
+  printf 'export MWCC_INSPECT_INVOCATION_ID=%s\n' "$(shell_quote "${INVOCATION_ID}")"
+  printf 'exec %s %s ${MWCC_ARGS_REMOTE}\n' \
     "$(shell_quote "${REMOTE_CLI}")" \
     "$(shell_quote "${REMOTE_MWCCEPPC}")"
-  printf 'exit\n'
-} | ssh -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT}" "${HOST}" "${REMOTE_BASH}" -s > "${TMP_OUT}" 2> "${TMP_ERR}"
-REMOTE_EXIT=$?
+  printf 'MWCC_INSPECT_COMMAND_EOF\n'
+  printf 'chmod 700 "${COMMAND}"\n'
+  printf 'echo "[mwcc-inspect:remote] stage=supervisor-launch job=${JOB_ID}" >&2\n'
+  printf 'exec "${JOB_DIR}/supervisor" launch --job-dir "${JOB_DIR}" --job-id "${JOB_ID}" --token "${TOKEN}" --deadline-seconds "${DEADLINE_SECONDS}" -- "${COMMAND}"\n'
+} | remote_bash 2> "${LOCAL_ERR}"
+LAUNCH_EXIT=$?
 set -e
 
-if [[ "${REMOTE_EXIT}" -ne 0 ]]; then
-  echo "[mwcc-inspect] remote command failed (exit ${REMOTE_EXIT}) on ${HOST}" >&2
+if [[ "${LAUNCH_EXIT}" -ne 0 ]]; then
+  echo "[mwcc-inspect] detached supervisor launch failed (exit ${LAUNCH_EXIT}) on ${HOST}" >&2
   echo "[mwcc-inspect] command: ssh -o ConnectTimeout=${SSH_CONNECT_TIMEOUT} ${HOST} ${REMOTE_BASH} -s" >&2
-  echo "[mwcc-inspect] stage: remote checkout/compiler/inspector" >&2
-  if [[ -s "${TMP_ERR}" ]]; then
+  echo "[mwcc-inspect] stage: remote checkout/supervisor-launch" >&2
+  if [[ -s "${LOCAL_ERR}" ]]; then
     echo "[mwcc-inspect] remote stderr:" >&2
-    sed -n '1,160p' "${TMP_ERR}" >&2
+    sed -n '1,160p' "${LOCAL_ERR}" >&2
   else
     echo "[mwcc-inspect] remote stderr: <empty>" >&2
   fi
-  if [[ -s "${TMP_OUT}" ]]; then
-    mv "${TMP_OUT}" "${OUT_FILE}"
-    echo "[mwcc-inspect] partial output preserved: ${OUT_FILE} ($(wc -c < "${OUT_FILE}") bytes)" >&2
-  else
-    rm -f "${OUT_FILE}" "${TMP_OUT}"
-    echo "[mwcc-inspect] no structured output was produced; ${OUT_FILE} was not written" >&2
+  if ! cancel_remote_job "${INVOCATION_ID}" "${CLEANUP_TIMEOUT}"; then
+    echo "[mwcc-inspect] timeout cleanup failed for ${INVOCATION_ID}" >&2
   fi
-  rm -f "${TMP_ERR}"
-  exit "${REMOTE_EXIT}"
+  REMOTE_JOB_ACTIVE=0
+  rm -f "${LOCAL_STAGE}" "${LOCAL_ERR}"
+  exit "${LAUNCH_EXIT}"
 fi
 
-if grep -Eq '^[[:space:]]*#[[:space:]]*Error:' "${TMP_OUT}"; then
-  mv "${TMP_OUT}" "${OUT_FILE}"
-  rm -f "${TMP_ERR}"
-  echo "[mwcc-inspect] inspector output contains compiler diagnostics; preserved: ${OUT_FILE}" >&2
-  exit 1
+REMAINING_SECONDS="$(remaining_budget "${DEADLINE_SECONDS}" "${STARTED_AT}")"
+if ! valid_positive_seconds "${REMAINING_SECONDS}"; then
+  cancel_remote_job "${INVOCATION_ID}" "${CLEANUP_TIMEOUT}" || true
+  REMOTE_JOB_ACTIVE=0
+  exit 124
 fi
 
-if ! grep -q '^FUNCTION:' "${TMP_OUT}"; then
-  mv "${TMP_OUT}" "${OUT_FILE}"
-  rm -f "${TMP_ERR}"
-  echo "[mwcc-inspect] inspector output has no FUNCTION: section; preserved: ${OUT_FILE}" >&2
-  exit 1
+set +e
+trusted_remote_supervisor await \
+  --job-dir "${REMOTE_JOB_DIR}" --job-id "${INVOCATION_ID}" \
+  --token "${JOB_TOKEN}" --wait-seconds "${REMAINING_SECONDS}" \
+  2>> "${LOCAL_ERR}"
+AWAIT_EXIT=$?
+set -e
+
+if [[ "${AWAIT_EXIT}" -ne 0 ]]; then
+  TIMEOUT_CLASS=0
+  TIMEOUT_CLEANUP_FAILED=0
+  if [[ "${AWAIT_EXIT}" -eq 124 || "${AWAIT_EXIT}" -eq 126 ]]; then
+    TIMEOUT_CLASS=1
+    echo "[mwcc-inspect] invocation ${INVOCATION_ID} timed out" >&2
+    if [[ "${AWAIT_EXIT}" -eq 126 ]]; then TIMEOUT_CLEANUP_FAILED=1; fi
+  else
+    echo "[mwcc-inspect] invocation ${INVOCATION_ID} failed (exit ${AWAIT_EXIT})" >&2
+  fi
+  trusted_remote_supervisor diagnostics \
+    --job-dir "${REMOTE_JOB_DIR}" --job-id "${INVOCATION_ID}" \
+    --token "${JOB_TOKEN}" 2>> "${LOCAL_ERR}" || true
+  if [[ -s "${LOCAL_ERR}" ]]; then
+    sed -n '1,240p' "${LOCAL_ERR}" >&2
+  fi
+  if [[ "${AWAIT_EXIT}" -ne 126 ]] && ! cancel_remote_job "${INVOCATION_ID}" "${CLEANUP_TIMEOUT}"; then
+    TIMEOUT_CLEANUP_FAILED=1
+  fi
+  REMOTE_JOB_ACTIVE=0
+  rm -f "${LOCAL_STAGE}" "${LOCAL_ERR}"
+  if [[ "${TIMEOUT_CLASS}" == "1" ]]; then
+    if [[ "${TIMEOUT_CLEANUP_FAILED}" == "1" ]]; then
+      echo "[mwcc-inspect] timeout-status=cleanup-failed invocation=${INVOCATION_ID}" >&2
+      exit 125
+    fi
+    echo "[mwcc-inspect] timeout-status=deadline invocation=${INVOCATION_ID}" >&2
+    exit 124
+  fi
+  exit "${AWAIT_EXIT}"
+fi
+REMOTE_JOB_ACTIVE=0
+REMOTE_JOB_TERMINAL_SUCCESS=1
+
+set +e
+trusted_remote_supervisor emit-success \
+  --job-dir "${REMOTE_JOB_DIR}" --job-id "${INVOCATION_ID}" \
+  --token "${JOB_TOKEN}" > "${LOCAL_STAGE}" 2>> "${LOCAL_ERR}"
+EMIT_EXIT=$?
+set -e
+if [[ "${EMIT_EXIT}" -ne 0 ]]; then
+  echo "[mwcc-inspect] exact success artifact validation failed for ${INVOCATION_ID}" >&2
+  exit 125
 fi
 
-mv "${TMP_OUT}" "${OUT_FILE}"
-rm -f "${TMP_ERR}"
+mv -f "${LOCAL_STAGE}" "${OUT_FILE}"
+set +e
+finalize_remote_success "${INVOCATION_ID}" 2>> "${LOCAL_ERR}"
+FINALIZE_EXIT=$?
+set -e
+REMOTE_JOB_TERMINAL_SUCCESS=0
+if [[ "${FINALIZE_EXIT}" -ne 0 ]]; then
+  echo "[mwcc-inspect] output proven and published, but retained success cleanup failed for ${INVOCATION_ID}" >&2
+  sed -n '1,240p' "${LOCAL_ERR}" >&2
+  exit 125
+fi
+rm -f "${LOCAL_ERR}"
+trap - EXIT HUP INT TERM
 
 echo "[mwcc-inspect] Output: ${OUT_FILE} ($(wc -c < "${OUT_FILE}") bytes)"
 echo "[mwcc-inspect] Section summary:"
