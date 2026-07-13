@@ -1099,7 +1099,7 @@ def _enumerate_candidate_branches(
     complete_lineage_ids = {candidate.lineage.record_id for candidate in complete}
     for edge in index.edges_by_kind.get("pcode-operand-lineage", ()):
         source = index.node_by_id.get(edge.source_id)
-        if edge.target_id in complete_lineage_ids and source is not None and source.kind != "retail-pcode":
+        if edge.target_id in complete_lineage_ids and source is not None and source.kind == "pcode-operand":
             accounted_edge_ids.add(edge.record_id)
 
     remaining_edges = tuple(

@@ -213,6 +213,65 @@ def test_complete_mutation_parent_lineage_is_not_a_partial_alternative() -> None
     assert {edge.record_id for edge in mutation_parent_edges}.issubset(enumeration.traversed_edge_ids)
 
 
+@pytest.mark.parametrize("source_kind", ("compiler-object", "allocator-node"))
+def test_malformed_incoming_lineage_source_is_incomplete_and_permutation_stable(source_kind: str) -> None:
+    evidence = complete_evidence()
+    candidate = only(owner_certificate._enumerate_candidates(owner_certificate._index_evidence(evidence)))
+    source = only(node for node in evidence.nodes if node.kind == source_kind)
+    lineage_edge = only(
+        record
+        for record in candidate.path_records
+        if isinstance(record, EvidenceEdge)
+        and record.kind == "pcode-operand-lineage"
+        and record.source_id == candidate.pcode.record_id
+    )
+    malformed = EvidenceEdge.create(
+        compile_id=source.compile_id,
+        function=source.function,
+        kind="pcode-operand-lineage",
+        source_id=source.record_id,
+        target_id=candidate.lineage.record_id,
+        occurrence_ordinal=99,
+        producer_confidence=Confidence.OBSERVED,
+        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        provenance=Provenance(
+            artifact_sha256=lineage_edge.provenance.artifact_sha256,
+            parser=lineage_edge.provenance.parser,
+            raw_start=None,
+            raw_end=None,
+            derivation_rule="test-malformed-incoming-lineage-source",
+            input_record_ids=(source.record_id, candidate.lineage.record_id),
+        ),
+        input_confidences=(source.confidence, candidate.lineage.confidence),
+        attributes=lineage_edge.attributes,
+    )
+
+    def diagnose(*, reverse: bool) -> OwnerCertificateResult:
+        nodes = tuple(reversed(evidence.nodes)) if reverse else evidence.nodes
+        edges = tuple(reversed((*evidence.edges, malformed))) if reverse else (*evidence.edges, malformed)
+        return owner_certificate.validate_owner_evidence(
+            ObjectBindingEvidence(
+                nodes,
+                edges,
+                evidence.capabilities,
+                evidence.capture_run_id,
+                evidence.instrumentation_identity,
+            )
+        )
+
+    forward = diagnose(reverse=False)
+    reversed_result = diagnose(reverse=True)
+    raw_resolution = next(item for item in forward.role_resolutions if item.role == ROLE)
+    public_resolution = forward.resolution_for(ROLE)
+
+    assert raw_resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert public_resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in public_resolution.rejections} == {"malformed-support"}
+    assert forward.certificate_nodes == ()
+    assert all(forward.certificate(record_id) is None for record_id in public_resolution.certificate_record_ids)
+    assert canonical_result(forward) == canonical_result(reversed_result)
+
+
 @pytest.mark.parametrize("path_count", [8, 32, 128])
 def test_candidate_index_is_built_once_without_per_candidate_source_rescans(path_count):
     evidence = evidence_with_independent_paths(path_count)
