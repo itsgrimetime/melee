@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import heapq
+import json
+import os
 import struct
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -19,11 +22,13 @@ from capstone import (
     Cs,
 )
 from capstone.x86 import (
+    X86_INS_LEA,
     X86_INS_JMP,
     X86_INS_LJMP,
     X86_INS_MOV,
     X86_OP_IMM,
     X86_OP_MEM,
+    X86_OP_REG,
     X86_REG_INVALID,
 )
 
@@ -397,6 +402,39 @@ def _diagnostic_key(
     return diagnostic.address, diagnostic.kind, diagnostic.detail
 
 
+@dataclass(frozen=True, slots=True)
+class _ExactValue:
+    value: int
+    chain: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _DataEvidence:
+    start: int
+    end: int
+    provenance: str
+
+
+_I386_RELOCATION_WIDTHS = {1: 2, 2: 2, 3: 4, 4: 2}
+_CANONICAL_NOP_ENCODINGS = tuple(
+    sorted(
+        (
+            bytes.fromhex("90"),
+            bytes.fromhex("66 90"),
+            bytes.fromhex("0f 1f 00"),
+            bytes.fromhex("0f 1f 40 00"),
+            bytes.fromhex("0f 1f 44 00 00"),
+            bytes.fromhex("66 0f 1f 44 00 00"),
+            bytes.fromhex("0f 1f 80 00 00 00 00"),
+            bytes.fromhex("0f 1f 84 00 00 00 00 00"),
+            bytes.fromhex("66 0f 1f 84 00 00 00 00 00"),
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
+
 class _DirectCfgRecovery:
     """Address-priority direct decoder with exact instruction ownership."""
 
@@ -416,6 +454,7 @@ class _DirectCfgRecovery:
         self.edges: set[CfgEdge] = set()
         self.direct_calls: set[DirectCall] = set()
         self.diagnostics: set[OwnershipDiagnostic] = set()
+        self.data_evidence: set[_DataEvidence] = set()
         self.function_addresses: set[int] = set()
         self.finite_targets: set[int] = set()
         self.pending: list[int] = []
@@ -534,48 +573,6 @@ class _DirectCfgRecovery:
             )
         )
 
-    def _record_absolute_initializer(self, decoded) -> None:
-        """Recognize only a direct absolute ``mov [addr], imm32`` seed."""
-        if decoded.id != X86_INS_MOV or len(decoded.operands) != 2:
-            return
-        destination, value = decoded.operands
-        if destination.type != X86_OP_MEM or value.type != X86_OP_IMM:
-            return
-        memory = destination.mem
-        if (
-            memory.segment != X86_REG_INVALID
-            or memory.base != X86_REG_INVALID
-            or memory.index != X86_REG_INVALID
-        ):
-            return
-        destination_address = memory.disp & 0xFFFF_FFFF
-        destination_size = destination.size
-        if destination_size != 4:
-            return
-        try:
-            self.image.read(destination_address, destination_size)
-        except ValueError:
-            return
-        if _is_executable_span(
-            self.image, destination_address, destination_size
-        ):
-            return
-        target = value.imm & 0xFFFF_FFFF
-        if not _is_executable_span(self.image, target, 1):
-            return
-
-        instruction = self.instructions[decoded.address]
-        self.seed_records.add(
-            SeedRecord(
-                address=target,
-                category="function-pointer-initializer",
-                provenance_address=instruction.address,
-                provenance_bytes=instruction.bytes_hex,
-                detail=f"absolute-store={destination_address:#x}",
-            )
-        )
-        self._enqueue(target, is_function=True)
-
     def _decode_from(self, start: int) -> None:
         self._validate_target(start)
         owner = self.byte_owners.get(start)
@@ -608,7 +605,6 @@ class _DirectCfgRecovery:
 
             decoded = self._decode_one(address)
             instruction = self._claim_instruction(decoded)
-            self._record_absolute_initializer(decoded)
             next_address = address + instruction.size
 
             if decoded.group(CS_GRP_CALL):
@@ -709,12 +705,475 @@ class _DirectCfgRecovery:
             self._check_count("max_blocks", len(blocks))
         return tuple(sorted(blocks, key=_block_key))
 
-    def recover(self) -> RawCfg:
-        while self.pending:
-            address = heapq.heappop(self.pending)
-            self._decode_from(address)
+    def _owned_decoded(self, address: int):
+        decoded = self._decode_one(address)
+        instruction = self.instructions[address]
+        if (
+            decoded.size != instruction.size
+            or bytes(decoded.bytes).hex() != instruction.bytes_hex
+        ):
+            raise CfgRecoveryError(
+                f"owned instruction bytes changed at {address:#x}"
+            )
+        return decoded
 
-        blocks = self._build_blocks()
+    def _register_family(self, register: int) -> str:
+        name = self.decoder.reg_name(register)
+        families = {
+            "al": "eax",
+            "ah": "eax",
+            "ax": "eax",
+            "eax": "eax",
+            "bl": "ebx",
+            "bh": "ebx",
+            "bx": "ebx",
+            "ebx": "ebx",
+            "cl": "ecx",
+            "ch": "ecx",
+            "cx": "ecx",
+            "ecx": "ecx",
+            "dl": "edx",
+            "dh": "edx",
+            "dx": "edx",
+            "edx": "edx",
+            "si": "esi",
+            "esi": "esi",
+            "di": "edi",
+            "edi": "edi",
+            "bp": "ebp",
+            "ebp": "ebp",
+            "sp": "esp",
+            "esp": "esp",
+            "ip": "eip",
+            "eip": "eip",
+        }
+        return families.get(name, name)
+
+    @staticmethod
+    def _chain_step(instruction: Instruction) -> str:
+        return f"{instruction.address:#x}:{instruction.bytes_hex}"
+
+    def _exact_memory_address(
+        self, memory, state: dict[str, _ExactValue]
+    ) -> int | None:
+        if (
+            memory.segment != X86_REG_INVALID
+            or memory.index != X86_REG_INVALID
+        ):
+            return None
+        if memory.base == X86_REG_INVALID:
+            return memory.disp & 0xFFFF_FFFF
+        base = state.get(self._register_family(memory.base))
+        if base is None:
+            return None
+        return (base.value + memory.disp) & 0xFFFF_FFFF
+
+    def _record_data_operands(
+        self, decoded, state: dict[str, _ExactValue]
+    ) -> None:
+        instruction = self.instructions[decoded.address]
+        for index, operand in enumerate(decoded.operands):
+            if operand.type != X86_OP_MEM or operand.size <= 0:
+                continue
+            address = self._exact_memory_address(operand.mem, state)
+            if address is None:
+                continue
+            try:
+                self.image.read(address, operand.size)
+            except ValueError:
+                continue
+            self.data_evidence.add(
+                _DataEvidence(
+                    start=address,
+                    end=address + operand.size,
+                    provenance=(
+                        f"instruction={instruction.address:#x};"
+                        f"bytes={instruction.bytes_hex};operand={index};"
+                        f"width={operand.size}"
+                    ),
+                )
+            )
+
+    def _initializer_value(
+        self, operand, state: dict[str, _ExactValue]
+    ) -> _ExactValue | None:
+        if operand.type == X86_OP_IMM:
+            return _ExactValue(operand.imm & 0xFFFF_FFFF, ())
+        if operand.type == X86_OP_REG and operand.size == 4:
+            return state.get(self._register_family(operand.reg))
+        return None
+
+    def _record_initializer(
+        self,
+        decoded,
+        state: dict[str, _ExactValue],
+    ) -> None:
+        if decoded.id != X86_INS_MOV or len(decoded.operands) != 2:
+            return
+        destination, source = decoded.operands
+        if destination.type != X86_OP_MEM:
+            return
+        exact_value = self._initializer_value(source, state)
+        if exact_value is None or not _is_executable_span(
+            self.image, exact_value.value, 1
+        ):
+            return
+
+        destination_address = self._exact_memory_address(
+            destination.mem, state
+        )
+        destination_is_valid = destination_address is not None
+        if destination_is_valid:
+            try:
+                self.image.read(destination_address, destination.size)
+            except ValueError:
+                destination_is_valid = False
+        if (
+            not destination_is_valid
+            or destination.size != 4
+            or _is_executable_span(self.image, destination_address, 4)
+        ):
+            raise CfgRecoveryError(
+                "unresolved function-pointer initializer: "
+                f"store at {decoded.address:#x}"
+            )
+
+        instruction = self.instructions[decoded.address]
+        chain = (*exact_value.chain, self._chain_step(instruction))
+        self.seed_records.add(
+            SeedRecord(
+                address=exact_value.value,
+                category="function-pointer-initializer",
+                provenance_address=instruction.address,
+                provenance_bytes=instruction.bytes_hex,
+                detail=(
+                    f"store-ea={destination_address:#x};"
+                    f"propagation-chain={'>'.join(chain)}"
+                ),
+            )
+        )
+        self._enqueue(exact_value.value, is_function=True)
+
+    def _update_exact_state(
+        self, decoded, state: dict[str, _ExactValue]
+    ) -> None:
+        instruction = self.instructions[decoded.address]
+        step = self._chain_step(instruction)
+        if decoded.group(CS_GRP_CALL):
+            state.clear()
+            return
+        if len(decoded.operands) == 2:
+            destination, source = decoded.operands
+            if destination.type == X86_OP_REG and destination.size == 4:
+                family = self._register_family(destination.reg)
+                if decoded.id == X86_INS_MOV and source.type == X86_OP_IMM:
+                    state[family] = _ExactValue(
+                        source.imm & 0xFFFF_FFFF, (step,)
+                    )
+                    return
+                if (
+                    decoded.id == X86_INS_LEA
+                    and source.type == X86_OP_MEM
+                    and source.mem.segment == X86_REG_INVALID
+                    and source.mem.base == X86_REG_INVALID
+                    and source.mem.index == X86_REG_INVALID
+                ):
+                    state[family] = _ExactValue(
+                        source.mem.disp & 0xFFFF_FFFF, (step,)
+                    )
+                    return
+                if (
+                    decoded.id == X86_INS_MOV
+                    and source.type == X86_OP_REG
+                    and source.size == 4
+                ):
+                    source_value = state.get(
+                        self._register_family(source.reg)
+                    )
+                    if source_value is None:
+                        state.pop(family, None)
+                    else:
+                        state[family] = _ExactValue(
+                            source_value.value,
+                            (*source_value.chain, step),
+                        )
+                    return
+
+        _, written = decoded.regs_access()
+        for register in written:
+            state.pop(self._register_family(register), None)
+
+    def _scan_owned_blocks(
+        self, blocks: tuple[BasicBlock, ...]
+    ) -> None:
+        previous_initializers = {
+            (record.address, record.provenance_address)
+            for record in self.seed_records
+            if record.category == "function-pointer-initializer"
+        }
+        self.seed_records = {
+            record
+            for record in self.seed_records
+            if record.category != "function-pointer-initializer"
+        }
+        self.data_evidence = set()
+        for block in blocks:
+            state: dict[str, _ExactValue] = {}
+            for address in block.instruction_addresses:
+                decoded = self._owned_decoded(address)
+                self._record_data_operands(decoded, state)
+                self._record_initializer(decoded, state)
+                self._update_exact_state(decoded, state)
+
+        current_initializers = {
+            (record.address, record.provenance_address)
+            for record in self.seed_records
+            if record.category == "function-pointer-initializer"
+        }
+        if not previous_initializers <= current_initializers:
+            raise CfgRecoveryError(
+                "unresolved function-pointer initializer: "
+                "propagation crosses an owned basic-block boundary"
+            )
+
+        for relocation in self.image.relocations:
+            width = _I386_RELOCATION_WIDTHS.get(relocation.type)
+            if width is None:
+                raise CfgRecoveryError(
+                    "unsupported relocation width during data ownership: "
+                    f"type={relocation.type}"
+                )
+            provenance = _read_provenance(
+                self.image,
+                relocation.va,
+                width,
+                "relocation data",
+            )
+            self.data_evidence.add(
+                _DataEvidence(
+                    start=relocation.va,
+                    end=relocation.va + width,
+                    provenance=(
+                        f"relocation={relocation.va:#x};"
+                        f"type={relocation.type};width={width};"
+                        f"bytes={provenance.hex()}"
+                    ),
+                )
+            )
+
+    def _merged_data_regions(self) -> tuple[ByteRegion, ...]:
+        merged: list[ByteRegion] = []
+        current_start: int | None = None
+        current_end = 0
+        provenance: set[str] = set()
+        for evidence in sorted(
+            self.data_evidence,
+            key=lambda row: (row.start, row.end, row.provenance),
+        ):
+            if current_start is None:
+                current_start = evidence.start
+                current_end = evidence.end
+                provenance = {evidence.provenance}
+                continue
+            if evidence.start <= current_end:
+                current_end = max(current_end, evidence.end)
+                provenance.add(evidence.provenance)
+                continue
+            merged.append(
+                ByteRegion(
+                    start=current_start,
+                    end=current_end,
+                    provenance="|".join(sorted(provenance)),
+                )
+            )
+            current_start = evidence.start
+            current_end = evidence.end
+            provenance = {evidence.provenance}
+        if current_start is not None:
+            merged.append(
+                ByteRegion(
+                    start=current_start,
+                    end=current_end,
+                    provenance="|".join(sorted(provenance)),
+                )
+            )
+        return tuple(merged)
+
+    @staticmethod
+    def _is_canonical_padding(blob: bytes) -> bool:
+        offset = 0
+        while offset < len(blob):
+            if blob[offset] == 0xCC:
+                offset += 1
+                continue
+            encoding = next(
+                (
+                    encoding
+                    for encoding in _CANONICAL_NOP_ENCODINGS
+                    if blob.startswith(encoding, offset)
+                ),
+                None,
+            )
+            if encoding is None:
+                return False
+            offset += len(encoding)
+        return bool(blob)
+
+    def _padding_regions(
+        self, data_regions: tuple[ByteRegion, ...]
+    ) -> tuple[ByteRegion, ...]:
+        regions: list[ByteRegion] = []
+        for raw_start, raw_end in self._executable_raw_ranges():
+            instructions = sorted(
+                (
+                    instruction
+                    for instruction in self.instructions.values()
+                    if raw_start <= instruction.address < raw_end
+                ),
+                key=_instruction_key,
+            )
+            for left, right in zip(instructions, instructions[1:]):
+                start = left.address + left.size
+                end = right.address
+                if start >= end or left.address not in self.terminators:
+                    continue
+                if any(
+                    region.start < end and start < region.end
+                    for region in data_regions
+                ):
+                    continue
+                blob = _read_provenance(
+                    self.image, start, end - start, "padding"
+                )
+                if not self._is_canonical_padding(blob):
+                    continue
+                regions.append(
+                    ByteRegion(
+                        start=start,
+                        end=end,
+                        provenance=(
+                            f"unreachable-after={left.address:#x};"
+                            f"before={right.address:#x};"
+                            "encoding=canonical-x86-nop-or-int3"
+                        ),
+                    )
+                )
+        return tuple(sorted(regions, key=lambda row: (row.start, row.end)))
+
+    def _executable_raw_ranges(self) -> tuple[tuple[int, int], ...]:
+        return tuple(
+            (section.va, section.va + section.raw_size)
+            for section in self.image.sections
+            if section.is_executable and section.raw_size
+        )
+
+    @staticmethod
+    def _region_contains(
+        regions: tuple[ByteRegion, ...], start: int, end: int
+    ) -> bool:
+        return any(
+            region.start <= start and end <= region.end
+            for region in regions
+        )
+
+    def _raw_e8_candidates(
+        self, data_regions: tuple[ByteRegion, ...]
+    ) -> tuple[RawE8Candidate, ...]:
+        candidates = []
+        for start, end in self._executable_raw_ranges():
+            blob = _read_provenance(
+                self.image, start, end - start, "executable raw bytes"
+            )
+            for offset, opcode in enumerate(blob):
+                if opcode != 0xE8:
+                    continue
+                address = start + offset
+                if offset + 5 > len(blob):
+                    raise CfgRecoveryError(
+                        "raw E8 candidate is unresolved: "
+                        f"truncated rel32 at {address:#x}"
+                    )
+                displacement = struct.unpack_from("<i", blob, offset + 1)[0]
+                target = (address + 5 + displacement) & 0xFFFF_FFFF
+                if not _is_executable_span(self.image, target, 1):
+                    continue
+                instruction = self.instructions.get(address)
+                direct_call = DirectCall(address=address, target=target)
+                if (
+                    instruction is not None
+                    and instruction.size == 5
+                    and direct_call in self.direct_calls
+                    and all(
+                        self.byte_owners.get(byte_address) == address
+                        for byte_address in range(address, address + 5)
+                    )
+                ):
+                    classification = "owned-call"
+                elif self._region_contains(
+                    data_regions, address, address + 5
+                ):
+                    classification = "owned-data"
+                else:
+                    raise CfgRecoveryError(
+                        "raw E8 candidate is unresolved: "
+                        f"address={address:#x};target={target:#x}"
+                    )
+                candidates.append(
+                    RawE8Candidate(
+                        address=address,
+                        target=target,
+                        classification=classification,
+                    )
+                )
+        return tuple(sorted(candidates, key=lambda row: row.address))
+
+    def _require_complete_ownership(
+        self,
+        data_regions: tuple[ByteRegion, ...],
+        padding_regions: tuple[ByteRegion, ...],
+    ) -> None:
+        covered = set(self.byte_owners)
+        for region in (*data_regions, *padding_regions):
+            for address in range(region.start, region.end):
+                if _is_executable_span(self.image, address, 1):
+                    covered.add(address)
+        unexplained: list[tuple[int, int]] = []
+        for start, end in self._executable_raw_ranges():
+            gap_start: int | None = None
+            for address in range(start, end):
+                if address not in covered and gap_start is None:
+                    gap_start = address
+                elif address in covered and gap_start is not None:
+                    unexplained.append((gap_start, address))
+                    gap_start = None
+            if gap_start is not None:
+                unexplained.append((gap_start, end))
+        if unexplained:
+            rendered = ",".join(
+                f"{start:#x}-{end:#x}" for start, end in unexplained
+            )
+            raise CfgRecoveryError(
+                f"unexplained executable bytes: {rendered}"
+            )
+
+    def recover(self) -> RawCfg:
+        while True:
+            while self.pending:
+                address = heapq.heappop(self.pending)
+                self._decode_from(address)
+            blocks = self._build_blocks()
+            block_start_count = len(self.block_starts)
+            self._scan_owned_blocks(blocks)
+            if (
+                not self.pending
+                and len(self.block_starts) == block_start_count
+            ):
+                break
+
+        data_regions = self._merged_data_regions()
+        padding_regions = self._padding_regions(data_regions)
+        raw_e8_candidates = self._raw_e8_candidates(data_regions)
+        self._require_complete_ownership(data_regions, padding_regions)
         high_water = (
             AnalysisHighWater(
                 "max_instructions", len(self.instructions)
@@ -738,9 +1197,9 @@ class _DirectCfgRecovery:
             direct_calls=tuple(
                 sorted(self.direct_calls, key=_call_key)
             ),
-            raw_e8_candidates=(),
-            data_regions=(),
-            padding_regions=(),
+            raw_e8_candidates=raw_e8_candidates,
+            data_regions=data_regions,
+            padding_regions=padding_regions,
             ownership_diagnostics=tuple(
                 sorted(self.diagnostics, key=_diagnostic_key)
             ),
@@ -764,7 +1223,109 @@ def recover_cfg(
 
 
 def write_jsonl_atomic(path: Path, cfg: RawCfg) -> None:
-    """Write canonical CFG JSONL atomically (decoder serialization slice)."""
-    raise NotImplementedError(
-        "canonical CFG JSONL is not implemented in the seed-inventory slice"
+    """Write canonical compact UTF-8 CFG records with atomic replacement."""
+    rows: list[dict[str, Any]] = []
+    for record in cfg.seed_inventory.records:
+        rows.append({"record_kind": "seed", **asdict(record)})
+    for instruction in cfg.instructions:
+        rows.append(
+            {
+                "record_kind": "instruction",
+                **asdict(instruction),
+            }
+        )
+    for block in cfg.blocks:
+        rows.append(
+            {
+                "record_kind": "basic-block",
+                "address": block.start,
+                **asdict(block),
+            }
+        )
+    for edge in cfg.edges:
+        rows.append(
+            {
+                "record_kind": "edge",
+                "address": edge.source,
+                **asdict(edge),
+            }
+        )
+    for call in cfg.direct_calls:
+        rows.append({"record_kind": "direct-call", **asdict(call)})
+    for candidate in cfg.raw_e8_candidates:
+        rows.append({"record_kind": "raw-e8", **asdict(candidate)})
+    for region in cfg.data_regions:
+        rows.append(
+            {
+                "record_kind": "data-region",
+                "address": region.start,
+                **asdict(region),
+            }
+        )
+    for region in cfg.padding_regions:
+        rows.append(
+            {
+                "record_kind": "padding-region",
+                "address": region.start,
+                **asdict(region),
+            }
+        )
+    for diagnostic in cfg.ownership_diagnostics:
+        rows.append(
+            {"record_kind": "ownership-diagnostic", **asdict(diagnostic)}
+        )
+    for limit_name, configured in asdict(cfg.limits).items():
+        rows.append(
+            {
+                "address": -1,
+                "record_kind": "analysis-limit",
+                "limit_name": limit_name,
+                "configured": configured,
+            }
+        )
+    for high_water in cfg.high_water_marks:
+        rows.append(
+            {
+                "address": -1,
+                "record_kind": "analysis-high-water",
+                **asdict(high_water),
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            row["address"],
+            row["record_kind"],
+            row.get("target", -1),
+        )
     )
+    payload = b"".join(
+        json.dumps(
+            row,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+        for row in rows
+    )
+
+    path = Path(path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(payload)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
