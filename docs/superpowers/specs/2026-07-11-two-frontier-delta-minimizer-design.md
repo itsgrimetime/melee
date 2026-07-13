@@ -89,6 +89,7 @@ melee-agent debug search delta-minimize \
   [--out-dir DIR] \
   [--max-candidates 64] \
   [--target TARGET.json] \
+  [--namespace-review REVIEW.yaml] \
   [--donor AXIS=left|right]... \
   [--no-objobjects] \
   [--json]
@@ -99,6 +100,12 @@ uses the expected object, so an opcode donor override would have no behavioral
 meaning and is not supported. Overrides are recorded in objective provenance.
 `--no-objobjects` is an explicit provisional mode and cannot emit a four-axis
 joint solution.
+
+`--namespace-review` is valid only with a
+`delta-minimize-color-target.v2` target. Omitting the sidecar in that context
+starts reviewed-namespace discovery; supplying it resumes the same run after
+the request has been inspected and sealed. V1 targets never accept a reviewed
+namespace sidecar.
 
 `--target` accepts `delta-minimize-color-target.v1`, a versioned validation of
 the force-physical target already consumed by `debug target score-source`:
@@ -170,11 +177,22 @@ the shared baseline.
 
 ### 5.1 Reviewed namespace discovery and sealing
 
+The normative reviewed-authority schemas and proof rules are defined by
+[`2026-07-11-issue-1238-cross-parent-role-bindings-design.md`](2026-07-11-issue-1238-cross-parent-role-bindings-design.md)
+and
+[`2026-07-11-issue-1238-reviewed-namespace-sidecar-design.md`](2026-07-11-issue-1238-reviewed-namespace-sidecar-design.md).
+Those companion specifications define automatic v5 structural witnesses,
+request and sealed-review schemas, exact-content inheritance, and resolution
+precedence. This specification adopts those definitions rather than treating
+raw IG equality as evidence.
+
 `--namespace-review PATH` accepts a sealed, provenance-bound namespace sidecar.
 When automatic v5 proof cannot resolve every viable allocator namespace, the
 first `delta-minimize` run captures the complete raw lattice, exits incomplete,
 and writes `namespace-review-request.yaml`. The text and JSON results name both
-that request path and every unresolved artifact ID. No objective manifest,
+that request path and every unresolved artifact ID under
+`inputs.namespace_review_request` and `inputs.namespace_review_unresolved`.
+No objective manifest,
 candidate profile publication, or Pareto frontier is published at this stage.
 
 The operator workflow is deliberately explicit:
@@ -225,7 +243,10 @@ turning whitespace into an ordinary permutation search.
 
 `ObjectiveProfiler` compiles and profiles both input parents. It derives the
 absolute targets and parent donors described in Section 9, records ambiguity,
-and creates one immutable `ObjectiveManifest` used for every candidate.
+and creates one immutable `ObjectiveManifest` used for every candidate. For a
+v2 reviewed-namespace run, objective publication is deferred until the raw
+lattice has been captured and every viable namespace is resolved. Parent
+capture remains the only profiler work performed before discovery.
 
 ### 6.3 CandidateEnumerator
 
@@ -332,21 +353,27 @@ delta rather than risking an unbounded preflight. At or below that ceiling, the
 reported legal-mask count is exact.
 
 Each materialized candidate records its mask, applied atoms, dependencies,
-distance from the left parent, distance from the right parent, source hash, and
-compile status.
+distance from the left parent (`popcount(mask)`), distance from the right parent
+(`atom_count - popcount(mask)`), source hash, and compile status.
 
 After Pareto scoring, equivalent objective vectors are minimized in both
 directions:
 
-- A left-minimal representative has no proper applied-atom subset with the
-  same vector.
-- A right-minimal representative has no proper right-to-left reverted-atom
-  subset with the same vector.
-- Ties use changed-byte count, then stable mask order.
+- `minimal_from_left` contains the single argmin of
+  `(popcount(mask), changed_bytes_from_left, mask, candidate_id)`.
+- `minimal_from_right` contains the single argmin of
+  `(atom_count - popcount(mask), changed_bytes_from_right, mask,
+  candidate_id)`.
+- The deterministic group `representative` is the single argmin of
+  `(min(popcount(mask), atom_count - popcount(mask)),
+  min(changed_bytes_from_left, changed_bytes_from_right), mask,
+  candidate_id)`.
 
 Both directional representatives are retained when they differ. Source size
-is not a fifth Pareto objective; it only reduces candidates that already have
-the same four-axis vector.
+is not a fifth Pareto objective; `changed_bytes_from_left` and
+`changed_bytes_from_right` count unequal bytes against the named parent,
+including length differences, and only break ties among candidates that
+already have the same four-axis vector.
 
 The raw frontier remains separate from these minimized views:
 
@@ -551,14 +578,16 @@ tuple disagrees with checkdiff structural truth, the evidence is contradictory
 and the run becomes `incomplete` rather than reporting any completed status.
 
 `best_next` is a presentation convenience, not a replacement for the frontier.
-It sorts exact-object matches first, then frontier candidates by joint-zero axis
-count, the four axis tuples in fixed `opcode`, `color`, `objobjects`,
-`stack-homes` order, minimized parent distance, changed bytes, and stable
-candidate ID.
+It is the ascending lexicographic argmin of
+`(not exact_object_match, -zero_axis_count, opcode, color, objobjects,
+stack_homes, min_parent_atom_distance, min_changed_bytes, candidate_id)` over
+the union of frontier and exact-match candidates. Thus exact matches sort
+first, then candidates with more zero axes; axis tuples retain the fixed
+`opcode`, `color`, `objobjects`, `stack-homes` order.
 
 ## 12. Execution and caching
 
-The command runs these resumable phases:
+The ordinary v1 command runs these resumable phases:
 
 1. Validate sources, target function, compiler context, and expected object.
 2. Compile/profile both parents and write `objective-manifest.json`.
@@ -568,15 +597,40 @@ The command runs these resumable phases:
 6. Inspect every successfully compiled, viable candidate for ObjObjects.
 7. Compute and minimize the Pareto frontier.
 
-Candidate source and evidence are content-addressed. A cache key includes:
+A v2 reviewed-namespace run has a separate discovery/resume order:
+
+1. Validate inputs and capture both parents.
+2. Extract deltas, count the exact legal set, and enumerate every mask.
+3. Compile/checkdiff/pcdump/inspect every candidate into the raw evidence
+   ledger.
+4. Resolve automatic v5 and exact-content-inherited namespaces.
+5. If any viable exact-content group remains unresolved, write
+   `namespace-review-request.yaml`, publish only an `incomplete` result, and
+   stop without an objective manifest or derived candidate profiles.
+6. On a sealed rerun, validate the sidecar against the request and resolve all
+   namespaces without recapturing compatible raw evidence.
+7. Publish the objective manifest, derive candidate profiles, and compute and
+   minimize the exact frontier.
+
+Candidate source and evidence are content-addressed in two layers. The raw
+capture key includes:
 
 - Full source hash.
 - Function and cflags/build-unit identity.
 - Compiler identity.
 - Expected object hash.
-- Objective-manifest hash.
+- A raw-capture epoch binding the target bytes, delta-manifest hash, parser and
+  evidence schemas, inspector version/mode, and ObjObject setting.
 - Scorer/parser schema versions.
 - Inspector version and invocation mode.
+
+Raw inspection reuse requires the exact full-source hash; token equivalence is
+not sufficient because preprocessing constructs such as `__LINE__`,
+`__FILE__`, and `#line` can make byte- or position-different sources compile
+differently. Derived objective distances and profiles are separately bound to
+the immutable objective-manifest hash and resolved namespace provenance. Thus
+discovery can cache raw artifacts before an objective exists, while a reviewed
+rerun can reuse those artifacts without allowing stale derived scores.
 
 The existing repository build lock protects build-tree operations. Candidate
 sources live only below `--out-dir`; the command never patches the working-tree
@@ -643,19 +697,28 @@ pareto.groups[].candidate_ids[]
 pareto.groups[].minimal_from_left[]
 pareto.groups[].minimal_from_right[]
 pareto.groups[].representative
+pareto.exact_match_candidate_ids[]
+pareto.joint_solutions[]
+pareto.joint_zero_all_candidate_ids[]
 best_next
-exact_match_candidate_ids[]
-joint_solutions[]
-joint_zero_all_candidate_ids[]
 cache_stats
 blockers[]
 ```
 
-Every candidate row links retained source, mask, atoms, parent distances,
-compile/checkdiff result, pcdump, inspector snapshot, four objective distances,
-dominators, and failure details. The text renderer summarizes the donors,
-delta lattice, candidate counts, frontier vectors, minimized edits, and next
-action without hiding the JSON evidence.
+For a completed or provisional result, every candidate row links retained
+source, mask, atoms, parent distances, compile/checkdiff result, pcdump,
+inspector snapshot, objective distances, dominators, and failure details. The
+text renderer summarizes the donors, delta lattice, candidate counts, frontier
+vectors, minimized edits, and next action without hiding the JSON evidence.
+
+A v2 discovery-stage `incomplete` result uses the same top-level schema with
+`exact_four_axis: false`, `objective_manifest: {}`, `pareto: null`,
+`best_next: null`, and `candidate_counts.complete: 0`. Each `candidates[]` row
+is raw-only and contains `candidate_id`, `mask`, `source_hash`, `source_path`,
+and `evidence`; it does not contain objective distances or dominators.
+`blockers` contains `namespace-review-required`, while
+`inputs.namespace_review_request` and `inputs.namespace_review_unresolved`
+identify the sealing work required to continue.
 
 ## 15. Testing
 
@@ -685,6 +748,13 @@ Cover:
   ordinary frontiers, including an exact match that differs from a proxy donor.
 - Bidirectional minimization of equivalent masks.
 - Cache-key stability, stale evidence, atomic resume, and corruption handling.
+- Exact-source inspection reuse, including a negative token-equivalent
+  `__LINE__` case.
+- Automatic v5 namespace proof, `reviewed-namespaces.v1` sidecar resolution,
+  exact-content inheritance, and the prohibition on overriding automatic
+  proof.
+- Strict request/sidecar schemas, complete expanded bindings, provenance
+  binding, and rejection of stale or partial review authority.
 
 ### 15.2 Integration tests
 
@@ -701,10 +771,18 @@ compiler/inspector proves that:
 - The exact Pareto frontier is reproducible.
 - Equivalent winners are minimized from both parents.
 - Interrupted evaluation resumes without repeating valid cached work.
+- V2 discovery captures the complete raw lattice before objective/profile
+  publication, reports the request and unresolved IDs at their documented JSON
+  locations, and exits incomplete.
+- Sealing exactly one authority per unresolved content group permits a rerun
+  that reuses every compatible raw capture and publishes the exact frontier.
+- Exact-content aliases inherit one approval, while a sidecar cannot replace an
+  automatic v5 proof.
 
 Hermetic checkdiff, pcdump, and inspector snapshots exercise the production
 parsers. CLI tests cover help/golden output, JSON schema, ambiguity diagnostics,
-budget overflow, provisional mode, and interrupted infrastructure.
+budget overflow, provisional mode, reviewed discovery/sealing/resume, and
+interrupted infrastructure.
 
 ### 15.3 Real-case acceptance
 
