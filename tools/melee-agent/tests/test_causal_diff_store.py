@@ -5,6 +5,7 @@ from typing import Iterable
 
 import pytest
 
+from src.mwcc_debug.causal_diff import store as store_module
 from src.mwcc_debug.causal_diff.graph import add_adapter_results_atomically
 from src.mwcc_debug.causal_diff.models import (
     AdapterResult,
@@ -125,6 +126,15 @@ def test_record_ids_are_rfc8785_stable() -> None:
         attributes={"virtual": 66},
     )
     assert first.record_id == second.record_id
+
+
+def test_public_canonical_record_content_distinguishes_python_equal_values() -> None:
+    first = _node("compile-a", "66", "row-counter").with_attributes({"zero": 0})
+    second = first.with_attributes({"zero": False})
+    assert first == second
+    helper = getattr(store_module, "canonical_record_bytes", None)
+    assert helper is not None
+    assert helper(first) != helper(second)
 
 
 def test_store_queries_ignore_insertion_order() -> None:

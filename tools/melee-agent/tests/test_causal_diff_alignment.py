@@ -9,6 +9,7 @@ import pytest
 from src.mwcc_debug import role_descriptor
 from src.mwcc_debug.causal_diff.alignment import (
     _normalized_instruction,
+    _owner_alternatives,
     align_anchor,
     build_role_comparisons,
 )
@@ -702,25 +703,20 @@ def test_exact_duplicate_rejection_summaries_collapse_with_multiplicity() -> Non
         )
     )
 
-    abstentions = tuple(
-        _only(
-            item
-            for item in build_role_comparisons(
-                fixtures.alignment(),
-                (replace(left, backend=replace(left.backend, owner_certificates=current)), right),
-            )
-            if item.relation_kind == "backend-owner-abstained"
+    alternatives = tuple(
+        _owner_alternatives(
+            "left",
+            OWNER_ROLE,
+            current,
+            current.role_resolutions[0],
+            (),
         )
         for current in results
     )
-    abstention = abstentions[0]
-    rejection_alternative = _only(
-        item for item in abstention.attributes["alternatives"] if item["rejection_id"] == rejection.rejection_id
-    )
+    rejection_alternative = _only(item for item in alternatives[0] if item["rejection_id"] == rejection.rejection_id)
     assert rejection_alternative["multiplicity"] == 2
-    assert abstentions[0].record_id == abstentions[1].record_id
-    assert abstentions[0].attributes["alternatives"] == abstentions[1].attributes["alternatives"]
-    assert fixtures.canonical_result(abstentions[0].attributes) == fixtures.canonical_result(abstentions[1].attributes)
+    assert alternatives[0] == alternatives[1]
+    assert fixtures.canonical_result(alternatives[0]) == fixtures.canonical_result(alternatives[1])
 
 
 def test_untrusted_certificate_result_can_only_abstain() -> None:
@@ -825,3 +821,89 @@ def test_every_other_relation_rejects_two_nullable_endpoints(relation_kind: str)
             provenance=_provenance(),
             attributes={},
         )
+
+
+MALFORMED_OWNER_ROLES = (
+    OwnerRoleKey("invalid", "gpr", "row-home", 4, "locals"),
+    OwnerRoleKey("use:0", "vector", "row-home", 4, "locals"),
+    OwnerRoleKey("use:0", "gpr", "INVALID_ROLE", 4, "locals"),
+    OwnerRoleKey("use:0", "gpr", "row-home", True, "locals"),
+    OwnerRoleKey("use:0", "gpr", "row-home", 4, "heap"),
+    ("not", "an", "owner-role"),
+)
+
+
+@pytest.mark.parametrize("malformed_role", MALFORMED_OWNER_ROLES)
+def test_untrusted_malformed_only_roles_are_ignored_without_validation(
+    malformed_role: object,
+) -> None:
+    fixtures = _owner_fixtures()
+    left, right = fixtures.graphs_with_statuses("missing", "missing")
+    untrusted = OwnerCertificateResult(
+        (),
+        (
+            OwnerRoleResolution(
+                malformed_role,  # type: ignore[arg-type]
+                OwnerResolutionStatus.MISSING,
+                (),
+                (),
+            ),
+        ),
+        (),
+    )
+    left = replace(left, backend=replace(left.backend, owner_certificates=untrusted))
+
+    comparisons = build_role_comparisons(fixtures.alignment(), (left, right))
+
+    assert not any(item.relation_kind.startswith("backend-owner-") for item in comparisons)
+
+
+@pytest.mark.parametrize("malformed_role", MALFORMED_OWNER_ROLES)
+def test_trusted_other_side_role_abstains_without_reading_untrusted_roles(
+    malformed_role: object,
+) -> None:
+    fixtures = _owner_fixtures()
+    left, right = fixtures.graphs_with_statuses("missing", "unique")
+    untrusted = OwnerCertificateResult(
+        (),
+        (
+            OwnerRoleResolution(
+                malformed_role,  # type: ignore[arg-type]
+                OwnerResolutionStatus.MISSING,
+                (),
+                (),
+            ),
+        ),
+        (),
+    )
+    left = replace(left, backend=replace(left.backend, owner_certificates=untrusted))
+
+    abstention = _only(
+        item
+        for item in build_role_comparisons(fixtures.alignment(), (left, right))
+        if item.relation_kind == "backend-owner-abstained"
+    )
+
+    assert abstention.attributes["role"] == OWNER_ROLE.as_json()
+    assert abstention.attributes["left_status"] == "incomplete"
+    assert abstention.attributes["right_status"] == "unique"
+
+
+def test_trusted_results_are_looked_up_once_per_side_per_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixtures = _owner_fixtures()
+    graph_pair = fixtures.future_complete_graph_pair()
+    trusted_ids = {id(graph.backend.owner_certificates): 0 for graph in graph_pair}
+    original = OwnerCertificateResult.resolution_for
+
+    def counted(result: OwnerCertificateResult, role: OwnerRoleKey):
+        if id(result) in trusted_ids:
+            trusted_ids[id(result)] += 1
+        return original(result, role)
+
+    monkeypatch.setattr(OwnerCertificateResult, "resolution_for", counted)
+
+    build_role_comparisons(fixtures.alignment(), graph_pair)
+
+    assert set(trusted_ids.values()) == {1}

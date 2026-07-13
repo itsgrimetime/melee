@@ -23,7 +23,10 @@ from src.mwcc_debug.causal_diff.models import (
     FrontierBundleManifest,
     Provenance,
 )
-from src.mwcc_debug.causal_diff.owner_certificate import OwnerSemanticState
+from src.mwcc_debug.causal_diff.owner_certificate import (
+    OwnerCertificateResult,
+    OwnerSemanticState,
+)
 from src.mwcc_debug.causal_diff.source_adapter import adapt_source
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 from tests.owner_certificate_fixtures import (
@@ -1426,7 +1429,7 @@ def test_graph_derivation_failure_leaves_store_unchanged(tmp_path: Path) -> None
 
 def test_equal_certificate_semantics_emit_no_owner_delta() -> None:
     deltas = diff_frontiers(
-        graphs(),
+        graphs(states=(STATE, STATE)),
         (owner_comparison(states=(STATE, STATE)),),
     )
     assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
@@ -1436,7 +1439,9 @@ def test_changed_certificate_semantics_emit_one_reconstructable_delta() -> None:
     changed = OwnerSemanticState(22, 0x48, 4)
     comparison = owner_comparison(states=(STATE, changed))
     delta = only(
-        item for item in diff_frontiers(graphs(), (comparison,)) if item.relation_kind == "backend-owner-state-changed"
+        item
+        for item in diff_frontiers(graphs(states=(STATE, changed)), (comparison,))
+        if item.relation_kind == "backend-owner-state-changed"
     )
     assert delta.left_record_id == comparison.left_record_id
     assert delta.right_record_id == comparison.right_record_id
@@ -1457,8 +1462,9 @@ def test_changed_certificate_semantics_emit_one_reconstructable_delta() -> None:
     ("parser", "provenance", "missing-endpoint", "noncertificate-endpoint", "malformed-state"),
 )
 def test_owner_differ_rejects_malformed_v2_correspondence(mutation: str) -> None:
-    graph_pair = list(graphs())
-    comparison = owner_comparison(states=(STATE, OwnerSemanticState(22, 0x48, 4)))
+    states = (STATE, OwnerSemanticState(22, 0x48, 4))
+    graph_pair = list(graphs(states=states))
+    comparison = owner_comparison(states=states)
     if mutation == "parser":
         comparison = replace(
             comparison,
@@ -1493,9 +1499,7 @@ def test_owner_differ_rejects_malformed_v2_correspondence(mutation: str) -> None
                 }
             )
         )
-        store = InMemoryEvidenceStore()
-        store.add_nodes((changed,))
-        graph_pair[0] = replace(graph_pair[0], store=store)
+        graph_pair[0] = _with_replaced_graph_node(graph_pair[0], changed)
 
     deltas = diff_frontiers(tuple(graph_pair), (comparison,))
 
@@ -1503,7 +1507,8 @@ def test_owner_differ_rejects_malformed_v2_correspondence(mutation: str) -> None
 
 
 def test_owner_differ_ignores_abstentions_even_with_certificate_endpoints() -> None:
-    comparison = owner_comparison(states=(STATE, OwnerSemanticState(22, 0x48, 4)))
+    states = (STATE, OwnerSemanticState(22, 0x48, 4))
+    comparison = owner_comparison(states=states)
     abstention = ComparisonRecord.create(
         analysis_id=comparison.analysis_id,
         relation_kind="backend-owner-abstained",
@@ -1521,6 +1526,140 @@ def test_owner_differ_ignores_abstentions_even_with_certificate_endpoints() -> N
         attributes={"reason": "backend-owner-ambiguous"},
     )
 
-    deltas = diff_frontiers(graphs(), (abstention,))
+    deltas = diff_frontiers(graphs(states=states), (abstention,))
 
     assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+
+
+def _with_replaced_graph_node(graph, changed: EvidenceNode):
+    nodes = tuple(
+        changed if node.record_id == changed.record_id else node
+        for node in graph.store.find_nodes(graph.bundle.compile_id)
+    )
+    certificate_ids = {node.record_id for node in graph.backend.owner_certificates.certificate_nodes}
+    store = InMemoryEvidenceStore()
+    store.add_nodes(tuple(node for node in nodes if node.record_id not in certificate_ids))
+    store.add_edges(graph.store.find_edges(graph.bundle.compile_id))
+    store.add_nodes(tuple(node for node in nodes if node.record_id in certificate_ids))
+    return replace(graph, store=store)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "certificate-parser",
+        "untrusted-membership",
+        "ordinary-content",
+        "python-equal-content",
+        "malformed-provenance",
+    ),
+)
+def test_owner_differ_requires_trusted_canonical_certificate_membership(
+    mutation: str,
+) -> None:
+    states = (
+        OwnerSemanticState(1, 1, 4),
+        OwnerSemanticState(2, 2, 4),
+    )
+    graph_pair = list(graphs(states=states))
+    comparison = owner_comparison(states=states)
+    left_graph = graph_pair[0]
+    certificate = left_graph.store.get_node(comparison.left_record_id)
+    assert certificate is not None
+    if mutation == "untrusted-membership":
+        trusted = left_graph.backend.owner_certificates
+        untrusted = OwnerCertificateResult(
+            trusted.certificate_nodes,
+            trusted.role_resolutions,
+            trusted.global_rejections,
+        )
+        graph_pair[0] = replace(
+            left_graph,
+            backend=replace(left_graph.backend, owner_certificates=untrusted),
+        )
+    else:
+        if mutation == "certificate-parser":
+            changed = replace(
+                certificate,
+                provenance=replace(
+                    certificate.provenance,
+                    parser="deserialized-owner-proof.v1",
+                ),
+            )
+        elif mutation == "ordinary-content":
+            changed = certificate.with_attributes({**certificate.attributes, "poisoned": True})
+        elif mutation == "python-equal-content":
+            changed = certificate.with_attributes(
+                {
+                    **certificate.attributes,
+                    "semantic_state": {
+                        **certificate.attributes["semantic_state"],
+                        "assigned_physical_register": True,
+                    },
+                }
+            )
+            assert changed == certificate
+        else:
+            changed = replace(
+                certificate,
+                provenance=replace(
+                    certificate.provenance,
+                    input_record_ids=(),
+                ),
+            )
+        graph_pair[0] = _with_replaced_graph_node(left_graph, changed)
+
+    deltas = diff_frontiers(tuple(graph_pair), (comparison,))
+
+    assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+
+
+def test_owner_differ_collapses_exact_duplicate_correspondences_stably() -> None:
+    states = (STATE, OwnerSemanticState(22, 0x48, 4))
+    graph_pair = graphs(states=states)
+    comparison = owner_comparison(states=states)
+
+    forward = tuple(
+        item
+        for item in diff_frontiers(graph_pair, (comparison, comparison))
+        if item.relation_kind == "backend-owner-state-changed"
+    )
+    reverse = tuple(
+        item
+        for item in diff_frontiers(graph_pair, tuple(reversed((comparison, comparison))))
+        if item.relation_kind == "backend-owner-state-changed"
+    )
+
+    assert len(forward) == 1
+    assert forward == reverse
+    assert forward[0].record_id == reverse[0].record_id
+
+
+def test_owner_differ_rejects_distinct_provenance_competitors_in_both_orders() -> None:
+    states = (STATE, OwnerSemanticState(22, 0x48, 4))
+    graph_pair = graphs(states=states)
+    comparison = owner_comparison(states=states)
+    left = graph_pair[0].store.get_node(comparison.left_record_id)
+    right = graph_pair[1].store.get_node(comparison.right_record_id)
+    assert left is not None and right is not None
+    competitor = ComparisonRecord.create(
+        analysis_id=comparison.analysis_id,
+        relation_kind=comparison.relation_kind,
+        left_compile_id=comparison.left_compile_id,
+        left_record_id=comparison.left_record_id,
+        right_compile_id=comparison.right_compile_id,
+        right_record_id=comparison.right_record_id,
+        producer_confidence=comparison.confidence,
+        adapter_confidence=comparison.confidence,
+        provenance=replace(
+            comparison.provenance,
+            derivation_rule="certified-owner-role:provenance-competitor",
+        ),
+        input_confidences=(left.confidence, right.confidence),
+        attributes=comparison.attributes,
+        occurrence_ordinal=1,
+    )
+
+    for ordered in ((comparison, competitor), (competitor, comparison)):
+        deltas = diff_frontiers(graph_pair, ordered)
+        assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)

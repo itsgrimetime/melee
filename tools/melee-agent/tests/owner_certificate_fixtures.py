@@ -15,7 +15,7 @@ from tools.mwcc_retro.backend_pcode_lineage import (
 )
 
 from src.mwcc_debug.causal_diff import backend_adapter
-from src.mwcc_debug.causal_diff.alignment import AnchorAlignment
+from src.mwcc_debug.causal_diff.alignment import AnchorAlignment, build_role_comparisons
 from src.mwcc_debug.causal_diff.asm_adapter import CheckdiffEvidence
 from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import ValidatedBundle
@@ -29,7 +29,6 @@ from src.mwcc_debug.causal_diff.models import (
     EvidenceEdge,
     EvidenceNode,
     Provenance,
-    min_confidence,
 )
 from src.mwcc_debug.causal_diff.object_binding_adapter import (
     ObjectBindingAdapterInput,
@@ -778,81 +777,61 @@ def future_complete_graph_pair() -> tuple[FrontierGraph, FrontierGraph]:
     return graphs_with_statuses("unique", "unique")
 
 
-def _synthetic_certificate(
-    compile_id: str,
-    state: OwnerSemanticState,
-) -> EvidenceNode:
-    content = {"role": ROLE.as_json(), "semantic_state": state.as_json()}
-    return EvidenceNode.create(
+def _semantic_frontier(label: str, state: OwnerSemanticState) -> FrontierGraph:
+    compile_id = f"diff-{label}"
+    evidence = _evidence_from_paths(
+        (
+            _path(
+                0,
+                operand_key=ROLE.operand_key,
+                semantic_stack_role=ROLE.semantic_stack_role,
+                physical_register=state.assigned_physical_register,
+                stack_offset=state.stack_offset,
+            ),
+        ),
         compile_id=compile_id,
         function="fn_test",
-        kind="owner-proof-certificate",
-        local_key=hashlib.sha256(canonical_bytes(content)).hexdigest(),
-        role_key=ROLE.semantic_stack_role,
-        producer_confidence=Confidence.OBSERVED,
-        adapter_confidence=Confidence.DERIVED_UNIQUE,
-        provenance=Provenance(
-            artifact_sha256="f" * 64,
-            parser="causal-owner-certificate.v1",
-            raw_start=None,
-            raw_end=None,
-            derivation_rule="synthetic-certified-state",
+        capture_run_id=hashlib.sha256(label.encode()).hexdigest(),
+    )
+    result = build_owner_certificates(evidence)
+    certificate = only(result.certificate_nodes)
+    assert certificate.attributes["semantic_state"] == state.as_json()
+    store = InMemoryEvidenceStore()
+    store.add_nodes(evidence.nodes)
+    store.add_edges(evidence.edges)
+    store.add_nodes((certificate,))
+    return _frontier(
+        label,
+        compile_id,
+        store,
+        BackendEvidence(
+            result=AdapterResult(nodes=(*evidence.nodes, certificate), edges=evidence.edges),
+            pcdump_text="",
+            role_compile=None,
+            nodes_by_class_ig=MappingProxyType({}),
+            nodes_by_virtual=MappingProxyType({}),
+            object_bindings=evidence,
+            owner_certificates=result,
         ),
-        attributes=content,
     )
 
 
-def graphs() -> tuple[FrontierGraph, FrontierGraph]:
-    values = (STATE, CHANGED_STATE)
-    frontiers = []
-    for label in ("left", "right"):
-        compile_id = f"diff-{label}"
-        certificates = tuple(_synthetic_certificate(compile_id, state) for state in values)
-        store = InMemoryEvidenceStore()
-        store.add_nodes(certificates)
-        frontiers.append(
-            _frontier(
-                label,
-                compile_id,
-                store,
-                BackendEvidence(
-                    result=AdapterResult(nodes=certificates),
-                    pcdump_text="",
-                    role_compile=None,
-                    nodes_by_class_ig=MappingProxyType({}),
-                    nodes_by_virtual=MappingProxyType({}),
-                ),
-            )
-        )
-    return tuple(frontiers)
+def graphs(
+    states: tuple[OwnerSemanticState, OwnerSemanticState] = (STATE, CHANGED_STATE),
+) -> tuple[FrontierGraph, FrontierGraph]:
+    return (
+        _semantic_frontier("left", states[0]),
+        _semantic_frontier("right", states[1]),
+    )
 
 
 def owner_comparison(
     states: tuple[OwnerSemanticState, OwnerSemanticState] = (STATE, STATE),
 ) -> ComparisonRecord:
-    left_graph, right_graph = graphs()
-    left = _synthetic_certificate(left_graph.bundle.compile_id, states[0])
-    right = _synthetic_certificate(right_graph.bundle.compile_id, states[1])
-    confidence = min_confidence(left.confidence, right.confidence)
-    return ComparisonRecord.create(
-        analysis_id=alignment().analysis_id,
-        relation_kind="backend-owner-corresponds-to",
-        left_compile_id=left.compile_id,
-        left_record_id=left.record_id,
-        right_compile_id=right.compile_id,
-        right_record_id=right.record_id,
-        producer_confidence=confidence,
-        adapter_confidence=confidence,
-        provenance=Provenance(
-            artifact_sha256=alignment().analysis_id,
-            parser="causal-backend-owner-alignment.v2",
-            raw_start=None,
-            raw_end=None,
-            derivation_rule="certified-owner-role",
-            input_record_ids=(left.record_id, right.record_id),
-        ),
-        input_confidences=(left.confidence, right.confidence),
-        attributes={"role": ROLE.as_json()},
+    return only(
+        item
+        for item in build_role_comparisons(alignment(), graphs(states))
+        if item.relation_kind == "backend-owner-corresponds-to"
     )
 
 

@@ -96,7 +96,9 @@ def _json_value(value: object) -> object:
     return value
 
 
-def _record_bytes(record: object) -> bytes:
+def canonical_record_bytes(record: object) -> bytes:
+    """Return canonical bytes for complete evidence-record content."""
+
     return canonical_bytes(_json_value(record))
 
 
@@ -128,20 +130,16 @@ class InMemoryEvidenceStore:
         self._comparisons: dict[str, ComparisonRecord] = {}
 
     def _record_for_id(self, record_id: str) -> EvidenceNode | EvidenceEdge | ComparisonRecord | None:
-        return (
-            self._nodes.get(record_id)
-            or self._edges.get(record_id)
-            or self._comparisons.get(record_id)
-        )
+        return self._nodes.get(record_id) or self._edges.get(record_id) or self._comparisons.get(record_id)
 
     def _validated_batch(self, records: Iterable[_Record]) -> dict[str, _Record]:
         pending: dict[str, _Record] = {}
         pending_content: dict[str, bytes] = {}
         for record in records:
-            content = _record_bytes(record)
+            content = canonical_record_bytes(record)
             prior = self._record_for_id(record.record_id)
             if prior is not None:
-                if _record_bytes(prior) != content:
+                if canonical_record_bytes(prior) != content:
                     raise ValueError(f"record ID collision: {record.record_id}")
                 continue
             if record.record_id in pending:
@@ -212,9 +210,7 @@ class InMemoryEvidenceStore:
             )
         self._comparisons.update(pending)
 
-    def _validate_comparison_endpoint(
-        self, endpoint_id: str | None, compile_id: str, comparison_id: str
-    ) -> None:
+    def _validate_comparison_endpoint(self, endpoint_id: str | None, compile_id: str, comparison_id: str) -> None:
         if endpoint_id is None:
             return
         endpoint = self._nodes.get(endpoint_id) or self._edges.get(endpoint_id)
@@ -291,10 +287,7 @@ class InMemoryEvidenceStore:
             for comparison in self._comparisons.values()
             if comparison.analysis_id == analysis_id
             and (relation_kind is None or comparison.relation_kind == relation_kind)
-            and (
-                endpoint is None
-                or endpoint in {comparison.left_record_id, comparison.right_record_id}
-            )
+            and (endpoint is None or endpoint in {comparison.left_record_id, comparison.right_record_id})
         )
         return tuple(sorted(records, key=_comparison_sort_key))
 

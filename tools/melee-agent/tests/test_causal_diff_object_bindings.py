@@ -7,6 +7,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
+from typing import Mapping
 
 import pytest
 
@@ -23,6 +24,7 @@ from src.mwcc_debug.causal_diff.alignment import (
     AbstentionReason,
     EffectAbstention,
     OperandRole,
+    _automatic_local_role,
     _candidate_is_uniquely_aligned,
     _verified_retail_local_role,
     align_anchor,
@@ -83,8 +85,9 @@ def _store_with_replaced_record(graph, changed):
         changed if isinstance(changed, EvidenceEdge) and edge.record_id == changed.record_id else edge
         for edge in graph.store.find_edges(graph.bundle.compile_id)
     )
-    store.add_nodes(nodes)
+    store.add_nodes(tuple(node for node in nodes if node.kind != "owner-proof-certificate"))
     store.add_edges(edges)
+    store.add_nodes(tuple(node for node in nodes if node.kind == "owner-proof-certificate"))
     return replace(graph, store=store)
 
 
@@ -151,7 +154,51 @@ def test_legacy_traversals_exclude_v2_edges_and_endpoints() -> None:
     assert legacy_simple_paths(poisoned, virtual_id, edge.target_id, 1) == ()
 
 
-def _graph_with_v2_owner_evidence(*, certificates: bool):
+@pytest.mark.parametrize(
+    ("record_name", "poison"),
+    tuple(
+        (record_name, poison)
+        for record_name in ("occurrence", "use-def", "virtual", "map", "allocator")
+        for poison in ("parser", "capture")
+    ),
+)
+def test_legacy_automatic_role_rejects_v2_anywhere_in_fallback_chain(
+    record_name: str,
+    poison: str,
+) -> None:
+    graph = _graph("direct")
+    role = OperandRole("use:0", "use", 0, "r", 21)
+    baseline, _reason = _automatic_local_role(graph, 0x234, role)
+    assert baseline is not None
+    records = {
+        "occurrence": baseline.pcode,
+        "use-def": baseline.use_def_edge,
+        "virtual": baseline.virtual,
+        "map": baseline.allocator_map_edge,
+        "allocator": baseline.node,
+    }
+    record = records[record_name]
+    assert record is not None
+    changed = (
+        replace(
+            record,
+            provenance=replace(
+                record.provenance,
+                parser="mwcc-retro-backend-trace.v2",
+            ),
+        )
+        if poison == "parser"
+        else record.with_attributes({**record.attributes, "capture_run_id": "a" * 64})
+    )
+    poisoned = _store_with_replaced_record(graph, changed)
+
+    resolution, reason = _automatic_local_role(poisoned, 0x234, role)
+
+    assert resolution is None
+    assert reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+
+def _graph_with_v2_owner_evidence(*, certificates: bool, physical_register: int = 21):
     from src.mwcc_debug.causal_diff.owner_certificate import build_owner_certificates
 
     graph = _graph("direct", missing_use=True)
@@ -159,6 +206,7 @@ def _graph_with_v2_owner_evidence(*, certificates: bool):
         _adapter_input(
             compile_id=graph.bundle.compile_id,
             function="fn_test",
+            physical_register=physical_register,
         )
     )
     result = build_owner_certificates(evidence)
@@ -214,6 +262,76 @@ def test_verified_retail_role_never_treats_raw_v2_mapping_as_proof() -> None:
 
     resolution, reason = _verified_retail_local_role(
         graph,
+        candidate,
+        0x234,
+        OperandRole("use:0", "use", 0, "r", 21),
+    )
+
+    assert resolution is None
+    assert reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+
+def _replace_first_binary_integer(value: object) -> tuple[object, bool]:
+    if isinstance(value, Mapping):
+        changed = dict(value)
+        for key, item in value.items():
+            replacement, found = _replace_first_binary_integer(item)
+            if found:
+                changed[key] = replacement
+                return changed, True
+        return value, False
+    if isinstance(value, tuple):
+        changed = list(value)
+        for index, item in enumerate(value):
+            replacement, found = _replace_first_binary_integer(item)
+            if found:
+                changed[index] = replacement
+                return tuple(changed), True
+        return value, False
+    if isinstance(value, int) and not isinstance(value, bool) and value in {0, 1}:
+        return bool(value), True
+    return value, False
+
+
+@pytest.mark.parametrize(
+    ("record_name", "poison"),
+    tuple(
+        (record_name, poison)
+        for record_name in ("certificate", "pcode", "virtual", "allocator")
+        for poison in ("ordinary", "python-equal")
+    ),
+)
+def test_verified_retail_role_requires_canonical_certificate_bound_records(
+    record_name: str,
+    poison: str,
+) -> None:
+    graph = _graph_with_v2_owner_evidence(
+        certificates=True,
+        physical_register=1,
+    )
+    certificate = next(iter(graph.backend.owner_certificates.certificate_nodes))
+    records = {
+        "certificate": certificate,
+        "pcode": graph.store.get_node(certificate.attributes["pcode_record_id"]),
+        "virtual": graph.store.get_node(certificate.attributes["virtual_record_id"]),
+        "allocator": graph.store.get_node(certificate.attributes["allocator_record_id"]),
+    }
+    record = records[record_name]
+    assert record is not None
+    if poison == "ordinary":
+        attributes = {**record.attributes, "poisoned": True}
+    else:
+        attributes, found = _replace_first_binary_integer(record.attributes)
+        assert found
+    changed = record.with_attributes(attributes)
+    if poison == "python-equal":
+        assert changed == record
+    poisoned = _store_with_replaced_record(graph, changed)
+    candidate = _candidate_is_uniquely_aligned(poisoned, 0x234)
+    assert candidate is not None
+
+    resolution, reason = _verified_retail_local_role(
+        poisoned,
         candidate,
         0x234,
         OperandRole("use:0", "use", 0, "r", 21),

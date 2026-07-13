@@ -8,6 +8,7 @@ from .canonical import canonical_bytes
 from .graph import FrontierGraph
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance
 from .owner_certificate import OwnerRoleKey, OwnerSemanticState
+from .store import canonical_record_bytes
 
 _PARSER_VERSION = "causal-frontier-differ.v1"
 _OWNER_ALIGNMENT_PARSER = "causal-backend-owner-alignment.v2"
@@ -154,6 +155,23 @@ def _analysis_id(comparisons: tuple[ComparisonRecord, ...]) -> str | None:
     return next(iter(analysis_ids), None)
 
 
+def _trusted_stored_certificate(
+    graph: FrontierGraph,
+    record_id: str,
+) -> EvidenceNode | None:
+    trusted = graph.backend.owner_certificates.certificate(record_id)
+    stored = graph.store.get_node(record_id)
+    if (
+        trusted is None
+        or stored is None
+        or trusted.kind != "owner-proof-certificate"
+        or trusted.provenance.parser != "causal-owner-certificate.v1"
+        or canonical_record_bytes(trusted) != canonical_record_bytes(stored)
+    ):
+        return None
+    return trusted
+
+
 def _owner_state_deltas(
     *,
     analysis_id: str,
@@ -161,22 +179,33 @@ def _owner_state_deltas(
     right_graph: FrontierGraph,
     comparisons: tuple[ComparisonRecord, ...],
 ) -> tuple[ComparisonRecord, ...]:
-    records: list[ComparisonRecord] = []
-    for comparison in sorted(comparisons, key=lambda item: item.record_id):
+    candidates_by_role: dict[
+        OwnerRoleKey,
+        dict[
+            bytes,
+            tuple[
+                ComparisonRecord,
+                EvidenceNode,
+                EvidenceNode,
+                OwnerSemanticState,
+                OwnerSemanticState,
+            ],
+        ],
+    ] = {}
+    for comparison in comparisons:
         if (
             comparison.relation_kind != "backend-owner-corresponds-to"
             or comparison.provenance.parser != _OWNER_ALIGNMENT_PARSER
             or comparison.left_record_id is None
             or comparison.right_record_id is None
+            or frozenset(comparison.attributes) != {"role"}
         ):
             continue
-        left = left_graph.store.get_node(comparison.left_record_id)
-        right = right_graph.store.get_node(comparison.right_record_id)
+        left = _trusted_stored_certificate(left_graph, comparison.left_record_id)
+        right = _trusted_stored_certificate(right_graph, comparison.right_record_id)
         if (
             left is None
             or right is None
-            or left.kind != "owner-proof-certificate"
-            or right.kind != "owner-proof-certificate"
             or left.compile_id != comparison.left_compile_id
             or right.compile_id != comparison.right_compile_id
             or not {left.record_id, right.record_id} <= set(comparison.provenance.input_record_ids)
@@ -195,8 +224,20 @@ def _owner_state_deltas(
             or left_role != comparison_role
             or left_state is None
             or right_state is None
-            or left_state == right_state
         ):
+            continue
+        candidates_by_role.setdefault(left_role, {}).setdefault(
+            canonical_record_bytes(comparison),
+            (comparison, left, right, left_state, right_state),
+        )
+
+    records: list[ComparisonRecord] = []
+    for role in sorted(candidates_by_role):
+        candidates = candidates_by_role[role]
+        if len(candidates) != 1:
+            continue
+        comparison, left, right, left_state, right_state = next(iter(candidates.values()))
+        if left_state == right_state:
             continue
         records.append(
             _delta(
@@ -207,7 +248,7 @@ def _owner_state_deltas(
                 right_compile_id=_compile_id(right_graph),
                 right=right,
                 attributes={
-                    "role": left_role.as_json(),
+                    "role": role.as_json(),
                     "left_semantic_state": left_state.as_json(),
                     "right_semantic_state": right_state.as_json(),
                 },

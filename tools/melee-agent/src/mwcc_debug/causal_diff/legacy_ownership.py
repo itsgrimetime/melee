@@ -49,6 +49,57 @@ def legacy_allocator_from_virtual(
     )
 
 
+def legacy_pcode_occurrences(graph: FrontierGraph) -> tuple[EvidenceNode, ...]:
+    """Return only pcdump-era occurrences eligible for legacy role fallback."""
+
+    return tuple(
+        node
+        for node in graph.store.find_nodes(
+            str(graph.bundle.compile_id),
+            "pcode-occurrence",
+        )
+        if _legacy_record(node)
+    )
+
+
+def legacy_allocator_chains_from_occurrence(
+    graph: FrontierGraph,
+    occurrence_id: str,
+    edge_kind: str,
+    operand_position: int,
+) -> tuple[tuple[EvidenceEdge, EvidenceNode, EvidenceEdge, EvidenceNode], ...]:
+    """Resolve a complete occurrence/use-def/virtual/map/allocator legacy chain."""
+
+    occurrence = graph.store.get_node(occurrence_id)
+    if not _legacy_record(occurrence) or occurrence.kind != "pcode-occurrence":
+        return ()
+    chains = []
+    for edge in graph.store.find_edges(
+        str(graph.bundle.compile_id),
+        edge_kind,
+        endpoint=occurrence_id,
+    ):
+        if (
+            edge.source_id != occurrence_id
+            or edge.attributes.get("operand_position") != operand_position
+            or not _legacy_edge(graph, edge)
+        ):
+            continue
+        virtual = graph.store.get_node(edge.target_id)
+        if virtual is None or virtual.kind != "virtual-register":
+            continue
+        chains.extend(
+            (edge, virtual, map_edge, allocator)
+            for map_edge, allocator in legacy_allocator_from_virtual(graph, virtual.record_id)
+        )
+    return tuple(
+        sorted(
+            chains,
+            key=lambda item: tuple(record.record_id for record in item),
+        )
+    )
+
+
 def legacy_reachable_records(
     graph: FrontierGraph,
     roots: Iterable[str],
@@ -120,7 +171,9 @@ def legacy_simple_paths(
 
 
 __all__ = [
+    "legacy_allocator_chains_from_occurrence",
     "legacy_allocator_from_virtual",
+    "legacy_pcode_occurrences",
     "legacy_reachable_records",
     "legacy_simple_paths",
 ]

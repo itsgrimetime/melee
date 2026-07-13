@@ -14,7 +14,11 @@ from ..parser import Instruction
 from .backend_adapter import _operand_roles
 from .canonical import canonical_bytes, stable_id
 from .graph import FrontierGraph
-from .legacy_ownership import legacy_allocator_from_virtual
+from .legacy_ownership import (
+    legacy_allocator_chains_from_occurrence,
+    legacy_allocator_from_virtual,
+    legacy_pcode_occurrences,
+)
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance, min_confidence
 from .owner_certificate import (
     OwnerCertificateRejection,
@@ -24,6 +28,7 @@ from .owner_certificate import (
     OwnerRoleResolution,
     OwnerSemanticState,
 )
+from .store import canonical_record_bytes
 
 _REGISTER = re.compile(r"\b([rf])\d+\b")
 _ADDI_ZERO_COPY = re.compile(
@@ -337,13 +342,38 @@ def _verified_retail_local_role(
             allocator_id = certificate.attributes.get("allocator_record_id")
             if not isinstance(allocator_id, str):
                 continue
-            allocator = graph.store.get_node(allocator_id)
-            if allocator is None or allocator.kind != "allocator-node":
+            allocator = _certificate_bound_node(
+                graph,
+                certificate,
+                allocator_id,
+                "allocator-node",
+            )
+            if allocator is None:
                 continue
             pcode_id = certificate.attributes.get("pcode_record_id")
             virtual_id = certificate.attributes.get("virtual_record_id")
-            pcode = graph.store.get_node(pcode_id) if isinstance(pcode_id, str) else None
-            virtual = graph.store.get_node(virtual_id) if isinstance(virtual_id, str) else None
+            pcode = (
+                _certificate_bound_node(
+                    graph,
+                    certificate,
+                    pcode_id,
+                    "retail-pcode",
+                )
+                if isinstance(pcode_id, str)
+                else None
+            )
+            virtual = (
+                _certificate_bound_node(
+                    graph,
+                    certificate,
+                    virtual_id,
+                    "retail-virtual-register",
+                )
+                if isinstance(virtual_id, str)
+                else None
+            )
+            if pcode is None or virtual is None:
+                continue
             chain = tuple(
                 record for record in (candidate, pcode, virtual, allocator, certificate) if record is not None
             )
@@ -386,7 +416,7 @@ def _automatic_local_role(
     pcode_neighborhoods = _pcode_neighborhoods(graph)
     edge_kind = "defines-virtual" if role.kind == "def" else "uses-virtual"
     resolutions: dict[str, list[_LocalRoleResolution]] = {}
-    for occurrence in graph.store.find_nodes(_compile_id(graph), "pcode-occurrence"):
+    for occurrence in legacy_pcode_occurrences(graph):
         if (
             _normalized_instruction(occurrence.attributes.get("opcode"), occurrence.attributes.get("operands"))
             != signature
@@ -394,30 +424,26 @@ def _automatic_local_role(
             continue
         if len(expected_neighborhood) > 1 and pcode_neighborhoods.get(occurrence.record_id) != expected_neighborhood:
             continue
-        edges = tuple(
-            edge
-            for edge in graph.store.find_edges(_compile_id(graph), edge_kind, endpoint=occurrence.record_id)
-            if edge.source_id == occurrence.record_id and edge.attributes.get("operand_position") == raw_position
-        )
-        for edge in edges:
-            virtual = graph.store.get_node(edge.target_id)
-            if virtual is None or virtual.kind != "virtual-register":
-                continue
-            for map_edge, allocator in legacy_allocator_from_virtual(graph, edge.target_id):
-                class_id = 1 if role.register_kind == "f" else 0
-                if allocator.attributes.get("class_id") == class_id:
-                    chain = (candidate, occurrence, edge, virtual, map_edge, allocator)
-                    resolutions.setdefault(allocator.record_id, []).append(
-                        _LocalRoleResolution(
-                            node=allocator,
-                            candidate=candidate,
-                            pcode=occurrence,
-                            use_def_edge=edge,
-                            virtual=virtual,
-                            allocator_map_edge=map_edge,
-                            confidence=min_confidence(*(record.confidence for record in chain)),
-                        )
+        for edge, virtual, map_edge, allocator in legacy_allocator_chains_from_occurrence(
+            graph,
+            occurrence.record_id,
+            edge_kind,
+            raw_position,
+        ):
+            class_id = 1 if role.register_kind == "f" else 0
+            if allocator.attributes.get("class_id") == class_id:
+                chain = (candidate, occurrence, edge, virtual, map_edge, allocator)
+                resolutions.setdefault(allocator.record_id, []).append(
+                    _LocalRoleResolution(
+                        node=allocator,
+                        candidate=candidate,
+                        pcode=occurrence,
+                        use_def_edge=edge,
+                        virtual=virtual,
+                        allocator_map_edge=map_edge,
+                        confidence=min_confidence(*(record.confidence for record in chain)),
                     )
+                )
     if len(resolutions) == 1:
         choices = next(iter(resolutions.values()))
         selected = max(
@@ -745,7 +771,30 @@ def _stored_certificate(
     if certificate is None:
         return None
     stored = graph.store.get_node(record_id)
-    return certificate if stored == certificate else None
+    if stored is None or canonical_record_bytes(stored) != canonical_record_bytes(certificate):
+        return None
+    return certificate
+
+
+def _certificate_bound_node(
+    graph: FrontierGraph,
+    certificate: EvidenceNode,
+    record_id: str,
+    kind: str,
+) -> EvidenceNode | None:
+    evidence = graph.backend.object_bindings
+    if evidence is None or record_id not in certificate.provenance.input_record_ids:
+        return None
+    bound = next(
+        (node for node in evidence.nodes if node.record_id == record_id),
+        None,
+    )
+    stored = graph.store.get_node(record_id)
+    if bound is None or stored is None or bound.kind != kind or stored.kind != kind:
+        return None
+    if canonical_record_bytes(bound) != canonical_record_bytes(stored):
+        return None
+    return stored
 
 
 def _effective_owner_resolution(
@@ -962,6 +1011,36 @@ def _owner_abstention(
     )
 
 
+def _trusted_owner_roles(result: OwnerCertificateResult) -> tuple[OwnerRoleKey, ...]:
+    if not result.is_trusted:
+        return ()
+    roles = []
+    for resolution in result.role_resolutions:
+        role = resolution.role
+        if type(role) is not OwnerRoleKey:
+            continue
+        try:
+            role.validate()
+        except (TypeError, ValueError):
+            continue
+        roles.append(role)
+    return tuple(sorted(set(roles)))
+
+
+def _owner_resolution(
+    result: OwnerCertificateResult,
+    role: OwnerRoleKey,
+) -> OwnerRoleResolution:
+    if not result.is_trusted:
+        return OwnerRoleResolution(
+            role,
+            OwnerResolutionStatus.INCOMPLETE,
+            (),
+            (),
+        )
+    return result.resolution_for(role)
+
+
 def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[FrontierGraph]) -> tuple[ComparisonRecord, ...]:
     """Return generic correspondences plus certificate-only owner resolution."""
 
@@ -981,11 +1060,16 @@ def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[Frontier
     left_result = left_graph.backend.owner_certificates
     right_result = right_graph.backend.owner_certificates
     roles = tuple(
-        sorted({resolution.role for result in (left_result, right_result) for resolution in result.role_resolutions})
+        sorted(
+            {
+                *_trusted_owner_roles(left_result),
+                *_trusted_owner_roles(right_result),
+            }
+        )
     )
     for ordinal, role in enumerate(roles):
-        left_resolution = left_result.resolution_for(role)
-        right_resolution = right_result.resolution_for(role)
+        left_resolution = _owner_resolution(left_result, role)
+        right_resolution = _owner_resolution(right_result, role)
         left_status, left_certificates = _effective_owner_resolution(left_graph, left_result, role, left_resolution)
         right_status, right_certificates = _effective_owner_resolution(
             right_graph, right_result, role, right_resolution
