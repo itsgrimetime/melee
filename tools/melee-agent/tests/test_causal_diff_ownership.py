@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 
@@ -10,18 +11,28 @@ import pytest
 from src.mwcc_debug.causal_diff.asm_adapter import CheckdiffEvidence
 from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import BundleInputError, ValidatedBundle
+from src.mwcc_debug.causal_diff.differ import diff_frontiers
 from src.mwcc_debug.causal_diff.frame_adapter import adapt_frame
 from src.mwcc_debug.causal_diff.graph import build_frontier_graph
 from src.mwcc_debug.causal_diff.models import (
     AdapterResult,
+    ComparisonRecord,
     Confidence,
     EvidenceEdge,
     EvidenceNode,
     FrontierBundleManifest,
     Provenance,
 )
+from src.mwcc_debug.causal_diff.owner_certificate import OwnerSemanticState
 from src.mwcc_debug.causal_diff.source_adapter import adapt_source
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
+from tests.owner_certificate_fixtures import (
+    ROLE,
+    STATE,
+    graphs,
+    only,
+    owner_comparison,
+)
 from tests.test_stack_slot_bridge import PCDUMP as BRIDGE_PCDUMP
 from tests.test_stack_slot_bridge import SOURCE as BRIDGE_SOURCE
 
@@ -1411,3 +1422,105 @@ def test_graph_derivation_failure_leaves_store_unchanged(tmp_path: Path) -> None
         )
 
     assert store.find_nodes(bundle.compile_id) == ()
+
+
+def test_equal_certificate_semantics_emit_no_owner_delta() -> None:
+    deltas = diff_frontiers(
+        graphs(),
+        (owner_comparison(states=(STATE, STATE)),),
+    )
+    assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+
+
+def test_changed_certificate_semantics_emit_one_reconstructable_delta() -> None:
+    changed = OwnerSemanticState(22, 0x48, 4)
+    comparison = owner_comparison(states=(STATE, changed))
+    delta = only(
+        item for item in diff_frontiers(graphs(), (comparison,)) if item.relation_kind == "backend-owner-state-changed"
+    )
+    assert delta.left_record_id == comparison.left_record_id
+    assert delta.right_record_id == comparison.right_record_id
+    assert delta.attributes == {
+        "role": ROLE.as_json(),
+        "left_semantic_state": STATE.as_json(),
+        "right_semantic_state": changed.as_json(),
+    }
+    assert set(delta.provenance.input_record_ids) == {
+        comparison.record_id,
+        comparison.left_record_id,
+        comparison.right_record_id,
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("parser", "provenance", "missing-endpoint", "noncertificate-endpoint", "malformed-state"),
+)
+def test_owner_differ_rejects_malformed_v2_correspondence(mutation: str) -> None:
+    graph_pair = list(graphs())
+    comparison = owner_comparison(states=(STATE, OwnerSemanticState(22, 0x48, 4)))
+    if mutation == "parser":
+        comparison = replace(
+            comparison,
+            provenance=replace(
+                comparison.provenance,
+                parser="causal-backend-owner-alignment.v1",
+            ),
+        )
+    elif mutation == "provenance":
+        comparison = replace(
+            comparison,
+            provenance=replace(
+                comparison.provenance,
+                input_record_ids=(comparison.left_record_id,),
+            ),
+        )
+    elif mutation == "missing-endpoint":
+        comparison = replace(comparison, left_record_id="missing-certificate")
+    else:
+        left = graph_pair[0].store.get_node(comparison.left_record_id)
+        assert left is not None
+        changed = (
+            replace(left, kind="allocator-node")
+            if mutation == "noncertificate-endpoint"
+            else left.with_attributes(
+                {
+                    **left.attributes,
+                    "semantic_state": {
+                        **left.attributes["semantic_state"],
+                        "unknown": 1,
+                    },
+                }
+            )
+        )
+        store = InMemoryEvidenceStore()
+        store.add_nodes((changed,))
+        graph_pair[0] = replace(graph_pair[0], store=store)
+
+    deltas = diff_frontiers(tuple(graph_pair), (comparison,))
+
+    assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+
+
+def test_owner_differ_ignores_abstentions_even_with_certificate_endpoints() -> None:
+    comparison = owner_comparison(states=(STATE, OwnerSemanticState(22, 0x48, 4)))
+    abstention = ComparisonRecord.create(
+        analysis_id=comparison.analysis_id,
+        relation_kind="backend-owner-abstained",
+        left_compile_id=comparison.left_compile_id,
+        left_record_id=comparison.left_record_id,
+        right_compile_id=comparison.right_compile_id,
+        right_record_id=comparison.right_record_id,
+        producer_confidence=Confidence.HEURISTIC,
+        adapter_confidence=Confidence.HEURISTIC,
+        provenance=replace(
+            comparison.provenance,
+            derivation_rule="certified-owner-abstention:test",
+        ),
+        input_confidences=(Confidence.DERIVED_UNIQUE, Confidence.DERIVED_UNIQUE),
+        attributes={"reason": "backend-owner-ambiguous"},
+    )
+
+    deltas = diff_frontiers(graphs(), (abstention,))
+
+    assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)

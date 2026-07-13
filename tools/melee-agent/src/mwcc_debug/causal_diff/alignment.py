@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -11,13 +12,17 @@ from typing import Iterable, Literal, Mapping
 from .. import role_descriptor, role_matcher, role_reanchor
 from ..parser import Instruction
 from .backend_adapter import _operand_roles
-from .canonical import stable_id
+from .canonical import canonical_bytes, stable_id
 from .graph import FrontierGraph
+from .legacy_ownership import legacy_allocator_from_virtual
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance, min_confidence
-from .object_binding_adapter import (
-    ObjectBindingEvidence,
-    exact_owner_path_record,
-    proof_complete,
+from .owner_certificate import (
+    OwnerCertificateRejection,
+    OwnerCertificateResult,
+    OwnerResolutionStatus,
+    OwnerRoleKey,
+    OwnerRoleResolution,
+    OwnerSemanticState,
 )
 
 _REGISTER = re.compile(r"\b([rf])\d+\b")
@@ -129,310 +134,6 @@ class _LocalRoleResolution:
             )
             if record is not None
         )
-
-
-@dataclass(frozen=True, slots=True)
-class BackendOwnerRoleTuple:
-    operand_key: str
-    register_class: str
-    semantic_stack_role: str
-    type_size: int
-    frame_area: str
-
-    def values(self) -> tuple[str, str, str, int, str]:
-        return (
-            self.operand_key,
-            self.register_class,
-            self.semantic_stack_role,
-            self.type_size,
-            self.frame_area,
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class BackendOwnerPath:
-    evidence: ObjectBindingEvidence
-    owner: EvidenceNode
-    anchor: EvidenceNode
-    pcode: EvidenceNode
-    lineage: EvidenceNode
-    virtual: EvidenceNode
-    allocator: EvidenceNode
-    stack: EvidenceNode
-    assigned_physical_register: int
-    supporting_records: tuple[EvidenceNode | EvidenceEdge, ...]
-
-    @property
-    def capture_run_id(self) -> str:
-        return self.evidence.capture_run_id
-
-    def semantic_state(self, role: BackendOwnerRoleTuple) -> Mapping[str, object]:
-        """Project only cross-capture allocator/frame facts from this exact path."""
-
-        return {
-            "role_tuple": role.values(),
-            "assigned_physical_register": self.assigned_physical_register,
-            "stack_offset": self.stack.attributes.get("offset"),
-            "stack_size": self.stack.attributes.get("size"),
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class BackendOwnerCandidate:
-    role_tuple: BackendOwnerRoleTuple
-    left: BackendOwnerPath
-    right: BackendOwnerPath
-
-
-def _proof_edge(
-    evidence: ObjectBindingEvidence,
-    kind: str,
-    source_id: str,
-    target_id: str,
-) -> tuple[EvidenceEdge, ...]:
-    return tuple(
-        edge
-        for edge in evidence.edges
-        if edge.kind == kind
-        and edge.source_id == source_id
-        and edge.target_id == target_id
-        and exact_owner_path_record(evidence, edge)
-    )
-
-
-def _local_backend_owner_paths(
-    evidence: ObjectBindingEvidence,
-    role: BackendOwnerRoleTuple,
-) -> tuple[BackendOwnerPath, ...]:
-    if not proof_complete(evidence):
-        return ()
-    nodes = {node.record_id: node for node in evidence.nodes}
-    register_class_id = 1 if role.register_class in {"f", "fpr"} else 0
-    paths: list[BackendOwnerPath] = []
-    anchors = tuple(
-        node
-        for node in evidence.nodes
-        if node.kind == "assembly-operand-anchor"
-        and node.attributes.get("machine_operand_key") == role.operand_key
-        and exact_owner_path_record(evidence, node)
-    )
-    owners = tuple(
-        node
-        for node in evidence.nodes
-        if node.kind == "compiler-object"
-        and node.attributes.get("type_size") == role.type_size
-        and role.frame_area in node.attributes.get("areas", ())
-        and exact_owner_path_record(evidence, node)
-    )
-    for anchor in anchors:
-        # Preserve every exact alternative rather than selecting by numeric identity.
-        anchor_edges = tuple(
-            edge
-            for edge in evidence.edges
-            if edge.kind == "assembly-anchor-emitted-by-pcode"
-            and edge.source_id == anchor.record_id
-            and edge.target_id in nodes
-            and exact_owner_path_record(evidence, edge)
-        )
-        for anchor_edge in anchor_edges:
-            pcode = nodes[anchor_edge.target_id]
-            if not exact_owner_path_record(evidence, pcode):
-                continue
-            lineage_edges = tuple(
-                edge
-                for edge in evidence.edges
-                if edge.kind == "pcode-operand-lineage"
-                and edge.source_id == pcode.record_id
-                and edge.target_id in nodes
-                and exact_owner_path_record(evidence, edge)
-            )
-            for lineage_edge in lineage_edges:
-                lineage = nodes[lineage_edge.target_id]
-                if not exact_owner_path_record(evidence, lineage):
-                    continue
-                virtual_edges = tuple(
-                    edge
-                    for edge in evidence.edges
-                    if edge.kind == "pcode-operand-uses-virtual"
-                    and edge.source_id == lineage.record_id
-                    and edge.target_id in nodes
-                    and exact_owner_path_record(evidence, edge)
-                )
-                for virtual_edge in virtual_edges:
-                    virtual = nodes[virtual_edge.target_id]
-                    if virtual.attributes.get("class_id") != register_class_id or not exact_owner_path_record(
-                        evidence, virtual
-                    ):
-                        continue
-                    allocator_edges = tuple(
-                        edge
-                        for edge in evidence.edges
-                        if edge.kind == "maps-to-allocator-node"
-                        and edge.source_id == virtual.record_id
-                        and edge.target_id in nodes
-                        and exact_owner_path_record(evidence, edge)
-                    )
-                    for owner in owners:
-                        object_edges = _proof_edge(
-                            evidence,
-                            "object-materializes-virtual",
-                            owner.record_id,
-                            virtual.record_id,
-                        )
-                        stack_edges = tuple(
-                            edge
-                            for edge in evidence.edges
-                            if edge.kind == "object-has-stack-home"
-                            and edge.source_id == owner.record_id
-                            and edge.target_id in nodes
-                            and edge.attributes.get("area") == role.frame_area
-                            and edge.attributes.get("semantic_stack_role") == role.semantic_stack_role
-                            and exact_owner_path_record(evidence, edge)
-                        )
-                        for object_edge in object_edges:
-                            for allocator_edge in allocator_edges:
-                                allocator = nodes[allocator_edge.target_id]
-                                if not exact_owner_path_record(evidence, allocator):
-                                    continue
-                                origin_ids = (
-                                    set(virtual_edge.provenance.input_record_ids)
-                                    & set(allocator_edge.provenance.input_record_ids)
-                                    & set(allocator.provenance.input_record_ids)
-                                )
-                                origin_support = tuple(
-                                    nodes[record_id]
-                                    for record_id in sorted(origin_ids)
-                                    if record_id in nodes
-                                    and nodes[record_id].kind == "backend-support-record"
-                                    and nodes[record_id].attributes.get("support_kind") == "pcode-rewrite"
-                                )
-                                if len(origin_support) != 1:
-                                    continue
-                                assigned_physical = origin_support[0].attributes.get("allocated_physical")
-                                if (
-                                    not isinstance(assigned_physical, int)
-                                    or isinstance(assigned_physical, bool)
-                                    or not 0 <= assigned_physical <= 31
-                                ):
-                                    continue
-                                for stack_edge in stack_edges:
-                                    stack = nodes[stack_edge.target_id]
-                                    if not exact_owner_path_record(evidence, stack):
-                                        continue
-                                    supporting = (
-                                        anchor,
-                                        anchor_edge,
-                                        pcode,
-                                        lineage_edge,
-                                        lineage,
-                                        virtual_edge,
-                                        virtual,
-                                        object_edge,
-                                        owner,
-                                        allocator_edge,
-                                        allocator,
-                                        stack_edge,
-                                        stack,
-                                    )
-                                    if all(exact_owner_path_record(evidence, record) for record in supporting):
-                                        paths.append(
-                                            BackendOwnerPath(
-                                                evidence,
-                                                owner,
-                                                anchor,
-                                                pcode,
-                                                lineage,
-                                                virtual,
-                                                allocator,
-                                                stack,
-                                                assigned_physical,
-                                                supporting,
-                                            )
-                                        )
-    return tuple(
-        sorted(
-            paths,
-            key=lambda path: (
-                path.owner.record_id,
-                path.anchor.record_id,
-                path.stack.record_id,
-                tuple(record.record_id for record in path.supporting_records),
-            ),
-        )
-    )
-
-
-def resolve_backend_owner_candidates(
-    evidence_pair: tuple[ObjectBindingEvidence, ObjectBindingEvidence],
-    role_tuple: BackendOwnerRoleTuple,
-) -> tuple[BackendOwnerCandidate, ...]:
-    """Enumerate every semantic bilateral owner without cross-run identities."""
-
-    left, right = evidence_pair
-    left_paths = _local_backend_owner_paths(left, role_tuple)
-    right_paths = _local_backend_owner_paths(right, role_tuple)
-    return tuple(
-        BackendOwnerCandidate(role_tuple, left_path, right_path)
-        for left_path in left_paths
-        for right_path in right_paths
-    )
-
-
-def backend_owner_correspondences(
-    analysis_id: str,
-    candidates: tuple[BackendOwnerCandidate, ...],
-) -> tuple[ComparisonRecord, ...]:
-    """Render analysis-scoped semantic owner alternatives, never graph edges."""
-
-    unique = len(candidates) == 1
-    comparisons: list[ComparisonRecord] = []
-    for ordinal, candidate in enumerate(candidates):
-        inputs = (
-            *candidate.left.supporting_records,
-            *candidate.right.supporting_records,
-        )
-        left_path_proof_complete = all(
-            exact_owner_path_record(candidate.left.evidence, record) for record in candidate.left.supporting_records
-        )
-        right_path_proof_complete = all(
-            exact_owner_path_record(candidate.right.evidence, record) for record in candidate.right.supporting_records
-        )
-        confidence = min_confidence(*(record.confidence for record in inputs)) if unique else Confidence.HEURISTIC
-        comparisons.append(
-            ComparisonRecord.create(
-                analysis_id=analysis_id,
-                relation_kind="backend-owner-corresponds-to",
-                left_compile_id=candidate.left.owner.compile_id,
-                left_record_id=candidate.left.owner.record_id,
-                right_compile_id=candidate.right.owner.compile_id,
-                right_record_id=candidate.right.owner.record_id,
-                producer_confidence=confidence,
-                adapter_confidence=confidence,
-                provenance=Provenance(
-                    artifact_sha256=analysis_id,
-                    parser="causal-backend-owner-alignment.v1",
-                    raw_start=None,
-                    raw_end=None,
-                    derivation_rule=(
-                        "semantic-owner-role-tuple:" + ":".join(str(value) for value in candidate.role_tuple.values())
-                    ),
-                    input_record_ids=tuple(record.record_id for record in inputs),
-                ),
-                input_confidences=tuple(record.confidence for record in inputs),
-                occurrence_ordinal=ordinal,
-                attributes={
-                    "role_tuple": candidate.role_tuple.values(),
-                    "left_semantic_state": candidate.left.semantic_state(candidate.role_tuple),
-                    "right_semantic_state": candidate.right.semantic_state(candidate.role_tuple),
-                    "alternative_count": len(candidates),
-                    "left_path_proof_complete": left_path_proof_complete,
-                    "right_path_proof_complete": right_path_proof_complete,
-                    "proof_complete": unique and left_path_proof_complete and right_path_proof_complete,
-                    "scope": "analysis",
-                },
-            )
-        )
-    return tuple(comparisons)
 
 
 def _label(graph: FrontierGraph) -> str:
@@ -612,98 +313,53 @@ def _candidate_is_uniquely_aligned(graph: FrontierGraph, retail_offset: int) -> 
     return candidate if len(alignments) == 1 else None
 
 
-def _allocator_from_virtual(graph: FrontierGraph, virtual_id: str) -> tuple[tuple[EvidenceEdge, EvidenceNode], ...]:
-    compile_id = _compile_id(graph)
-    mappings = {
-        edge.target_id: edge
-        for edge in graph.store.find_edges(compile_id, "maps-to-allocator-node", endpoint=virtual_id)
-        if edge.source_id == virtual_id
-    }
-    return tuple(
-        (mappings[record_id], node)
-        for record_id in sorted(mappings)
-        if (node := graph.store.get_node(record_id)) is not None and node.kind == "allocator-node"
-    )
-
-
 def _verified_retail_local_role(
     graph: FrontierGraph,
     candidate: EvidenceNode,
     retail_offset: int,
     role: OperandRole,
 ) -> tuple[_LocalRoleResolution | None, AbstentionReason]:
-    evidence = graph.backend.object_bindings
-    if evidence is None or not proof_complete(evidence):
-        return None, AbstentionReason.MISSING_BACKEND_ROLE
-    nodes = {node.record_id: node for node in evidence.nodes}
-
-    def edges(kind: str, source_id: str) -> tuple[EvidenceEdge, ...]:
-        return tuple(
-            edge
-            for edge in evidence.edges
-            if edge.kind == kind
-            and edge.source_id == source_id
-            and edge.target_id in nodes
-            and exact_owner_path_record(evidence, edge)
-        )
-
+    del retail_offset
+    result = graph.backend.owner_certificates
+    register_class = "fpr" if role.register_kind == "f" else "gpr"
     alternatives: dict[str, list[_LocalRoleResolution]] = {}
-    anchors = tuple(
-        node
-        for node in evidence.nodes
-        if node.kind == "assembly-operand-anchor"
-        and node.attributes.get("code_offset") == retail_offset
-        and node.attributes.get("machine_operand_key") == role.key
-        and exact_owner_path_record(evidence, node)
-    )
-    class_id = 1 if role.register_kind == "f" else 0
-    for anchor in anchors:
-        for anchor_edge in edges("assembly-anchor-emitted-by-pcode", anchor.record_id):
-            pcode = nodes[anchor_edge.target_id]
-            for lineage_edge in edges("pcode-operand-lineage", pcode.record_id):
-                lineage = nodes[lineage_edge.target_id]
-                for virtual_edge in edges("pcode-operand-uses-virtual", lineage.record_id):
-                    virtual = nodes[virtual_edge.target_id]
-                    if virtual.attributes.get("class_id") != class_id:
-                        continue
-                    for allocator_edge in edges("maps-to-allocator-node", virtual.record_id):
-                        allocator = nodes[allocator_edge.target_id]
-                        supporting = (
-                            anchor,
-                            anchor_edge,
-                            lineage_edge,
-                            lineage,
-                        )
-                        chain = (
-                            candidate,
-                            pcode,
-                            virtual_edge,
-                            virtual,
-                            allocator_edge,
-                            allocator,
-                            *supporting,
-                        )
-                        selected_v2_path = tuple(record for record in chain if record is not candidate)
-                        if not all(
-                            exact_owner_path_record(evidence, record) for record in selected_v2_path
-                        ) or not proof_complete(
-                            evidence,
-                            frozenset(record.record_id for record in selected_v2_path),
-                        ):
-                            continue
-                        alternatives.setdefault(allocator.record_id, []).append(
-                            _LocalRoleResolution(
-                                node=allocator,
-                                candidate=candidate,
-                                pcode=pcode,
-                                use_def_edge=virtual_edge,
-                                virtual=virtual,
-                                allocator_map_edge=allocator_edge,
-                                confidence=min_confidence(*(record.confidence for record in chain)),
-                                verified_retail_path=True,
-                                supporting_records=supporting,
-                            )
-                        )
+    for base_resolution in result.role_resolutions:
+        owner_role = base_resolution.role
+        if owner_role.operand_key != role.key or owner_role.register_class != register_class:
+            continue
+        resolution = result.resolution_for(owner_role)
+        if resolution.status is not OwnerResolutionStatus.UNIQUE:
+            continue
+        for certificate_id in resolution.certificate_record_ids:
+            certificate = _stored_certificate(graph, result, owner_role, certificate_id)
+            if certificate is None:
+                continue
+            allocator_id = certificate.attributes.get("allocator_record_id")
+            if not isinstance(allocator_id, str):
+                continue
+            allocator = graph.store.get_node(allocator_id)
+            if allocator is None or allocator.kind != "allocator-node":
+                continue
+            pcode_id = certificate.attributes.get("pcode_record_id")
+            virtual_id = certificate.attributes.get("virtual_record_id")
+            pcode = graph.store.get_node(pcode_id) if isinstance(pcode_id, str) else None
+            virtual = graph.store.get_node(virtual_id) if isinstance(virtual_id, str) else None
+            chain = tuple(
+                record for record in (candidate, pcode, virtual, allocator, certificate) if record is not None
+            )
+            alternatives.setdefault(allocator.record_id, []).append(
+                _LocalRoleResolution(
+                    node=allocator,
+                    candidate=candidate,
+                    pcode=pcode,
+                    use_def_edge=None,
+                    virtual=virtual,
+                    allocator_map_edge=None,
+                    confidence=min_confidence(*(record.confidence for record in chain)),
+                    verified_retail_path=True,
+                    supporting_records=(certificate,),
+                )
+            )
     if len(alternatives) == 1:
         return next(iter(alternatives.values()))[0], AbstentionReason.MISSING_BACKEND_ROLE
     if alternatives:
@@ -747,7 +403,7 @@ def _automatic_local_role(
             virtual = graph.store.get_node(edge.target_id)
             if virtual is None or virtual.kind != "virtual-register":
                 continue
-            for map_edge, allocator in _allocator_from_virtual(graph, edge.target_id):
+            for map_edge, allocator in legacy_allocator_from_virtual(graph, edge.target_id):
                 class_id = 1 if role.register_kind == "f" else 0
                 if allocator.attributes.get("class_id") == class_id:
                     chain = (candidate, occurrence, edge, virtual, map_edge, allocator)
@@ -790,7 +446,7 @@ def _asserted_local_role(graph: FrontierGraph, spec: str) -> _LocalRoleResolutio
             raise ValueError(f"invalid frontier-node spec: {spec!r}")
         kind = virtual_match.group("kind").lower()
         virtual_id = graph.backend.nodes_by_virtual.get((kind, int(virtual_match.group("number"))))
-        candidates = () if virtual_id is None else _allocator_from_virtual(graph, virtual_id)
+        candidates = () if virtual_id is None else legacy_allocator_from_virtual(graph, virtual_id)
         if len(candidates) != 1:
             raise ValueError(f"frontier-node virtual assertion is not unique: {spec!r}")
         map_edge, node = candidates[0]
@@ -1032,8 +688,282 @@ def align_anchor(
     )
 
 
+_OWNER_STATUS_PRIORITY = (
+    OwnerResolutionStatus.CONTRADICTORY,
+    OwnerResolutionStatus.INCOMPLETE,
+    OwnerResolutionStatus.AMBIGUOUS,
+    OwnerResolutionStatus.MISSING,
+)
+_OWNER_ABSTENTION_REASONS = {
+    OwnerResolutionStatus.CONTRADICTORY: "backend-owner-contradictory",
+    OwnerResolutionStatus.INCOMPLETE: "backend-owner-path-incomplete",
+    OwnerResolutionStatus.AMBIGUOUS: "backend-owner-ambiguous",
+    OwnerResolutionStatus.MISSING: "backend-owner-missing",
+}
+
+
+def _certificate_semantics(
+    certificate: EvidenceNode,
+    role: OwnerRoleKey,
+) -> OwnerSemanticState | None:
+    role_value = certificate.attributes.get("role")
+    state_value = certificate.attributes.get("semantic_state")
+    if not isinstance(role_value, Mapping) or not isinstance(state_value, Mapping):
+        return None
+    try:
+        parsed_role = OwnerRoleKey(**role_value)
+        state = OwnerSemanticState(**state_value)
+        parsed_role.validate()
+        state.validate()
+    except (TypeError, ValueError):
+        return None
+    return state if parsed_role == role else None
+
+
+def _trusted_certificate(
+    result: OwnerCertificateResult,
+    role: OwnerRoleKey,
+    record_id: str,
+) -> EvidenceNode | None:
+    certificate = result.certificate(record_id)
+    if certificate is None or certificate.kind != "owner-proof-certificate":
+        return None
+    if certificate.provenance.parser != "causal-owner-certificate.v1":
+        return None
+    if _certificate_semantics(certificate, role) is None:
+        return None
+    return certificate
+
+
+def _stored_certificate(
+    graph: FrontierGraph,
+    result: OwnerCertificateResult,
+    role: OwnerRoleKey,
+    record_id: str,
+) -> EvidenceNode | None:
+    certificate = _trusted_certificate(result, role, record_id)
+    if certificate is None:
+        return None
+    stored = graph.store.get_node(record_id)
+    return certificate if stored == certificate else None
+
+
+def _effective_owner_resolution(
+    graph: FrontierGraph,
+    result: OwnerCertificateResult,
+    role: OwnerRoleKey,
+    resolution: OwnerRoleResolution,
+) -> tuple[OwnerResolutionStatus, tuple[EvidenceNode, ...]]:
+    certificates = tuple(
+        certificate
+        for record_id in resolution.certificate_record_ids
+        if (certificate := _stored_certificate(graph, result, role, record_id)) is not None
+    )
+    status = resolution.status
+    if status is OwnerResolutionStatus.UNIQUE and (
+        len(resolution.certificate_record_ids) != 1 or len(certificates) != 1
+    ):
+        status = OwnerResolutionStatus.INCOMPLETE
+    return status, certificates
+
+
+def _rejection_summary(
+    side: str,
+    rejection: OwnerCertificateRejection,
+) -> Mapping[str, object]:
+    return {
+        "kind": "rejection",
+        "side": side,
+        "certificate_record_id": None,
+        "role": None if rejection.role is None else rejection.role.as_json(),
+        "state": None,
+        "confidence": Confidence.HEURISTIC.value,
+        "provenance_record_ids": (),
+        "rejection_id": rejection.rejection_id,
+        "reason": rejection.reason,
+        "candidate_record_ids": tuple(sorted(rejection.candidate_record_ids)),
+        "support_record_ids": tuple(sorted(rejection.raw_support_record_ids)),
+    }
+
+
+def _certificate_multiplicity(
+    result: OwnerCertificateResult,
+    role: OwnerRoleKey,
+    certificate: EvidenceNode,
+) -> int:
+    state = _certificate_semantics(certificate, role)
+    if state is None:
+        return 1
+    provenance_ids = tuple(sorted(certificate.provenance.input_record_ids))
+    return next(
+        (
+            group.multiplicity
+            for group in result._canonical_groups
+            if group.role == role
+            and group.semantic_state == state
+            and provenance_ids in tuple(tuple(sorted(record_ids)) for record_ids in group.provenance_record_ids)
+        ),
+        1,
+    )
+
+
+def _owner_alternatives(
+    side: str,
+    role: OwnerRoleKey,
+    result: OwnerCertificateResult,
+    resolution: OwnerRoleResolution,
+    certificates: tuple[EvidenceNode, ...],
+) -> tuple[Mapping[str, object], ...]:
+    raw: list[Mapping[str, object]] = []
+    certificates_by_id = {certificate.record_id: certificate for certificate in certificates}
+    for record_id in resolution.certificate_record_ids:
+        certificate = _trusted_certificate(result, role, record_id)
+        if certificate is not None:
+            certificates_by_id.setdefault(record_id, certificate)
+    for certificate in certificates_by_id.values():
+        state = _certificate_semantics(certificate, role)
+        assert state is not None
+        summary = {
+            "kind": "certificate",
+            "side": side,
+            "certificate_record_id": certificate.record_id,
+            "role": role.as_json(),
+            "state": state.as_json(),
+            "confidence": certificate.confidence.value,
+            "provenance_record_ids": tuple(sorted(certificate.provenance.input_record_ids)),
+            "rejection_id": None,
+            "reason": None,
+            "candidate_record_ids": (),
+            "support_record_ids": (),
+        }
+        raw.extend((summary,) * _certificate_multiplicity(result, role, certificate))
+    raw.extend(_rejection_summary(side, rejection) for rejection in (*resolution.rejections, *result.global_rejections))
+    grouped: dict[bytes, tuple[Mapping[str, object], int]] = {}
+    for summary in raw:
+        key = canonical_bytes(summary)
+        prior = grouped.get(key)
+        grouped[key] = (summary, 1 if prior is None else prior[1] + 1)
+    return tuple({**summary, "multiplicity": multiplicity} for _key, (summary, multiplicity) in sorted(grouped.items()))
+
+
+def _owner_correspondence(
+    analysis_id: str,
+    role: OwnerRoleKey,
+    left: EvidenceNode,
+    right: EvidenceNode,
+    ordinal: int,
+) -> ComparisonRecord:
+    inputs = (left, right)
+    confidence = min_confidence(*(certificate.confidence for certificate in inputs))
+    role_digest = hashlib.sha256(canonical_bytes(role.as_json())).hexdigest()
+    return ComparisonRecord.create(
+        analysis_id=analysis_id,
+        relation_kind="backend-owner-corresponds-to",
+        left_compile_id=left.compile_id,
+        left_record_id=left.record_id,
+        right_compile_id=right.compile_id,
+        right_record_id=right.record_id,
+        producer_confidence=confidence,
+        adapter_confidence=confidence,
+        provenance=Provenance(
+            artifact_sha256=analysis_id,
+            parser="causal-backend-owner-alignment.v2",
+            raw_start=None,
+            raw_end=None,
+            derivation_rule=f"certified-owner-role:{role_digest}",
+            input_record_ids=tuple(certificate.record_id for certificate in inputs),
+        ),
+        input_confidences=tuple(certificate.confidence for certificate in inputs),
+        occurrence_ordinal=ordinal,
+        attributes={"role": role.as_json()},
+    )
+
+
+def _owner_abstention(
+    analysis_id: str,
+    role: OwnerRoleKey,
+    left_graph: FrontierGraph,
+    right_graph: FrontierGraph,
+    left_resolution: OwnerRoleResolution,
+    right_resolution: OwnerRoleResolution,
+    left_status: OwnerResolutionStatus,
+    right_status: OwnerResolutionStatus,
+    left_certificates: tuple[EvidenceNode, ...],
+    right_certificates: tuple[EvidenceNode, ...],
+    ordinal: int,
+) -> ComparisonRecord:
+    status = next(item for item in _OWNER_STATUS_PRIORITY if item in {left_status, right_status})
+    alternatives = tuple(
+        sorted(
+            (
+                *_owner_alternatives(
+                    "left", role, left_graph.backend.owner_certificates, left_resolution, left_certificates
+                ),
+                *_owner_alternatives(
+                    "right", role, right_graph.backend.owner_certificates, right_resolution, right_certificates
+                ),
+            ),
+            key=canonical_bytes,
+        )
+    )
+    alternatives_digest = hashlib.sha256(
+        canonical_bytes({"role": role.as_json(), "alternatives": alternatives})
+    ).hexdigest()
+    inputs_by_id = {certificate.record_id: certificate for certificate in (*left_certificates, *right_certificates)}
+    inputs = tuple(inputs_by_id[record_id] for record_id in sorted(inputs_by_id))
+    left_endpoint = left_certificates[0] if len(left_certificates) == 1 else None
+    right_endpoint = right_certificates[0] if len(right_certificates) == 1 else None
+    return ComparisonRecord.create(
+        analysis_id=analysis_id,
+        relation_kind="backend-owner-abstained",
+        left_compile_id=_compile_id(left_graph),
+        left_record_id=None if left_endpoint is None else left_endpoint.record_id,
+        right_compile_id=_compile_id(right_graph),
+        right_record_id=None if right_endpoint is None else right_endpoint.record_id,
+        producer_confidence=Confidence.HEURISTIC,
+        adapter_confidence=Confidence.HEURISTIC,
+        provenance=Provenance(
+            artifact_sha256=analysis_id,
+            parser="causal-backend-owner-alignment.v2",
+            raw_start=None,
+            raw_end=None,
+            derivation_rule=f"certified-owner-abstention:{alternatives_digest}",
+            input_record_ids=tuple(record.record_id for record in inputs),
+        ),
+        input_confidences=tuple(record.confidence for record in inputs),
+        occurrence_ordinal=ordinal,
+        attributes={
+            "reason": _OWNER_ABSTENTION_REASONS[status],
+            "role": role.as_json(),
+            "left_status": left_status.value,
+            "right_status": right_status.value,
+            "certificate_record_ids": {
+                "left": tuple(sorted(left_resolution.certificate_record_ids)),
+                "right": tuple(sorted(right_resolution.certificate_record_ids)),
+            },
+            "rejections": {
+                "left": tuple(
+                    _rejection_summary("left", item)
+                    for item in sorted(
+                        (*left_resolution.rejections, *left_graph.backend.owner_certificates.global_rejections),
+                        key=lambda item: item.rejection_id,
+                    )
+                ),
+                "right": tuple(
+                    _rejection_summary("right", item)
+                    for item in sorted(
+                        (*right_resolution.rejections, *right_graph.backend.owner_certificates.global_rejections),
+                        key=lambda item: item.rejection_id,
+                    )
+                ),
+            },
+            "alternatives": alternatives,
+        },
+    )
+
+
 def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[FrontierGraph]) -> tuple[ComparisonRecord, ...]:
-    """Return the alignment's comparison-scoped correspondences after scope validation."""
+    """Return generic correspondences plus certificate-only owner resolution."""
 
     graph_pair = tuple(graphs)
     if len(graph_pair) != 2:
@@ -1047,62 +977,54 @@ def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[Frontier
         if actual != expected:
             raise ValueError("role comparison scope does not match frontier pair")
     comparisons = list(alignment.comparisons)
-    ordered_graphs = tuple(sorted(graph_pair, key=_label))
-    left_evidence = ordered_graphs[0].backend.object_bindings
-    right_evidence = ordered_graphs[1].backend.object_bindings
-    if left_evidence is None or right_evidence is None:
-        return tuple(comparisons)
-
-    def role_shapes(evidence: ObjectBindingEvidence) -> frozenset[tuple[str, int, str]]:
-        nodes = {node.record_id: node for node in evidence.nodes}
-        values: set[tuple[str, int, str]] = set()
-        for edge in evidence.edges:
-            if edge.kind != "object-has-stack-home":
-                continue
-            owner = nodes.get(edge.source_id)
-            if owner is None or owner.kind != "compiler-object":
-                continue
-            semantic_role = edge.attributes.get("semantic_stack_role")
-            type_size = owner.attributes.get("type_size")
-            area = edge.attributes.get("area")
-            if (
-                isinstance(semantic_role, str)
-                and semantic_role
-                and isinstance(type_size, int)
-                and not isinstance(type_size, bool)
-                and isinstance(area, str)
-                and area
-            ):
-                values.add((semantic_role, type_size, area))
-        return frozenset(values)
-
-    shared_shapes = role_shapes(left_evidence) & role_shapes(right_evidence)
-    for operand in alignment.operand_roles:
-        register_class = "fpr" if operand.register_kind == "f" else "gpr"
-        for semantic_role, type_size, area in sorted(shared_shapes):
-            role_tuple = BackendOwnerRoleTuple(
-                operand.key,
-                register_class,
-                semantic_role,
-                type_size,
-                area,
+    left_graph, right_graph = tuple(sorted(graph_pair, key=_label))
+    left_result = left_graph.backend.owner_certificates
+    right_result = right_graph.backend.owner_certificates
+    roles = tuple(
+        sorted({resolution.role for result in (left_result, right_result) for resolution in result.role_resolutions})
+    )
+    for ordinal, role in enumerate(roles):
+        left_resolution = left_result.resolution_for(role)
+        right_resolution = right_result.resolution_for(role)
+        left_status, left_certificates = _effective_owner_resolution(left_graph, left_result, role, left_resolution)
+        right_status, right_certificates = _effective_owner_resolution(
+            right_graph, right_result, role, right_resolution
+        )
+        if left_status is right_status is OwnerResolutionStatus.UNIQUE:
+            comparisons.append(
+                _owner_correspondence(
+                    alignment.analysis_id,
+                    role,
+                    left_certificates[0],
+                    right_certificates[0],
+                    ordinal,
+                )
             )
-            candidates = resolve_backend_owner_candidates((left_evidence, right_evidence), role_tuple)
-            comparisons.extend(backend_owner_correspondences(alignment.analysis_id, candidates))
+        else:
+            comparisons.append(
+                _owner_abstention(
+                    alignment.analysis_id,
+                    role,
+                    left_graph,
+                    right_graph,
+                    left_resolution,
+                    right_resolution,
+                    left_status,
+                    right_status,
+                    left_certificates,
+                    right_certificates,
+                    ordinal,
+                )
+            )
     return tuple(comparisons)
 
 
 __all__ = [
     "AbstentionReason",
     "AnchorAlignment",
-    "BackendOwnerCandidate",
-    "BackendOwnerPath",
-    "BackendOwnerRoleTuple",
     "EffectAbstention",
     "OperandRole",
     "RolePair",
     "align_anchor",
-    "backend_owner_correspondences",
     "build_role_comparisons",
-    "resolve_backend_owner_candidates",
 ]

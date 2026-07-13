@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import sys
 from dataclasses import replace
@@ -20,25 +21,18 @@ from tools.mwcc_retro.backend_pcode_lineage import (
 
 from src.mwcc_debug.causal_diff.alignment import (
     AbstentionReason,
-    AnchorAlignment,
-    BackendOwnerRoleTuple,
     EffectAbstention,
     OperandRole,
     _candidate_is_uniquely_aligned,
     _verified_retail_local_role,
     align_anchor,
-    backend_owner_correspondences,
-    build_role_comparisons,
-    resolve_backend_owner_candidates,
 )
 from src.mwcc_debug.causal_diff.backend_adapter import adapt_backends
 from src.mwcc_debug.causal_diff.bundles import BundleInputError, load_bundle
 from src.mwcc_debug.causal_diff.canonical import canonical_bytes
-from src.mwcc_debug.causal_diff.differ import diff_frontiers
-from src.mwcc_debug.causal_diff.effects import DerivedEffects, _reachable_records, derive_effects
+from src.mwcc_debug.causal_diff.effects import DerivedEffects, _reachable_records
 from src.mwcc_debug.causal_diff.inference import (
     _PATH_EDGE_KINDS,
-    VerdictStatus,
     _all_simple_paths,
     build_report,
 )
@@ -46,6 +40,7 @@ from src.mwcc_debug.causal_diff.models import (
     BackendArtifactRef,
     Confidence,
     EvidenceEdge,
+    EvidenceNode,
 )
 from src.mwcc_debug.causal_diff.object_binding_adapter import (
     ObjectBindingAdapterInput,
@@ -72,6 +67,160 @@ ALL_CAPABILITIES = frozenset(
         "pcode-to-code-range",
     }
 )
+
+
+def test_legacy_ownership_module_is_available() -> None:
+    assert importlib.util.find_spec("src.mwcc_debug.causal_diff.legacy_ownership") is not None
+
+
+def _store_with_replaced_record(graph, changed):
+    store = InMemoryEvidenceStore()
+    nodes = tuple(
+        changed if isinstance(changed, EvidenceNode) and node.record_id == changed.record_id else node
+        for node in graph.store.find_nodes(graph.bundle.compile_id)
+    )
+    edges = tuple(
+        changed if isinstance(changed, EvidenceEdge) and edge.record_id == changed.record_id else edge
+        for edge in graph.store.find_edges(graph.bundle.compile_id)
+    )
+    store.add_nodes(nodes)
+    store.add_edges(edges)
+    return replace(graph, store=store)
+
+
+def test_legacy_allocator_lookup_accepts_only_v1_records() -> None:
+    from src.mwcc_debug.causal_diff.legacy_ownership import legacy_allocator_from_virtual
+
+    graph = _graph("direct")
+    virtual_id = graph.backend.nodes_by_virtual[("r", 40)]
+    mappings = legacy_allocator_from_virtual(graph, virtual_id)
+    assert len(mappings) == 1
+    assert mappings[0][1].kind == "allocator-node"
+
+
+@pytest.mark.parametrize("poison", ("edge-parser", "edge-capture", "node-parser", "node-capture"))
+def test_legacy_allocator_lookup_categorically_excludes_v2_records(poison: str) -> None:
+    from src.mwcc_debug.causal_diff.legacy_ownership import legacy_allocator_from_virtual
+
+    graph = _graph("direct")
+    virtual_id = graph.backend.nodes_by_virtual[("r", 40)]
+    edge = next(
+        item
+        for item in graph.store.find_edges(graph.bundle.compile_id, "maps-to-allocator-node")
+        if item.source_id == virtual_id
+    )
+    allocator = graph.store.get_node(edge.target_id)
+    assert allocator is not None
+    if poison == "edge-parser":
+        changed = replace(edge, provenance=replace(edge.provenance, parser="mwcc-retro-backend-trace.v2"))
+    elif poison == "edge-capture":
+        changed = edge.with_attributes({**edge.attributes, "capture_run_id": "a" * 64})
+    elif poison == "node-parser":
+        changed = replace(
+            allocator,
+            provenance=replace(allocator.provenance, parser="mwcc-retro-backend-trace.v2"),
+        )
+    else:
+        changed = allocator.with_attributes({**allocator.attributes, "capture_run_id": "a" * 64})
+    poisoned = _store_with_replaced_record(graph, changed)
+
+    assert legacy_allocator_from_virtual(poisoned, virtual_id) == ()
+
+
+def test_legacy_traversals_exclude_v2_edges_and_endpoints() -> None:
+    from src.mwcc_debug.causal_diff.legacy_ownership import (
+        legacy_reachable_records,
+        legacy_simple_paths,
+    )
+
+    graph = _graph("direct")
+    virtual_id = graph.backend.nodes_by_virtual[("r", 40)]
+    edge = next(
+        item
+        for item in graph.store.find_edges(graph.bundle.compile_id, "maps-to-allocator-node")
+        if item.source_id == virtual_id
+    )
+    poisoned = _store_with_replaced_record(
+        graph,
+        replace(edge, provenance=replace(edge.provenance, parser="mwcc-retro-backend-trace.v2")),
+    )
+
+    reachable, traversed = legacy_reachable_records(poisoned, (virtual_id,))
+    assert edge.target_id not in reachable
+    assert edge.record_id not in traversed
+    assert legacy_simple_paths(poisoned, virtual_id, edge.target_id, 1) == ()
+
+
+def _graph_with_v2_owner_evidence(*, certificates: bool):
+    from src.mwcc_debug.causal_diff.owner_certificate import build_owner_certificates
+
+    graph = _graph("direct", missing_use=True)
+    evidence = emit_object_binding_evidence(
+        _adapter_input(
+            compile_id=graph.bundle.compile_id,
+            function="fn_test",
+        )
+    )
+    result = build_owner_certificates(evidence)
+    store = InMemoryEvidenceStore()
+    store.add_nodes(graph.store.find_nodes(graph.bundle.compile_id))
+    store.add_edges(graph.store.find_edges(graph.bundle.compile_id))
+    store.add_nodes(evidence.nodes)
+    store.add_edges(evidence.edges)
+    if certificates:
+        store.add_nodes(result.certificate_nodes)
+    return replace(
+        graph,
+        store=store,
+        backend=replace(
+            graph.backend,
+            object_bindings=evidence,
+            owner_certificates=(result if certificates else graph.backend.owner_certificates),
+        ),
+    )
+
+
+def test_verified_retail_role_uses_trusted_certificate_not_raw_v2_traversal() -> None:
+    graph = _graph_with_v2_owner_evidence(certificates=True)
+    certificate = next(iter(graph.backend.owner_certificates.certificate_nodes))
+    evidence = graph.backend.object_bindings
+    assert evidence is not None
+    graph = replace(
+        graph,
+        backend=replace(
+            graph.backend,
+            object_bindings=replace(evidence, edges=()),
+        ),
+    )
+    candidate = _candidate_is_uniquely_aligned(graph, 0x234)
+    assert candidate is not None
+
+    resolution, _reason = _verified_retail_local_role(
+        graph,
+        candidate,
+        0x234,
+        OperandRole("use:0", "use", 0, "r", 21),
+    )
+
+    assert resolution is not None
+    assert resolution.node.record_id == certificate.attributes["allocator_record_id"]
+    assert certificate in resolution.supporting_records
+
+
+def test_verified_retail_role_never_treats_raw_v2_mapping_as_proof() -> None:
+    graph = _graph_with_v2_owner_evidence(certificates=False)
+    candidate = _candidate_is_uniquely_aligned(graph, 0x234)
+    assert candidate is not None
+
+    resolution, reason = _verified_retail_local_role(
+        graph,
+        candidate,
+        0x234,
+        OperandRole("use:0", "use", 0, "r", 21),
+    )
+
+    assert resolution is None
+    assert reason is AbstentionReason.MISSING_BACKEND_ROLE
 
 
 def _object_result(
@@ -454,67 +603,6 @@ def test_phase1_empty_source_fields_never_emit_source_ownership() -> None:
 
     assert "object-to-source" not in {edge.kind for edge in evidence.edges}
     assert bilateral_source_object_records((evidence, evidence)) == ()
-
-
-def test_owner_resolution_uses_semantic_role_tuple_and_keeps_runs_local() -> None:
-    left = emit_object_binding_evidence(_adapter_input())
-    right = emit_object_binding_evidence(
-        _adapter_input(
-            compile_id="compile-b",
-            capture_run_id="b" * 64,
-            virtual=91,
-        )
-    )
-    role = BackendOwnerRoleTuple("use:0", "gpr", "row-home", 4, "locals")
-
-    candidates = resolve_backend_owner_candidates((left, right), role)
-    comparisons = backend_owner_correspondences("analysis", candidates)
-
-    assert len(candidates) == 1
-    assert len(comparisons) == 1
-    comparison = comparisons[0]
-    assert comparison.relation_kind == "backend-owner-corresponds-to"
-    assert comparison.attributes["role_tuple"] == (
-        "use:0",
-        "gpr",
-        "row-home",
-        4,
-        "locals",
-    )
-    assert "virtual" not in comparison.attributes
-    assert "runtime_address" not in comparison.attributes
-    assert candidates[0].left.capture_run_id != candidates[0].right.capture_run_id
-    assert comparison.attributes["left_semantic_state"] == comparison.attributes["right_semantic_state"]
-    assert set(comparison.attributes["left_semantic_state"]) == {
-        "role_tuple",
-        "assigned_physical_register",
-        "stack_offset",
-        "stack_size",
-    }
-
-
-def test_matching_cross_run_virtual_number_cannot_replace_semantic_role() -> None:
-    left = emit_object_binding_evidence(_adapter_input())
-    wrong_role = emit_object_binding_evidence(
-        _adapter_input(
-            compile_id="compile-b",
-            capture_run_id="b" * 64,
-            virtual=66,
-            object_result=_object_result(
-                capture_run_id="b" * 64,
-                virtual=66,
-                semantic_stack_role="different-home",
-            ),
-        )
-    )
-
-    assert (
-        resolve_backend_owner_candidates(
-            (left, wrong_role),
-            BackendOwnerRoleTuple("use:0", "gpr", "row-home", 4, "locals"),
-        )
-        == ()
-    )
 
 
 def test_proof_complete_requires_one_connected_owner_path() -> None:
@@ -1068,393 +1156,10 @@ def _replace_evidence_record(
         ),
     ),
 )
-def test_owner_resolution_rejects_every_poisoned_exact_path_record(poison) -> None:
+def test_proof_complete_rejects_every_poisoned_exact_path_record(poison) -> None:
     left = poison(emit_object_binding_evidence(_adapter_input()))
-    right = emit_object_binding_evidence(
-        _adapter_input(
-            compile_id="compile-b",
-            capture_run_id="b" * 64,
-            virtual=91,
-        )
-    )
-    role = BackendOwnerRoleTuple("use:0", "gpr", "row-home", 4, "locals")
 
     assert not proof_complete(left)
-    assert resolve_backend_owner_candidates((left, right), role) == ()
-
-
-def test_build_role_comparisons_integrates_unique_semantic_backend_owner() -> None:
-    left = emit_object_binding_evidence(_adapter_input())
-    right = emit_object_binding_evidence(
-        _adapter_input(
-            compile_id="compile-b",
-            capture_run_id="b" * 64,
-            virtual=91,
-        )
-    )
-    graphs = (
-        SimpleNamespace(
-            bundle=SimpleNamespace(label="left", compile_id="compile-a"),
-            backend=SimpleNamespace(object_bindings=left),
-        ),
-        SimpleNamespace(
-            bundle=SimpleNamespace(label="right", compile_id="compile-b"),
-            backend=SimpleNamespace(object_bindings=right),
-        ),
-    )
-    alignment = AnchorAlignment(
-        analysis_id="analysis",
-        retail_offset=0x234,
-        operand_roles=(OperandRole("use:0", "use", 0, "r", 21),),
-        by_operand={},
-        comparisons=(),
-        abstentions=(),
-    )
-
-    comparisons = build_role_comparisons(alignment, graphs)
-
-    assert len(comparisons) == 1
-    assert comparisons[0].relation_kind == "backend-owner-corresponds-to"
-
-
-def _future_complete_owner_pipeline(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    semantic_change: bool,
-    ambiguous_owner: bool = False,
-    mixed_owner_alternative: bool = False,
-    force_owner_observed: bool = False,
-):
-    monkeypatch.setattr(
-        "src.mwcc_debug.causal_diff.alignment.role_descriptor.build_descriptors",
-        lambda compile_, class_id: compile_[class_id],
-    )
-    graphs = []
-    for label, capture_run_id, virtual, physical, stack_start in (
-        ("direct", "a" * 64, 66, 21, 36),
-        (
-            "paired",
-            "b" * 64,
-            91,
-            19 if semantic_change else 21,
-            32 if semantic_change else 36,
-        ),
-    ):
-        original = _graph(label, missing_use=True)
-        evidence = emit_object_binding_evidence(
-            _adapter_input(
-                compile_id=original.bundle.compile_id,
-                function="fn_test",
-                capture_run_id=capture_run_id,
-                virtual=virtual,
-                physical_register=physical,
-                object_result=_object_result(
-                    capture_run_id=capture_run_id,
-                    virtual=virtual,
-                    semantic_stack_role="row",
-                    final_r1_offset=stack_start,
-                ),
-            )
-        )
-        if force_owner_observed:
-            evidence = replace(
-                evidence,
-                nodes=tuple(
-                    replace(
-                        node,
-                        producer_confidence=Confidence.OBSERVED,
-                        adapter_confidence=Confidence.OBSERVED,
-                        confidence=Confidence.OBSERVED,
-                    )
-                    for node in evidence.nodes
-                ),
-                edges=tuple(
-                    replace(
-                        edge,
-                        producer_confidence=Confidence.OBSERVED,
-                        adapter_confidence=Confidence.OBSERVED,
-                        confidence=Confidence.OBSERVED,
-                    )
-                    for edge in evidence.edges
-                ),
-            )
-        store = InMemoryEvidenceStore()
-        original_nodes = tuple(
-            node for node in original.store.find_nodes(original.bundle.compile_id) if node.kind != "stack-object"
-        )
-        original_node_ids = {node.record_id for node in original_nodes}
-        original_edges = tuple(
-            edge
-            for edge in original.store.find_edges(original.bundle.compile_id)
-            if {edge.source_id, edge.target_id} <= original_node_ids
-        )
-        store.add_nodes((*original_nodes, *evidence.nodes))
-        store.add_edges((*original_edges, *evidence.edges))
-        stack = next(node for node in evidence.nodes if node.kind == "stack-object")
-        graphs.append(
-            replace(
-                original,
-                store=store,
-                backend=replace(original.backend, object_bindings=evidence),
-                frame=replace(
-                    original.frame,
-                    result=replace(original.frame.result, nodes=(stack,), edges=()),
-                    current_stack_nodes=MappingProxyType({"row": stack.record_id}),
-                ),
-            )
-        )
-
-    graph_pair = tuple(graphs)
-    alignment = align_anchor(graph_pair, 0x234, ())
-    comparisons = build_role_comparisons(alignment, graph_pair)
-    if ambiguous_owner or mixed_owner_alternative:
-        owner_candidates = resolve_backend_owner_candidates(
-            tuple(graph.backend.object_bindings for graph in graph_pair),
-            BackendOwnerRoleTuple("use:0", "gpr", "row", 4, "locals"),
-        )
-        assert len(owner_candidates) == 1
-        ambiguous_comparisons = backend_owner_correspondences(
-            alignment.analysis_id,
-            (owner_candidates[0], owner_candidates[0]),
-        )
-        if ambiguous_owner:
-            comparisons = (
-                tuple(
-                    comparison
-                    for comparison in comparisons
-                    if comparison.relation_kind != "backend-owner-corresponds-to"
-                )
-                + ambiguous_comparisons
-            )
-        else:
-            comparisons = (*comparisons, ambiguous_comparisons[0])
-    effects = derive_effects(alignment, graph_pair)
-    effects = replace(
-        effects,
-        pairs=tuple(pair for pair in effects.pairs if pair.allocator.operand_key == "use:0"),
-    )
-    deltas = diff_frontiers(graph_pair, comparisons)
-    report = build_report(graph_pair, effects, (*comparisons, *deltas))
-
-    return deltas, report
-
-
-def test_capture_local_owner_state_never_manufactures_semantic_delta(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    deltas, _report = _future_complete_owner_pipeline(
-        monkeypatch,
-        semantic_change=False,
-    )
-
-    assert not any(comparison.attributes.get("kind") == "compiler-object" for comparison in deltas)
-
-
-def test_future_complete_owner_pipeline_reaches_mandatory_source_gate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    deltas, report = _future_complete_owner_pipeline(
-        monkeypatch,
-        semantic_change=True,
-    )
-
-    owner_delta = next(
-        comparison
-        for comparison in deltas
-        if comparison.relation_kind == "node-changed" and comparison.attributes.get("kind") == "compiler-object"
-    )
-    assert owner_delta
-    assert set(owner_delta.attributes["left_attributes"]) == {
-        "role_tuple",
-        "assigned_physical_register",
-        "stack_offset",
-        "stack_size",
-    }
-    assert report.verdicts
-    assert all(verdict.status is VerdictStatus.ABSTAIN for verdict in report.verdicts), [
-        (verdict.status, verdict.failed_gates, verdict.rejected_alternatives) for verdict in report.verdicts
-    ]
-    assert all("gate-9-source-object-binding" in verdict.failed_gates for verdict in report.verdicts)
-    assert "source-object-binding-missing" in report.missing_evidence
-
-
-def test_semantic_owner_delta_cites_and_propagates_exact_path_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _deltas, report = _future_complete_owner_pipeline(
-        monkeypatch,
-        semantic_change=True,
-        force_owner_observed=True,
-    )
-    owner_correspondence = next(
-        comparison for comparison in report.comparisons if comparison.relation_kind == "backend-owner-corresponds-to"
-    )
-    owner_delta = next(
-        comparison
-        for comparison in report.comparisons
-        if comparison.relation_kind == "node-changed" and comparison.attributes.get("kind") == "compiler-object"
-    )
-
-    assert owner_correspondence.confidence is Confidence.OBSERVED
-    assert owner_delta.confidence is owner_correspondence.confidence
-    assert {
-        owner_correspondence.record_id,
-        *owner_correspondence.provenance.input_record_ids,
-    } <= set(owner_delta.provenance.input_record_ids)
-
-
-def test_ambiguous_backend_owner_alternatives_never_become_derived_delta(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    deltas, report = _future_complete_owner_pipeline(
-        monkeypatch,
-        semantic_change=True,
-        ambiguous_owner=True,
-    )
-
-    assert not any(comparison.attributes.get("kind") == "compiler-object" for comparison in deltas)
-    assert report.verdicts
-    assert all(verdict.status is VerdictStatus.ABSTAIN for verdict in report.verdicts)
-    assert all("gate-6-unique-owner-chain" in verdict.failed_gates for verdict in report.verdicts)
-    assert all(
-        any(alternative.startswith("backend-owner-ambiguous:") for alternative in verdict.rejected_alternatives)
-        for verdict in report.verdicts
-    )
-
-
-def test_proof_looking_owner_is_rejected_when_heuristic_alternative_remains(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    deltas, report = _future_complete_owner_pipeline(
-        monkeypatch,
-        semantic_change=True,
-        mixed_owner_alternative=True,
-    )
-
-    assert not any(comparison.attributes.get("kind") == "compiler-object" for comparison in deltas)
-    assert report.verdicts
-    assert all(verdict.status is VerdictStatus.ABSTAIN for verdict in report.verdicts)
-    assert all("gate-6-unique-owner-chain" in verdict.failed_gates for verdict in report.verdicts)
-    assert all(
-        any(alternative.startswith("backend-owner-ambiguous:") for alternative in verdict.rejected_alternatives)
-        for verdict in report.verdicts
-    )
-    owner_comparisons = tuple(
-        comparison for comparison in report.comparisons if comparison.relation_kind == "backend-owner-corresponds-to"
-    )
-    assert len(owner_comparisons) == 2
-    assert len({comparison.record_id for comparison in owner_comparisons}) == 1
-    ambiguity = next(comparison for comparison in deltas if comparison.relation_kind == "backend-owner-ambiguous")
-    alternatives = ambiguity.attributes["alternatives"]
-    assert len(alternatives) == 2
-    assert len({alternative["alternative_id"] for alternative in alternatives}) == 2
-    assert len({alternative["underlying_record_id"] for alternative in alternatives}) == 1
-    assert {alternative["confidence"] for alternative in alternatives} == {
-        "derived-unique",
-        "heuristic",
-    }
-    assert all(
-        {
-            "alternative_id",
-            "underlying_record_id",
-            "confidence",
-            "semantic_attributes",
-            "provenance",
-            "left_record_id",
-            "right_record_id",
-        }
-        <= set(alternative)
-        for alternative in alternatives
-    )
-    retained_ids = {
-        alternative.removeprefix("alternative-owner:")
-        for verdict in report.verdicts
-        for alternative in verdict.rejected_alternatives
-        if alternative.startswith("alternative-owner:")
-    }
-    assert retained_ids == {alternative["alternative_id"] for alternative in alternatives}
-
-
-def test_future_verified_anchor_path_replaces_ambiguous_v1_backend_role(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "src.mwcc_debug.causal_diff.alignment.role_descriptor.build_descriptors",
-        lambda compile_, class_id: compile_[class_id],
-    )
-    graphs = []
-    for label, capture_run_id, virtual in (
-        ("direct", "a" * 64, 66),
-        ("paired", "b" * 64, 91),
-    ):
-        graph = _graph(label, missing_use=True)
-        evidence = emit_object_binding_evidence(
-            _adapter_input(
-                compile_id=graph.bundle.compile_id,
-                function="fn_test",
-                capture_run_id=capture_run_id,
-                virtual=virtual,
-            )
-        )
-        graph.store.add_nodes(evidence.nodes)
-        graph.store.add_edges(evidence.edges)
-        graphs.append(
-            replace(
-                graph,
-                backend=replace(graph.backend, object_bindings=evidence),
-            )
-        )
-
-    alignment = align_anchor(tuple(graphs), 0x234, ())
-
-    assert "use:0" in alignment.by_operand
-    assert not any(item.operand_key == "use:0" for item in alignment.abstentions)
-
-
-def test_verified_local_role_never_selects_poisoned_path_licensed_elsewhere() -> None:
-    graph = _graph("direct", missing_use=True)
-    evidence = emit_object_binding_evidence(
-        _adapter_input(
-            compile_id=graph.bundle.compile_id,
-            function="fn_test",
-        )
-    )
-    original = next(edge for edge in evidence.edges if edge.kind == "assembly-anchor-emitted-by-pcode")
-    poisoned = replace(
-        original,
-        provenance=replace(original.provenance, input_record_ids=()),
-    )
-    clean_alternative = EvidenceEdge.create(
-        compile_id=original.compile_id,
-        function=original.function,
-        kind=original.kind,
-        source_id=original.source_id,
-        target_id=original.target_id,
-        occurrence_ordinal=999,
-        producer_confidence=original.producer_confidence,
-        adapter_confidence=original.adapter_confidence,
-        provenance=original.provenance,
-        input_confidences=(original.confidence,) * len(original.provenance.input_record_ids),
-        attributes=original.attributes,
-    )
-    mixed = replace(
-        evidence,
-        edges=tuple(poisoned if edge.record_id == original.record_id else edge for edge in evidence.edges)
-        + (clean_alternative,),
-    )
-    graph = replace(graph, backend=replace(graph.backend, object_bindings=mixed))
-    candidate = _candidate_is_uniquely_aligned(graph, 0x234)
-    assert candidate is not None
-
-    resolution, _reason = _verified_retail_local_role(
-        graph,
-        candidate,
-        0x234,
-        OperandRole("use:0", "use", 0, "r", 21),
-    )
-
-    assert resolution is not None
-    assert all(exact_owner_path_record(mixed, record) for record in resolution.supporting_records)
 
 
 def test_effect_traversal_reaches_stack_only_over_exact_owner_edges() -> None:

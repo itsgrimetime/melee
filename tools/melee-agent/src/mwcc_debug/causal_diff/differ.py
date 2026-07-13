@@ -2,40 +2,19 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from typing import Iterable, Mapping
 
-from .canonical import canonical_bytes, stable_id
+from .canonical import canonical_bytes
 from .graph import FrontierGraph
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance
+from .owner_certificate import OwnerRoleKey, OwnerSemanticState
 
 _PARSER_VERSION = "causal-frontier-differ.v1"
-_OWNER_ALIGNMENT_PARSER = "causal-backend-owner-alignment.v1"
-_OWNER_SEMANTIC_STATE_KEYS = frozenset(
-    {
-        "role_tuple",
-        "assigned_physical_register",
-        "stack_offset",
-        "stack_size",
-    }
-)
-_OWNER_ALTERNATIVE_SAFE_ATTRIBUTE_KEYS = frozenset(
-    {
-        "role_tuple",
-        "left_semantic_state",
-        "right_semantic_state",
-        "alternative_count",
-        "left_path_proof_complete",
-        "right_path_proof_complete",
-        "proof_complete",
-        "scope",
-    }
-)
+_OWNER_ALIGNMENT_PARSER = "causal-backend-owner-alignment.v2"
 _MATERIAL_NODE_KINDS = frozenset(
     {
         "allocator-node",
         "allocator-decision",
-        "compiler-object",
         "statement",
         "enode",
         "objobject",
@@ -80,8 +59,36 @@ def _same_attributes(left: Mapping[str, object], right: Mapping[str, object]) ->
     return canonical_bytes(_canonical_value(left)) == canonical_bytes(_canonical_value(right))
 
 
-def _verified_owner_semantic_state(value: object) -> bool:
-    return isinstance(value, Mapping) and frozenset(value) == _OWNER_SEMANTIC_STATE_KEYS
+def _owner_role(value: object) -> OwnerRoleKey | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        role = OwnerRoleKey(
+            operand_key=value["operand_key"],
+            register_class=value["register_class"],
+            semantic_stack_role=value["semantic_stack_role"],
+            type_size=value["type_size"],
+            frame_area=value["frame_area"],
+        )
+        role.validate()
+    except (KeyError, TypeError, ValueError):
+        return None
+    return role if _same_attributes(value, role.as_json()) else None
+
+
+def _owner_semantic_state(value: object) -> OwnerSemanticState | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        state = OwnerSemanticState(
+            assigned_physical_register=value["assigned_physical_register"],
+            stack_offset=value["stack_offset"],
+            stack_size=value["stack_size"],
+        )
+        state.validate()
+    except (KeyError, TypeError, ValueError):
+        return None
+    return state if _same_attributes(value, state.as_json()) else None
 
 
 def _unique_role_pairs(
@@ -147,127 +154,66 @@ def _analysis_id(comparisons: tuple[ComparisonRecord, ...]) -> str | None:
     return next(iter(analysis_ids), None)
 
 
-def _owner_ambiguity_records(
+def _owner_state_deltas(
+    *,
     analysis_id: str,
+    left_graph: FrontierGraph,
+    right_graph: FrontierGraph,
     comparisons: tuple[ComparisonRecord, ...],
 ) -> tuple[ComparisonRecord, ...]:
-    grouped: dict[bytes, list[ComparisonRecord]] = {}
-    for comparison in comparisons:
-        grouped.setdefault(
-            canonical_bytes(_canonical_value(comparison.attributes.get("role_tuple"))),
-            [],
-        ).append(comparison)
-
-    def alternative_safe_content(
-        comparison: ComparisonRecord,
-    ) -> Mapping[str, object]:
-        semantic_attributes = {
-            key: _canonical_value(comparison.attributes[key])
-            for key in sorted(_OWNER_ALTERNATIVE_SAFE_ATTRIBUTE_KEYS)
-            if key in comparison.attributes
-        }
-        safe_provenance = {
-            "artifact_sha256": comparison.provenance.artifact_sha256,
-            "parser": comparison.provenance.parser,
-            "derivation_rule": comparison.provenance.derivation_rule,
-        }
-        return {
-            "relation_kind": comparison.relation_kind,
-            "left_compile_id": comparison.left_compile_id,
-            "right_compile_id": comparison.right_compile_id,
-            "confidence": comparison.confidence.value,
-            "semantic_attributes": semantic_attributes,
-            "provenance": safe_provenance,
-        }
-
-    def alternative_metadata(
-        comparison: ComparisonRecord,
-        collision_ordinal: int,
-    ) -> Mapping[str, object]:
-        safe_content = alternative_safe_content(comparison)
-        alternative_id = stable_id(
-            comparison.analysis_id,
-            "backend-owner-alternative.v1",
-            {
-                **safe_content,
-                "collision_ordinal": collision_ordinal,
-            },
-        )
-        return {
-            "alternative_id": alternative_id,
-            "underlying_record_id": comparison.record_id,
-            "left_record_id": comparison.left_record_id,
-            "right_record_id": comparison.right_record_id,
-            "confidence": comparison.confidence.value,
-            "semantic_attributes": safe_content["semantic_attributes"],
-            "provenance": {
-                **safe_content["provenance"],
-                "input_record_ids": comparison.provenance.input_record_ids,
-            },
-        }
-
     records: list[ComparisonRecord] = []
-    for ordinal, alternatives in enumerate(
-        sorted(grouped.values(), key=lambda items: min(item.record_id for item in items))
-    ):
-        ordered_by_content = tuple(
-            sorted(
-                alternatives,
-                key=lambda comparison: (
-                    canonical_bytes(alternative_safe_content(comparison)),
-                    comparison.record_id,
-                ),
-            )
-        )
-        collision_counts: dict[bytes, int] = {}
-        audited_items: list[tuple[Mapping[str, object], ComparisonRecord]] = []
-        for comparison in ordered_by_content:
-            content_key = canonical_bytes(alternative_safe_content(comparison))
-            collision_ordinal = collision_counts.get(content_key, 0)
-            collision_counts[content_key] = collision_ordinal + 1
-            audited_items.append(
-                (
-                    alternative_metadata(comparison, collision_ordinal),
-                    comparison,
-                )
-            )
-        audited = tuple(
-            sorted(
-                audited_items,
-                key=lambda item: str(item[0]["alternative_id"]),
-            )
-        )
-        ordered = tuple(comparison for _metadata, comparison in audited)
-        metadata = tuple(item for item, _comparison in audited)
-        first = ordered[0]
+    for comparison in sorted(comparisons, key=lambda item: item.record_id):
+        if (
+            comparison.relation_kind != "backend-owner-corresponds-to"
+            or comparison.provenance.parser != _OWNER_ALIGNMENT_PARSER
+            or comparison.left_record_id is None
+            or comparison.right_record_id is None
+        ):
+            continue
+        left = left_graph.store.get_node(comparison.left_record_id)
+        right = right_graph.store.get_node(comparison.right_record_id)
+        if (
+            left is None
+            or right is None
+            or left.kind != "owner-proof-certificate"
+            or right.kind != "owner-proof-certificate"
+            or left.compile_id != comparison.left_compile_id
+            or right.compile_id != comparison.right_compile_id
+            or not {left.record_id, right.record_id} <= set(comparison.provenance.input_record_ids)
+        ):
+            continue
+        left_role = _owner_role(left.attributes.get("role"))
+        right_role = _owner_role(right.attributes.get("role"))
+        comparison_role = _owner_role(comparison.attributes.get("role"))
+        left_state = _owner_semantic_state(left.attributes.get("semantic_state"))
+        right_state = _owner_semantic_state(right.attributes.get("semantic_state"))
+        if (
+            left_role is None
+            or right_role is None
+            or comparison_role is None
+            or left_role != right_role
+            or left_role != comparison_role
+            or left_state is None
+            or right_state is None
+            or left_state == right_state
+        ):
+            continue
         records.append(
-            ComparisonRecord.create(
+            _delta(
                 analysis_id=analysis_id,
-                relation_kind="backend-owner-ambiguous",
-                left_compile_id=first.left_compile_id,
-                left_record_id=first.left_record_id,
-                right_compile_id=first.right_compile_id,
-                right_record_id=first.right_record_id,
-                producer_confidence=Confidence.HEURISTIC,
-                adapter_confidence=Confidence.HEURISTIC,
-                provenance=Provenance(
-                    artifact_sha256=analysis_id,
-                    parser=_PARSER_VERSION,
-                    raw_start=None,
-                    raw_end=None,
-                    derivation_rule="rejected-backend-owner-alternatives",
-                    input_record_ids=tuple(item.record_id for item in ordered),
-                ),
-                input_confidences=tuple(item.confidence for item in ordered),
-                occurrence_ordinal=ordinal,
+                relation_kind="backend-owner-state-changed",
+                left_compile_id=_compile_id(left_graph),
+                left=left,
+                right_compile_id=_compile_id(right_graph),
+                right=right,
                 attributes={
-                    "reason": "backend-owner-ambiguous",
-                    "role_tuple": first.attributes.get("role_tuple"),
-                    "alternative_ids": tuple(item["alternative_id"] for item in metadata),
-                    "alternatives": metadata,
-                    "alternative_record_ids": tuple(item.record_id for item in ordered),
-                    "alternative_owner_pairs": tuple((item.left_record_id, item.right_record_id) for item in ordered),
+                    "role": left_role.as_json(),
+                    "left_semantic_state": left_state.as_json(),
+                    "right_semantic_state": right_state.as_json(),
                 },
+                ordinal=len(records),
+                supporting_records=(comparison,),
+                confidence=comparison.confidence,
             )
         )
     return tuple(records)
@@ -290,91 +236,28 @@ def diff_frontiers(
     left_nodes, right_nodes = _nodes(left_graph), _nodes(right_graph)
     left_by_id = {node.record_id: node for node in left_nodes}
     right_by_id = {node.record_id: node for node in right_nodes}
-    evidence_records_by_id = {
-        record.record_id: record
-        for graph in (left_graph, right_graph)
-        for record in (
-            *graph.store.find_nodes(_compile_id(graph)),
-            *graph.store.find_edges(_compile_id(graph)),
-        )
-    }
     aligned: dict[str, str] = {}
-    owner_semantic_states: dict[tuple[str, str], tuple[object, object]] = {}
-    owner_delta_support: dict[
-        tuple[str, str],
-        tuple[EvidenceNode | EvidenceEdge | ComparisonRecord, ...],
-    ] = {}
-    all_owner_comparisons = tuple(
-        comparison for comparison in comparison_records if comparison.relation_kind == "backend-owner-corresponds-to"
-    )
-    owner_comparisons = tuple(
-        comparison
-        for comparison in all_owner_comparisons
-        if comparison.confidence in {Confidence.OBSERVED, Confidence.DERIVED_UNIQUE}
-        and comparison.provenance.parser == _OWNER_ALIGNMENT_PARSER
-        and comparison.attributes.get("alternative_count") == 1
-        and comparison.attributes.get("proof_complete") is True
-        and comparison.attributes.get("left_path_proof_complete") is True
-        and comparison.attributes.get("right_path_proof_complete") is True
-        and _verified_owner_semantic_state(comparison.attributes.get("left_semantic_state"))
-        and _verified_owner_semantic_state(comparison.attributes.get("right_semantic_state"))
-        and set(comparison.provenance.input_record_ids) <= evidence_records_by_id.keys()
-    )
-    left_owner_counts = Counter(comparison.left_record_id for comparison in all_owner_comparisons)
-    right_owner_counts = Counter(comparison.right_record_id for comparison in all_owner_comparisons)
-    accepted_owner_ids = {
-        comparison.record_id
-        for comparison in owner_comparisons
-        if left_owner_counts[comparison.left_record_id] == 1 and right_owner_counts[comparison.right_record_id] == 1
-    }
-    rejected_owner_comparisons = tuple(
-        comparison for comparison in all_owner_comparisons if comparison.record_id not in accepted_owner_ids
-    )
     for comparison in comparison_records:
-        if comparison.relation_kind not in {
-            "role-corresponds-to",
-            "backend-owner-corresponds-to",
-        }:
-            continue
-        if (
-            comparison.relation_kind == "backend-owner-corresponds-to"
-            and comparison.record_id not in accepted_owner_ids
-        ):
+        if comparison.relation_kind != "role-corresponds-to":
             continue
         if comparison.left_record_id in left_by_id and comparison.right_record_id in right_by_id:
             aligned[comparison.left_record_id] = comparison.right_record_id
-            if comparison.relation_kind == "backend-owner-corresponds-to":
-                owner_pair = (
-                    comparison.left_record_id,
-                    comparison.right_record_id,
-                )
-                owner_semantic_states[owner_pair] = (
-                    comparison.attributes.get("left_semantic_state"),
-                    comparison.attributes.get("right_semantic_state"),
-                )
-                owner_delta_support[owner_pair] = (
-                    comparison,
-                    *(evidence_records_by_id[record_id] for record_id in comparison.provenance.input_record_ids),
-                )
     for left, right in _unique_role_pairs(left_nodes, right_nodes):
         aligned.setdefault(left.record_id, right.record_id)
 
-    deltas = list(_owner_ambiguity_records(analysis_id, rejected_owner_comparisons))
+    deltas = list(
+        _owner_state_deltas(
+            analysis_id=analysis_id,
+            left_graph=left_graph,
+            right_graph=right_graph,
+            comparisons=comparison_records,
+        )
+    )
     ordinal = len(deltas)
     aligned_right = set(aligned.values())
-    unaligned_left_owners = {
-        node.record_id for node in left_nodes if node.kind == "compiler-object" and node.record_id not in aligned
-    }
-    unaligned_right_owners = {
-        node.record_id for node in right_nodes if node.kind == "compiler-object" and node.record_id not in aligned_right
-    }
     for left_id, right_id in sorted(aligned.items()):
         left, right = left_by_id[left_id], right_by_id[right_id]
-        owner_states = owner_semantic_states.get((left_id, right_id))
-        owner_support = owner_delta_support.get((left_id, right_id), ())
-        compared_left = left.attributes if owner_states is None else owner_states[0]
-        compared_right = right.attributes if owner_states is None else owner_states[1]
-        if left.kind == right.kind and _same_attributes(compared_left, compared_right):
+        if left.kind == right.kind and _same_attributes(left.attributes, right.attributes):
             continue
         deltas.append(
             _delta(
@@ -387,21 +270,15 @@ def diff_frontiers(
                 attributes={
                     "kind": left.kind,
                     "role_key": left.role_key or right.role_key,
-                    "left_attributes": compared_left,
-                    "right_attributes": compared_right,
+                    "left_attributes": left.attributes,
+                    "right_attributes": right.attributes,
                 },
                 ordinal=ordinal,
-                supporting_records=owner_support,
-                confidence=(
-                    owner_support[0].confidence
-                    if owner_support and isinstance(owner_support[0], ComparisonRecord)
-                    else Confidence.DERIVED_UNIQUE
-                ),
             )
         )
         ordinal += 1
     for left in sorted(
-        (node for node in left_nodes if node.record_id not in aligned and node.record_id not in unaligned_left_owners),
+        (node for node in left_nodes if node.record_id not in aligned),
         key=lambda node: node.record_id,
     ):
         deltas.append(
@@ -418,11 +295,7 @@ def diff_frontiers(
         )
         ordinal += 1
     for right in sorted(
-        (
-            node
-            for node in right_nodes
-            if node.record_id not in aligned_right and node.record_id not in unaligned_right_owners
-        ),
+        (node for node in right_nodes if node.record_id not in aligned_right),
         key=lambda node: node.record_id,
     ):
         deltas.append(
@@ -450,8 +323,6 @@ def diff_frontiers(
         right_edge_index.setdefault((edge.kind, edge.source_id, edge.target_id), []).append(edge)
     matched_right_edges: set[str] = set()
     for left in left_edges:
-        if {left.source_id, left.target_id} & unaligned_left_owners:
-            continue
         mapped_source = aligned.get(left.source_id)
         mapped_target = aligned.get(left.target_id)
         if mapped_source is None or mapped_target is None:
@@ -516,8 +387,6 @@ def diff_frontiers(
             ordinal += 1
     for right in right_edges:
         if right.record_id in matched_right_edges:
-            continue
-        if {right.source_id, right.target_id} & unaligned_right_owners:
             continue
         missing_endpoints = tuple(
             endpoint for endpoint in (right.source_id, right.target_id) if endpoint in unaligned_right_material

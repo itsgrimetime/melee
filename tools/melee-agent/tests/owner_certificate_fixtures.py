@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Iterable, Mapping, TypeVar
 
 import pytest
@@ -14,15 +15,34 @@ from tools.mwcc_retro.backend_pcode_lineage import (
 )
 
 from src.mwcc_debug.causal_diff import backend_adapter
+from src.mwcc_debug.causal_diff.alignment import AnchorAlignment
+from src.mwcc_debug.causal_diff.asm_adapter import CheckdiffEvidence
+from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import ValidatedBundle
 from src.mwcc_debug.causal_diff.canonical import canonical_bytes
-from src.mwcc_debug.causal_diff.models import EvidenceEdge, EvidenceNode
+from src.mwcc_debug.causal_diff.frame_adapter import FrameEvidence
+from src.mwcc_debug.causal_diff.graph import FrontierGraph
+from src.mwcc_debug.causal_diff.models import (
+    AdapterResult,
+    ComparisonRecord,
+    Confidence,
+    EvidenceEdge,
+    EvidenceNode,
+    Provenance,
+    min_confidence,
+)
 from src.mwcc_debug.causal_diff.object_binding_adapter import (
     ObjectBindingAdapterInput,
     ObjectBindingEvidence,
     emit_object_binding_evidence,
 )
-from src.mwcc_debug.causal_diff.owner_certificate import OwnerRoleKey
+from src.mwcc_debug.causal_diff.owner_certificate import (
+    OwnerCertificateResult,
+    OwnerRoleKey,
+    OwnerSemanticState,
+    build_owner_certificates,
+)
+from src.mwcc_debug.causal_diff.source_adapter import SourceEvidence
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 from tests.test_causal_diff_object_bindings import (
     _adapter_input,
@@ -34,6 +54,9 @@ from tests.test_causal_diff_object_bindings import (
 _T = TypeVar("_T")
 
 STORE_FACTORIES = (pytest.param(InMemoryEvidenceStore, id="in-memory"),)
+ROLE = OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals")
+STATE = OwnerSemanticState(21, 0x44, 4)
+CHANGED_STATE = OwnerSemanticState(22, 0x48, 4)
 
 
 def only(items: Iterable[_T]) -> _T:
@@ -160,8 +183,11 @@ def _evidence_from_paths(
         "2" * 64,
         "mwcc-retro-lifetime-proof.v1",
     ),
+    compile_id: str = "compile-a",
+    function: str = "fn",
+    capture_run_id: str = "a" * 64,
 ) -> ObjectBindingEvidence:
-    base_object = _object_result()
+    base_object = _object_result(capture_run_id=capture_run_id)
     base_object_row = tuple(base_object.normalized["objects"])[0]
     base_virtual_row = tuple(base_object.normalized["virtual_bindings"])[0]
     base_frame_row = tuple(base_object.normalized["frame_bindings"])[0]
@@ -328,10 +354,12 @@ def _evidence_from_paths(
         ),
         anchor_bindings=MappingProxyType(anchors),
     )
-    source: ObjectBindingAdapterInput = replace(
-        _adapter_input(),
-        object_validation=object_validation,
-        pcode_validation=pcode_validation,
+    source: ObjectBindingAdapterInput = _adapter_input(
+        compile_id=compile_id,
+        function=function,
+        capture_run_id=capture_run_id,
+        object_result=object_validation,
+        pcode_result=pcode_validation,
         instrumentation_identity=instrumentation_identity,
     )
     return emit_object_binding_evidence(source)
@@ -607,3 +635,231 @@ def _json_value(value: object) -> object:
 
 def canonical_result(result: object) -> bytes:
     return canonical_bytes(_json_value(result))
+
+
+def alignment() -> AnchorAlignment:
+    return AnchorAlignment(
+        analysis_id="d" * 64,
+        retail_offset=0x234,
+        operand_roles=(),
+        by_operand={},
+        comparisons=(),
+        abstentions=(),
+    )
+
+
+def _empty_checkdiff() -> CheckdiffEvidence:
+    return CheckdiffEvidence(
+        result=AdapterResult(),
+        rows_by_offset=MappingProxyType({}),
+        stack_slot_localizer=None,
+        target_assembly=(),
+        current_assembly=(),
+        expected_assembly_digest="e" * 64,
+    )
+
+
+def _frontier(
+    label: str,
+    compile_id: str,
+    store: InMemoryEvidenceStore,
+    backend: BackendEvidence,
+) -> FrontierGraph:
+    return FrontierGraph(
+        bundle=SimpleNamespace(
+            label=label,
+            compile_id=compile_id,
+            manifest=SimpleNamespace(function="fn_test"),
+        ),
+        store=store,
+        checkdiff=_empty_checkdiff(),
+        backend=backend,
+        inspector=AdapterResult(),
+        frame=FrameEvidence(
+            result=AdapterResult(),
+            expected_stack_roles=MappingProxyType({}),
+            current_stack_nodes=MappingProxyType({}),
+        ),
+        source=SourceEvidence(
+            result=AdapterResult(),
+            expressions_by_signature=MappingProxyType({}),
+            inline_scopes_by_callee=MappingProxyType({}),
+        ),
+        warnings=(),
+    )
+
+
+def _status_evidence(
+    status: str,
+    *,
+    compile_id: str,
+    capture_run_id: str,
+) -> ObjectBindingEvidence:
+    common = {
+        "compile_id": compile_id,
+        "function": "fn_test",
+        "capture_run_id": capture_run_id,
+    }
+    if status == "unique":
+        return complete_evidence(**common)
+    if status == "missing":
+        return _evidence_from_paths((), **common)
+    if status == "ambiguous":
+        return _evidence_from_paths(
+            (
+                _path(0, operand_key=ROLE.operand_key, semantic_stack_role=ROLE.semantic_stack_role),
+                _path(1, operand_key=ROLE.operand_key, semantic_stack_role=ROLE.semantic_stack_role),
+            ),
+            **common,
+        )
+    if status == "contradictory":
+        path = _path(0, operand_key=ROLE.operand_key, semantic_stack_role=ROLE.semantic_stack_role)
+        path["emission_physical"] = 22
+        return _evidence_from_paths((path,), **common)
+    if status == "incomplete":
+        return _evidence_from_paths(
+            (
+                _path(
+                    0,
+                    operand_key=ROLE.operand_key,
+                    semantic_stack_role=ROLE.semantic_stack_role,
+                    rewrite_confidence="heuristic",
+                ),
+            ),
+            **common,
+        )
+    raise ValueError(f"unknown owner status: {status}")
+
+
+def _certified_frontier(label: str, status: str) -> FrontierGraph:
+    compile_id = f"certificate-{label}"
+    capture_run_id = hashlib.sha256(label.encode()).hexdigest()
+    evidence = _status_evidence(
+        status,
+        compile_id=compile_id,
+        capture_run_id=capture_run_id,
+    )
+    result = build_owner_certificates(evidence)
+    store = InMemoryEvidenceStore()
+    store.add_nodes(evidence.nodes)
+    store.add_edges(evidence.edges)
+    store.add_nodes(result.certificate_nodes)
+    backend_result = AdapterResult(
+        nodes=(*evidence.nodes, *result.certificate_nodes),
+        edges=evidence.edges,
+    )
+    return _frontier(
+        label,
+        compile_id,
+        store,
+        BackendEvidence(
+            result=backend_result,
+            pcdump_text="",
+            role_compile=None,
+            nodes_by_class_ig=MappingProxyType({}),
+            nodes_by_virtual=MappingProxyType({}),
+            object_bindings=evidence,
+            owner_certificates=result,
+        ),
+    )
+
+
+def graphs_with_statuses(
+    left_status: str,
+    right_status: str,
+) -> tuple[FrontierGraph, FrontierGraph]:
+    return (
+        _certified_frontier("left", left_status),
+        _certified_frontier("right", right_status),
+    )
+
+
+def future_complete_graph_pair() -> tuple[FrontierGraph, FrontierGraph]:
+    return graphs_with_statuses("unique", "unique")
+
+
+def _synthetic_certificate(
+    compile_id: str,
+    state: OwnerSemanticState,
+) -> EvidenceNode:
+    content = {"role": ROLE.as_json(), "semantic_state": state.as_json()}
+    return EvidenceNode.create(
+        compile_id=compile_id,
+        function="fn_test",
+        kind="owner-proof-certificate",
+        local_key=hashlib.sha256(canonical_bytes(content)).hexdigest(),
+        role_key=ROLE.semantic_stack_role,
+        producer_confidence=Confidence.OBSERVED,
+        adapter_confidence=Confidence.DERIVED_UNIQUE,
+        provenance=Provenance(
+            artifact_sha256="f" * 64,
+            parser="causal-owner-certificate.v1",
+            raw_start=None,
+            raw_end=None,
+            derivation_rule="synthetic-certified-state",
+        ),
+        attributes=content,
+    )
+
+
+def graphs() -> tuple[FrontierGraph, FrontierGraph]:
+    values = (STATE, CHANGED_STATE)
+    frontiers = []
+    for label in ("left", "right"):
+        compile_id = f"diff-{label}"
+        certificates = tuple(_synthetic_certificate(compile_id, state) for state in values)
+        store = InMemoryEvidenceStore()
+        store.add_nodes(certificates)
+        frontiers.append(
+            _frontier(
+                label,
+                compile_id,
+                store,
+                BackendEvidence(
+                    result=AdapterResult(nodes=certificates),
+                    pcdump_text="",
+                    role_compile=None,
+                    nodes_by_class_ig=MappingProxyType({}),
+                    nodes_by_virtual=MappingProxyType({}),
+                ),
+            )
+        )
+    return tuple(frontiers)
+
+
+def owner_comparison(
+    states: tuple[OwnerSemanticState, OwnerSemanticState] = (STATE, STATE),
+) -> ComparisonRecord:
+    left_graph, right_graph = graphs()
+    left = _synthetic_certificate(left_graph.bundle.compile_id, states[0])
+    right = _synthetic_certificate(right_graph.bundle.compile_id, states[1])
+    confidence = min_confidence(left.confidence, right.confidence)
+    return ComparisonRecord.create(
+        analysis_id=alignment().analysis_id,
+        relation_kind="backend-owner-corresponds-to",
+        left_compile_id=left.compile_id,
+        left_record_id=left.record_id,
+        right_compile_id=right.compile_id,
+        right_record_id=right.record_id,
+        producer_confidence=confidence,
+        adapter_confidence=confidence,
+        provenance=Provenance(
+            artifact_sha256=alignment().analysis_id,
+            parser="causal-backend-owner-alignment.v2",
+            raw_start=None,
+            raw_end=None,
+            derivation_rule="certified-owner-role",
+            input_record_ids=(left.record_id, right.record_id),
+        ),
+        input_confidences=(left.confidence, right.confidence),
+        attributes={"role": ROLE.as_json()},
+    )
+
+
+def node(record_id: str) -> EvidenceNode:
+    matches = tuple(
+        candidate
+        for graph in (*future_complete_graph_pair(), *graphs())
+        if (candidate := graph.store.get_node(record_id)) is not None
+    )
+    return only(matches)

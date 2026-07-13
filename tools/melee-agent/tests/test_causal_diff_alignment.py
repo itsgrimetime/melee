@@ -24,13 +24,35 @@ from src.mwcc_debug.causal_diff.frame_adapter import FrameEvidence
 from src.mwcc_debug.causal_diff.graph import FrontierGraph
 from src.mwcc_debug.causal_diff.models import (
     AdapterResult,
+    ComparisonRecord,
     Confidence,
     EvidenceEdge,
     EvidenceNode,
     Provenance,
+    min_confidence,
+)
+from src.mwcc_debug.causal_diff.owner_certificate import (
+    OwnerCertificateResult,
+    OwnerResolutionStatus,
+    OwnerRoleKey,
+    OwnerRoleResolution,
 )
 from src.mwcc_debug.causal_diff.source_adapter import SourceEvidence
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
+
+OWNER_ROLE = OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals")
+
+
+def _only(items):
+    values = tuple(items)
+    assert len(values) == 1
+    return values[0]
+
+
+def _owner_fixtures():
+    from tests import owner_certificate_fixtures
+
+    return owner_certificate_fixtures
 
 
 def _provenance(*input_record_ids: str) -> Provenance:
@@ -555,3 +577,251 @@ def test_removed_material_node_emits_incident_edge_removed_delta() -> None:
     assert any(
         record.relation_kind == "edge-removed" and record.left_record_id == incident.record_id for record in deltas
     )
+
+
+@pytest.mark.parametrize(
+    ("left_status", "right_status", "reason"),
+    [
+        ("missing", "unique", "backend-owner-missing"),
+        ("ambiguous", "unique", "backend-owner-ambiguous"),
+        ("contradictory", "unique", "backend-owner-contradictory"),
+        ("incomplete", "unique", "backend-owner-path-incomplete"),
+    ],
+)
+def test_nonunique_bilateral_resolution_emits_one_abstention(
+    left_status: str,
+    right_status: str,
+    reason: str,
+) -> None:
+    fixtures = _owner_fixtures()
+    comparisons = build_role_comparisons(
+        fixtures.alignment(),
+        fixtures.graphs_with_statuses(left_status, right_status),
+    )
+    abstention = _only(
+        comparison for comparison in comparisons if comparison.relation_kind == "backend-owner-abstained"
+    )
+    assert abstention.attributes["reason"] == reason
+    assert abstention.attributes["left_status"] == left_status
+    assert abstention.attributes["right_status"] == right_status
+
+
+@pytest.mark.parametrize(
+    ("left_status", "right_status", "reason"),
+    [
+        ("ambiguous", "contradictory", "backend-owner-contradictory"),
+        ("ambiguous", "incomplete", "backend-owner-path-incomplete"),
+        ("ambiguous", "missing", "backend-owner-ambiguous"),
+    ],
+)
+def test_bilateral_abstention_reason_uses_closed_priority(
+    left_status: str,
+    right_status: str,
+    reason: str,
+) -> None:
+    fixtures = _owner_fixtures()
+    abstention = _only(
+        comparison
+        for comparison in build_role_comparisons(
+            fixtures.alignment(),
+            fixtures.graphs_with_statuses(left_status, right_status),
+        )
+        if comparison.relation_kind == "backend-owner-abstained"
+    )
+    assert abstention.attributes["reason"] == reason
+
+
+def test_unique_pair_uses_certificate_endpoints_and_minimum_confidence() -> None:
+    fixtures = _owner_fixtures()
+    graph_pair = fixtures.future_complete_graph_pair()
+    comparison = _only(
+        item
+        for item in build_role_comparisons(fixtures.alignment(), graph_pair)
+        if item.relation_kind == "backend-owner-corresponds-to"
+    )
+    left = fixtures.node(comparison.left_record_id)
+    right = fixtures.node(comparison.right_record_id)
+
+    assert comparison.provenance.parser == "causal-backend-owner-alignment.v2"
+    assert left.kind == right.kind == "owner-proof-certificate"
+    assert comparison.confidence == min_confidence(left.confidence, right.confidence)
+    assert set(comparison.provenance.input_record_ids) == {left.record_id, right.record_id}
+    assert comparison.attributes == {"role": OWNER_ROLE.as_json()}
+
+
+def test_abstention_is_permutation_stable_and_binds_alternative_content() -> None:
+    fixtures = _owner_fixtures()
+    graph_pair = fixtures.graphs_with_statuses("ambiguous", "unique")
+    forward = _only(
+        item
+        for item in build_role_comparisons(fixtures.alignment(), graph_pair)
+        if item.relation_kind == "backend-owner-abstained"
+    )
+    reverse = _only(
+        item
+        for item in build_role_comparisons(fixtures.alignment(), tuple(reversed(graph_pair)))
+        if item.relation_kind == "backend-owner-abstained"
+    )
+    changed = _only(
+        item
+        for item in build_role_comparisons(
+            fixtures.alignment(),
+            fixtures.graphs_with_statuses("contradictory", "unique"),
+        )
+        if item.relation_kind == "backend-owner-abstained"
+    )
+
+    assert forward == reverse
+    assert fixtures.canonical_result(forward.attributes) == fixtures.canonical_result(reverse.attributes)
+    assert forward.record_id == reverse.record_id
+    assert forward.attributes["alternatives"] == reverse.attributes["alternatives"]
+    assert forward.record_id != changed.record_id
+    assert forward.provenance.derivation_rule.startswith("certified-owner-abstention:")
+
+
+def test_exact_duplicate_rejection_summaries_collapse_with_multiplicity() -> None:
+    fixtures = _owner_fixtures()
+    left, right = fixtures.graphs_with_statuses("contradictory", "unique")
+    result = left.backend.owner_certificates
+    resolution = result.resolution_for(OWNER_ROLE)
+    rejection = _only(resolution.rejections)
+    other = replace(
+        rejection,
+        rejection_id="other-rejection",
+        candidate_record_ids=(*rejection.candidate_record_ids, "other-candidate"),
+    )
+    results = tuple(
+        OwnerCertificateResult(
+            (),
+            (replace(resolution, rejections=rejections),),
+            (),
+        )
+        for rejections in (
+            (rejection, other, rejection),
+            (rejection, other, rejection)[::-1],
+        )
+    )
+
+    abstentions = tuple(
+        _only(
+            item
+            for item in build_role_comparisons(
+                fixtures.alignment(),
+                (replace(left, backend=replace(left.backend, owner_certificates=current)), right),
+            )
+            if item.relation_kind == "backend-owner-abstained"
+        )
+        for current in results
+    )
+    abstention = abstentions[0]
+    rejection_alternative = _only(
+        item for item in abstention.attributes["alternatives"] if item["rejection_id"] == rejection.rejection_id
+    )
+    assert rejection_alternative["multiplicity"] == 2
+    assert abstentions[0].record_id == abstentions[1].record_id
+    assert abstentions[0].attributes["alternatives"] == abstentions[1].attributes["alternatives"]
+    assert fixtures.canonical_result(abstentions[0].attributes) == fixtures.canonical_result(abstentions[1].attributes)
+
+
+def test_untrusted_certificate_result_can_only_abstain() -> None:
+    fixtures = _owner_fixtures()
+    left, right = fixtures.future_complete_graph_pair()
+    trusted = left.backend.owner_certificates
+    certificate = _only(trusted.certificate_nodes)
+    untrusted = OwnerCertificateResult(
+        (certificate,),
+        (
+            OwnerRoleResolution(
+                OWNER_ROLE,
+                OwnerResolutionStatus.UNIQUE,
+                (certificate.record_id,),
+                (),
+            ),
+        ),
+        (),
+    )
+    left = replace(left, backend=replace(left.backend, owner_certificates=untrusted))
+
+    abstention = _only(
+        item
+        for item in build_role_comparisons(fixtures.alignment(), (left, right))
+        if item.relation_kind == "backend-owner-abstained"
+    )
+    assert abstention.attributes["reason"] == "backend-owner-path-incomplete"
+    assert abstention.attributes["left_status"] == "incomplete"
+
+
+def test_unique_resolution_with_certificate_absent_from_store_abstains() -> None:
+    fixtures = _owner_fixtures()
+    left, right = fixtures.future_complete_graph_pair()
+    without_certificate = InMemoryEvidenceStore()
+    evidence = left.backend.object_bindings
+    assert evidence is not None
+    without_certificate.add_nodes(evidence.nodes)
+    without_certificate.add_edges(evidence.edges)
+    left = replace(left, store=without_certificate)
+
+    abstention = _only(
+        item
+        for item in build_role_comparisons(fixtures.alignment(), (left, right))
+        if item.relation_kind == "backend-owner-abstained"
+    )
+    assert abstention.attributes["reason"] == "backend-owner-path-incomplete"
+    assert abstention.left_record_id is None
+    assert abstention.right_record_id is not None
+    missing_id = _only(left.backend.owner_certificates.certificate_nodes).record_id
+    assert any(item["certificate_record_id"] == missing_id for item in abstention.attributes["alternatives"])
+
+
+@pytest.mark.parametrize(
+    ("left_record_id", "right_record_id"),
+    ((None, None), ("left", None), (None, "right"), ("left", "right")),
+)
+def test_backend_owner_abstention_is_the_nullable_endpoint_relation(
+    left_record_id: str | None,
+    right_record_id: str | None,
+) -> None:
+    comparison = ComparisonRecord(
+        record_id="comparison",
+        analysis_id="analysis",
+        relation_kind="backend-owner-abstained",
+        left_compile_id="left-compile",
+        left_record_id=left_record_id,
+        right_compile_id="right-compile",
+        right_record_id=right_record_id,
+        confidence=Confidence.HEURISTIC,
+        provenance=_provenance(),
+        attributes={},
+    )
+    assert comparison.left_record_id == left_record_id
+    assert comparison.right_record_id == right_record_id
+
+
+@pytest.mark.parametrize(
+    "relation_kind",
+    (
+        "role-corresponds-to",
+        "backend-owner-corresponds-to",
+        "backend-owner-state-changed",
+        "node-changed",
+        "edge-changed",
+        "node-added",
+        "edge-added",
+        "node-removed",
+        "edge-removed",
+    ),
+)
+def test_every_other_relation_rejects_two_nullable_endpoints(relation_kind: str) -> None:
+    with pytest.raises(ValueError, match="invalid comparison endpoints"):
+        ComparisonRecord(
+            record_id="comparison",
+            analysis_id="analysis",
+            relation_kind=relation_kind,
+            left_compile_id="left-compile",
+            left_record_id=None,
+            right_compile_id="right-compile",
+            right_record_id=None,
+            confidence=Confidence.HEURISTIC,
+            provenance=_provenance(),
+            attributes={},
+        )

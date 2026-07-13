@@ -418,7 +418,9 @@ class ComparisonRecord:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "attributes", _immutable_attributes(self.attributes))
-        if self.relation_kind in _ADDED_RELATIONS:
+        if self.relation_kind == "backend-owner-abstained":
+            valid_endpoints = True
+        elif self.relation_kind in _ADDED_RELATIONS:
             valid_endpoints = self.left_record_id is None and self.right_record_id is not None
         elif self.relation_kind in _REMOVED_RELATIONS:
             valid_endpoints = self.left_record_id is not None and self.right_record_id is None
