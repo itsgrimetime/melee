@@ -26,6 +26,7 @@ from src.mwcc_debug.causal_diff.alignment import (
     OperandRole,
     _automatic_local_role,
     _candidate_is_uniquely_aligned,
+    _pcode_neighborhoods,
     _verified_retail_local_role,
     align_anchor,
 )
@@ -61,7 +62,7 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
     OwnerRoleResolution,
 )
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
-from tests.test_causal_diff_alignment import _graph
+from tests.test_causal_diff_alignment import _edge, _graph, _node, _only
 from tests.test_retro_backend_trace_assembler import (
     _trusted_table,
     _v2_assembly_kwargs,
@@ -95,6 +96,381 @@ def _store_with_replaced_record(graph, changed):
     store.add_edges(edges)
     store.add_nodes(tuple(node for node in nodes if node.kind == "owner-proof-certificate"))
     return replace(graph, store=store)
+
+
+_LEGACY_ROLE = OperandRole("use:0", "use", 0, "r", 21)
+_TWO_INSTRUCTION_NEIGHBORHOOD = ("mr r#,r#", "mr r#,r#")
+
+
+def _neighborhood_occurrence(
+    graph,
+    key: str,
+    *,
+    pass_index: int,
+    instruction_index: int,
+    poison: str | None = None,
+    record_id: str | None = None,
+    confidence: Confidence = Confidence.OBSERVED,
+) -> EvidenceNode:
+    anchor = _only(graph.store.find_nodes(graph.bundle.compile_id, "pcode-occurrence"))
+    attributes = {
+        **anchor.attributes,
+        "pass_index": pass_index,
+        "instruction_index": instruction_index,
+        "opcode": "mr",
+        "operands": "r9,r10",
+    }
+    if poison == "capture":
+        attributes["capture_run_id"] = "a" * 64
+    node = _node(
+        graph.bundle.compile_id,
+        "pcode-occurrence",
+        key,
+        attributes,
+    )
+    if confidence is Confidence.HEURISTIC:
+        node = replace(
+            node,
+            producer_confidence=Confidence.HEURISTIC,
+            adapter_confidence=Confidence.HEURISTIC,
+            confidence=Confidence.HEURISTIC,
+        )
+    if poison == "parser":
+        node = replace(
+            node,
+            provenance=replace(
+                node.provenance,
+                parser="mwcc-retro-backend-trace.v2",
+            ),
+        )
+    elif poison not in {None, "capture"}:
+        raise ValueError(f"unknown neighborhood poison: {poison}")
+    return node if record_id is None else replace(node, record_id=record_id)
+
+
+def _with_legacy_neighborhood(
+    graph,
+    *,
+    added_nodes: tuple[EvidenceNode, ...] = (),
+    added_edges: tuple[EvidenceEdge, ...] = (),
+    reverse_insertion: bool = False,
+):
+    nodes = []
+    for node in graph.store.find_nodes(graph.bundle.compile_id):
+        if node.kind == "candidate-instruction":
+            node = node.with_attributes(
+                {
+                    **node.attributes,
+                    "retail_neighborhood_signature": _TWO_INSTRUCTION_NEIGHBORHOOD,
+                }
+            )
+        elif node.kind == "retail-instruction":
+            node = node.with_attributes(
+                {
+                    **node.attributes,
+                    "neighborhood_signature": _TWO_INSTRUCTION_NEIGHBORHOOD,
+                }
+            )
+        nodes.append(node)
+    nodes.extend(added_nodes)
+    edges = [*graph.store.find_edges(graph.bundle.compile_id), *added_edges]
+    if reverse_insertion:
+        nodes.reverse()
+        edges.reverse()
+    store = InMemoryEvidenceStore()
+    store.add_nodes(nodes)
+    store.add_edges(edges)
+    return replace(graph, store=store)
+
+
+def _legacy_outcome(graph) -> tuple[bytes | None, AbstentionReason]:
+    resolution, reason = _automatic_local_role(graph, 0x234, _LEGACY_ROLE)
+    if resolution is None:
+        return None, reason
+    audit = canonical_bytes(
+        {
+            "allocator_record_id": resolution.node.record_id,
+            "confidence": resolution.confidence.value,
+            "evidence_chain": tuple(record.record_id for record in resolution.evidence_chain),
+            "supporting_records": tuple(record.record_id for record in resolution.supporting_records),
+            "verified_retail_path": resolution.verified_retail_path,
+        }
+    )
+    return audit, reason
+
+
+def _second_legacy_chain(graph):
+    anchor = _only(graph.store.find_nodes(graph.bundle.compile_id, "pcode-occurrence"))
+    occurrence = _node(
+        graph.bundle.compile_id,
+        "pcode-occurrence",
+        "second-occurrence",
+        {
+            **anchor.attributes,
+            "pass_index": 1,
+            "instruction_index": 7,
+        },
+    )
+    virtual = _node(
+        graph.bundle.compile_id,
+        "virtual-register",
+        "second-virtual",
+        {"class": "r", "virtual": 99},
+    )
+    allocator = _node(
+        graph.bundle.compile_id,
+        "allocator-node",
+        "second-allocator",
+        {
+            "class_id": 0,
+            "ig_id": 99,
+            "assigned_reg": 21,
+            "first_def_signature": "lwz r#,0(r#)",
+        },
+    )
+    return (
+        (occurrence, virtual, allocator),
+        (
+            _edge(
+                graph.bundle.compile_id,
+                "uses-virtual",
+                occurrence,
+                virtual,
+                attributes={"operand_position": 1},
+            ),
+            _edge(
+                graph.bundle.compile_id,
+                "maps-to-allocator-node",
+                virtual,
+                allocator,
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize("poison", ("parser", "capture"))
+@pytest.mark.parametrize(
+    ("pass_index", "instruction_index", "record_id"),
+    (
+        pytest.param(0, 6, None, id="same-pass-previous"),
+        pytest.param(0, 8, None, id="same-pass-next"),
+        pytest.param(0, 7, "0" * 64, id="same-pass-duplicate-before"),
+        pytest.param(0, 7, "f" * 64, id="same-pass-duplicate-after"),
+        pytest.param(1, 6, None, id="different-pass-previous"),
+        pytest.param(1, 8, None, id="different-pass-next"),
+        pytest.param(1, 7, "0" * 64, id="different-pass-duplicate"),
+    ),
+)
+@pytest.mark.parametrize("reverse_insertion", (False, True))
+def test_nonlegacy_neighbor_cannot_turn_rejection_into_acceptance(
+    poison: str,
+    pass_index: int,
+    instruction_index: int,
+    record_id: str | None,
+    reverse_insertion: bool,
+) -> None:
+    base = _graph("direct")
+    baseline = _with_legacy_neighborhood(
+        base,
+        reverse_insertion=reverse_insertion,
+    )
+    poisoned_neighbor = _neighborhood_occurrence(
+        base,
+        f"{poison}-{pass_index}-{instruction_index}-{record_id}",
+        pass_index=pass_index,
+        instruction_index=instruction_index,
+        poison=poison,
+        record_id=record_id,
+    )
+    poisoned = _with_legacy_neighborhood(
+        base,
+        added_nodes=(poisoned_neighbor,),
+        reverse_insertion=reverse_insertion,
+    )
+
+    expected = (None, AbstentionReason.MISSING_BACKEND_ROLE)
+    assert _legacy_outcome(baseline) == expected
+    assert _legacy_outcome(poisoned) == expected
+
+
+@pytest.mark.parametrize("poison", ("parser", "capture"))
+@pytest.mark.parametrize("reverse_insertion", (False, True))
+def test_nonlegacy_neighbor_cannot_turn_acceptance_into_rejection(
+    poison: str,
+    reverse_insertion: bool,
+) -> None:
+    base = _graph("direct")
+    valid_previous = _neighborhood_occurrence(
+        base,
+        "valid-previous",
+        pass_index=0,
+        instruction_index=6,
+    )
+    poisoned_next = _neighborhood_occurrence(
+        base,
+        f"{poison}-next",
+        pass_index=0,
+        instruction_index=8,
+        poison=poison,
+    )
+    accepted = _with_legacy_neighborhood(
+        base,
+        added_nodes=(valid_previous,),
+        reverse_insertion=reverse_insertion,
+    )
+    poisoned = _with_legacy_neighborhood(
+        base,
+        added_nodes=(valid_previous, poisoned_next),
+        reverse_insertion=reverse_insertion,
+    )
+
+    accepted_audit, accepted_reason = _legacy_outcome(accepted)
+    assert accepted_audit is not None
+    assert accepted_reason is AbstentionReason.MISSING_BACKEND_ROLE
+    assert _legacy_outcome(poisoned) == (accepted_audit, accepted_reason)
+
+
+@pytest.mark.parametrize("poison", ("parser", "capture"))
+@pytest.mark.parametrize("reverse_insertion", (False, True))
+def test_nonlegacy_neighbor_cannot_enable_second_chain_or_create_ambiguity(
+    poison: str,
+    reverse_insertion: bool,
+) -> None:
+    base = _graph("direct")
+    valid_primary_neighbor = _neighborhood_occurrence(
+        base,
+        "valid-primary-previous",
+        pass_index=0,
+        instruction_index=6,
+    )
+    second_nodes, second_edges = _second_legacy_chain(base)
+    poisoned_second_neighbor = _neighborhood_occurrence(
+        base,
+        f"{poison}-second-previous",
+        pass_index=1,
+        instruction_index=6,
+        poison=poison,
+    )
+    selected = _with_legacy_neighborhood(
+        base,
+        added_nodes=(valid_primary_neighbor, *second_nodes),
+        added_edges=second_edges,
+        reverse_insertion=reverse_insertion,
+    )
+    poisoned = _with_legacy_neighborhood(
+        base,
+        added_nodes=(valid_primary_neighbor, *second_nodes, poisoned_second_neighbor),
+        added_edges=second_edges,
+        reverse_insertion=reverse_insertion,
+    )
+
+    selected_audit, selected_reason = _legacy_outcome(selected)
+    assert selected_audit is not None
+    assert selected_reason is AbstentionReason.MISSING_BACKEND_ROLE
+    assert _legacy_outcome(poisoned) == (selected_audit, selected_reason)
+
+
+@pytest.mark.parametrize(
+    ("instruction_index", "record_id"),
+    (
+        pytest.param(6, None, id="previous"),
+        pytest.param(8, None, id="next"),
+        pytest.param(7, "0" * 64, id="duplicate-before"),
+        pytest.param(7, "f" * 64, id="duplicate-after"),
+    ),
+)
+@pytest.mark.parametrize("reverse_insertion", (False, True))
+@pytest.mark.parametrize(
+    "confidence",
+    (Confidence.OBSERVED, Confidence.HEURISTIC),
+)
+def test_valid_legacy_neighbor_satisfies_multi_instruction_context_and_is_audited(
+    instruction_index: int,
+    record_id: str | None,
+    reverse_insertion: bool,
+    confidence: Confidence,
+) -> None:
+    base = _graph("direct")
+    neighbor = _neighborhood_occurrence(
+        base,
+        f"valid-{instruction_index}-{record_id}-{confidence.value}",
+        pass_index=0,
+        instruction_index=instruction_index,
+        record_id=record_id,
+        confidence=confidence,
+    )
+    graph = _with_legacy_neighborhood(
+        base,
+        added_nodes=(neighbor,),
+        reverse_insertion=reverse_insertion,
+    )
+
+    resolution, reason = _automatic_local_role(graph, 0x234, _LEGACY_ROLE)
+
+    assert resolution is not None
+    assert reason is AbstentionReason.MISSING_BACKEND_ROLE
+    assert resolution.supporting_records == (neighbor,)
+    assert tuple(record.record_id for record in resolution.evidence_chain).count(resolution.pcode.record_id) == 1
+    assert resolution.confidence is (
+        Confidence.HEURISTIC if confidence is Confidence.HEURISTIC else Confidence.DERIVED_UNIQUE
+    )
+
+
+def test_pcode_neighborhoods_are_a_pure_permutation_stable_function() -> None:
+    from src.mwcc_debug.causal_diff.legacy_ownership import legacy_pcode_occurrences
+
+    base = _graph("direct")
+    previous = _neighborhood_occurrence(
+        base,
+        "pure-previous",
+        pass_index=0,
+        instruction_index=6,
+    )
+    next_ = _neighborhood_occurrence(
+        base,
+        "pure-next",
+        pass_index=0,
+        instruction_index=8,
+    )
+    graph = _with_legacy_neighborhood(base, added_nodes=(previous, next_))
+    occurrences = legacy_pcode_occurrences(graph)
+
+    forward = _pcode_neighborhoods(occurrences)
+    reverse = _pcode_neighborhoods(tuple(reversed(occurrences)))
+
+    assert forward == reverse
+    assert all(record in occurrences for neighborhood in forward.values() for record in neighborhood)
+
+
+def test_automatic_role_queries_legacy_occurrences_once_and_reuses_exact_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mwcc_debug.causal_diff import alignment as alignment_module
+
+    graph = _graph("direct")
+    original_query = alignment_module.legacy_pcode_occurrences
+    original_neighborhoods = alignment_module._pcode_neighborhoods
+    calls = 0
+    queried = None
+
+    def counted_query(current_graph):
+        nonlocal calls, queried
+        calls += 1
+        queried = original_query(current_graph)
+        return queried
+
+    def same_tuple_neighborhoods(occurrences):
+        assert occurrences is queried
+        return original_neighborhoods(occurrences)
+
+    monkeypatch.setattr(alignment_module, "legacy_pcode_occurrences", counted_query)
+    monkeypatch.setattr(alignment_module, "_pcode_neighborhoods", same_tuple_neighborhoods)
+
+    resolution, reason = _automatic_local_role(graph, 0x234, _LEGACY_ROLE)
+
+    assert resolution is not None
+    assert reason is AbstentionReason.MISSING_BACKEND_ROLE
+    assert calls == 1
 
 
 def test_legacy_allocator_lookup_accepts_only_v1_records() -> None:

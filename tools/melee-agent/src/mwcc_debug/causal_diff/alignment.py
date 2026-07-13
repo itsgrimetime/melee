@@ -166,13 +166,15 @@ def _normalized_instruction_text(value: object) -> str:
     return _normalized_instruction(opcode, operands if separator else "")
 
 
-def _pcode_neighborhoods(graph: FrontierGraph) -> Mapping[str, tuple[str, ...]]:
+def _pcode_neighborhoods(
+    occurrences: Iterable[EvidenceNode],
+) -> Mapping[str, tuple[EvidenceNode, ...]]:
     groups: dict[int, list[EvidenceNode]] = {}
-    for node in graph.store.find_nodes(_compile_id(graph), "pcode-occurrence"):
+    for node in occurrences:
         pass_index = node.attributes.get("pass_index")
         if isinstance(pass_index, int):
             groups.setdefault(pass_index, []).append(node)
-    neighborhoods: dict[str, tuple[str, ...]] = {}
+    neighborhoods: dict[str, tuple[EvidenceNode, ...]] = {}
     for nodes in groups.values():
         ordered = sorted(
             nodes,
@@ -182,11 +184,8 @@ def _pcode_neighborhoods(graph: FrontierGraph) -> Mapping[str, tuple[str, ...]]:
                 node.record_id,
             ),
         )
-        signatures = [
-            _normalized_instruction(node.attributes.get("opcode"), node.attributes.get("operands")) for node in ordered
-        ]
         for index, node in enumerate(ordered):
-            neighborhoods[node.record_id] = tuple(signatures[max(0, index - 1) : index + 2])
+            neighborhoods[node.record_id] = tuple(ordered[max(0, index - 1) : index + 2])
     return MappingProxyType(neighborhoods)
 
 
@@ -418,17 +417,31 @@ def _automatic_local_role(
     expected_neighborhood = tuple(
         _normalized_instruction_text(item) for item in candidate.attributes.get("retail_neighborhood_signature", ())
     )
-    pcode_neighborhoods = _pcode_neighborhoods(graph)
+    legacy_occurrences = legacy_pcode_occurrences(graph)
+    pcode_neighborhoods = _pcode_neighborhoods(legacy_occurrences)
     edge_kind = "defines-virtual" if role.kind == "def" else "uses-virtual"
     resolutions: dict[str, list[_LocalRoleResolution]] = {}
-    for occurrence in legacy_pcode_occurrences(graph):
+    for occurrence in legacy_occurrences:
         if (
             _normalized_instruction(occurrence.attributes.get("opcode"), occurrence.attributes.get("operands"))
             != signature
         ):
             continue
-        if len(expected_neighborhood) > 1 and pcode_neighborhoods.get(occurrence.record_id) != expected_neighborhood:
+        neighborhood = pcode_neighborhoods.get(occurrence.record_id, ())
+        neighborhood_signatures = tuple(
+            _normalized_instruction(
+                record.attributes.get("opcode"),
+                record.attributes.get("operands"),
+            )
+            for record in neighborhood
+        )
+        if len(expected_neighborhood) > 1 and neighborhood_signatures != expected_neighborhood:
             continue
+        neighborhood_support = (
+            tuple(record for record in neighborhood if record.record_id != occurrence.record_id)
+            if len(expected_neighborhood) > 1
+            else ()
+        )
         for edge, virtual, map_edge, allocator in legacy_allocator_chains_from_occurrence(
             graph,
             occurrence.record_id,
@@ -437,7 +450,15 @@ def _automatic_local_role(
         ):
             class_id = 1 if role.register_kind == "f" else 0
             if allocator.attributes.get("class_id") == class_id:
-                chain = (candidate, occurrence, edge, virtual, map_edge, allocator)
+                chain = (
+                    candidate,
+                    occurrence,
+                    *neighborhood_support,
+                    edge,
+                    virtual,
+                    map_edge,
+                    allocator,
+                )
                 resolutions.setdefault(allocator.record_id, []).append(
                     _LocalRoleResolution(
                         node=allocator,
@@ -447,6 +468,7 @@ def _automatic_local_role(
                         virtual=virtual,
                         allocator_map_edge=map_edge,
                         confidence=min_confidence(*(record.confidence for record in chain)),
+                        supporting_records=neighborhood_support,
                     )
                 )
     if len(resolutions) == 1:
