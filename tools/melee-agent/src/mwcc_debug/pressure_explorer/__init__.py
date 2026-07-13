@@ -9547,7 +9547,21 @@ def _declaration_use_region_end(text: str, start: int, name: str) -> int | None:
     last_use_end = _last_line_end_for_identifiers(text, start, (name,))
     if last_use_end is None:
         return None
+    if _region_crosses_enclosing_scope(text, start, last_use_end):
+        return None
     return _balanced_region_end(text, start, last_use_end)
+
+
+def _region_crosses_enclosing_scope(text: str, start: int, end: int) -> bool:
+    depth = 0
+    for char in _mask_c_non_code_text(text[start:end]):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            if depth == 0:
+                return True
+            depth -= 1
+    return False
 
 
 def _balanced_region_end(text: str, start: int, min_end: int) -> int:

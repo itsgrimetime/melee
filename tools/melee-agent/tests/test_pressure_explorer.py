@@ -16,6 +16,7 @@ from src.mwcc_debug.pressure_explorer import (
     PairDelta,
     PressureDelta,
     TargetPairState,
+    _probe_declaration_use_distance,
     compare_pressure_signatures,
     generate_frame_directed_probes,
     generate_lifetime_layout_probes,
@@ -2967,6 +2968,85 @@ def test_declaration_use_distance_skips_use_that_crosses_shallower_else() -> Non
     probes = generate_lifetime_layout_probes(source, "fn_80000000", max_probes=20)
 
     assert "declaration-use-distance" not in {probe.operator for probe in probes}
+
+
+def test_declaration_use_distance_skips_later_use_outside_first_use_scope() -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+
+        void fn_80000000(int cond)
+        {
+            HSD_JObj* header;
+            sink(cond);
+            if (cond) {
+                header = make_header();
+                sink(header);
+            }
+            header = make_other_header();
+            sink(header);
+        }
+    """)
+
+    probes = generate_lifetime_layout_probes(
+        source,
+        "fn_80000000",
+        operator_filter=("declaration-use-distance",),
+        max_probes=20,
+    )
+
+    assert [probe.operator for probe in probes] == []
+
+
+@pytest.mark.parametrize("non_code_brace", ['sink("{");', "/* { */"])
+def test_declaration_use_distance_ignores_open_brace_in_non_code_when_scope_exits(
+    non_code_brace: str,
+) -> None:
+    body = textwrap.dedent(f"""\
+            int header;
+            sink(cond);
+            if (cond) {{
+                header = make_header();
+                {non_code_brace}
+                sink(header);
+            }}
+            header = make_other_header();
+            sink(header);
+    """)
+    prefix = "void fn_80000000(int cond)\n{\n"
+
+    probe = _probe_declaration_use_distance(
+        prefix + body + "}\n",
+        body,
+        len(prefix),
+        "fn_80000000",
+    )
+
+    assert probe is None
+
+
+@pytest.mark.parametrize("non_code_brace", ['sink("}");', "/* } */"])
+def test_declaration_use_distance_keeps_same_scope_use_with_non_code_close_brace(
+    non_code_brace: str,
+) -> None:
+    body = textwrap.dedent(f"""\
+            int header;
+            sink(cond);
+            header = make_header();
+            {non_code_brace}
+            sink(header);
+    """)
+    prefix = "void fn_80000000(int cond)\n{\n"
+
+    probe = _probe_declaration_use_distance(
+        prefix + body + "}\n",
+        body,
+        len(prefix),
+        "fn_80000000",
+    )
+
+    assert probe is not None
+    assert "int header;" in probe.source_text
+    assert "sink(header);" in probe.source_text
 
 
 def test_declaration_use_distance_keeps_later_uses_inside_moved_block() -> None:
