@@ -8885,14 +8885,12 @@ def _source_restore_byte_guard(
             current = path.read_bytes() if path.exists() else None
         except Exception:
             current = None
-        if current == original:
-            return
-
-        _restore_source_bytes_snapshot(
-            path,
-            original,
-            melee_root=melee_root,
-        )
+        if current != original:
+            _restore_source_bytes_snapshot(
+                path,
+                original,
+                melee_root=melee_root,
+            )
 def _unique_existing_source_restore_paths(
     paths: Iterable[Path | None],
 ) -> list[Path]:

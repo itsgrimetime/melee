@@ -11144,7 +11144,9 @@ def test_select_order_search_json_returns_when_source_score_lock_is_held(
     payload = json.loads(result.stdout)
     assert payload["status"] == "timeout"
     assert payload["timed_out"] is True
-    assert "finishing select-order candidate held-lock" in payload["timeout_error"]
+    assert "timed out waiting for repo-wide source-scoring lock" in (
+        payload["timeout_error"]
+    )
     assert payload["variants"]
 
 
@@ -11190,6 +11192,65 @@ def test_select_order_search_marks_source_pcdump_omission_as_malformed_source(
     assert variant["source_retained"] == str(source)
     assert "source_hunk" in variant
     assert "objective" not in variant
+
+
+def test_select_order_search_preserves_guarded_declaration_use_compile_failure(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    live_source = melee_root / "src" / "melee" / "mn" / "sample.c"
+    live_source.parent.mkdir(parents=True)
+    original = "void fn_80000000(void) { /* original */ }\n"
+    live_source.write_text(original)
+    candidate = tmp_path / "declaration-use-distance.c"
+    candidate.write_text("void fn_80000000(void) { /* candidate */ }\n")
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text(BASELINE)
+
+    def fake_compile(*args, **kwargs) -> str:
+        assert live_source.read_text() == original
+        raise RuntimeError("declaration-use-distance compile exploded")
+
+    debug_cli._ACTIVE_SOURCE_RESTORES.clear()
+    monkeypatch.setattr(debug_cli, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.setattr(
+        debug_cli,
+        "_find_unit_for_function",
+        lambda function, root: "melee/mn/sample",
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(live_source),
+            "--candidate",
+            f"guarded:declaration-use-distance={candidate}",
+            "--no-compile-probes",
+            "--no-score-match-percent",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    variant = json.loads(result.stdout)["variants"][0]
+    assert variant["status"] == "failed"
+    assert variant["error"] == "declaration-use-distance compile exploded"
+    assert live_source.read_text() == original
+    assert debug_cli._ACTIVE_SOURCE_RESTORES == {}
 
 
 def test_select_order_search_no_score_restores_live_source_after_probe_compile_mutates_it(
