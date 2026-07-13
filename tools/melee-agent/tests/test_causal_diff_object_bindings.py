@@ -54,6 +54,12 @@ from src.mwcc_debug.causal_diff.object_binding_adapter import (
     exact_owner_path_record,
     proof_complete,
 )
+from src.mwcc_debug.causal_diff.owner_certificate import (
+    OwnerCertificateResult,
+    OwnerResolutionStatus,
+    OwnerRoleKey,
+    OwnerRoleResolution,
+)
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 from tests.test_causal_diff_alignment import _graph
 from tests.test_retro_backend_trace_assembler import (
@@ -198,6 +204,37 @@ def test_legacy_automatic_role_rejects_v2_anywhere_in_fallback_chain(
     assert reason is AbstentionReason.MISSING_BACKEND_ROLE
 
 
+class _ExplodingOwnerRole:
+    def __getattribute__(self, name: str) -> object:
+        raise AssertionError(f"untrusted owner role attribute accessed: {name}")
+
+
+class _ExplodingRoleResolutions:
+    def __iter__(self):
+        raise AssertionError("untrusted role resolutions iterated")
+
+    def __len__(self) -> int:
+        raise AssertionError("untrusted role resolutions measured")
+
+    def __getitem__(self, index: object) -> object:
+        raise AssertionError(f"untrusted role resolutions indexed: {index!r}")
+
+
+def _untrusted_owner_result_with_role(role: object) -> OwnerCertificateResult:
+    return OwnerCertificateResult(
+        (),
+        (
+            OwnerRoleResolution(
+                role,  # type: ignore[arg-type]
+                OwnerResolutionStatus.UNIQUE,
+                (),
+                (),
+            ),
+        ),
+        (),
+    )
+
+
 def _graph_with_v2_owner_evidence(*, certificates: bool, physical_register: int = 21):
     from src.mwcc_debug.causal_diff.owner_certificate import build_owner_certificates
 
@@ -226,6 +263,219 @@ def _graph_with_v2_owner_evidence(*, certificates: bool, physical_register: int 
             owner_certificates=(result if certificates else graph.backend.owner_certificates),
         ),
     )
+
+
+UNTRUSTED_ALLOCATOR_ROLES = (
+    pytest.param(("not", "an", "owner-role"), id="tuple"),
+    pytest.param(object(), id="object"),
+    pytest.param(_ExplodingOwnerRole(), id="exploding-attribute"),
+    pytest.param(
+        OwnerRoleKey("invalid", "gpr", "row-home", 4, "locals"),
+        id="invalid-operand",
+    ),
+    pytest.param(
+        OwnerRoleKey("use:0", "vector", "row-home", 4, "locals"),
+        id="invalid-register-class",
+    ),
+    pytest.param(
+        OwnerRoleKey("use:0", "gpr", "INVALID_ROLE", 4, "locals"),
+        id="invalid-semantic-role",
+    ),
+    pytest.param(
+        OwnerRoleKey("use:0", "gpr", "row-home", True, "locals"),
+        id="boolean-type-size",
+    ),
+    pytest.param(
+        OwnerRoleKey("use:0", "gpr", "row-home", 4, "heap"),
+        id="invalid-frame-area",
+    ),
+)
+
+
+@pytest.mark.parametrize("malformed_role", UNTRUSTED_ALLOCATOR_ROLES)
+def test_allocator_entrypoints_never_read_untrusted_role_data(
+    malformed_role: object,
+) -> None:
+    graph = _graph("direct")
+    result = _untrusted_owner_result_with_role(malformed_role)
+    assert result.is_trusted is False
+    graph = replace(
+        graph,
+        backend=replace(graph.backend, owner_certificates=result),
+    )
+    candidate = _candidate_is_uniquely_aligned(graph, 0x234)
+    assert candidate is not None
+    role = OperandRole("use:0", "use", 0, "r", 21)
+
+    verified, verified_reason = _verified_retail_local_role(
+        graph,
+        candidate,
+        0x234,
+        role,
+    )
+    automatic, automatic_reason = _automatic_local_role(graph, 0x234, role)
+
+    assert verified is None
+    assert verified_reason is AbstentionReason.MISSING_BACKEND_ROLE
+    assert automatic is not None
+    assert automatic.verified_retail_path is False
+    assert automatic_reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+
+def test_allocator_entrypoints_never_iterate_untrusted_resolution_container() -> None:
+    graph = _graph("direct")
+    result = OwnerCertificateResult(
+        (),
+        _ExplodingRoleResolutions(),  # type: ignore[arg-type]
+        (),
+    )
+    assert result.is_trusted is False
+    graph = replace(
+        graph,
+        backend=replace(graph.backend, owner_certificates=result),
+    )
+    candidate = _candidate_is_uniquely_aligned(graph, 0x234)
+    assert candidate is not None
+    role = OperandRole("use:0", "use", 0, "r", 21)
+
+    verified, verified_reason = _verified_retail_local_role(
+        graph,
+        candidate,
+        0x234,
+        role,
+    )
+    automatic, automatic_reason = _automatic_local_role(graph, 0x234, role)
+
+    assert verified is None
+    assert verified_reason is AbstentionReason.MISSING_BACKEND_ROLE
+    assert automatic is not None
+    assert automatic.verified_retail_path is False
+    assert automatic_reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+
+def test_allocator_entrypoints_reject_replaced_trusted_result_before_role_access() -> None:
+    trusted_graph = _graph_with_v2_owner_evidence(certificates=True)
+    trusted = trusted_graph.backend.owner_certificates
+    replaced_result = replace(
+        trusted,
+        role_resolutions=_ExplodingRoleResolutions(),  # type: ignore[arg-type]
+    )
+    assert trusted.is_trusted is True
+    assert replaced_result.is_trusted is False
+
+    graph = _graph("direct")
+    graph = replace(
+        graph,
+        backend=replace(graph.backend, owner_certificates=replaced_result),
+    )
+    candidate = _candidate_is_uniquely_aligned(graph, 0x234)
+    assert candidate is not None
+    role = OperandRole("use:0", "use", 0, "r", 21)
+
+    verified, verified_reason = _verified_retail_local_role(
+        graph,
+        candidate,
+        0x234,
+        role,
+    )
+    automatic, automatic_reason = _automatic_local_role(graph, 0x234, role)
+
+    assert verified is None
+    assert verified_reason is AbstentionReason.MISSING_BACKEND_ROLE
+    assert automatic is not None
+    assert automatic.verified_retail_path is False
+    assert automatic_reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+
+def test_allocator_entrypoints_never_call_resolution_for_on_untrusted_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _graph("direct")
+    result = _untrusted_owner_result_with_role(OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals"))
+    graph = replace(
+        graph,
+        backend=replace(graph.backend, owner_certificates=result),
+    )
+
+    def forbidden_resolution_for(
+        owner_result: OwnerCertificateResult,
+        role: OwnerRoleKey,
+    ) -> OwnerRoleResolution:
+        raise AssertionError(f"resolution_for called on untrusted result {owner_result!r} for {role!r}")
+
+    monkeypatch.setattr(
+        OwnerCertificateResult,
+        "resolution_for",
+        forbidden_resolution_for,
+    )
+    candidate = _candidate_is_uniquely_aligned(graph, 0x234)
+    assert candidate is not None
+    role = OperandRole("use:0", "use", 0, "r", 21)
+
+    verified, verified_reason = _verified_retail_local_role(
+        graph,
+        candidate,
+        0x234,
+        role,
+    )
+    automatic, automatic_reason = _automatic_local_role(graph, 0x234, role)
+
+    assert verified is None
+    assert verified_reason is AbstentionReason.MISSING_BACKEND_ROLE
+    assert automatic is not None
+    assert automatic.verified_retail_path is False
+    assert automatic_reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+
+def test_allocator_entrypoints_preserve_valid_trusted_certificate_selection() -> None:
+    graph = _graph_with_v2_owner_evidence(certificates=True)
+    candidate = _candidate_is_uniquely_aligned(graph, 0x234)
+    assert candidate is not None
+    role = OperandRole("use:0", "use", 0, "r", 21)
+
+    verified, verified_reason = _verified_retail_local_role(
+        graph,
+        candidate,
+        0x234,
+        role,
+    )
+    automatic, automatic_reason = _automatic_local_role(graph, 0x234, role)
+
+    assert verified is not None
+    assert verified.verified_retail_path is True
+    assert verified_reason is AbstentionReason.MISSING_BACKEND_ROLE
+    assert automatic is not None
+    assert automatic.verified_retail_path is True
+    assert automatic.node.record_id == verified.node.record_id
+    assert automatic_reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+
+def test_untrusted_result_can_fall_back_only_through_v2_filtered_legacy_chain() -> None:
+    graph = _graph("direct")
+    role = OperandRole("use:0", "use", 0, "r", 21)
+    baseline, _reason = _automatic_local_role(graph, 0x234, role)
+    assert baseline is not None
+    assert baseline.use_def_edge is not None
+    poisoned_edge = replace(
+        baseline.use_def_edge,
+        provenance=replace(
+            baseline.use_def_edge.provenance,
+            parser="mwcc-retro-backend-trace.v2",
+        ),
+    )
+    graph = _store_with_replaced_record(graph, poisoned_edge)
+    graph = replace(
+        graph,
+        backend=replace(
+            graph.backend,
+            owner_certificates=_untrusted_owner_result_with_role(_ExplodingOwnerRole()),
+        ),
+    )
+
+    resolution, reason = _automatic_local_role(graph, 0x234, role)
+
+    assert resolution is None
+    assert reason is AbstentionReason.MISSING_BACKEND_ROLE
 
 
 def test_verified_retail_role_uses_trusted_certificate_not_raw_v2_traversal() -> None:

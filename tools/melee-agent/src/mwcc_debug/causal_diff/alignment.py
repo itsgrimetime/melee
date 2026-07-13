@@ -326,6 +326,8 @@ def _verified_retail_local_role(
 ) -> tuple[_LocalRoleResolution | None, AbstentionReason]:
     del retail_offset
     result = graph.backend.owner_certificates
+    if not result.is_trusted:
+        return None, AbstentionReason.MISSING_BACKEND_ROLE
     register_class = "fpr" if role.register_kind == "f" else "gpr"
     alternatives: dict[str, list[_LocalRoleResolution]] = {}
     for base_resolution in result.role_resolutions:
