@@ -34,6 +34,7 @@ from tests.owner_certificate_fixtures import (
     evidence_with_coordinated_allocator_change,
     evidence_with_global_and_role_rejection,
     evidence_with_heuristic_support,
+    evidence_with_independent_paths,
     evidence_with_lineage_variant,
     evidence_with_mutation_parent_override,
     evidence_with_object_generation_conflict,
@@ -54,6 +55,83 @@ from tests.test_causal_diff_object_bindings import ALL_CAPABILITIES, _object_res
 
 ROLE = OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals")
 STATE = OwnerSemanticState(21, 0x44, 4)
+
+
+class _CountingTuple(tuple):
+    def __new__(cls, values, counter):
+        value = super().__new__(cls, values)
+        value.counter = counter
+        return value
+
+    def __iter__(self):
+        for item in super().__iter__():
+            self.counter["visits"] += 1
+            yield item
+
+
+@pytest.mark.parametrize("path_count", [8, 32])
+def test_candidate_index_is_built_once_without_per_candidate_source_rescans(path_count):
+    evidence = evidence_with_independent_paths(path_count)
+    counter = {"visits": 0}
+    counted = ObjectBindingEvidence(
+        _CountingTuple(evidence.nodes, counter),
+        _CountingTuple(evidence.edges, counter),
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+    index = owner_certificate._index_evidence(counted)
+    assert counter["visits"] == len(evidence.nodes) + len(evidence.edges)
+
+    counter["visits"] = 0
+    candidates = owner_certificate._enumerate_candidates(index)
+    validated = tuple(owner_certificate._validate_candidate(counted, index, candidate) for candidate in candidates)
+
+    assert len(candidates) == path_count
+    assert all(not isinstance(item, owner_certificate.OwnerCertificateRejection) for item in validated)
+    assert counter["visits"] == 0
+
+
+def test_indexed_many_path_result_is_byte_stable_under_record_permutation():
+    evidence = evidence_with_independent_paths(8)
+    permuted = ObjectBindingEvidence(
+        tuple(reversed(evidence.nodes)),
+        tuple(reversed(evidence.edges)),
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+    assert canonical_result(owner_certificate.validate_owner_evidence(evidence)) == canonical_result(
+        owner_certificate.validate_owner_evidence(permuted)
+    )
+
+
+def test_indexed_registration_rejects_conflicting_exact_path_id_permutation_stably():
+    evidence = complete_evidence()
+    original = support(evidence, "pcode-emission")
+    conflicting = original.with_attributes({**original.attributes, "unknown": "conflict"})
+
+    def diagnostic(nodes):
+        return owner_certificate.validate_owner_evidence(
+            ObjectBindingEvidence(
+                nodes,
+                evidence.edges,
+                evidence.capabilities,
+                evidence.capture_run_id,
+                evidence.instrumentation_identity,
+            )
+        )
+
+    first = diagnostic((*evidence.nodes, conflicting))
+    second = diagnostic((conflicting, *evidence.nodes))
+    first_resolution = next(item for item in first.role_resolutions if item.role == ROLE)
+    second_resolution = next(item for item in second.role_resolutions if item.role == ROLE)
+
+    assert first.certificate_nodes == second.certificate_nodes == ()
+    assert {item.reason for item in first_resolution.rejections} == {"unregistered-support"}
+    assert canonical_result(first) == canonical_result(second)
 
 
 def test_synthetic_future_complete_pair_reaches_only_gate_9():

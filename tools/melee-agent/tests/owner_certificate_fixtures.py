@@ -477,6 +477,22 @@ def ambiguous_evidence(*, permuted: bool = False) -> ObjectBindingEvidence:
     return _evidence_from_paths(paths, reverse_pcode_inputs=permuted)
 
 
+def evidence_with_independent_paths(count: int) -> ObjectBindingEvidence:
+    if count < 1:
+        raise ValueError("count must be positive")
+    return _evidence_from_paths(
+        tuple(
+            _path(
+                index,
+                operand_key=f"use:{index}",
+                semantic_stack_role=f"indexed-home-{index}",
+                stack_offset=0x44 + index * 4,
+            )
+            for index in range(count)
+        )
+    )
+
+
 def evidence_with_role_statuses() -> ObjectBindingEvidence:
     return _evidence_from_paths(
         (

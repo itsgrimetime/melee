@@ -7,7 +7,8 @@ import math
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Iterable, Mapping
+from types import MappingProxyType
+from typing import Iterable, Mapping, TypeVar
 
 import rfc8785
 
@@ -452,6 +453,50 @@ class _MalformedEvidence(Exception):
     """Signal malformed persisted input at a validated semantic boundary."""
 
 
+@dataclass(frozen=True, slots=True)
+class _OwnerEvidenceIndex:
+    records_by_id: Mapping[str, tuple[EvidenceNode | EvidenceEdge, ...]]
+    node_by_id: Mapping[str, EvidenceNode]
+    edges_by_kind: Mapping[str, tuple[EvidenceEdge, ...]]
+    edges_by_kind_source: Mapping[tuple[str, str], tuple[EvidenceEdge, ...]]
+    edges_by_kind_target: Mapping[tuple[str, str], tuple[EvidenceEdge, ...]]
+
+
+_IndexKey = TypeVar("_IndexKey")
+_IndexValue = TypeVar("_IndexValue")
+
+
+def _freeze_groups(
+    groups: Mapping[_IndexKey, list[_IndexValue]],
+) -> Mapping[_IndexKey, tuple[_IndexValue, ...]]:
+    return MappingProxyType({key: tuple(values) for key, values in groups.items()})
+
+
+def _index_evidence(evidence: ObjectBindingEvidence) -> _OwnerEvidenceIndex:
+    records_by_id: dict[str, list[EvidenceNode | EvidenceEdge]] = {}
+    node_by_id: dict[str, EvidenceNode] = {}
+    edges_by_kind: dict[str, list[EvidenceEdge]] = {}
+    edges_by_kind_source: dict[tuple[str, str], list[EvidenceEdge]] = {}
+    edges_by_kind_target: dict[tuple[str, str], list[EvidenceEdge]] = {}
+
+    for node in evidence.nodes:
+        records_by_id.setdefault(node.record_id, []).append(node)
+        node_by_id[node.record_id] = node
+    for edge in evidence.edges:
+        records_by_id.setdefault(edge.record_id, []).append(edge)
+        edges_by_kind.setdefault(edge.kind, []).append(edge)
+        edges_by_kind_source.setdefault((edge.kind, edge.source_id), []).append(edge)
+        edges_by_kind_target.setdefault((edge.kind, edge.target_id), []).append(edge)
+
+    return _OwnerEvidenceIndex(
+        _freeze_groups(records_by_id),
+        MappingProxyType(dict(node_by_id)),
+        _freeze_groups(edges_by_kind),
+        _freeze_groups(edges_by_kind_source),
+        _freeze_groups(edges_by_kind_target),
+    )
+
+
 def _is_nonempty_str(value: object) -> bool:
     return isinstance(value, str) and bool(value)
 
@@ -635,10 +680,10 @@ def _rejection(
 
 
 def _registered_record(
-    evidence: ObjectBindingEvidence,
+    index: _OwnerEvidenceIndex,
     record_id: str,
 ) -> EvidenceNode | EvidenceEdge | OwnerCertificateRejection:
-    matches = tuple(record for record in (*evidence.nodes, *evidence.edges) if record.record_id == record_id)
+    matches = index.records_by_id.get(record_id, ())
     if not matches or any(record != matches[0] for record in matches[1:]):
         return _rejection("unregistered-support", candidates=matches)
     return matches[0]
@@ -687,6 +732,7 @@ def _support_attributes_are_exact(support: EvidenceNode) -> bool:
 
 def _validated_support_records(
     evidence: ObjectBindingEvidence,
+    index: _OwnerEvidenceIndex,
     dependent: EvidenceNode | EvidenceEdge,
     excluded_ids: Iterable[str],
     role: OwnerRoleKey | None = None,
@@ -696,7 +742,7 @@ def _validated_support_records(
     for input_id in dependent.provenance.input_record_ids:
         if input_id in excluded:
             continue
-        registered = _registered_record(evidence, input_id)
+        registered = _registered_record(index, input_id)
         if not isinstance(registered, EvidenceNode) or registered.kind != "backend-support-record":
             candidates = () if isinstance(registered, OwnerCertificateRejection) else (registered,)
             return _rejection(
@@ -733,53 +779,37 @@ def _validated_support_records(
     return tuple(selected)
 
 
-def _enumerate_candidates(evidence: ObjectBindingEvidence) -> tuple[_CandidatePath, ...]:
-    nodes = {node.record_id: node for node in evidence.nodes}
-    edges = {
-        kind: tuple(edge for edge in evidence.edges if edge.kind == kind)
-        for kind in (
-            "assembly-anchor-emitted-by-pcode",
-            "pcode-operand-lineage",
-            "pcode-operand-uses-virtual",
-            "object-materializes-virtual",
-            "maps-to-allocator-node",
-            "object-has-stack-home",
-        )
-    }
+def _enumerate_candidates(index: _OwnerEvidenceIndex) -> tuple[_CandidatePath, ...]:
     candidates: list[_CandidatePath] = []
-    for anchor_edge in edges["assembly-anchor-emitted-by-pcode"]:
-        anchor = nodes.get(anchor_edge.source_id)
-        pcode = nodes.get(anchor_edge.target_id)
+    for anchor_edge in index.edges_by_kind.get("assembly-anchor-emitted-by-pcode", ()):
+        anchor = index.node_by_id.get(anchor_edge.source_id)
+        pcode = index.node_by_id.get(anchor_edge.target_id)
         if anchor is None or pcode is None:
             continue
-        for lineage_edge in edges["pcode-operand-lineage"]:
-            if lineage_edge.source_id != pcode.record_id:
-                continue
-            lineage = nodes.get(lineage_edge.target_id)
+        for lineage_edge in index.edges_by_kind_source.get(("pcode-operand-lineage", pcode.record_id), ()):
+            lineage = index.node_by_id.get(lineage_edge.target_id)
             if lineage is None:
                 continue
-            for virtual_edge in edges["pcode-operand-uses-virtual"]:
-                if virtual_edge.source_id != lineage.record_id:
-                    continue
-                virtual = nodes.get(virtual_edge.target_id)
+            for virtual_edge in index.edges_by_kind_source.get(("pcode-operand-uses-virtual", lineage.record_id), ()):
+                virtual = index.node_by_id.get(virtual_edge.target_id)
                 if virtual is None:
                     continue
-                for object_edge in edges["object-materializes-virtual"]:
-                    if object_edge.target_id != virtual.record_id:
-                        continue
-                    owner = nodes.get(object_edge.source_id)
+                for object_edge in index.edges_by_kind_target.get(
+                    ("object-materializes-virtual", virtual.record_id), ()
+                ):
+                    owner = index.node_by_id.get(object_edge.source_id)
                     if owner is None:
                         continue
-                    for allocator_edge in edges["maps-to-allocator-node"]:
-                        if allocator_edge.source_id != virtual.record_id:
-                            continue
-                        allocator = nodes.get(allocator_edge.target_id)
+                    for allocator_edge in index.edges_by_kind_source.get(
+                        ("maps-to-allocator-node", virtual.record_id), ()
+                    ):
+                        allocator = index.node_by_id.get(allocator_edge.target_id)
                         if allocator is None:
                             continue
-                        for frame_edge in edges["object-has-stack-home"]:
-                            if frame_edge.source_id != owner.record_id:
-                                continue
-                            stack = nodes.get(frame_edge.target_id)
+                        for frame_edge in index.edges_by_kind_source.get(
+                            ("object-has-stack-home", owner.record_id), ()
+                        ):
+                            stack = index.node_by_id.get(frame_edge.target_id)
                             if stack is None:
                                 continue
                             candidates.append(
@@ -828,12 +858,13 @@ def _role_for(candidate: _CandidatePath) -> OwnerRoleKey | OwnerCertificateRejec
 
 def _supports_for_records(
     evidence: ObjectBindingEvidence,
+    index: _OwnerEvidenceIndex,
     records: Iterable[EvidenceNode | EvidenceEdge],
     role: OwnerRoleKey,
 ) -> tuple[EvidenceNode, ...] | OwnerCertificateRejection:
     by_id: dict[str, EvidenceNode] = {}
     for record in records:
-        registered = _registered_record(evidence, record.record_id)
+        registered = _registered_record(index, record.record_id)
         if isinstance(registered, OwnerCertificateRejection) or registered != record:
             return _rejection("unregistered-support", role, (record,))
         if (
@@ -845,7 +876,7 @@ def _supports_for_records(
         endpoints = (record.source_id, record.target_id) if isinstance(record, EvidenceEdge) else ()
         if isinstance(record, EvidenceEdge) and not set(endpoints).issubset(record.provenance.input_record_ids):
             return _rejection("unregistered-support", role, (record,))
-        support = _validated_support_records(evidence, record, endpoints, role)
+        support = _validated_support_records(evidence, index, record, endpoints, role)
         if isinstance(support, OwnerCertificateRejection):
             return support
         for item in support:
@@ -980,6 +1011,7 @@ def _validate_emission(
 
 def _validate_lineage_output(
     evidence: ObjectBindingEvidence,
+    index: _OwnerEvidenceIndex,
     candidate: _CandidatePath,
     role: OwnerRoleKey,
     support: tuple[EvidenceNode, ...],
@@ -998,17 +1030,14 @@ def _validate_lineage_output(
         return _rejection("lineage-parent-mismatch", role, candidate.path_records, mutation_support)
     selected = tuple(
         edge
-        for edge in evidence.edges
-        if edge.kind == "pcode-operand-lineage"
-        and edge.target_id == candidate.lineage.record_id
-        and edge.attributes.get("event_index") == lineage_support.attributes.get("event_index")
+        for edge in index.edges_by_kind_target.get(("pcode-operand-lineage", candidate.lineage.record_id), ())
+        if edge.attributes.get("event_index") == lineage_support.attributes.get("event_index")
         and edge.attributes.get("lineage_event_side") == "outputs"
         and edge.attributes.get("mutation_kind") == lineage_support.attributes.get("mutation_kind")
         and edge.attributes.get("operand_lineage_id") == lineage_support.attributes.get("operand_lineage_id")
         and edge.attributes.get("parent_lineage_ids") == parent_ids
     )
-    registered_nodes = {node.record_id: node for node in evidence.nodes}
-    parent_nodes = tuple(registered_nodes.get(edge.source_id) for edge in selected)
+    parent_nodes = tuple(index.node_by_id.get(edge.source_id) for edge in selected)
     if any(node is None for node in parent_nodes):
         return _rejection("lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support)
     actual = tuple(sorted(str(node.attributes.get("operand_lineage_id")) for node in parent_nodes if node is not None))
@@ -1022,7 +1051,7 @@ def _validate_lineage_output(
         *tuple(node for node in parent_nodes if node is not None),
         *selected,
     )
-    parent_support = _supports_for_records(evidence, parent_records, role)
+    parent_support = _supports_for_records(evidence, index, parent_records, role)
     if isinstance(parent_support, OwnerCertificateRejection):
         return parent_support
     return parent_records, tuple({item.record_id: item for item in (*mutation_support, *parent_support)}.values())
@@ -1194,6 +1223,7 @@ def _validate_frame_binding(
 
 def _validate_candidate(
     evidence: ObjectBindingEvidence,
+    index: _OwnerEvidenceIndex,
     candidate: _CandidatePath,
 ) -> _OwnerPath | OwnerCertificateRejection:
     role = _role_for(candidate)
@@ -1210,7 +1240,7 @@ def _validate_candidate(
     )
     if any(node.kind != kind for node, kind in expected_node_kinds) or candidate.anchor.role_key != role.operand_key:
         return _rejection("malformed-support", role, candidate.path_records)
-    support = _supports_for_records(evidence, candidate.path_records, role)
+    support = _supports_for_records(evidence, index, candidate.path_records, role)
     if isinstance(support, OwnerCertificateRejection):
         return support
     scope_rejection = _validate_common_scope(evidence, (*candidate.path_records, *support))
@@ -1220,7 +1250,7 @@ def _validate_candidate(
     if isinstance(emission, OwnerCertificateRejection):
         return emission
     decoded_physical, emission_support = emission
-    lineage = _validate_lineage_output(evidence, candidate, role, support)
+    lineage = _validate_lineage_output(evidence, index, candidate, role, support)
     if isinstance(lineage, OwnerCertificateRejection):
         return lineage
     lineage_records, lineage_support = lineage
@@ -1288,11 +1318,12 @@ def _validate_core(evidence: ObjectBindingEvidence) -> _ValidationOutcome:
             tuple(sorted(global_rejections, key=lambda item: item.rejection_id)),
         )
 
-    candidates = _enumerate_candidates(evidence)
+    index = _index_evidence(evidence)
+    candidates = _enumerate_candidates(index)
     paths: list[_OwnerPath] = []
     rejections: list[OwnerCertificateRejection] = []
     for candidate in candidates:
-        validated = _validate_candidate(evidence, candidate)
+        validated = _validate_candidate(evidence, index, candidate)
         if isinstance(validated, OwnerCertificateRejection):
             rejections.append(validated)
         else:
