@@ -9,18 +9,19 @@
 │                        [required]                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --melee-root                        PATH  Melee repo root containing         │
-│                                           build/tools/dtk. Auto-detected by  │
-│                                           default.                           │
-│ --object-root                       PATH  Root used to resolve relative      │
-│                                           object paths appended by           │
-│                                           decomp-permuter, for example a     │
-│                                           remote decomp-permuter checkout.   │
-│ --name-magic     --no-name-magic          Apply checkdiff-style anonymous @N │
-│                                           relocation renames against the     │
-│                                           matching target.o before           │
-│                                           disassembly.                       │
-│                                           [default: name-magic]              │
-│ --help                                    Show this message and exit.        │
+│ --melee-root                          PATH  Melee repo root containing       │
+│                                             build/tools/dtk. Auto-detected   │
+│                                             by default.                      │
+│ --object-root                         PATH  Root used to resolve relative    │
+│                                             object paths appended by         │
+│                                             decomp-permuter, for example a   │
+│                                             remote decomp-permuter checkout. │
+│ --function     -f                     TEXT  Emit only the exact named DTK    │
+│                                             .fn block.                       │
+│ --name-magic       --no-name-magic          Apply checkdiff-style anonymous  │
+│                                             @N relocation renames against    │
+│                                             the matching target.o before     │
+│                                             disassembly.                     │
+│                                             [default: name-magic]            │
+│ --help                                      Show this message and exit.      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-

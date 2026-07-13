@@ -6,13 +6,37 @@ import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from typer.testing import CliRunner
+
+from src.cli import app
 from src.mwcc_debug.dtk_objdump import (
+    DtkObjdumpError,
     convert_dtk_disasm_to_objdump,
     disassemble_object,
     find_melee_root,
-    resolve_object_file,
     resolve_name_magic_target,
+    resolve_object_file,
 )
+
+runner = CliRunner()
+
+
+def _multi_function_dtk_text(*, suffix_immediate: int = 2) -> str:
+    return textwrap.dedent(f"""\
+        .fn prefix, global
+        /* 80000000 00000034  38 60 00 00 */\tli r3, 0
+        .endfn prefix
+
+        .fn target_fn, global
+        /* 80000004 00000038  3C 60 00 00 */\tlis r3, target_data@ha
+        /* 80000008 0000003C  38 63 00 00 */\taddi r3, r3, target_data@l
+        .endfn target_fn
+
+        .fn suffix, global
+        /* 8000000C 00000040  38 60 00 0{suffix_immediate} */\tli r3, {suffix_immediate}
+        .endfn suffix
+    """)
 
 
 def test_convert_dtk_disasm_to_objdump_shape() -> None:
@@ -29,6 +53,83 @@ def test_convert_dtk_disasm_to_objdump_shape() -> None:
 
     assert "0:\t7c 08 02 a6\tmflr r0" in converted
     assert "4:\t3c 60 00 00\tlis r3, symbol@ha" in converted
+
+
+def test_convert_dtk_disasm_selects_exact_function_and_preserves_rows() -> None:
+    converted = convert_dtk_disasm_to_objdump(
+        _multi_function_dtk_text(),
+        function="target_fn",
+    )
+
+    assert converted == (
+        "80000004:\t3c 60 00 00\tlis r3, target_data@ha\n"
+        "80000008:\t38 63 00 00\taddi r3, r3, target_data@l\n"
+    )
+
+
+def test_function_slice_ignores_unrelated_suffix_changes() -> None:
+    target = convert_dtk_disasm_to_objdump(
+        _multi_function_dtk_text(suffix_immediate=2),
+        function="target_fn",
+    )
+    candidate = convert_dtk_disasm_to_objdump(
+        _multi_function_dtk_text(suffix_immediate=7),
+        function="target_fn",
+    )
+
+    assert candidate == target
+
+
+def test_unfiltered_multi_function_conversion_remains_compatible() -> None:
+    converted = convert_dtk_disasm_to_objdump(_multi_function_dtk_text())
+
+    assert converted == (
+        "80000000:\t38 60 00 00\tli r3, 0\n"
+        "80000004:\t3c 60 00 00\tlis r3, target_data@ha\n"
+        "80000008:\t38 63 00 00\taddi r3, r3, target_data@l\n"
+        "8000000c:\t38 60 00 02\tli r3, 2\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("dtk_text", "error"),
+    [
+        (_multi_function_dtk_text(), "not found"),
+        (
+            _multi_function_dtk_text()
+            + ".fn target_fn, global\n"
+            + "/* 80000010 00000044  4E 80 00 20 */\tblr\n"
+            + ".endfn target_fn\n",
+            "appears 2 times",
+        ),
+        (
+            ".fn broken, global\n"
+            "/* 80000000 00000034  4E 80 00 20 */\tblr\n",
+            "missing .endfn",
+        ),
+        (
+            ".fn broken, global\n"
+            "/* 80000000 00000034  4E 80 00 20 */\tblr\n"
+            ".endfn another\n",
+            "mismatched .endfn",
+        ),
+        (
+            ".fn broken, global\n"
+            ".endfn broken\n",
+            "no instruction rows",
+        ),
+    ],
+)
+def test_convert_dtk_disasm_function_selector_fails_closed(
+    dtk_text: str,
+    error: str,
+) -> None:
+    function = "missing" if error == "not found" else (
+        "target_fn" if "appears" in error else "broken"
+    )
+
+    with pytest.raises(DtkObjdumpError, match=error):
+        convert_dtk_disasm_to_objdump(dtk_text, function=function)
 
 
 def test_find_melee_root_prefers_melee_root_env(tmp_path, monkeypatch) -> None:
@@ -147,3 +248,71 @@ def test_disassemble_object_applies_name_magic_to_temp_copy(
     assert calls["work_o"] != base
     assert calls["disassembled"] == calls["work_o"]
     assert base.read_bytes() == b"base"
+
+
+def test_dtk_objdump_cli_passes_function_selector(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    obj = tmp_path / "candidate.o"
+    obj.write_bytes(b"obj")
+    calls: dict[str, object] = {}
+
+    def fake_disassemble_object(o_file: Path, **kwargs: object) -> str:
+        calls["o_file"] = o_file
+        calls.update(kwargs)
+        return "80000004:\t4e 80 00 20\tblr\n"
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.dtk_objdump.disassemble_object",
+        fake_disassemble_object,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "dtk-objdump",
+            "--function",
+            "target_fn",
+            str(obj),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["o_file"] == obj
+    assert calls["function"] == "target_fn"
+
+
+def test_dtk_objdump_cli_reports_missing_function(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    obj = tmp_path / "candidate.o"
+    obj.write_bytes(b"obj")
+
+    def fake_disassemble_object(*args: object, **kwargs: object) -> str:
+        raise DtkObjdumpError(
+            "requested function 'missing' not found in dtk disassembly"
+        )
+
+    monkeypatch.setattr(
+        "src.mwcc_debug.dtk_objdump.disassemble_object",
+        fake_disassemble_object,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "target",
+            "dtk-objdump",
+            "--function",
+            "missing",
+            str(obj),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "requested function 'missing' not found" in result.output

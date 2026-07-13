@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 
@@ -2273,7 +2275,8 @@ def test_doctor_target_checks_full_objdump_command(tmp_path: Path) -> None:
     local_perm.mkdir(parents=True)
     (local_perm / "compile.sh").write_text("#!/bin/sh\n")
     (local_perm / "settings.toml").write_text(
-        'objdump_command = "melee-agent debug target dtk-objdump"\n'
+        'objdump_command = "melee-agent debug target dtk-objdump '
+        '--function fn_80000000"\n'
     )
 
     target = pr.RemoteTarget(
@@ -2299,12 +2302,136 @@ def test_doctor_target_checks_full_objdump_command(tmp_path: Path) -> None:
 
     assert report.ok
     remote_script = calls[0][2]
-    assert "melee-agent debug target dtk-objdump --melee-root /home/coder/melee" in remote_script
+    assert (
+        "melee-agent debug target dtk-objdump --function fn_80000000"
+        in remote_script
+    )
+    assert "--melee-root /home/coder/melee" in remote_script
     assert "$HOME/.local/bin/melee-agent" in remote_script
     assert "MELEE_ROOT=\"$melee_root\"" in remote_script
     assert "objdump_run_command" in remote_script
     assert "objdump_probe" in remote_script
     assert "/home/coder/decomp-permuter/nonmatchings/fn_80000000/target.o" in remote_script
+
+
+def test_remote_settings_rewrite_preserves_function_selector() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    settings = (
+        'func_name = "fn_80000000"\n'
+        'objdump_command = "melee-agent debug target dtk-objdump '
+        '--function fn_80000000"\n'
+    )
+
+    rewritten = pr._rewrite_settings_toml_for_remote(settings, target=target)
+
+    assert '--function fn_80000000' in rewritten
+    assert '--melee-root /home/coder/melee' in rewritten
+    assert '--object-root /home/coder/decomp-permuter' in rewritten
+
+
+def test_remote_settings_rewrite_replaces_single_quoted_objdump_once() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    settings = (
+        "# retain this comment\n"
+        "objdump_command = 'melee-agent debug target dtk-objdump "
+        "--function fn_80000000'\n"
+        "\n[weight_overrides]\nperm_xor_zero = 5.0\n"
+    )
+
+    rewritten = pr._rewrite_settings_toml_for_remote(settings, target=target)
+    parsed = tomllib.loads(rewritten)
+
+    assert rewritten.count("objdump_command =") == 1
+    assert "# retain this comment" in rewritten
+    assert "--function fn_80000000" in parsed["objdump_command"]
+    assert parsed["weight_overrides"]["perm_xor_zero"] == 5.0
+
+
+def test_remote_settings_rewrite_replaces_inline_comment_objdump_once() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    settings = (
+        'objdump_command = "melee-agent debug target dtk-objdump '
+        '--function fn_80000000"  # retain objdump note\n'
+    )
+
+    rewritten = pr._rewrite_settings_toml_for_remote(settings, target=target)
+    parsed = tomllib.loads(rewritten)
+
+    assert rewritten.count("objdump_command =") == 1
+    assert "# retain objdump note" in rewritten
+    assert "--function fn_80000000" in parsed["objdump_command"]
+
+
+def test_remote_objdump_replaces_split_and_equals_root_options() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/remote/melee",
+        remote_perm_root="/remote/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    command = (
+        "melee-agent debug target dtk-objdump --function fn_80000000 "
+        "--melee-root /old/melee-a --melee-root=/old/melee-b "
+        "--object-root /old/perm-a --object-root=/old/perm-b --no-name-magic"
+    )
+
+    rewritten = pr._remote_dtk_objdump_command(target, command)
+    argv = shlex.split(rewritten)
+
+    assert argv.count("--melee-root") == 1
+    assert argv[argv.index("--melee-root") + 1] == target.remote_melee_root
+    assert not any(arg.startswith("--melee-root=") for arg in argv)
+    assert argv.count("--object-root") == 1
+    assert argv[argv.index("--object-root") + 1] == target.remote_perm_root
+    assert not any(arg.startswith("--object-root=") for arg in argv)
+    assert argv[argv.index("--function") + 1] == "fn_80000000"
+    assert "--no-name-magic" in argv
+
+
+def test_remote_settings_rewrite_toml_escapes_quoted_roots() -> None:
+    target = pr.RemoteTarget(
+        name="quoted",
+        ssh="quoted.example",
+        remote_melee_root='/remote/"quoted"/melee',
+        remote_perm_root='/remote/"quoted"/decomp-permuter',
+        threads=8,
+        session_prefix="melee-perm",
+    )
+    settings = (
+        'objdump_command = "melee-agent debug target dtk-objdump '
+        '--function fn_80000000"\n'
+    )
+
+    rewritten = pr._rewrite_settings_toml_for_remote(settings, target=target)
+    parsed = tomllib.loads(rewritten)
+    argv = shlex.split(parsed["objdump_command"])
+
+    assert argv[argv.index("--melee-root") + 1] == target.remote_melee_root
+    assert argv[argv.index("--object-root") + 1] == target.remote_perm_root
+    assert argv[argv.index("--function") + 1] == "fn_80000000"
 
 
 def test_doctor_target_objdump_failure_reports_command_rc_and_probe(

@@ -10,15 +10,14 @@ import pytest
 
 from src.mwcc_debug.patterns import PATTERNS, MutationPattern
 from src.mwcc_debug.permuter_config import (
-    DEFAULT_OBJDUMP_COMMAND,
+    WEIGHT_OVERRIDE_CAPS,
     PatternSkippedError,
     ScorerConfig,
     SettingsTomlSpec,
-    WEIGHT_OVERRIDE_CAPS,
     build_spec,
     parse_existing_overrides,
-    repair_bootstrap_settings_toml,
     render_settings_toml,
+    repair_bootstrap_settings_toml,
 )
 
 
@@ -121,8 +120,9 @@ def test_render_with_weights_parses_back_via_toml() -> None:
     parsed = tomllib.loads(text)
     assert parsed["func_name"] == "fn_xyz"
     assert parsed["compiler_type"] == "mwcc"
-    assert parsed["objdump_command"] == DEFAULT_OBJDUMP_COMMAND
-    assert parsed["objdump_command"] == "melee-agent debug target dtk-objdump"
+    assert parsed["objdump_command"] == (
+        "melee-agent debug target dtk-objdump --function fn_xyz"
+    )
     assert parsed["weight_overrides"]["perm_temp_for_expr"] == 60.0
     assert parsed["weight_overrides"]["perm_refer_to_var"] == 30.0
 
@@ -146,6 +146,14 @@ def test_render_without_weights_omits_section() -> None:
     # When there are no overrides, the section is omitted entirely
     assert "weight_overrides" not in parsed
     assert "[weight_overrides]" not in text
+
+
+def test_generated_objdump_command_is_bound_to_function() -> None:
+    parsed = tomllib.loads(render_settings_toml(build_spec("fn_target", None)))
+
+    assert parsed["objdump_command"] == (
+        "melee-agent debug target dtk-objdump --function fn_target"
+    )
 
 
 def test_render_sorts_keys_for_stable_diffs() -> None:
@@ -222,7 +230,9 @@ def test_repair_bootstrap_settings_replaces_stale_toolchain_preserves_tuning() -
     assert repaired.randomize_funcs == ["fn_test", "helper"]
     assert parsed["func_name"] == "fn_test"
     assert parsed["compiler_type"] == "mwcc"
-    assert parsed["objdump_command"] == DEFAULT_OBJDUMP_COMMAND
+    assert parsed["objdump_command"] == (
+        "melee-agent debug target dtk-objdump --function fn_test"
+    )
     assert "compiler_command" not in parsed
     assert "assembler_command" not in parsed
     assert "asm_prelude_file" not in parsed
@@ -253,7 +263,9 @@ def test_repair_bootstrap_settings_injects_objdump_without_clobbering_custom_key
     assert repaired.changed is True
     assert parsed["func_name"] == "fn_test"
     assert parsed["compiler_type"] == "mwcc"
-    assert parsed["objdump_command"] == DEFAULT_OBJDUMP_COMMAND
+    assert parsed["objdump_command"] == (
+        "melee-agent debug target dtk-objdump --function fn_test"
+    )
     assert parsed["custom"] is True
 
 

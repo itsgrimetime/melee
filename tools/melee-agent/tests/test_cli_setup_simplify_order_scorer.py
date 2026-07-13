@@ -210,6 +210,9 @@ def test_setup_writes_spec_settings_and_compile(
     settings_path = perm_dir / "settings.toml"
     assert settings_path.exists()
     parsed = tomllib.loads(settings_path.read_text())
+    assert parsed["objdump_command"] == (
+        "melee-agent debug target dtk-objdump --function fn_test"
+    )
     assert "scorer" in parsed
     assert "score-simplify-order" in parsed["scorer"]["command"]
     assert "--function" in parsed["scorer"]["command"]

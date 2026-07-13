@@ -11593,7 +11593,9 @@ def test_debug_permute_bootstrap_reports_kept_settings_randomize_funcs_scope(
     settings = tomllib.loads(settings_text)
     assert settings["custom"] is True
     assert settings["func_name"] == "fn_80000000"
-    assert settings["objdump_command"] == "melee-agent debug target dtk-objdump"
+    assert settings["objdump_command"] == (
+        "melee-agent debug target dtk-objdump --function fn_80000000"
+    )
     assert "compiler_command" not in settings
     assert "assembler_command" not in settings
     assert settings["weight_overrides"]["perm_reorder_decls"] == 77.0
@@ -11685,6 +11687,10 @@ def test_debug_permute_bootstrap_force_rewrites_randomize_funcs_scope(
     assert payload["randomize_funcs_status"] == "written"
     settings_text = (destination / "settings.toml").read_text(encoding="utf-8")
     assert 'randomize_funcs = ["fn_80000000", "helper_inline"]' in settings_text
+    settings = tomllib.loads(settings_text)
+    assert settings["objdump_command"] == (
+        "melee-agent debug target dtk-objdump --function fn_80000000"
+    )
 
 
 def test_debug_permute_bootstrap_promotes_fresh_worktree_import(
@@ -11757,7 +11763,9 @@ def test_debug_permute_bootstrap_promotes_fresh_worktree_import(
     settings = tomllib.loads((destination / "settings.toml").read_text())
     assert settings["custom"] is True
     assert settings["func_name"] == "fn_80000000"
-    assert settings["objdump_command"] == "melee-agent debug target dtk-objdump"
+    assert settings["objdump_command"] == (
+        "melee-agent debug target dtk-objdump --function fn_80000000"
+    )
     assert (output_dir / "source.c").read_text() == "candidate output\n"
     assert not (melee_root / "nonmatchings" / "fn_80000000-2").exists()
 

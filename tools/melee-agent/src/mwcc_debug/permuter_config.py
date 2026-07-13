@@ -27,6 +27,7 @@ a pure file-rendering helper.
 from __future__ import annotations
 
 import re
+import shlex
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,16 @@ from .patterns import MutationPattern
 # project dtk binary through melee-agent so local and remote permuter runs do
 # not depend on a system powerpc-eabi-objdump install.
 DEFAULT_OBJDUMP_COMMAND = "melee-agent debug target dtk-objdump"
+
+
+def target_objdump_command(func_name: str) -> str:
+    """Return a stock scorer command restricted to one known function."""
+    return shlex.join([
+        *shlex.split(DEFAULT_OBJDUMP_COMMAND),
+        "--function",
+        func_name,
+    ])
+
 
 # decomp-permuter's internal-type randomizer has a higher crash rate on
 # preprocessed Melee sources because prior mutations can leave StructRef
@@ -119,7 +130,7 @@ def build_spec(
     pattern: MutationPattern | None,
     *,
     compiler_type: str = "mwcc",
-    objdump_command: str = DEFAULT_OBJDUMP_COMMAND,
+    objdump_command: str | None = None,
     existing_overrides: dict[str, float] | None = None,
     merge: bool = False,
     force: bool = False,
@@ -152,7 +163,11 @@ def build_spec(
     return SettingsTomlSpec(
         func_name=func_name,
         compiler_type=compiler_type,
-        objdump_command=objdump_command,
+        objdump_command=(
+            objdump_command
+            if objdump_command is not None
+            else target_objdump_command(func_name)
+        ),
         weight_overrides=overrides,
         pattern_name=pattern.name if pattern else None,
         randomize_funcs=randomize_funcs,
@@ -180,7 +195,7 @@ def render_settings_toml(spec: SettingsTomlSpec) -> str:
             f"randomize_funcs = {_render_toml_string_list(spec.randomize_funcs)}"
         )
     lines.append(f'compiler_type = "{spec.compiler_type}"')
-    lines.append(f'objdump_command = "{spec.objdump_command}"')
+    lines.append(f"objdump_command = {_quote_toml_string(spec.objdump_command)}")
 
     if spec.weight_overrides:
         lines.append("")
@@ -326,7 +341,8 @@ def repair_bootstrap_settings_toml(
     canonical_lines.extend(
         [
             'compiler_type = "mwcc"\n',
-            f"objdump_command = {_quote_toml_string(DEFAULT_OBJDUMP_COMMAND)}\n",
+            f"objdump_command = "
+            f"{_quote_toml_string(target_objdump_command(func_name))}\n",
         ]
     )
 

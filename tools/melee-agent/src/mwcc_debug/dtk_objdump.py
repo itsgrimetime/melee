@@ -20,9 +20,62 @@ _DTK_INSTRUCTION_RE = re.compile(
     r"(?P<bytes>(?:[0-9A-Fa-f]{2}\s+){3}[0-9A-Fa-f]{2})\s*\*/\s*"
     r"\t(?P<asm>.+?)\s*$"
 )
+_DTK_FUNCTION_RE = re.compile(
+    r"^\s*\.fn\s+(?P<name>[^,\s]+)(?:\s*,.*)?$"
+)
+_DTK_END_FUNCTION_RE = re.compile(
+    r"^\s*\.endfn(?:\s+(?P<name>[^,\s]+))?\s*$"
+)
 
 
-def convert_dtk_disasm_to_objdump(text: str) -> str:
+def _select_function_lines(text: str, function: str) -> list[str]:
+    lines = text.splitlines()
+    starts = [
+        (index, match.group("name"))
+        for index, line in enumerate(lines)
+        if (match := _DTK_FUNCTION_RE.match(line)) is not None
+    ]
+    matches = [index for index, name in starts if name == function]
+    if not matches:
+        raise DtkObjdumpError(
+            f"requested function {function!r} not found in dtk disassembly"
+        )
+    if len(matches) != 1:
+        raise DtkObjdumpError(
+            f"requested function {function!r} appears {len(matches)} times "
+            "in dtk disassembly"
+        )
+
+    start = matches[0]
+    selected: list[str] = []
+    for line in lines[start + 1:]:
+        next_function = _DTK_FUNCTION_RE.match(line)
+        if next_function is not None:
+            raise DtkObjdumpError(
+                f"requested function {function!r} is missing .endfn before "
+                f"{next_function.group('name')!r}"
+            )
+        end_function = _DTK_END_FUNCTION_RE.match(line)
+        if end_function is not None:
+            end_name = end_function.group("name")
+            if end_name != function:
+                raise DtkObjdumpError(
+                    f"requested function {function!r} has mismatched .endfn "
+                    f"{end_name!r}"
+                )
+            return selected
+        selected.append(line)
+
+    raise DtkObjdumpError(
+        f"requested function {function!r} is missing .endfn"
+    )
+
+
+def convert_dtk_disasm_to_objdump(
+    text: str,
+    *,
+    function: str | None = None,
+) -> str:
     """Convert `dtk elf disasm` instruction rows to objdump-like rows.
 
     decomp-permuter's PPC scorer expects the three-column shape emitted by GNU
@@ -30,8 +83,13 @@ def convert_dtk_disasm_to_objdump(text: str) -> str:
     comment-prefixed assembly rows, so this adapter keeps scoring independent of
     a system `powerpc-eabi-objdump` install.
     """
+    lines = (
+        _select_function_lines(text, function)
+        if function is not None
+        else text.splitlines()
+    )
     rows: list[str] = []
-    for line in text.splitlines():
+    for line in lines:
         match = _DTK_INSTRUCTION_RE.match(line)
         if match is None:
             continue
@@ -39,6 +97,10 @@ def convert_dtk_disasm_to_objdump(text: str) -> str:
         byte_text = match.group("bytes").lower()
         asm_text = match.group("asm").strip()
         rows.append(f"{offset:x}:\t{byte_text}\t{asm_text}")
+    if function is not None and not rows:
+        raise DtkObjdumpError(
+            f"requested function {function!r} has no instruction rows"
+        )
     return "\n".join(rows) + ("\n" if rows else "")
 
 
@@ -126,6 +188,7 @@ def disassemble_object(
     melee_root: Path | None = None,
     object_root: Path | None = None,
     name_magic: bool = True,
+    function: str | None = None,
 ) -> str:
     root = find_melee_root(melee_root)
     dtk = root / "build" / "tools" / "dtk"
@@ -155,4 +218,7 @@ def disassemble_object(
         if proc.returncode != 0:
             detail = proc.stderr.strip() or proc.stdout.strip()
             raise DtkObjdumpError(f"dtk elf disasm failed: {detail}")
-        return convert_dtk_disasm_to_objdump(out_path.read_text())
+        return convert_dtk_disasm_to_objdump(
+            out_path.read_text(),
+            function=function,
+        )

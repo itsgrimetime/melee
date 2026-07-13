@@ -606,6 +606,14 @@ def target_dtk_objdump(
             ),
         ),
     ] = None,
+    function: Annotated[
+        Optional[str],
+        typer.Option(
+            "--function",
+            "-f",
+            help="Emit only the exact named DTK .fn block.",
+        ),
+    ] = None,
     name_magic: Annotated[
         bool,
         typer.Option(
@@ -626,6 +634,7 @@ def target_dtk_objdump(
             melee_root=melee_root,
             object_root=object_root,
             name_magic=name_magic,
+            function=function,
         ))
     except DtkObjdumpError as exc:
         typer.echo(str(exc), err=True)

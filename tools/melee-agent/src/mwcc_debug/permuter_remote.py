@@ -2253,33 +2253,100 @@ def _rewrite_compile_sh_for_remote(text: str) -> str:
     return "\n".join(out) + suffix
 
 
-_OBJDUMP_SETTING_RE = re.compile(r'^(\s*objdump_command\s*=\s*)".*"\s*$')
+_OBJDUMP_SETTING_RE = re.compile(
+    r"^(?P<prefix>\s*(?:objdump_command|\"objdump_command\"|"
+    r"'objdump_command')\s*=\s*)"
+)
+_TOML_TABLE_HEADER_RE = re.compile(
+    r"^\s*\[\[?(?P<name>[^\]]+)\]\]?\s*(?:#.*)?$"
+)
+_REMOTE_OBJDUMP_ROOT_OPTIONS = ("--melee-root", "--object-root")
 
 
-def _remote_dtk_objdump_command(target: RemoteTarget) -> str:
-    argv = [
-        *shlex.split(DEFAULT_OBJDUMP_COMMAND),
-        "--melee-root",
-        target.remote_melee_root,
-        "--object-root",
-        target.remote_perm_root,
-    ]
+def _toml_inline_comment_suffix(line: str, *, value_start: int) -> str:
+    quote: str | None = None
+    escaped = False
+    for index in range(value_start, len(line)):
+        char = line[index]
+        if quote == '"':
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif quote == "'":
+            if char == quote:
+                quote = None
+        elif char in {'"', "'"}:
+            quote = char
+        elif char == "#":
+            comment_start = index
+            while (
+                comment_start > value_start
+                and line[comment_start - 1] in " \t"
+            ):
+                comment_start -= 1
+            return line[comment_start:]
+    return ""
+
+
+def _without_remote_objdump_roots(argv: list[str]) -> list[str]:
+    def is_root_option(arg: str) -> bool:
+        return any(
+            arg == option or arg.startswith(option + "=")
+            for option in _REMOTE_OBJDUMP_ROOT_OPTIONS
+        )
+
+    out: list[str] = []
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if any(
+            arg.startswith(option + "=")
+            for option in _REMOTE_OBJDUMP_ROOT_OPTIONS
+        ):
+            index += 1
+            continue
+        if arg in _REMOTE_OBJDUMP_ROOT_OPTIONS:
+            index += 1
+            if index < len(argv) and not is_root_option(argv[index]):
+                index += 1
+            continue
+        out.append(arg)
+        index += 1
+    return out
+
+
+def _is_dtk_objdump_command(command: str) -> bool:
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    return (
+        len(argv) >= 4
+        and argv[:4] == ["melee-agent", "debug", "target", "dtk-objdump"]
+    )
+
+
+def _remote_dtk_objdump_command(
+    target: RemoteTarget,
+    command: str = DEFAULT_OBJDUMP_COMMAND,
+) -> str:
+    argv = _without_remote_objdump_roots(shlex.split(command))
+    for option, value in (
+        ("--melee-root", target.remote_melee_root),
+        ("--object-root", target.remote_perm_root),
+    ):
+        argv.extend([option, value])
     return shlex.join(argv)
 
 
 def _remote_objdump_command(command: str, target: RemoteTarget | None) -> str:
     if target is None:
         return command
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        return command
-    if (
-        len(argv) >= 4
-        and argv[:4] == ["melee-agent", "debug", "target", "dtk-objdump"]
-        and "--melee-root" not in argv
-    ):
-        return _remote_dtk_objdump_command(target)
+    if _is_dtk_objdump_command(command):
+        return _remote_dtk_objdump_command(target, command)
     return command
 
 
@@ -2405,15 +2472,33 @@ def _rewrite_settings_toml_for_remote(
     lines = text.splitlines()
     out: list[str] = []
     found = False
-    command = _remote_objdump_command(DEFAULT_OBJDUMP_COMMAND, target)
+    try:
+        configured_command = tomllib.loads(text).get("objdump_command")
+    except tomllib.TOMLDecodeError:
+        configured_command = None
+    command = (
+        configured_command
+        if isinstance(configured_command, str)
+        and _is_dtk_objdump_command(configured_command)
+        else DEFAULT_OBJDUMP_COMMAND
+    )
+    command = _remote_objdump_command(command, target)
+    rendered_command = json.dumps(command, ensure_ascii=False)
     in_scorer = False
+    at_top_level = True
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_scorer = stripped == "[scorer]"
-        match = _OBJDUMP_SETTING_RE.match(line)
+        table_match = _TOML_TABLE_HEADER_RE.match(line)
+        if table_match is not None:
+            at_top_level = False
+            in_scorer = table_match.group("name").strip() == "scorer"
+        match = _OBJDUMP_SETTING_RE.match(line) if at_top_level else None
         if match is not None:
-            out.append(f'{match.group(1)}"{command}"')
+            comment = _toml_inline_comment_suffix(
+                line,
+                value_start=match.end(),
+            )
+            out.append(f"{match.group('prefix')}{rendered_command}{comment}")
             found = True
         elif (
             in_scorer
@@ -2440,9 +2525,13 @@ def _rewrite_settings_toml_for_remote(
         else:
             out.append(line)
     if not found:
-        setting = f'objdump_command = "{command}"'
+        setting = f"objdump_command = {rendered_command}"
         section_index = next(
-            (idx for idx, line in enumerate(out) if line.lstrip().startswith("[")),
+            (
+                idx
+                for idx, line in enumerate(out)
+                if _TOML_TABLE_HEADER_RE.match(line) is not None
+            ),
             None,
         )
         if section_index is None:
@@ -2631,10 +2720,9 @@ def _doctor_local_objdump(
         return [], None
     if not isinstance(command, str) or not command.strip():
         return [DoctorCheck("local objdump command", False, "objdump_command missing")], None
-    if target is not None:
-        command = _remote_objdump_command(DEFAULT_OBJDUMP_COMMAND, target)
-    else:
-        command = _remote_objdump_command(command, target)
+    if target is not None and not _is_dtk_objdump_command(command):
+        command = DEFAULT_OBJDUMP_COMMAND
+    command = _remote_objdump_command(command, target)
     try:
         argv = shlex.split(command)
     except ValueError as exc:
