@@ -2,8 +2,14 @@ from dataclasses import replace
 
 import pytest
 
+from src.mwcc_debug.causal_diff import owner_certificate
 from src.mwcc_debug.causal_diff.canonical import stable_id
-from src.mwcc_debug.causal_diff.models import Confidence, EvidenceNode, Provenance
+from src.mwcc_debug.causal_diff.models import (
+    Confidence,
+    EvidenceEdge,
+    EvidenceNode,
+    Provenance,
+)
 from src.mwcc_debug.causal_diff.object_binding_adapter import (
     ObjectBindingEvidence,
     emit_object_binding_evidence,
@@ -15,8 +21,31 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
     OwnerSemanticState,
     build_owner_certificates,
 )
-from tests.owner_certificate_fixtures import canonical_result, complete_evidence
-from tests.test_causal_diff_object_bindings import _adapter_input, _object_result
+from tests.owner_certificate_fixtures import (
+    ambiguous_evidence,
+    canonical_result,
+    complete_evidence,
+    disconnected_evidence,
+    evidence_with_allocator_origin_conflict,
+    evidence_with_certificate_and_global_rejection,
+    evidence_with_certificate_and_role_rejection,
+    evidence_with_coordinated_allocator_change,
+    evidence_with_global_and_role_rejection,
+    evidence_with_heuristic_support,
+    evidence_with_lineage_variant,
+    evidence_with_mutation_parent_override,
+    evidence_with_object_generation_conflict,
+    evidence_with_role_statuses,
+    evidence_with_split_physical_assignment,
+    evidence_with_two_mutation_outputs,
+    evidence_without_instrumentation_identity,
+    first_role,
+    other_role,
+    replace_record,
+    second_role,
+    support,
+)
+from tests.test_causal_diff_object_bindings import ALL_CAPABILITIES, _adapter_input, _object_result
 
 ROLE = OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals")
 STATE = OwnerSemanticState(21, 0x44, 4)
@@ -228,12 +257,13 @@ def test_invalid_instrumentation_identity_is_controlled_rejection(identity):
 
     assert result.certificate_nodes == ()
     assert {item.reason for item in result.global_rejections} == {
-        "invalid-instrumentation-identity"
+        "missing-instrumentation-identity"
     }
 
 
-def test_unsupported_semantic_proof_content_is_controlled_rejection():
-    evidence = complete_evidence(object_result=_object_result(areas=(object(),)))
+@pytest.mark.parametrize("unsupported", [object(), float("nan"), float("inf")])
+def test_unsupported_semantic_proof_content_is_controlled_rejection(unsupported):
+    evidence = complete_evidence(object_result=_object_result(areas=(unsupported,)))
 
     try:
         result = build_owner_certificates(evidence)
@@ -242,7 +272,7 @@ def test_unsupported_semantic_proof_content_is_controlled_rejection():
 
     assert result.certificate_nodes == ()
     assert {item.reason for item in result.global_rejections} == {
-        "unsupported-certificate-canonicalization"
+        "malformed-support"
     }
 
 
@@ -253,3 +283,429 @@ def test_independent_complete_results_have_equal_canonical_content():
     assert first is not second
     assert first.certificate_nodes[0] is not second.certificate_nodes[0]
     assert canonical_result(first) == canonical_result(second)
+
+
+def test_split_physical_assignment_never_certifies():
+    result = build_owner_certificates(evidence_with_split_physical_assignment())
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {
+        "split-physical-assignment"
+    }
+
+
+def test_coordinated_allocator_changes_cannot_override_decoded_emission():
+    result = build_owner_certificates(evidence_with_coordinated_allocator_change())
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {
+        "split-physical-assignment"
+    }
+
+
+def test_multi_output_event_uses_each_outputs_exact_parent_set():
+    evidence = evidence_with_two_mutation_outputs(
+        first_parents=("ol-a",),
+        second_parents=("ol-b", "ol-c"),
+    )
+    result = build_owner_certificates(evidence)
+
+    assert result.resolution_for(first_role()).status is OwnerResolutionStatus.UNIQUE
+    assert result.resolution_for(second_role()).status is OwnerResolutionStatus.UNIQUE
+
+
+@pytest.mark.parametrize(
+    "parents",
+    [
+        (),
+        ("ol-a", "ol-extra"),
+        ("ol-other",),
+        ("ol-a", "ol-a"),
+        ("ol-a", "ol-b"),
+    ],
+)
+def test_mutation_parent_variants_fail_closed(parents):
+    evidence = evidence_with_mutation_parent_override(parents)
+    resolution = build_owner_certificates(evidence).resolution_for(ROLE)
+
+    assert resolution.status is not OwnerResolutionStatus.UNIQUE
+    expected = (
+        "malformed-support"
+        if parents in {(), ("ol-a", "ol-a")}
+        else "lineage-parent-mismatch"
+    )
+    assert {item.reason for item in resolution.rejections} == {expected}
+
+
+@pytest.mark.parametrize(
+    ("variant", "reason"),
+    [
+        ("event-index", "lineage-parent-mismatch"),
+        ("side", "lineage-parent-mismatch"),
+        ("mutation-kind", "lineage-parent-mismatch"),
+        ("noncanonical-parent-order", "malformed-support"),
+    ],
+)
+def test_lineage_event_variants_fail_closed(variant, reason):
+    resolution = build_owner_certificates(
+        evidence_with_lineage_variant(variant)
+    ).resolution_for(ROLE)
+
+    assert resolution.status is not OwnerResolutionStatus.UNIQUE
+    assert {item.reason for item in resolution.rejections} == {reason}
+
+
+def test_heuristic_support_is_incomplete_and_never_certifies():
+    result = build_owner_certificates(evidence_with_heuristic_support())
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {"malformed-support"}
+
+
+def test_allocator_origin_conflict_is_contradictory():
+    result = build_owner_certificates(evidence_with_allocator_origin_conflict())
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert {item.reason for item in resolution.rejections} == {
+        "allocator-origin-contradiction"
+    }
+
+
+def test_object_allocation_generation_must_match_stage_snapshots():
+    result = build_owner_certificates(evidence_with_object_generation_conflict())
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert {item.reason for item in resolution.rejections} == {
+        "allocator-origin-contradiction"
+    }
+
+
+def test_frame_binding_must_belong_to_the_owners_declared_area():
+    evidence = complete_evidence(object_result=_object_result(areas=("temps",)))
+    resolution = build_owner_certificates(evidence).resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert {item.reason for item in resolution.rejections} == {
+        "frame-binding-contradiction"
+    }
+
+
+def test_disconnected_path_without_a_compatible_role_is_global_incomplete():
+    result = build_owner_certificates(disconnected_evidence())
+
+    assert result.certificate_nodes == ()
+    assert {item.reason for item in result.global_rejections} == {
+        "disconnected-owner-path"
+    }
+    assert result.resolution_for(ROLE).status is OwnerResolutionStatus.INCOMPLETE
+
+
+def test_missing_required_capability_is_global_and_fail_closed():
+    evidence = emit_object_binding_evidence(
+        _adapter_input(capabilities=ALL_CAPABILITIES - {"object-to-frame"})
+    )
+    result = build_owner_certificates(evidence)
+
+    assert result.certificate_nodes == ()
+    assert {item.reason for item in result.global_rejections} == {
+        "missing-required-capability"
+    }
+    assert result.resolution_for(ROLE).status is OwnerResolutionStatus.INCOMPLETE
+
+
+@pytest.mark.parametrize("scope_field", ["compile", "capture", "artifact", "parser"])
+def test_diagnostic_validation_rejects_mixed_record_scope(scope_field):
+    evidence = complete_evidence()
+    emission = support(evidence, "pcode-emission")
+    if scope_field == "compile":
+        changed = replace(emission, compile_id="compile-other")
+    elif scope_field == "capture":
+        changed = emission.with_attributes(
+            {**emission.attributes, "capture_run_id": "c" * 64}
+        )
+    elif scope_field == "artifact":
+        changed = replace(
+            emission,
+            provenance=replace(emission.provenance, artifact_sha256="d" * 64),
+        )
+    else:
+        changed = replace(
+            emission,
+            provenance=replace(emission.provenance, parser="mwcc-debug-pcdump"),
+        )
+    tokenless = replace_record(evidence, changed)
+
+    diagnostic = owner_certificate.validate_owner_evidence(tokenless)
+    trusted_attempt = build_owner_certificates(tokenless)
+
+    assert {item.reason for item in diagnostic.global_rejections} == {
+        "mixed-record-scope"
+    }
+    assert diagnostic.certificate_nodes == ()
+    assert diagnostic.is_trusted is False
+    assert trusted_attempt.certificate_nodes == ()
+    assert {item.reason for item in trusted_attempt.global_rejections} == {
+        "untrusted-diagnostic-materialization"
+    }
+
+
+def test_diagnostic_validation_rejects_unregistered_provenance_input():
+    evidence = complete_evidence()
+    anchor_edge = next(
+        edge
+        for edge in evidence.edges
+        if edge.kind == "assembly-anchor-emitted-by-pcode"
+    )
+    changed = replace(
+        anchor_edge,
+        provenance=replace(
+            anchor_edge.provenance,
+            input_record_ids=(*anchor_edge.provenance.input_record_ids, "unregistered"),
+        ),
+    )
+    diagnostic = owner_certificate.validate_owner_evidence(
+        replace_record(evidence, changed)
+    )
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"unregistered-support"}
+    assert diagnostic.certificate_nodes == ()
+
+
+def test_diagnostic_validation_requires_each_edges_endpoint_provenance():
+    evidence = complete_evidence()
+    edge = next(
+        item for item in evidence.edges if item.kind == "pcode-operand-uses-virtual"
+    )
+    changed = replace(
+        edge,
+        provenance=replace(
+            edge.provenance,
+            input_record_ids=tuple(
+                item
+                for item in edge.provenance.input_record_ids
+                if item != edge.target_id
+            ),
+        ),
+    )
+    diagnostic = owner_certificate.validate_owner_evidence(
+        replace_record(evidence, changed)
+    )
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"unregistered-support"}
+
+
+def test_diagnostic_validation_requires_shared_emission_support():
+    evidence = complete_evidence()
+    emission = support(evidence, "pcode-emission")
+    edge = next(
+        item
+        for item in evidence.edges
+        if item.kind == "pcode-operand-lineage"
+        and item.source_id
+        == next(node.record_id for node in evidence.nodes if node.kind == "retail-pcode")
+    )
+    changed = replace(
+        edge,
+        provenance=replace(
+            edge.provenance,
+            input_record_ids=tuple(
+                item
+                for item in edge.provenance.input_record_ids
+                if item != emission.record_id
+            ),
+        ),
+    )
+    diagnostic = owner_certificate.validate_owner_evidence(
+        replace_record(evidence, changed)
+    )
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"malformed-support"}
+
+
+def test_diagnostic_validation_rejects_unknown_support_attribute():
+    evidence = complete_evidence()
+    emission = support(evidence, "pcode-emission")
+    changed = emission.with_attributes({**emission.attributes, "unknown": True})
+    diagnostic = owner_certificate.validate_owner_evidence(
+        replace_record(evidence, changed)
+    )
+    resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"malformed-support"}
+    assert diagnostic.certificate_nodes == ()
+
+
+def test_diagnostic_validator_cannot_mint_complete_record_content():
+    evidence = complete_evidence()
+    tokenless = replace(evidence)
+
+    diagnostic = owner_certificate.validate_owner_evidence(tokenless)
+
+    assert diagnostic.certificate_nodes == ()
+    assert diagnostic.is_trusted is False
+    assert diagnostic.certificate("anything") is None
+    assert diagnostic.resolution_for(ROLE).status is OwnerResolutionStatus.INCOMPLETE
+    assert next(item for item in diagnostic.role_resolutions if item.role == ROLE).status \
+        is OwnerResolutionStatus.UNIQUE
+
+
+def test_valid_certificate_plus_compatible_rejection_is_not_unique():
+    result = build_owner_certificates(
+        evidence_with_certificate_and_role_rejection(ROLE)
+    )
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.AMBIGUOUS
+    assert len(resolution.certificate_record_ids) == 1
+    assert {item.reason for item in resolution.rejections} == {
+        "plausible-owner-alternative"
+    }
+
+
+def test_global_rejection_taints_every_lookup_as_incomplete():
+    result = build_owner_certificates(evidence_without_instrumentation_identity())
+
+    assert result.global_rejections
+    assert all(rejection.role is None for rejection in result.global_rejections)
+    assert result.resolution_for(ROLE).status is OwnerResolutionStatus.INCOMPLETE
+    assert result.resolution_for(other_role()).status is OwnerResolutionStatus.INCOMPLETE
+    assert result.resolution_for(ROLE).rejections == ()
+
+
+def test_global_rejection_preserves_role_scoped_rejections():
+    result = build_owner_certificates(evidence_with_global_and_role_rejection())
+    resolution = result.resolution_for(ROLE)
+
+    assert {item.reason for item in result.global_rejections} == {
+        "missing-instrumentation-identity"
+    }
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert {item.reason for item in resolution.rejections} == {"malformed-support"}
+
+
+def test_global_rejection_preserves_valid_certificate_ids():
+    result = build_owner_certificates(
+        evidence_with_certificate_and_global_rejection()
+    )
+    resolution = result.resolution_for(ROLE)
+
+    assert {item.reason for item in result.global_rejections} == {
+        "disconnected-owner-path"
+    }
+    assert resolution.status is OwnerResolutionStatus.INCOMPLETE
+    assert len(resolution.certificate_record_ids) == 1
+    assert result.certificate(resolution.certificate_record_ids[0]) is not None
+
+
+def test_repeated_lookup_does_not_change_resolution():
+    result = build_owner_certificates(complete_evidence())
+
+    assert result.resolution_for(ROLE) == result.resolution_for(ROLE)
+
+
+def test_input_permutation_is_byte_stable():
+    evidence = ambiguous_evidence()
+    permuted_evidence = ambiguous_evidence(permuted=True)
+
+    assert canonical_result(build_owner_certificates(evidence)) == canonical_result(
+        build_owner_certificates(permuted_evidence)
+    )
+
+
+def test_semantic_duplicate_alternatives_retain_canonical_multiplicity():
+    result = build_owner_certificates(ambiguous_evidence())
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.AMBIGUOUS
+    assert resolution.certificate_record_ids == tuple(
+        sorted(resolution.certificate_record_ids)
+    )
+    groups = tuple(group for group in result._canonical_groups if group.role == ROLE)
+    assert len(groups) == 2
+    assert all(group.multiplicity == 1 for group in groups)
+    assert all(len(group.provenance_record_ids) == 1 for group in groups)
+
+
+def test_exact_duplicate_alternatives_retain_one_group_and_multiplicity():
+    evidence = complete_evidence()
+    duplicate = next(
+        edge
+        for edge in evidence.edges
+        if edge.kind == "assembly-anchor-emitted-by-pcode"
+    )
+    tokenless = ObjectBindingEvidence(
+        evidence.nodes,
+        (*evidence.edges, duplicate),
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.abstention_reason,
+        evidence.instrumentation_identity,
+    )
+    result = owner_certificate.validate_owner_evidence(tokenless)
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.AMBIGUOUS
+    groups = tuple(group for group in result._canonical_groups if group.role == ROLE)
+    assert len(groups) == 1
+    assert groups[0].multiplicity == 2
+    assert len(groups[0].provenance_record_ids) == 2
+
+
+def test_five_role_statuses_are_resolved_independently():
+    result = build_owner_certificates(evidence_with_role_statuses())
+    ambiguous_role = OwnerRoleKey("use:1", "gpr", "ambiguous-home", 4, "locals")
+    contradictory_role = OwnerRoleKey(
+        "use:2", "gpr", "contradictory-home", 4, "locals"
+    )
+    incomplete_role = OwnerRoleKey("use:3", "gpr", "incomplete-home", 4, "locals")
+
+    assert result.resolution_for(first_role()).status is OwnerResolutionStatus.UNIQUE
+    assert result.resolution_for(other_role()).status is OwnerResolutionStatus.MISSING
+    assert result.resolution_for(ambiguous_role).status is OwnerResolutionStatus.AMBIGUOUS
+    assert (
+        result.resolution_for(contradictory_role).status
+        is OwnerResolutionStatus.CONTRADICTORY
+    )
+    assert result.resolution_for(incomplete_role).status is OwnerResolutionStatus.INCOMPLETE
+
+
+def test_rejection_ids_change_with_cited_record_content_not_only_record_ids():
+    first = owner_certificate.validate_owner_evidence(
+        replace_record(
+            complete_evidence(),
+            support(complete_evidence(), "pcode-emission").with_attributes(
+                {
+                    **support(complete_evidence(), "pcode-emission").attributes,
+                    "unknown": "first",
+                }
+            ),
+        )
+    )
+    base = complete_evidence()
+    emission = support(base, "pcode-emission")
+    second = owner_certificate.validate_owner_evidence(
+        replace_record(
+            base,
+            emission.with_attributes({**emission.attributes, "unknown": "second"}),
+        )
+    )
+
+    first_rejection = next(item for item in first.role_resolutions if item.role == ROLE).rejections[0]
+    second_rejection = next(item for item in second.role_resolutions if item.role == ROLE).rejections[0]
+    assert first_rejection.candidate_record_ids == second_rejection.candidate_record_ids
+    assert first_rejection.rejection_id != second_rejection.rejection_id
