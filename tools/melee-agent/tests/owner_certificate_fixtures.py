@@ -727,6 +727,19 @@ def _status_evidence(
             ),
             **common,
         )
+    if status == "global-and-role-rejection":
+        return _evidence_from_paths(
+            (
+                _path(
+                    0,
+                    operand_key=ROLE.operand_key,
+                    semantic_stack_role=ROLE.semantic_stack_role,
+                    rewrite_confidence="heuristic",
+                ),
+            ),
+            instrumentation_identity=None,
+            **common,
+        )
     raise ValueError(f"unknown owner status: {status}")
 
 

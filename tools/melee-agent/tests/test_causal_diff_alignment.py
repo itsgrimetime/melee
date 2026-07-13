@@ -8,8 +8,9 @@ import pytest
 
 from src.mwcc_debug import role_descriptor
 from src.mwcc_debug.causal_diff.alignment import (
+    _canonical_owner_alternatives,
     _normalized_instruction,
-    _owner_alternatives,
+    _rejection_summary,
     align_anchor,
     build_role_comparisons,
 )
@@ -33,6 +34,7 @@ from src.mwcc_debug.causal_diff.models import (
     min_confidence,
 )
 from src.mwcc_debug.causal_diff.owner_certificate import (
+    OwnerCertificateRejection,
     OwnerCertificateResult,
     OwnerResolutionStatus,
     OwnerRoleKey,
@@ -682,41 +684,188 @@ def test_abstention_is_permutation_stable_and_binds_alternative_content() -> Non
 
 def test_exact_duplicate_rejection_summaries_collapse_with_multiplicity() -> None:
     fixtures = _owner_fixtures()
-    left, right = fixtures.graphs_with_statuses("contradictory", "unique")
+    left, _right = fixtures.graphs_with_statuses("contradictory", "unique")
     result = left.backend.owner_certificates
-    resolution = result.resolution_for(OWNER_ROLE)
-    rejection = _only(resolution.rejections)
+    assert result.is_trusted is True
+    rejection = _only(result.resolution_for(OWNER_ROLE).rejections)
     other = replace(
         rejection,
         rejection_id="other-rejection",
         candidate_record_ids=(*rejection.candidate_record_ids, "other-candidate"),
     )
-    results = tuple(
-        OwnerCertificateResult(
-            (),
-            (replace(resolution, rejections=rejections),),
-            (),
-        )
-        for rejections in (
-            (rejection, other, rejection),
-            (rejection, other, rejection)[::-1],
+    summary = _rejection_summary("left", rejection)
+    other_summary = _rejection_summary("left", other)
+
+    alternatives = tuple(
+        _canonical_owner_alternatives(raw)
+        for raw in (
+            (summary, other_summary, summary),
+            (summary, other_summary, summary)[::-1],
         )
     )
 
-    alternatives = tuple(
-        _owner_alternatives(
-            "left",
-            OWNER_ROLE,
-            current,
-            current.role_resolutions[0],
-            (),
-        )
-        for current in results
-    )
     rejection_alternative = _only(item for item in alternatives[0] if item["rejection_id"] == rejection.rejection_id)
     assert rejection_alternative["multiplicity"] == 2
     assert alternatives[0] == alternatives[1]
     assert fixtures.canonical_result(alternatives[0]) == fixtures.canonical_result(alternatives[1])
+
+
+class _ExplodingGlobalRejections:
+    def __bool__(self) -> bool:
+        raise AssertionError("untrusted global rejections tested for truth")
+
+    def __iter__(self):
+        raise AssertionError("untrusted global rejections iterated")
+
+    def __len__(self) -> int:
+        raise AssertionError("untrusted global rejections measured")
+
+    def __getitem__(self, index: object) -> object:
+        raise AssertionError(f"untrusted global rejections indexed: {index!r}")
+
+
+class _ExplodingGlobalRejection:
+    def __getattribute__(self, name: str) -> object:
+        raise AssertionError(f"untrusted global rejection member accessed: {name}")
+
+
+def _one_owner_abstention(graph_pair) -> ComparisonRecord:
+    fixtures = _owner_fixtures()
+    return _only(
+        item
+        for item in build_role_comparisons(fixtures.alignment(), graph_pair)
+        if item.relation_kind == "backend-owner-abstained"
+    )
+
+
+def _with_untrusted_owner_payload(
+    graph_pair,
+    *,
+    construction: str,
+    global_rejections: object,
+):
+    left, right = graph_pair
+    trusted = left.backend.owner_certificates
+    if construction == "direct":
+        untrusted = OwnerCertificateResult(
+            trusted.certificate_nodes,
+            trusted.role_resolutions,
+            global_rejections,  # type: ignore[arg-type]
+        )
+    elif construction == "replace":
+        untrusted = replace(
+            trusted,
+            global_rejections=global_rejections,  # type: ignore[arg-type]
+        )
+    else:
+        raise ValueError(f"unknown construction: {construction}")
+    assert untrusted.is_trusted is False
+    return (
+        replace(left, backend=replace(left.backend, owner_certificates=untrusted)),
+        right,
+    )
+
+
+@pytest.mark.parametrize("construction", ("direct", "replace"))
+@pytest.mark.parametrize(
+    "payload",
+    (
+        pytest.param(_ExplodingGlobalRejections(), id="exploding-container"),
+        pytest.param((_ExplodingGlobalRejection(),), id="exploding-member"),
+    ),
+)
+def test_untrusted_owner_payload_is_never_read_during_bilateral_abstention(
+    construction: str,
+    payload: object,
+) -> None:
+    fixtures = _owner_fixtures()
+    graph_pair = _with_untrusted_owner_payload(
+        fixtures.future_complete_graph_pair(),
+        construction=construction,
+        global_rejections=payload,
+    )
+
+    abstention = _one_owner_abstention(graph_pair)
+    right_certificate = _only(graph_pair[1].backend.owner_certificates.certificate_nodes)
+
+    assert abstention.attributes["reason"] == "backend-owner-path-incomplete"
+    assert abstention.attributes["left_status"] == "incomplete"
+    assert abstention.attributes["right_status"] == "unique"
+    assert abstention.attributes["certificate_record_ids"]["left"] == ()
+    assert abstention.attributes["rejections"]["left"] == ()
+    assert not any(item["side"] == "left" for item in abstention.attributes["alternatives"])
+    assert abstention.left_record_id is None
+    assert abstention.right_record_id == right_certificate.record_id
+    assert abstention.confidence is Confidence.HEURISTIC
+    assert abstention.provenance.input_record_ids == (right_certificate.record_id,)
+
+
+def test_untrusted_forged_rejections_cannot_change_abstention_content_or_id() -> None:
+    fixtures = _owner_fixtures()
+    forged = (
+        OwnerCertificateRejection(
+            "forged-a",
+            "forged-reason-a",
+            OWNER_ROLE,
+            ("forged-candidate-a",),
+            ("forged-support-a",),
+        ),
+        OwnerCertificateRejection(
+            "forged-b",
+            "forged-reason-b",
+            None,
+            ("forged-candidate-b",),
+            ("forged-support-b",),
+        ),
+    )
+    outputs = []
+    for construction, payload in (
+        ("direct", ()),
+        ("direct", forged),
+        ("direct", forged[::-1]),
+        ("replace", forged),
+        ("replace", forged[::-1]),
+    ):
+        graph_pair = _with_untrusted_owner_payload(
+            fixtures.future_complete_graph_pair(),
+            construction=construction,
+            global_rejections=payload,
+        )
+        outputs.extend(_one_owner_abstention(ordered) for ordered in (graph_pair, tuple(reversed(graph_pair))))
+
+    baseline = outputs[0]
+    assert all(item == baseline for item in outputs)
+    assert {item.record_id for item in outputs} == {baseline.record_id}
+    assert {fixtures.canonical_result(item) for item in outputs} == {fixtures.canonical_result(baseline)}
+    assert baseline.attributes["rejections"]["left"] == ()
+    assert not any(item["side"] == "left" for item in baseline.attributes["alternatives"])
+
+
+def test_trusted_builder_rejections_remain_in_abstention_audit_and_alternatives() -> None:
+    fixtures = _owner_fixtures()
+    graph_pair = fixtures.graphs_with_statuses("global-and-role-rejection", "unique")
+    left_result = graph_pair[0].backend.owner_certificates
+    assert left_result.is_trusted is True
+    left_resolution = left_result.resolution_for(OWNER_ROLE)
+    expected = tuple(
+        sorted(
+            (*left_resolution.rejections, *left_result.global_rejections),
+            key=lambda item: item.rejection_id,
+        )
+    )
+
+    forward = _one_owner_abstention(graph_pair)
+    reverse = _one_owner_abstention(tuple(reversed(graph_pair)))
+    actual = forward.attributes["rejections"]["left"]
+    alternatives = tuple(
+        item for item in forward.attributes["alternatives"] if item["side"] == "left" and item["kind"] == "rejection"
+    )
+
+    assert forward == reverse
+    assert tuple(item["rejection_id"] for item in actual) == tuple(item.rejection_id for item in expected)
+    assert tuple(item["reason"] for item in actual) == tuple(item.reason for item in expected)
+    assert {item["rejection_id"] for item in alternatives} == {item.rejection_id for item in expected}
+    assert all(item["multiplicity"] == 1 for item in alternatives)
 
 
 def test_untrusted_certificate_result_can_only_abstain() -> None:

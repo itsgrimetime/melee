@@ -733,6 +733,13 @@ _OWNER_ABSTENTION_REASONS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class _CertifiedOwnerView:
+    result: OwnerCertificateResult | None
+    roles: tuple[OwnerRoleKey, ...]
+    global_rejections: tuple[OwnerCertificateRejection, ...]
+
+
 def _certificate_semantics(
     certificate: EvidenceNode,
     role: OwnerRoleKey,
@@ -799,14 +806,24 @@ def _certificate_bound_node(
 
 def _effective_owner_resolution(
     graph: FrontierGraph,
-    result: OwnerCertificateResult,
+    view: _CertifiedOwnerView,
     role: OwnerRoleKey,
     resolution: OwnerRoleResolution,
 ) -> tuple[OwnerResolutionStatus, tuple[EvidenceNode, ...]]:
+    if view.result is None:
+        return OwnerResolutionStatus.INCOMPLETE, ()
     certificates = tuple(
         certificate
         for record_id in resolution.certificate_record_ids
-        if (certificate := _stored_certificate(graph, result, role, record_id)) is not None
+        if (
+            certificate := _stored_certificate(
+                graph,
+                view.result,
+                role,
+                record_id,
+            )
+        )
+        is not None
     )
     status = resolution.status
     if status is OwnerResolutionStatus.UNIQUE and (
@@ -856,13 +873,27 @@ def _certificate_multiplicity(
     )
 
 
+def _canonical_owner_alternatives(
+    raw: Iterable[Mapping[str, object]],
+) -> tuple[Mapping[str, object], ...]:
+    grouped: dict[bytes, tuple[Mapping[str, object], int]] = {}
+    for summary in raw:
+        key = canonical_bytes(summary)
+        prior = grouped.get(key)
+        grouped[key] = (summary, 1 if prior is None else prior[1] + 1)
+    return tuple({**summary, "multiplicity": multiplicity} for _key, (summary, multiplicity) in sorted(grouped.items()))
+
+
 def _owner_alternatives(
     side: str,
     role: OwnerRoleKey,
-    result: OwnerCertificateResult,
+    view: _CertifiedOwnerView,
     resolution: OwnerRoleResolution,
     certificates: tuple[EvidenceNode, ...],
 ) -> tuple[Mapping[str, object], ...]:
+    if view.result is None:
+        return ()
+    result = view.result
     raw: list[Mapping[str, object]] = []
     certificates_by_id = {certificate.record_id: certificate for certificate in certificates}
     for record_id in resolution.certificate_record_ids:
@@ -886,13 +917,8 @@ def _owner_alternatives(
             "support_record_ids": (),
         }
         raw.extend((summary,) * _certificate_multiplicity(result, role, certificate))
-    raw.extend(_rejection_summary(side, rejection) for rejection in (*resolution.rejections, *result.global_rejections))
-    grouped: dict[bytes, tuple[Mapping[str, object], int]] = {}
-    for summary in raw:
-        key = canonical_bytes(summary)
-        prior = grouped.get(key)
-        grouped[key] = (summary, 1 if prior is None else prior[1] + 1)
-    return tuple({**summary, "multiplicity": multiplicity} for _key, (summary, multiplicity) in sorted(grouped.items()))
+    raw.extend(_rejection_summary(side, rejection) for rejection in (*resolution.rejections, *view.global_rejections))
+    return _canonical_owner_alternatives(raw)
 
 
 def _owner_correspondence(
@@ -933,6 +959,8 @@ def _owner_abstention(
     role: OwnerRoleKey,
     left_graph: FrontierGraph,
     right_graph: FrontierGraph,
+    left_view: _CertifiedOwnerView,
+    right_view: _CertifiedOwnerView,
     left_resolution: OwnerRoleResolution,
     right_resolution: OwnerRoleResolution,
     left_status: OwnerResolutionStatus,
@@ -945,12 +973,8 @@ def _owner_abstention(
     alternatives = tuple(
         sorted(
             (
-                *_owner_alternatives(
-                    "left", role, left_graph.backend.owner_certificates, left_resolution, left_certificates
-                ),
-                *_owner_alternatives(
-                    "right", role, right_graph.backend.owner_certificates, right_resolution, right_certificates
-                ),
+                *_owner_alternatives("left", role, left_view, left_resolution, left_certificates),
+                *_owner_alternatives("right", role, right_view, right_resolution, right_certificates),
             ),
             key=canonical_bytes,
         )
@@ -994,14 +1018,14 @@ def _owner_abstention(
                 "left": tuple(
                     _rejection_summary("left", item)
                     for item in sorted(
-                        (*left_resolution.rejections, *left_graph.backend.owner_certificates.global_rejections),
+                        (*left_resolution.rejections, *left_view.global_rejections),
                         key=lambda item: item.rejection_id,
                     )
                 ),
                 "right": tuple(
                     _rejection_summary("right", item)
                     for item in sorted(
-                        (*right_resolution.rejections, *right_graph.backend.owner_certificates.global_rejections),
+                        (*right_resolution.rejections, *right_view.global_rejections),
                         key=lambda item: item.rejection_id,
                     )
                 ),
@@ -1011,9 +1035,9 @@ def _owner_abstention(
     )
 
 
-def _trusted_owner_roles(result: OwnerCertificateResult) -> tuple[OwnerRoleKey, ...]:
+def _certified_owner_view(result: OwnerCertificateResult) -> _CertifiedOwnerView:
     if not result.is_trusted:
-        return ()
+        return _CertifiedOwnerView(None, (), ())
     roles = []
     for resolution in result.role_resolutions:
         role = resolution.role
@@ -1024,21 +1048,25 @@ def _trusted_owner_roles(result: OwnerCertificateResult) -> tuple[OwnerRoleKey, 
         except (TypeError, ValueError):
             continue
         roles.append(role)
-    return tuple(sorted(set(roles)))
+    return _CertifiedOwnerView(
+        result,
+        tuple(sorted(set(roles))),
+        result.global_rejections,
+    )
 
 
 def _owner_resolution(
-    result: OwnerCertificateResult,
+    view: _CertifiedOwnerView,
     role: OwnerRoleKey,
 ) -> OwnerRoleResolution:
-    if not result.is_trusted:
+    if view.result is None:
         return OwnerRoleResolution(
             role,
             OwnerResolutionStatus.INCOMPLETE,
             (),
             (),
         )
-    return result.resolution_for(role)
+    return view.result.resolution_for(role)
 
 
 def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[FrontierGraph]) -> tuple[ComparisonRecord, ...]:
@@ -1057,22 +1085,23 @@ def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[Frontier
             raise ValueError("role comparison scope does not match frontier pair")
     comparisons = list(alignment.comparisons)
     left_graph, right_graph = tuple(sorted(graph_pair, key=_label))
-    left_result = left_graph.backend.owner_certificates
-    right_result = right_graph.backend.owner_certificates
-    roles = tuple(
-        sorted(
-            {
-                *_trusted_owner_roles(left_result),
-                *_trusted_owner_roles(right_result),
-            }
-        )
-    )
+    left_view = _certified_owner_view(left_graph.backend.owner_certificates)
+    right_view = _certified_owner_view(right_graph.backend.owner_certificates)
+    roles = tuple(sorted({*left_view.roles, *right_view.roles}))
     for ordinal, role in enumerate(roles):
-        left_resolution = _owner_resolution(left_result, role)
-        right_resolution = _owner_resolution(right_result, role)
-        left_status, left_certificates = _effective_owner_resolution(left_graph, left_result, role, left_resolution)
+        left_resolution = _owner_resolution(left_view, role)
+        right_resolution = _owner_resolution(right_view, role)
+        left_status, left_certificates = _effective_owner_resolution(
+            left_graph,
+            left_view,
+            role,
+            left_resolution,
+        )
         right_status, right_certificates = _effective_owner_resolution(
-            right_graph, right_result, role, right_resolution
+            right_graph,
+            right_view,
+            role,
+            right_resolution,
         )
         if left_status is right_status is OwnerResolutionStatus.UNIQUE:
             comparisons.append(
@@ -1091,6 +1120,8 @@ def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[Frontier
                     role,
                     left_graph,
                     right_graph,
+                    left_view,
+                    right_view,
                     left_resolution,
                     right_resolution,
                     left_status,
