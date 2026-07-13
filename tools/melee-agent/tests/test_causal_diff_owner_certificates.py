@@ -127,6 +127,51 @@ def test_direct_certificate_result_construction_is_not_trusted():
     assert result.certificate(forged.record_id) is None
 
 
+def test_certificate_result_subclass_cannot_override_trust():
+    certificate = build_owner_certificates(complete_evidence()).certificate_nodes[0]
+
+    try:
+        class ForgedResult(OwnerCertificateResult):
+            @property
+            def is_trusted(self) -> bool:
+                return True
+    except TypeError as error:
+        assert str(error) == "OwnerCertificateResult is runtime-final"
+        return
+
+    forged = ForgedResult((certificate,), (), ())
+    assert forged.is_trusted is False
+    assert forged.certificate(certificate.record_id) is None
+
+
+def test_object_binding_evidence_subclass_cannot_replay_adapter_trust():
+    trusted = complete_evidence()
+    trusted_token = trusted._adapter_token
+
+    try:
+        class ForgedEvidence(ObjectBindingEvidence):
+            def __getattribute__(self, name):
+                if name == "_adapter_token":
+                    return trusted_token
+                return super().__getattribute__(name)
+    except TypeError as error:
+        assert str(error) == "ObjectBindingEvidence is runtime-final"
+        return
+
+    forged = ForgedEvidence(
+        (),
+        (),
+        frozenset(),
+        "forged-capture",
+        None,
+        ("forged-a", "forged-b", "forged-c", "forged-d"),
+    )
+    result = build_owner_certificates(forged)
+    assert {item.reason for item in result.global_rejections} == {
+        "untrusted-diagnostic-materialization"
+    }
+
+
 def test_replaced_certificate_results_lose_trust():
     trusted = build_owner_certificates(complete_evidence())
     certificate = trusted.certificate_nodes[0]

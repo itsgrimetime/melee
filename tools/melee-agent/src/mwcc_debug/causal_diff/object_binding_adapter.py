@@ -261,6 +261,9 @@ class ObjectBindingEvidence:
     def verified_capabilities(self) -> frozenset[str]:
         return self.capabilities
 
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        raise TypeError("ObjectBindingEvidence is runtime-final")
+
 
 def _trusted_object_binding_evidence(
     nodes: tuple[EvidenceNode, ...],

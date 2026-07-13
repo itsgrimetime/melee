@@ -123,10 +123,10 @@ class OwnerCertificateResult:
 
     @property
     def is_trusted(self) -> bool:
-        return self._token is _TRUST_TOKEN
+        return _result_is_trusted(self)
 
     def certificate(self, record_id: str) -> EvidenceNode | None:
-        if not self.is_trusted:
+        if not _result_is_trusted(self):
             return None
         return next((node for node in self.certificate_nodes if node.record_id == record_id), None)
 
@@ -136,7 +136,7 @@ class OwnerCertificateResult:
             (item for item in self.role_resolutions if item.role == role),
             OwnerRoleResolution(role, OwnerResolutionStatus.MISSING, (), ()),
         )
-        if not self.is_trusted or self.global_rejections:
+        if not _result_is_trusted(self) or self.global_rejections:
             return OwnerRoleResolution(
                 role,
                 OwnerResolutionStatus.INCOMPLETE,
@@ -144,6 +144,16 @@ class OwnerCertificateResult:
                 (*base.rejections, *self.global_rejections),
             )
         return base
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        raise TypeError("OwnerCertificateResult is runtime-final")
+
+
+def _result_is_trusted(result: OwnerCertificateResult) -> bool:
+    return (
+        type(result) is OwnerCertificateResult
+        and object.__getattribute__(result, "_token") is _TRUST_TOKEN
+    )
 
 
 def _trusted_result(
@@ -441,7 +451,10 @@ def _certificate(path: _OwnerPath, evidence: ObjectBindingEvidence) -> EvidenceN
 def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificateResult:
     """Derive all connected capture-local roles from trusted adapter evidence."""
 
-    if evidence._adapter_token is not _OBJECT_BINDING_ADAPTER_TOKEN:
+    if (
+        type(evidence) is not ObjectBindingEvidence
+        or object.__getattribute__(evidence, "_adapter_token") is not _OBJECT_BINDING_ADAPTER_TOKEN
+    ):
         return _trusted_result(
             (),
             (),
