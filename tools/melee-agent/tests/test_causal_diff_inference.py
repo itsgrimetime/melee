@@ -10,6 +10,7 @@ from src.mwcc_debug.causal_diff.alignment import (
     AbstentionReason,
     EffectAbstention,
     RolePair,
+    build_role_comparisons,
 )
 from src.mwcc_debug.causal_diff.canonical import stable_id
 from src.mwcc_debug.causal_diff.effects import (
@@ -565,6 +566,75 @@ def test_certificate_inference_rejects_forged_relation_parser(relation_kind: str
     assert verdict.proof_paths == ()
 
 
+@pytest.mark.parametrize(
+    "unsealed_relations",
+    (
+        frozenset({"backend-owner-corresponds-to"}),
+        frozenset({"backend-owner-state-changed"}),
+        frozenset({"backend-owner-corresponds-to", "backend-owner-state-changed"}),
+    ),
+)
+def test_unsealed_owner_relation_cannot_satisfy_certificate_inference(
+    unsealed_relations: frozenset[str],
+) -> None:
+    graph_pair, owner_alignment, records = future_complete_pipeline_inputs()
+    valid_effects = derive_effects(owner_alignment, graph_pair, records)
+    unsealed = tuple(replace(record) if record.relation_kind in unsealed_relations else record for record in records)
+
+    verdict = only(build_report(graph_pair, valid_effects, unsealed).verdicts)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert "gate-6-unique-owner-chain" in verdict.failed_gates
+    assert "gate-8-evidence-integrity" in verdict.failed_gates
+    assert verdict.proof_paths == ()
+
+
+def test_comparison_round_trip_loses_authority_for_certificate_inference() -> None:
+    graph_pair, owner_alignment, records = future_complete_pipeline_inputs()
+    valid_effects = derive_effects(owner_alignment, graph_pair, records)
+    original_report = build_report(graph_pair, valid_effects, records)
+    payloads = {item["record_id"]: item for item in original_report.to_dict()["comparisons"]}
+
+    round_tripped = []
+    for record in records:
+        if record.relation_kind not in {
+            "backend-owner-corresponds-to",
+            "backend-owner-state-changed",
+        }:
+            round_tripped.append(record)
+            continue
+        payload = payloads[record.record_id]
+        provenance = payload["provenance"]
+        round_tripped.append(
+            ComparisonRecord(
+                record_id=payload["record_id"],
+                analysis_id=payload["analysis_id"],
+                relation_kind=payload["relation_kind"],
+                left_compile_id=payload["left_compile_id"],
+                left_record_id=payload["left_record_id"],
+                right_compile_id=payload["right_compile_id"],
+                right_record_id=payload["right_record_id"],
+                confidence=Confidence(payload["confidence"]),
+                provenance=Provenance(
+                    artifact_sha256=provenance["artifact_sha256"],
+                    parser=provenance["parser"],
+                    raw_start=provenance["raw_start"],
+                    raw_end=provenance["raw_end"],
+                    derivation_rule=provenance["derivation_rule"],
+                    input_record_ids=tuple(provenance["input_record_ids"]),
+                ),
+                attributes=payload["attributes"],
+            )
+        )
+
+    verdict = only(build_report(graph_pair, valid_effects, tuple(round_tripped)).verdicts)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert "gate-6-unique-owner-chain" in verdict.failed_gates
+    assert "gate-8-evidence-integrity" in verdict.failed_gates
+    assert verdict.proof_paths == ()
+
+
 def test_unique_changed_certificate_pair_stops_only_at_source_binding_gate() -> None:
     report = run_synthetic_future_complete_pair()
     verdict = only(report.verdicts)
@@ -777,7 +847,7 @@ def test_wrong_parser_owner_abstention_is_forged_integrity_evidence_only() -> No
     assert verdict.rejected_alternatives == ()
 
 
-def test_exact_parser_owner_abstention_remains_certified_gate_8_evidence() -> None:
+def test_exact_parser_unsealed_owner_abstention_is_forged_gate_8_evidence() -> None:
     graph_pair, owner_alignment, comparisons = future_complete_pipeline_inputs()
     effects = derive_effects(owner_alignment, graph_pair, comparisons)
     certified = _owner_abstention_for_parser(
@@ -789,7 +859,29 @@ def test_exact_parser_owner_abstention_remains_certified_gate_8_evidence() -> No
 
     assert verdict.status is VerdictStatus.ABSTAIN
     assert verdict.failed_gates == ("gate-8-evidence-integrity",)
-    assert verdict.rejected_alternatives == (f"backend-owner-abstained:{certified.record_id}",)
+    assert verdict.rejected_alternatives == ()
+
+
+def test_sealed_owner_abstention_remains_certified_gate_8_evidence() -> None:
+    graph_pair, owner_alignment, comparisons = future_complete_pipeline_inputs()
+    effects = derive_effects(owner_alignment, graph_pair, comparisons)
+    sealed = only(
+        item
+        for item in build_role_comparisons(
+            replace(
+                owner_alignment,
+                retail_offset=owner_alignment.retail_offset + 4,
+            ),
+            graph_pair,
+        )
+        if item.relation_kind == "backend-owner-abstained"
+    )
+
+    verdict = only(build_report(graph_pair, effects, (*comparisons, sealed)).verdicts)
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-8-evidence-integrity",)
+    assert verdict.rejected_alternatives == (f"backend-owner-abstained:{sealed.record_id}",)
 
 
 def test_forged_stored_certificate_cannot_satisfy_inference() -> None:
@@ -1328,6 +1420,15 @@ def test_report_rendering_is_canonical_and_concise() -> None:
         assert " -> ".join(path) in text
     assert "melee-agent debug inspect" in text
     assert "full graph" not in text
+
+
+def test_report_omits_comparison_runtime_authority() -> None:
+    case = proof_complete_unique()
+    comparison = case.comparisons[0]
+    object.__setattr__(comparison, "_owner_authority", object())
+    report = build_report(_graphs(case), case.effects, case.comparisons)
+
+    assert "_owner_authority" not in json.dumps(report.to_dict(), sort_keys=True)
 
 
 def test_canonical_json_sorts_nested_semantic_collections() -> None:

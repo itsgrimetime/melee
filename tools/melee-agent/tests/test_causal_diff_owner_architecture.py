@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from src.mwcc_debug.causal_diff import object_binding_adapter
+from src.mwcc_debug.causal_diff import alignment, differ, object_binding_adapter
 from src.mwcc_debug.causal_diff.legacy_ownership import legacy_reachable_records
 from tests.owner_certificate_fixtures import (
     graph_with_legacy_and_v2_numeric_collision,
@@ -75,6 +75,18 @@ def _adapter_token_setters(tree: ast.AST) -> frozenset[str]:
     )
 
 
+def _function_callers(tree: ast.AST, callee: str) -> frozenset[str]:
+    return frozenset(
+        function.name
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == callee
+            for node in ast.walk(function)
+        )
+    )
+
+
 def test_downstream_modules_cannot_reconstruct_raw_owner_proof() -> None:
     for path in DOWNSTREAM_PATHS:
         tree = ast.parse(path.read_text())
@@ -108,3 +120,27 @@ def test_only_verified_bundle_adapter_sets_owner_authority_token() -> None:
         object_binding_adapter,
         "emit_trusted_object_binding_evidence_for_test",
     )
+
+
+def test_only_public_alignment_boundary_seals_owner_relations() -> None:
+    tree = ast.parse((CAUSAL_DIFF / "alignment.py").read_text())
+
+    assert _function_callers(tree, "_seal_owner_alignment_record") == {"build_role_comparisons"}
+    assert not _function_callers(tree, "_seal_owner_alignment_record") & {
+        "_owner_correspondence",
+        "_owner_abstention",
+    }
+    assert "_OWNER_ALIGNMENT_AUTHORITY" not in alignment.__all__
+    assert "_seal_owner_alignment_record" not in alignment.__all__
+
+
+def test_only_public_differencer_boundary_seals_owner_deltas() -> None:
+    tree = ast.parse((CAUSAL_DIFF / "differ.py").read_text())
+
+    assert _function_callers(tree, "_seal_owner_delta_record") == {"diff_frontiers"}
+    assert "_owner_state_deltas" not in _function_callers(
+        tree,
+        "_seal_owner_delta_record",
+    )
+    assert "_OWNER_DELTA_AUTHORITY" not in differ.__all__
+    assert "_seal_owner_delta_record" not in differ.__all__

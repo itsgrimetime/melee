@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 from dataclasses import replace
 from types import MappingProxyType, SimpleNamespace
@@ -7,12 +8,14 @@ from types import MappingProxyType, SimpleNamespace
 import pytest
 
 from src.mwcc_debug import role_descriptor
+from src.mwcc_debug.causal_diff import alignment as alignment_module
 from src.mwcc_debug.causal_diff.alignment import (
     _canonical_owner_alternatives,
     _normalized_instruction,
     _rejection_summary,
     align_anchor,
     build_role_comparisons,
+    owner_alignment_record_is_authoritative,
 )
 from src.mwcc_debug.causal_diff.asm_adapter import (
     CheckdiffEvidence,
@@ -650,6 +653,58 @@ def test_unique_pair_uses_certificate_endpoints_and_minimum_confidence() -> None
     assert comparison.confidence == min_confidence(left.confidence, right.confidence)
     assert set(comparison.provenance.input_record_ids) == {left.record_id, right.record_id}
     assert comparison.attributes == {"role": OWNER_ROLE.as_json()}
+
+
+def test_direct_owner_correspondence_has_no_alignment_authority() -> None:
+    fixtures = _owner_fixtures()
+    left, right = fixtures.future_complete_graph_pair()
+    left_certificate = _only(left.backend.owner_certificates.certificate_nodes)
+    right_certificate = _only(right.backend.owner_certificates.certificate_nodes)
+
+    direct = alignment_module._owner_correspondence(
+        "d" * 64,
+        fixtures.ROLE,
+        left_certificate,
+        right_certificate,
+        0,
+    )
+
+    assert owner_alignment_record_is_authoritative(direct) is False
+
+
+def test_build_role_comparisons_seals_only_owner_relations() -> None:
+    fixtures = _owner_fixtures()
+    records = build_role_comparisons(
+        fixtures.alignment(),
+        fixtures.future_complete_graph_pair(),
+    )
+
+    assert all(
+        owner_alignment_record_is_authoritative(record)
+        for record in records
+        if record.relation_kind in {"backend-owner-corresponds-to", "backend-owner-abstained"}
+    )
+    assert all(
+        not owner_alignment_record_is_authoritative(record)
+        for record in records
+        if record.relation_kind == "role-corresponds-to"
+    )
+    owner_record = _only(record for record in records if record.relation_kind == "backend-owner-corresponds-to")
+    assert not owner_alignment_record_is_authoritative(replace(owner_record))
+    assert not owner_alignment_record_is_authoritative(copy.copy(owner_record))
+    assert not owner_alignment_record_is_authoritative(copy.deepcopy(owner_record))
+
+
+def test_build_role_comparisons_seals_owner_abstention() -> None:
+    fixtures = _owner_fixtures()
+    records = build_role_comparisons(
+        fixtures.alignment(),
+        fixtures.graphs_with_statuses("ambiguous", "unique"),
+    )
+    abstention = _only(record for record in records if record.relation_kind == "backend-owner-abstained")
+
+    assert owner_alignment_record_is_authoritative(abstention)
+    assert not owner_alignment_record_is_authoritative(replace(abstention))
 
 
 def test_owner_correspondence_requires_both_certificates_at_requested_anchor() -> None:

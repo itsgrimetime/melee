@@ -7,7 +7,9 @@ from enum import Enum, StrEnum
 from types import MappingProxyType
 from typing import Iterable, Literal, Mapping
 
+from .alignment import owner_alignment_record_is_authoritative
 from .canonical import canonical_bytes, stable_id
+from .differ import owner_delta_record_is_authoritative
 from .effects import DerivedEffects, EffectPair
 from .graph import FrontierGraph
 from .legacy_ownership import legacy_simple_paths_with_truncation
@@ -778,6 +780,7 @@ def _infer_certificate_pair(
         comparison
         for comparison in records
         if comparison.relation_kind == "backend-owner-corresponds-to"
+        and owner_alignment_record_is_authoritative(comparison)
         and comparison.provenance.parser == _OWNER_CORRESPONDENCE_PARSER
         and comparison.left_record_id is not None
         and comparison.right_record_id is not None
@@ -790,6 +793,7 @@ def _infer_certificate_pair(
         comparison
         for comparison in records
         if comparison.relation_kind == "backend-owner-state-changed"
+        and owner_delta_record_is_authoritative(comparison)
         and comparison.provenance.parser == _OWNER_DELTA_PARSER
         and comparison.left_record_id is not None
         and comparison.right_record_id is not None
@@ -898,11 +902,11 @@ def _infer_certificate_pair(
         )
     matching_abstentions = _matching_owner_abstention_records(records, role, owner_ids)
     certified_abstentions = tuple(
-        item for item in matching_abstentions if item.provenance.parser == _OWNER_CORRESPONDENCE_PARSER
+        item
+        for item in matching_abstentions
+        if item.provenance.parser == _OWNER_CORRESPONDENCE_PARSER and owner_alignment_record_is_authoritative(item)
     )
-    forged_abstentions = tuple(
-        item for item in matching_abstentions if item.provenance.parser != _OWNER_CORRESPONDENCE_PARSER
-    )
+    forged_abstentions = tuple(item for item in matching_abstentions if item not in certified_abstentions)
     if matching_abstentions:
         cited_records.extend(matching_abstentions)
     if integrity_failure or certified_abstentions or forged_abstentions or _evidence_integrity_failure(cited_records):
@@ -1410,7 +1414,11 @@ def exit_code_for_report(report: CausalDiffReport) -> int:
 
 def _canonical_value(value: object) -> object:
     if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _canonical_value(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: _canonical_value(getattr(value, field.name))
+            for field in fields(value)
+            if not field.name.startswith("_")
+        }
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, Mapping):

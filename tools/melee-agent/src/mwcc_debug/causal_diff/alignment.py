@@ -40,6 +40,8 @@ _CLASS_IG = re.compile(r"^(?P<class>0|1|gpr|fpr|r|f):(?P<ig>\d+)$", re.IGNORECAS
 _VIRTUAL = re.compile(r"^(?P<kind>[rf])(?P<number>\d+)$", re.IGNORECASE)
 _PARSER_VERSION = "causal-anchor-alignment.v1"
 _FIXED_GPRS = frozenset({1, 2})
+_OWNER_ALIGNMENT_AUTHORITY = object()
+_OWNER_ALIGNMENT_RELATIONS = frozenset({"backend-owner-corresponds-to", "backend-owner-abstained"})
 _ZERO_BASE_OPERANDS: Mapping[str, frozenset[int]] = MappingProxyType(
     {
         "addi": frozenset({1}),
@@ -49,6 +51,21 @@ _ZERO_BASE_OPERANDS: Mapping[str, frozenset[int]] = MappingProxyType(
         "stwux": frozenset({1}),
     }
 )
+
+
+def owner_alignment_record_is_authoritative(record: ComparisonRecord) -> bool:
+    return (
+        type(record) is ComparisonRecord
+        and record.relation_kind in _OWNER_ALIGNMENT_RELATIONS
+        and object.__getattribute__(record, "_owner_authority") is _OWNER_ALIGNMENT_AUTHORITY
+    )
+
+
+def _seal_owner_alignment_record(record: ComparisonRecord) -> ComparisonRecord:
+    if type(record) is not ComparisonRecord or record.relation_kind not in _OWNER_ALIGNMENT_RELATIONS:
+        raise ValueError("only owner alignment relations can receive alignment authority")
+    object.__setattr__(record, "_owner_authority", _OWNER_ALIGNMENT_AUTHORITY)
+    return record
 
 
 class AbstentionReason(StrEnum):
@@ -1178,30 +1195,34 @@ def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[Frontier
         )
         if left_status is right_status is OwnerResolutionStatus.UNIQUE:
             comparisons.append(
-                _owner_correspondence(
-                    alignment.analysis_id,
-                    role,
-                    left_certificates[0],
-                    right_certificates[0],
-                    ordinal,
+                _seal_owner_alignment_record(
+                    _owner_correspondence(
+                        alignment.analysis_id,
+                        role,
+                        left_certificates[0],
+                        right_certificates[0],
+                        ordinal,
+                    )
                 )
             )
         else:
             comparisons.append(
-                _owner_abstention(
-                    alignment.analysis_id,
-                    role,
-                    left_graph,
-                    right_graph,
-                    left_view,
-                    right_view,
-                    left_resolution,
-                    right_resolution,
-                    left_status,
-                    right_status,
-                    left_certificates,
-                    right_certificates,
-                    ordinal,
+                _seal_owner_alignment_record(
+                    _owner_abstention(
+                        alignment.analysis_id,
+                        role,
+                        left_graph,
+                        right_graph,
+                        left_view,
+                        right_view,
+                        left_resolution,
+                        right_resolution,
+                        left_status,
+                        right_status,
+                        left_certificates,
+                        right_certificates,
+                        ordinal,
+                    )
                 )
             )
     return tuple(comparisons)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Iterable, Literal, Mapping
@@ -415,6 +415,7 @@ class ComparisonRecord:
     confidence: Confidence
     provenance: Provenance
     attributes: Mapping[str, object]
+    _owner_authority: object | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "attributes", _immutable_attributes(self.attributes))
@@ -475,6 +476,13 @@ class ComparisonRecord:
 
     def with_attributes(self, attributes: Mapping[str, object]) -> ComparisonRecord:
         return replace(self, attributes=_immutable_attributes(attributes))
+
+    def __copy__(self) -> ComparisonRecord:
+        return replace(self)
+
+    def __deepcopy__(self, memo: dict[int, object]) -> ComparisonRecord:
+        del memo
+        return replace(self)
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 from typing import Iterable
 
@@ -17,8 +18,11 @@ from src.mwcc_debug.causal_diff.models import (
 )
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
 from tests.owner_certificate_fixtures import (
+    CHANGED_STATE,
+    STATE,
     STORE_FACTORIES,
     future_complete_backend,
+    owner_comparison,
 )
 
 
@@ -135,6 +139,27 @@ def test_public_canonical_record_content_distinguishes_python_equal_values() -> 
     helper = getattr(store_module, "canonical_record_bytes", None)
     assert helper is not None
     assert helper(first) != helper(second)
+
+
+def test_comparison_runtime_authority_is_not_canonical_or_comparing() -> None:
+    record = owner_comparison(states=(STATE, CHANGED_STATE))
+    unsealed_bytes = store_module.canonical_record_bytes(record)
+
+    object.__setattr__(record, "_owner_authority", object())
+
+    assert store_module.canonical_record_bytes(record) == unsealed_bytes
+    assert record == replace(record)
+    assert "_owner_authority" not in store_module.canonical_record_bytes(record).decode()
+
+
+def test_comparison_copy_and_reconstruction_drop_runtime_authority() -> None:
+    record = owner_comparison(states=(STATE, CHANGED_STATE))
+    sentinel = object()
+    object.__setattr__(record, "_owner_authority", sentinel)
+
+    assert replace(record)._owner_authority is None
+    assert copy.copy(record)._owner_authority is None
+    assert copy.deepcopy(record)._owner_authority is None
 
 
 def test_store_queries_ignore_insertion_order() -> None:

@@ -10,8 +10,10 @@ from .alignment import (
     AnchorAlignment,
     EffectAbstention,
     RolePair,
+    owner_alignment_record_is_authoritative,
 )
 from .canonical import stable_id
+from .differ import owner_delta_record_is_authoritative
 from .graph import FrontierGraph
 from .legacy_ownership import legacy_reachable_records
 from .models import ComparisonRecord, EvidenceNode
@@ -244,6 +246,7 @@ def _certificate_covered_stack_roles(
     for comparison in comparisons:
         if (
             comparison.relation_kind != "backend-owner-corresponds-to"
+            or not owner_alignment_record_is_authoritative(comparison)
             or comparison.provenance.parser != _OWNER_CORRESPONDENCE_PARSER
             or comparison.left_record_id is None
             or comparison.right_record_id is None
@@ -296,6 +299,7 @@ def _certificate_stack_effects(
         comparison
         for comparison in comparisons
         if comparison.relation_kind == "backend-owner-corresponds-to"
+        and owner_alignment_record_is_authoritative(comparison)
         and comparison.provenance.parser == _OWNER_CORRESPONDENCE_PARSER
         and comparison.left_record_id is not None
         and comparison.right_record_id is not None
@@ -305,6 +309,7 @@ def _certificate_stack_effects(
     for delta in sorted(comparisons, key=lambda item: item.record_id):
         if (
             delta.relation_kind != "backend-owner-state-changed"
+            or not owner_delta_record_is_authoritative(delta)
             or delta.provenance.parser != _OWNER_DELTA_PARSER
             or delta.left_record_id is None
             or delta.right_record_id is None

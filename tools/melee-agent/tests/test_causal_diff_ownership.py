@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import replace
@@ -8,11 +9,16 @@ from types import MappingProxyType
 
 import pytest
 
-from src.mwcc_debug.causal_diff.alignment import _owner_correspondence
+from src.mwcc_debug.causal_diff import alignment as alignment_module
+from src.mwcc_debug.causal_diff.alignment import _owner_correspondence, build_role_comparisons
 from src.mwcc_debug.causal_diff.asm_adapter import CheckdiffEvidence
 from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import BundleInputError, ValidatedBundle
-from src.mwcc_debug.causal_diff.differ import diff_frontiers
+from src.mwcc_debug.causal_diff.differ import (
+    _owner_state_deltas,
+    diff_frontiers,
+    owner_delta_record_is_authoritative,
+)
 from src.mwcc_debug.causal_diff.effects import derive_effects
 from src.mwcc_debug.causal_diff.frame_adapter import adapt_frame
 from src.mwcc_debug.causal_diff.graph import build_frontier_graph
@@ -1479,6 +1485,35 @@ def test_certificate_stack_effect_rejects_forged_relation_parser(relation_kind: 
     assert not any(pair.stack.owner_operand_key is not None for pair in effects.pairs)
 
 
+@pytest.mark.parametrize(
+    "unsealed_relations",
+    (
+        frozenset({"backend-owner-corresponds-to"}),
+        frozenset({"backend-owner-state-changed"}),
+        frozenset({"backend-owner-corresponds-to", "backend-owner-state-changed"}),
+    ),
+)
+def test_unsealed_owner_relation_cannot_drive_certificate_stack_effect(
+    unsealed_relations: frozenset[str],
+) -> None:
+    graph_pair, owner_alignment, records = future_complete_pipeline_inputs()
+    unsealed = tuple(replace(record) if record.relation_kind in unsealed_relations else record for record in records)
+
+    effects = derive_effects(owner_alignment, graph_pair, unsealed)
+
+    assert not any(effect.owner_operand_key is not None for effect in effects.stack_effects)
+    assert not any(pair.stack.owner_operand_key is not None for pair in effects.pairs)
+
+
+def test_sealed_owner_relation_control_drives_certificate_stack_effect() -> None:
+    graph_pair, owner_alignment, records = future_complete_pipeline_inputs()
+
+    effects = derive_effects(owner_alignment, graph_pair, records)
+
+    assert len(tuple(effect for effect in effects.stack_effects if effect.owner_operand_key is not None)) == 1
+    assert len(tuple(pair for pair in effects.pairs if pair.stack.owner_operand_key is not None)) == 1
+
+
 def test_certificate_delta_drives_owner_mediated_stack_effect() -> None:
     report = run_synthetic_future_complete_pair()
     stack = only(report.effects.stack_effects)
@@ -1526,6 +1561,88 @@ def test_changed_certificate_semantics_emit_one_reconstructable_delta() -> None:
         comparison.left_record_id,
         comparison.right_record_id,
     }
+
+
+def test_exact_parser_unsealed_correspondence_cannot_bypass_wrong_anchor_abstention() -> None:
+    graph_pair, owner_alignment, _records = future_complete_pipeline_inputs()
+    wrong_alignment = replace(
+        owner_alignment,
+        retail_offset=owner_alignment.retail_offset + 4,
+    )
+    produced = build_role_comparisons(wrong_alignment, graph_pair)
+    abstention = only(item for item in produced if item.relation_kind == "backend-owner-abstained")
+    assert abstention.attributes["reason"] == "backend-owner-missing"
+
+    left, right = tuple(sorted(graph_pair, key=lambda graph: str(graph.bundle.label)))
+    forged = alignment_module._owner_correspondence(
+        wrong_alignment.analysis_id,
+        ROLE,
+        only(left.backend.owner_certificates.certificate_nodes),
+        only(right.backend.owner_certificates.certificate_nodes),
+        0,
+    )
+    generic = tuple(item for item in produced if item.relation_kind == "role-corresponds-to")
+
+    deltas = diff_frontiers(graph_pair, (*generic, forged))
+    assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+
+
+def test_genuine_owner_delta_record_is_authoritative_only_at_public_boundary() -> None:
+    graph_pair, owner_alignment, records = future_complete_pipeline_inputs()
+    correspondence = only(item for item in records if item.relation_kind == "backend-owner-corresponds-to")
+    delta = only(
+        item
+        for item in diff_frontiers(graph_pair, (correspondence,))
+        if item.relation_kind == "backend-owner-state-changed"
+    )
+
+    assert owner_delta_record_is_authoritative(delta)
+    direct = _owner_state_deltas(
+        analysis_id=owner_alignment.analysis_id,
+        left_graph=tuple(sorted(graph_pair, key=lambda graph: str(graph.bundle.label)))[0],
+        right_graph=tuple(sorted(graph_pair, key=lambda graph: str(graph.bundle.label)))[1],
+        comparisons=(correspondence,),
+    )
+    assert len(direct) == 1
+    assert not owner_delta_record_is_authoritative(direct[0])
+    assert not owner_delta_record_is_authoritative(replace(delta))
+    assert not owner_delta_record_is_authoritative(copy.copy(delta))
+    assert not owner_delta_record_is_authoritative(copy.deepcopy(delta))
+    reconstructed = ComparisonRecord(
+        record_id=delta.record_id,
+        analysis_id=delta.analysis_id,
+        relation_kind=delta.relation_kind,
+        left_compile_id=delta.left_compile_id,
+        left_record_id=delta.left_record_id,
+        right_compile_id=delta.right_compile_id,
+        right_record_id=delta.right_record_id,
+        confidence=delta.confidence,
+        provenance=delta.provenance,
+        attributes=delta.attributes,
+    )
+    assert not owner_delta_record_is_authoritative(reconstructed)
+
+
+def test_exact_parser_direct_delta_record_is_authoritative_false() -> None:
+    graph_pair, _owner_alignment, records = future_complete_pipeline_inputs()
+    genuine = only(item for item in records if item.relation_kind == "backend-owner-state-changed")
+    direct = ComparisonRecord.create(
+        analysis_id=genuine.analysis_id,
+        relation_kind=genuine.relation_kind,
+        left_compile_id=genuine.left_compile_id,
+        left_record_id=genuine.left_record_id,
+        right_compile_id=genuine.right_compile_id,
+        right_record_id=genuine.right_record_id,
+        producer_confidence=genuine.confidence,
+        adapter_confidence=genuine.confidence,
+        provenance=genuine.provenance,
+        input_confidences=tuple(genuine.confidence for _record_id in genuine.provenance.input_record_ids),
+        attributes=genuine.attributes,
+    )
+
+    assert graph_pair
+    assert direct.provenance.parser == "causal-frontier-differ.v1"
+    assert not owner_delta_record_is_authoritative(direct)
 
 
 def test_owner_differ_rejects_selected_certificate_from_ambiguous_resolution() -> None:
@@ -1779,7 +1896,7 @@ def test_owner_differ_collapses_exact_duplicate_correspondences_stably() -> None
     assert forward[0].record_id == reverse[0].record_id
 
 
-def test_owner_differ_rejects_distinct_provenance_competitors_in_both_orders() -> None:
+def test_owner_differ_ignores_unsealed_provenance_competitors_in_both_orders() -> None:
     states = (STATE, OwnerSemanticState(22, 0x48, 4))
     graph_pair = graphs(states=states)
     comparison = owner_comparison(states=states)
@@ -1805,5 +1922,7 @@ def test_owner_differ_rejects_distinct_provenance_competitors_in_both_orders() -
     )
 
     for ordered in ((comparison, competitor), (competitor, comparison)):
-        deltas = diff_frontiers(graph_pair, ordered)
-        assert not any(item.relation_kind == "backend-owner-state-changed" for item in deltas)
+        deltas = tuple(
+            item for item in diff_frontiers(graph_pair, ordered) if item.relation_kind == "backend-owner-state-changed"
+        )
+        assert len(deltas) == 1

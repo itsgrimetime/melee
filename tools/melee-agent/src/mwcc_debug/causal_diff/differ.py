@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable, Mapping
 
+from .alignment import owner_alignment_record_is_authoritative
 from .canonical import canonical_bytes
 from .graph import FrontierGraph
 from .models import ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode, Provenance
@@ -16,6 +17,7 @@ from .store import canonical_record_bytes
 
 _PARSER_VERSION = "causal-frontier-differ.v1"
 _OWNER_ALIGNMENT_PARSER = "causal-backend-owner-alignment.v2"
+_OWNER_DELTA_AUTHORITY = object()
 _MATERIAL_NODE_KINDS = frozenset(
     {
         "allocator-node",
@@ -28,6 +30,21 @@ _MATERIAL_NODE_KINDS = frozenset(
         "inline-scope",
     }
 )
+
+
+def owner_delta_record_is_authoritative(record: ComparisonRecord) -> bool:
+    return (
+        type(record) is ComparisonRecord
+        and record.relation_kind == "backend-owner-state-changed"
+        and object.__getattribute__(record, "_owner_authority") is _OWNER_DELTA_AUTHORITY
+    )
+
+
+def _seal_owner_delta_record(record: ComparisonRecord) -> ComparisonRecord:
+    if type(record) is not ComparisonRecord or record.relation_kind != "backend-owner-state-changed":
+        raise ValueError("only owner state deltas can receive differencer authority")
+    object.__setattr__(record, "_owner_authority", _OWNER_DELTA_AUTHORITY)
+    return record
 
 
 def _label(graph: FrontierGraph) -> str:
@@ -216,6 +233,7 @@ def _owner_state_deltas(
     for comparison in comparisons:
         if (
             comparison.relation_kind != "backend-owner-corresponds-to"
+            or not owner_alignment_record_is_authoritative(comparison)
             or comparison.provenance.parser != _OWNER_ALIGNMENT_PARSER
             or comparison.left_record_id is None
             or comparison.right_record_id is None
@@ -317,14 +335,15 @@ def diff_frontiers(
     for left, right in _unique_role_pairs(left_nodes, right_nodes):
         aligned.setdefault(left.record_id, right.record_id)
 
-    deltas = list(
-        _owner_state_deltas(
+    deltas = [
+        _seal_owner_delta_record(record)
+        for record in _owner_state_deltas(
             analysis_id=analysis_id,
             left_graph=left_graph,
             right_graph=right_graph,
             comparisons=comparison_records,
         )
-    )
+    ]
     ordinal = len(deltas)
     aligned_right = set(aligned.values())
     for left_id, right_id in sorted(aligned.items()):

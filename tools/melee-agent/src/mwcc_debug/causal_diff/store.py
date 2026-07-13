@@ -84,7 +84,11 @@ _Record = TypeVar("_Record", EvidenceNode, EvidenceEdge, ComparisonRecord)
 
 def _json_value(value: object) -> object:
     if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _json_value(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: _json_value(getattr(value, field.name))
+            for field in fields(value)
+            if not field.name.startswith("_")
+        }
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, Mapping):
