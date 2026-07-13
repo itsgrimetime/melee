@@ -39,10 +39,12 @@ from tests.owner_certificate_fixtures import (
     evidence_with_certificate_and_role_rejection,
     evidence_with_coordinated_allocator_change,
     evidence_with_coordinated_allocator_omission,
+    evidence_with_create_lineage_history,
     evidence_with_duplicate_exact_rewrite,
     evidence_with_global_and_role_rejection,
     evidence_with_heuristic_support,
     evidence_with_independent_paths,
+    evidence_with_invalid_lineage_history,
     evidence_with_lineage_variant,
     evidence_with_mutation_parent_override,
     evidence_with_object_generation_conflict,
@@ -1021,6 +1023,178 @@ def test_multi_output_event_uses_each_outputs_exact_parent_set():
     assert result.resolution_for(second_role()).status is OwnerResolutionStatus.UNIQUE
 
 
+def test_parentless_create_definition_builds_owner_certificate():
+    evidence = evidence_with_create_lineage_history()
+    result = build_owner_certificates(evidence)
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.UNIQUE
+    assert resolution.rejections == ()
+    certificate = only(result.certificate_nodes)
+    create_support = only(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-lineage-event"
+        and node.attributes.get("operand_lineage_id") == "ol-1"
+        and node.attributes.get("side") == "outputs"
+    )
+    assert create_support.attributes["mutation_kind"] == "create"
+    assert create_support.attributes["parent_lineage_ids"] == ()
+    assert create_support.record_id in certificate.attributes["raw_support_record_ids"]
+
+
+def test_preserved_lineage_history_builds_and_serializes_owner_certificate():
+    evidence = evidence_with_create_lineage_history(preserve=True)
+    result = build_owner_certificates(evidence)
+    resolution = result.resolution_for(ROLE)
+
+    assert resolution.status is OwnerResolutionStatus.UNIQUE
+    assert resolution.rejections == ()
+    certificate = only(result.certificate_nodes)
+    mutation_support = tuple(
+        sorted(
+            (
+                node
+                for node in evidence.nodes
+                if node.kind == "backend-support-record"
+                and node.attributes.get("support_kind") == "pcode-lineage-event"
+                and node.attributes.get("operand_lineage_id") == "ol-1"
+                and "event_index" in node.attributes
+            ),
+            key=lambda node: (
+                node.attributes["event_index"],
+                node.attributes["side"],
+            ),
+        )
+    )
+    assert tuple(
+        (
+            node.attributes["event_index"],
+            node.attributes["side"],
+            node.attributes["mutation_kind"],
+            node.attributes["parent_lineage_ids"],
+        )
+        for node in mutation_support
+    ) == (
+        (0, "outputs", "create", ()),
+        (1, "inputs", "update", ()),
+        (1, "outputs", "update", ()),
+    )
+    for node in mutation_support:
+        assert node.record_id in certificate.attributes["raw_support_record_ids"]
+        assert node.record_id in certificate.provenance.input_record_ids
+        assert result.certificate_support_node(certificate.record_id, node.record_id) is node
+
+
+def test_lineage_history_is_order_independent():
+    evidence = evidence_with_create_lineage_history(preserve=True)
+    reverse = ObjectBindingEvidence(
+        tuple(reversed(evidence.nodes)),
+        tuple(reversed(evidence.edges)),
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+    forward_result = owner_certificate.validate_owner_evidence(evidence)
+    reverse_result = owner_certificate.validate_owner_evidence(reverse)
+
+    assert canonical_result(forward_result) == canonical_result(reverse_result)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "multiple-definitions",
+        "fake-preservation",
+        "omitted-fresh-parents",
+        "preservation-before-definition",
+        "create-with-input",
+        "create-with-parent",
+        "preservation-parent-edge",
+    ),
+)
+def test_invalid_lineage_history_never_certifies(variant: str) -> None:
+    result = owner_certificate.validate_owner_evidence(
+        evidence_with_invalid_lineage_history(variant)
+    )
+    resolution = result.resolution_for(ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is not OwnerResolutionStatus.UNIQUE
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {
+        "lineage-parent-mismatch"
+    }
+
+
+@pytest.mark.parametrize(
+    "parent_summary",
+    (
+        pytest.param((), id="empty"),
+        pytest.param(("ol-other",), id="replacement"),
+        pytest.param(("ol-other", "ol-parent-0"), id="superset"),
+    ),
+)
+def test_input_parent_summary_mismatch_never_certifies(
+    parent_summary: tuple[str, ...],
+) -> None:
+    evidence = evidence_with_invalid_lineage_history(
+        "input-parent-summary-mismatch",
+        input_parent_summary=parent_summary,
+    )
+    result = owner_certificate.validate_owner_evidence(evidence)
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is not OwnerResolutionStatus.UNIQUE
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {
+        "lineage-parent-mismatch"
+    }
+
+
+def test_mutation_parent_edge_missing_event_index_never_certifies() -> None:
+    evidence = evidence_with_invalid_lineage_history(
+        "mutation-edge-missing-event-index"
+    )
+    result = owner_certificate.validate_owner_evidence(evidence)
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is not OwnerResolutionStatus.UNIQUE
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {
+        "lineage-parent-mismatch"
+    }
+
+
+@pytest.mark.parametrize(
+    "event_index",
+    (
+        pytest.param(False, id="boolean"),
+        pytest.param(0.0, id="integral-float"),
+    ),
+)
+def test_mutation_parent_edge_malformed_event_index_never_certifies(
+    event_index: object,
+) -> None:
+    evidence = evidence_with_invalid_lineage_history(
+        "mutation-edge-invalid-event-index",
+        mutation_edge_event_index=event_index,
+    )
+    result = owner_certificate.validate_owner_evidence(evidence)
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is not OwnerResolutionStatus.UNIQUE
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {
+        "lineage-parent-mismatch"
+    }
+
+
 def test_multi_parent_lineage_is_stable_under_raw_container_reversal():
     evidence = evidence_with_two_mutation_outputs(
         first_parents=("ol-a",),
@@ -1141,7 +1315,7 @@ def test_mutation_parent_variants_fail_closed(parents):
     resolution = next(item for item in diagnostic.role_resolutions if item.role == ROLE)
 
     assert resolution.status is not OwnerResolutionStatus.UNIQUE
-    expected = "malformed-support" if parents in {(), ("ol-a", "ol-a")} else "lineage-parent-mismatch"
+    expected = "malformed-support" if parents == ("ol-a", "ol-a") else "lineage-parent-mismatch"
     assert {item.reason for item in resolution.rejections} == {expected}
 
 

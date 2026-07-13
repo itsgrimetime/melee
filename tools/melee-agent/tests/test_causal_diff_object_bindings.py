@@ -1284,11 +1284,11 @@ def _pcode_result(
             "pcode_operand_lineage_events": (
                 MappingProxyType(
                     {
-                        "mutation_kind": "clone",
+                        "mutation_kind": "update",
                         "inputs": (
                             MappingProxyType(
                                 {
-                                    "pcode_id": "pc-parent",
+                                    "pcode_id": "pc-0",
                                     "operands": tuple(
                                         MappingProxyType(
                                             {

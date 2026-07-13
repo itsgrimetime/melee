@@ -400,11 +400,13 @@ def _event(
     pcode_id: str,
     inputs: tuple[str, ...],
     outputs: tuple[tuple[str, tuple[str, ...]], ...],
-    mutation_kind: str = "clone",
+    mutation_kind: str = "update",
+    preserved_lineage_ids: frozenset[str] = frozenset(),
 ) -> Mapping[str, object]:
-    return _mapping(
-        mutation_kind=mutation_kind,
-        inputs=(
+    input_states = (
+        ()
+        if not inputs
+        else (
             _mapping(
                 pcode_id=pcode_id,
                 operands=tuple(
@@ -412,20 +414,26 @@ def _event(
                     for index, lineage_id in enumerate(inputs, start=1)
                 ),
             ),
-        ),
-        outputs=(
-            _mapping(
-                pcode_id=pcode_id,
-                operands=tuple(
-                    _mapping(
-                        operand_lineage_id=lineage_id,
-                        operand_index=index,
-                        parent_lineage_ids=parents,
-                    )
-                    for index, (lineage_id, parents) in enumerate(outputs, start=1)
+        )
+    )
+    output_operands = tuple(
+        _mapping(
+            **{
+                "operand_lineage_id": lineage_id,
+                "operand_index": index,
+                **(
+                    {}
+                    if lineage_id in preserved_lineage_ids
+                    else {"parent_lineage_ids": parents}
                 ),
-            ),
-        ),
+            }
+        )
+        for index, (lineage_id, parents) in enumerate(outputs, start=1)
+    )
+    return _mapping(
+        mutation_kind=mutation_kind,
+        inputs=input_states,
+        outputs=(_mapping(pcode_id=pcode_id, operands=output_operands),),
     )
 
 
@@ -682,6 +690,183 @@ def evidence_with_two_mutation_outputs(
     )
 
 
+def evidence_with_create_lineage_history(*, preserve: bool = False) -> ObjectBindingEvidence:
+    path = _path(0, operand_key="use:0", semantic_stack_role="row-home")
+    events = [
+        _event(
+            pcode_id="pc-0",
+            inputs=(),
+            outputs=(("ol-1", ()),),
+            mutation_kind="create",
+        )
+    ]
+    if preserve:
+        events.append(
+            _event(
+                pcode_id="pc-0",
+                inputs=("ol-1",),
+                outputs=(("ol-1", ()),),
+                mutation_kind="update",
+                preserved_lineage_ids=frozenset({"ol-1"}),
+            )
+        )
+    return _evidence_from_paths((path,), events=tuple(events))
+
+
+def evidence_with_invalid_lineage_history(
+    variant: str,
+    *,
+    input_parent_summary: tuple[str, ...] = (),
+    mutation_edge_event_index: object = None,
+) -> ObjectBindingEvidence:
+    path = _path(0, operand_key="use:0", semantic_stack_role="row-home")
+    if variant == "input-parent-summary-mismatch":
+        evidence = _evidence_from_paths((path,))
+        input_support = only(
+            node
+            for node in evidence.nodes
+            if node.kind == "backend-support-record"
+            and node.attributes.get("support_kind") == "pcode-lineage-event"
+            and node.attributes.get("event_index") == 0
+            and node.attributes.get("side") == "inputs"
+        )
+        return replace_record(
+            evidence,
+            input_support.with_attributes(
+                {
+                    **input_support.attributes,
+                    "parent_lineage_ids": input_parent_summary,
+                }
+            ),
+        )
+    if variant == "mutation-edge-missing-event-index":
+        evidence = _evidence_from_paths((path,))
+        parent_edge = only(
+            edge
+            for edge in evidence.edges
+            if edge.kind == "pcode-operand-lineage"
+            and "event_index" in edge.attributes
+        )
+        extra_edge = replace(
+            parent_edge,
+            record_id=hashlib.sha256(
+                f"{parent_edge.record_id}:missing-event-index".encode()
+            ).hexdigest(),
+            attributes={
+                key: value
+                for key, value in parent_edge.attributes.items()
+                if key != "event_index"
+            },
+        )
+        return replace(evidence, edges=(*evidence.edges, extra_edge))
+    if variant == "mutation-edge-invalid-event-index":
+        evidence = _evidence_from_paths((path,))
+        parent_edge = only(
+            edge
+            for edge in evidence.edges
+            if edge.kind == "pcode-operand-lineage"
+            and "event_index" in edge.attributes
+        )
+        return replace_record(
+            evidence,
+            parent_edge.with_attributes(
+                {
+                    **parent_edge.attributes,
+                    "event_index": mutation_edge_event_index,
+                }
+            ),
+        )
+    create = _event(
+        pcode_id="pc-0",
+        inputs=(),
+        outputs=(("ol-1", ()),),
+        mutation_kind="create",
+    )
+    preserve = _event(
+        pcode_id="pc-0",
+        inputs=("ol-1",),
+        outputs=(("ol-1", ()),),
+        mutation_kind="update",
+        preserved_lineage_ids=frozenset({"ol-1"}),
+    )
+    events = {
+        "multiple-definitions": (
+            create,
+            _event(
+                pcode_id="pc-0",
+                inputs=("ol-parent-0",),
+                outputs=(("ol-1", ("ol-parent-0",)),),
+                mutation_kind="update",
+            ),
+        ),
+        "fake-preservation": (
+            create,
+            _event(
+                pcode_id="pc-0",
+                inputs=("ol-other",),
+                outputs=(("ol-1", ()),),
+                mutation_kind="update",
+                preserved_lineage_ids=frozenset({"ol-1"}),
+            ),
+        ),
+        "omitted-fresh-parents": (
+            _event(
+                pcode_id="pc-0",
+                inputs=("ol-parent-0",),
+                outputs=(("ol-1", ()),),
+                mutation_kind="update",
+                preserved_lineage_ids=frozenset({"ol-1"}),
+            ),
+        ),
+        "preservation-before-definition": (preserve, create),
+        "create-with-input": (
+            _event(
+                pcode_id="pc-0",
+                inputs=("ol-other",),
+                outputs=(("ol-1", ()),),
+                mutation_kind="create",
+            ),
+        ),
+        "create-with-parent": (
+            _event(
+                pcode_id="pc-0",
+                inputs=(),
+                outputs=(("ol-1", ("ol-parent-0",)),),
+                mutation_kind="create",
+            ),
+        ),
+        "preservation-parent-edge": (
+            create,
+            _event(
+                pcode_id="pc-0",
+                inputs=("ol-1", "ol-parent-0"),
+                outputs=(("ol-1", ("ol-parent-0",)),),
+                mutation_kind="update",
+            ),
+        ),
+    }.get(variant)
+    if events is None:
+        raise ValueError(f"unknown invalid lineage history: {variant}")
+    evidence = _evidence_from_paths((path,), events=events)
+    if variant != "preservation-parent-edge":
+        return evidence
+    output_support = only(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-lineage-event"
+        and node.attributes.get("event_index") == 1
+        and node.attributes.get("side") == "outputs"
+        and node.attributes.get("operand_lineage_id") == "ol-1"
+    )
+    return replace_record(
+        evidence,
+        output_support.with_attributes(
+            {**output_support.attributes, "parent_lineage_ids": ()}
+        ),
+    )
+
+
 def evidence_with_mutation_parent_override(
     parents: tuple[str, ...],
 ) -> ObjectBindingEvidence:
@@ -692,6 +877,8 @@ def evidence_with_mutation_parent_override(
         if node.kind == "backend-support-record"
         and node.attributes.get("support_kind") == "pcode-lineage-event"
         and "event_index" in node.attributes
+        and node.attributes.get("side") == "outputs"
+        and node.attributes.get("operand_lineage_id") == "ol-1"
     )
     changed = lineage_support.with_attributes({**lineage_support.attributes, "parent_lineage_ids": parents})
     # Public emission creates one coherent event. The proof-incapable persistence
@@ -701,17 +888,42 @@ def evidence_with_mutation_parent_override(
 
 def evidence_with_lineage_variant(variant: str) -> ObjectBindingEvidence:
     evidence = complete_evidence()
+    if variant == "mutation-kind":
+        event_records: tuple[EvidenceNode | EvidenceEdge, ...] = (
+            *tuple(
+                node
+                for node in evidence.nodes
+                if node.kind == "backend-support-record"
+                and node.attributes.get("support_kind") == "pcode-lineage-event"
+                and node.attributes.get("event_index") == 0
+            ),
+            *tuple(
+                edge
+                for edge in evidence.edges
+                if edge.kind == "pcode-operand-lineage"
+                and edge.attributes.get("event_index") == 0
+            ),
+        )
+        for record in event_records:
+            evidence = replace_record(
+                evidence,
+                record.with_attributes(
+                    {**record.attributes, "mutation_kind": "merge"}
+                ),
+            )
+        return evidence
     lineage_support = only(
         node
         for node in evidence.nodes
         if node.kind == "backend-support-record"
         and node.attributes.get("support_kind") == "pcode-lineage-event"
         and "event_index" in node.attributes
+        and node.attributes.get("side") == "outputs"
+        and node.attributes.get("operand_lineage_id") == "ol-1"
     )
     field, value = {
         "event-index": ("event_index", 1),
         "side": ("side", "inputs"),
-        "mutation-kind": ("mutation_kind", "merge"),
         "noncanonical-parent-order": ("parent_lineage_ids", ("ol-b", "ol-a")),
     }.get(variant, (None, None))
     if field is None:

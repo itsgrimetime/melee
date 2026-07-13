@@ -501,6 +501,16 @@ class _OwnerEvidenceIndex:
     edges_by_kind: Mapping[str, tuple[EvidenceEdge, ...]]
     edges_by_kind_source: Mapping[tuple[str, str], tuple[EvidenceEdge, ...]]
     edges_by_kind_target: Mapping[tuple[str, str], tuple[EvidenceEdge, ...]]
+    mutation_support: tuple[EvidenceNode, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _LineageMutationEvent:
+    event_index: int
+    mutation_kind: str
+    inputs: tuple[EvidenceNode, ...]
+    outputs: tuple[EvidenceNode, ...]
+    all_support: tuple[EvidenceNode, ...]
 
 
 _IndexKey = TypeVar("_IndexKey")
@@ -519,10 +529,17 @@ def _index_evidence(evidence: ObjectBindingEvidence) -> _OwnerEvidenceIndex:
     edges_by_kind: dict[str, list[EvidenceEdge]] = {}
     edges_by_kind_source: dict[tuple[str, str], list[EvidenceEdge]] = {}
     edges_by_kind_target: dict[tuple[str, str], list[EvidenceEdge]] = {}
+    mutation_support: list[EvidenceNode] = []
 
     for node in evidence.nodes:
         records_by_id.setdefault(node.record_id, []).append(node)
         node_by_id[node.record_id] = node
+        if (
+            node.kind == "backend-support-record"
+            and node.attributes.get("support_kind") == "pcode-lineage-event"
+            and "event_index" in node.attributes
+        ):
+            mutation_support.append(node)
     for edge in evidence.edges:
         records_by_id.setdefault(edge.record_id, []).append(edge)
         edges_by_kind.setdefault(edge.kind, []).append(edge)
@@ -535,6 +552,7 @@ def _index_evidence(evidence: ObjectBindingEvidence) -> _OwnerEvidenceIndex:
         _freeze_groups(edges_by_kind),
         _freeze_groups(edges_by_kind_source),
         _freeze_groups(edges_by_kind_target),
+        tuple(mutation_support),
     )
 
 
@@ -611,10 +629,9 @@ def _is_physical(value: object) -> bool:
     return _is_int(value) and 0 <= value <= 31
 
 
-def _is_string_tuple(value: object) -> bool:
+def _is_canonical_string_tuple(value: object) -> bool:
     return (
         isinstance(value, tuple)
-        and bool(value)
         and all(_is_nonempty_str(item) for item in value)
         and value == tuple(sorted(set(value)))
     )
@@ -686,7 +703,7 @@ _SUPPORT_SCHEMAS: Mapping[str, tuple[Mapping[str, object], ...]] = {
             side=_is_lineage_side,
             mutation_kind=_is_nonempty_str,
             operand_lineage_id=_is_nonempty_str,
-            parent_lineage_ids=_is_string_tuple,
+            parent_lineage_ids=_is_canonical_string_tuple,
         ),
     ),
     "object-virtual-binding": (
@@ -1411,6 +1428,29 @@ def _validate_emission(
     return values[0], (generation, code_range, emission, direct_lineage)
 
 
+def _valid_lineage_mutation_support(
+    evidence: ObjectBindingEvidence,
+    candidate: _CandidatePath,
+    item: EvidenceNode,
+) -> bool:
+    return (
+        item.kind == "backend-support-record"
+        and item.attributes.get("support_kind") == "pcode-lineage-event"
+        and "event_index" in item.attributes
+        and _support_attributes_are_exact(item)
+        and item.attributes.get("verified_capability") == _SUPPORT_CAPABILITIES["pcode-lineage-event"]
+        and not item.provenance.input_record_ids
+        and item.producer_confidence is not Confidence.HEURISTIC
+        and item.adapter_confidence is not Confidence.HEURISTIC
+        and item.confidence is not Confidence.HEURISTIC
+        and item.compile_id == candidate.lineage.compile_id
+        and item.function == candidate.lineage.function
+        and item.provenance.artifact_sha256 == candidate.lineage.provenance.artifact_sha256
+        and item.provenance.parser == _PARSER
+        and item.attributes.get("capture_run_id") == evidence.capture_run_id
+    )
+
+
 def _validate_lineage_output(
     evidence: ObjectBindingEvidence,
     index: _OwnerEvidenceIndex,
@@ -1418,27 +1458,193 @@ def _validate_lineage_output(
     role: OwnerRoleKey,
     support: tuple[EvidenceNode, ...],
 ) -> tuple[tuple[EvidenceNode | EvidenceEdge, ...], tuple[EvidenceNode, ...]] | OwnerCertificateRejection:
-    mutation_support = tuple(
+    lineage_id = candidate.lineage.attributes.get("operand_lineage_id")
+    registered_mutation_support = index.mutation_support
+    candidate_support = tuple(
         item
-        for item in _support_of_kind(support, "pcode-lineage-event", shape="mutation")
-        if item.attributes.get("operand_lineage_id") == candidate.lineage.attributes.get("operand_lineage_id")
-        and item.attributes.get("side") == "outputs"
+        for item in registered_mutation_support
+        if item.attributes.get("operand_lineage_id") == lineage_id
     )
-    if len(mutation_support) != 1:
-        return _rejection("lineage-parent-mismatch", role, candidate.path_records, mutation_support)
-    lineage_support = mutation_support[0]
-    parent_ids = lineage_support.attributes.get("parent_lineage_ids")
-    if not _is_string_tuple(parent_ids):
-        return _rejection("lineage-parent-mismatch", role, candidate.path_records, mutation_support)
-    selected = tuple(
+    if any(not _valid_lineage_mutation_support(evidence, candidate, item) for item in candidate_support):
+        return _rejection("malformed-support", role, candidate.path_records, candidate_support)
+    cited_ids = candidate.lineage.provenance.input_record_ids
+    path_candidate_support_ids = {
+        item.record_id
+        for item in _support_of_kind(support, "pcode-lineage-event", shape="mutation")
+        if item.attributes.get("operand_lineage_id") == lineage_id
+    }
+    if (
+        not candidate_support
+        or len(cited_ids) != len(set(cited_ids))
+        or {item.record_id for item in candidate_support} != set(cited_ids)
+        or path_candidate_support_ids != set(cited_ids)
+        or len(candidate_support) != len({item.record_id for item in candidate_support})
+    ):
+        return _rejection("lineage-parent-mismatch", role, candidate.path_records, candidate_support)
+
+    events: list[_LineageMutationEvent] = []
+    for event_index in sorted({item.attributes["event_index"] for item in candidate_support}):
+        event_support = tuple(
+            sorted(
+                (
+                    item
+                    for item in registered_mutation_support
+                    if item.attributes.get("event_index") == event_index
+                ),
+                key=lambda item: item.record_id,
+            )
+        )
+        if any(not _valid_lineage_mutation_support(evidence, candidate, item) for item in event_support):
+            return _rejection("malformed-support", role, candidate.path_records, event_support)
+        identities = tuple(
+            (
+                item.attributes.get("side"),
+                item.attributes.get("pcode_id"),
+                item.attributes.get("operand_lineage_id"),
+            )
+            for item in event_support
+        )
+        mutation_kinds = {item.attributes.get("mutation_kind") for item in event_support}
+        event_parent_ids = tuple(
+            sorted(
+                {
+                    parent_id
+                    for item in event_support
+                    if item.attributes.get("side") == "outputs"
+                    for parent_id in item.attributes.get("parent_lineage_ids", ())
+                }
+            )
+        )
+        input_parent_summaries_match = all(
+            item.attributes.get("parent_lineage_ids") == event_parent_ids
+            for item in event_support
+            if item.attributes.get("side") == "inputs"
+        )
+        inputs = tuple(
+            item
+            for item in event_support
+            if item.attributes.get("side") == "inputs"
+            and item.attributes.get("operand_lineage_id") == lineage_id
+        )
+        outputs = tuple(
+            item
+            for item in event_support
+            if item.attributes.get("side") == "outputs"
+            and item.attributes.get("operand_lineage_id") == lineage_id
+        )
+        if (
+            event_index < 0
+            or len(identities) != len(set(identities))
+            or len(mutation_kinds) != 1
+            or not input_parent_summaries_match
+            or not outputs
+        ):
+            return _rejection("lineage-parent-mismatch", role, candidate.path_records, event_support)
+        events.append(
+            _LineageMutationEvent(
+                event_index,
+                str(next(iter(mutation_kinds))),
+                inputs,
+                outputs,
+                event_support,
+            )
+        )
+
+    definitions: list[tuple[_LineageMutationEvent, EvidenceNode]] = []
+    preservations: list[_LineageMutationEvent] = []
+    for event in events:
+        output_parents = tuple(item.attributes.get("parent_lineage_ids") for item in event.outputs)
+        all_inputs = tuple(
+            item
+            for item in event.all_support
+            if item.attributes.get("side") == "inputs"
+        )
+        if (
+            event.mutation_kind == "create"
+            and len(event.outputs) == 1
+            and output_parents == ((),)
+            and not all_inputs
+        ):
+            definitions.append((event, event.outputs[0]))
+            continue
+        if (
+            event.mutation_kind in {"update", "replace"}
+            and len(event.outputs) == 1
+            and bool(output_parents[0])
+            and not event.inputs
+        ):
+            parent_ids = output_parents[0]
+            input_lineage_ids = {
+                item.attributes.get("operand_lineage_id")
+                for item in all_inputs
+            }
+            if set(parent_ids) <= input_lineage_ids:
+                definitions.append((event, event.outputs[0]))
+                continue
+        if (
+            event.mutation_kind in {"update", "clone", "replace"}
+            and event.inputs
+            and all(parent_ids == () for parent_ids in output_parents)
+        ):
+            preservations.append(event)
+            continue
+        return _rejection("lineage-parent-mismatch", role, candidate.path_records, event.all_support)
+
+    if len(definitions) != 1:
+        return _rejection(
+            "lineage-parent-mismatch",
+            role,
+            candidate.path_records,
+            tuple(item for event in events for item in event.all_support),
+        )
+    definition, definition_support = definitions[0]
+    if any(event.event_index <= definition.event_index for event in preservations):
+        return _rejection(
+            "lineage-parent-mismatch",
+            role,
+            candidate.path_records,
+            tuple(item for event in events for item in event.all_support),
+        )
+
+    parent_ids = definition_support.attributes.get("parent_lineage_ids")
+    if not _is_canonical_string_tuple(parent_ids):
+        return _rejection("malformed-support", role, candidate.path_records, (definition_support,))
+    mutation_edges = tuple(
         edge
         for edge in index.edges_by_kind_target.get(("pcode-operand-lineage", candidate.lineage.record_id), ())
-        if edge.attributes.get("event_index") == lineage_support.attributes.get("event_index")
-        and edge.attributes.get("lineage_event_side") == "outputs"
-        and edge.attributes.get("mutation_kind") == lineage_support.attributes.get("mutation_kind")
-        and edge.attributes.get("operand_lineage_id") == lineage_support.attributes.get("operand_lineage_id")
-        and edge.attributes.get("parent_lineage_ids") == parent_ids
+        if (
+            (source_node := index.node_by_id.get(edge.source_id)) is not None
+            and source_node.kind == "pcode-operand"
+        )
     )
+    if parent_ids:
+        selected = tuple(
+            edge
+            for edge in mutation_edges
+            if _is_int(edge.attributes.get("event_index"))
+            and edge.attributes.get("event_index") == definition.event_index
+            and edge.attributes.get("lineage_event_side") == "outputs"
+            and edge.attributes.get("mutation_kind") == definition.mutation_kind
+            and edge.attributes.get("operand_lineage_id") == lineage_id
+            and edge.attributes.get("parent_lineage_ids") == parent_ids
+        )
+        if len(selected) != len(mutation_edges):
+            return _rejection(
+                "lineage-parent-mismatch",
+                role,
+                (*candidate.path_records, *mutation_edges),
+                tuple(item for event in events for item in event.all_support),
+            )
+    else:
+        selected = ()
+        if mutation_edges:
+            return _rejection(
+                "lineage-parent-mismatch",
+                role,
+                (*candidate.path_records, *mutation_edges),
+                tuple(item for event in events for item in event.all_support),
+            )
+
     parent_pairs: list[tuple[EvidenceNode, EvidenceEdge]] = []
     for edge in selected:
         parent_node = index.node_by_id.get(edge.source_id)
@@ -1451,7 +1657,7 @@ def _validate_lineage_output(
                 "lineage-parent-mismatch",
                 role,
                 (*candidate.path_records, *selected),
-                mutation_support,
+                tuple(item for event in events for item in event.all_support),
             )
         parent_pairs.append((parent_node, edge))
     parent_pairs.sort(
@@ -1467,11 +1673,22 @@ def _validate_lineage_output(
     selected = tuple(edge for _node, edge in parent_pairs)
     actual = tuple(sorted(str(node.attributes.get("operand_lineage_id")) for node in parent_nodes))
     if actual != parent_ids:
-        return _rejection("lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support)
-    if lineage_support.record_id not in candidate.lineage.provenance.input_record_ids or any(
-        lineage_support.record_id not in edge.provenance.input_record_ids for edge in selected
+        return _rejection(
+            "lineage-parent-mismatch",
+            role,
+            (*candidate.path_records, *selected),
+            tuple(item for event in events for item in event.all_support),
+        )
+    if any(
+        definition_support.record_id not in edge.provenance.input_record_ids
+        for edge in selected
     ):
-        return _rejection("lineage-parent-mismatch", role, (*candidate.path_records, *selected), mutation_support)
+        return _rejection(
+            "lineage-parent-mismatch",
+            role,
+            (*candidate.path_records, *selected),
+            tuple(item for event in events for item in event.all_support),
+        )
     parent_records: tuple[EvidenceNode | EvidenceEdge, ...] = (
         *parent_nodes,
         *selected,
@@ -1479,7 +1696,13 @@ def _validate_lineage_output(
     parent_support = _supports_for_records(evidence, index, parent_records, role)
     if isinstance(parent_support, OwnerCertificateRejection):
         return parent_support
-    return parent_records, tuple({item.record_id: item for item in (*mutation_support, *parent_support)}.values())
+    event_support = tuple(item for event in events for item in event.all_support)
+    return parent_records, tuple(
+        {
+            item.record_id: item
+            for item in (*event_support, *parent_support)
+        }.values()
+    )
 
 
 def _validate_allocator_origin(
