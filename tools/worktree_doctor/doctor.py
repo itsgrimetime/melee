@@ -6,17 +6,14 @@ import os
 import platform
 import shutil
 import stat
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import (
-    COMPILE_RULES,
     DTK_DOWNLOAD_TAG,
     REPORT_REFRESH_FIX,
-    REPORT_REFRESH_TIMEOUT_SECONDS,
-    STALE_GRACE_SECONDS,
+    TOOLING_FILE_GROUPS,
     TOOLING_FILES,
     WIBO_DOWNLOAD_TAG,
 )
@@ -25,9 +22,9 @@ from .utils import (
     detect_ghidra_install,
     install_base_dol,
     refresh_report_json,
-    resolve_melee_agent_module_path,
     run_git,
 )
+
 # Access ROOT via _utils.ROOT so monkeypatching tests can change it dynamically.
 
 
@@ -94,15 +91,101 @@ class Doctor:
         self.results.extend(collect_local_exclude_warnings(_utils.ROOT, fix=self.fix))
 
     def check_tooling_overlay(self) -> None:
+        grouped_paths: set[str] = set()
+        for group in TOOLING_FILE_GROUPS:
+            grouped_paths.update(group)
+            states: list[tuple[str, Path, bool, bool | None, bool]] = []
+            unavailable: list[str] = []
+            for rel_path in group:
+                path = _utils.ROOT / rel_path
+                exists = os.path.lexists(path)
+                master_file = _utils.read_from_master_with_mode(
+                    rel_path, _utils.ROOT
+                )
+                if master_file is None:
+                    unavailable.append(rel_path)
+                    states.append((rel_path, path, exists, None, False))
+                    continue
+                expected, expected_mode = master_file
+                current_file = _utils.read_tooling_file_with_mode(
+                    path, _utils.ROOT
+                )
+                matches = current_file == (expected, expected_mode)
+                protected = not matches and _utils.has_worktree_changes(rel_path)
+                states.append((rel_path, path, exists, matches, protected))
+
+            if unavailable:
+                self.fail(
+                    "mwcc-inspect tooling pair is unavailable from master: "
+                    + ", ".join(unavailable),
+                    "restore every pair member on master before refreshing matcher worktrees",
+                )
+                continue
+
+            if all(matches for _rel, _path, _exists, matches, _dirty in states):
+                for rel_path, _path, _exists, _matches, _dirty in states:
+                    self.ok(f"tooling current: {rel_path}")
+                self.ok("mwcc-inspect tooling pair is current")
+                continue
+
+            protected = [rel for rel, _p, _e, _m, dirty in states if dirty]
+            if protected:
+                self.warn(
+                    "mwcc-inspect tooling pair not refreshed; protected local changes: "
+                    + ", ".join(protected),
+                    "review local edits; worktree-doctor will not overwrite either pair member",
+                )
+                continue
+
+            if self.fix:
+                restored = _utils.restore_group_from_master(group, _utils.ROOT)
+                if restored:
+                    for rel_path, _path, existed, matches, _dirty in states:
+                        if not existed:
+                            self.ok(f"restored tooling from master: {rel_path}")
+                        elif not matches:
+                            self.ok(
+                                f"refreshed stale tooling from master: {rel_path}"
+                            )
+                        else:
+                            self.ok(f"tooling current: {rel_path}")
+                    self.ok("mwcc-inspect tooling pair is current")
+                else:
+                    self.fail(
+                        "mwcc-inspect tooling pair refresh failed; inspect both members before retrying",
+                        "repair filesystem errors and rerun worktree-doctor --fix",
+                    )
+                continue
+
+            for rel_path, _path, exists, matches, _dirty in states:
+                if not exists:
+                    self.fail(
+                        f"missing tooling file: {rel_path}",
+                        f"run {Path(__file__).name} --fix or restore the fork tooling overlay",
+                    )
+                elif not matches:
+                    self.fail(
+                        f"stale tooling file differs from master: {rel_path}",
+                        f"run {Path(__file__).name} --fix to refresh the fork tooling overlay",
+                    )
+
         for rel_path in TOOLING_FILES:
+            if rel_path in grouped_paths:
+                continue
             path = _utils.ROOT / rel_path
-            if not path.exists():
+            if not os.path.lexists(path):
+                has_local_changes = _utils.has_worktree_changes(rel_path)
                 restored = False
-                if self.fix:
+                if self.fix and not has_local_changes:
                     from .utils import restore_from_master
                     restored = restore_from_master(rel_path, path)
                 if restored:
                     self.ok(f"restored tooling from master: {rel_path}")
+                elif has_local_changes:
+                    self.warn(
+                        f"tooling file is missing and has local changes: {rel_path}",
+                        "review the deletion; worktree-doctor will not overwrite dirty tooling",
+                    )
                 else:
                     self.fail(
                         f"missing tooling file: {rel_path}",
@@ -250,8 +333,8 @@ class Doctor:
 
     def _redownload_wibo(self, wibo: Path) -> bool:
         import platform
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         machine = platform.machine().lower()
         if machine == "amd64":
