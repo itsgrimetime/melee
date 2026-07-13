@@ -1483,16 +1483,75 @@ def _validate_lineage_output(
 
 
 def _validate_allocator_origin(
+    evidence: ObjectBindingEvidence,
+    index: _OwnerEvidenceIndex,
     candidate: _CandidatePath,
     role: OwnerRoleKey,
     support: tuple[EvidenceNode, ...],
     decoded_physical: int,
 ) -> tuple[int, tuple[EvidenceNode, ...]] | OwnerCertificateRejection:
-    rewrites = _support_of_kind(support, "pcode-rewrite")
+    path_rewrites = _support_of_kind(support, "pcode-rewrite")
     bindings = _support_of_kind(support, "object-virtual-binding")
-    if len(rewrites) != 1 or len(bindings) != 1:
+    if len(bindings) != 1:
         return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
-    rewrite, binding = rewrites[0], bindings[0]
+    common = {
+        "class_id": candidate.virtual.attributes.get("class_id"),
+        "virtual": candidate.virtual.attributes.get("virtual"),
+    }
+    registered_pcode_rewrites = tuple(
+        node
+        for node in index.node_by_id.values()
+        if node.kind == "backend-support-record" and node.attributes.get("support_kind") == "pcode-rewrite"
+    )
+    registered_rewrites = tuple(
+        sorted(
+            (
+                rewrite
+                for rewrite in registered_pcode_rewrites
+                if all(rewrite.attributes.get(key) == value for key, value in common.items())
+            ),
+            key=lambda rewrite: rewrite.record_id,
+        )
+    )
+    for rewrite in registered_rewrites:
+        registered = _registered_record(index, rewrite.record_id)
+        if not isinstance(registered, EvidenceNode) or _record_content(registered) != _record_content(rewrite):
+            return _rejection("unregistered-support", role, candidate.path_records, (rewrite,))
+        if (
+            registered.kind != "backend-support-record"
+            or registered.attributes.get("verified_capability") != _SUPPORT_CAPABILITIES["pcode-rewrite"]
+            or not _support_attributes_are_exact(registered)
+            or registered.provenance.input_record_ids
+            or registered.producer_confidence is Confidence.HEURISTIC
+            or registered.adapter_confidence is Confidence.HEURISTIC
+            or registered.confidence is Confidence.HEURISTIC
+            or registered.compile_id != candidate.virtual.compile_id
+            or registered.function != candidate.virtual.function
+            or registered.provenance.artifact_sha256 != candidate.virtual.provenance.artifact_sha256
+            or registered.provenance.parser != _PARSER
+            or registered.attributes.get("capture_run_id") != evidence.capture_run_id
+        ):
+            return _rejection("malformed-support", role, candidate.path_records, (registered,))
+    scope_rejection = _validate_common_scope(evidence, (*candidate.path_records, *registered_rewrites))
+    if scope_rejection is not None:
+        return _rejection(scope_rejection.reason, role, candidate.path_records, registered_rewrites)
+    all_rewrite_ids = {rewrite.record_id for rewrite in registered_rewrites}
+    if {rewrite.record_id for rewrite in path_rewrites} != all_rewrite_ids:
+        return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
+    expected_rewrite = {
+        "pcode_id": candidate.pcode.attributes.get("pcode_id"),
+        "operand_lineage_id": candidate.lineage.attributes.get("operand_lineage_id"),
+        "class_id": candidate.virtual.attributes.get("class_id"),
+        "virtual": candidate.virtual.attributes.get("virtual"),
+    }
+    matching_rewrites = tuple(
+        rewrite
+        for rewrite in registered_rewrites
+        if all(rewrite.attributes.get(key) == value for key, value in expected_rewrite.items())
+    )
+    if len(matching_rewrites) != 1:
+        return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
+    rewrite, binding = matching_rewrites[0], bindings[0]
     object_edge = next(
         edge
         for edge in candidate.path_records
@@ -1508,18 +1567,28 @@ def _validate_allocator_origin(
         for edge in candidate.path_records
         if isinstance(edge, EvidenceEdge) and edge.kind == "pcode-operand-uses-virtual"
     )
-    if any(
-        rewrite.record_id not in record.provenance.input_record_ids
-        for record in (virtual_edge, allocator_edge, candidate.allocator)
-    ) or any(
-        binding.record_id not in record.provenance.input_record_ids
-        for record in (object_edge, allocator_edge, candidate.allocator)
+    registered_pcode_rewrite_ids = {rewrite.record_id for rewrite in registered_pcode_rewrites}
+
+    def rewrite_ids_cited_by(record: EvidenceNode | EvidenceEdge) -> set[str]:
+        return set(record.provenance.input_record_ids) & registered_pcode_rewrite_ids
+
+    if (
+        rewrite_ids_cited_by(virtual_edge) != {rewrite.record_id}
+        or rewrite_ids_cited_by(allocator_edge) != all_rewrite_ids
+        or rewrite_ids_cited_by(candidate.allocator) != all_rewrite_ids
+        or any(
+            binding.record_id not in record.provenance.input_record_ids
+            for record in (object_edge, allocator_edge, candidate.allocator)
+        )
     ):
         return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
-    common = {
-        "class_id": candidate.virtual.attributes.get("class_id"),
-        "virtual": candidate.virtual.attributes.get("virtual"),
-    }
+    if any(any(item.attributes.get(key) != value for key, value in common.items()) for item in registered_rewrites):
+        return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
+    rewrite_physicals = tuple(item.attributes.get("allocated_physical") for item in registered_rewrites)
+    if not all(_is_physical(value) for value in rewrite_physicals):
+        return _rejection("malformed-support", role, candidate.path_records, support)
+    if any(value != decoded_physical for value in rewrite_physicals):
+        return _rejection("split-physical-assignment", role, candidate.path_records, support)
     physicals = (
         decoded_physical,
         candidate.virtual.attributes.get("physical_register"),
@@ -1553,7 +1622,7 @@ def _validate_allocator_origin(
         or rewrite.attributes.get("allocation_generation") != candidate.pcode.attributes.get("allocation_generation")
     ):
         return _rejection("allocator-origin-contradiction", role, candidate.path_records, support)
-    return physicals[0], (rewrite, binding)
+    return physicals[0], (*registered_rewrites, binding)
 
 
 def _validate_object_identity(
@@ -1687,7 +1756,14 @@ def _validate_candidate(
     object_identity = _validate_object_identity(candidate, role, all_support)
     if isinstance(object_identity, OwnerCertificateRejection):
         return object_identity
-    allocator = _validate_allocator_origin(candidate, role, all_support, decoded_physical)
+    allocator = _validate_allocator_origin(
+        evidence,
+        index,
+        candidate,
+        role,
+        all_support,
+        decoded_physical,
+    )
     if isinstance(allocator, OwnerCertificateRejection):
         return allocator
     physical, allocator_support = allocator

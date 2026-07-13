@@ -383,6 +383,10 @@ def second_role() -> OwnerRoleKey:
     return OwnerRoleKey("use:1", "gpr", "second-home", 4, "locals")
 
 
+def shared_virtual_role(operand_key: str) -> OwnerRoleKey:
+    return OwnerRoleKey(operand_key, "gpr", "row-home", 4, "locals")
+
+
 def other_role() -> OwnerRoleKey:
     return OwnerRoleKey("use:9", "gpr", "missing-home", 4, "locals")
 
@@ -746,6 +750,219 @@ def ambiguous_evidence(*, permuted: bool = False) -> ObjectBindingEvidence:
         _path(1, operand_key="use:0", semantic_stack_role="row-home"),
     )
     return _evidence_from_paths(paths, reverse_pcode_inputs=permuted)
+
+
+def evidence_with_shared_virtual_rewrites(
+    *,
+    second_physical: int = 21,
+    permuted: bool = False,
+) -> ObjectBindingEvidence:
+    first = _path(0, operand_key="use:0", semantic_stack_role="row-home")
+    second = _path(
+        1,
+        operand_key="use:1",
+        semantic_stack_role="row-home",
+        physical_register=second_physical,
+        include_object=False,
+    )
+    second["virtual"] = first["virtual"]
+    evidence = _evidence_from_paths((first, second))
+    if not permuted:
+        return evidence
+    reversed_evidence = ObjectBindingEvidence(
+        tuple(reversed(evidence.nodes)),
+        tuple(reversed(evidence.edges)),
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+    object.__setattr__(
+        reversed_evidence,
+        "_adapter_token",
+        object.__getattribute__(evidence, "_adapter_token"),
+    )
+    return reversed_evidence
+
+
+def evidence_with_duplicate_exact_rewrite(
+    *,
+    conflicting_physical: bool = False,
+) -> ObjectBindingEvidence:
+    evidence = complete_evidence()
+    rewrite = support(evidence, "pcode-rewrite")
+    duplicate = EvidenceNode.create(
+        compile_id=rewrite.compile_id,
+        function=rewrite.function,
+        kind=rewrite.kind,
+        local_key=(evidence.capture_run_id, "duplicate-exact-pcode-rewrite"),
+        role_key=rewrite.role_key,
+        producer_confidence=rewrite.producer_confidence,
+        adapter_confidence=rewrite.adapter_confidence,
+        provenance=replace(rewrite.provenance, input_record_ids=()),
+        input_confidences=(),
+        attributes={
+            **rewrite.attributes,
+            "allocated_physical": 22 if conflicting_physical else rewrite.attributes["allocated_physical"],
+        },
+    )
+    cited_node_kinds = {"allocator-node"}
+    cited_edge_kinds = {"pcode-operand-uses-virtual", "maps-to-allocator-node"}
+    nodes = tuple(
+        replace(
+            node,
+            provenance=replace(
+                node.provenance,
+                input_record_ids=(*node.provenance.input_record_ids, duplicate.record_id),
+            ),
+        )
+        if node.kind in cited_node_kinds
+        else node
+        for node in evidence.nodes
+    )
+    edges = tuple(
+        replace(
+            edge,
+            provenance=replace(
+                edge.provenance,
+                input_record_ids=(*edge.provenance.input_record_ids, duplicate.record_id),
+            ),
+        )
+        if edge.kind in cited_edge_kinds
+        else edge
+        for edge in evidence.edges
+    )
+    augmented = ObjectBindingEvidence(
+        (*nodes, duplicate),
+        edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+    object.__setattr__(
+        augmented,
+        "_adapter_token",
+        object.__getattribute__(evidence, "_adapter_token"),
+    )
+    return augmented
+
+
+def evidence_with_shared_virtual_provenance_variant(
+    variant: str,
+) -> ObjectBindingEvidence:
+    evidence = evidence_with_shared_virtual_rewrites()
+    rewrite_by_pcode = {
+        node.attributes["pcode_id"]: node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record" and node.attributes.get("support_kind") == "pcode-rewrite"
+    }
+    exact = rewrite_by_pcode["pc-0"]
+    unrelated = rewrite_by_pcode["pc-1"]
+    if variant == "virtual-extra":
+        record_kind = "pcode-operand-uses-virtual"
+        remove_id = None
+        add_id = unrelated.record_id
+    elif variant == "virtual-missing":
+        record_kind = "pcode-operand-uses-virtual"
+        remove_id = exact.record_id
+        add_id = None
+    elif variant == "allocator-edge-missing":
+        record_kind = "maps-to-allocator-node"
+        remove_id = exact.record_id
+        add_id = None
+    elif variant == "allocator-node-missing":
+        record_kind = "allocator-node"
+        remove_id = exact.record_id
+        add_id = None
+    else:
+        raise ValueError(f"unknown shared virtual provenance variant: {variant}")
+
+    def changed_provenance(record: EvidenceNode | EvidenceEdge) -> Provenance:
+        input_ids = tuple(record_id for record_id in record.provenance.input_record_ids if record_id != remove_id)
+        if add_id is not None:
+            input_ids = (*input_ids, add_id)
+        return replace(record.provenance, input_record_ids=input_ids)
+
+    nodes = tuple(
+        replace(node, provenance=changed_provenance(node)) if node.kind == record_kind else node
+        for node in evidence.nodes
+    )
+    edges = tuple(
+        replace(edge, provenance=changed_provenance(edge))
+        if edge.kind == record_kind
+        and (record_kind != "pcode-operand-uses-virtual" or edge.attributes.get("machine_operand_key") == "use:0")
+        else edge
+        for edge in evidence.edges
+    )
+    augmented = ObjectBindingEvidence(
+        nodes,
+        edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+    object.__setattr__(
+        augmented,
+        "_adapter_token",
+        object.__getattribute__(evidence, "_adapter_token"),
+    )
+    return augmented
+
+
+def evidence_with_coordinated_allocator_omission() -> ObjectBindingEvidence:
+    evidence = evidence_with_shared_virtual_rewrites()
+    unrelated = only(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-rewrite"
+        and node.attributes.get("pcode_id") == "pc-1"
+    )
+
+    def omit_unrelated(provenance: Provenance) -> Provenance:
+        return replace(
+            provenance,
+            input_record_ids=tuple(
+                record_id for record_id in provenance.input_record_ids if record_id != unrelated.record_id
+            ),
+        )
+
+    return ObjectBindingEvidence(
+        tuple(
+            replace(node, provenance=omit_unrelated(node.provenance)) if node.kind == "allocator-node" else node
+            for node in evidence.nodes
+        ),
+        tuple(
+            replace(edge, provenance=omit_unrelated(edge.provenance)) if edge.kind == "maps-to-allocator-node" else edge
+            for edge in evidence.edges
+        ),
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+
+def evidence_with_uncited_duplicate_exact_rewrite() -> ObjectBindingEvidence:
+    evidence = complete_evidence()
+    rewrite = support(evidence, "pcode-rewrite")
+    duplicate = EvidenceNode.create(
+        compile_id=rewrite.compile_id,
+        function=rewrite.function,
+        kind=rewrite.kind,
+        local_key=(evidence.capture_run_id, "uncited-duplicate-exact-pcode-rewrite"),
+        role_key=rewrite.role_key,
+        producer_confidence=rewrite.producer_confidence,
+        adapter_confidence=rewrite.adapter_confidence,
+        provenance=replace(rewrite.provenance, input_record_ids=()),
+        input_confidences=(),
+        attributes=rewrite.attributes,
+    )
+    return ObjectBindingEvidence(
+        (*evidence.nodes, duplicate),
+        evidence.edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
 
 
 def evidence_with_independent_paths(count: int) -> ObjectBindingEvidence:

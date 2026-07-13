@@ -38,6 +38,8 @@ from tests.owner_certificate_fixtures import (
     evidence_with_certificate_and_global_rejection,
     evidence_with_certificate_and_role_rejection,
     evidence_with_coordinated_allocator_change,
+    evidence_with_coordinated_allocator_omission,
+    evidence_with_duplicate_exact_rewrite,
     evidence_with_global_and_role_rejection,
     evidence_with_heuristic_support,
     evidence_with_independent_paths,
@@ -47,8 +49,11 @@ from tests.owner_certificate_fixtures import (
     evidence_with_partial_independent_paths,
     evidence_with_partial_owner_branch,
     evidence_with_role_statuses,
+    evidence_with_shared_virtual_provenance_variant,
+    evidence_with_shared_virtual_rewrites,
     evidence_with_split_physical_assignment,
     evidence_with_two_mutation_outputs,
+    evidence_with_uncited_duplicate_exact_rewrite,
     evidence_with_zero_sized_owner,
     evidence_without_instrumentation_identity,
     first_role,
@@ -58,6 +63,7 @@ from tests.owner_certificate_fixtures import (
     replace_record,
     run_synthetic_future_complete_pair,
     second_role,
+    shared_virtual_role,
     support,
 )
 from tests.test_causal_diff_object_bindings import (
@@ -901,6 +907,107 @@ def test_coordinated_allocator_changes_cannot_override_decoded_emission():
     assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
     assert resolution.certificate_record_ids == ()
     assert {item.reason for item in resolution.rejections} == {"split-physical-assignment"}
+
+
+def test_distinct_pcode_rewrites_may_share_one_allocator_virtual():
+    evidence = evidence_with_shared_virtual_rewrites()
+    rewrite_support = tuple(
+        node
+        for node in evidence.nodes
+        if node.kind == "backend-support-record" and node.attributes.get("support_kind") == "pcode-rewrite"
+    )
+    allocator = only(node for node in evidence.nodes if node.kind == "allocator-node")
+    allocator_edge = only(edge for edge in evidence.edges if edge.kind == "maps-to-allocator-node")
+
+    assert {(node.attributes["pcode_id"], node.attributes["operand_lineage_id"]) for node in rewrite_support} == {
+        ("pc-0", "ol-1"),
+        ("pc-1", "ol-2"),
+    }
+    assert all(
+        node.record_id in allocator.provenance.input_record_ids
+        and node.record_id in allocator_edge.provenance.input_record_ids
+        for node in rewrite_support
+    )
+
+    result = build_owner_certificates(evidence)
+    rewrite_ids = {node.record_id for node in rewrite_support}
+    certificate_ids = []
+    for role in (shared_virtual_role("use:0"), shared_virtual_role("use:1")):
+        resolution = result.resolution_for(role)
+        assert resolution.status is OwnerResolutionStatus.UNIQUE
+        certificate_id = only(resolution.certificate_record_ids)
+        certificate_ids.append(certificate_id)
+        certificate = result.certificate(certificate_id)
+        assert certificate is not None
+        assert rewrite_ids <= set(certificate.attributes["raw_support_record_ids"])
+    assert certificate_ids[0] != certificate_ids[1]
+
+
+def test_shared_virtual_rewrite_selection_is_order_stable():
+    forward = build_owner_certificates(evidence_with_shared_virtual_rewrites())
+    reverse = build_owner_certificates(evidence_with_shared_virtual_rewrites(permuted=True))
+
+    assert canonical_result(forward) == canonical_result(reverse)
+
+
+@pytest.mark.parametrize("conflicting_physical", (False, True))
+def test_duplicate_exact_rewrite_origin_never_certifies(conflicting_physical: bool):
+    result = build_owner_certificates(evidence_with_duplicate_exact_rewrite(conflicting_physical=conflicting_physical))
+    resolution = result.resolution_for(ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {"allocator-origin-contradiction"}
+
+
+def test_shared_virtual_physical_conflict_never_certifies():
+    result = build_owner_certificates(evidence_with_shared_virtual_rewrites(second_physical=22))
+
+    assert result.certificate_nodes == ()
+    for role in (shared_virtual_role("use:0"), shared_virtual_role("use:1")):
+        resolution = result.resolution_for(role)
+        assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+        assert resolution.certificate_record_ids == ()
+        assert {item.reason for item in resolution.rejections} == {"split-physical-assignment"}
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "virtual-extra",
+        "virtual-missing",
+        "allocator-edge-missing",
+        "allocator-node-missing",
+    ),
+)
+def test_shared_virtual_rewrite_provenance_must_remain_exact(variant: str):
+    result = build_owner_certificates(evidence_with_shared_virtual_provenance_variant(variant))
+    resolution = result.resolution_for(shared_virtual_role("use:0"))
+
+    assert resolution.status is not OwnerResolutionStatus.UNIQUE
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {"allocator-origin-contradiction"}
+
+
+def test_persisted_coordinated_allocator_omission_never_certifies():
+    result = owner_certificate.validate_owner_evidence(evidence_with_coordinated_allocator_omission())
+    resolution = next(item for item in result.role_resolutions if item.role == shared_virtual_role("use:0"))
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {"allocator-origin-contradiction"}
+
+
+def test_persisted_uncited_duplicate_exact_rewrite_never_certifies():
+    result = owner_certificate.validate_owner_evidence(evidence_with_uncited_duplicate_exact_rewrite())
+    resolution = next(item for item in result.role_resolutions if item.role == ROLE)
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    assert {item.reason for item in resolution.rejections} == {"allocator-origin-contradiction"}
 
 
 def test_multi_output_event_uses_each_outputs_exact_parent_set():
