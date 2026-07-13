@@ -215,6 +215,12 @@ def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
         "partial_clobber_retains_initializer_taint",
         "call_clobbers_caller_saved_initializer_value",
         "call_preserves_callee_saved_initializer_taint",
+        "cross_register_lea_initializer",
+        "register_xchg_initializer",
+        "partial_register_copy_initializer",
+        "cmov_initializer",
+        "arithmetic_cross_register_initializer",
+        "vector_register_initializer",
     }:
         data[0x20A:0x220] = b"\x90" * 0x16
 
@@ -310,6 +316,32 @@ def synthetic_cfg_pe_bytes(*, mutation: str | None = None) -> bytes:
         data[0x20A:0x21C] = bytes.fromhex(
             "bb 50 10 40 00 e8 2c 00 00 00 "
             "89 1d 90 20 40 00 eb 04"
+        )
+    elif mutation == "cross_register_lea_initializer":
+        data[0x20A:0x218] = bytes.fromhex(
+            "bb 50 10 40 00 8d 03 a3 90 20 40 00 eb 08"
+        )
+    elif mutation == "register_xchg_initializer":
+        data[0x20A:0x218] = bytes.fromhex(
+            "bb 50 10 40 00 87 d8 a3 90 20 40 00 eb 08"
+        )
+    elif mutation == "partial_register_copy_initializer":
+        data[0x20A:0x219] = bytes.fromhex(
+            "bb 50 10 40 00 66 89 d8 a3 90 20 40 00 eb 07"
+        )
+    elif mutation == "cmov_initializer":
+        data[0x20A:0x21D] = bytes.fromhex(
+            "bb 50 10 40 00 31 c0 85 c9 0f 45 c3 "
+            "a3 90 20 40 00 eb 03"
+        )
+    elif mutation == "arithmetic_cross_register_initializer":
+        data[0x20A:0x21A] = bytes.fromhex(
+            "bb 50 10 40 00 31 c0 01 d8 a3 90 20 40 00 eb 06"
+        )
+    elif mutation == "vector_register_initializer":
+        data[0x20A:0x21D] = bytes.fromhex(
+            "bb 50 10 40 00 66 0f 6e c3 "
+            "66 0f 7e 05 90 20 40 00 eb 03"
         )
     elif mutation == "far_call":
         data[0x270:0x278] = bytes.fromhex(

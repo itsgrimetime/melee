@@ -1175,17 +1175,21 @@ class _DirectCfgRecovery:
                     if left_family == right_family:
                         zeroed_families.add(left_family)
 
+                propagates_unsafe_input = (
+                    bool(read_families & tainted) and not zeroed_families
+                )
                 for register in written_registers:
                     family = self._register_family(register)
                     register_is_full_width = (
                         self.decoder.reg_name(register) == family
                     )
-                    if (
+                    if family in zeroed_families:
+                        tainted.discard(family)
+                    elif propagates_unsafe_input:
+                        tainted.add(family)
+                    elif (
                         register_is_full_width
-                        and (
-                            family not in read_families
-                            or family in zeroed_families
-                        )
+                        and family not in read_families
                     ):
                         tainted.discard(family)
 

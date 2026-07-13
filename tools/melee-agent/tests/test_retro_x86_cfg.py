@@ -460,6 +460,27 @@ def test_partial_write_and_callee_saved_call_retain_unsafe_taint(
         recover_cfg(image, inventory(image), generous_limits(image))
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "cross_register_lea_initializer",
+        "register_xchg_initializer",
+        "partial_register_copy_initializer",
+        "cmov_initializer",
+        "arithmetic_cross_register_initializer",
+        "vector_register_initializer",
+    ],
+)
+def test_register_transform_retains_unsafe_initializer_taint(
+    tmp_path, mutation
+):
+    image = load_cfg_image(tmp_path, mutation)
+    with pytest.raises(
+        CfgRecoveryError, match="unresolved function-pointer initializer"
+    ):
+        recover_cfg(image, inventory(image), generous_limits(image))
+
+
 def test_entry_export_and_anchor_bind_to_complete_first_instruction(
     synthetic_cfg_image,
 ):
