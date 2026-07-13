@@ -9,6 +9,7 @@ from src.search.delta_minimize.bindings import (
     couple_semantic_atoms,
     lexical_owners,
     reachable_functions,
+    validate_supported_bindings,
     validate_target_definition,
 )
 from src.search.delta_minimize.delta import (
@@ -1194,6 +1195,66 @@ def test_unsupported_changed_binding_fails_closed(left, right):
         delta.extract_delta_manifest(left, right, function="draw")
 
 
+def test_changed_indirect_callee_expression_fails_closed() -> None:
+    left = "int draw(int x) { return (*first)(x); }\n"
+    right = "int draw(int x) { return (*second)(x); }\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
+        delta.extract_delta_manifest(left, right, function="draw")
+
+
+def test_changed_indirect_call_argument_fails_closed() -> None:
+    left = "int draw(int x) { return (*function_pointer)(x); }\n"
+    right = "int draw(int x) { return (*function_pointer)(x + 1); }\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
+        delta.extract_delta_manifest(left, right, function="draw")
+
+
+def test_parenthesized_known_type_cast_is_not_an_indirect_call() -> None:
+    left = "typedef float f32; f32 draw(int x) { return (f32) (x + 1); }\n"
+    right = "typedef float f32; f32 draw(int x) { return (f32) (x + 2); }\n"
+
+    index = build_binding_index(left)
+    assert not any(blocker.reason == "indirect-call" for blocker in index.blockers)
+
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, (1 << len(manifest.atoms)) - 1) == right
+
+
+def test_local_object_shadowing_known_type_remains_an_indirect_call() -> None:
+    source = """\
+typedef float f32;
+int sub(int x) { return x; }
+int draw(int x) { int (*f32)(int) = sub; return (f32) (x); }
+"""
+
+    index = build_binding_index(source)
+
+    assert any(
+        blocker.reason == "indirect-call" and blocker.symbol == "(f32)"
+        for blocker in index.blockers
+    )
+
+
+def test_expired_nested_typedef_does_not_hide_later_indirect_call() -> None:
+    source = """\
+int (*converter)(int);
+int draw(int x) {
+    { typedef int converter; converter value = x; }
+    return (converter) (x);
+}
+"""
+
+    index = build_binding_index(source)
+
+    assert any(
+        blocker.reason == "indirect-call" and blocker.symbol == "(converter)"
+        for blocker in index.blockers
+    )
+
+
 def test_unchanged_external_callee_allows_argument_delta() -> None:
     left = "int draw(int x) { external(x + 1); return x; }\n"
     right = "int draw(int x) { external(x + 2); return x; }\n"
@@ -1212,12 +1273,103 @@ def test_unchanged_external_callee_allows_argument_delta() -> None:
             "int draw(int x) { replacement(x); return x; }\n",
         ),
         (
-            "int draw(int x) { return x; }\n",
             "int draw(int x) { external(x); return x; }\n",
+            "int draw(int x) { new_external(x); return x; }\n",
         ),
     ],
-    ids=("renamed", "inserted"),
+    ids=("renamed", "partial-callee-insertion"),
 )
 def test_changed_external_call_binding_still_fails_closed(left: str, right: str) -> None:
     with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
         delta.extract_delta_manifest(left, right, function="draw")
+
+
+def test_unpaired_external_call_move_and_rename_fails_closed() -> None:
+    left = "int draw(int x) { external(x); return x; }\n"
+    right = "int draw(int x) { return x; replacement(x); }\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
+        delta.extract_delta_manifest(left, right, function="draw")
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            "int draw(int x) { return x; }\n",
+            "int draw(int x) { external(x); return x; }\n",
+        ),
+        (
+            "int draw(int x) { external(x); return x; }\n",
+            "int draw(int x) { return x; }\n",
+        ),
+    ],
+    ids=("inserted", "deleted"),
+)
+def test_whole_one_sided_external_call_is_atomic(left: str, right: str) -> None:
+    manifest = delta.extract_delta_manifest(left, right, function="draw")
+
+    assert materialize_mask(left, manifest, 0) == left
+    assert materialize_mask(left, manifest, (1 << len(manifest.atoms)) - 1) == right
+
+
+def test_whole_one_sided_indirect_call_still_fails_closed() -> None:
+    left = "int draw(int x) { return x; }\n"
+    right = "int draw(int x) { (*function_pointer)(x); return x; }\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
+        delta.extract_delta_manifest(left, right, function="draw")
+
+
+def test_whole_one_sided_shadowed_call_still_fails_closed() -> None:
+    left = """\
+int sub(int x) { return x; }
+int draw(int x) { int (*local)(int) = sub; return x; }
+"""
+    right = """\
+int sub(int x) { return x; }
+int draw(int x) { int (*local)(int) = sub; local(x); return x; }
+"""
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
+        delta.extract_delta_manifest(left, right, function="draw")
+
+
+def test_changed_external_declaration_still_fails_closed() -> None:
+    source = "void external(int value); int draw(int x) { external(x); return x; }\n"
+    index = build_binding_index(source)
+    declaration = next(
+        blocker
+        for blocker in index.blockers
+        if blocker.reason == "unresolved-external-declaration"
+    )
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding"):
+        validate_supported_bindings(
+            index,
+            {"external"},
+            [declaration.span],
+        )
+
+
+def test_changed_external_call_reports_only_delta_local_call_site() -> None:
+    prefix = """\
+void external(int value);
+void replacement(int value);
+int unrelated(int x) { external(x); return x; }
+"""
+    left = prefix + "int draw(int x) { external(x); return x; }\n"
+    right = prefix + "int draw(int x) { replacement(x); return x; }\n"
+
+    with pytest.raises(DeltaMinimizeError, match="unsupported-semantic-binding") as exc:
+        delta.extract_delta_manifest(left, right, function="draw")
+
+    external_blockers = [
+        blocker
+        for blocker in exc.value.details["blockers"]
+        if blocker["symbol"] == "external"
+    ]
+    assert len(external_blockers) == 1
+    draw_start = left.index("int draw")
+    assert external_blockers[0]["reason"] == "unresolved-external-call"
+    assert external_blockers[0]["span"][0] >= draw_start

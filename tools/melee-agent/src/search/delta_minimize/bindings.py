@@ -18,6 +18,11 @@ _LEXICAL_TRIVIA_RE = re.compile(
     re.DOTALL,
 )
 
+_CHANGE_LOCAL_BLOCKER_REASONS = {
+    "unresolved-external-call",
+    "unresolved-external-declaration",
+}
+
 
 @dataclass(frozen=True)
 class CallBinding:
@@ -121,6 +126,10 @@ def build_binding_index(source: str) -> BindingIndex:
     declaration_nodes: dict[str, list[tuple[object, object, object, object]]] = defaultdict(list)
     macro_names: set[str] = set()
     blockers: list[BindingBlocker] = []
+    type_identifier_nodes: dict[str, list[object]] = defaultdict(list)
+
+    for node in _walk_type(root, "type_identifier"):
+        type_identifier_nodes[node_text(source_bytes, node)].append(node)
 
     for node in _walk(root):
         if node.type == "ERROR":
@@ -217,7 +226,23 @@ def build_binding_index(source: str) -> BindingIndex:
         arguments = call.child_by_field_name("arguments")
         callee = node_text(source_bytes, callee_node).strip() if callee_node is not None else "*"
         call_span = _span(call, to_char)
-        if arguments is None or callee_node is None or callee_node.type != "identifier":
+        owner = _ancestor(call, "function_definition")
+        local_declarations = (
+            _visible_local_declarations(call, owner, source_bytes, to_char) if owner is not None else {}
+        )
+        if arguments is None or callee_node is None:
+            blockers.append(BindingBlocker(callee or "*", "indirect-call", call_span))
+            continue
+        if _is_parenthesized_known_type_cast(
+            call,
+            callee_node,
+            owner,
+            type_identifier_nodes,
+            local_declarations,
+            source_bytes,
+        ):
+            continue
+        if callee_node.type != "identifier":
             blockers.append(BindingBlocker(callee or "*", "indirect-call", call_span))
             continue
         if _has_preprocessor_ancestor(call):
@@ -227,10 +252,6 @@ def build_binding_index(source: str) -> BindingIndex:
             blockers.append(BindingBlocker(callee, "macro-like-call", call_span))
             continue
 
-        owner = _ancestor(call, "function_definition")
-        local_declarations = (
-            _visible_local_declarations(call, owner, source_bytes, to_char) if owner is not None else {}
-        )
         if callee in local_declarations:
             blockers.append(BindingBlocker(callee, "shadowed-call", call_span))
             if callee in unique_nodes:
@@ -518,13 +539,27 @@ def validate_supported_bindings(
     changed_spans: Sequence[tuple[int, int]] | None = None,
     renamed_names: set[str] | None = None,
     type_unchanged_names: set[str] | None = None,
+    atomic_external_call_spans: Sequence[tuple[int, int]] = (),
 ) -> None:
     renamed_names = renamed_names or set()
     type_unchanged_names = type_unchanged_names or set()
+    atomic_external_calls = set(atomic_external_call_spans)
     blockers = [
         blocker
         for blocker in index.blockers
         if blocker.symbol in changed_names
+        and not (
+            blocker.reason == "unresolved-external-call"
+            and blocker.span in atomic_external_calls
+        )
+        and (
+            blocker.reason not in _CHANGE_LOCAL_BLOCKER_REASONS
+            or changed_spans is None
+            or any(
+                _spans_touch(change, blocker.owned_span or blocker.span)
+                for change in changed_spans
+            )
+        )
         and (
             blocker.reason != "non-call-function-reference"
             or blocker.symbol in renamed_names
@@ -571,6 +606,24 @@ def couple_semantic_atoms(
     )
     left_changed_spans = _changed_spans(scoped_atoms, side="left")
     right_changed_spans = _changed_spans(scoped_atoms, side="right")
+    left_atomic_external_calls = _one_sided_external_calls_by_atom(
+        left_index,
+        scoped_atoms,
+        side="left",
+    )
+    right_atomic_external_calls = _one_sided_external_calls_by_atom(
+        right_index,
+        scoped_atoms,
+        side="right",
+    )
+    left_atomic_external_call_spans = _safe_atomic_external_call_spans(
+        left_atomic_external_calls,
+        right_atomic_external_calls,
+    )
+    right_atomic_external_call_spans = _safe_atomic_external_call_spans(
+        right_atomic_external_calls,
+        left_atomic_external_calls,
+    )
     left_changed = _changed_binding_names(left_index, left_changed_spans)
     right_changed = _changed_binding_names(right_index, right_changed_spans)
     pairs = _pair_functions(
@@ -599,6 +652,7 @@ def couple_semantic_atoms(
         left_changed_spans,
         left_renamed,
         left_type_unchanged,
+        left_atomic_external_call_spans,
     )
     validate_supported_bindings(
         right_index,
@@ -606,6 +660,7 @@ def couple_semantic_atoms(
         right_changed_spans,
         right_renamed,
         right_type_unchanged,
+        right_atomic_external_call_spans,
     )
 
     semantic_labels: dict[str, list[str]] = defaultdict(list)
@@ -1119,6 +1174,51 @@ def _changed_spans(atoms, *, side: str) -> tuple[tuple[int, int], ...]:
     )
 
 
+def _one_sided_external_calls_by_atom(
+    index: BindingIndex,
+    atoms,
+    *,
+    side: str,
+) -> dict[str, tuple[tuple[int, int], ...]]:
+    calls_by_atom: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    external_calls = tuple(
+        blocker.span
+        for blocker in index.blockers
+        if blocker.reason == "unresolved-external-call"
+    )
+    for atom in atoms:
+        for patch in atom.patches:
+            left_span = (patch.left_start, patch.left_end)
+            right_span = (patch.right_start, patch.right_end)
+            if side == "left":
+                selected, opposite = left_span, right_span
+            else:
+                selected, opposite = right_span, left_span
+            if selected[0] != selected[1] and opposite[0] == opposite[1]:
+                calls_by_atom[atom.atom_id].extend(
+                    call_span
+                    for call_span in external_calls
+                    if _span_contains(selected, call_span)
+                )
+    return {
+        atom_id: tuple(dict.fromkeys(call_spans))
+        for atom_id, call_spans in calls_by_atom.items()
+        if call_spans
+    }
+
+
+def _safe_atomic_external_call_spans(
+    selected: Mapping[str, Sequence[tuple[int, int]]],
+    opposite: Mapping[str, Sequence[tuple[int, int]]],
+) -> tuple[tuple[int, int], ...]:
+    eligible_atoms = selected.keys() if not opposite else selected.keys() & opposite.keys()
+    return tuple(
+        span
+        for atom_id in sorted(eligible_atoms)
+        for span in selected[atom_id]
+    )
+
+
 def _changed_binding_names(index: BindingIndex, spans: Sequence[tuple[int, int]]) -> set[str]:
     nonempty_spans = tuple(span for span in spans if span[0] != span[1])
     names: set[str] = set()
@@ -1502,6 +1602,47 @@ def _visible_local_declarations(
     return {name: tuple(dict.fromkeys(spans)) for name, spans in spans_by_name.items()}
 
 
+def _is_parenthesized_known_type_cast(
+    call,
+    callee,
+    owner,
+    type_identifier_nodes: Mapping[str, Sequence[object]],
+    local_declarations: Mapping[str, Sequence[tuple[int, int]]],
+    source_bytes: bytes,
+) -> bool:
+    """Recognize typedef casts that tree-sitter parses as call expressions."""
+
+    current = callee
+    saw_parentheses = False
+    while current.type == "parenthesized_expression":
+        children = tuple(current.named_children)
+        if len(children) != 1:
+            return False
+        saw_parentheses = True
+        current = children[0]
+    if not saw_parentheses or current.type != "identifier":
+        return False
+
+    name = node_text(source_bytes, current)
+    if name in local_declarations:
+        return False
+    for type_node in type_identifier_nodes.get(name, ()):
+        if type_node.start_byte >= call.start_byte:
+            continue
+        type_owner = _ancestor(type_node, "function_definition")
+        if type_owner is None:
+            return True
+        if (
+            owner is not None
+            and type_owner.start_byte == owner.start_byte
+            and type_owner.end_byte == owner.end_byte
+        ):
+            type_scope = _ancestor(type_node, "compound_statement")
+            if type_scope is None or _contains_node(type_scope, call):
+                return True
+    return False
+
+
 def _local_declaration_entries(declaration):
     for child in _declaration_declarators(declaration):
         complete_declarator = child.child_by_field_name("declarator") if child.type == "init_declarator" else child
@@ -1698,6 +1839,17 @@ def _spans_touch(first: tuple[int, int], second: tuple[int, int]) -> bool:
     if second[0] == second[1]:
         return first[0] <= second[0] < first[1]
     return first[0] < second[1] and second[0] < first[1]
+
+
+def _span_contains(
+    container: tuple[int, int],
+    contained: tuple[int, int],
+) -> bool:
+    return (
+        container[0] != container[1]
+        and container[0] <= contained[0]
+        and contained[1] <= container[1]
+    )
 
 
 def _patch_pair_intersects_owned_spans(
