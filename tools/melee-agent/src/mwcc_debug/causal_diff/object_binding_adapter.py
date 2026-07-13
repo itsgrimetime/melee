@@ -255,11 +255,31 @@ class ObjectBindingEvidence:
     capture_run_id: str
     abstention_reason: str | None
     instrumentation_identity: OwnerInstrumentationIdentity | None
-    _adapter_token: object | None = field(default=None, repr=False, compare=False)
+    _adapter_token: object | None = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def verified_capabilities(self) -> frozenset[str]:
         return self.capabilities
+
+
+def _trusted_object_binding_evidence(
+    nodes: tuple[EvidenceNode, ...],
+    edges: tuple[EvidenceEdge, ...],
+    capabilities: frozenset[str],
+    capture_run_id: str,
+    abstention_reason: str | None,
+    instrumentation_identity: OwnerInstrumentationIdentity | None,
+) -> ObjectBindingEvidence:
+    evidence = ObjectBindingEvidence(
+        nodes,
+        edges,
+        capabilities,
+        capture_run_id,
+        abstention_reason,
+        instrumentation_identity,
+    )
+    object.__setattr__(evidence, "_adapter_token", _OBJECT_BINDING_ADAPTER_TOKEN)
+    return evidence
 
 
 def _confidence(value: object, default: Confidence) -> Confidence:
@@ -404,14 +424,13 @@ def emit_object_binding_evidence(
 
     capabilities = frozenset(source.capabilities)
     if not capabilities:
-        return ObjectBindingEvidence(
+        return _trusted_object_binding_evidence(
             (),
             (),
             capabilities,
             source.capture_run_id,
             "backend-owner-path-incomplete",
             source.instrumentation_identity,
-            _OBJECT_BINDING_ADAPTER_TOKEN,
         )
     nodes: list[EvidenceNode] = []
     edges: list[EvidenceEdge] = []
@@ -1053,24 +1072,22 @@ def emit_object_binding_evidence(
                 )
             )
 
-    normalized = ObjectBindingEvidence(
+    normalized = _trusted_object_binding_evidence(
         _deduplicate_nodes(nodes),
         _deduplicate_edges(edges),
         capabilities,
         source.capture_run_id,
         None,
         source.instrumentation_identity,
-        _OBJECT_BINDING_ADAPTER_TOKEN,
     )
     if not proof_complete(normalized):
-        return ObjectBindingEvidence(
+        return _trusted_object_binding_evidence(
             normalized.nodes,
             normalized.edges,
             normalized.capabilities,
             normalized.capture_run_id,
             "backend-owner-path-incomplete",
             normalized.instrumentation_identity,
-            _OBJECT_BINDING_ADAPTER_TOKEN,
         )
     return normalized
 

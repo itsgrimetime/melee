@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import pytest
 
+from src.mwcc_debug.causal_diff.canonical import stable_id
 from src.mwcc_debug.causal_diff.models import Confidence, EvidenceNode, Provenance
 from src.mwcc_debug.causal_diff.object_binding_adapter import (
     ObjectBindingEvidence,
@@ -15,7 +16,7 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
     build_owner_certificates,
 )
 from tests.owner_certificate_fixtures import canonical_result, complete_evidence
-from tests.test_causal_diff_object_bindings import _adapter_input
+from tests.test_causal_diff_object_bindings import _adapter_input, _object_result
 
 ROLE = OwnerRoleKey("use:0", "gpr", "row-home", 4, "locals")
 STATE = OwnerSemanticState(21, 0x44, 4)
@@ -37,6 +38,11 @@ def test_complete_path_builds_one_content_addressed_certificate():
     assert certificate.attributes["semantic_state"] == STATE.as_json()
     assert certificate.attributes["proof_content_sha256"]
     assert certificate.confidence is Confidence.DERIVED_UNIQUE
+    assert certificate.record_id == stable_id(
+        certificate.compile_id,
+        certificate.kind,
+        certificate.attributes["proof_content_sha256"],
+    )
 
 
 @pytest.mark.parametrize(
@@ -55,31 +61,28 @@ def test_role_schema_is_closed(role):
 
 
 def test_changed_semantic_support_content_changes_certificate_id():
-    evidence = emit_object_binding_evidence(_adapter_input())
-    first = build_owner_certificates(evidence)
-    owner = next(node for node in evidence.nodes if node.kind == "compiler-object")
-    changed = owner.with_attributes({**owner.attributes, "areas": ("locals", "temps")})
-    poisoned = replace(
-        evidence,
-        nodes=tuple(changed if node.record_id == owner.record_id else node for node in evidence.nodes),
+    first = build_owner_certificates(complete_evidence())
+    second = build_owner_certificates(
+        complete_evidence(object_result=_object_result(areas=("locals", "temps")))
     )
-    second = build_owner_certificates(poisoned)
 
     assert first.certificate_nodes[0].record_id != second.certificate_nodes[0].record_id
 
 
 def test_runtime_pointer_changes_do_not_change_certificate_id():
-    evidence = emit_object_binding_evidence(_adapter_input())
-    owner = next(node for node in evidence.nodes if node.kind == "compiler-object")
-    changed = owner.with_attributes({**owner.attributes, "runtime_address": 0xDEADBEEF})
-    altered = replace(
-        evidence,
-        nodes=tuple(changed if node.record_id == owner.record_id else node for node in evidence.nodes),
+    first = build_owner_certificates(complete_evidence())
+    second = build_owner_certificates(
+        complete_evidence(
+            object_result=_object_result(
+                runtime_address=0xDEADBEEF,
+                snapshot_runtime_address=0xDEAD0000,
+                ignode_runtime_address=0xDEAD1000,
+                list_node_runtime_address=0xBEEF0000,
+            )
+        )
     )
-    assert (
-        build_owner_certificates(evidence).certificate_nodes[0].record_id
-        == build_owner_certificates(altered).certificate_nodes[0].record_id
-    )
+
+    assert first.certificate_nodes[0].record_id == second.certificate_nodes[0].record_id
 
 
 def test_direct_diagnostic_evidence_construction_cannot_build_proof():
@@ -124,7 +127,84 @@ def test_direct_certificate_result_construction_is_not_trusted():
     assert result.certificate(forged.record_id) is None
 
 
-def test_trusted_result_has_stable_json_canonicalization():
-    result = build_owner_certificates(complete_evidence())
+def test_replaced_certificate_results_lose_trust():
+    trusted = build_owner_certificates(complete_evidence())
+    certificate = trusted.certificate_nodes[0]
+    forged = replace(certificate, record_id="forged-owner-certificate")
 
-    assert canonical_result(result) == canonical_result(result)
+    for cloned in (
+        replace(trusted),
+        replace(trusted, certificate_nodes=(forged,)),
+    ):
+        assert cloned.is_trusted is False
+        assert cloned.certificate(certificate.record_id) is None
+        assert cloned.certificate(forged.record_id) is None
+
+
+def test_replaced_object_binding_evidence_loses_adapter_trust():
+    trusted = complete_evidence()
+    forged_identity = ("forged-a", "forged-b", "forged-c", "forged-d")
+
+    for cloned in (
+        replace(trusted),
+        replace(
+            trusted,
+            nodes=(),
+            edges=(),
+            capabilities=frozenset(),
+            capture_run_id="forged-capture",
+            instrumentation_identity=forged_identity,
+        ),
+    ):
+        result = build_owner_certificates(cloned)
+        assert result.certificate_nodes == ()
+        assert {item.reason for item in result.global_rejections} == {
+            "untrusted-diagnostic-materialization"
+        }
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        pytest.param((), id="empty-tuple"),
+        pytest.param(("one",), id="one-member"),
+        pytest.param(("one", "two", "", "four"), id="empty-member"),
+        pytest.param(("one", "two", 3, "four"), id="non-string-member"),
+        pytest.param(("one", "two", object(), "four"), id="unsupported-canonical-value"),
+    ],
+)
+def test_invalid_instrumentation_identity_is_controlled_rejection(identity):
+    evidence = complete_evidence(instrumentation_identity=identity)
+
+    try:
+        result = build_owner_certificates(evidence)
+    except Exception as error:  # pragma: no cover - the assertion reports the escaped error
+        pytest.fail(f"invalid instrumentation identity escaped as {type(error).__name__}: {error}")
+
+    assert result.certificate_nodes == ()
+    assert {item.reason for item in result.global_rejections} == {
+        "invalid-instrumentation-identity"
+    }
+
+
+def test_unsupported_semantic_proof_content_is_controlled_rejection():
+    evidence = complete_evidence(object_result=_object_result(areas=(object(),)))
+
+    try:
+        result = build_owner_certificates(evidence)
+    except Exception as error:  # pragma: no cover - the assertion reports the escaped error
+        pytest.fail(f"unsupported proof content escaped as {type(error).__name__}: {error}")
+
+    assert result.certificate_nodes == ()
+    assert {item.reason for item in result.global_rejections} == {
+        "unsupported-certificate-canonicalization"
+    }
+
+
+def test_independent_complete_results_have_equal_canonical_content():
+    first = build_owner_certificates(complete_evidence())
+    second = build_owner_certificates(complete_evidence())
+
+    assert first is not second
+    assert first.certificate_nodes[0] is not second.certificate_nodes[0]
+    assert canonical_result(first) == canonical_result(second)

@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Mapping
 
+import rfc8785
+
 from .canonical import canonical_bytes
 from .models import Confidence, EvidenceEdge, EvidenceNode, Provenance
 from .object_binding_adapter import (
@@ -117,7 +119,7 @@ class OwnerCertificateResult:
     certificate_nodes: tuple[EvidenceNode, ...]
     role_resolutions: tuple[OwnerRoleResolution, ...]
     global_rejections: tuple[OwnerCertificateRejection, ...]
-    _token: object | None = field(default=None, repr=False, compare=False)
+    _token: object | None = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def is_trusted(self) -> bool:
@@ -142,6 +144,16 @@ class OwnerCertificateResult:
                 (*base.rejections, *self.global_rejections),
             )
         return base
+
+
+def _trusted_result(
+    certificate_nodes: tuple[EvidenceNode, ...],
+    role_resolutions: tuple[OwnerRoleResolution, ...],
+    global_rejections: tuple[OwnerCertificateRejection, ...],
+) -> OwnerCertificateResult:
+    result = OwnerCertificateResult(certificate_nodes, role_resolutions, global_rejections)
+    object.__setattr__(result, "_token", _TRUST_TOKEN)
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +231,14 @@ def _rejection(reason: str) -> OwnerCertificateRejection:
         )
     ).hexdigest()
     return OwnerCertificateRejection(rejection_id, reason, None, (), ())
+
+
+def _valid_instrumentation_identity(value: object) -> bool:
+    return (
+        isinstance(value, tuple)
+        and len(value) == 4
+        and all(isinstance(item, str) and bool(item) for item in value)
+    )
 
 
 def _registered_support(
@@ -422,18 +442,22 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
     """Derive all connected capture-local roles from trusted adapter evidence."""
 
     if evidence._adapter_token is not _OBJECT_BINDING_ADAPTER_TOKEN:
-        return OwnerCertificateResult(
+        return _trusted_result(
             (),
             (),
             (_rejection("untrusted-diagnostic-materialization"),),
-            _TRUST_TOKEN,
         )
     if evidence.instrumentation_identity is None:
-        return OwnerCertificateResult(
+        return _trusted_result(
             (),
             (),
             (_rejection("missing-instrumentation-identity"),),
-            _TRUST_TOKEN,
+        )
+    if not _valid_instrumentation_identity(evidence.instrumentation_identity):
+        return _trusted_result(
+            (),
+            (),
+            (_rejection("invalid-instrumentation-identity"),),
         )
 
     by_role: dict[OwnerRoleKey, list[_OwnerPath]] = {}
@@ -444,7 +468,14 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
     resolutions: list[OwnerRoleResolution] = []
     for role in sorted(by_role):
         paths = by_role[role]
-        role_certificates = tuple(_certificate(path, evidence) for path in paths)
+        try:
+            role_certificates = tuple(_certificate(path, evidence) for path in paths)
+        except rfc8785.CanonicalizationError:
+            return _trusted_result(
+                (),
+                (),
+                (_rejection("unsupported-certificate-canonicalization"),),
+            )
         certificates.extend(role_certificates)
         status = (
             OwnerResolutionStatus.UNIQUE
@@ -463,9 +494,8 @@ def build_owner_certificates(evidence: ObjectBindingEvidence) -> OwnerCertificat
                 (),
             )
         )
-    return OwnerCertificateResult(
+    return _trusted_result(
         tuple(certificates),
         tuple(resolutions),
         (),
-        _TRUST_TOKEN,
     )

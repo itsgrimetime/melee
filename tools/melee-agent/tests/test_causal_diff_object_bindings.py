@@ -80,7 +80,16 @@ def _object_result(
     virtual: int = 66,
     semantic_stack_role: str = "row-home",
     final_r1_offset: int = 0x44,
+    areas: tuple[str, ...] = ("locals",),
+    runtime_address: int = 0x1000,
+    snapshot_runtime_address: int | None = None,
+    ignode_runtime_address: int | None = None,
+    list_node_runtime_address: int = 0x5000,
 ) -> ObjectBindingValidation:
+    if snapshot_runtime_address is None:
+        snapshot_runtime_address = runtime_address
+    if ignode_runtime_address is None:
+        ignode_runtime_address = 0x4000 + virtual
     return ObjectBindingValidation(
         MappingProxyType(
             {
@@ -89,16 +98,16 @@ def _object_result(
                     MappingProxyType(
                         {
                             "object_id": "obj-0",
-                            "runtime_address": 0x1000,
+                            "runtime_address": runtime_address,
                             "allocation_generation": 1,
                             "type_size": 4,
-                            "areas": ("locals",),
+                            "areas": areas,
                             "stage_snapshots": (
                                 MappingProxyType(
                                     {
                                         "stage": "colorgraph_return",
                                         "lifecycle_sequence_at_capture": 1,
-                                        "runtime_address": 0x1000,
+                                        "runtime_address": snapshot_runtime_address,
                                         "allocation_generation": 1,
                                     }
                                 ),
@@ -106,7 +115,7 @@ def _object_result(
                                     {
                                         "stage": "final_scheduler",
                                         "lifecycle_sequence_at_capture": 2,
-                                        "runtime_address": 0x1000,
+                                        "runtime_address": snapshot_runtime_address,
                                         "allocation_generation": 1,
                                     }
                                 ),
@@ -124,7 +133,7 @@ def _object_result(
                             "virtual_kind": "r",
                             "virtual": virtual,
                             "ig_id": virtual,
-                            "ignode_runtime_address": 0x4000 + virtual,
+                            "ignode_runtime_address": ignode_runtime_address,
                             "confidence": "observed",
                         }
                     ),
@@ -135,7 +144,7 @@ def _object_result(
                             "object_id": "obj-0",
                             "semantic_stack_role": semantic_stack_role,
                             "area": "locals",
-                            "list_node_runtime_address": 0x5000,
+                            "list_node_runtime_address": list_node_runtime_address,
                             "final_r1_offset": final_r1_offset,
                             "size": 4,
                             "confidence": "derived-unique",
@@ -277,6 +286,12 @@ def _adapter_input(
     physical_register: int = 21,
     object_result: ObjectBindingValidation | None = None,
     pcode_result: PCodeLineageValidation | None = None,
+    instrumentation_identity: object = (
+        "1" * 64,
+        "proof-test",
+        "2" * 64,
+        "mwcc-retro-lifetime-proof.v1",
+    ),
 ) -> ObjectBindingAdapterInput:
     return ObjectBindingAdapterInput(
         compile_id=compile_id,
@@ -291,12 +306,7 @@ def _adapter_input(
             virtual=virtual,
             physical_register=physical_register,
         ),
-        instrumentation_identity=(
-            "1" * 64,
-            "proof-test",
-            "2" * 64,
-            "mwcc-retro-lifetime-proof.v1",
-        ),
+        instrumentation_identity=instrumentation_identity,
     )
 
 
