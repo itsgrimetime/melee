@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from src.common import tree_sitter_c as _ts
 from src.mwcc_debug.pressure_explorer import LifetimeLayoutProbe
 from src.mwcc_debug.source_field_attribution import (
     accessors_for_field_path,
@@ -16,7 +17,6 @@ from src.mwcc_debug.source_field_attribution import (
 )
 from src.mwcc_debug.source_hunks import diff_line_hunks
 from src.search import statement_move
-
 
 _UNSAFE_LABEL_CHARS_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _SYNTHETIC_NO_SOURCE_KINDS = {"implicit-temp", "copy/coalesce-product"}
@@ -116,6 +116,48 @@ class _SyntheticOwnerResult:
     candidates: tuple[_SyntheticOwnerCandidate, ...]
     metadata: dict[str, Any]
     terminal_blocker: str | None
+
+
+@dataclass(frozen=True)
+class _InlineCallReturnHelper:
+    name: str
+    result_local: str
+    normalized_pointer_type: str
+    definition_span: tuple[int, int]
+    result_declaration_span: tuple[int, int]
+    low_level_call_span: tuple[int, int]
+    return_span: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class _InlineCallReturnOwner:
+    owner: _OwnerAssignment
+    helper: _InlineCallReturnHelper
+    owner_declaration_span: tuple[int, int]
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _BoundPointerLocal:
+    name: str
+    normalized_pointer_type: str
+    declaration_span: tuple[int, int]
+    identifier_span: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class _OrdinaryIdentifierBinding:
+    kind: str
+    scope: str
+    binding_span: tuple[int, int]
+    identifier_span: tuple[int, int]
+    preprocessor_controlled: bool
+
+
+@dataclass(frozen=True)
+class _TopLevelFunctionBinding:
+    declaration_spans: tuple[tuple[int, int], ...]
+    definition_spans: tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -245,6 +287,9 @@ def _source_attr_dict(source_attr: Any) -> dict[str, Any]:
             str(key): _source_attr_jsonish(value)
             for key, value in source_attr.items()
         }
+    if hasattr(source_attr, "__dataclass_fields__"):
+        payload = _source_attr_jsonish(source_attr)
+        return dict(payload) if isinstance(payload, Mapping) else {}
     payload = {
         key: getattr(source_attr, key, None)
         for key in (
@@ -325,7 +370,7 @@ def _candidate_destinations(
 ) -> list[int]:
     lo, hi = unit.index_range
     if direction == "before":
-        return sorted((dest for dest in legal if dest < lo))
+        return sorted(dest for dest in legal if dest < lo)
     if direction == "after":
         return sorted((dest for dest in legal if dest > hi + 1), reverse=True)
     return []
@@ -5126,9 +5171,1125 @@ def _call_return_rhs_matches(source_attr: Any, rhs: str) -> bool:
     return False
 
 
-def _call_return_owner_split(
+def _walk_ast_nodes(node: Any) -> Iterable[Any]:
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        stack.extend(reversed(current.named_children))
+
+
+def _declarator_identifier_node(declarator: Any) -> Any | None:
+    current = declarator
+    while current is not None:
+        if current.type == "identifier":
+            return current
+        nested = current.child_by_field_name("declarator")
+        if (
+            nested is None
+            and current.type == "parenthesized_declarator"
+            and len(current.named_children) == 1
+        ):
+            nested = current.named_children[0]
+        if nested is None:
+            return None
+        current = nested
+    return None
+
+
+def _ordinary_declarator_identifier_node(declarator: Any) -> Any | None:
+    current = declarator
+    while current is not None:
+        if current.type in {"identifier", "type_identifier"}:
+            return current
+        nested = current.child_by_field_name("declarator")
+        if (
+            nested is None
+            and current.type == "parenthesized_declarator"
+            and len(current.named_children) == 1
+        ):
+            nested = current.named_children[0]
+        if nested is None:
+            return None
+        current = nested
+    return None
+
+
+def _function_definition_nodes(
+    root: Any,
+    source_bytes: bytes,
+) -> dict[str, list[Any]]:
+    definitions: dict[str, list[Any]] = {}
+    for node in _walk_ast_nodes(root):
+        if node.type != "function_definition":
+            continue
+        name_node = _declarator_identifier_node(
+            node.child_by_field_name("declarator")
+        )
+        if name_node is None:
+            continue
+        name = _ts.node_text(source_bytes, name_node)
+        definitions.setdefault(name, []).append(node)
+    return definitions
+
+
+def _function_definition_name_node(node: Any) -> Any | None:
+    return _declarator_identifier_node(node.child_by_field_name("declarator"))
+
+
+def _declared_function_identifier(node: Any) -> Any | None:
+    current = node
+    while current is not None:
+        if current.type == "identifier":
+            return current
+        if current.type == "pointer_declarator":
+            return None
+        if current.type == "parenthesized_declarator":
+            children = list(current.named_children)
+            current = children[0] if len(children) == 1 else None
+        else:
+            current = current.child_by_field_name("declarator")
+    return None
+
+
+def _function_declaration_identifier(node: Any) -> Any | None:
+    current = node
+    while current is not None:
+        if current.type == "function_declarator":
+            name_node = _declared_function_identifier(
+                current.child_by_field_name("declarator")
+            )
+            if name_node is not None:
+                return name_node
+        nested = current.child_by_field_name("declarator")
+        if nested is None and current.type == "parenthesized_declarator":
+            children = list(current.named_children)
+            nested = children[0] if len(children) == 1 else None
+        current = nested
+    return None
+
+
+def _declaration_declarators(declaration: Any) -> Iterable[Any]:
+    for index, child in enumerate(declaration.children):
+        if (
+            child.is_named
+            and declaration.field_name_for_child(index) == "declarator"
+        ):
+            yield child
+
+
+def _has_function_definition_ancestor(node: Any) -> bool:
+    current = node.parent
+    while current is not None:
+        if current.type == "function_definition":
+            return True
+        current = current.parent
+    return False
+
+
+def _ordinary_identifier_binding(
+    binding_node: Any,
+    name_node: Any,
+    *,
+    kind: str,
+    scope: str,
+) -> _OrdinaryIdentifierBinding:
+    return _OrdinaryIdentifierBinding(
+        kind=kind,
+        scope=scope,
+        binding_span=(binding_node.start_byte, binding_node.end_byte),
+        identifier_span=(name_node.start_byte, name_node.end_byte),
+        preprocessor_controlled=_ast_node_has_preprocessor_ancestor(
+            binding_node
+        ),
+    )
+
+
+def _top_level_function_binding(
+    root: Any,
+    source_bytes: bytes,
+    definitions: Mapping[str, list[Any]],
+    name: str,
+) -> tuple[
+    _TopLevelFunctionBinding | None,
+    tuple[_OrdinaryIdentifierBinding, ...],
+]:
+    declarations: list[tuple[int, int]] = []
+    conflicting_bindings: list[_OrdinaryIdentifierBinding] = []
+    for node in _walk_ast_nodes(root):
+        if _has_function_definition_ancestor(node):
+            continue
+        if node.type == "enumerator":
+            name_node = node.child_by_field_name("name")
+            if (
+                name_node is None
+                or _ts.node_text(source_bytes, name_node) != name
+            ):
+                continue
+            conflicting_bindings.append(_ordinary_identifier_binding(
+                node,
+                name_node,
+                kind="enum-constant",
+                scope="translation-unit",
+            ))
+            continue
+        if node.type not in {"declaration", "type_definition"}:
+            continue
+        for declarator in _declaration_declarators(node):
+            if node.type == "type_definition":
+                name_node = _ordinary_declarator_identifier_node(declarator)
+            else:
+                name_node = _declarator_identifier_node(declarator)
+            if (
+                name_node is None
+                or _ts.node_text(source_bytes, name_node) != name
+            ):
+                continue
+            span = (declarator.start_byte, declarator.end_byte)
+            function_name_node = (
+                _function_declaration_identifier(declarator)
+                if node.type == "declaration"
+                else None
+            )
+            is_function_declaration = (
+                function_name_node is not None
+                and function_name_node.start_byte == name_node.start_byte
+                and function_name_node.end_byte == name_node.end_byte
+            )
+            if is_function_declaration and not _ast_node_has_preprocessor_ancestor(
+                node
+            ):
+                declarations.append(span)
+                continue
+            conflicting_bindings.append(_ordinary_identifier_binding(
+                declarator,
+                name_node,
+                kind=(
+                    "function-declaration"
+                    if is_function_declaration
+                    else "typedef-name"
+                    if node.type == "type_definition"
+                    else "object"
+                ),
+                scope="translation-unit",
+            ))
+
+    definition_nodes = list(definitions.get(name, ()))
+    definition_spans: list[tuple[int, int]] = []
+    definitions_valid = True
+    for definition in definition_nodes:
+        name_node = _function_declaration_identifier(
+            definition.child_by_field_name("declarator")
+        )
+        if (
+            name_node is None
+            or _ts.node_text(source_bytes, name_node) != name
+        ):
+            definitions_valid = False
+            continue
+        if _ast_node_has_preprocessor_ancestor(definition):
+            conflicting_bindings.append(_ordinary_identifier_binding(
+                definition,
+                name_node,
+                kind="function-definition",
+                scope="translation-unit",
+            ))
+            continue
+        definition_spans.append((definition.start_byte, definition.end_byte))
+
+    if (
+        conflicting_bindings
+        or not definitions_valid
+        or len(definition_spans) > 1
+        or (not declarations and not definition_spans)
+    ):
+        return None, tuple(conflicting_bindings)
+    return (
+        _TopLevelFunctionBinding(
+            declaration_spans=tuple(declarations),
+            definition_spans=tuple(definition_spans),
+        ),
+        (),
+    )
+
+
+def _top_level_function_binding_metadata(
+    binding: _TopLevelFunctionBinding,
+) -> dict[str, list[list[int]]]:
+    return {
+        "declaration_spans": [list(span) for span in binding.declaration_spans],
+        "definition_spans": [list(span) for span in binding.definition_spans],
+    }
+
+
+def _ordinary_identifier_bindings_metadata(
+    bindings: tuple[_OrdinaryIdentifierBinding, ...],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": binding.kind,
+            "scope": binding.scope,
+            "binding_span": list(binding.binding_span),
+            "identifier_span": list(binding.identifier_span),
+            "preprocessor_controlled": binding.preprocessor_controlled,
+        }
+        for binding in bindings
+    ]
+
+
+def _normalized_pointer_decl_type(type_text: object) -> str | None:
+    safe_type = _safe_decl_type_text(type_text)
+    if safe_type is None or re.search(r"\bvolatile\b", safe_type):
+        return None
+    normalized = re.sub(
+        r"\b(?:extern|inline|register|static)\b",
+        " ",
+        safe_type,
+    )
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not re.fullmatch(
+        r"(?:(?:const|restrict)\s+)*(?:struct\s+)?[A-Za-z_]\w*"
+        r"(?:\s+[A-Za-z_]\w*)*\s*\*+",
+        normalized,
+    ):
+        return None
+    normalized = re.sub(r"\s*\*\s*", "*", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _function_inline_pointer_return_type(
+    source_bytes: bytes,
+    definition: Any,
+) -> tuple[str | None, str | None]:
+    name_node = _function_definition_name_node(definition)
+    if name_node is None:
+        return None, "inline-call-return-helper-definition-unsupported"
+    storage_classes = [
+        _ts.node_text(source_bytes, child)
+        for child in definition.named_children
+        if child.type == "storage_class_specifier"
+    ]
+    if "inline" not in storage_classes:
+        return None, "inline-call-return-helper-not-inline"
+    if sorted(storage_classes) != ["inline", "static"]:
+        return None, "inline-call-return-helper-not-tu-local"
+    prefix = source_bytes[
+        definition.start_byte:name_node.start_byte
+    ].decode("utf-8", errors="replace")
+    pointer_type = _normalized_pointer_decl_type(prefix)
+    if pointer_type is None:
+        return None, "inline-call-return-helper-type-unresolved"
+    return pointer_type, None
+
+
+def _ast_node_has_preprocessor_ancestor(node: Any) -> bool:
+    current = node
+    while current is not None:
+        if current.type.startswith("preproc_"):
+            return True
+        current = current.parent
+    return False
+
+
+def _span_is_preprocessor_controlled(
+    preprocessor_spans: tuple[tuple[int, int], ...],
+    span: tuple[int, int],
+) -> bool:
+    return any(
+        start <= span[0] and span[1] <= end
+        for start, end in preprocessor_spans
+    )
+
+
+def _direct_call_name(call: Any, source_bytes: bytes) -> str | None:
+    callee = call.child_by_field_name("function")
+    if callee is None or callee.type != "identifier":
+        return None
+    return _ts.node_text(source_bytes, callee)
+
+
+def _plain_standalone_assignment(
+    assignment: Any,
+    source_bytes: bytes,
+) -> bool:
+    left = assignment.child_by_field_name("left")
+    right = assignment.child_by_field_name("right")
+    statement = assignment.parent
+    if (
+        left is None
+        or right is None
+        or statement is None
+        or statement.type != "expression_statement"
+        or source_bytes[left.end_byte:right.start_byte].strip() != b"="
+    ):
+        return False
+    children = list(statement.named_children)
+    return (
+        len(children) == 1
+        and children[0].start_byte == assignment.start_byte
+        and children[0].end_byte == assignment.end_byte
+        and children[0].type == assignment.type
+    )
+
+
+def _direct_call_result_identifier(
+    call: Any,
+    source_bytes: bytes,
+) -> Any | None:
+    parent = call.parent
+    if parent is None:
+        return None
+    if parent.type == "assignment_expression":
+        right = parent.child_by_field_name("right")
+        left = parent.child_by_field_name("left")
+        if (
+            right is None
+            or left is None
+            or (right.start_byte, right.end_byte)
+            != (call.start_byte, call.end_byte)
+            or left.type != "identifier"
+            or not _plain_standalone_assignment(parent, source_bytes)
+        ):
+            return None
+        return left
+    if parent.type == "init_declarator":
+        value = parent.child_by_field_name("value")
+        declarator = parent.child_by_field_name("declarator")
+        name_node = _declarator_identifier_node(declarator)
+        if (
+            value is None
+            or name_node is None
+            or (value.start_byte, value.end_byte)
+            != (call.start_byte, call.end_byte)
+        ):
+            return None
+        return name_node
+    return None
+
+
+def _function_parameter_name_nodes(definition: Any) -> list[Any]:
+    declarator = definition.child_by_field_name("declarator")
+    while declarator is not None and declarator.type != "function_declarator":
+        declarator = declarator.child_by_field_name("declarator")
+    if declarator is None:
+        return []
+    parameters = declarator.child_by_field_name("parameters")
+    if parameters is None:
+        return []
+
+    names: list[Any] = []
+    for parameter in parameters.named_children:
+        if parameter.type != "parameter_declaration":
+            continue
+        name_node = _declarator_identifier_node(
+            parameter.child_by_field_name("declarator")
+        )
+        if name_node is not None:
+            names.append(name_node)
+    return names
+
+
+def _node_contains(ancestor: Any, descendant: Any) -> bool:
+    current = descendant
+    while current is not None:
+        if (
+            current.start_byte == ancestor.start_byte
+            and current.end_byte == ancestor.end_byte
+            and current.type == ancestor.type
+        ):
+            return True
+        current = current.parent
+    return False
+
+
+def _declaration_scope_contains(
+    declaration: Any,
+    identifier: Any,
+) -> bool:
+    current = declaration.parent
+    while current is not None and current.type != "function_definition":
+        if current.type in {"compound_statement", "for_statement"}:
+            return _node_contains(current, identifier)
+        current = current.parent
+    return False
+
+
+def _declaration_name_nodes(declaration: Any) -> list[Any]:
+    names: list[Any] = []
+    type_node = declaration.child_by_field_name("type")
+    for child in declaration.named_children:
+        if type_node is not None and (
+            child.start_byte == type_node.start_byte
+            and child.end_byte == type_node.end_byte
+            and child.type == type_node.type
+        ):
+            continue
+        name_node = _declarator_identifier_node(child)
+        if name_node is not None:
+            names.append(name_node)
+    return names
+
+
+def _visible_function_ordinary_identifier_bindings(
+    definition: Any,
+    identifier: Any,
+    source_bytes: bytes,
+) -> tuple[_OrdinaryIdentifierBinding, ...]:
+    name = _ts.node_text(source_bytes, identifier)
+    bindings: list[_OrdinaryIdentifierBinding] = []
+    for name_node in _function_parameter_name_nodes(definition):
+        if _ts.node_text(source_bytes, name_node) != name:
+            continue
+        binding_node = name_node
+        while (
+            binding_node.parent is not None
+            and binding_node.type != "parameter_declaration"
+        ):
+            binding_node = binding_node.parent
+        bindings.append(_ordinary_identifier_binding(
+            binding_node,
+            name_node,
+            kind="parameter",
+            scope="function",
+        ))
+
+    body = definition.child_by_field_name("body")
+    if body is None:
+        return tuple(bindings)
+    for node in _walk_ast_nodes(body):
+        if node.type == "enumerator":
+            name_nodes = [node.child_by_field_name("name")]
+            kind = "enum-constant"
+        elif node.type == "type_definition":
+            name_nodes = [
+                _ordinary_declarator_identifier_node(declarator)
+                for declarator in _declaration_declarators(node)
+            ]
+            kind = "typedef-name"
+        elif node.type == "declaration":
+            name_nodes = _declaration_name_nodes(node)
+            kind = "declaration"
+        else:
+            continue
+        for name_node in name_nodes:
+            if (
+                name_node is not None
+                and _ts.node_text(source_bytes, name_node) == name
+                and name_node.end_byte <= identifier.start_byte
+                and _declaration_scope_contains(node, identifier)
+            ):
+                bindings.append(_ordinary_identifier_binding(
+                    node,
+                    name_node,
+                    kind=kind,
+                    scope="function",
+                ))
+    return tuple(sorted(
+        bindings,
+        key=lambda binding: (
+            binding.identifier_span,
+            binding.kind,
+        ),
+    ))
+
+
+def _pointer_binding_from_declaration(
+    declaration: Any,
+    name_node: Any,
+    source_bytes: bytes,
+) -> _BoundPointerLocal | None:
+    type_node = declaration.child_by_field_name("type")
+    if type_node is None:
+        return None
+    direct_declarators: list[Any] = []
+    for child in declaration.named_children:
+        candidate = _declarator_identifier_node(child)
+        if (
+            candidate is not None
+            and candidate.start_byte == name_node.start_byte
+            and candidate.end_byte == name_node.end_byte
+        ):
+            direct_declarators.append(child)
+    if len(direct_declarators) != 1:
+        return None
+
+    declarator = direct_declarators[0]
+    if declarator.type == "init_declarator":
+        declarator = declarator.child_by_field_name("declarator")
+    pointer_depth = 0
+    while declarator is not None and declarator.type == "pointer_declarator":
+        nested = declarator.child_by_field_name("declarator")
+        if nested is None or any(
+            child.start_byte != nested.start_byte
+            or child.end_byte != nested.end_byte
+            or child.type != nested.type
+            for child in declarator.named_children
+        ):
+            return None
+        pointer_depth += 1
+        declarator = nested
+    if (
+        pointer_depth == 0
+        or declarator is None
+        or declarator.type != "identifier"
+        or declarator.start_byte != name_node.start_byte
+        or declarator.end_byte != name_node.end_byte
+    ):
+        return None
+
+    base_type = source_bytes[
+        declaration.start_byte:type_node.end_byte
+    ].decode("utf-8", errors="replace")
+    normalized_type = _normalized_pointer_decl_type(
+        f"{base_type}{'*' * pointer_depth}"
+    )
+    if normalized_type is None:
+        return None
+    return _BoundPointerLocal(
+        name=_ts.node_text(source_bytes, name_node),
+        normalized_pointer_type=normalized_type,
+        declaration_span=(declaration.start_byte, declaration.end_byte),
+        identifier_span=(name_node.start_byte, name_node.end_byte),
+    )
+
+
+def _bind_unique_pointer_local(
+    definition: Any,
+    use_identifier: Any,
+    source_bytes: bytes,
+) -> tuple[_BoundPointerLocal | None, str | None]:
+    name = _ts.node_text(source_bytes, use_identifier)
+    body = definition.child_by_field_name("body")
+    if body is None:
+        return None, "unresolved"
+    declarations: list[tuple[Any, Any]] = []
+    for node in _walk_ast_nodes(body):
+        if node.type != "declaration":
+            continue
+        for name_node in _declaration_name_nodes(node):
+            if _ts.node_text(source_bytes, name_node) == name:
+                declarations.append((node, name_node))
+    if any(
+        _ast_node_has_preprocessor_ancestor(declaration)
+        for declaration, _name_node in declarations
+    ):
+        return None, "preprocessor"
+    if len(declarations) != 1:
+        return None, "ambiguous" if declarations else "unresolved"
+
+    declaration, name_node = declarations[0]
+    binding = _pointer_binding_from_declaration(
+        declaration,
+        name_node,
+        source_bytes,
+    )
+    if binding is None:
+        return None, "unresolved"
+    use_is_declaration = (
+        use_identifier.start_byte == name_node.start_byte
+        and use_identifier.end_byte == name_node.end_byte
+    )
+    scope = declaration.parent
+    if (
+        scope is None
+        or scope.type != "compound_statement"
+        or not _node_contains(scope, use_identifier)
+        or (not use_is_declaration and declaration.end_byte > use_identifier.start_byte)
+    ):
+        return None, "ambiguous"
+    return binding, None
+
+
+def _owner_assignment_nodes(
+    definition: Any,
+    owner: _OwnerAssignment,
+    helper_name: str,
+    source_bytes: bytes,
+) -> tuple[Any, Any] | None:
+    candidates: list[tuple[Any, Any]] = []
+    for node in _walk_ast_nodes(definition):
+        if node.type != "assignment_expression":
+            continue
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        statement = node.parent
+        if (
+            left is None
+            or right is None
+            or left.type != "identifier"
+            or _ts.node_text(source_bytes, left) != owner.local_name
+            or right.type != "call_expression"
+            or _direct_call_name(right, source_bytes) != helper_name
+            or statement is None
+            or statement.type != "expression_statement"
+            or (statement.start_byte, statement.end_byte)
+            != owner.sibling.byte_range
+            or not _plain_standalone_assignment(node, source_bytes)
+        ):
+            continue
+        candidates.append((left, right))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _target_assignment_has_preprocessor_ambiguity(
+    definition: Any,
+    helper_names: set[str],
+    source_bytes: bytes,
+) -> bool:
+    body = definition.child_by_field_name("body")
+    if body is None:
+        return True
+    declarations = [
+        node for node in _walk_ast_nodes(body) if node.type == "declaration"
+    ]
+    for node in _walk_ast_nodes(body):
+        if node.type != "assignment_expression":
+            continue
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        if (
+            left is None
+            or right is None
+            or left.type != "identifier"
+            or right.type != "call_expression"
+            or _direct_call_name(right, source_bytes) not in helper_names
+            or not _plain_standalone_assignment(node, source_bytes)
+        ):
+            continue
+        if _ast_node_has_preprocessor_ancestor(node):
+            return True
+        owner_name = _ts.node_text(source_bytes, left)
+        if any(
+            _ast_node_has_preprocessor_ancestor(declaration)
+            and any(
+                _ts.node_text(source_bytes, name_node) == owner_name
+                for name_node in _declaration_name_nodes(declaration)
+            )
+            for declaration in declarations
+        ):
+            return True
+    return False
+
+
+def _analyze_inline_call_return_helper(
+    source_bytes: bytes,
+    *,
+    helper_name: str,
+    definition: Any,
+    call_symbol: str,
+) -> tuple[_InlineCallReturnHelper | None, str | None]:
+    if _ast_node_has_preprocessor_ancestor(definition):
+        return None, "inline-call-return-preprocessor-ambiguous"
+    if definition.parent is None or definition.parent.type != "translation_unit":
+        return None, "inline-call-return-helper-definition-nested"
+    if any(node.type == "ERROR" for node in _walk_ast_nodes(definition)):
+        return None, "inline-call-return-source-span-unsafe"
+
+    return_type, return_type_reason = _function_inline_pointer_return_type(
+        source_bytes,
+        definition,
+    )
+    if return_type_reason is not None or return_type is None:
+        return None, return_type_reason
+
+    body = definition.child_by_field_name("body")
+    if body is None or body.type != "compound_statement":
+        return None, "inline-call-return-helper-definition-unsupported"
+    low_level_calls = [
+        node
+        for node in _walk_ast_nodes(body)
+        if node.type == "call_expression"
+        and _direct_call_name(node, source_bytes) == call_symbol
+    ]
+    if len(low_level_calls) != 1:
+        return None, "inline-call-return-low-level-call-ambiguous"
+    low_level_call = low_level_calls[0]
+    if _ast_node_has_preprocessor_ancestor(low_level_call):
+        return None, "inline-call-return-preprocessor-ambiguous"
+    low_level_callee = low_level_call.child_by_field_name("function")
+    if low_level_callee is None:
+        return None, "inline-call-return-low-level-call-binding-ambiguous"
+    local_bindings = _visible_function_ordinary_identifier_bindings(
+        definition,
+        low_level_callee,
+        source_bytes,
+    )
+    if any(
+        binding.preprocessor_controlled for binding in local_bindings
+    ):
+        return None, "inline-call-return-preprocessor-ambiguous"
+    if local_bindings:
+        return None, "inline-call-return-low-level-call-binding-ambiguous"
+    result_identifier = _direct_call_result_identifier(
+        low_level_call,
+        source_bytes,
+    )
+    if result_identifier is None:
+        return None, "inline-call-return-low-level-call-owner-unsupported"
+    result_local = _ts.node_text(source_bytes, result_identifier)
+    result_binding, result_binding_reason = _bind_unique_pointer_local(
+        definition,
+        result_identifier,
+        source_bytes,
+    )
+    if result_binding_reason == "preprocessor":
+        return None, "inline-call-return-preprocessor-ambiguous"
+    if result_binding_reason == "ambiguous":
+        return None, "inline-call-return-helper-binding-ambiguous"
+    if result_binding is None:
+        return None, "inline-call-return-helper-type-unresolved"
+    preprocessor_spans = tuple(
+        (node.start_byte, node.end_byte)
+        for node in _walk_ast_nodes(definition)
+        if node.type.startswith("preproc_")
+    )
+    if _span_is_preprocessor_controlled(
+        preprocessor_spans,
+        result_binding.declaration_span,
+    ):
+        return None, "inline-call-return-preprocessor-ambiguous"
+
+    returns = [
+        node
+        for node in _walk_ast_nodes(body)
+        if node.type == "return_statement"
+    ]
+    if len(returns) != 1:
+        return None, "inline-call-return-helper-return-ambiguous"
+    return_node = returns[0]
+    if _ast_node_has_preprocessor_ancestor(return_node):
+        return None, "inline-call-return-preprocessor-ambiguous"
+    return_values = list(return_node.named_children)
+    return_identifier = return_values[0] if return_values else None
+    if (
+        len(return_values) != 1
+        or return_identifier is None
+        or return_identifier.type != "identifier"
+        or _ts.node_text(source_bytes, return_identifier) != result_local
+    ):
+        return None, "inline-call-return-helper-return-not-direct"
+    return_binding, return_binding_reason = _bind_unique_pointer_local(
+        definition,
+        return_identifier,
+        source_bytes,
+    )
+    if return_binding_reason == "preprocessor":
+        return None, "inline-call-return-preprocessor-ambiguous"
+    if return_binding_reason == "ambiguous":
+        return None, "inline-call-return-helper-binding-ambiguous"
+    if return_binding is None:
+        return None, "inline-call-return-helper-type-unresolved"
+    if return_binding.declaration_span != result_binding.declaration_span:
+        return None, "inline-call-return-helper-binding-ambiguous"
+    if result_binding.normalized_pointer_type != return_type:
+        return None, "inline-call-return-type-incompatible"
+
+    return (
+        _InlineCallReturnHelper(
+            name=helper_name,
+            result_local=result_local,
+            normalized_pointer_type=return_type,
+            definition_span=(definition.start_byte, definition.end_byte),
+            result_declaration_span=result_binding.declaration_span,
+            low_level_call_span=(
+                low_level_call.start_byte,
+                low_level_call.end_byte,
+            ),
+            return_span=(return_node.start_byte, return_node.end_byte),
+        ),
+        None,
+    )
+
+
+def _bare_call_assignment_owners(
+    groups: list[statement_move.SiblingGroup],
+) -> list[tuple[_OwnerAssignment, str]]:
+    owners: list[tuple[_OwnerAssignment, str]] = []
+    seen_spans: set[tuple[int, int]] = set()
+    for group in groups:
+        for sibling in group.siblings:
+            if sibling.kind != "simple" or sibling.byte_range in seen_spans:
+                continue
+            match = _SIMPLE_ASSIGN_RE.match(sibling.text)
+            if match is None:
+                continue
+            local_name = match.group("lhs")
+            if local_name not in group.locals_:
+                continue
+            rhs = match.group("rhs").strip()
+            helper_name = _bare_call_rhs_name(rhs)
+            if helper_name is None:
+                continue
+            seen_spans.add(sibling.byte_range)
+            owners.append((
+                _OwnerAssignment(
+                    group=group,
+                    sibling=sibling,
+                    local_name=local_name,
+                    rhs=rhs,
+                    indent=match.group("indent"),
+                    split_expression=rhs,
+                ),
+                helper_name,
+            ))
+    return owners
+
+
+def _inline_call_return_copy_chain(
+    source_attr: Any,
+    *,
+    target_ig: int,
+) -> tuple[int, ...] | None:
+    raw_chain = _attr_value(source_attr, "copy_chain")
+    if not isinstance(raw_chain, (list, tuple)):
+        return None
+    if not 2 <= len(raw_chain) <= 8:
+        return None
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in raw_chain):
+        return None
+    chain = tuple(raw_chain)
+    if chain[0] != target_ig or chain[-1] != 3 or len(set(chain)) != len(chain):
+        return None
+    return chain
+
+
+def _inline_call_return_owner(
+    source_text: str,
     groups: list[statement_move.SiblingGroup],
     source_attr: Any,
+    *,
+    function: str,
+    target_ig: int,
+) -> tuple[_InlineCallReturnOwner | None, dict[str, Any], str | None]:
+    copy_chain = _inline_call_return_copy_chain(
+        source_attr,
+        target_ig=target_ig,
+    )
+    metadata: dict[str, Any] = {
+        "resolution": "inline-wrapper-return-owner",
+        "candidate_limit": 1,
+        "copy_chain": list(copy_chain) if copy_chain is not None else (
+            _source_attr_jsonish(_attr_value(source_attr, "copy_chain"))
+        ),
+        "source_span_unit": "byte",
+    }
+
+    def reject(reason: str):
+        metadata["status"] = "rejected"
+        metadata["rejection_reason"] = reason
+        return None, metadata, reason
+
+    if copy_chain is None:
+        return reject("inline-call-return-copy-chain-invalid")
+    call_symbol = _attr_value(source_attr, "call_symbol")
+    if not isinstance(call_symbol, str) or not call_symbol:
+        return reject("inline-call-return-call-symbol-missing")
+
+    source_bytes = source_text.encode("utf-8")
+    root = _ts.get_parser().parse(source_bytes).root_node
+    definitions = _function_definition_nodes(root, source_bytes)
+    if len(definitions.get(function, ())) != 1:
+        return reject("inline-call-return-target-definition-ambiguous")
+    target_definition = definitions[function][0]
+    if _ast_node_has_preprocessor_ancestor(target_definition):
+        return reject("inline-call-return-preprocessor-ambiguous")
+
+    preprocessor_spans = tuple(
+        (node.start_byte, node.end_byte)
+        for node in _walk_ast_nodes(root)
+        if node.type.startswith("preproc_")
+    )
+    macro_names: set[str] = set()
+    for node in _walk_ast_nodes(root):
+        if node.type not in {"preproc_def", "preproc_function_def"}:
+            continue
+        name_node = node.child_by_field_name("name")
+        if name_node is not None:
+            macro_names.add(_ts.node_text(source_bytes, name_node))
+    if call_symbol in macro_names:
+        return reject("inline-call-return-preprocessor-ambiguous")
+
+    helper_names: set[str] = set()
+    for helper_name, helper_definitions in definitions.items():
+        for definition in helper_definitions:
+            body = definition.child_by_field_name("body")
+            if body is None:
+                continue
+            if any(
+                node.type == "call_expression"
+                and _direct_call_name(node, source_bytes) == call_symbol
+                for node in _walk_ast_nodes(body)
+            ):
+                helper_names.add(helper_name)
+                break
+    if not helper_names:
+        return reject("inline-call-return-helper-definition-not-found")
+    if _target_assignment_has_preprocessor_ambiguity(
+        target_definition,
+        helper_names,
+        source_bytes,
+    ):
+        return reject("inline-call-return-preprocessor-ambiguous")
+
+    target_owners = [
+        (owner, helper_name)
+        for owner, helper_name in _bare_call_assignment_owners(groups)
+        if helper_name in helper_names
+    ]
+    if not target_owners:
+        return reject("inline-call-return-target-assignment-not-found")
+    if len(target_owners) != 1:
+        metadata["candidate_assignment_count"] = len(target_owners)
+        return reject("inline-call-return-owner-ambiguous")
+
+    owner, helper_name = target_owners[0]
+    if helper_name in macro_names:
+        return reject("inline-call-return-preprocessor-ambiguous")
+    helper_definitions = definitions.get(helper_name, ())
+    if len(helper_definitions) != 1:
+        metadata["wrapper_name"] = helper_name
+        metadata["wrapper_definition_count"] = len(helper_definitions)
+        return reject("inline-call-return-helper-definition-ambiguous")
+    if _ast_node_has_preprocessor_ancestor(helper_definitions[0]):
+        return reject("inline-call-return-preprocessor-ambiguous")
+    if _span_is_preprocessor_controlled(
+        preprocessor_spans,
+        owner.sibling.byte_range,
+    ):
+        return reject("inline-call-return-preprocessor-ambiguous")
+
+    owner_nodes = _owner_assignment_nodes(
+        target_definition,
+        owner,
+        helper_name,
+        source_bytes,
+    )
+    if owner_nodes is None:
+        return reject("inline-call-return-owner-binding-ambiguous")
+    owner_identifier, wrapper_call = owner_nodes
+    wrapper_callee = wrapper_call.child_by_field_name("function")
+    if wrapper_callee is None:
+        return reject("inline-call-return-wrapper-call-binding-ambiguous")
+    wrapper_local_bindings = _visible_function_ordinary_identifier_bindings(
+        target_definition,
+        wrapper_callee,
+        source_bytes,
+    )
+    wrapper_binding, wrapper_conflicts = _top_level_function_binding(
+        root,
+        source_bytes,
+        definitions,
+        helper_name,
+    )
+    if wrapper_local_bindings:
+        metadata["wrapper_local_binding_conflicts"] = (
+            _ordinary_identifier_bindings_metadata(wrapper_local_bindings)
+        )
+    if wrapper_conflicts:
+        metadata["wrapper_tu_binding_conflicts"] = (
+            _ordinary_identifier_bindings_metadata(wrapper_conflicts)
+        )
+    if any(
+        binding.preprocessor_controlled
+        for binding in (*wrapper_local_bindings, *wrapper_conflicts)
+    ):
+        return reject("inline-call-return-preprocessor-ambiguous")
+    if wrapper_local_bindings or wrapper_binding is None:
+        return reject("inline-call-return-wrapper-call-binding-ambiguous")
+
+    low_level_binding, low_level_conflicts = _top_level_function_binding(
+        root,
+        source_bytes,
+        definitions,
+        call_symbol,
+    )
+    if low_level_conflicts:
+        metadata["low_level_tu_binding_conflicts"] = (
+            _ordinary_identifier_bindings_metadata(low_level_conflicts)
+        )
+    if any(
+        binding.preprocessor_controlled for binding in low_level_conflicts
+    ):
+        return reject("inline-call-return-preprocessor-ambiguous")
+    if low_level_binding is None:
+        return reject("inline-call-return-low-level-call-binding-ambiguous")
+
+    helper, helper_reason = _analyze_inline_call_return_helper(
+        source_bytes,
+        helper_name=helper_name,
+        definition=helper_definitions[0],
+        call_symbol=call_symbol,
+    )
+    if helper is None:
+        return reject(
+            helper_reason or "inline-call-return-helper-definition-unsupported"
+        )
+
+    owner_binding, owner_binding_reason = _bind_unique_pointer_local(
+        target_definition,
+        owner_identifier,
+        source_bytes,
+    )
+    if owner_binding_reason == "preprocessor":
+        return reject("inline-call-return-preprocessor-ambiguous")
+    if owner_binding_reason == "ambiguous":
+        return reject("inline-call-return-owner-binding-ambiguous")
+    if owner_binding is None:
+        return reject("inline-call-return-owner-type-unresolved")
+    if _span_is_preprocessor_controlled(
+        preprocessor_spans,
+        owner_binding.declaration_span,
+    ):
+        return reject("inline-call-return-preprocessor-ambiguous")
+    if owner_binding.normalized_pointer_type != helper.normalized_pointer_type:
+        return reject("inline-call-return-type-incompatible")
+    attributed_type = _attr_value(source_attr, "type")
+    if attributed_type is not None:
+        normalized_attributed_type = _normalized_pointer_decl_type(attributed_type)
+        if normalized_attributed_type is None:
+            return reject("inline-call-return-attributed-type-unresolved")
+        if normalized_attributed_type != helper.normalized_pointer_type:
+            return reject("inline-call-return-type-incompatible")
+
+    metadata.update({
+        "status": "resolved",
+        "wrapper_name": helper.name,
+        "helper_result_local": helper.result_local,
+        "owner_local": owner.local_name,
+        "normalized_pointer_type": helper.normalized_pointer_type,
+        "call_symbol": call_symbol,
+        "wrapper_function_binding": _top_level_function_binding_metadata(
+            wrapper_binding
+        ),
+        "low_level_function_binding": _top_level_function_binding_metadata(
+            low_level_binding
+        ),
+        "wrapper_definition_span": list(helper.definition_span),
+        "helper_result_declaration_span": list(helper.result_declaration_span),
+        "low_level_call_span": list(helper.low_level_call_span),
+        "helper_return_span": list(helper.return_span),
+        "owner_declaration_span": list(owner_binding.declaration_span),
+        "target_assignment_span": list(owner.sibling.byte_range),
+    })
+    return (
+        _InlineCallReturnOwner(
+            owner=owner,
+            helper=helper,
+            owner_declaration_span=owner_binding.declaration_span,
+            metadata=metadata,
+        ),
+        metadata,
+        None,
+    )
+
+
+def _call_return_owner_split(
+    source_text: str,
+    groups: list[statement_move.SiblingGroup],
+    source_attr: Any,
+    *,
+    function: str,
+    target_ig: int,
 ) -> _SyntheticOwnerResult:
     local_name = _attr_value(source_attr, "name")
     metadata = {
@@ -5139,9 +6300,31 @@ def _call_return_owner_split(
         "call_symbol": _attr_value(source_attr, "call_symbol"),
         "copy_chain": _source_attr_jsonish(_attr_value(source_attr, "copy_chain")),
         "variant": "synthetic-call-return-owner-copy",
+        "candidate_limit": 1,
     }
     if not isinstance(local_name, str) or not local_name:
-        return _SyntheticOwnerResult((), metadata, "call-return-owner-copy-not-found")
+        resolution, inline_metadata, terminal_blocker = (
+            _inline_call_return_owner(
+                source_text,
+                groups,
+                source_attr,
+                function=function,
+                target_ig=target_ig,
+            )
+        )
+        metadata.update(inline_metadata)
+        if resolution is None:
+            return _SyntheticOwnerResult((), metadata, terminal_blocker)
+        return _SyntheticOwnerResult(
+            (
+                _SyntheticOwnerCandidate(
+                    resolution.owner,
+                    dict(metadata),
+                ),
+            ),
+            metadata,
+            None,
+        )
 
     source_line = _attr_value(source_attr, "source_line")
     owners = _visible_local_assignment_owners(
@@ -6547,30 +7730,51 @@ def plan_window_order_source_probes(
         direction: str,
         source_attr: Any,
     ) -> None:
-        synthetic = _call_return_owner_split(groups, source_attr)
+        synthetic = _call_return_owner_split(
+            source_text,
+            groups,
+            source_attr,
+            function=function,
+            target_ig=target_ig,
+        )
         diag["call_return_source_probe"] = dict(synthetic.metadata)
         diag["source_attribution_kind"] = _attr_value(source_attr, "kind")
+
+        def reject_materialization(reason: str) -> None:
+            diag["terminal_blocker"] = reason
+            proof = dict(diag["call_return_source_probe"])
+            if proof.get("resolution") == "inline-wrapper-return-owner":
+                proof["status"] = "rejected"
+                proof["rejection_reason"] = reason
+                diag["call_return_source_probe"] = proof
+
         if not synthetic.candidates:
-            diag["terminal_blocker"] = (
+            reject_materialization(
                 synthetic.terminal_blocker or "call-return-owner-copy-not-found"
             )
             return
         if len(probes) >= limit:
-            diag["terminal_blocker"] = "probe-limit-reached"
+            reject_materialization("probe-limit-reached")
             return
 
         candidate = synthetic.candidates[0]
         owner = candidate.owner
         if owner is None:
-            diag["terminal_blocker"] = "call-return-owner-copy-not-found"
+            reject_materialization("call-return-owner-copy-not-found")
             return
         split = _split_owner_assignment_source(source_text, owner)
         if split is None:
-            local_type = _function_local_type(
-                source_text,
-                name=owner.local_name,
-                search_span=function_body_span,
-            )
+            if (
+                candidate.metadata.get("resolution")
+                == "inline-wrapper-return-owner"
+            ):
+                local_type = candidate.metadata.get("normalized_pointer_type")
+            else:
+                local_type = _function_local_type(
+                    source_text,
+                    name=owner.local_name,
+                    search_span=function_body_span,
+                )
             if local_type is not None:
                 split = _split_owner_assignment_source_with_type(
                     source_text,
@@ -6579,14 +7783,14 @@ def plan_window_order_source_probes(
                     type_text=local_type,
                 )
         if split is None:
-            diag["terminal_blocker"] = "call-return-owner-type-unresolved"
+            reject_materialization("call-return-owner-type-unresolved")
             return
         candidate_text, split_meta = split
         if candidate_text == source_text:
-            diag["terminal_blocker"] = "source-unchanged"
+            reject_materialization("source-unchanged")
             return
         if candidate_text in seen_source:
-            diag["terminal_blocker"] = "synthetic-temp-duplicate-source"
+            reject_materialization("synthetic-temp-duplicate-source")
             return
 
         label = (
@@ -6607,6 +7811,7 @@ def plan_window_order_source_probes(
         call_return_probe = dict(candidate.metadata)
         call_return_probe.update(split_meta)
         call_return_probe.update({
+            "status": "materialized",
             "probe_label": label,
             "source_hunks": source_hunks,
             "source_diff": source_diff,

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import dataclasses
+import json
 import textwrap
 
 import pytest
 
+from src.mwcc_debug.virtual_attribution import InstructionSite, SourceAttribution
 from src.search.directed.window_order_source import (
     generate_window_order_source_probes,
     plan_target_aware_live_range_repair_probes,
@@ -456,6 +459,1159 @@ def test_window_order_plan_rejects_compound_call_return_rhs() -> None:
     diag = plan.lead_diagnostics[0]
     assert diag["terminal_blocker"] == "call-return-owner-copy-not-found"
     assert diag["call_return_source_probe"]["candidate_assignment_count"] == 0
+
+
+def _plan_inline_call_return_owner(
+    source: str,
+    *,
+    copy_chain: list[int] | None = None,
+    attributed_type: object | None = None,
+):
+    source_attribution = {
+        "kind": "call-return",
+        "name": None,
+        "type": attributed_type,
+        "expression": "HSD_JObjLoadJoint(joint_data)",
+        "call_symbol": "HSD_JObjLoadJoint",
+        "source_line": None,
+        "copy_chain": [72, 86, 3] if copy_chain is None else copy_chain,
+    }
+    plan = plan_window_order_source_probes(
+        textwrap.dedent(source),
+        function="fn",
+        fallback_leads=[{"target_ig": 72, "order_move": ["before", 67]}],
+        source_attributions={72: source_attribution},
+        max_probes=4,
+    )
+    return plan, source_attribution
+
+
+def test_window_order_plan_materializes_inline_call_return_owner() -> None:
+    plan, source_attribution = _plan_inline_call_return_owner("""\
+        typedef struct HSD_JObj HSD_JObj;
+        HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+        void sink(HSD_JObj* jobj);
+
+        static inline HSD_JObj* make_header(void* joint_data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(joint_data);
+            sink(result);
+            return result;
+        }
+
+        void fn(void* joint_data)
+        {
+            HSD_JObj* header;
+            header = make_header(joint_data);
+            sink(header);
+        }
+    """)
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert len(plan.probes) == 1
+    probe = plan.probes[0]
+    diag = plan.lead_diagnostics[0]
+    proof = probe.provenance["call_return_source_probe"]
+
+    assert diag["status"] == "materialized"
+    assert diag["materialized_probe_labels"] == [probe.label]
+    assert probe.provenance["source_attribution"] == source_attribution
+    assert proof["resolution"] == "inline-wrapper-return-owner"
+    assert proof["wrapper_name"] == "make_header"
+    assert proof["helper_result_local"] == "result"
+    assert proof["owner_local"] == "header"
+    assert proof["copy_chain"] == [72, 86, 3]
+    assert proof["normalized_pointer_type"] == "HSD_JObj*"
+    assert proof["candidate_limit"] == 1
+    assert proof["wrapper_definition_span"]
+    assert proof["low_level_call_span"]
+    assert proof["helper_return_span"]
+    assert proof["helper_result_declaration_span"]
+    assert proof["owner_declaration_span"]
+    assert proof["target_assignment_span"]
+    assert "HSD_JObj* window_order_synthetic_header;" in probe.source_text
+    assert "window_order_synthetic_header = make_header(joint_data);" in (
+        probe.source_text
+    )
+    assert "header = window_order_synthetic_header;" in probe.source_text
+
+
+def test_window_order_inline_call_return_preserves_exact_attribution() -> None:
+    first_def = InstructionSite(
+        pass_name="BEFORE GLOBAL OPTIMIZATION",
+        block_idx=23,
+        instr_idx=0,
+        opcode="bl",
+        operands="HSD_JObjLoadJoint",
+    )
+    use_site = InstructionSite(
+        pass_name="BEFORE GLOBAL OPTIMIZATION",
+        block_idx=24,
+        instr_idx=2,
+        opcode="mr",
+        operands="r3,r72",
+    )
+    source_attribution = SourceAttribution(
+        kind="call-return",
+        confidence="copy-chain",
+        source_file="src/melee/mn/mndiagram.c",
+        expression="HSD_JObjLoadJoint(...) ",
+        first_def=first_def,
+        call_symbol="HSD_JObjLoadJoint",
+        copy_chain=(72, 86, 3),
+        use_sites=(use_site,),
+        owner_status="unresolved-call-return",
+        owner_scope_path=("fn", "for"),
+        objobject_id="0x1234",
+        objobject_name="header_result",
+        stack_home_offset=24,
+    )
+    source = textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+        HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+        static inline HSD_JObj* make_header(void* joint_data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(joint_data);
+            return result;
+        }
+        void fn(void* joint_data)
+        {
+            HSD_JObj* header;
+            header = make_header(joint_data);
+        }
+    """)
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[{"target_ig": 72, "order_move": ["before", 67]}],
+        source_attributions={72: source_attribution},
+        max_probes=1,
+    )
+    if not plan.probes:
+        pytest.fail("exact dataclass attribution did not materialize")
+
+    expected = json.loads(json.dumps(dataclasses.asdict(source_attribution)))
+    assert plan.probes[0].provenance["source_attribution"] == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "copy_chain", "reason"),
+    [
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_a(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                static inline HSD_JObj* make_b(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data, int choose)
+                {
+                    HSD_JObj* header;
+                    if (choose) {
+                        header = make_a(data);
+                    } else {
+                        header = make_b(data);
+                    }
+                }
+            """,
+            None,
+            "inline-call-return-owner-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                #define make_header(data) other_header(data)
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            None,
+            "inline-call-return-preprocessor-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            None,
+            "inline-call-return-low-level-call-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data, int choose)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    if (choose) {
+                        return result;
+                    }
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data, 1);
+                }
+            """,
+            None,
+            "inline-call-return-helper-return-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                HSD_JObj* identity(HSD_JObj* jobj);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = identity(make_header(data));
+                }
+            """,
+            None,
+            "inline-call-return-target-assignment-not-found",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                typedef HSD_JObj* HeaderPtr;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HeaderPtr header;
+                    header = make_header(data);
+                }
+            """,
+            None,
+            "inline-call-return-owner-type-unresolved",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            [72, 86],
+            "inline-call-return-copy-chain-invalid",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                    header = make_header(data);
+                }
+            """,
+            None,
+            "inline-call-return-owner-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return (result);
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            None,
+            "inline-call-return-helper-return-not-direct",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                typedef HSD_JObj* HeaderPtr;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HeaderPtr result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            None,
+            "inline-call-return-helper-type-unresolved",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                typedef struct Other Other;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    Other* header;
+                    header = make_header(data);
+                }
+            """,
+            None,
+            "inline-call-return-type-incompatible",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            None,
+            "inline-call-return-helper-definition-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                #if USE_HEADER
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                #endif
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            None,
+            "inline-call-return-preprocessor-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                #if USE_HEADER
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+                #endif
+            """,
+            None,
+            "inline-call-return-preprocessor-ambiguous",
+        ),
+    ],
+    ids=[
+        "two-wrappers",
+        "macro-wrapper",
+        "repeated-low-level-call",
+        "multiple-returns",
+        "compound-target-rhs",
+        "missing-owner-pointer-type",
+        "invalid-copy-chain",
+        "repeated-target-call",
+        "non-direct-return",
+        "missing-helper-pointer-type",
+        "incompatible-pointer-type",
+        "duplicate-helper-definition",
+        "preprocessor-controlled-helper",
+        "preprocessor-controlled-target",
+    ],
+)
+def test_window_order_plan_rejects_unsafe_inline_call_return_owner(
+    source: str,
+    copy_chain: list[int] | None,
+    reason: str,
+) -> None:
+    plan, _source_attribution = _plan_inline_call_return_owner(
+        source,
+        copy_chain=copy_chain,
+    )
+    if not plan.lead_diagnostics:
+        pytest.skip("tree-sitter unavailable")
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    assert diag["terminal_blocker"] == reason
+    assert diag["call_return_source_probe"]["rejection_reason"] == reason
+    assert diag["call_return_source_probe"]["candidate_limit"] == 1
+
+
+@pytest.mark.parametrize(
+    ("source", "reason"),
+    [
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result += HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-low-level-call-owner-unsupported",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    if ((result = HSD_JObjLoadJoint(data))) {
+                    }
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-low-level-call-owner-unsupported",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(
+                    void* data,
+                    HSD_JObj* (*make_header)(void*)
+                )
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-wrapper-call-binding-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                static inline HSD_JObj* make_header(
+                    void* data,
+                    HSD_JObj* (*HSD_JObjLoadJoint)(void*)
+                )
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data, 0);
+                }
+            """,
+            "inline-call-return-low-level-call-binding-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* (*make_header)(void*);
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-wrapper-call-binding-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* (*HSD_JObjLoadJoint)(void*);
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-low-level-call-binding-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                #if USE_FAST
+                    HSD_JObj* result;
+                #endif
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-preprocessor-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                #if USE_FAST
+                    HSD_JObj* header;
+                #endif
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-preprocessor-ambiguous",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                #if USE_FAST
+                    return result;
+                #endif
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-preprocessor-ambiguous",
+        ),
+    ],
+    ids=[
+        "compound-low-level-assignment",
+        "nested-low-level-assignment",
+        "shadowed-wrapper-call",
+        "shadowed-low-level-call",
+        "locally-shadowed-wrapper-call",
+        "locally-shadowed-low-level-call",
+        "preprocessor-controlled-result-declaration",
+        "preprocessor-controlled-owner-declaration",
+        "preprocessor-controlled-return",
+    ],
+)
+def test_window_order_plan_rejects_unproven_inline_call_return_shape(
+    source: str,
+    reason: str,
+) -> None:
+    plan, _source_attribution = _plan_inline_call_return_owner(source)
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    assert diag["terminal_blocker"] == reason
+    assert diag["call_return_source_probe"]["rejection_reason"] == reason
+
+
+@pytest.mark.parametrize(
+    (
+        "scope",
+        "binding_kind",
+        "shadowed_symbol",
+        "parenthesized_typedef",
+        "reason",
+    ),
+    [
+        (
+            "translation-unit",
+            "enumerator",
+            "make_header",
+            False,
+            "inline-call-return-wrapper-call-binding-ambiguous",
+        ),
+        (
+            "translation-unit",
+            "enumerator",
+            "HSD_JObjLoadJoint",
+            False,
+            "inline-call-return-low-level-call-binding-ambiguous",
+        ),
+        (
+            "translation-unit",
+            "typedef",
+            "make_header",
+            False,
+            "inline-call-return-wrapper-call-binding-ambiguous",
+        ),
+        (
+            "translation-unit",
+            "typedef",
+            "HSD_JObjLoadJoint",
+            True,
+            "inline-call-return-low-level-call-binding-ambiguous",
+        ),
+        (
+            "local",
+            "enumerator",
+            "make_header",
+            False,
+            "inline-call-return-wrapper-call-binding-ambiguous",
+        ),
+        (
+            "local",
+            "enumerator",
+            "HSD_JObjLoadJoint",
+            False,
+            "inline-call-return-low-level-call-binding-ambiguous",
+        ),
+        (
+            "local",
+            "typedef",
+            "make_header",
+            True,
+            "inline-call-return-wrapper-call-binding-ambiguous",
+        ),
+        (
+            "local",
+            "typedef",
+            "HSD_JObjLoadJoint",
+            False,
+            "inline-call-return-low-level-call-binding-ambiguous",
+        ),
+    ],
+    ids=[
+        "tu-enumerator-wrapper",
+        "tu-enumerator-low-level",
+        "tu-typedef-direct-wrapper",
+        "tu-typedef-parenthesized-low-level",
+        "local-enumerator-wrapper",
+        "local-enumerator-low-level",
+        "local-typedef-parenthesized-wrapper",
+        "local-typedef-direct-low-level",
+    ],
+)
+def test_window_order_plan_rejects_ordinary_identifier_call_shadow(
+    scope: str,
+    binding_kind: str,
+    shadowed_symbol: str,
+    parenthesized_typedef: bool,
+    reason: str,
+) -> None:
+    if binding_kind == "enumerator":
+        shadow = f"enum {{ {shadowed_symbol} = 1 }};"
+    else:
+        declarator = (
+            f"({shadowed_symbol})"
+            if parenthesized_typedef
+            else shadowed_symbol
+        )
+        shadow = f"typedef int {declarator};"
+
+    translation_unit_shadow = shadow if scope == "translation-unit" else ""
+    helper_shadow = (
+        shadow
+        if scope == "local" and shadowed_symbol == "HSD_JObjLoadJoint"
+        else ""
+    )
+    target_shadow = (
+        shadow
+        if scope == "local" and shadowed_symbol == "make_header"
+        else ""
+    )
+    plan, _source_attribution = _plan_inline_call_return_owner(f"""\
+        typedef struct HSD_JObj HSD_JObj;
+        {translation_unit_shadow}
+        HSD_JObj* HSD_JObjLoadJoint(void* data);
+        static inline HSD_JObj* make_header(void* data)
+        {{
+            {helper_shadow}
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(data);
+            return result;
+        }}
+        void fn(void* data)
+        {{
+            {target_shadow}
+            HSD_JObj* header;
+            header = make_header(data);
+        }}
+    """)
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    assert diag["terminal_blocker"] == reason
+    proof = diag["call_return_source_probe"]
+    assert proof["rejection_reason"] == reason
+    assert proof["candidate_limit"] == 1
+
+
+@pytest.mark.parametrize(
+    ("source", "reason"),
+    [
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-helper-not-tu-local",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                extern inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-helper-not-tu-local",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                extern static inline HSD_JObj* make_header(void* data)
+                {
+                    HSD_JObj* result;
+                    result = HSD_JObjLoadJoint(data);
+                    return result;
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-helper-not-tu-local",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                void unrelated(void)
+                {
+                    static inline HSD_JObj* make_header(void* data)
+                    {
+                        HSD_JObj* result;
+                        result = HSD_JObjLoadJoint(data);
+                        return result;
+                    }
+                }
+                void fn(void* data)
+                {
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-helper-definition-nested",
+        ),
+        (
+            """\
+                typedef struct HSD_JObj HSD_JObj;
+                HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+                void fn(void* data)
+                {
+                    static inline HSD_JObj* make_header(void* inner_data)
+                    {
+                        HSD_JObj* result;
+                        result = HSD_JObjLoadJoint(inner_data);
+                        return result;
+                    }
+                    HSD_JObj* header;
+                    header = make_header(data);
+                }
+            """,
+            "inline-call-return-helper-definition-nested",
+        ),
+    ],
+    ids=[
+        "non-static-inline",
+        "extern-inline",
+        "extern-static-inline",
+        "nested-in-unrelated-function",
+        "nested-in-target-function",
+    ],
+)
+def test_window_order_plan_rejects_non_tu_local_inline_helper(
+    source: str,
+    reason: str,
+) -> None:
+    plan, _source_attribution = _plan_inline_call_return_owner(source)
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    assert diag["terminal_blocker"] == reason
+    assert diag["call_return_source_probe"]["rejection_reason"] == reason
+
+
+def test_window_order_plan_rejects_shadowed_inline_helper_binding() -> None:
+    plan, _source_attribution = _plan_inline_call_return_owner("""\
+        typedef struct HSD_JObj HSD_JObj;
+        typedef struct Other Other;
+        HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+        static inline HSD_JObj* make_header(void* data)
+        {
+            HSD_JObj* result;
+            {
+                Other* result;
+                result = HSD_JObjLoadJoint(data);
+                return result;
+            }
+        }
+        void fn(void* data)
+        {
+            HSD_JObj* header;
+            header = make_header(data);
+        }
+    """)
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    reason = "inline-call-return-helper-binding-ambiguous"
+    assert diag["terminal_blocker"] == reason
+    assert diag["call_return_source_probe"]["rejection_reason"] == reason
+
+
+def test_window_order_plan_rejects_tu_scope_function_pointer_wrapper_binding(
+) -> None:
+    plan, _source_attribution = _plan_inline_call_return_owner("""\
+        typedef struct HSD_JObj HSD_JObj;
+        HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+        HSD_JObj* (*make_header)(void* data);
+        static inline HSD_JObj* make_header(void* data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(data);
+            return result;
+        }
+        void fn(void* data)
+        {
+            HSD_JObj* header;
+            header = make_header(data);
+        }
+    """)
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    reason = "inline-call-return-wrapper-call-binding-ambiguous"
+    assert diag["terminal_blocker"] == reason
+    assert diag["call_return_source_probe"]["rejection_reason"] == reason
+
+
+def test_window_order_plan_rejects_tu_scope_function_pointer_low_level_binding(
+) -> None:
+    plan, _source_attribution = _plan_inline_call_return_owner("""\
+        typedef struct HSD_JObj HSD_JObj;
+        HSD_JObj* (*HSD_JObjLoadJoint)(void* joint_data);
+        static inline HSD_JObj* make_header(void* data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(data);
+            return result;
+        }
+        void fn(void* data)
+        {
+            HSD_JObj* header;
+            header = make_header(data);
+        }
+    """)
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    reason = "inline-call-return-low-level-call-binding-ambiguous"
+    assert diag["terminal_blocker"] == reason
+    assert diag["call_return_source_probe"]["rejection_reason"] == reason
+
+
+def test_window_order_plan_rejects_ambiguous_target_owner_declaration() -> None:
+    plan, _source_attribution = _plan_inline_call_return_owner("""\
+        typedef struct HSD_JObj HSD_JObj;
+        typedef struct Other Other;
+        HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+        static inline HSD_JObj* make_header(void* data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(data);
+            return result;
+        }
+        void fn(void* data)
+        {
+            HSD_JObj* header;
+            Other* header;
+            header = make_header(data);
+        }
+    """)
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    reason = "inline-call-return-owner-binding-ambiguous"
+    assert diag["terminal_blocker"] == reason
+    assert diag["call_return_source_probe"]["rejection_reason"] == reason
+
+
+def test_window_order_plan_rejects_non_string_attributed_type() -> None:
+    plan, _source_attribution = _plan_inline_call_return_owner(
+        """\
+            typedef struct HSD_JObj HSD_JObj;
+            HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+            static inline HSD_JObj* make_header(void* data)
+            {
+                HSD_JObj* result;
+                result = HSD_JObjLoadJoint(data);
+                return result;
+            }
+            void fn(void* data)
+            {
+                HSD_JObj* header;
+                header = make_header(data);
+            }
+        """,
+        attributed_type={"unexpected": "type"},
+    )
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    reason = "inline-call-return-attributed-type-unresolved"
+    assert diag["terminal_blocker"] == reason
+    assert diag["call_return_source_probe"]["rejection_reason"] == reason
+
+
+def test_window_order_plan_deduplicates_repeated_inline_chain_leads() -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+        HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+        static inline HSD_JObj* make_header(void* data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(data);
+            return result;
+        }
+        void fn(void* data)
+        {
+            HSD_JObj* header;
+            header = make_header(data);
+        }
+    """)
+    source_attribution = {
+        "kind": "call-return",
+        "name": None,
+        "type": None,
+        "expression": "HSD_JObjLoadJoint(data)",
+        "call_symbol": "HSD_JObjLoadJoint",
+        "source_line": None,
+        "copy_chain": [72, 86, 3],
+    }
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[
+            {"target_ig": 72, "order_move": ["before", 67]},
+            {"target_ig": 72, "order_move": ["before", 68]},
+        ],
+        source_attributions={72: source_attribution},
+        max_probes=4,
+    )
+
+    assert len(plan.probes) == 1
+    assert len(plan.lead_diagnostics) == 2
+    assert plan.lead_diagnostics[0]["status"] == "materialized"
+    assert (
+        plan.lead_diagnostics[1]["terminal_blocker"]
+        == "synthetic-temp-duplicate-source"
+    )
+    duplicate_proof = plan.lead_diagnostics[1]["call_return_source_probe"]
+    assert duplicate_proof["status"] == "rejected"
+    assert (
+        duplicate_proof["rejection_reason"]
+        == "synthetic-temp-duplicate-source"
+    )
+
+
+def test_window_order_plan_reports_explicit_inline_rejection_at_probe_limit(
+) -> None:
+    source = textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+        HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+        static inline HSD_JObj* make_header(void* data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(data);
+            return result;
+        }
+        void fn(void* data)
+        {
+            HSD_JObj* header;
+            header = make_header(data);
+        }
+    """)
+    source_attribution = {
+        "kind": "call-return",
+        "name": None,
+        "type": None,
+        "expression": "HSD_JObjLoadJoint(data)",
+        "call_symbol": "HSD_JObjLoadJoint",
+        "source_line": None,
+        "copy_chain": [72, 86, 3],
+    }
+
+    plan = plan_window_order_source_probes(
+        source,
+        function="fn",
+        fallback_leads=[
+            {"target_ig": 72, "order_move": ["before", 67]},
+        ],
+        source_attributions={72: source_attribution},
+        max_probes=0,
+    )
+
+    assert plan.probes == []
+    diag = plan.lead_diagnostics[0]
+    assert diag["terminal_blocker"] == "probe-limit-reached"
+    proof = diag["call_return_source_probe"]
+    assert proof["status"] == "rejected"
+    assert proof["rejection_reason"] == "probe-limit-reached"
 
 
 def test_window_order_plan_recovers_pcode_field_load_user_data_from_base_virtual(

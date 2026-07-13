@@ -7,8 +7,8 @@ import pathlib
 import signal
 import subprocess
 import tempfile
-import time
 import textwrap
+import time
 
 import pytest
 from typer.testing import CliRunner
@@ -7052,6 +7052,163 @@ def test_select_order_search_force_phys_lists_window_order_probe_json(
         probe["operator"] == "window-order-source-steering"
         for probe in payload["probes"]
     )
+
+
+def test_select_order_search_compiles_and_scores_inline_call_return_owner_probe(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline.txt"
+    source = tmp_path / "sample.c"
+    campaign = tmp_path / "campaign"
+    baseline.write_text(BASELINE)
+    source.write_text(textwrap.dedent("""\
+        typedef struct HSD_JObj HSD_JObj;
+        HSD_JObj* HSD_JObjLoadJoint(void* joint_data);
+        static inline HSD_JObj* make_header(void* joint_data)
+        {
+            HSD_JObj* result;
+            result = HSD_JObjLoadJoint(joint_data);
+            return result;
+        }
+        void fn_80000000(void* joint_data)
+        {
+            HSD_JObj* header;
+            header = make_header(joint_data);
+        }
+    """))
+    fallback = {
+        "ran": True,
+        "reason": "window-order fallback leads found",
+        "leads": [{
+            "target_ig": 72,
+            "order_move": ["before", 67],
+            "move_distance": 5,
+            "perturbed_reg": 29,
+        }],
+    }
+    source_attribution = {
+        "kind": "call-return",
+        "name": None,
+        "type": None,
+        "expression": "HSD_JObjLoadJoint(joint_data)",
+        "call_symbol": "HSD_JObjLoadJoint",
+        "source_line": None,
+        "copy_chain": [72, 86, 3],
+    }
+    compiled_sources: list[str] = []
+    scored_sources: list[str] = []
+
+    def fake_compile(*args, **kwargs) -> str:
+        path = pathlib.Path(kwargs["diff_input"].path)
+        compiled_sources.append(path.read_text())
+        return TARGET_ORDER
+
+    def fake_source_score(*args, **kwargs):
+        path = pathlib.Path(kwargs["path"])
+        scored_sources.append(path.read_text())
+        return debug_cli._SourceCandidateRealScore(
+            94.0,
+            None,
+            structural_guard={
+                "accepted": True,
+                "shape_preserved": True,
+                "classification_primary": "normalized-structural-match",
+                "normalized_diff_lines": 0,
+                "frame_delta": 0,
+            },
+        )
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_register_tiebreak_window_order_fallback",
+        lambda **kwargs: fallback,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_source_attributions_for_leads",
+        lambda **kwargs: {72: source_attribution},
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_append_transform_corpus_probes",
+        lambda probes, **kwargs: probes,
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.pressure_explorer.generate_lifetime_layout_probes",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.mwcc_debug.diff_capture.compile_source_variant",
+        fake_compile,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_select_order_source_score",
+        fake_source_score,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "debug",
+            "select-order-search",
+            "-f",
+            "fn_80000000",
+            "--target",
+            "r32<r33",
+            "--pcdump",
+            str(baseline),
+            "--source-file",
+            str(source),
+            "--transform-force-phys",
+            "32:29",
+            "--max-probes",
+            "4",
+            "--campaign-dir",
+            str(campaign),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    wrapper_probes = [
+        probe for probe in payload["probes"]
+        if probe["provenance"].get("kind")
+        == "window-order-call-return-source-order"
+    ]
+    assert len(wrapper_probes) == 1
+    proof = wrapper_probes[0]["provenance"]["call_return_source_probe"]
+    assert proof["wrapper_name"] == "make_header"
+    assert proof["owner_local"] == "header"
+    assert proof["copy_chain"] == [72, 86, 3]
+    assert proof["candidate_limit"] == 1
+    assert proof["owner_declaration_span"]
+    assert wrapper_probes[0]["provenance"]["source_attribution"] == (
+        source_attribution
+    )
+
+    wrapper_variants = [
+        variant for variant in payload["variants"]
+        if variant["label"] == wrapper_probes[0]["label"]
+    ]
+    assert len(wrapper_variants) == 1
+    variant = wrapper_variants[0]
+    assert variant["status"] == "ok"
+    assert variant["structural_guard"]["accepted"] is True
+    assert pathlib.Path(variant["pcdump_path"]).read_text() == TARGET_ORDER
+    assert len(compiled_sources) == 1
+    assert len(scored_sources) == 1
+    assert "window_order_synthetic_header" in compiled_sources[0]
+    assert compiled_sources == scored_sources
+
+    diagnostics = payload["window_order_probe_diagnostics"]
+    assert diagnostics["fallback_leads"] == 1
+    assert diagnostics["listed_source_probes"] == 1
+    lead = diagnostics["lead_diagnostics"][0]
+    assert lead["status"] == "materialized"
+    assert "terminal_blocker" not in lead
 
 
 def test_select_order_search_json_exposes_implicit_temp_source_probe(
