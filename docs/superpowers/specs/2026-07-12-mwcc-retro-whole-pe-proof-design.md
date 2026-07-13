@@ -224,6 +224,9 @@ directory containing:
 
 - `raw-pe-cfg.v1.jsonl`: canonical instructions, blocks, edges, calls, and
   jump tables.
+- `raw-ghidra-crosscheck.v1.json`: numeric raw-versus-Ghidra instruction,
+  flow, reference, and ownership deltas without granting Ghidra completeness
+  authority.
 - `backend-lifetime-sites.candidate.v1.json`: allocations, reuse/free
   boundaries, unlink classifications, field writes, mutation/rewrite/emission
   sites, and provenance paths.
@@ -237,8 +240,16 @@ directory containing:
   every proof site.
 - `gc_125n_lifetime_proof.candidate.json`: emitted only when
   `proof_ready=true` and accepted by the production proof validator.
+- `gc_125n.candidate.json`: ignored production-shape table containing the
+  exact candidate proof registry tuple and rewrite/mutation/emission gate used
+  unchanged by live probes.
 - `REPORT.md`: human-readable completeness argument generated from the same
   inventories.
+
+Publication order is acyclic: raw CFG, Ghidra cross-check, lifetime sites,
+opcode layouts, audit summary, canonical hook manifest and digest, canonical
+proof containing the manifest digest and its digest, candidate table containing
+that proof tuple and exact site gate, then the report.
 
 Digest-bearing artifacts exclude timestamps, elapsed time, host-specific
 paths, and unordered containers. Publication uses a temporary file, flush,
