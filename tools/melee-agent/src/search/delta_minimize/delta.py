@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from hashlib import sha256
@@ -11,7 +12,11 @@ from src.common.tree_sitter_c import get_parser
 
 from .contracts import DeltaMinimizeError
 
-DELTA_MANIFEST_SCHEMA = "delta-manifest.v2"
+DELTA_MANIFEST_SCHEMA = "delta-manifest.v3"
+_PRESENTATION_ONLY_RE = re.compile(
+    r"(?:\s+|//[^\r\n]*(?:\r?\n|\r|$)|/\*.*?\*/)*\Z",
+    re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -37,12 +42,24 @@ class DeltaAtom:
 
 
 @dataclass(frozen=True)
+class ExcludedDeltaAtom:
+    atom_id: str
+    affected_functions: tuple[str, ...]
+    left_spans: tuple[tuple[int, int], ...]
+    right_spans: tuple[tuple[int, int], ...]
+    reason: str
+
+
+@dataclass(frozen=True)
 class DeltaManifest:
     schema_version: str
     function: str
     left_hash: str
     right_hash: str
     atoms: tuple[DeltaAtom, ...]
+    scoped_right_hash: str = ""
+    excluded_atom_ids: tuple[str, ...] = ()
+    excluded_atoms: tuple[ExcludedDeltaAtom, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -76,6 +93,10 @@ def extract_primitive_manifest(
 ) -> DeltaManifest:
     """Extract only textual replacements observed between two source parents."""
 
+    from .bindings import build_binding_index, lexical_owners
+
+    left_index = build_binding_index(left)
+    right_index = build_binding_index(right)
     left_bytes = left.encode("utf-8")
     right_bytes = right.encode("utf-8")
     parser = get_parser()
@@ -88,13 +109,31 @@ def extract_primitive_manifest(
         reason = "unmergeable-overlapping-delta" if merged_overlap else "endpoint-reproduction-failed"
         raise DeltaMinimizeError(reason)
 
-    grouped: dict[tuple[str, str], list[DeltaPatch]] = {}
+    grouped: dict[tuple[str, str, tuple[str, ...]], list[DeltaPatch]] = {}
     for change in changes:
         left_text = left[change.left_start : change.left_end]
         right_text = right[change.right_start : change.right_end]
-        if _is_presentation_only(left_text, right_text):
+        left_owners = lexical_owners(left_index, (change.left_start, change.left_end))
+        right_owners = lexical_owners(right_index, (change.right_start, change.right_end))
+        _validate_scope_ownership(
+            left_index,
+            right_index,
+            function=function,
+            change=change,
+            left_owners=left_owners,
+            right_owners=right_owners,
+        )
+        owners = tuple(sorted(set((*left_owners, *right_owners))))
+        left_comment = _span_is_comment(left_root, left, change.left_start, change.left_end)
+        right_comment = _span_is_comment(right_root, right, change.right_start, change.right_end)
+        if _is_presentation_only(left_text, right_text) or (
+            (left_comment or not left_text)
+            and (right_comment or not right_text)
+            and (left_comment or right_comment)
+        ):
             kind = "presentation-only"
-            symbol = f"{function}:presentation"
+            owner = owners[0] if owners else "unowned"
+            symbol = f"{owner}:presentation"
         else:
             left_anchor = _anchor_for_span(
                 left_root,
@@ -108,18 +147,17 @@ def extract_primitive_manifest(
                 change.right_start,
                 change.right_end,
             )
-            if left_anchor is None and right_anchor is None:
-                raise DeltaMinimizeError(
-                    "unsupported-delta-anchor",
-                    {
-                        "left_span": [change.left_start, change.left_end],
-                        "right_span": [change.right_start, change.right_end],
-                    },
-                )
-            kind = left_anchor.kind if left_anchor is not None else right_anchor.kind
+            kind = (
+                left_anchor.kind
+                if left_anchor is not None
+                else right_anchor.kind
+                if right_anchor is not None
+                else "unowned"
+            )
             left_path = "none" if left_anchor is None else left_anchor.path
             right_path = "none" if right_anchor is None else right_anchor.path
-            symbol = f"{function}:{kind}:{left_path}|{right_path}"
+            owner = owners[0] if owners else "unowned"
+            symbol = f"{owner}:{kind}:{left_path}|{right_path}"
 
         patch = DeltaPatch(
             left_start=change.left_start,
@@ -131,11 +169,11 @@ def extract_primitive_manifest(
             anchor_kind=kind,
             anchor_symbol=symbol,
         )
-        grouped.setdefault((kind, symbol), []).append(patch)
+        grouped.setdefault((kind, symbol, owners), []).append(patch)
 
     atoms = tuple(
-        _make_atom(kind, patches, function=function)
-        for (kind, _), patches in sorted(
+        _make_atom(kind, patches, affected_functions=owners)
+        for (kind, _, owners), patches in sorted(
             grouped.items(),
             key=lambda item: _patch_order_key(item[1]),
         )
@@ -146,6 +184,7 @@ def extract_primitive_manifest(
         left_hash=_source_hash(left),
         right_hash=_source_hash(right),
         atoms=atoms,
+        scoped_right_hash=_source_hash(right),
     )
     _validate_manifest(manifest)
 
@@ -167,28 +206,98 @@ def extract_delta_manifest(
 ) -> DeltaManifest:
     """Extract primitive deltas, then couple semantically linked bindings."""
 
-    from .bindings import build_binding_index, couple_semantic_atoms
-
-    primitive = extract_primitive_manifest(left, right, function=function)
-    atoms = couple_semantic_atoms(
-        build_binding_index(left),
-        build_binding_index(right),
-        primitive.atoms,
+    from .bindings import (
+        build_binding_index,
+        couple_semantic_atoms,
+        reachable_functions,
+        validate_target_definition,
     )
+
+    left_index = build_binding_index(left)
+    right_index = build_binding_index(right)
+    validate_target_definition(left_index, function, side="left")
+    validate_target_definition(right_index, function, side="right")
+    left_scope = reachable_functions(left_index, function, side="left")
+    right_scope = reachable_functions(right_index, function, side="right")
+    scope = left_scope | right_scope
+    primitive = extract_primitive_manifest(left, right, function=function)
+    seed_atom_ids = {
+        atom.atom_id
+        for atom in primitive.atoms
+        if set(atom.affected_functions) & scope
+    }
+    atoms = couple_semantic_atoms(
+        left_index,
+        right_index,
+        primitive.atoms,
+        seed_atom_ids=seed_atom_ids,
+        scope_functions=scope,
+        left_scope_functions=left_scope,
+        right_scope_functions=right_scope,
+    )
+    seed_patches = {
+        _patch_identity(patch)
+        for atom in primitive.atoms
+        if atom.atom_id in seed_atom_ids
+        for patch in atom.patches
+    }
+    retained: list[DeltaAtom] = []
+    excluded: list[ExcludedDeltaAtom] = []
+    for atom in atoms:
+        owners = set(atom.affected_functions)
+        intersects_seed = any(_patch_identity(patch) in seed_patches for patch in atom.patches)
+        in_scope = bool(owners & scope)
+        outside_scope = bool(owners - scope)
+        if intersects_seed or in_scope:
+            if outside_scope and atom.kind != "semantic-composite":
+                raise _scope_error(function, atom, "mixed-function-scope")
+            retained.append(atom)
+            continue
+        if not owners and atom.kind != "presentation-only":
+            raise _scope_error(function, atom, "unowned-semantic-delta")
+        excluded.append(_excluded_atom(atom, "unreachable-function" if owners else "unowned-presentation"))
+
+    retained_ids = {atom.atom_id for atom in retained}
+    while True:
+        required = {
+            required
+            for atom in retained
+            for required in atom.requires
+            if required not in retained_ids
+        }
+        if not required:
+            break
+        moved = [atom for atom in atoms if atom.atom_id in required]
+        if len(moved) != len(required):
+            raise DeltaMinimizeError("invalid-delta-dependency", {"missing": sorted(required)})
+        retained.extend(moved)
+        retained_ids.update(required)
+        excluded = [item for item in excluded if item.atom_id not in required]
+
+    retained_tuple = tuple(retained)
+    projected = _materialize_atoms(left, retained_tuple)
+    excluded_tuple = tuple(sorted(excluded, key=lambda item: item.atom_id))
     manifest = DeltaManifest(
         schema_version=primitive.schema_version,
         function=primitive.function,
         left_hash=primitive.left_hash,
         right_hash=primitive.right_hash,
-        atoms=atoms,
+        atoms=retained_tuple,
+        scoped_right_hash=_source_hash(projected),
+        excluded_atom_ids=tuple(item.atom_id for item in excluded_tuple),
+        excluded_atoms=excluded_tuple,
     )
     _validate_manifest(manifest)
-    full_mask = (1 << len(atoms)) - 1
+    full_mask = (1 << len(retained_tuple)) - 1
     if not _mask_is_legal(manifest, 0) or not _mask_is_legal(manifest, full_mask):
         raise DeltaMinimizeError("endpoint-reproduction-failed")
     if materialize_mask(left, manifest, 0) != left:
         raise DeltaMinimizeError("endpoint-reproduction-failed", {"endpoint": "left"})
-    if materialize_mask(left, manifest, full_mask) != right:
+    if materialize_mask(left, manifest, full_mask) != projected:
+        raise DeltaMinimizeError("endpoint-reproduction-failed", {"endpoint": "scoped-right"})
+    if _source_hash(projected) != manifest.scoped_right_hash:
+        raise DeltaMinimizeError("endpoint-reproduction-failed", {"endpoint": "scoped-right-hash"})
+    if not excluded_tuple and projected != right:
         raise DeltaMinimizeError("endpoint-reproduction-failed", {"endpoint": "right"})
     return manifest
 
@@ -424,10 +533,17 @@ def _node_path(node) -> str:
 
 
 def _is_presentation_only(left_text: str, right_text: str) -> bool:
-    return not left_text.strip() and not right_text.strip()
+    return bool(_PRESENTATION_ONLY_RE.fullmatch(left_text)) and bool(
+        _PRESENTATION_ONLY_RE.fullmatch(right_text)
+    )
 
 
-def _make_atom(kind: str, patches: list[DeltaPatch], *, function: str) -> DeltaAtom:
+def _make_atom(
+    kind: str,
+    patches: list[DeltaPatch],
+    *,
+    affected_functions: tuple[str, ...],
+) -> DeltaAtom:
     ordered = tuple(sorted(patches, key=lambda patch: (patch.left_start, patch.right_start)))
     identity = "\0".join(
         [
@@ -440,7 +556,7 @@ def _make_atom(kind: str, patches: list[DeltaPatch], *, function: str) -> DeltaA
         atom_id=atom_id,
         kind=kind,
         patches=ordered,
-        affected_functions=(function,),
+        affected_functions=affected_functions,
         summary=f"{kind} delta ({len(ordered)} patch{'es' if len(ordered) != 1 else ''})",
     )
 
@@ -463,6 +579,18 @@ def _validate_manifest(manifest: DeltaManifest) -> dict[str, int]:
                 "invalid-delta-dependency",
                 {"atom_id": atom.atom_id, "missing": missing},
             )
+    if manifest.schema_version == DELTA_MANIFEST_SCHEMA:
+        excluded_ids = manifest.excluded_atom_ids
+        record_ids = tuple(atom.atom_id for atom in manifest.excluded_atoms)
+        if (
+            not _is_source_digest(manifest.scoped_right_hash)
+            or excluded_ids != tuple(sorted(set(excluded_ids)))
+            or record_ids != excluded_ids
+            or set(excluded_ids) & set(ids)
+            or not excluded_ids
+            and manifest.scoped_right_hash != manifest.right_hash
+        ):
+            raise DeltaMinimizeError("invalid-delta-scope-provenance")
     return ids
 
 
@@ -503,3 +631,131 @@ def _valid_span(start: int, end: int, length: int) -> bool:
 
 def _source_hash(source: str) -> str:
     return sha256(source.encode("utf-8")).hexdigest()
+
+
+def _is_source_digest(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _patch_identity(patch: DeltaPatch) -> tuple[object, ...]:
+    return (
+        patch.left_start,
+        patch.left_end,
+        patch.left_text,
+        patch.right_start,
+        patch.right_end,
+        patch.right_text,
+    )
+
+
+def _materialize_atoms(left: str, atoms: tuple[DeltaAtom, ...]) -> str:
+    transient = DeltaManifest(
+        schema_version="delta-manifest.v2",
+        function="<projection>",
+        left_hash=_source_hash(left),
+        right_hash="",
+        atoms=atoms,
+    )
+    return materialize_mask(left, transient, (1 << len(atoms)) - 1)
+
+
+def _excluded_atom(atom: DeltaAtom, reason: str) -> ExcludedDeltaAtom:
+    return ExcludedDeltaAtom(
+        atom_id=atom.atom_id,
+        affected_functions=atom.affected_functions,
+        left_spans=tuple((patch.left_start, patch.left_end) for patch in atom.patches),
+        right_spans=tuple((patch.right_start, patch.right_end) for patch in atom.patches),
+        reason=reason,
+    )
+
+
+def _scope_error(function: str, atom: DeltaAtom, reason: str) -> DeltaMinimizeError:
+    has_left = any(patch.left_start != patch.left_end for patch in atom.patches)
+    has_right = any(patch.right_start != patch.right_end for patch in atom.patches)
+    side = "both" if has_left and has_right else "left" if has_left else "right" if has_right else "neither"
+    return DeltaMinimizeError(
+        "ambiguous-delta-scope",
+        {
+            "target": function,
+            "side": side,
+            "reason": reason,
+            "candidate_owners": list(atom.affected_functions),
+            "left_spans": [[patch.left_start, patch.left_end] for patch in atom.patches],
+            "right_spans": [[patch.right_start, patch.right_end] for patch in atom.patches],
+        },
+    )
+
+
+def _validate_scope_ownership(
+    left_index,
+    right_index,
+    *,
+    function: str,
+    change: _Change,
+    left_owners: tuple[str, ...],
+    right_owners: tuple[str, ...],
+) -> None:
+    from .bindings import overlapping_functions
+
+    for side, index, span, owners in (
+        ("left", left_index, (change.left_start, change.left_end), left_owners),
+        ("right", right_index, (change.right_start, change.right_end), right_owners),
+    ):
+        parse_errors = [
+            blocker
+            for blocker in index.blockers
+            if blocker.reason == "parse-error" and _span_pair_touches(span, blocker.span)
+        ]
+        overlaps = overlapping_functions(index, span) if not owners else ()
+        if parse_errors or len(owners) > 1 or overlaps:
+            candidate_owners = owners or overlaps
+            reason = (
+                "parse-error-overlap"
+                if parse_errors
+                else "non-unique-lexical-owner"
+                if len(candidate_owners) > 1
+                else "partial-lexical-owner-overlap"
+            )
+            raise DeltaMinimizeError(
+                "ambiguous-delta-scope",
+                {
+                    "target": function,
+                    "side": side,
+                    "span": list(span),
+                    "candidate_owners": list(candidate_owners),
+                    "reason": reason,
+                },
+            )
+
+
+def _span_pair_touches(first: tuple[int, int], second: tuple[int, int]) -> bool:
+    if first[0] == first[1]:
+        return second[0] <= first[0] <= second[1]
+    if second[0] == second[1]:
+        return first[0] <= second[0] <= first[1]
+    return first[0] < second[1] and second[0] < first[1]
+
+
+def _span_is_comment(root, source: str, start: int, end: int) -> bool:
+    if start == end:
+        return False
+    to_char = _byte_to_char_offsets(source)
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        node_start = to_char[node.start_byte]
+        node_end = to_char[node.end_byte]
+        if node.type == "comment" and node_start <= start and end <= node_end:
+            return True
+        stack.extend(node.named_children)
+    return False
+
+
+def _byte_to_char_offsets(source: str) -> list[int]:
+    offsets = [0]
+    chars = 0
+    for byte in source.encode("utf-8"):
+        if byte & 0xC0 != 0x80:
+            chars += 1
+        offsets.append(chars)
+    return offsets

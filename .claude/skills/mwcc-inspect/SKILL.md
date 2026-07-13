@@ -47,6 +47,15 @@ ssh nzxt-local 'C:\devkitPro\msys2\usr\bin\bash.exe -c "cd /c/Users/mikes/code/m
 
 ## Usage
 
+Run the wrapper from the active matcher worktree. If either
+`tools/workflow/mwcc-inspect.sh` or
+`tools/workflow/mwcc-inspect-supervisor.sh` is missing or stale, repair the
+pair before inspecting:
+
+```bash
+python tools/worktree-doctor.py --fix
+```
+
 ```bash
 tools/workflow/mwcc-inspect.sh <path/to/source.c>
 ```
@@ -61,11 +70,20 @@ tools/workflow/mwcc-inspect.sh src/melee/lb/lbarq.c
 The wrapper:
 1. Computes the mwcc compile command via local `ninja -t commands`
 2. Strips the macOS-side `wine`/`wibo`/`sjiswrap` prefix (mwcceppc runs natively on Windows)
-3. SSHes to the host, fetches origin, checks out the local HEAD commit (so the remote compiles the same source we're looking at)
-4. Runs the inspector with the same mwcc args
+3. Resolves an exact commit and creates an invocation-private repository under the authenticated remote job directory; it never checks out the shared remote working tree
+4. Applies uploaded candidate source and header overlays, then runs the inspector with private source/include/output roots and the same mwcc args
 5. Writes the structured dump to `build/mwcc_inspect/<basename>.txt`
 
-**Uncommitted local changes are not seen by the remote.** Commit + push first (auto-push is on master, so a normal commit is enough).
+Clean committed repository sources use the exact local `HEAD`. Uploaded or
+uncommitted candidates are overlaid on the selected exact ref together with
+regular TU-local `*.h`/`*.inc` files from the active matcher worktree. Regular
+candidate-adjacent headers are explicit overrides and take highest precedence.
+This means candidate source/header bundles can be inspected without first
+committing them.
+
+Each run has a unique invocation ID. Simultaneous IDs may safely select
+different refs because their repositories, cancellation, and output publication
+are isolated and exact-ID scoped.
 
 ### Useful env-var overrides
 
@@ -92,7 +110,7 @@ When stuck on a register-allocation cascade (e.g. expected `r25=platform_pass, r
 
 4. Modify your C to nudge the ordering (e.g. reorder declarations, introduce / remove intermediate variables, change initialization order).
 
-5. Commit, push, re-run. Compare the new ObjObject ordering. Iterate until the order matches what would produce the target register assignment.
+5. Re-run from the same matcher worktree. Compare the new ObjObject ordering. Iterate until the order matches what would produce the target register assignment.
 
 This is the workflow the upstream README around `mpColl_80046904` documents.
 
@@ -125,8 +143,8 @@ LOCAL VARIABLES (sorted by ObjObject address):
 - **Per-function snapshot.** The breakpoint fires near end-of-function compilation. Earlier passes' intermediate state isn't visible.
 - **No insight into linker decisions.** SDA relocations, stack-frame layout, multi-TU concerns all happen later.
 - **Compiler-internal addresses are not stable across runs.** ObjObject addresses are arbitrary heap pointers from the compiler's own allocator. The *ordering* and *relative offsets* are what matter, not the absolute values.
-- **Requires the same git ref on remote.** Uncommitted changes are not inspected. Commit first.
-- **Single host, single user.** No parallel-safe story. If two engineers run the wrapper at once against the same remote, behavior is undefined.
+- **Exact base ref.** Every run starts from one exact commit in its private repository. Candidate and TU-local source/header overlays are the only uncommitted inputs.
+- **Same-SID security boundary.** Private job ACLs protect against other Windows users, but processes running as the same Windows SID remain within the trusted threat model. This is not a general multi-user sandbox.
 
 ## Troubleshooting
 
@@ -135,7 +153,7 @@ LOCAL VARIABLES (sorted by ObjObject address):
 | `ERROR_FILE_NOT_FOUND` from inspector | The remote is missing the compiler. Run the bootstrap command from "Setup". |
 | `command not found: bash.exe` | The remote's bash path differs. Set `MWCC_INSPECT_REMOTE_BASH`. |
 | `not a valid mwcc version` | The inspector binary you're using doesn't have a build-date entry for 1.2.5n. Use the GC 1.0 release zip, not 1.3.2 or 3.0. |
-| Dump shows wrong source | The remote may be on an old commit. Force a fresh fetch: `ssh nzxt-local 'C:\devkitPro\msys2\usr\bin\bash.exe -c "cd /c/Users/mikes/code/melee && git fetch origin"'` |
+| Dump shows wrong source | Inspect the wrapper's printed exact ref, invocation ID, and private job/repository diagnostics. Confirm the command was launched from the intended matcher worktree and repair the workflow pair with `python tools/worktree-doctor.py --fix`; do not manually check out the shared remote tree. |
 | Inspector hangs | The breakpoint VA may be off (rare with GC 1.0 build + 1.2.5n compiler). Check `Detected mwcc version` line — should say `GC/1.2.5`. |
 
 ## See also

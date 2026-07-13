@@ -20,7 +20,8 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from .utils import ROOT, detect_repo_root as detect_repo_root  # noqa: E402 — ROOT computed in utils
+from .utils import ROOT  # noqa: E402 — ROOT computed in utils
+from .utils import detect_repo_root as detect_repo_root
 
 # ── constants ────────────────────────────────────────────────────────────────
 
@@ -46,9 +47,16 @@ TOOLING_FILES = [
     "tools/workflow/status.sh",
     "tools/workflow/create-pr.sh",
     "tools/workflow/mwcc-inspect.sh",
+    "tools/workflow/mwcc-inspect-supervisor.sh",
     "tools/workflow/update-pr.sh",
     "tools/workflow/pr-worktree.sh",
 ]
+
+MWCC_INSPECT_TOOLING_GROUP = (
+    "tools/workflow/mwcc-inspect.sh",
+    "tools/workflow/mwcc-inspect-supervisor.sh",
+)
+TOOLING_FILE_GROUPS = (MWCC_INSPECT_TOOLING_GROUP,)
 
 DOL_CANDIDATES = [
     Path.home() / "code" / "melee" / "orig" / "GALE01" / "sys" / "main.dol",
@@ -69,10 +77,33 @@ COMPILE_RULES = {"mwcc", "mwcc_sjis", "mwcc_extab", "mwcc_sjis_extab", "as"}
 
 # ── public API re-exports ────────────────────────────────────────────────────
 
+from .assets import (  # noqa: E402, F401
+    ASSET_PATHS,
+    CACHE_SCHEMA_VERSION,
+    AssetResult,
+    default_cache_root,
+    hydrate_shared_assets,
+    inspect_hydrated_assets,
+    seed_shared_assets,
+)
+from .banner import (  # noqa: E402, F401
+    BANNER_TOOL_NAMES,
+    banner_line,
+    collect_banner_tooling_status,
+)
+from .checks import (  # noqa: E402, F401
+    collect_knowledge_source_warnings,
+    collect_stale_state_warnings,
+    newest_relevant_input,
+    parse_compile_edges,
+    repair_ninja_deps_if_corrupt,
+    resolve_discord_search,
+    stale_compile_edges,
+)
 from .doctor import (  # noqa: E402, F401
+    TRACKED_TOOLING_EXCLUDE_PATTERNS,
     CheckResult,
     Doctor,
-    TRACKED_TOOLING_EXCLUDE_PATTERNS,
     blocked_tracked_tooling_exclude_patterns,
     collect_local_exclude_warnings,
     has_tracked_path_under,
@@ -93,31 +124,9 @@ from .utils import (  # noqa: E402, F401
     rel_to_root,
     resolve_melee_agent_module_path,
     restore_from_master,
+    restore_group_from_master,
     run_cmd,
     run_git,
-)
-from .checks import (  # noqa: E402, F401
-    collect_knowledge_source_warnings,
-    collect_stale_state_warnings,
-    newest_relevant_input,
-    parse_compile_edges,
-    repair_ninja_deps_if_corrupt,
-    resolve_discord_search,
-    stale_compile_edges,
-)
-from .banner import (  # noqa: E402, F401
-    BANNER_TOOL_NAMES,
-    banner_line,
-    collect_banner_tooling_status,
-)
-from .assets import (  # noqa: E402, F401
-    ASSET_PATHS,
-    CACHE_SCHEMA_VERSION,
-    AssetResult,
-    default_cache_root,
-    hydrate_shared_assets,
-    inspect_hydrated_assets,
-    seed_shared_assets,
 )
 
 # Re-export detect_repo_root so tests that access module.ROOT and

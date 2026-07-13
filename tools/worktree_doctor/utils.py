@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from importlib import metadata
 import os
 import platform
 import shlex
@@ -12,8 +11,10 @@ import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
+from importlib import metadata
 from pathlib import Path
 
 
@@ -253,16 +254,23 @@ def refresh_report_json(root: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def restore_from_master(rel_path: str, dest: Path) -> bool:
-    root = ROOT
-    exists = subprocess.run(
-        ["git", "cat-file", "-e", f"master:{rel_path}"],
+def read_from_master_with_mode(
+    rel_path: str, root: Path | None = None
+) -> tuple[bytes, int] | None:
+    """Read a regular master file and its Git executable mode."""
+    root = root or ROOT
+    tree = subprocess.run(
+        ["git", "ls-tree", "master", "--", rel_path],
         cwd=root,
         capture_output=True,
         text=True,
     )
-    if exists.returncode != 0:
-        return False
+    if tree.returncode != 0 or not tree.stdout.strip():
+        return None
+    mode_text = tree.stdout.split(maxsplit=1)[0]
+    mode = {"100644": 0o644, "100755": 0o755}.get(mode_text)
+    if mode is None:
+        return None
 
     content = subprocess.run(
         ["git", "show", f"master:{rel_path}"],
@@ -271,35 +279,236 @@ def restore_from_master(rel_path: str, dest: Path) -> bool:
         text=False,
     )
     if content.returncode != 0:
+        return None
+    return content.stdout, mode
+
+
+def _safe_destination_parent(dest: Path, root: Path, *, create: bool) -> bool:
+    root = root.absolute()
+    dest = dest.absolute()
+    try:
+        relative = dest.relative_to(root)
+    except ValueError:
+        return False
+    if not relative.parts:
         return False
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(content.stdout)
+    try:
+        root_stat = root.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISDIR(root_stat.st_mode) or stat.S_ISLNK(root_stat.st_mode):
+        return False
+
+    current = root
+    for component in relative.parts[:-1]:
+        current /= component
+        try:
+            current_stat = current.lstat()
+        except FileNotFoundError:
+            if not create:
+                continue
+            try:
+                current.mkdir()
+                current_stat = current.lstat()
+            except OSError:
+                return False
+        except OSError:
+            return False
+        if not stat.S_ISDIR(current_stat.st_mode) or stat.S_ISLNK(
+            current_stat.st_mode
+        ):
+            return False
     return True
 
 
-def read_from_master(rel_path: str) -> bytes | None:
-    root = ROOT
-    content = subprocess.run(
-        ["git", "show", f"master:{rel_path}"],
-        cwd=root,
-        capture_output=True,
-        text=False,
-    )
-    if content.returncode != 0:
+def _read_regular_file_no_follow(path: Path) -> tuple[bytes, int] | None:
+    try:
+        path_stat = path.lstat()
+    except OSError:
         return None
-    return content.stdout
+    if not stat.S_ISREG(path_stat.st_mode):
+        return None
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        opened_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened_stat.st_mode)
+            or opened_stat.st_dev != path_stat.st_dev
+            or opened_stat.st_ino != path_stat.st_ino
+        ):
+            return None
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            content = stream.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return content, stat.S_IMODE(path_stat.st_mode)
+
+
+def read_tooling_file_with_mode(
+    path: Path, root: Path
+) -> tuple[bytes, int] | None:
+    """Read a regular tooling file without following it or parent symlinks."""
+    if not _safe_destination_parent(path, root, create=False):
+        return None
+    return _read_regular_file_no_follow(path)
+
+
+def _stage_bytes(dest: Path, content: bytes, mode: int, purpose: str) -> Path:
+    fd, raw_path = tempfile.mkstemp(
+        prefix=f".{dest.name}.{purpose}.", dir=dest.parent
+    )
+    staged = Path(raw_path)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+        staged.chmod(mode)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return staged
+
+
+def _stage_symlink(dest: Path, target: str, purpose: str) -> Path:
+    fd, raw_path = tempfile.mkstemp(
+        prefix=f".{dest.name}.{purpose}.", dir=dest.parent
+    )
+    os.close(fd)
+    staged = Path(raw_path)
+    try:
+        staged.unlink()
+        staged.symlink_to(target)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return staged
+
+
+def _snapshot_destination(path: Path) -> tuple[str, bytes | str, int] | None:
+    if not os.path.lexists(path):
+        return None
+    try:
+        path_stat = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"cannot inspect tooling destination: {path}") from exc
+    if stat.S_ISLNK(path_stat.st_mode):
+        return "symlink", os.readlink(path), 0
+    regular = _read_regular_file_no_follow(path)
+    if regular is None:
+        raise ValueError(f"tooling destination is not a regular file: {path}")
+    return "regular", regular[0], regular[1]
+
+
+def _restore_master_entries(
+    entries: list[tuple[Path, bytes, int]], root: Path
+) -> bool:
+    snapshots: dict[Path, tuple[str, bytes | str, int] | None] = {}
+    staged: dict[Path, Path] = {}
+    backups: dict[Path, Path] = {}
+    replaced: list[Path] = []
+    try:
+        if not all(
+            _safe_destination_parent(dest, root, create=False)
+            for dest, _content, _mode in entries
+        ):
+            return False
+        for dest, _content, _mode in entries:
+            snapshots[dest] = _snapshot_destination(dest)
+
+        if not all(
+            _safe_destination_parent(dest, root, create=True)
+            for dest, _content, _mode in entries
+        ):
+            return False
+
+        for dest, content, mode in entries:
+            staged[dest] = _stage_bytes(dest, content, mode, "restore")
+            snapshot = snapshots[dest]
+            if snapshot is not None:
+                kind, old_content, old_mode = snapshot
+                if kind == "regular":
+                    assert isinstance(old_content, bytes)
+                    backups[dest] = _stage_bytes(
+                        dest, old_content, old_mode, "rollback"
+                    )
+                else:
+                    assert isinstance(old_content, str)
+                    backups[dest] = _stage_symlink(
+                        dest, old_content, "rollback"
+                    )
+
+        for dest, _content, _mode in entries:
+            if not _safe_destination_parent(dest, root, create=False):
+                raise ValueError(f"unsafe tooling destination parent: {dest}")
+            os.replace(staged[dest], dest)
+            replaced.append(dest)
+    except (OSError, ValueError):
+        rollback_ok = True
+        for dest in reversed(replaced):
+            try:
+                if not _safe_destination_parent(dest, root, create=False):
+                    rollback_ok = False
+                    continue
+                backup = backups.get(dest)
+                if backup is None:
+                    dest.unlink(missing_ok=True)
+                else:
+                    os.replace(backup, dest)
+            except OSError:
+                rollback_ok = False
+        if not rollback_ok:
+            return False
+        return False
+    finally:
+        for temporary in (*staged.values(), *backups.values()):
+            temporary.unlink(missing_ok=True)
+    return True
+
+
+def restore_group_from_master(rel_paths: tuple[str, ...], root: Path) -> bool:
+    """Restore a tooling group from master, rolling back partial replacement."""
+    entries: list[tuple[Path, bytes, int]] = []
+    for rel_path in rel_paths:
+        master_file = read_from_master_with_mode(rel_path, root)
+        if master_file is None:
+            return False
+        content, mode = master_file
+        entries.append((root / rel_path, content, mode))
+    return _restore_master_entries(entries, root)
+
+
+def restore_from_master(rel_path: str, dest: Path) -> bool:
+    master_file = read_from_master_with_mode(rel_path, ROOT)
+    if master_file is None:
+        return False
+    content, mode = master_file
+    return _restore_master_entries([(dest, content, mode)], ROOT)
+
+
+def read_from_master(rel_path: str) -> bytes | None:
+    master_file = read_from_master_with_mode(rel_path, ROOT)
+    if master_file is None:
+        return None
+    return master_file[0]
 
 
 def matches_master(rel_path: str, path: Path) -> bool | None:
-    expected = read_from_master(rel_path)
-    if expected is None:
+    master_file = read_from_master_with_mode(rel_path, ROOT)
+    if master_file is None:
         return None
-    try:
-        actual = path.read_bytes()
-    except OSError:
+    expected, expected_mode = master_file
+    current_file = read_tooling_file_with_mode(path, ROOT)
+    if current_file is None:
         return False
-    return actual == expected
+    actual, actual_mode = current_file
+    return actual == expected and actual_mode == expected_mode
 
 
 def has_worktree_changes(rel_path: str) -> bool:

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -624,8 +625,9 @@ def read_inspect_input_if_available(
     *,
     function: str,
     melee_root: Path,
-    timeout: int,
+    timeout: float,
     output_path: Path | None = None,
+    invocation_id: str | None = None,
 ) -> str | None:
     if diff_input.kind != "source":
         return None
@@ -635,12 +637,25 @@ def read_inspect_input_if_available(
         melee_root=melee_root,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    active_invocation_id = invocation_id or f"inspect-{secrets.token_hex(12)}"
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", active_invocation_id) is None:
+        raise ValueError(f"invalid mwcc-inspect invocation ID: {active_invocation_id!r}")
+    canonical_before = _inspect_output_fingerprint(out_path)
+    result_path = out_path.with_name(f".{out_path.name}.result.{active_invocation_id}")
+    if result_path.exists():
+        raise ValueError(f"mwcc-inspect invocation result already exists: {result_path}")
+    deadline = time.monotonic() + timeout
+    remaining = max(0.001, deadline - time.monotonic())
     cmd = [
         "tools/workflow/mwcc-inspect.sh",
+        "--invocation-id",
+        active_invocation_id,
+        "--deadline-seconds",
+        f"{remaining:.6f}",
         "--function",
         function,
         "--output",
-        str(out_path),
+        str(result_path),
         str(diff_input.path),
     ]
     print(
@@ -652,20 +667,97 @@ def read_inspect_input_if_available(
         proc = _run_with_process_group_timeout(
             cmd,
             cwd=melee_root,
-            timeout=timeout,
+            timeout=remaining,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as error:
         print(
             f"[mwcc-debug] {diff_input.label}: mwcc-inspect timed out "
-            f"after {timeout}s; killed process group",
+            f"after {timeout}s; killed local process group; canceling "
+            f"remote invocation {active_invocation_id}",
             file=sys.stderr,
         )
-        return None
+        cancel_cmd = [
+            "tools/workflow/mwcc-inspect.sh",
+            "--cancel",
+            active_invocation_id,
+            "--cleanup-timeout",
+            "15",
+        ]
+        cleanup_diagnostic = ""
+        try:
+            cleanup = _run_with_process_group_timeout(
+                cancel_cmd,
+                cwd=melee_root,
+                timeout=30,
+            )
+            if cleanup.returncode != 0:
+                detail = (cleanup.stderr or cleanup.stdout or "").strip()
+                cleanup_diagnostic = (
+                    f"timeout cleanup failed for {active_invocation_id}: "
+                    f"cancel exited {cleanup.returncode}"
+                    + (f": {detail}" if detail else "")
+                )
+        except Exception as cleanup_error:
+            cleanup_diagnostic = (
+                f"timeout cleanup failed for {active_invocation_id}: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        if cleanup_diagnostic:
+            print(f"[mwcc-debug] {cleanup_diagnostic}", file=sys.stderr)
+            existing = "" if error.stderr is None else str(error.stderr)
+            separator = "" if not existing or existing.endswith("\n") else "\n"
+            error.stderr = f"{existing}{separator}{cleanup_diagnostic}\n"
+        result_path.unlink(missing_ok=True)
+        raise
+    timeout_cleanup_failed = (
+        proc.returncode == 125
+        and "[mwcc-inspect] timeout-status=cleanup-failed" in (proc.stderr or "")
+    )
+    if proc.returncode == 124 or timeout_cleanup_failed:
+        result_path.unlink(missing_ok=True)
+        raise subprocess.TimeoutExpired(
+            cmd=cmd,
+            timeout=remaining,
+            output=proc.stdout,
+            stderr=proc.stderr,
+        )
     if proc.returncode != 0:
+        result_path.unlink(missing_ok=True)
         return None
-    if not out_path.exists():
+    if not result_path.exists():
         return None
-    return out_path.read_text(encoding="utf-8", errors="replace")
+    result_bytes = result_path.read_bytes()
+    result_fingerprint = (len(result_bytes), hashlib.sha256(result_bytes).hexdigest())
+    lock_path = out_path.with_name(f".{out_path.name}.promote.lock")
+    with lock_path.open("a+b") as lock_file:
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            canonical_now = _inspect_output_fingerprint(out_path)
+            if canonical_now == canonical_before:
+                os.replace(result_path, out_path)
+            elif canonical_now == result_fingerprint:
+                result_path.unlink(missing_ok=True)
+            else:
+                result_path.unlink(missing_ok=True)
+                print(
+                    f"[mwcc-debug] {diff_input.label}: concurrent mwcc-inspect "
+                    f"canonical output conflict for {out_path}; preserved first "
+                    f"publisher and returned invocation-exact result",
+                    file=sys.stderr,
+                )
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    return result_bytes.decode("utf-8", errors="replace")
+
+
+def _inspect_output_fingerprint(path: Path) -> tuple[int, str] | None:
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    return len(data), hashlib.sha256(data).hexdigest()
 
 
 def _default_inspect_output_path(
@@ -701,7 +793,7 @@ def _run_with_process_group_timeout(
     cmd: list[str],
     *,
     cwd: Path,
-    timeout: int,
+    timeout: float,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     proc = subprocess.Popen(

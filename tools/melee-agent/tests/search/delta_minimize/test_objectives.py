@@ -146,7 +146,7 @@ def test_allocator_namespace_witness_includes_semantic_role_identity(
     assert objectives_module._allocator_namespace_witness(baseline_compile, 0) != original
 
 
-def test_reviewed_namespace_cannot_authorize_a_different_allocator_domain(
+def test_allocator_domain_cardinality_mismatch_is_actionable(
     monkeypatch: pytest.MonkeyPatch,
     baseline_compile: Compile,
 ) -> None:
@@ -170,8 +170,8 @@ def test_reviewed_namespace_cannot_authorize_a_different_allocator_domain(
 
     with pytest.raises(
         DeltaMinimizeError,
-        match="^invalid-namespace-artifact-domain$",
-    ):
+        match="^namespace-domain-mismatch$",
+    ) as raised:
         resolve_namespace_map(
             artifact_id="candidate:mask-100",
             source_sha256="1" * 64,
@@ -184,6 +184,12 @@ def test_reviewed_namespace_cannot_authorize_a_different_allocator_domain(
             request=object(),
             reviewed=object(),
         )
+
+    assert raised.value.details == {
+        "artifact_count": canonical_count + 1,
+        "artifact_id": "candidate:mask-100",
+        "canonical_count": canonical_count,
+    }
 
 
 def _write_target(

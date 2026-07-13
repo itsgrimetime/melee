@@ -291,6 +291,191 @@ def test_setup_uses_bootstrap_full_unit_source_metadata(
     assert "replace_function" in csh
 
 
+def test_setup_uses_bootstrap_unit_provenance_for_external_retained_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    function = "fn_test"
+    melee_root = tmp_path / "melee"
+    canonical_source = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    canonical_source.parent.mkdir(parents=True)
+    canonical_source.write_text(
+        f"void {function}(void) {{ canonical_source(); }}\n",
+        encoding="utf-8",
+    )
+    (melee_root / "build.ninja").write_text(
+        textwrap.dedent(
+            """\
+            build build/GALE01/src/melee/mn/mndiagram.o: mwcc src/melee/mn/mndiagram.c
+              mw_version = GC/1.2.5n
+              cflags = -O4,p -nodefaults -DBOOTSTRAP_FULL_TU_FLAG=1
+            """
+        ),
+        encoding="utf-8",
+    )
+    retained_source_rel = Path("build/delta-minimize/run/retained-fulltu.c")
+    retained_source = melee_root / retained_source_rel
+    retained_source.parent.mkdir(parents=True)
+    retained_source.write_text(
+        textwrap.dedent(
+            f"""\
+            int retained_helper(void) {{ return 1; }}
+
+            void {function}(void) {{
+                retained_helper();
+            }}
+            """
+        ),
+        encoding="utf-8",
+    )
+    perm_root = _make_perm_dir(
+        tmp_path,
+        function=function,
+        compile_sh=(
+            "#!/usr/bin/env bash\n"
+            "set -e\n"
+            'INPUT_ABS="$(realpath "$1")"\n'
+            'OUTPUT_ABS="$(realpath "$3")"\n'
+            f"cd {melee_root}\n"
+            'STAGE="nonmatchings/.permuter_stage_$$.c"\n'
+            'cp "$INPUT_ABS" "$STAGE"\n'
+            "wine build/compilers/GC/1.2.5n/mwcceppc.exe "
+            "-O0 -standalone -c \"$STAGE\" -o \"$OUTPUT_ABS\"\n"
+        ),
+    )
+    perm_dir = perm_root / "nonmatchings" / function
+    (perm_dir / "melee_agent_bootstrap.json").write_text(
+        json.dumps(
+            {
+                "function": function,
+                "unit": "melee/mn/mndiagram",
+                "source": retained_source_rel.as_posix(),
+                "import_source": str(canonical_source),
+                "source_staged": True,
+                "full_unit_source": True,
+                "candidate_source_context": "full-unit",
+            }
+        ),
+        encoding="utf-8",
+    )
+    baseline = _make_baseline_dump(tmp_path, function)
+    _stub_wibo_and_compiler(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli_debug, "DEFAULT_MELEE_ROOT", melee_root)
+    other_cwd = tmp_path / "other-cwd"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "permute", "setup-simplify-order-scorer",
+            "--function", function,
+            "--want-first", "42",
+            "--baseline-dump", str(baseline),
+            "--source-file", str(retained_source),
+            "--perm-root", str(perm_root),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+    compile_sh = (perm_dir / "compile.sh").read_text(encoding="utf-8")
+    assert (perm_dir / "full-unit.c").read_text(encoding="utf-8") == (
+        retained_source.read_text(encoding="utf-8")
+    )
+    assert 'MELEE_FULL_UNIT_SOURCE="$PERM_DIR/full-unit.c"' in compile_sh
+    assert 'STAGE="src/melee/mn/.permuter_stage_$$.c"' in compile_sh
+    assert "-DBOOTSTRAP_FULL_TU_FLAG=1" in compile_sh
+    assert "-i src/melee/mn" in compile_sh
+    assert "-O0" not in compile_sh
+    assert "-standalone" not in compile_sh
+
+
+def test_setup_ignores_stale_bootstrap_provenance_for_explicit_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    function = "fn_test"
+    melee_root = tmp_path / "melee"
+    canonical_source = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    canonical_source.parent.mkdir(parents=True)
+    canonical_source.write_text(f"void {function}(void) {{}}\n", encoding="utf-8")
+    (melee_root / "build.ninja").write_text(
+        textwrap.dedent(
+            """\
+            build build/GALE01/src/melee/mn/mndiagram.o: mwcc src/melee/mn/mndiagram.c
+              mw_version = GC/1.2.5n
+              cflags = -O4,p -nodefaults -DSTALE_BOOTSTRAP_FLAG=1
+            """
+        ),
+        encoding="utf-8",
+    )
+    metadata_source_rel = Path("build/delta-minimize/run/retained-fulltu.c")
+    metadata_source = melee_root / metadata_source_rel
+    metadata_source.parent.mkdir(parents=True)
+    metadata_source.write_text(f"void {function}(void) {{}}\n", encoding="utf-8")
+    other_cwd = tmp_path / "unrelated-cwd"
+    explicit_source = other_cwd / metadata_source_rel
+    explicit_source.parent.mkdir(parents=True)
+    explicit_source.write_text(
+        f"void {function}(void) {{ explicit_source(); }}\n",
+        encoding="utf-8",
+    )
+    perm_root = _make_perm_dir(
+        tmp_path,
+        function=function,
+        compile_sh=(
+            "#!/usr/bin/env bash\n"
+            "set -e\n"
+            'INPUT_ABS="$(realpath "$1")"\n'
+            'OUTPUT_ABS="$(realpath "$3")"\n'
+            f"cd {melee_root}\n"
+            'STAGE="nonmatchings/.permuter_stage_$$.c"\n'
+            'cp "$INPUT_ABS" "$STAGE"\n'
+            "wine build/compilers/GC/1.2.5n/mwcceppc.exe "
+            "-O0 -standalone -c \"$STAGE\" -o \"$OUTPUT_ABS\"\n"
+        ),
+    )
+    perm_dir = perm_root / "nonmatchings" / function
+    (perm_dir / "melee_agent_bootstrap.json").write_text(
+        json.dumps(
+            {
+                "function": function,
+                "unit": "melee/mn/mndiagram",
+                "source": metadata_source_rel.as_posix(),
+                "import_source": str(canonical_source),
+                "source_staged": True,
+                "full_unit_source": True,
+                "candidate_source_context": "full-unit",
+            }
+        ),
+        encoding="utf-8",
+    )
+    baseline = _make_baseline_dump(tmp_path, function)
+    _stub_wibo_and_compiler(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli_debug, "DEFAULT_MELEE_ROOT", melee_root)
+    monkeypatch.chdir(other_cwd)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "permute", "setup-simplify-order-scorer",
+            "--function", function,
+            "--want-first", "42",
+            "--baseline-dump", str(baseline),
+            "--source-file", str(explicit_source),
+            "--perm-root", str(perm_root),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+    compile_sh = (perm_dir / "compile.sh").read_text(encoding="utf-8")
+    assert (perm_dir / "full-unit.c").read_text(encoding="utf-8") == (
+        explicit_source.read_text(encoding="utf-8")
+    )
+    assert 'STAGE="nonmatchings/.permuter_stage_$$.c"' in compile_sh
+    assert "-O0" in compile_sh
+    assert "-standalone" in compile_sh
+    assert "-DSTALE_BOOTSTRAP_FLAG=1" not in compile_sh
+
+
 def test_setup_source_file_force_phys_writes_remote_ready_full_tu_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -519,6 +704,55 @@ def test_setup_preserves_existing_weight_overrides(
     assert parsed["weight_overrides"]["perm_xor_zero"] == 5.0
     assert parsed["weight_overrides"]["perm_reorder_decls"] == 50.0
     assert "scorer" in parsed
+
+
+def test_force_setup_preserves_existing_randomize_funcs_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    function = "fn_test"
+    randomize_funcs = [function, "helper_z", "helper_a"]
+    existing_settings = textwrap.dedent("""\
+        func_name = "fn_test"
+        randomize_funcs = ["fn_test", "helper_z", "helper_a"]
+        compiler_type = "mwcc"
+
+        [weight_overrides]
+        perm_xor_zero = 5.0
+
+        [scorer]
+        command = "/bin/false"
+        timeout_seconds = 99.0
+    """)
+    perm_root = _make_perm_dir(
+        tmp_path,
+        function=function,
+        settings_toml=existing_settings,
+    )
+    perm_dir = perm_root / "nonmatchings" / function
+    (perm_dir / "simplify_order_target.yaml").write_text("stale\n")
+    baseline = _make_baseline_dump(tmp_path, function)
+    _stub_wibo_and_compiler(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "debug", "permute", "setup-simplify-order-scorer",
+            "--function", function,
+            "--want-first", "42",
+            "--baseline-dump", str(baseline),
+            "--perm-root", str(perm_root),
+            "--scorer-timeout", "15.0",
+            "--force",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout + "\n" + (result.stderr or "")
+
+    parsed = tomllib.loads((perm_dir / "settings.toml").read_text())
+    assert parsed["randomize_funcs"] == randomize_funcs
+    assert parsed["weight_overrides"] == {"perm_xor_zero": 5.0}
+    assert "score-simplify-order" in parsed["scorer"]["command"]
+    assert parsed["scorer"]["command"] != "/bin/false"
+    assert parsed["scorer"]["timeout_seconds"] == 15.0
 
 
 def test_setup_passes_custom_scorer_timeout(

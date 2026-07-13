@@ -80,7 +80,7 @@ def _result(*, status: str = "frontier", provisional: bool = False) -> DeltaMini
         joint_zero_all_candidate_ids=(),
     )
     return DeltaMinimizeResult(
-        schema_version="delta-minimize-result.v1",
+        schema_version="delta-minimize-result.v2",
         status="provisional" if provisional else status,
         exact_four_axis=not provisional and status != "incomplete",
         function="draw",
@@ -853,7 +853,7 @@ def test_delta_minimize_json_is_pure_and_deterministic(monkeypatch, tmp_path: Pa
 
     assert first.exit_code == second.exit_code == 0
     assert first.stdout == second.stdout
-    assert json.loads(first.stdout)["schema_version"] == "delta-minimize-result.v1"
+    assert json.loads(first.stdout)["schema_version"] == "delta-minimize-result.v2"
     assert not first.stdout.startswith("Running")
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from ...mwcc_debug import role_descriptor, role_reanchor
+from ...mwcc_debug import parse_pcdump, role_descriptor, role_reanchor
 from ...mwcc_debug.colorgraph_profile import build_colorgraph_profile, colorgraph_distance
 from ...mwcc_debug.diff_capture import DiffInput, read_inspect_input_if_available
 from ...mwcc_debug.frame_reservations import analyze_frame_reservations
@@ -324,6 +324,22 @@ def _compile_rejected(row: Mapping[str, Any]) -> bool:
     return _concrete_mwcc_compile_diagnostics(_compile_diagnostics(row))
 
 
+def _target_function_missing(row: Mapping[str, Any], function: str) -> bool:
+    expected = f"function {function!r} not in compiled pcdump"
+    return (
+        row.get("score_error_kind") == "candidate"
+        and row.get("terminal_safe") is True
+        and isinstance(row.get("pcdump_path"), str)
+        and bool(row["pcdump_path"])
+        and str(row.get("error") or "").strip() == expected
+    )
+
+
+def _pcdump_proves_function_absent(path: Path, function: str) -> bool:
+    parsed = parse_pcdump(path.read_text(encoding="utf-8"))
+    return bool(parsed) and all(item.name != function for item in parsed)
+
+
 def _file_hash(path: Path) -> str:
     if path.is_symlink() or not path.is_file():
         raise ValueError("missing artifact")
@@ -340,6 +356,7 @@ def _validate_cached_artifacts(
     candidate_source: Path,
     source_hash: str,
     *,
+    function: str,
     include_objobjects: bool,
     require_checkdiff: bool = True,
 ) -> bool:
@@ -354,6 +371,16 @@ def _validate_cached_artifacts(
             if _file_hash(Path(evidence.pcdump_path)) != evidence.pcdump_hash:
                 return False
             if include_objobjects and not evidence.inspect_text:
+                return False
+        elif "candidate-target-function-missing" in evidence.blockers:
+            if (
+                evidence.pcdump_path is None
+                or evidence.pcdump_hash is None
+                or evidence.checkdiff_evidence is not None
+                or evidence.inspect_text is not None
+                or _file_hash(Path(evidence.pcdump_path)) != evidence.pcdump_hash
+                or not _pcdump_proves_function_absent(Path(evidence.pcdump_path), function)
+            ):
                 return False
         elif (
             evidence.pcdump_path is not None
@@ -466,6 +493,7 @@ def capture_candidate(
             evidence,
             source_path,
             source_hash,
+            function=config.function,
             include_objobjects=config.include_objobjects,
         ):
             _remember_inspection(store, source_hash, config.function, evidence.inspect_text)
@@ -491,31 +519,41 @@ def capture_candidate(
     row = rows[0]
     if row.get("candidate_id") not in {None, candidate_id}:
         raise DeltaMinimizeError("malformed-score-source-result")
-    if row.get("score_error_kind") == "infrastructure":
+    kind = row.get("score_error_kind")
+    if kind not in {None, "candidate", "infrastructure"}:
+        raise DeltaMinimizeError(
+            "candidate-score-infrastructure",
+            {"candidate_id": candidate_id, "error": row.get("error")},
+        )
+    if kind == "infrastructure":
         raise DeltaMinimizeError(
             "candidate-score-infrastructure",
             {"candidate_id": candidate_id, "error": row.get("error")},
         )
 
-    rejected = _compile_rejected(row)
     pcdump = row.get("pcdump_path")
     if pcdump is not None and (not isinstance(pcdump, str) or not pcdump):
         raise DeltaMinimizeError("malformed-score-source-result")
     checkdiff = row.get("checkdiff_evidence")
     if checkdiff is not None and not isinstance(checkdiff, Mapping):
         raise DeltaMinimizeError("malformed-score-source-result")
-    if row.get("score_error_kind") == "candidate" and not rejected:
-        if row.get("terminal_safe") is True and "not in compiled pcdump" in str(row.get("error") or "").lower():
-            raise DeltaMinimizeError(
-                "candidate-target-function-missing",
-                {"candidate_id": candidate_id, "function": config.function},
-            )
+
+    compile_rejected = _compile_rejected(row)
+    target_missing = _target_function_missing(row, config.function)
+    error_text = row.get("error")
+    has_error = isinstance(error_text, str) and bool(error_text.strip())
+    malformed_error = error_text is not None and not isinstance(error_text, str)
+    if (
+        malformed_error
+        or (kind == "candidate" and not (compile_rejected or target_missing))
+        or (has_error and not (compile_rejected or target_missing))
+    ):
         raise DeltaMinimizeError(
             "candidate-score-infrastructure",
             {"candidate_id": candidate_id, "error": row.get("error")},
         )
     pcdump_hash: str | None = None
-    if not rejected:
+    if not compile_rejected:
         try:
             pcdump_hash = _file_hash(Path(pcdump or ""))
         except (OSError, ValueError) as error:
@@ -523,21 +561,36 @@ def capture_candidate(
                 "candidate-score-infrastructure",
                 {"candidate_id": candidate_id, "error": "missing-or-unsafe-pcdump"},
             ) from error
+    blockers = _candidate_blockers(row)
+    if target_missing:
+        blockers = tuple(dict.fromkeys((*blockers, "candidate-target-function-missing")))
+    nonviable = compile_rejected or target_missing
     evidence = RawCandidateEvidence(
         candidate_id=candidate_id,
         mask=mask,
         source_path=str(source_path),
         source_hash=source_hash,
-        compile_status="rejected" if rejected else "compiled",
-        viable=not rejected,
-        pcdump_path=pcdump,
-        checkdiff_evidence=checkdiff,
+        compile_status="rejected" if nonviable else "compiled",
+        viable=not nonviable,
+        pcdump_path=None if compile_rejected else pcdump,
+        checkdiff_evidence=None if target_missing else checkdiff,
         inspect_text=None,
         compiler_stderr=_compile_diagnostics(row),
-        blockers=_candidate_blockers(row),
+        blockers=blockers,
         inspection_mode="objobjects" if config.include_objobjects else "no-objobjects",
         pcdump_hash=pcdump_hash,
     )
+    if target_missing and not _validate_cached_artifacts(
+        evidence,
+        source_path,
+        source_hash,
+        function=config.function,
+        include_objobjects=config.include_objobjects,
+    ):
+        raise DeltaMinimizeError(
+            "candidate-score-infrastructure",
+            {"candidate_id": candidate_id, "error": row.get("error")},
+        )
     if evidence.viable and config.include_objobjects:
         cached_inspection = _inspection_cache(store).get(source_hash)
         if cached_inspection is not None and _complete_objobject_text(cached_inspection, config.function):

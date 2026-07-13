@@ -270,6 +270,28 @@ def _resume_command(result: DeltaMinimizeResult) -> str | None:
 def _recovery_lines(result: DeltaMinimizeResult) -> list[str]:
     blockers = set(result.blockers)
     lines: list[str] = []
+    blocking_error = result.inputs.get("blocking_error")
+    if isinstance(blocking_error, Mapping):
+        reason = blocking_error.get("reason")
+        details = blocking_error.get("details")
+        if reason == "namespace-domain-mismatch" and isinstance(details, Mapping):
+            lines.append(
+                "namespace domain mismatch: "
+                f"{details.get('artifact_id', 'unknown artifact')} has "
+                f"{details.get('artifact_count', 'unknown')} roles; canonical evidence has "
+                f"{details.get('canonical_count', 'unknown')}"
+            )
+            lines.append(
+                "full allocator namespace review requires equal cardinality; "
+                "use allocator-compatible parents or a semantic target workflow"
+            )
+        elif reason == "invalid-objective-manifest" and isinstance(details, Mapping):
+            cause = details.get("cause")
+            lines.append(
+                "objective inference stopped after lattice materialization"
+                + (f": {cause}" if isinstance(cause, str) and cause else "")
+            )
+            lines.append("inspect inputs.blocking_error in result.json before resuming this out-dir")
     if "namespace-review-required" in blockers:
         request = result.inputs.get("namespace_review_request")
         unresolved = result.inputs.get("namespace_review_unresolved")

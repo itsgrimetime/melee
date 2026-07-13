@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -79,8 +79,13 @@ def test_fix_mode_does_not_reinstall_stale_melee_agent_entrypoint(monkeypatch, t
     fake_agent.write_text("#!/usr/bin/env python\n")
     calls: list[list[str]] = []
 
-    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path); monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
-    monkeypatch.setattr(doctor_mod.shutil, "which", lambda name: str(fake_agent) if name == "melee-agent" else None)
+    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        doctor_mod.shutil,
+        "which",
+        lambda name: str(fake_agent) if name == "melee-agent" else None,
+    )
 
     def fake_run_cmd(args: list[str], timeout: int):
         calls.append(args)
@@ -265,37 +270,459 @@ def test_fix_refreshes_stale_mwcc_debug_overlay_from_master(
     )
 
 
-def test_fix_refreshes_stale_mwcc_inspect_workflow_from_master(
+MWCC_INSPECT_WRAPPER = "tools/workflow/mwcc-inspect.sh"
+MWCC_INSPECT_SUPERVISOR = "tools/workflow/mwcc-inspect-supervisor.sh"
+MWCC_INSPECT_GROUP = (MWCC_INSPECT_WRAPPER, MWCC_INSPECT_SUPERVISOR)
+
+
+def _init_inspector_pair_repo(tmp_path: Path) -> tuple[Path, Path]:
+    subprocess.run(
+        ["git", "init", "-b", "master"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "agent@example.test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Agent"], cwd=tmp_path, check=True
+    )
+    wrapper = tmp_path / MWCC_INSPECT_WRAPPER
+    supervisor = tmp_path / MWCC_INSPECT_SUPERVISOR
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("new wrapper\n", encoding="utf-8")
+    supervisor.write_text("new supervisor\n", encoding="utf-8")
+    wrapper.chmod(0o755)
+    supervisor.chmod(0o755)
+    subprocess.run(
+        ["git", "add", *MWCC_INSPECT_GROUP], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "master inspector pair"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "switch", "-c", "matcher"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    return wrapper, supervisor
+
+
+def _configure_inspector_pair_test(monkeypatch, doctor_mod, tmp_path: Path) -> None:
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod.doctor, "TOOLING_FILES", list(MWCC_INSPECT_GROUP))
+    monkeypatch.setattr(
+        doctor_mod.doctor, "TOOLING_FILE_GROUPS", (MWCC_INSPECT_GROUP,)
+    )
+
+
+def _path_state(path: Path) -> tuple[bytes, int] | None:
+    if not path.exists():
+        return None
+    return path.read_bytes(), path.stat().st_mode & 0o777
+
+
+def test_fix_refreshes_mwcc_inspect_tooling_pair_from_master(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     doctor_mod = load_worktree_doctor()
 
-    assert "tools/workflow/mwcc-inspect.sh" in doctor_mod.TOOLING_FILES
+    assert MWCC_INSPECT_GROUP in doctor_mod.TOOLING_FILE_GROUPS
+    assert set(MWCC_INSPECT_GROUP) <= set(doctor_mod.TOOLING_FILES)
 
-    subprocess.run(["git", "init", "-b", "master"], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Agent"], cwd=tmp_path, check=True)
-    wrapper = tmp_path / "tools" / "workflow" / "mwcc-inspect.sh"
-    wrapper.parent.mkdir(parents=True)
-    wrapper.write_text("new\n", encoding="utf-8")
-    subprocess.run(["git", "add", "tools/workflow/mwcc-inspect.sh"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-m", "master inspect wrapper"], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "switch", "-c", "matcher"], cwd=tmp_path, check=True, capture_output=True)
-    wrapper.write_text("old\n", encoding="utf-8")
-    subprocess.run(["git", "commit", "-am", "stale inspect wrapper"], cwd=tmp_path, check=True, capture_output=True)
-
-    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
-    monkeypatch.setattr(doctor_mod.doctor, "TOOLING_FILES", ["tools/workflow/mwcc-inspect.sh"])
+    wrapper, supervisor = _init_inspector_pair_repo(tmp_path)
+    wrapper.write_text("old wrapper\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "rm", MWCC_INSPECT_SUPERVISOR], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-am", "stale inspector pair"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    _configure_inspector_pair_test(monkeypatch, doctor_mod, tmp_path)
 
     doctor = doctor_mod.Doctor(fix=True)
     doctor.check_tooling_overlay()
 
-    assert wrapper.read_text(encoding="utf-8") == "new\n"
+    assert wrapper.read_text(encoding="utf-8") == "new wrapper\n"
+    assert supervisor.read_text(encoding="utf-8") == "new supervisor\n"
+    assert wrapper.stat().st_mode & 0o111
+    assert supervisor.stat().st_mode & 0o111
+    messages = [result.message for result in doctor.results]
+    assert (
+        "refreshed stale tooling from master: tools/workflow/mwcc-inspect.sh"
+        in messages
+    )
+    assert (
+        "restored tooling from master: tools/workflow/mwcc-inspect-supervisor.sh"
+        in messages
+    )
+    assert "mwcc-inspect tooling pair is current" in messages
+
+
+def test_fix_does_not_refresh_pair_when_supervisor_has_local_changes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    wrapper, supervisor = _init_inspector_pair_repo(tmp_path)
+    wrapper.write_text("old wrapper\n", encoding="utf-8")
+    supervisor.write_text("old supervisor\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "commit", "-am", "stale inspector pair"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    supervisor.write_text("protected supervisor\n", encoding="utf-8")
+    wrapper_before = _path_state(wrapper)
+    supervisor_before = _path_state(supervisor)
+    _configure_inspector_pair_test(monkeypatch, doctor_mod, tmp_path)
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_tooling_overlay()
+
+    assert _path_state(wrapper) == wrapper_before
+    assert _path_state(supervisor) == supervisor_before
     assert any(
-        result.level == "ok"
-        and "refreshed stale tooling from master: tools/workflow/mwcc-inspect.sh"
-        in result.message
+        result.level == "warn"
+        and "mwcc-inspect tooling pair" in result.message
+        and MWCC_INSPECT_SUPERVISOR in result.message
+        for result in doctor.results
+    )
+
+
+def test_fix_does_not_restore_missing_supervisor_when_wrapper_is_dirty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    wrapper, supervisor = _init_inspector_pair_repo(tmp_path)
+    subprocess.run(
+        ["git", "rm", MWCC_INSPECT_SUPERVISOR], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "remove old supervisor"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    wrapper.write_text("protected wrapper\n", encoding="utf-8")
+    wrapper_before = _path_state(wrapper)
+    _configure_inspector_pair_test(monkeypatch, doctor_mod, tmp_path)
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_tooling_overlay()
+
+    assert _path_state(wrapper) == wrapper_before
+    assert _path_state(supervisor) is None
+    assert any(
+        result.level == "warn"
+        and "mwcc-inspect tooling pair" in result.message
+        and MWCC_INSPECT_WRAPPER in result.message
+        for result in doctor.results
+    )
+
+
+def test_fix_does_not_partially_refresh_pair_when_master_member_is_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    wrapper, supervisor = _init_inspector_pair_repo(tmp_path)
+    subprocess.run(["git", "switch", "master"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "rm", MWCC_INSPECT_SUPERVISOR], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "remove master supervisor"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "switch", "matcher"], cwd=tmp_path, check=True, capture_output=True)
+    wrapper.write_text("matcher wrapper\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "commit", "-am", "stale matcher wrapper"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    wrapper_before = _path_state(wrapper)
+    supervisor_before = _path_state(supervisor)
+    _configure_inspector_pair_test(monkeypatch, doctor_mod, tmp_path)
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_tooling_overlay()
+
+    assert _path_state(wrapper) == wrapper_before
+    assert _path_state(supervisor) == supervisor_before
+    assert any(
+        result.level == "fail"
+        and "mwcc-inspect tooling pair" in result.message
+        and MWCC_INSPECT_SUPERVISOR in result.message
+        for result in doctor.results
+    )
+
+
+def test_restore_group_rolls_back_first_member_when_second_replace_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    wrapper, supervisor = _init_inspector_pair_repo(tmp_path)
+    wrapper.write_text("old wrapper\n", encoding="utf-8")
+    supervisor.write_text("old supervisor\n", encoding="utf-8")
+    wrapper_before = _path_state(wrapper)
+    supervisor_before = _path_state(supervisor)
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    real_replace = doctor_mod.utils.os.replace
+    replacement_count = 0
+
+    def fail_second_replacement(src, dst) -> None:
+        nonlocal replacement_count
+        if Path(dst) in (wrapper, supervisor) and ".restore." in Path(src).name:
+            replacement_count += 1
+            if replacement_count == 2:
+                raise OSError("simulated replacement failure")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(doctor_mod.utils.os, "replace", fail_second_replacement)
+
+    assert not doctor_mod.utils.restore_group_from_master(MWCC_INSPECT_GROUP, tmp_path)
+    assert _path_state(wrapper) == wrapper_before
+    assert _path_state(supervisor) == supervisor_before
+
+
+def test_fix_refreshes_pair_when_only_executable_mode_is_stale(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    wrapper, supervisor = _init_inspector_pair_repo(tmp_path)
+    wrapper.chmod(0o644)
+    supervisor.chmod(0o644)
+    subprocess.run(
+        ["git", "commit", "-am", "stale inspector modes"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    _configure_inspector_pair_test(monkeypatch, doctor_mod, tmp_path)
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_tooling_overlay()
+
+    assert wrapper.read_text(encoding="utf-8") == "new wrapper\n"
+    assert supervisor.read_text(encoding="utf-8") == "new supervisor\n"
+    assert wrapper.stat().st_mode & 0o777 == 0o755
+    assert supervisor.stat().st_mode & 0o777 == 0o755
+    assert any(
+        result.message
+        == "refreshed stale tooling from master: tools/workflow/mwcc-inspect.sh"
+        for result in doctor.results
+    )
+
+
+def test_fix_replaces_clean_tooling_symlink_without_reading_its_target(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    wrapper, _supervisor = _init_inspector_pair_repo(tmp_path)
+    external = tmp_path / "external-wrapper"
+    external.write_text("new wrapper\n", encoding="utf-8")
+    external.chmod(0o755)
+    wrapper.unlink()
+    wrapper.symlink_to(external)
+    subprocess.run(
+        ["git", "add", MWCC_INSPECT_WRAPPER], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "committed tooling symlink"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    external_before = _path_state(external)
+    _configure_inspector_pair_test(monkeypatch, doctor_mod, tmp_path)
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_tooling_overlay()
+
+    assert not wrapper.is_symlink()
+    assert _path_state(wrapper) == (b"new wrapper\n", 0o755)
+    assert _path_state(external) == external_before
+    assert any(
+        result.message
+        == "refreshed stale tooling from master: tools/workflow/mwcc-inspect.sh"
+        for result in doctor.results
+    )
+
+
+def test_fix_blocks_dirty_tooling_symlink_even_when_target_matches_master(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    wrapper, supervisor = _init_inspector_pair_repo(tmp_path)
+    external = tmp_path / "external-wrapper"
+    external.write_text("new wrapper\n", encoding="utf-8")
+    external.chmod(0o755)
+    wrapper.unlink()
+    wrapper.symlink_to(external)
+    wrapper_before = wrapper.readlink()
+    supervisor_before = _path_state(supervisor)
+    external_before = _path_state(external)
+    _configure_inspector_pair_test(monkeypatch, doctor_mod, tmp_path)
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_tooling_overlay()
+
+    assert wrapper.is_symlink()
+    assert wrapper.readlink() == wrapper_before
+    assert _path_state(supervisor) == supervisor_before
+    assert _path_state(external) == external_before
+    assert any(
+        result.level == "warn"
+        and "protected local changes" in result.message
+        and MWCC_INSPECT_WRAPPER in result.message
+        for result in doctor.results
+    )
+
+
+def test_restore_group_rejects_symlinked_parent_without_external_writes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    wrapper, _supervisor = _init_inspector_pair_repo(tmp_path)
+    workflow = wrapper.parent
+    shutil.rmtree(workflow)
+    external = tmp_path / "external-workflow"
+    external.mkdir()
+    external_wrapper = external / "mwcc-inspect.sh"
+    external_supervisor = external / "mwcc-inspect-supervisor.sh"
+    external_wrapper.write_text("external wrapper\n", encoding="utf-8")
+    external_supervisor.write_text("external supervisor\n", encoding="utf-8")
+    external_wrapper.chmod(0o700)
+    external_supervisor.chmod(0o600)
+    workflow.symlink_to(external, target_is_directory=True)
+    external_before = {
+        external_wrapper: _path_state(external_wrapper),
+        external_supervisor: _path_state(external_supervisor),
+    }
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+
+    assert not doctor_mod.utils.restore_group_from_master(
+        MWCC_INSPECT_GROUP, tmp_path
+    )
+    assert {
+        external_wrapper: _path_state(external_wrapper),
+        external_supervisor: _path_state(external_supervisor),
+    } == external_before
+
+
+def test_restore_group_rollback_restores_symlink_without_touching_target(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    wrapper, supervisor = _init_inspector_pair_repo(tmp_path)
+    external = tmp_path / "external-wrapper"
+    external.write_text("external wrapper\n", encoding="utf-8")
+    external.chmod(0o700)
+    wrapper.unlink()
+    wrapper.symlink_to(external)
+    supervisor.write_text("old supervisor\n", encoding="utf-8")
+    supervisor.chmod(0o600)
+    external_before = _path_state(external)
+    supervisor_before = _path_state(supervisor)
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    real_replace = doctor_mod.utils.os.replace
+    replacement_count = 0
+
+    def fail_second_replacement(src, dst) -> None:
+        nonlocal replacement_count
+        if Path(dst) in (wrapper, supervisor) and ".restore." in Path(src).name:
+            replacement_count += 1
+            if replacement_count == 2:
+                raise OSError("simulated replacement failure")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(doctor_mod.utils.os, "replace", fail_second_replacement)
+
+    assert not doctor_mod.utils.restore_group_from_master(
+        MWCC_INSPECT_GROUP, tmp_path
+    )
+    assert wrapper.is_symlink()
+    assert wrapper.readlink() == external
+    assert _path_state(external) == external_before
+    assert _path_state(supervisor) == supervisor_before
+
+
+def test_fix_does_not_overwrite_dirty_broken_symlink_for_ordinary_tooling(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    doctor_mod = load_worktree_doctor()
+    subprocess.run(
+        ["git", "init", "-b", "master"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "agent@example.test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Agent"], cwd=tmp_path, check=True
+    )
+    rel_path = "tools/mwcc_debug/mwcc_debug.c"
+    tooling = tmp_path / rel_path
+    tooling.parent.mkdir(parents=True)
+    tooling.write_text("master tooling\n", encoding="utf-8")
+    subprocess.run(["git", "add", rel_path], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "master tooling"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "switch", "-c", "matcher"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    missing_target = tmp_path / "missing-external-tooling"
+    tooling.unlink()
+    tooling.symlink_to(missing_target)
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod.doctor, "TOOLING_FILES", [rel_path])
+    monkeypatch.setattr(doctor_mod.doctor, "TOOLING_FILE_GROUPS", ())
+
+    doctor = doctor_mod.Doctor(fix=True)
+    doctor.check_tooling_overlay()
+
+    assert tooling.is_symlink()
+    assert tooling.readlink() == missing_target
+    assert any(
+        result.level == "warn"
+        and "local changes" in result.message
+        and rel_path in result.message
         for result in doctor.results
     )
 
@@ -345,7 +772,8 @@ def test_fix_builds_table_typer_when_missing(monkeypatch, tmp_path: Path) -> Non
     """Issue #30: --fix should actually build table-typer, not just suggest it."""
     doctor_mod = load_worktree_doctor()
     ttdir = _make_table_typer_dir(tmp_path)
-    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path); monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
 
     calls: list[Path] = []
 
@@ -367,7 +795,8 @@ def test_fix_table_typer_go_missing_is_optional_warn(monkeypatch, tmp_path: Path
     """If Go isn't installed, --fix can't build it; warn but label opseq optional."""
     doctor_mod = load_worktree_doctor()
     _make_table_typer_dir(tmp_path)
-    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path); monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
     monkeypatch.setattr(
         doctor_mod.utils,
         "build_table_typer",
@@ -392,7 +821,8 @@ def test_fix_replaces_macos_arm64_dtk_with_rosetta_binary(monkeypatch, tmp_path:
     dtk.parent.mkdir(parents=True)
     dtk.write_bytes(b"arm64 dtk")
 
-    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path); monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
     monkeypatch.setattr(doctor_mod.sys, "platform", "darwin")
     monkeypatch.setattr(doctor_mod.platform, "machine", lambda: "arm64")
     monkeypatch.setattr(doctor_mod.utils, "detect_macho_arch", lambda path: "arm64")
@@ -441,7 +871,9 @@ def test_refresh_report_timeout_kills_child_processes(monkeypatch, tmp_path: Pat
     (tmp_path / "configure.py").write_text("import sys\nsys.exit(0)\n")
 
     monkeypatch.setattr(doctor_mod, "REPORT_REFRESH_TIMEOUT_SECONDS", 2.0)
-    import sys as _sys; monkeypatch.setattr(_sys.modules["worktree_doctor"], "REPORT_REFRESH_TIMEOUT_SECONDS", 2.0)
+    monkeypatch.setattr(
+        sys.modules["worktree_doctor"], "REPORT_REFRESH_TIMEOUT_SECONDS", 2.0
+    )
     monkeypatch.setenv("CHILD_PID_FILE", str(child_pid_file))
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
@@ -492,7 +924,8 @@ def test_table_typer_missing_without_fix_labels_optional(monkeypatch, tmp_path: 
     """Without --fix, the warning should point at --fix and call opseq optional."""
     doctor_mod = load_worktree_doctor()
     _make_table_typer_dir(tmp_path)
-    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path); monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod, "ROOT", tmp_path)
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", tmp_path)
 
     def must_not_build(root: Path):
         raise AssertionError("build_table_typer must not run without --fix")
@@ -519,8 +952,12 @@ def test_fix_replaces_broken_base_dol_symlink(monkeypatch, tmp_path: Path) -> No
     dol_path.parent.mkdir(parents=True)
     dol_path.symlink_to(tmp_path / "missing" / "main.dol")
 
-    monkeypatch.setattr(doctor_mod, "ROOT", worktree); monkeypatch.setattr(doctor_mod.utils, "ROOT", worktree)
-    monkeypatch.setattr(doctor_mod, "DOL_CANDIDATES", [candidate]); import sys as _sys2; monkeypatch.setattr(_sys2.modules["worktree_doctor"], "DOL_CANDIDATES", [candidate])
+    monkeypatch.setattr(doctor_mod, "ROOT", worktree)
+    monkeypatch.setattr(doctor_mod.utils, "ROOT", worktree)
+    monkeypatch.setattr(doctor_mod, "DOL_CANDIDATES", [candidate])
+    monkeypatch.setattr(
+        sys.modules["worktree_doctor"], "DOL_CANDIDATES", [candidate]
+    )
 
     doctor = doctor_mod.Doctor(fix=True)
     doctor.check_base_dol()
