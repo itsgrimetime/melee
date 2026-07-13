@@ -2356,9 +2356,12 @@ def _score_source_compile_source_rel(
 ) -> Iterator[str]:
     from src.cli.debug import (  # noqa: PLC0415
         _acquire_source_score_repo_lock,
+        _capture_source_file_snapshot,
+        _preserve_source_restore_backup,
         _register_active_source_restore,
+        _restore_source_file_snapshot,
+        _stage_source_file_bytes,
         _unregister_active_source_restore,
-        _restore_source_snapshot,
     )
     if not _score_source_should_stage_through_unit(
         source_rel=source_rel,
@@ -2370,18 +2373,41 @@ def _score_source_compile_source_rel(
     candidate_path = melee_root / source_rel
     unit_path = melee_root / cflags_unit_rel
     with _acquire_source_score_repo_lock(melee_root, timeout=timeout):
-        candidate_text = candidate_path.read_text(encoding="utf-8", errors="replace")
-        original = unit_path.read_text(encoding="utf-8", errors="replace")
+        original = _capture_source_file_snapshot(unit_path)
         _register_active_source_restore(unit_path, original)
+        release_active_restore = False
+        supersede_newer_restores = False
         try:
-            unit_path.write_text(candidate_text, encoding="utf-8")
+            candidate_bytes = candidate_path.read_bytes()
+            _stage_source_file_bytes(unit_path, candidate_bytes, original)
             yield cflags_unit_rel
         finally:
             try:
-                if unit_path.read_text(encoding="utf-8", errors="replace") != original:
-                    _restore_source_snapshot(unit_path, original)
+                restore_error = _restore_source_file_snapshot(unit_path, original)
+                if restore_error is not None:
+                    backup_path, backup_error = _preserve_source_restore_backup(
+                        unit_path,
+                        original.contents,
+                        melee_root=melee_root,
+                    )
+                    if backup_error is not None:
+                        restore_error = f"{restore_error}; {backup_error}"
+                    elif backup_path is not None:
+                        restore_error = (
+                            f"{restore_error}; original bytes preserved at "
+                            f"{backup_path}"
+                        )
+                        release_active_restore = True
+                    raise RuntimeError(restore_error)
+                release_active_restore = True
+                supersede_newer_restores = True
             finally:
-                _unregister_active_source_restore(unit_path)
+                if release_active_restore:
+                    _unregister_active_source_restore(
+                        unit_path,
+                        original,
+                        supersede_newer=supersede_newer_restores,
+                    )
 
 
 def _score_source_retained_pcdump_path(

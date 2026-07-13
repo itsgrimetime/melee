@@ -1664,7 +1664,10 @@ def _pressure_class_id(register_class: str | None) -> int:
 
 
 
-_ACTIVE_SOURCE_RESTORES: dict[Path, list[str]] = {}
+_ACTIVE_SOURCE_RESTORES: dict[
+    Path,
+    list[str | bytes | _SourceFileSnapshot],  # noqa: F405
+] = {}
 _SOURCE_RESTORE_SIGNAL_HANDLERS: dict[int, object] = {}
 
 
@@ -1689,11 +1692,8 @@ class _SelectOrderCommandSourceRestore:
         self.original = self.path.read_bytes() if self.path is not None else None
         self._registered_active_restore = False
         if self.path is not None and self.original is not None:
-            try:
-                _register_active_source_restore(self.path, self.original.decode("utf-8"))
-                self._registered_active_restore = True
-            except UnicodeDecodeError:
-                pass
+            _register_active_source_restore(self.path, self.original)  # noqa: F405
+            self._registered_active_restore = True
 
     def restore(self) -> None:
         if self.path is None or self.original is None:

@@ -24,6 +24,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -327,7 +328,11 @@ __all__ = [
     '_restore_active_sources_for_signal',
     '_restore_object_report_for_unit',
     '_restore_signature_candidate_validation_state',
+    '_capture_source_file_snapshot',
+    '_restore_source_file_snapshot',
+    '_stage_source_file_bytes',
     '_restore_source_bytes_snapshot',
+    '_SourceFileSnapshot',
     '_retained_c_source_variant_hit',
     '_retained_source_sibling_for_pcdump',
     '_run_checkdiff_json',
@@ -8824,6 +8829,366 @@ def _preserve_source_restore_backup(
         return Path(raw_backup), None
     except Exception as exc:
         return None, f"failed to preserve source restore backup: {type(exc).__name__}: {exc}"
+
+
+@dataclasses.dataclass(frozen=True)
+class _SourceFileSnapshot:
+    contents: bytes
+    st_mode: int
+    st_atime_ns: int
+    st_mtime_ns: int
+    st_dev: int
+    st_ino: int
+
+
+def _source_file_open_flags(access: int) -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise RuntimeError("safe no-follow source staging is unavailable")
+    return (
+        access
+        | nofollow
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+
+
+def _read_source_file_fd(fd: int) -> bytes:
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = os.read(fd, 64 * 1024)
+        except InterruptedError:
+            continue
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _write_source_file_fd(fd: int, contents: bytes, *, durable: bool) -> None:
+    os.lseek(fd, 0, os.SEEK_SET)
+    pending = memoryview(contents)
+    written = 0
+    while written < len(pending):
+        try:
+            count = os.write(fd, pending[written:])
+        except InterruptedError:
+            continue
+        if count <= 0:
+            raise OSError("source write made no progress")
+        written += count
+    os.ftruncate(fd, len(contents))
+    if durable:
+        os.fsync(fd)
+
+
+def _validate_source_file_stat(
+    path: Path,
+    file_stat: os.stat_result,
+    *,
+    snapshot: _SourceFileSnapshot | None = None,
+) -> None:
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise RuntimeError(f"refusing to stage non-regular source: {path}")
+    if snapshot is not None and (
+        file_stat.st_nlink != 1
+        or (file_stat.st_dev, file_stat.st_ino)
+        != (snapshot.st_dev, snapshot.st_ino)
+    ):
+        raise RuntimeError(f"source changed after snapshot: {path}")
+    if file_stat.st_nlink != 1:
+        raise RuntimeError(f"refusing to stage multiply-linked source: {path}")
+
+
+def _capture_source_file_fd(path: Path) -> int:
+    try:
+        return os.open(path, _source_file_open_flags(os.O_RDONLY))
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        try:
+            current_stat = path.lstat()
+        except OSError:
+            current_stat = None
+        if current_stat is not None and stat.S_ISLNK(current_stat.st_mode):
+            raise RuntimeError(f"refusing to stage symlink source: {path}") from exc
+        raise RuntimeError(f"failed to open source without following links: {path}") from exc
+
+
+def _open_snapshotted_source_fd(
+    path: Path,
+    snapshot: _SourceFileSnapshot,
+    access: int,
+) -> tuple[int, os.stat_result]:
+    try:
+        fd = os.open(path, _source_file_open_flags(access))
+    except OSError as exc:
+        raise RuntimeError(f"source changed after snapshot: {path}") from exc
+    try:
+        file_stat = os.fstat(fd)
+        _validate_source_file_stat(path, file_stat, snapshot=snapshot)
+        return fd, file_stat
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _capture_source_file_snapshot(path: Path) -> _SourceFileSnapshot:
+    """Capture one regular source without following aliases or losing bytes."""
+
+    fd = _capture_source_file_fd(path)
+    try:
+        source_stat = os.fstat(fd)
+        _validate_source_file_stat(path, source_stat)
+        contents = _read_source_file_fd(fd)
+        return _SourceFileSnapshot(
+            contents=contents,
+            st_mode=source_stat.st_mode,
+            st_atime_ns=source_stat.st_atime_ns,
+            st_mtime_ns=source_stat.st_mtime_ns,
+            st_dev=source_stat.st_dev,
+            st_ino=source_stat.st_ino,
+        )
+    finally:
+        os.close(fd)
+
+
+def _open_source_file_for_restore(
+    path: Path,
+    snapshot: _SourceFileSnapshot,
+) -> int:
+    """Open the original inode or safely recreate its path without following links."""
+
+    for _attempt in range(8):
+        probe_fd = -1
+        try:
+            probe_fd = os.open(path, _source_file_open_flags(os.O_RDONLY))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            try:
+                replacement_stat = path.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISDIR(replacement_stat.st_mode):
+                raise RuntimeError(
+                    f"refusing to replace directory during source restore: {path}"
+                )
+            path.unlink()
+            continue
+        else:
+            try:
+                probe_stat = os.fstat(probe_fd)
+                if stat.S_ISDIR(probe_stat.st_mode):
+                    raise RuntimeError(
+                        f"refusing to replace directory during source restore: {path}"
+                    )
+                if (
+                    stat.S_ISREG(probe_stat.st_mode)
+                    and probe_stat.st_nlink == 1
+                    and (probe_stat.st_dev, probe_stat.st_ino)
+                    == (snapshot.st_dev, snapshot.st_ino)
+                ):
+                    if not probe_stat.st_mode & stat.S_IWUSR:
+                        os.fchmod(
+                            probe_fd,
+                            stat.S_IMODE(probe_stat.st_mode) | stat.S_IWUSR,
+                        )
+                    os.close(probe_fd)
+                    probe_fd = -1
+                    try:
+                        fd, _ = _open_snapshotted_source_fd(
+                            path,
+                            snapshot,
+                            os.O_RDWR,
+                        )
+                    except RuntimeError:
+                        continue
+                    return fd
+            finally:
+                if probe_fd >= 0:
+                    os.close(probe_fd)
+            path.unlink()
+            continue
+
+        try:
+            fd = os.open(
+                path,
+                _source_file_open_flags(os.O_RDWR) | os.O_CREAT | os.O_EXCL,
+                stat.S_IMODE(snapshot.st_mode),
+            )
+        except FileExistsError:
+            continue
+        try:
+            created_stat = os.fstat(fd)
+            _validate_source_file_stat(path, created_stat)
+            return fd
+        except Exception:
+            os.close(fd)
+            raise
+    raise RuntimeError(f"source path kept changing during restore: {path}")
+
+
+def _source_path_owns_fd(path: Path, file_stat: os.stat_result) -> bool:
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return False
+    return (
+        stat.S_ISREG(path_stat.st_mode)
+        and (path_stat.st_dev, path_stat.st_ino)
+        == (file_stat.st_dev, file_stat.st_ino)
+    )
+
+
+def _restore_source_file_snapshot(
+    path: Path,
+    snapshot: _SourceFileSnapshot,
+) -> str | None:
+    """Restore a regular source even when its path was removed or replaced."""
+
+    try:
+        for _attempt in range(8):
+            fd = _open_source_file_for_restore(path, snapshot)
+            try:
+                _write_source_file_fd(fd, snapshot.contents, durable=False)
+                os.fchmod(fd, stat.S_IMODE(snapshot.st_mode))
+                if _read_source_file_fd(fd) != snapshot.contents:
+                    return f"failed to restore {path}: restored byte hash mismatch"
+                os.utime(
+                    fd,
+                    ns=(snapshot.st_atime_ns, snapshot.st_mtime_ns),
+                )
+                os.fsync(fd)
+                restored_stat = os.fstat(fd)
+                if restored_stat.st_nlink == 1 and _source_path_owns_fd(
+                    path,
+                    restored_stat,
+                ) and _source_path_owns_fd(path, restored_stat):
+                    break
+            finally:
+                os.close(fd)
+        else:
+            raise RuntimeError(f"source path kept changing during restore: {path}")
+    except Exception as exc:
+        return f"failed to restore {path}: {type(exc).__name__}: {exc}"
+
+    if not stat.S_ISREG(restored_stat.st_mode):
+        return f"failed to restore {path}: restored path is not a regular file"
+    if stat.S_IMODE(restored_stat.st_mode) != stat.S_IMODE(snapshot.st_mode):
+        return f"failed to restore {path}: restored mode mismatch"
+    if (
+        restored_stat.st_atime_ns != snapshot.st_atime_ns
+        or restored_stat.st_mtime_ns != snapshot.st_mtime_ns
+    ):
+        return f"failed to restore {path}: restored timestamp mismatch"
+    return None
+
+
+def _stage_source_file_bytes(
+    path: Path,
+    candidate: bytes,
+    snapshot: _SourceFileSnapshot,
+) -> None:
+    """Stage bytes only while the snapshotted regular file still owns the path."""
+
+    try:
+        fd, _ = _open_snapshotted_source_fd(path, snapshot, os.O_RDWR)
+    except RuntimeError as writable_open_error:
+        probe_fd, current_stat = _open_snapshotted_source_fd(
+            path,
+            snapshot,
+            os.O_RDONLY,
+        )
+        try:
+            if (
+                stat.S_IMODE(current_stat.st_mode)
+                != stat.S_IMODE(snapshot.st_mode)
+                or current_stat.st_mtime_ns != snapshot.st_mtime_ns
+                or _read_source_file_fd(probe_fd) != snapshot.contents
+            ):
+                raise RuntimeError(f"source changed after snapshot: {path}")
+            current_stat = os.fstat(probe_fd)
+            _validate_source_file_stat(path, current_stat, snapshot=snapshot)
+            if (
+                stat.S_IMODE(current_stat.st_mode)
+                != stat.S_IMODE(snapshot.st_mode)
+                or current_stat.st_mtime_ns != snapshot.st_mtime_ns
+            ):
+                raise RuntimeError(f"source changed after snapshot: {path}")
+            if current_stat.st_mode & stat.S_IWUSR:
+                raise writable_open_error
+            temporary_mode = (
+                stat.S_IMODE(current_stat.st_mode) | stat.S_IWUSR
+            )
+            os.fchmod(probe_fd, temporary_mode)
+        finally:
+            os.close(probe_fd)
+
+        fd, current_stat = _open_snapshotted_source_fd(
+            path,
+            snapshot,
+            os.O_RDWR,
+        )
+        try:
+            if (
+                stat.S_IMODE(current_stat.st_mode) != temporary_mode
+                or current_stat.st_mtime_ns != snapshot.st_mtime_ns
+                or _read_source_file_fd(fd) != snapshot.contents
+            ):
+                raise RuntimeError(f"source changed after snapshot: {path}")
+            current_stat = os.fstat(fd)
+            _validate_source_file_stat(path, current_stat, snapshot=snapshot)
+            if (
+                stat.S_IMODE(current_stat.st_mode) != temporary_mode
+                or current_stat.st_mtime_ns != snapshot.st_mtime_ns
+            ):
+                raise RuntimeError(f"source changed after snapshot: {path}")
+            os.fchmod(fd, stat.S_IMODE(snapshot.st_mode))
+        except Exception:
+            os.close(fd)
+            raise
+
+    try:
+        current_stat = os.fstat(fd)
+        _validate_source_file_stat(path, current_stat, snapshot=snapshot)
+        if (
+            stat.S_IMODE(current_stat.st_mode) != stat.S_IMODE(snapshot.st_mode)
+            or current_stat.st_mtime_ns != snapshot.st_mtime_ns
+            or _read_source_file_fd(fd) != snapshot.contents
+        ):
+            raise RuntimeError(f"source changed after snapshot: {path}")
+        current_stat = os.fstat(fd)
+        _validate_source_file_stat(path, current_stat, snapshot=snapshot)
+        if (
+            stat.S_IMODE(current_stat.st_mode) != stat.S_IMODE(snapshot.st_mode)
+            or current_stat.st_mtime_ns != snapshot.st_mtime_ns
+        ):
+            raise RuntimeError(f"source changed after snapshot: {path}")
+        _write_source_file_fd(fd, candidate, durable=False)
+        staged_stat = os.fstat(fd)
+        _validate_source_file_stat(path, staged_stat, snapshot=snapshot)
+        if not _source_path_owns_fd(path, staged_stat) or not _source_path_owns_fd(
+            path,
+            staged_stat,
+        ):
+            raise RuntimeError(f"source changed after snapshot: {path}")
+    finally:
+        os.close(fd)
+
+
+def _restore_source_bytes_snapshot_error(path: Path, original: bytes) -> str | None:
+    try:
+        path.write_bytes(original)
+        restored = path.read_bytes()
+    except Exception as exc:
+        return f"failed to restore {path}: {type(exc).__name__}: {exc}"
+    if restored != original:
+        return f"failed to restore {path}: restored byte hash mismatch"
+    return None
+
+
 def _restore_source_bytes_snapshot(
     path: Path,
     original: bytes,
@@ -8831,19 +9196,7 @@ def _restore_source_bytes_snapshot(
     melee_root: Path,
 ) -> None:
     from src.cli.debug import _SourceRestoreBytesError  # noqa: PLC0415
-    restore_error: str | None = None
-    try:
-        path.write_bytes(original)
-        restored = path.read_bytes()
-    except Exception as exc:
-        restore_error = (
-            f"failed to restore {path}: {type(exc).__name__}: {exc}"
-        )
-    else:
-        if restored != original:
-            restore_error = (
-                f"failed to restore {path}: restored byte hash mismatch"
-            )
+    restore_error = _restore_source_bytes_snapshot_error(path, original)
 
     if restore_error is None:
         return
@@ -8871,11 +9224,8 @@ def _source_restore_byte_guard(
     original = path.read_bytes()
     registered_signal_restore = False
     try:
-        try:
-            _register_active_source_restore(path, original.decode("utf-8"))
-            registered_signal_restore = True
-        except UnicodeDecodeError:
-            pass
+        _register_active_source_restore(path, original)
+        registered_signal_restore = True
 
         yield
     finally:
@@ -8906,14 +9256,19 @@ def _unique_existing_source_restore_paths(
         out.append(path)
     return out
 def _restore_active_sources_for_signal(signum: int, _frame: object) -> None:
-    from src.cli.debug import _restore_source_snapshot, _ACTIVE_SOURCE_RESTORES
+    from src.cli.debug import _ACTIVE_SOURCE_RESTORES, _restore_source_snapshot
     errors: list[str] = []
     for path, originals in list(_ACTIVE_SOURCE_RESTORES.items()):
         if not originals:
             _ACTIVE_SOURCE_RESTORES.pop(path, None)
             continue
         original = originals[0]
-        error = _restore_source_snapshot(path, original)
+        if isinstance(original, _SourceFileSnapshot):
+            error = _restore_source_file_snapshot(path, original)
+        elif isinstance(original, bytes):
+            error = _restore_source_bytes_snapshot_error(path, original)
+        else:
+            error = _restore_source_snapshot(path, original)
         if error:
             errors.append(error)
         else:
@@ -8930,17 +9285,34 @@ def _ensure_source_restore_signal_handlers() -> None:
             continue
         _SOURCE_RESTORE_SIGNAL_HANDLERS[signum] = signal.getsignal(signum)
         signal.signal(signum, _restore_active_sources_for_signal)
-def _register_active_source_restore(path: Path, original: str) -> None:
+def _register_active_source_restore(
+    path: Path,
+    original: str | bytes | _SourceFileSnapshot,
+) -> None:
     from src.cli.debug import _ACTIVE_SOURCE_RESTORES
     _ensure_source_restore_signal_handlers()
     _ACTIVE_SOURCE_RESTORES.setdefault(path, []).append(original)
-def _unregister_active_source_restore(path: Path) -> None:
+def _unregister_active_source_restore(
+    path: Path,
+    original: str | bytes | _SourceFileSnapshot | None = None,
+    *,
+    supersede_newer: bool = False,
+) -> None:
     from src.cli.debug import _ACTIVE_SOURCE_RESTORES
     originals = _ACTIVE_SOURCE_RESTORES.get(path)
     if not originals:
         _ACTIVE_SOURCE_RESTORES.pop(path, None)
         return
-    originals.pop()
+    if original is None:
+        originals.pop()
+    else:
+        for index in range(len(originals) - 1, -1, -1):
+            if originals[index] is original:
+                if supersede_newer:
+                    del originals[index:]
+                else:
+                    del originals[index]
+                break
     if not originals:
         _ACTIVE_SOURCE_RESTORES.pop(path, None)
 @contextmanager

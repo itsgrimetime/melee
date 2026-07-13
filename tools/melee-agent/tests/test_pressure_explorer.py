@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 import json
+import os
 import pathlib
+import signal
+import stat
 import textwrap
+from contextlib import contextmanager
 
 import pytest
 from typer.testing import CliRunner
@@ -6455,6 +6458,1038 @@ def test_score_source_compile_source_rel_stages_candidate_under_lock(
         ("lock-exit", original_text, "12.5"),
     ]
     assert target.read_text() == original_text
+
+
+def test_score_source_compile_source_rel_restores_source_timestamps(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_text("void fn_80000000(void) { sink(1); }\n")
+    original = b"void fn_80000000(void) { sink(0); }\n"
+    target.write_bytes(original)
+    os.utime(
+        target,
+        ns=(1_700_000_000_123_456_789, 1_700_000_001_987_654_321),
+    )
+    original_stat = target.stat()
+
+    @contextmanager
+    def fake_lock(root, *, timeout=None):
+        yield
+
+    monkeypatch.setattr(debug_cli, "_acquire_source_score_repo_lock", fake_lock)
+
+    with debug_cli._score_source_compile_source_rel(
+        source_rel="build/diagnostics/candidate.c",
+        cflags_unit_rel="src/melee/mn/mndiagram.c",
+        melee_root=melee_root,
+    ):
+        assert target.read_text() == "void fn_80000000(void) { sink(1); }\n"
+
+    restored_stat = target.stat()
+    assert target.read_bytes() == original
+    assert restored_stat.st_atime_ns == original_stat.st_atime_ns
+    assert restored_stat.st_mtime_ns == original_stat.st_mtime_ns
+
+
+def test_score_source_compile_source_rel_restores_metadata_on_body_failure(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_text("void fn_80000000(void) { sink(1); }\n")
+    original = b"void fn_80000000(void) { sink(0); }\n"
+    target.write_bytes(original)
+    os.utime(
+        target,
+        ns=(1_700_000_002_123_456_789, 1_700_000_003_987_654_321),
+    )
+    original_stat = target.stat()
+
+    @contextmanager
+    def fake_lock(root, *, timeout=None):
+        yield
+
+    monkeypatch.setattr(debug_cli, "_acquire_source_score_repo_lock", fake_lock)
+
+    with pytest.raises(RuntimeError, match="compile exploded"):
+        with debug_cli._score_source_compile_source_rel(
+            source_rel="build/diagnostics/candidate.c",
+            cflags_unit_rel="src/melee/mn/mndiagram.c",
+            melee_root=melee_root,
+        ):
+            raise RuntimeError("compile exploded")
+
+    restored_stat = target.stat()
+    assert target.read_bytes() == original
+    assert restored_stat.st_atime_ns == original_stat.st_atime_ns
+    assert restored_stat.st_mtime_ns == original_stat.st_mtime_ns
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+
+@pytest.mark.parametrize("body_failure", (False, True), ids=("success", "body-failure"))
+def test_score_source_compile_source_rel_restores_exact_non_utf8_bytes(
+    tmp_path: pathlib.Path,
+    body_failure: bool,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate_bytes = b"/* candidate: \xfe */\nvoid fn_80000000(void) {}\n"
+    original_bytes = b"/* original: \xff */\nvoid fn_80000000(void) {}\n"
+    candidate.write_bytes(candidate_bytes)
+    target.write_bytes(original_bytes)
+    os.utime(
+        target,
+        ns=(1_700_000_004_123_456_789, 1_700_000_005_987_654_321),
+    )
+    original_stat = target.stat()
+
+    if body_failure:
+        with pytest.raises(RuntimeError, match="compile exploded"):
+            with debug_cli._score_source_compile_source_rel(
+                source_rel="build/diagnostics/candidate.c",
+                cflags_unit_rel="src/melee/mn/mndiagram.c",
+                melee_root=melee_root,
+            ):
+                assert target.read_bytes() == candidate_bytes
+                raise RuntimeError("compile exploded")
+    else:
+        with debug_cli._score_source_compile_source_rel(
+            source_rel="build/diagnostics/candidate.c",
+            cflags_unit_rel="src/melee/mn/mndiagram.c",
+            melee_root=melee_root,
+        ):
+            assert target.read_bytes() == candidate_bytes
+
+    restored_stat = target.stat()
+    assert target.read_bytes() == original_bytes
+    assert restored_stat.st_mode == original_stat.st_mode
+    assert restored_stat.st_atime_ns == original_stat.st_atime_ns
+    assert restored_stat.st_mtime_ns == original_stat.st_mtime_ns
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+
+def test_score_source_compile_source_rel_recreates_target_removed_by_body(
+    tmp_path: pathlib.Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate\n")
+    target.write_bytes(b"original\n")
+    target.chmod(0o640)
+    os.utime(
+        target,
+        ns=(1_700_000_006_123_456_789, 1_700_000_007_987_654_321),
+    )
+    original_stat = target.stat()
+
+    with debug_cli._score_source_compile_source_rel(
+        source_rel="build/diagnostics/candidate.c",
+        cflags_unit_rel="src/melee/mn/mndiagram.c",
+        melee_root=melee_root,
+    ):
+        target.unlink()
+
+    restored_stat = target.stat()
+    assert target.read_bytes() == b"original\n"
+    assert restored_stat.st_mode == original_stat.st_mode
+    assert restored_stat.st_atime_ns == original_stat.st_atime_ns
+    assert restored_stat.st_mtime_ns == original_stat.st_mtime_ns
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+
+def test_score_source_compile_source_rel_replaces_body_symlink_without_touching_backing(
+    tmp_path: pathlib.Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    backing = target.with_name("replacement.c")
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate\n")
+    target.write_bytes(b"original\n")
+    backing.write_bytes(b"backing\n")
+    original_stat = target.stat()
+
+    with debug_cli._score_source_compile_source_rel(
+        source_rel="build/diagnostics/candidate.c",
+        cflags_unit_rel="src/melee/mn/mndiagram.c",
+        melee_root=melee_root,
+    ):
+        target.unlink()
+        target.symlink_to(backing.name)
+
+    restored_stat = target.lstat()
+    assert not target.is_symlink()
+    assert target.read_bytes() == b"original\n"
+    assert backing.read_bytes() == b"backing\n"
+    assert restored_stat.st_mode == original_stat.st_mode
+    assert restored_stat.st_atime_ns == original_stat.st_atime_ns
+    assert restored_stat.st_mtime_ns == original_stat.st_mtime_ns
+
+
+def test_score_source_compile_source_rel_replaces_body_regular_file(
+    tmp_path: pathlib.Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate\n")
+    target.write_bytes(b"original\n")
+    target.chmod(0o640)
+    os.utime(
+        target,
+        ns=(1_700_000_010_123_456_789, 1_700_000_011_987_654_321),
+    )
+    original_stat = target.stat()
+
+    with debug_cli._score_source_compile_source_rel(
+        source_rel="build/diagnostics/candidate.c",
+        cflags_unit_rel="src/melee/mn/mndiagram.c",
+        melee_root=melee_root,
+    ):
+        target.unlink()
+        target.write_bytes(b"replacement\n")
+        target.chmod(0o600)
+
+    restored_stat = target.stat()
+    assert target.read_bytes() == b"original\n"
+    assert restored_stat.st_mode == original_stat.st_mode
+    assert restored_stat.st_atime_ns == original_stat.st_atime_ns
+    assert restored_stat.st_mtime_ns == original_stat.st_mtime_ns
+
+
+def test_score_source_compile_source_rel_restores_mode_changed_by_body(
+    tmp_path: pathlib.Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate\n")
+    target.write_bytes(b"original\n")
+    target.chmod(0o640)
+
+    with debug_cli._score_source_compile_source_rel(
+        source_rel="build/diagnostics/candidate.c",
+        cflags_unit_rel="src/melee/mn/mndiagram.c",
+        melee_root=melee_root,
+    ):
+        target.chmod(0o400)
+
+    assert target.read_bytes() == b"original\n"
+    assert target.stat().st_mode & 0o777 == 0o640
+
+
+def test_score_source_compile_source_rel_stages_and_restores_read_only_source(
+    tmp_path: pathlib.Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate\n")
+    target.write_bytes(b"original\n")
+    target.chmod(0o440)
+
+    with debug_cli._score_source_compile_source_rel(
+        source_rel="build/diagnostics/candidate.c",
+        cflags_unit_rel="src/melee/mn/mndiagram.c",
+        melee_root=melee_root,
+    ):
+        assert target.read_bytes() == b"candidate\n"
+
+    assert target.read_bytes() == b"original\n"
+    assert target.stat().st_mode & 0o777 == 0o440
+
+
+def test_score_source_compile_source_rel_restores_snapshot_when_candidate_is_missing(
+    tmp_path: pathlib.Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"original\n")
+    os.utime(
+        target,
+        ns=(1_600_000_000_123_456_789, 1_700_000_009_987_654_321),
+    )
+    original_stat = target.stat()
+
+    with pytest.raises(FileNotFoundError):
+        with debug_cli._score_source_compile_source_rel(
+            source_rel="build/diagnostics/missing.c",
+            cflags_unit_rel="src/melee/mn/mndiagram.c",
+            melee_root=melee_root,
+        ):
+            pytest.fail("a missing candidate cannot reach compilation")
+
+    restored_stat = target.stat()
+    assert target.read_bytes() == b"original\n"
+    assert restored_stat.st_atime_ns == original_stat.st_atime_ns
+    assert restored_stat.st_mtime_ns == original_stat.st_mtime_ns
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+
+def test_score_source_compile_source_rel_rejects_original_symlink_before_staging(
+    tmp_path: pathlib.Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    backing = target.with_name("backing.c")
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate\n")
+    backing.write_bytes(b"original\n")
+    target.symlink_to(backing.name)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        with debug_cli._score_source_compile_source_rel(
+            source_rel="build/diagnostics/candidate.c",
+            cflags_unit_rel="src/melee/mn/mndiagram.c",
+            melee_root=melee_root,
+        ):
+            pytest.fail("symlink target must be rejected before staging")
+
+    assert target.is_symlink()
+    assert backing.read_bytes() == b"original\n"
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+
+def test_capture_source_snapshot_survives_path_swap_to_symlink(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "unit.c"
+    backing = tmp_path / "backing.c"
+    original = b"original\xff\n"
+    target.write_bytes(original)
+    backing.write_bytes(b"backing\n")
+    real_lstat = pathlib.Path.lstat
+    real_fstat = os.fstat
+    swapped = False
+
+    def swap_after_stat(file_stat: os.stat_result) -> os.stat_result:
+        nonlocal swapped
+        if not swapped:
+            target.unlink()
+            target.symlink_to(backing.name)
+            swapped = True
+        return file_stat
+
+    def swapping_lstat(path: pathlib.Path) -> os.stat_result:
+        file_stat = real_lstat(path)
+        return swap_after_stat(file_stat) if path == target else file_stat
+
+    def swapping_fstat(fd: int) -> os.stat_result:
+        return swap_after_stat(real_fstat(fd))
+
+    monkeypatch.setattr(pathlib.Path, "lstat", swapping_lstat)
+    monkeypatch.setattr(os, "fstat", swapping_fstat)
+
+    snapshot = debug_cli._capture_source_file_snapshot(target)
+
+    assert swapped is True
+    assert snapshot.contents == original
+    assert backing.read_bytes() == b"backing\n"
+    assert debug_cli._restore_source_file_snapshot(target, snapshot) is None
+    assert not target.is_symlink()
+    assert target.read_bytes() == original
+    assert backing.read_bytes() == b"backing\n"
+
+
+def test_stage_source_rejects_path_swap_without_mutating_symlink_backing(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "unit.c"
+    backing = tmp_path / "backing.c"
+    target.write_bytes(b"original\n")
+    backing.write_bytes(b"backing\n")
+    snapshot = debug_cli._capture_source_file_snapshot(target)
+    real_lstat = pathlib.Path.lstat
+    real_fstat = os.fstat
+    swapped = False
+
+    def swap_after_stat(file_stat: os.stat_result) -> os.stat_result:
+        nonlocal swapped
+        if not swapped:
+            target.unlink()
+            target.symlink_to(backing.name)
+            swapped = True
+        return file_stat
+
+    def swapping_lstat(path: pathlib.Path) -> os.stat_result:
+        file_stat = real_lstat(path)
+        return swap_after_stat(file_stat) if path == target else file_stat
+
+    def swapping_fstat(fd: int) -> os.stat_result:
+        return swap_after_stat(real_fstat(fd))
+
+    monkeypatch.setattr(pathlib.Path, "lstat", swapping_lstat)
+    monkeypatch.setattr(os, "fstat", swapping_fstat)
+
+    with pytest.raises(RuntimeError, match="source changed after snapshot"):
+        debug_cli._stage_source_file_bytes(target, b"candidate\n", snapshot)
+
+    assert swapped is True
+    assert backing.read_bytes() == b"backing\n"
+    assert debug_cli._restore_source_file_snapshot(target, snapshot) is None
+    assert not target.is_symlink()
+    assert target.read_bytes() == b"original\n"
+    assert backing.read_bytes() == b"backing\n"
+
+
+@pytest.mark.parametrize("mutation", ("contents", "mode", "mtime"))
+def test_stage_source_rejects_same_inode_mutation(
+    tmp_path: pathlib.Path,
+    mutation: str,
+) -> None:
+    target = tmp_path / "unit.c"
+    target.write_bytes(b"original\n")
+    target.chmod(0o640)
+    os.utime(
+        target,
+        ns=(1_700_000_020_123_456_789, 1_700_000_021_987_654_321),
+    )
+    snapshot = debug_cli._capture_source_file_snapshot(target)
+    original_ino = target.stat().st_ino
+
+    if mutation == "contents":
+        target.write_bytes(b"mutated\n")
+        os.utime(target, ns=(snapshot.st_atime_ns, snapshot.st_mtime_ns))
+    elif mutation == "mode":
+        target.chmod(0o600)
+    else:
+        os.utime(
+            target,
+            ns=(snapshot.st_atime_ns, snapshot.st_mtime_ns + 1_000_000_000),
+        )
+
+    with pytest.raises(RuntimeError, match="source changed after snapshot"):
+        debug_cli._stage_source_file_bytes(target, b"candidate\n", snapshot)
+
+    assert target.stat().st_ino == original_ino
+    assert target.read_bytes() != b"candidate\n"
+    assert debug_cli._restore_source_file_snapshot(target, snapshot) is None
+    assert target.read_bytes() == b"original\n"
+
+
+@pytest.mark.parametrize("mutation", ("contents", "mode", "mtime"))
+def test_stage_source_revalidates_same_inode_at_writable_open(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    target = tmp_path / "unit.c"
+    target.write_bytes(b"original\n")
+    target.chmod(0o640)
+    os.utime(
+        target,
+        ns=(1_700_000_022_123_456_789, 1_700_000_023_987_654_321),
+    )
+    snapshot = debug_cli._capture_source_file_snapshot(target)
+    real_open = os.open
+    mutated = False
+
+    def mutate_before_writable_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal mutated
+        if (
+            not mutated
+            and os.fspath(path) == os.fspath(target)
+            and flags & os.O_ACCMODE == os.O_RDWR
+        ):
+            if mutation == "contents":
+                target.write_bytes(b"external edit\n")
+                os.utime(target, ns=(snapshot.st_atime_ns, snapshot.st_mtime_ns))
+            elif mutation == "mode":
+                target.chmod(0o600)
+            else:
+                os.utime(
+                    target,
+                    ns=(snapshot.st_atime_ns, snapshot.st_mtime_ns + 1_000_000_000),
+                )
+            mutated = True
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", mutate_before_writable_open)
+
+    with pytest.raises(RuntimeError, match="source changed after snapshot"):
+        debug_cli._stage_source_file_bytes(target, b"candidate\n", snapshot)
+
+    assert mutated is True
+    assert target.read_bytes() != b"candidate\n"
+    assert debug_cli._restore_source_file_snapshot(target, snapshot) is None
+    assert target.read_bytes() == b"original\n"
+
+
+def test_stage_source_rejects_external_mode_change_during_read_only_fallback(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "unit.c"
+    target.write_bytes(b"original\n")
+    target.chmod(0o440)
+    snapshot = debug_cli._capture_source_file_snapshot(target)
+    real_open = os.open
+    writable_attempts = 0
+
+    def mutate_on_second_writable_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal writable_attempts
+        if (
+            os.fspath(path) == os.fspath(target)
+            and flags & os.O_ACCMODE == os.O_RDWR
+        ):
+            writable_attempts += 1
+            if writable_attempts == 2:
+                assert stat.S_IMODE(target.stat().st_mode) == 0o640
+                target.chmod(0o600)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", mutate_on_second_writable_open)
+
+    with pytest.raises(RuntimeError, match="source changed after snapshot"):
+        debug_cli._stage_source_file_bytes(target, b"candidate\n", snapshot)
+
+    assert writable_attempts == 2
+    assert target.read_bytes() == b"original\n"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert debug_cli._restore_source_file_snapshot(target, snapshot) is None
+    assert target.read_bytes() == b"original\n"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o440
+
+
+def test_stage_source_revalidates_path_after_final_ownership_lstat(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "unit.c"
+    backing = tmp_path / "backing.c"
+    target.write_bytes(b"original\n")
+    backing.write_bytes(b"backing\n")
+    snapshot = debug_cli._capture_source_file_snapshot(target)
+    real_lstat = pathlib.Path.lstat
+    swapped = False
+
+    def swap_after_ownership_lstat(path: pathlib.Path) -> os.stat_result:
+        nonlocal swapped
+        file_stat = real_lstat(path)
+        if path == target and not swapped:
+            target.unlink()
+            target.symlink_to(backing.name)
+            swapped = True
+        return file_stat
+
+    monkeypatch.setattr(pathlib.Path, "lstat", swap_after_ownership_lstat)
+
+    with pytest.raises(RuntimeError, match="source changed after snapshot"):
+        debug_cli._stage_source_file_bytes(target, b"candidate\n", snapshot)
+
+    assert swapped is True
+    assert target.is_symlink()
+    assert backing.read_bytes() == b"backing\n"
+    assert debug_cli._restore_source_file_snapshot(target, snapshot) is None
+    assert not target.is_symlink()
+    assert target.read_bytes() == b"original\n"
+    assert backing.read_bytes() == b"backing\n"
+
+
+def test_restore_source_retries_path_swap_without_mutating_symlink_backing(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "unit.c"
+    backing = tmp_path / "backing.c"
+    target.write_bytes(b"original\n")
+    backing.write_bytes(b"backing\n")
+    snapshot = debug_cli._capture_source_file_snapshot(target)
+    debug_cli._stage_source_file_bytes(target, b"candidate\n", snapshot)
+    real_lstat = pathlib.Path.lstat
+    real_fstat = os.fstat
+    swapped = False
+
+    def swap_after_stat(file_stat: os.stat_result) -> os.stat_result:
+        nonlocal swapped
+        if not swapped:
+            target.unlink()
+            target.symlink_to(backing.name)
+            swapped = True
+        return file_stat
+
+    def swapping_lstat(path: pathlib.Path) -> os.stat_result:
+        file_stat = real_lstat(path)
+        return swap_after_stat(file_stat) if path == target else file_stat
+
+    def swapping_fstat(fd: int) -> os.stat_result:
+        return swap_after_stat(real_fstat(fd))
+
+    monkeypatch.setattr(pathlib.Path, "lstat", swapping_lstat)
+    monkeypatch.setattr(os, "fstat", swapping_fstat)
+
+    assert debug_cli._restore_source_file_snapshot(target, snapshot) is None
+    assert swapped is True
+    assert not target.is_symlink()
+    assert target.read_bytes() == b"original\n"
+    assert backing.read_bytes() == b"backing\n"
+
+
+def test_restore_source_revalidates_path_after_final_ownership_lstat(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "unit.c"
+    backing = tmp_path / "backing.c"
+    target.write_bytes(b"original\n")
+    backing.write_bytes(b"backing\n")
+    snapshot = debug_cli._capture_source_file_snapshot(target)
+    debug_cli._stage_source_file_bytes(target, b"candidate\n", snapshot)
+    real_lstat = pathlib.Path.lstat
+    swapped = False
+
+    def swap_after_ownership_lstat(path: pathlib.Path) -> os.stat_result:
+        nonlocal swapped
+        file_stat = real_lstat(path)
+        if path == target and not swapped:
+            target.unlink()
+            target.symlink_to(backing.name)
+            swapped = True
+        return file_stat
+
+    monkeypatch.setattr(pathlib.Path, "lstat", swap_after_ownership_lstat)
+
+    assert debug_cli._restore_source_file_snapshot(target, snapshot) is None
+    assert swapped is True
+    assert not target.is_symlink()
+    assert target.read_bytes() == b"original\n"
+    assert backing.read_bytes() == b"backing\n"
+
+
+def test_score_source_compile_source_rel_signal_restore_is_lossless(
+    tmp_path: pathlib.Path,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate\n")
+    original = b"/* raw: \xff */\noriginal\n"
+    target.write_bytes(original)
+
+    with debug_cli._score_source_compile_source_rel(
+        source_rel="build/diagnostics/candidate.c",
+        cflags_unit_rel="src/melee/mn/mndiagram.c",
+        melee_root=melee_root,
+    ):
+        assert target.read_bytes() == b"candidate\n"
+        with pytest.raises(SystemExit, match=str(128 + signal.SIGTERM)):
+            debug_cli._restore_active_sources_for_signal(signal.SIGTERM, None)
+        assert target.read_bytes() == original
+        assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+    assert target.read_bytes() == original
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+
+def test_score_source_restore_completes_short_writes(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate contents longer than original\n")
+    original = b"original\xff\n"
+    target.write_bytes(original)
+    real_write = os.write
+
+    with debug_cli._score_source_compile_source_rel(
+        source_rel="build/diagnostics/candidate.c",
+        cflags_unit_rel="src/melee/mn/mndiagram.c",
+        melee_root=melee_root,
+    ):
+        def short_write(fd: int, contents: bytes) -> int:
+            return real_write(fd, contents[:3])
+
+        monkeypatch.setattr(os, "write", short_write)
+
+    assert target.read_bytes() == original
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+
+def test_score_source_partial_restore_write_preserves_backup_and_body_context(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate contents\n")
+    original = b"original\xff\n"
+    target.write_bytes(original)
+    real_write = os.write
+    write_calls = 0
+
+    def partial_then_fail(fd: int, contents: bytes) -> int:
+        nonlocal write_calls
+        write_calls += 1
+        if write_calls == 1:
+            return real_write(fd, contents[:3])
+        raise OSError("partial restore write exploded")
+
+    with pytest.raises(RuntimeError, match="partial restore write exploded") as exc:
+        with debug_cli._score_source_compile_source_rel(
+            source_rel="build/diagnostics/candidate.c",
+            cflags_unit_rel="src/melee/mn/mndiagram.c",
+            melee_root=melee_root,
+        ):
+            monkeypatch.setattr(os, "write", partial_then_fail)
+            raise ValueError("compile exploded")
+
+    backups = list((melee_root / "build" / "source-restore-backups").glob("*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
+    assert isinstance(exc.value.__context__, ValueError)
+    assert str(exc.value.__context__) == "compile exploded"
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+
+@pytest.mark.parametrize("failure", ("truncate", "fsync"))
+def test_score_source_restore_io_failure_preserves_backup(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate contents longer than original\n")
+    original = b"original\xff\n"
+    target.write_bytes(original)
+
+    with pytest.raises(RuntimeError, match=f"forced restore {failure} failure"):
+        with debug_cli._score_source_compile_source_rel(
+            source_rel="build/diagnostics/candidate.c",
+            cflags_unit_rel="src/melee/mn/mndiagram.c",
+            melee_root=melee_root,
+        ):
+            def fail_io(_fd: int, *_args) -> None:
+                raise OSError(f"forced restore {failure} failure")
+
+            monkeypatch.setattr(
+                os,
+                "ftruncate" if failure == "truncate" else "fsync",
+                fail_io,
+            )
+
+    backups = list((melee_root / "build" / "source-restore-backups").glob("*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+
+
+def test_score_source_restore_retains_signal_snapshot_when_backup_fails(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate contents longer than original\n")
+    target.write_bytes(b"original\n")
+    monkeypatch.setattr(
+        debug_cli,
+        "_preserve_source_restore_backup",
+        lambda *_args, **_kwargs: (None, "forced backup failure"),
+    )
+
+    with pytest.raises(RuntimeError, match="forced backup failure"):
+        with debug_cli._score_source_compile_source_rel(
+            source_rel="build/diagnostics/candidate.c",
+            cflags_unit_rel="src/melee/mn/mndiagram.c",
+            melee_root=melee_root,
+        ):
+            monkeypatch.setattr(
+                os,
+                "ftruncate",
+                lambda *_args: (_ for _ in ()).throw(
+                    OSError("forced restore truncate failure")
+                ),
+            )
+
+    assert target in debug_cli._ACTIVE_SOURCE_RESTORES
+    debug_cli._ACTIVE_SOURCE_RESTORES.pop(target)
+
+
+def test_outer_restore_supersedes_failed_inner_registration(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    outer_candidate = melee_root / "build" / "diagnostics" / "outer.c"
+    inner_candidate = melee_root / "build" / "diagnostics" / "inner.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    outer_candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    outer_candidate.write_bytes(b"outer candidate\n")
+    inner_candidate.write_bytes(b"inner candidate\n")
+    target.write_bytes(b"original\n")
+    real_restore = debug_cli._restore_source_file_snapshot
+    restore_calls = 0
+
+    def fail_inner_then_restore_outer(path, snapshot):
+        nonlocal restore_calls
+        restore_calls += 1
+        if restore_calls == 1:
+            return "forced inner restore failure"
+        return real_restore(path, snapshot)
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_restore_source_file_snapshot",
+        fail_inner_then_restore_outer,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_preserve_source_restore_backup",
+        lambda *_args, **_kwargs: (None, "forced inner backup failure"),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="forced inner backup failure"):
+            with debug_cli._score_source_compile_source_rel(
+                source_rel="build/diagnostics/outer.c",
+                cflags_unit_rel="src/melee/mn/mndiagram.c",
+                melee_root=melee_root,
+            ):
+                with debug_cli._score_source_compile_source_rel(
+                    source_rel="build/diagnostics/inner.c",
+                    cflags_unit_rel="src/melee/mn/mndiagram.c",
+                    melee_root=melee_root,
+                ):
+                    assert target.read_bytes() == b"inner candidate\n"
+
+        assert restore_calls == 2
+        assert target.read_bytes() == b"original\n"
+        assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+        with pytest.raises(SystemExit, match=str(128 + signal.SIGTERM)):
+            debug_cli._restore_active_sources_for_signal(signal.SIGTERM, None)
+        assert target.read_bytes() == b"original\n"
+    finally:
+        debug_cli._ACTIVE_SOURCE_RESTORES.pop(target, None)
+
+
+def test_nested_score_source_restore_retains_outer_after_outer_failure(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    outer_candidate = melee_root / "build" / "diagnostics" / "outer.c"
+    inner_candidate = melee_root / "build" / "diagnostics" / "inner.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    outer_candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    outer_candidate.write_bytes(b"outer candidate\n")
+    inner_candidate.write_bytes(b"inner candidate\n")
+    target.write_bytes(b"original\n")
+    real_restore = debug_cli._restore_source_file_snapshot
+    restore_calls = 0
+
+    def restore_inner_then_fail_outer(path, snapshot):
+        nonlocal restore_calls
+        restore_calls += 1
+        if restore_calls == 1:
+            return real_restore(path, snapshot)
+        return "forced outer restore failure"
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_restore_source_file_snapshot",
+        restore_inner_then_fail_outer,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_preserve_source_restore_backup",
+        lambda *_args, **_kwargs: (None, "forced outer backup failure"),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="forced outer backup failure"):
+            with debug_cli._score_source_compile_source_rel(
+                source_rel="build/diagnostics/outer.c",
+                cflags_unit_rel="src/melee/mn/mndiagram.c",
+                melee_root=melee_root,
+            ):
+                with debug_cli._score_source_compile_source_rel(
+                    source_rel="build/diagnostics/inner.c",
+                    cflags_unit_rel="src/melee/mn/mndiagram.c",
+                    melee_root=melee_root,
+                ):
+                    assert target.read_bytes() == b"inner candidate\n"
+                assert target.read_bytes() == b"outer candidate\n"
+
+        retained = debug_cli._ACTIVE_SOURCE_RESTORES[target]
+        assert len(retained) == 1
+        assert retained[0].contents == b"original\n"
+        with pytest.raises(SystemExit, match=str(128 + signal.SIGTERM)):
+            debug_cli._restore_active_sources_for_signal(signal.SIGTERM, None)
+        assert target.read_bytes() == b"original\n"
+        assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+    finally:
+        debug_cli._ACTIVE_SOURCE_RESTORES.pop(target, None)
+
+
+def test_nested_score_source_restore_retains_both_when_both_fail(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    outer_candidate = melee_root / "build" / "diagnostics" / "outer.c"
+    inner_candidate = melee_root / "build" / "diagnostics" / "inner.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    outer_candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    outer_candidate.write_bytes(b"outer candidate\n")
+    inner_candidate.write_bytes(b"inner candidate\n")
+    target.write_bytes(b"original\n")
+    restore_calls = 0
+
+    def fail_both_restores(_path, _snapshot):
+        nonlocal restore_calls
+        restore_calls += 1
+        return f"forced restore failure {restore_calls}"
+
+    monkeypatch.setattr(
+        debug_cli,
+        "_restore_source_file_snapshot",
+        fail_both_restores,
+    )
+    monkeypatch.setattr(
+        debug_cli,
+        "_preserve_source_restore_backup",
+        lambda *_args, **_kwargs: (None, "forced backup failure"),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="forced restore failure 2") as exc:
+            with debug_cli._score_source_compile_source_rel(
+                source_rel="build/diagnostics/outer.c",
+                cflags_unit_rel="src/melee/mn/mndiagram.c",
+                melee_root=melee_root,
+            ):
+                with debug_cli._score_source_compile_source_rel(
+                    source_rel="build/diagnostics/inner.c",
+                    cflags_unit_rel="src/melee/mn/mndiagram.c",
+                    melee_root=melee_root,
+                ):
+                    assert target.read_bytes() == b"inner candidate\n"
+
+        assert isinstance(exc.value.__context__, RuntimeError)
+        assert "forced restore failure 1" in str(exc.value.__context__)
+        retained = debug_cli._ACTIVE_SOURCE_RESTORES[target]
+        assert [snapshot.contents for snapshot in retained] == [
+            b"original\n",
+            b"outer candidate\n",
+        ]
+        with pytest.raises(SystemExit, match=str(128 + signal.SIGTERM)):
+            debug_cli._restore_active_sources_for_signal(signal.SIGTERM, None)
+        assert target.read_bytes() == b"original\n"
+        assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+    finally:
+        debug_cli._ACTIVE_SOURCE_RESTORES.pop(target, None)
+
+
+def test_nested_active_source_signal_restores_outermost_snapshot(
+    tmp_path: pathlib.Path,
+) -> None:
+    target = tmp_path / "unit.c"
+    target.write_bytes(b"original\n")
+    outer = debug_cli._capture_source_file_snapshot(target)
+    debug_cli._register_active_source_restore(target, outer)
+    debug_cli._stage_source_file_bytes(target, b"outer candidate\n", outer)
+    inner = debug_cli._capture_source_file_snapshot(target)
+    debug_cli._register_active_source_restore(target, inner)
+    debug_cli._stage_source_file_bytes(target, b"inner candidate\n", inner)
+
+    try:
+        with pytest.raises(SystemExit, match=str(128 + signal.SIGTERM)):
+            debug_cli._restore_active_sources_for_signal(signal.SIGTERM, None)
+        assert target.read_bytes() == b"original\n"
+        assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
+    finally:
+        debug_cli._ACTIVE_SOURCE_RESTORES.pop(target, None)
+
+
+def test_score_source_compile_source_rel_restore_error_supersedes_body_error(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    melee_root = tmp_path / "melee"
+    candidate = melee_root / "build" / "diagnostics" / "candidate.c"
+    target = melee_root / "src" / "melee" / "mn" / "mndiagram.c"
+    candidate.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    candidate.write_bytes(b"candidate\n")
+    target.write_bytes(b"original\n")
+    monkeypatch.setattr(
+        debug_cli,
+        "_restore_source_file_snapshot",
+        lambda path, snapshot: "forced restore failure",
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="forced restore failure") as exc:
+        with debug_cli._score_source_compile_source_rel(
+            source_rel="build/diagnostics/candidate.c",
+            cflags_unit_rel="src/melee/mn/mndiagram.c",
+            melee_root=melee_root,
+        ):
+            raise ValueError("compile exploded")
+
+    assert isinstance(exc.value.__context__, ValueError)
+    assert str(exc.value.__context__) == "compile exploded"
+    assert target not in debug_cli._ACTIVE_SOURCE_RESTORES
 
 
 def test_lifetime_layout_json_compile_probes_emits_live_candidate_paths(
