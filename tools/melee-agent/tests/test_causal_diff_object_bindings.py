@@ -341,6 +341,101 @@ def test_verified_retail_role_requires_canonical_certificate_bound_records(
     assert reason is AbstentionReason.MISSING_BACKEND_ROLE
 
 
+@pytest.mark.parametrize("record_name", ("pcode", "virtual", "allocator"))
+@pytest.mark.parametrize("poison", ("ordinary", "python-equal"))
+def test_verified_retail_role_rejects_self_consistent_untrusted_support_replacement(
+    record_name: str,
+    poison: str,
+) -> None:
+    graph = _graph_with_v2_owner_evidence(certificates=True, physical_register=1)
+    certificate = next(iter(graph.backend.owner_certificates.certificate_nodes))
+    evidence = graph.backend.object_bindings
+    assert evidence is not None
+    record_id = certificate.attributes[f"{record_name}_record_id"]
+    record = graph.store.get_node(record_id)
+    assert record is not None
+
+    if poison == "ordinary":
+        changed = record.with_attributes({**record.attributes, "poisoned": True})
+    else:
+        attributes, found = _replace_first_binary_integer(record.attributes)
+        assert found
+        changed = record.with_attributes(attributes)
+        assert changed == record
+
+    poisoned = _store_with_replaced_record(graph, changed)
+    untrusted_evidence = replace(
+        evidence,
+        nodes=tuple(changed if node.record_id == changed.record_id else node for node in evidence.nodes),
+    )
+    assert untrusted_evidence._adapter_token is None
+    poisoned = replace(
+        poisoned,
+        backend=replace(poisoned.backend, object_bindings=untrusted_evidence),
+    )
+    candidate = _candidate_is_uniquely_aligned(poisoned, 0x234)
+    assert candidate is not None
+
+    resolution, reason = _verified_retail_local_role(
+        poisoned,
+        candidate,
+        0x234,
+        OperandRole("use:0", "use", 0, "r", 21),
+    )
+
+    assert resolution is None
+    assert reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+
+def test_verified_retail_role_uses_result_source_binding_not_independent_backend_evidence() -> None:
+    authority = _graph_with_v2_owner_evidence(certificates=True, physical_register=1)
+    independent = _graph_with_v2_owner_evidence(certificates=True, physical_register=2)
+    authority_certificate = next(iter(authority.backend.owner_certificates.certificate_nodes))
+    allocator_id = authority_certificate.attributes["allocator_record_id"]
+    independent_allocator = independent.store.get_node(allocator_id)
+    assert independent_allocator is not None
+    assert independent_allocator.attributes["assigned_phys"] == 2
+    assert independent.backend.object_bindings is not None
+    assert independent.backend.object_bindings._adapter_token is not None
+
+    mismatched = _store_with_replaced_record(authority, independent_allocator)
+    mismatched = replace(
+        mismatched,
+        backend=replace(
+            mismatched.backend,
+            object_bindings=independent.backend.object_bindings,
+        ),
+    )
+    candidate = _candidate_is_uniquely_aligned(mismatched, 0x234)
+    assert candidate is not None
+    resolution, reason = _verified_retail_local_role(
+        mismatched,
+        candidate,
+        0x234,
+        OperandRole("use:0", "use", 0, "r", 21),
+    )
+    assert resolution is None
+    assert reason is AbstentionReason.MISSING_BACKEND_ROLE
+
+    ignored_container = replace(
+        authority,
+        backend=replace(
+            authority.backend,
+            object_bindings=independent.backend.object_bindings,
+        ),
+    )
+    candidate = _candidate_is_uniquely_aligned(ignored_container, 0x234)
+    assert candidate is not None
+    resolution, _reason = _verified_retail_local_role(
+        ignored_container,
+        candidate,
+        0x234,
+        OperandRole("use:0", "use", 0, "r", 21),
+    )
+    assert resolution is not None
+    assert resolution.node.attributes["assigned_phys"] == 1
+
+
 def _object_result(
     *,
     capture_run_id: str = "a" * 64,

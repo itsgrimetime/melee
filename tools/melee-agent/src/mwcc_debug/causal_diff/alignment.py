@@ -344,6 +344,7 @@ def _verified_retail_local_role(
                 continue
             allocator = _certificate_bound_node(
                 graph,
+                result,
                 certificate,
                 allocator_id,
                 "allocator-node",
@@ -355,6 +356,7 @@ def _verified_retail_local_role(
             pcode = (
                 _certificate_bound_node(
                     graph,
+                    result,
                     certificate,
                     pcode_id,
                     "retail-pcode",
@@ -365,6 +367,7 @@ def _verified_retail_local_role(
             virtual = (
                 _certificate_bound_node(
                     graph,
+                    result,
                     certificate,
                     virtual_id,
                     "retail-virtual-register",
@@ -778,23 +781,18 @@ def _stored_certificate(
 
 def _certificate_bound_node(
     graph: FrontierGraph,
+    result: OwnerCertificateResult,
     certificate: EvidenceNode,
     record_id: str,
     kind: str,
 ) -> EvidenceNode | None:
-    evidence = graph.backend.object_bindings
-    if evidence is None or record_id not in certificate.provenance.input_record_ids:
-        return None
-    bound = next(
-        (node for node in evidence.nodes if node.record_id == record_id),
-        None,
-    )
+    bound = result.certificate_support_node(certificate.record_id, record_id)
     stored = graph.store.get_node(record_id)
     if bound is None or stored is None or bound.kind != kind or stored.kind != kind:
         return None
     if canonical_record_bytes(bound) != canonical_record_bytes(stored):
         return None
-    return stored
+    return bound
 
 
 def _effective_owner_resolution(
