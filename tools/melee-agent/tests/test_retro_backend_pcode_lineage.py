@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import inspect
 import json
 import struct
@@ -130,46 +131,97 @@ def candidate_object(tmp_path: Path) -> Path:
 def proof_payload() -> dict[str, object]:
     rules: list[dict[str, object]] = []
     for operand_index, role in ((0, "def"), (1, "use")):
-        rules.extend(
-            [
-                {
-                    "opcode_id": 42,
-                    "operand_index": operand_index,
-                    "raw_arg_kind_id": 7,
-                    "register_flags_mask": 3,
-                    "register_flags_value": 0,
-                    "role": role,
-                    "class_id": 0,
-                    "allocation_requirement": "allocator-rewrite-required",
-                },
-                {
-                    "opcode_id": 42,
-                    "operand_index": operand_index,
-                    "raw_arg_kind_id": 8,
-                    "register_flags_mask": 3,
-                    "register_flags_value": 1,
-                    "role": role,
-                    "class_id": 0,
-                    "allocation_requirement": "fixed-physical",
-                },
-            ]
+        rules.append(
+            {
+                "opcode_id": 42,
+                "descriptor_index": operand_index,
+                "format_code": "r",
+                "expansion": {"kind": "one", "count": 1},
+                "raw_arg_kind_id": 0,
+                "role": role,
+                "register_form": "gpr",
+                "class_id": 0,
+                "virtual_kind": "r",
+                "state_rules": [
+                    {
+                        "capture_stage": "allocator_input",
+                        "register_flags_mask": 255,
+                        "register_flags_value": 2,
+                        "register_value_min": 0,
+                        "register_value_max": 31,
+                        "allocation_state": "physical",
+                    },
+                    {
+                        "capture_stage": "allocator_input",
+                        "register_flags_mask": 255,
+                        "register_flags_value": 2,
+                        "register_value_min": 32,
+                        "register_value_max": 65535,
+                        "allocation_state": "virtual",
+                    },
+                    {
+                        "capture_stage": "mutation_output",
+                        "register_flags_mask": 255,
+                        "register_flags_value": 2,
+                        "register_value_min": 0,
+                        "register_value_max": 31,
+                        "allocation_state": "physical",
+                    },
+                    {
+                        "capture_stage": "mutation_output",
+                        "register_flags_mask": 255,
+                        "register_flags_value": 2,
+                        "register_value_min": 32,
+                        "register_value_max": 65535,
+                        "allocation_state": "virtual",
+                    },
+                    {
+                        "capture_stage": "code_emission",
+                        "register_flags_mask": 255,
+                        "register_flags_value": 2,
+                        "register_value_min": 0,
+                        "register_value_max": 31,
+                        "allocation_state": "physical",
+                    },
+                ],
+            }
         )
-    rules.sort(
-        key=lambda row: tuple(
-            row[field]
-            for field in (
-                "opcode_id",
-                "operand_index",
-                "raw_arg_kind_id",
-                "register_flags_mask",
-                "register_flags_value",
-            )
-        )
+    rules.append(
+        {
+            "opcode_id": 42,
+            "descriptor_index": 2,
+            "format_code": "m",
+            "expansion": {"kind": "one", "count": 1},
+            "raw_arg_kind_id": 4,
+            "role": "use",
+            "register_form": "none",
+            "class_id": None,
+            "virtual_kind": None,
+            "state_rules": [],
+        }
     )
+    custom_ids = {3, 4, 12, 13, 15, 16, 199}
+    opcodes = [
+        {
+            "opcode_id": opcode_id,
+            "mnemonic": "ADDI" if opcode_id == 42 else f"OP_{opcode_id:03d}",
+            "format_string": "rrm" if opcode_id == 42 else "",
+            "constructor_kind": (
+                "custom" if opcode_id in custom_ids else "generic-fixed"
+            ),
+            "custom_constructor_addresses": (
+                [0x410000 + opcode_id * 0x10]
+                if opcode_id in custom_ids
+                else []
+            ),
+        }
+        for opcode_id in range(468)
+    ]
     return {
         "schema_version": "mwcc-retro-lifetime-proof.v1",
         "proof_id": "gc-1.2.5n-backend-entity-allocation-trace.v1",
         "compiler_executable_sha256": "a" * 64,
+        "runtime_hook_manifest_sha256": "c" * 64,
         "mode": "allocation-generation",
         "allocation_sites": [
             {
@@ -191,7 +243,7 @@ def proof_payload() -> dict[str, object]:
         "operand_mutation_sites": [{"site_id": "mutation-1", "address": 0x500400, "compiler_stage": "optimizer"}],
         "code_emission_sites": [{"site_id": "emit-1", "address": 0x500500, "compiler_stage": "backend-finalize"}],
         "operand_rules": rules,
-        "opcode_table": [{"opcode_id": 42, "mnemonic": "ADDI"}],
+        "opcode_table": opcodes,
         "initialization_address": 0x401000,
         "proof_basis": "exhaustive-static-callgraph-and-disassembly",
     }
@@ -234,17 +286,45 @@ def validate_promoted_lineage(
 
 
 def operand(
-    index: int, lineage: str, kind: int, digest_char: str, parents: list[str] | None = None
+    index: int,
+    lineage: str,
+    kind: int,
+    digest_char: str,
+    parents: list[str] | None = None,
+    *,
+    flags: int | None = None,
+    value: int | None = None,
 ) -> dict[str, object]:
+    del digest_char
+    if flags is None:
+        flags = 2 if kind == 0 else 0
+    if value is None:
+        value = (67 - index) if kind == 0 else 0
+    raw = bytes((kind, flags)) + value.to_bytes(2, "little") + bytes(8)
     row: dict[str, object] = {
         "operand_index": index,
         "operand_lineage_id": lineage,
         "raw_arg_kind_id": kind,
-        "raw_payload_sha256": digest_char * 64,
+        "raw_register_flags": flags,
+        "raw_register_value": value,
+        "raw_payload_hex": raw.hex(),
+        "raw_payload_sha256": hashlib.sha256(raw).hexdigest(),
     }
     if parents is not None:
         row["parent_lineage_ids"] = parents
     return row
+
+
+def set_raw_register_value(row: dict[str, object], value: int) -> None:
+    raw = bytes((int(row["raw_arg_kind_id"]), int(row["raw_register_flags"])))
+    raw += value.to_bytes(2, "little") + bytes(8)
+    row.update(
+        {
+            "raw_register_value": value,
+            "raw_payload_hex": raw.hex(),
+            "raw_payload_sha256": hashlib.sha256(raw).hexdigest(),
+        }
+    )
 
 
 def state(
@@ -274,8 +354,10 @@ def parsed(
         "role": role,
         "class_id": 0,
         "raw_arg_kind_id": kind,
-        "raw_register_flags": 0 if kind == 7 else 1,
-        "allocation_requirement": requirement,
+        "raw_register_flags": 2,
+        "raw_register_value": virtual if virtual is not None else physical,
+        "allocation_state": requirement,
+        "register_form": "gpr",
         "operand_lineage_id": lineage,
         "virtual_kind": "r" if virtual is not None else None,
         "virtual": virtual,
@@ -285,18 +367,26 @@ def parsed(
 
 def snapshot(stage: str, *, reordered: bool = False) -> dict[str, object]:
     if stage == "allocator_input":
-        inventory = [operand(0, "ol-0", 7, "a"), operand(1, "ol-1", 7, "b"), operand(2, "ol-2", 1, "c")]
+        inventory = [
+            operand(0, "ol-0", 0, "a", value=67),
+            operand(1, "ol-1", 0, "b", value=66),
+            operand(2, "ol-2", 4, "c", value=0),
+        ]
         registers = [
-            parsed(0, "ol-0", "def", kind=7, requirement="allocator-rewrite-required", virtual=67, physical=None),
-            parsed(1, "ol-1", "use", kind=7, requirement="allocator-rewrite-required", virtual=66, physical=None),
+            parsed(0, "ol-0", "def", kind=0, requirement="virtual", virtual=67, physical=None),
+            parsed(1, "ol-1", "use", kind=0, requirement="virtual", virtual=66, physical=None),
         ]
     else:
         lineages = ("ol-1", "ol-0") if reordered else ("ol-0", "ol-1")
         physicals = (21, 22) if reordered else (22, 21)
-        inventory = [operand(0, lineages[0], 8, "d"), operand(1, lineages[1], 8, "e"), operand(2, "ol-2", 1, "f")]
+        inventory = [
+            operand(0, lineages[0], 0, "d", value=physicals[0]),
+            operand(1, lineages[1], 0, "e", value=physicals[1]),
+            operand(2, "ol-2", 4, "f", value=0),
+        ]
         registers = [
-            parsed(0, lineages[0], "def", kind=8, requirement="fixed-physical", virtual=None, physical=physicals[0]),
-            parsed(1, lineages[1], "use", kind=8, requirement="fixed-physical", virtual=None, physical=physicals[1]),
+            parsed(0, lineages[0], "def", kind=0, requirement="physical", virtual=None, physical=physicals[0]),
+            parsed(1, lineages[1], "use", kind=0, requirement="physical", virtual=None, physical=physicals[1]),
         ]
     return {
         "stage": stage,
@@ -334,11 +424,19 @@ def rewrite(index: int, lineage: str, role: str, virtual: int, physical: int, se
 
 
 def minimal_payload(*, reordered: bool = False) -> dict[str, object]:
-    initial = [operand(0, "ol-0", 7, "a"), operand(1, "ol-1", 7, "b"), operand(2, "ol-2", 1, "c")]
+    initial = [
+        operand(0, "ol-0", 0, "a", value=67),
+        operand(1, "ol-1", 0, "b", value=66),
+        operand(2, "ol-2", 4, "c", value=0),
+    ]
     lineages = ("ol-1", "ol-0") if reordered else ("ol-0", "ol-1")
     physicals = (21, 22) if reordered else (22, 21)
     code_bytes = "3ab60000" if reordered else "3ad50000"
-    final = [operand(0, lineages[0], 8, "d"), operand(1, lineages[1], 8, "e"), operand(2, "ol-2", 1, "f")]
+    final = [
+        operand(0, lineages[0], 0, "d", value=physicals[0]),
+        operand(1, lineages[1], 0, "e", value=physicals[1]),
+        operand(2, "ol-2", 4, "f", value=0),
+    ]
     mappings = [
         {
             "instruction_offset_within_range": 0,
@@ -401,8 +499,9 @@ def minimal_payload(*, reordered: bool = False) -> dict[str, object]:
         "first_event_sequence": 0,
         "last_event_sequence": 3,
         "parsed_register_operands": 2,
-        "allocatable_register_operands": 2,
-        "fixed_physical_register_operands": 0,
+        "virtual_register_operands": 2,
+        "physical_register_operands": 0,
+        "non_allocator_register_operands": 0,
         "rewrite_events": 2,
         "mutation_events": 1,
         "final_pcodes": 1,
@@ -446,6 +545,7 @@ def test_valid_reorder_preserves_lineage_not_operand_index(tmp_path: Path) -> No
     candidate_object.write_bytes(_candidate_elf(bytes.fromhex("3ab60000")))
     result = validate_promoted_lineage(minimal_payload(reordered=True), trusted_proof(), candidate_object, "fn")
 
+    assert result.errors == ()
     binding = result.anchor_bindings[(0, "def:0")]
     assert binding.virtual == 66
     assert binding.operand_lineage_id == "ol-1"
@@ -615,9 +715,9 @@ def test_invalid_lineage_fixtures_fail_closed(fixture_name: str, message: str, c
         (lambda p: p["pcode_instructions"][0]["stage_snapshots"][1].update({"opcode": "LI"}), "opcode mnemonic"),
         (
             lambda p: p["pcode_instructions"][0]["stage_snapshots"][0]["parsed_register_operands"][0].update(
-                {"allocation_requirement": "fixed-physical"}
+                {"allocation_state": "physical"}
             ),
-            "allocation requirement",
+            "state",
         ),
         (lambda p: p["coverage"]["pcode_instrumentation"].update({"status": "partial"}), "status must be complete"),
         (lambda p: p["coverage"]["pcode_instrumentation"].update({"dropped_events": 1}), "events were dropped"),
@@ -639,12 +739,74 @@ def test_replay_and_coverage_negative_matrix(candidate_object: Path, mutate, mes
     assert result.capabilities == frozenset()
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("raw_payload_hex", "00", "exactly 12 lowercase-hex bytes"),
+        (
+            "raw_payload_hex",
+            "00022200000000000000000A",
+            "exactly 12 lowercase-hex bytes",
+        ),
+        ("raw_arg_kind_id", 1, "raw kind differs from bytes"),
+        ("raw_register_flags", 3, "raw flags differ from bytes"),
+        ("raw_register_value", 35, "raw value differs from bytes"),
+        ("raw_payload_sha256", "9" * 64, "raw payload digest differs from bytes"),
+    ],
+)
+def test_raw_operand_bytes_are_independently_decoded(
+    candidate_object: Path, field: str, value: object, message: str
+) -> None:
+    payload = minimal_payload()
+    payload["pcode_instructions"][0]["stage_snapshots"][0][
+        "operand_lineage_inventory"
+    ][0][field] = value
+
+    result = validate_promoted_lineage(
+        payload, trusted_proof(), candidate_object, "fn"
+    )
+
+    assert any(message in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("raw_register_flags", 3, "parsed raw flags disagree with lineage inventory"),
+        ("raw_register_value", 68, "parsed raw value disagrees with lineage inventory"),
+        ("raw_register_flags", "2", "parsed raw flags must be unsigned byte"),
+        ("raw_register_value", "67", "parsed raw value must be unsigned 16-bit"),
+        ("raw_register_flags", True, "parsed raw flags must be unsigned byte"),
+        ("raw_register_value", True, "parsed raw value must be unsigned 16-bit"),
+        ("raw_register_flags", -1, "parsed raw flags must be unsigned byte"),
+        ("raw_register_flags", 0x100, "parsed raw flags must be unsigned byte"),
+        ("raw_register_value", -1, "parsed raw value must be unsigned 16-bit"),
+        ("raw_register_value", 0x10000, "parsed raw value must be unsigned 16-bit"),
+    ],
+)
+def test_parsed_register_state_is_exactly_bound_to_raw_inventory(
+    candidate_object: Path, field: str, value: object, message: str
+) -> None:
+    payload = minimal_payload()
+    payload["pcode_instructions"][0]["stage_snapshots"][0][
+        "parsed_register_operands"
+    ][0][field] = value
+
+    result = validate_promoted_lineage(
+        payload, trusted_proof(), candidate_object, "fn"
+    )
+
+    assert any(message in error for error in result.errors), result.errors
+    assert result.capabilities == frozenset()
+
+
 def test_multi_parent_lineage_retains_diagnostics_but_abstains(candidate_object: Path) -> None:
     payload = minimal_payload()
     output = payload["pcode_operand_lineage_events"][0]["outputs"][0]["operands"]
-    output[0] = operand(0, "ol-3", 8, "d", ["ol-0", "ol-1"])
+    output[0] = operand(0, "ol-3", 0, "d", ["ol-0", "ol-1"], value=22)
     emission = payload["pcode_instructions"][0]["stage_snapshots"][1]
-    emission["operand_lineage_inventory"][0] = operand(0, "ol-3", 8, "d")
+    emission["operand_lineage_inventory"][0] = operand(0, "ol-3", 0, "d", value=22)
     emission["parsed_register_operands"][0]["operand_lineage_id"] = "ol-3"
     payload["pcode_instructions"][0]["code_ranges"][0]["machine_operand_mappings"][0]["operand_lineage_id"] = "ol-3"
 
@@ -658,18 +820,22 @@ def test_multi_parent_lineage_retains_diagnostics_but_abstains(candidate_object:
 def test_fixed_physical_operand_needs_no_allocator_rewrite(candidate_object: Path) -> None:
     payload = minimal_payload()
     first = payload["pcode_instructions"][0]["stage_snapshots"][0]
-    first["operand_lineage_inventory"][1].update({"raw_arg_kind_id": 8})
+    first["operand_lineage_inventory"][1] = operand(
+        1, "ol-1", 0, "b", value=21
+    )
     first["parsed_register_operands"][1] = parsed(
         1,
         "ol-1",
         "use",
-        kind=8,
-        requirement="fixed-physical",
+        kind=0,
+        requirement="physical",
         virtual=None,
         physical=21,
     )
     mutation = payload["pcode_operand_lineage_events"][0]
-    mutation["inputs"][0]["operands"][1].update({"raw_arg_kind_id": 8})
+    mutation["inputs"][0]["operands"][1] = operand(
+        1, "ol-1", 0, "b", value=21
+    )
     payload["pcode_occurrences"].pop()
     mutation["pcode_event_sequence"] = 1
     payload["pcode_instructions"][0]["emission_event_sequence"] = 2
@@ -677,8 +843,8 @@ def test_fixed_physical_operand_needs_no_allocator_rewrite(candidate_object: Pat
     coverage.update(
         {
             "last_event_sequence": 2,
-            "allocatable_register_operands": 1,
-            "fixed_physical_register_operands": 1,
+            "virtual_register_operands": 1,
+            "physical_register_operands": 1,
             "rewrite_events": 1,
         }
     )
@@ -774,8 +940,8 @@ def test_create_defines_fresh_parentless_lineages(candidate_object: Path) -> Non
     payload["coverage"]["pcode_instrumentation"].update(
         {
             "last_event_sequence": 1,
-            "allocatable_register_operands": 0,
-            "fixed_physical_register_operands": 2,
+            "virtual_register_operands": 0,
+            "physical_register_operands": 2,
             "rewrite_events": 0,
         }
     )
@@ -849,7 +1015,7 @@ def cloned_payload() -> dict[str, object]:
         {
             "last_event_sequence": 4,
             "parsed_register_operands": 4,
-            "fixed_physical_register_operands": 2,
+            "physical_register_operands": 2,
             "final_pcodes": 2,
             "emission_events": 2,
         }
@@ -1237,6 +1403,19 @@ def _lwz_payload() -> dict[str, object]:
         payload["pcode_instructions"][0]["stage_snapshots"][1]["parsed_register_operands"][index][
             "physical_register"
         ] = physical
+        payload["pcode_instructions"][0]["stage_snapshots"][1]["parsed_register_operands"][index][
+            "raw_register_value"
+        ] = physical
+        set_raw_register_value(
+            payload["pcode_instructions"][0]["stage_snapshots"][1][
+                "operand_lineage_inventory"
+            ][index],
+            physical,
+        )
+        set_raw_register_value(
+            payload["pcode_operand_lineage_events"][0]["outputs"][0]["operands"][index],
+            physical,
+        )
         payload["pcode_instructions"][0]["code_ranges"][0]["machine_operand_mappings"][index]["physical_register"] = (
             physical
         )
@@ -1574,8 +1753,8 @@ def _created_payload() -> dict[str, object]:
     payload["coverage"]["pcode_instrumentation"].update(
         {
             "last_event_sequence": 1,
-            "allocatable_register_operands": 0,
-            "fixed_physical_register_operands": 2,
+            "virtual_register_operands": 0,
+            "physical_register_operands": 2,
             "rewrite_events": 0,
         }
     )

@@ -233,15 +233,23 @@ def _complete_coverage_proof():
 
 def _coverage_operand(
     *,
-    kind=7,
-    digest="a" * 64,
+    kind=0,
+    flags=2,
+    value=67,
+    digest=None,
     parents=None,
 ):
+    raw = bytes((kind, flags)) + value.to_bytes(2, "little") + bytes(8)
     row = {
         "operand_index": 0,
         "operand_lineage_id": "ol-0",
         "raw_arg_kind_id": kind,
-        "raw_payload_sha256": digest,
+        "raw_register_flags": flags,
+        "raw_register_value": value,
+        "raw_payload_hex": raw.hex(),
+        "raw_payload_sha256": (
+            hashlib.sha256(raw).hexdigest() if digest is None else digest
+        ),
     }
     if parents is not None:
         row["parent_lineage_ids"] = parents
@@ -258,8 +266,7 @@ def _coverage_state(*, output=False):
         "arg_count": 1,
         "operands": [
             _coverage_operand(
-                kind=8 if output else 7,
-                digest=("b" if output else "a") * 64,
+                value=3 if output else 67,
             )
         ],
     }
@@ -279,9 +286,11 @@ def _coverage_emission_snapshot():
                 "operand_index": 0,
                 "role": "use",
                 "class_id": 0,
-                "raw_arg_kind_id": 8,
-                "raw_register_flags": 0,
-                "allocation_requirement": "fixed-physical",
+                "raw_arg_kind_id": 0,
+                "raw_register_flags": 2,
+                "raw_register_value": 3,
+                "allocation_state": "physical",
+                "register_form": "gpr",
                 "operand_lineage_id": "ol-0",
                 "virtual_kind": None,
                 "virtual": None,
@@ -289,7 +298,7 @@ def _coverage_emission_snapshot():
             }
         ],
         "operand_lineage_inventory": [
-            _coverage_operand(kind=8, digest="b" * 64)
+            _coverage_operand(value=3)
         ],
     }
 
@@ -602,8 +611,8 @@ def test_runtime_rejects_malformed_or_misclassified_events(mutate, expected):
         (
             lambda events: events[2]["emission_snapshot"][
                 "parsed_register_operands"
-            ][0].update({"allocation_requirement": []}),
-            "code_emission event 2 emission snapshot parsed operand 0 allocation_requirement is invalid",
+            ][0].update({"allocation_state": []}),
+            "code_emission event 2 emission snapshot parsed operand 0 allocation_state is invalid",
         ),
         (
             lambda events: events[2]["code_ranges"][0][

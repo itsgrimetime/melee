@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from elftools.elf.sections import SymbolTableSection
 
 from .backend_instrumentation_proof import (
     InstrumentationProof,
+    classify_operand,
+    expand_operand_descriptors,
     proof_sha256,
     validate_embedded_proof,
 )
@@ -124,7 +127,7 @@ def _physical(value: object) -> bool:
     return _int(value) and 0 <= value <= 31
 
 
-_CLASS_SHAPES = {0: ("gpr", "r"), 1: ("fpr", "f")}
+_CLASS_SHAPES = {0: ("gpr", "r"), 1: ("fpr", "f"), 9: ("vector", "v")}
 
 
 def _validate_class_shape(
@@ -137,7 +140,7 @@ def _validate_class_shape(
 ) -> None:
     shape = _CLASS_SHAPES.get(class_id) if _nonnegative(class_id) else None
     if shape is None:
-        errors.append(f"{label} class_id must be 0 or 1")
+        errors.append(f"{label} class_id must be 0, 1, or 9")
         return
     expected_name, expected_kind = shape
     if class_name is not None and class_name != expected_name:
@@ -518,7 +521,9 @@ _PARSED_FIELDS = frozenset(
         "class_id",
         "raw_arg_kind_id",
         "raw_register_flags",
-        "allocation_requirement",
+        "raw_register_value",
+        "allocation_state",
+        "register_form",
         "operand_lineage_id",
         "virtual_kind",
         "virtual",
@@ -530,6 +535,9 @@ _OPERAND_FIELDS = frozenset(
         "operand_index",
         "operand_lineage_id",
         "raw_arg_kind_id",
+        "raw_register_flags",
+        "raw_register_value",
+        "raw_payload_hex",
         "raw_payload_sha256",
         "parent_lineage_ids",
     }
@@ -578,33 +586,6 @@ _MUTATION_FIELDS = frozenset(
 )
 
 
-def _rule(
-    ctx: _Context,
-    opcode_id: object,
-    operand_index: object,
-    kind: object,
-    flags: object,
-    label: str,
-) -> Mapping[str, object] | None:
-    if not all(_nonnegative(value) for value in (opcode_id, operand_index, kind, flags)):
-        ctx.errors.append(f"{label} rule key fields must be nonnegative integers")
-        return None
-    matches = [
-        row
-        for row in ctx.rules
-        if row.get("opcode_id") == opcode_id
-        and row.get("operand_index") == operand_index
-        and row.get("raw_arg_kind_id") == kind
-        and _nonnegative(row.get("register_flags_mask"))
-        and _nonnegative(row.get("register_flags_value"))
-        and flags & row["register_flags_mask"] == row["register_flags_value"]
-    ]
-    if len(matches) != 1:
-        ctx.errors.append(f"{label} must match exactly one trusted operand rule")
-        return None
-    return matches[0]
-
-
 def _validate_operands(
     value: object,
     arg_count: object,
@@ -635,8 +616,41 @@ def _validate_operands(
             ctx.errors.append(f"{label} operand {index} lineage id must be non-empty string")
         if not _nonnegative(row.get("raw_arg_kind_id")):
             ctx.errors.append(f"{label} operand {index} raw kind must be nonnegative integer")
+        if not _nonnegative(row.get("raw_register_flags")) or row.get(
+            "raw_register_flags"
+        ) > 0xFF:
+            ctx.errors.append(f"{label} operand {index} raw flags must be unsigned byte")
+        if not _nonnegative(row.get("raw_register_value")) or row.get(
+            "raw_register_value"
+        ) > 0xFFFF:
+            ctx.errors.append(f"{label} operand {index} raw value must be unsigned 16-bit")
+        raw_hex = row.get("raw_payload_hex")
+        raw_bytes = None
+        if (
+            type(raw_hex) is not str
+            or len(raw_hex) != 24
+            or any(char not in _SHA for char in raw_hex)
+        ):
+            ctx.errors.append(
+                f"{label} operand {index} raw payload must be exactly 12 lowercase-hex bytes"
+            )
+        else:
+            raw_bytes = bytes.fromhex(raw_hex)
         if not _sha(row.get("raw_payload_sha256")):
             ctx.errors.append(f"{label} operand {index} raw payload digest must be lowercase SHA-256")
+        elif raw_bytes is not None and hashlib.sha256(raw_bytes).hexdigest() != row.get(
+            "raw_payload_sha256"
+        ):
+            ctx.errors.append(f"{label} operand {index} raw payload digest differs from bytes")
+        if raw_bytes is not None:
+            if raw_bytes[0] != row.get("raw_arg_kind_id"):
+                ctx.errors.append(f"{label} operand {index} raw kind differs from bytes")
+            if raw_bytes[1] != row.get("raw_register_flags"):
+                ctx.errors.append(f"{label} operand {index} raw flags differ from bytes")
+            if int.from_bytes(raw_bytes[2:4], "little") != row.get(
+                "raw_register_value"
+            ):
+                ctx.errors.append(f"{label} operand {index} raw value differs from bytes")
         if "parent_lineage_ids" in row:
             if not allow_parents:
                 ctx.errors.append(f"{label} operand {index} must omit parent_lineage_ids")
@@ -661,12 +675,20 @@ def _validate_parsed(
     value: object,
     opcode_id: object,
     inventory: list[Mapping[str, object]],
+    capture_stage: object,
     label: str,
     ctx: _Context,
 ) -> list[Mapping[str, object]]:
     rows = _rows(value, f"{label} parsed_register_operands", ctx.errors)
     result: list[Mapping[str, object]] = []
     keys: list[tuple[object, ...]] = []
+    try:
+        descriptors = expand_operand_descriptors(
+            ctx.proof.payload, int(opcode_id), len(inventory)
+        )
+    except Exception as exc:  # noqa: BLE001 - malformed proof/runtime count
+        ctx.errors.append(f"{label} operand descriptor expansion failed: {exc}")
+        descriptors = ()
     for index, raw in enumerate(rows):
         row = _closed(raw, _PARSED_FIELDS, f"{label} parsed operand {index}", ctx.errors)
         if row is None:
@@ -680,45 +702,87 @@ def _validate_parsed(
             "raw_arg_kind_id"
         ):
             ctx.errors.append(f"{label} parsed operand {index} disagrees with lineage inventory")
-        rule = _rule(
-            ctx,
-            opcode_id,
-            operand_index,
-            row.get("raw_arg_kind_id"),
-            row.get("raw_register_flags"),
-            f"{label} parsed operand {index}",
+        parsed_flags = row.get("raw_register_flags")
+        parsed_value = row.get("raw_register_value")
+        if type(parsed_flags) is not int or not 0 <= parsed_flags <= 0xFF:
+            ctx.errors.append(
+                f"{label} parsed operand {index} parsed raw flags must be unsigned byte"
+            )
+        if type(parsed_value) is not int or not 0 <= parsed_value <= 0xFFFF:
+            ctx.errors.append(
+                f"{label} parsed operand {index} parsed raw value must be unsigned 16-bit"
+            )
+        inventory_flags = item.get("raw_register_flags")
+        inventory_value = item.get("raw_register_value")
+        if parsed_flags != inventory_flags:
+            ctx.errors.append(
+                f"{label} parsed operand {index} parsed raw flags disagree with lineage inventory"
+            )
+        if parsed_value != inventory_value:
+            ctx.errors.append(
+                f"{label} parsed operand {index} parsed raw value disagrees with lineage inventory"
+            )
+        descriptor = (
+            descriptors[operand_index]
+            if _nonnegative(operand_index) and operand_index < len(descriptors)
+            else None
         )
-        if rule is not None:
-            for field in ("role", "class_id", "allocation_requirement"):
-                if row.get(field) != rule.get(field):
+        state = None
+        if descriptor is None:
+            ctx.errors.append(f"{label} parsed operand {index} has no expanded descriptor")
+        else:
+            if row.get("raw_arg_kind_id") != descriptor.raw_arg_kind_id:
+                ctx.errors.append(f"{label} parsed operand {index} raw kind disagrees with descriptor")
+            for field, expected in (
+                ("role", descriptor.role),
+                ("register_form", descriptor.register_form),
+            ):
+                if row.get(field) != expected:
                     ctx.errors.append(
-                        f"{label} parsed operand {index} allocation requirement/role/class disagrees with trusted rule"
+                        f"{label} parsed operand {index} {field} disagrees with descriptor"
                     )
-        requirement = row.get("allocation_requirement")
-        _validate_class_shape(
-            class_id=row.get("class_id"),
-            virtual_kind=row.get("virtual_kind"),
-            label=f"{label} parsed operand {index}",
-            errors=ctx.errors,
-        )
-        if requirement == "allocator-rewrite-required":
+            try:
+                state = classify_operand(
+                    descriptor,
+                    capture_stage if type(capture_stage) is str else "",
+                    inventory_flags,
+                    inventory_value,
+                )
+            except Exception as exc:  # noqa: BLE001 - exact-one state trust boundary
+                ctx.errors.append(f"{label} parsed operand {index} state classification failed: {exc}")
+        allocation_state = row.get("allocation_state")
+        if state is not None and (
+            allocation_state != state.allocation_state
+            or row.get("virtual") != state.virtual
+            or row.get("physical_register") != state.physical_register
+        ):
+            ctx.errors.append(f"{label} parsed operand {index} state disagrees with trusted rule")
+        if descriptor is not None and allocation_state in {"virtual", "physical"}:
+            if row.get("class_id") != descriptor.class_id:
+                ctx.errors.append(f"{label} parsed operand {index} class disagrees with descriptor")
+        if allocation_state == "virtual":
             if (
-                row.get("virtual_kind") not in ("r", "f")
+                descriptor is None
+                or row.get("virtual_kind") != descriptor.virtual_kind
                 or not _nonnegative(row.get("virtual"))
                 or row.get("physical_register") is not None
             ):
-                ctx.errors.append(f"{label} allocatable operand has invalid virtual/physical shape")
-        elif requirement == "fixed-physical":
+                ctx.errors.append(f"{label} virtual operand shape is invalid")
+        elif allocation_state == "physical":
             if (
                 row.get("virtual_kind") is not None
                 or row.get("virtual") is not None
-                or not _physical(row.get("physical_register"))
+                or not _nonnegative(row.get("physical_register"))
             ):
-                ctx.errors.append(f"{label} fixed operand has invalid virtual/physical shape")
-            if not _physical(row.get("physical_register")):
-                ctx.errors.append(f"{label} parsed operand {index} physical register must be in 0..31")
+                ctx.errors.append(f"{label} physical operand shape is invalid")
+        elif allocation_state == "non-allocator":
+            if any(
+                row.get(field) is not None
+                for field in ("class_id", "virtual_kind", "virtual", "physical_register")
+            ):
+                ctx.errors.append(f"{label} non-allocator operand shape is invalid")
         else:
-            ctx.errors.append(f"{label} has unknown allocation requirement")
+            ctx.errors.append(f"{label} has unknown allocation_state")
         key = (
             operand_index,
             row.get("role"),
@@ -733,17 +797,18 @@ def _validate_parsed(
             ctx.errors.append(f"{label} parsed register operands must be canonically ordered")
     except TypeError:
         ctx.errors.append(f"{label} parsed register operands are not sortable")
-    if len(keys) != len(set(keys)):
-        ctx.errors.append(f"{label} has duplicate parsed register operand")
+    try:
+        if len(keys) != len(set(keys)):
+            ctx.errors.append(f"{label} has duplicate parsed register operand")
+    except TypeError:
+        ctx.errors.append(f"{label} parsed register operands are not hashable")
     parsed_counts = Counter(row.get("operand_index") for row in result)
-    for operand_index, item in enumerate(inventory):
-        has_register_rule = any(
-            rule.get("opcode_id") == opcode_id
-            and rule.get("operand_index") == operand_index
-            and rule.get("raw_arg_kind_id") == item.get("raw_arg_kind_id")
-            for rule in ctx.rules
+    for operand_index, _item in enumerate(inventory):
+        has_register_descriptor = (
+            operand_index < len(descriptors)
+            and descriptors[operand_index].register_form != "none"
         )
-        expected = 1 if has_register_rule else 0
+        expected = 1 if has_register_descriptor else 0
         if parsed_counts[operand_index] != expected:
             ctx.errors.append(f"{label} parsed register inventory is incomplete at operand {operand_index}")
     return result
@@ -769,6 +834,9 @@ def _state_signature(row: Mapping[str, object]) -> tuple[object, ...]:
                 item.get("operand_index"),
                 item.get("operand_lineage_id"),
                 item.get("raw_arg_kind_id"),
+                item.get("raw_register_flags"),
+                item.get("raw_register_value"),
+                item.get("raw_payload_hex"),
                 item.get("raw_payload_sha256"),
             )
             for item in operands
@@ -969,6 +1037,7 @@ def _validate_instructions(
                 snapshot.get("parsed_register_operands"),
                 opcode_id,
                 inventory,
+                stage,
                 label,
                 ctx,
             )
@@ -977,7 +1046,7 @@ def _validate_instructions(
                 ctx.allocatable_lineages.update(
                     str(parsed_row.get("operand_lineage_id"))
                     for parsed_row in parsed_rows
-                    if parsed_row.get("allocation_requirement") == "allocator-rewrite-required"
+                    if parsed_row.get("allocation_state") == "virtual"
                 )
             if snap_index == 0 and stage == "allocator_input" and isinstance(pcode_id, str):
                 for operand_row in inventory:
@@ -1156,8 +1225,8 @@ def _validate_rewrite(
         ):
             if row.get(field) != parsed.get(field):
                 ctx.errors.append(f"{label} {field} disagrees with parsed occurrence")
-        if parsed.get("allocation_requirement") != "allocator-rewrite-required":
-            ctx.errors.append(f"{label} rewrites a fixed physical operand")
+        if parsed.get("allocation_state") != "virtual":
+            ctx.errors.append(f"{label} rewrites a non-virtual operand")
     _validate_class_shape(
         class_id=row.get("class_id"),
         class_name=row.get("class_name"),
@@ -2025,7 +2094,7 @@ def _validate_ranges(
             if (
                 not origins
                 and lineage not in ctx.allocatable_lineages
-                and parsed.get("allocation_requirement") == "fixed-physical"
+                and parsed.get("allocation_state") == "physical"
             ):
                 if mapping.get("physical_register") != parsed.get("physical_register"):
                     ctx.errors.append(f"{label} fixed emission physical register disagrees")
@@ -2135,8 +2204,9 @@ _PCODE_COVERAGE_FIELDS = frozenset(
         "first_event_sequence",
         "last_event_sequence",
         "parsed_register_operands",
-        "allocatable_register_operands",
-        "fixed_physical_register_operands",
+        "virtual_register_operands",
+        "physical_register_operands",
+        "non_allocator_register_operands",
         "rewrite_events",
         "mutation_events",
         "final_pcodes",
@@ -2295,12 +2365,16 @@ def _validate_coverage(
         parsed = snapshot.get("parsed_register_operands") if isinstance(snapshot, Mapping) else None
         if isinstance(parsed, list):
             first_parsed.extend(item for item in parsed if isinstance(item, Mapping))
-    allocatable = [item for item in first_parsed if item.get("allocation_requirement") == "allocator-rewrite-required"]
-    fixed = [item for item in first_parsed if item.get("allocation_requirement") == "fixed-physical"]
+    virtual = [item for item in first_parsed if item.get("allocation_state") == "virtual"]
+    physical = [item for item in first_parsed if item.get("allocation_state") == "physical"]
+    non_allocator = [
+        item for item in first_parsed if item.get("allocation_state") == "non-allocator"
+    ]
     counts = {
         "parsed_register_operands": len(first_parsed),
-        "allocatable_register_operands": len(allocatable),
-        "fixed_physical_register_operands": len(fixed),
+        "virtual_register_operands": len(virtual),
+        "physical_register_operands": len(physical),
+        "non_allocator_register_operands": len(non_allocator),
         "rewrite_events": len(payload.get("pcode_occurrences", [])),
         "mutation_events": len(payload.get("pcode_operand_lineage_events", [])),
         "final_pcodes": len(ctx.current),
@@ -2315,7 +2389,7 @@ def _validate_coverage(
         parsed = snapshot.get("parsed_register_operands") if isinstance(snapshot, Mapping) else None
         if isinstance(parsed, list):
             for item in parsed:
-                if isinstance(item, Mapping) and item.get("allocation_requirement") == "allocator-rewrite-required":
+                if isinstance(item, Mapping) and item.get("allocation_state") == "virtual":
                     expected_rewrites[(pcode_id, item.get("operand_index"))] += 1
     actual_rewrites = Counter((str(item.get("pcode_id")), item.get("operand_index")) for item in rewrites)
     for key in sorted(set(expected_rewrites) | set(actual_rewrites)):

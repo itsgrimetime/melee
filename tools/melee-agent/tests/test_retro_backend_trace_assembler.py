@@ -1,3 +1,4 @@
+import hashlib
 import sys
 from pathlib import Path
 
@@ -22,6 +23,7 @@ def _function_start() -> dict:
 
 
 def _pcode_events() -> list[dict]:
+    raw = bytes.fromhex("000222000000000000000000")
     return [
         _function_start(),
         {"event": "backend_marker", "name": "pcode_pass_boundary"},
@@ -41,6 +43,20 @@ def _pcode_events() -> list[dict]:
             "block_id": "B0",
             "order": 0,
             "opcode": "mr",
+            "opcode_id": 63,
+            "arg_count": 1,
+            "runtime_address": 0x700000,
+            "source_stage": "allocator_input",
+            "operand_lineage_inventory": [
+                {
+                    "operand_index": 0,
+                    "raw_arg_kind_id": 0,
+                    "raw_register_flags": 2,
+                    "raw_register_value": 34,
+                    "raw_payload_hex": raw.hex(),
+                    "raw_payload_sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            ],
             "operands": "",
             "normalized": "mr",
         },
@@ -240,6 +256,9 @@ def test_assemble_candidate_trace_replaces_matching_partial_decisions() -> None:
     cls = fn["regalloc"]["classes"][0]
     nodes = {node["ig_id"]: node for node in cls["nodes"]}
     assert fn["pcode"]["passes"][0]["instructions"][0]["opcode"] == "mr"
+    assert fn["pcode"]["passes"][0]["instructions"][0][
+        "operand_lineage_inventory"
+    ][0]["raw_payload_hex"] == "000222000000000000000000"
     assert [decision["id"] for decision in cls["color_decisions"]] == ["gpr-i0", "gpr-i1"]
     assert nodes[32]["assigned_phys"] == 0
     assert nodes[32]["color_decision_ref"] == "gpr-i0"

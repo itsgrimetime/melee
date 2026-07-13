@@ -159,16 +159,25 @@ class _Normalizer:
             self.passes_by_id[pass_id] = pcode_pass
             self.function["pcode"]["passes"].append(pcode_pass)
 
-        pcode_pass["instructions"].append(
-            {
-                "id": event["id"],
-                "block_id": event["block_id"],
-                "order": event["order"],
-                "opcode": event["opcode"],
-                "operands": event.get("operands", ""),
-                "normalized": event.get("normalized", ""),
-            }
-        )
+        instruction = {
+            "id": event["id"],
+            "block_id": event["block_id"],
+            "order": event["order"],
+            "opcode": event["opcode"],
+            "operands": event.get("operands", ""),
+            "normalized": event.get("normalized", ""),
+        }
+        for field in (
+            "opcode_id",
+            "arg_count",
+            "runtime_address",
+            "source_stage",
+            "operand_lineage_inventory",
+            "retail_pcode",
+        ):
+            if field in event:
+                instruction[field] = copy.deepcopy(event[field])
+        pcode_pass["instructions"].append(instruction)
 
     def _apply_regclass(self, event: dict[str, Any]) -> None:
         class_id = event["class_id"]

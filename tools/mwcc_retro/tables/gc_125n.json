@@ -287,13 +287,25 @@
       }
     },
     "PCode": {
-      "provenance": "probe_lbarq_frame2/probe_lb00ce_fpr_frame2",
-      "confidence": "live-invariant",
-      "evidence": "block sample proves PCode next/opcode/arg_count fields",
+      "provenance": "probe_lbarq_frame2/probe_lb00ce_fpr_frame2; retained GC/1.2.5n allocator disassembly",
+      "confidence": "manual-disassembly-confirmed",
+      "evidence": "block samples prove next/opcode/arg_count; retained disassembly proves inline args at 0x1c with 0x0c stride",
       "fields": {
         "next": 0,
         "opcode": 20,
-        "arg_count": 26
+        "arg_count": 26,
+        "args": 28
+      }
+    },
+    "PCodeArg": {
+      "provenance": "retained GC/1.2.5n allocator disassembly at 0x004CE1A0",
+      "confidence": "manual-disassembly-confirmed",
+      "evidence": "allocator rewrite preserves kind/flags and stores the unsigned 16-bit register payload at +2; operand stepping uses a 0x0c stride",
+      "size": 12,
+      "fields": {
+        "kind": 0,
+        "register_flags": 1,
+        "payload": 2
       }
     },
     "ObjObject": {

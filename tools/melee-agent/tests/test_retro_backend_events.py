@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import sys
 from pathlib import Path
 
@@ -124,6 +125,43 @@ def test_marker_only_events_do_not_normalize_to_complete_trace():
             source=SOURCE,
             tool_version="test",
         )
+
+
+def test_pcode_normalization_preserves_exact_raw_operand_inventory():
+    events = backend_events.load_events(FIXTURE)
+    event = next(row for row in events if row.get("event") == "pcode_instruction")
+    raw = bytes.fromhex("000222000000000000000000")
+    event.update(
+        {
+            "opcode_id": 63,
+            "arg_count": 1,
+            "runtime_address": 0x700000,
+            "source_stage": "allocator_input",
+            "operand_lineage_inventory": [
+                {
+                    "operand_index": 0,
+                    "raw_arg_kind_id": 0,
+                    "raw_register_flags": 2,
+                    "raw_register_value": 34,
+                    "raw_payload_hex": raw.hex(),
+                    "raw_payload_sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            ],
+        }
+    )
+
+    trace = backend_events.normalize_events(
+        events, compiler=COMPILER, source=SOURCE, tool_version="test"
+    )
+    instruction = trace["functions"][0]["pcode"]["passes"][0]["instructions"][0]
+
+    assert instruction["opcode_id"] == 63
+    assert instruction["arg_count"] == 1
+    assert instruction["runtime_address"] == 0x700000
+    assert instruction["source_stage"] == "allocator_input"
+    assert instruction["operand_lineage_inventory"] == event[
+        "operand_lineage_inventory"
+    ]
 
 
 def test_allocator_event_before_regclass_is_rejected():

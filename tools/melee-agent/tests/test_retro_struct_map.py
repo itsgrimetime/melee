@@ -19,6 +19,7 @@ def test_live_gc125n_table_satisfies_required_backend_map_gate():
     assert struct_map.validate_required_backend_map(table) == []
     assert struct_map.validate_backend_ig_snapshot_capability(table) == []
     assert struct_map.validate_backend_pcode_snapshot_capability(table) == []
+    assert struct_map.validate_pcode_arg_capture_capability(table) == []
     assert struct_map.validate_instrumentation_proof_registry(table) == []
     assert table["instrumentation_proof_schema"] == "mwcc-retro-lifetime-proof.v1"
     assert table["instrumentation_proofs"] == []

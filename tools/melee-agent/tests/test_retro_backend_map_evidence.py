@@ -39,10 +39,28 @@ NOT_PROMOTABLE_FROM_CURRENT_PROBE = {
 
 
 def _valid_instrumentation_proof():
+    custom_ids = {3, 4, 12, 13, 15, 16, 199}
+    opcodes = [
+        {
+            "opcode_id": opcode_id,
+            "mnemonic": "ADDI" if opcode_id == 42 else f"OP_{opcode_id:03d}",
+            "format_string": "r" if opcode_id == 42 else "",
+            "constructor_kind": (
+                "custom" if opcode_id in custom_ids else "generic-fixed"
+            ),
+            "custom_constructor_addresses": (
+                [0x410000 + opcode_id * 0x10]
+                if opcode_id in custom_ids
+                else []
+            ),
+        }
+        for opcode_id in range(468)
+    ]
     return {
         "schema_version": "mwcc-retro-lifetime-proof.v1",
         "proof_id": "proof",
         "compiler_executable_sha256": "a" * 64,
+        "runtime_hook_manifest_sha256": "c" * 64,
         "mode": "allocation-generation",
         "allocation_sites": [
             {
@@ -89,16 +107,35 @@ def _valid_instrumentation_proof():
         "operand_rules": [
             {
                 "opcode_id": 42,
-                "operand_index": 0,
+                "descriptor_index": 0,
+                "format_code": "r",
+                "expansion": {"kind": "one", "count": 1},
                 "raw_arg_kind_id": 0,
-                "register_flags_mask": 1,
-                "register_flags_value": 0,
                 "role": "use",
+                "register_form": "gpr",
                 "class_id": 0,
-                "allocation_requirement": "allocator-rewrite-required",
+                "virtual_kind": "r",
+                "state_rules": [
+                    {
+                        "capture_stage": "allocator_input",
+                        "register_flags_mask": 255,
+                        "register_flags_value": 0,
+                        "register_value_min": 32,
+                        "register_value_max": 65535,
+                        "allocation_state": "virtual",
+                    },
+                    {
+                        "capture_stage": "code_emission",
+                        "register_flags_mask": 255,
+                        "register_flags_value": 1,
+                        "register_value_min": 0,
+                        "register_value_max": 31,
+                        "allocation_state": "physical",
+                    },
+                ],
             }
         ],
-        "opcode_table": [{"opcode_id": 42, "mnemonic": "ADDI"}],
+        "opcode_table": opcodes,
         "initialization_address": 0x401000,
         "proof_basis": "exhaustive-static-callgraph-and-disassembly",
     }
@@ -158,9 +195,7 @@ def test_pcode_instrumentation_gate_rejects_unpromoted_and_partial_site_inventor
     assert "no promoted instrumentation proof" in errors
     assert "pcode instrumentation gate is not validated" in errors
 
-    layout_errors = struct_map.validate_pcode_arg_capture_capability(table)
-    assert "PCode.args expected offset 0x1c, got None" in layout_errors
-    assert "missing required PCodeArg struct" in layout_errors
+    assert struct_map.validate_pcode_arg_capture_capability(table) == []
 
 
 def test_pcode_instrumentation_gate_fails_closed_on_altered_site_inventory():
@@ -360,10 +395,7 @@ def test_map_probe_reports_exact_unpromoted_pcode_gates_without_capability():
 
     assert status["status"] == "unpromoted"
     assert status["capabilities"] == []
-    assert status["layout_errors"] == [
-        "PCode.args expected offset 0x1c, got None",
-        "missing required PCodeArg struct",
-    ]
+    assert status["layout_errors"] == []
     assert status["proof_errors"] == [
         "no promoted instrumentation proof",
         "pcode instrumentation gate is not validated",
