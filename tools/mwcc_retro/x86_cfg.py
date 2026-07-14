@@ -2090,15 +2090,40 @@ class _DirectCfgRecovery:
                 )
                 return False
             target = int.from_bytes(raw, "little")
+            # For type-3 HIGHLOW-relocated entries, the raw value is an RVA;
+            # the loaded VA is raw + image_base.  Skip adjustment when the
+            # raw value is already an absolute VA (synthetic test fixtures).
+            if (
+                relocation_types.get(entry_address) == 3
+                and target < self.image.image_base
+            ):
+                target = (target + self.image.image_base) & 0xFFFF_FFFF
             if not _is_executable_span(self.image, target, 1):
+                # movzx-bound tables may mix code and data entries.
+                # Skip data-only entries; only fail if no entries at all.
+                if operator == "movzx":
+                    continue
                 self._computed_flow_blocker(
                     instruction,
                     "jump-table target is not executable: "
                     f"index={index};entry={entry_address:#x};target={target:#x}",
                 )
                 return False
+            # For movzx tables, entries without a type-3 relocation are
+            # inline data (strings, constants), not code pointers.
+            if operator == "movzx" and relocation_types.get(entry_address) != 3:
+                continue
             entries.append(target)
             entry_rows.append((entry_address, raw, target))
+
+        if not entries:
+            # No executable entries found (e.g., all data in movzx table)
+            self._computed_flow_blocker(
+                instruction,
+                "jump-table has no executable entries: "
+                f"base={base:#x};indices={index_min}..{index_max}",
+            )
+            return False
 
         table = JumpTable(
             address=instruction.address,
@@ -7851,88 +7876,98 @@ class _DirectCfgRecovery:
         return True
 
     def _resolve_computed_flows(self) -> None:
-        candidate_addresses = set(self.indirect_candidates)
-        self.diagnostics = {
-            row
-            for row in self.diagnostics
-            if row.address not in candidate_addresses
-            or row.kind
-            not in {
-                "computed-flow-blocker",
-                "indirect-flow",
-                "unsupported-far-flow",
-            }
-        }
-        for address in sorted(candidate_addresses):
-            # A finite table is an immutable fixed-point fact.  Newly decoded
-            # classifiers or callers may add other facts, but they may not
-            # re-derive this transfer with different incidental provenance.
-            if address in self.jump_tables:
-                continue
-            flow_kind, is_far = self.indirect_candidates[address]
-            instruction = self.instructions[address]
-            decoded = self._owned_decoded(address)
-            recovered = (
-                False
-                if is_far
-                else (
-                    self._recover_cw_inactive_action_helper(instruction)
-                    or self._recover_cw_registered_destructor_callback(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_cw_k17_callback(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_cw_continuation_jump(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_iat_terminal(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_global_slot_targets(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_constructor_descriptor_target(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_finite_value_target(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_sentinel_callback_table(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_byte_return_table(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_zero_count_indexed_control(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_registrar_table(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                    or self._recover_indexed_table(
-                        decoded, instruction, flow_kind=flow_kind
-                    )
-                )
-            )
-            if recovered or any(
-                row.address == address
-                and row.kind == "computed-flow-blocker"
+        """Resolve indirect candidates to fixed point.
+
+        Resolution of jump tables exposes new reachable code which may
+        contain additional indirect candidates.  Iterate until no new
+        tables are created and no candidates remain.
+        """
+        for iteration in range(64):  # safety bound
+            candidate_addresses = set(self.indirect_candidates)
+            self.diagnostics = {
+                row
                 for row in self.diagnostics
-            ):
-                continue
-            self.diagnostics.add(
-                OwnershipDiagnostic(
-                    kind=("unsupported-far-flow" if is_far else "indirect-flow"),
-                    address=address,
-                    detail=(
-                        f"unsupported far {flow_kind}: "
-                        if is_far
-                        else f"unresolved indirect {flow_kind}: "
+                if row.address not in candidate_addresses
+                or row.kind
+                not in {
+                    "computed-flow-blocker",
+                    "indirect-flow",
+                    "unsupported-far-flow",
+                }
+            }
+            new_tables = 0
+            for address in sorted(candidate_addresses):
+                if address in self.jump_tables:
+                    continue
+                flow_kind, is_far = self.indirect_candidates[address]
+                instruction = self.instructions[address]
+                decoded = self._owned_decoded(address)
+                recovered = (
+                    False
+                    if is_far
+                    else (
+                        self._recover_cw_inactive_action_helper(instruction)
+                        or self._recover_cw_registered_destructor_callback(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_cw_k17_callback(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_cw_continuation_jump(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_iat_terminal(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_global_slot_targets(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_constructor_descriptor_target(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_finite_value_target(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_sentinel_callback_table(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_byte_return_table(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_zero_count_indexed_control(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_registrar_table(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
+                        or self._recover_indexed_table(
+                            decoded, instruction, flow_kind=flow_kind
+                        )
                     )
-                    + f"{instruction.mnemonic} {instruction.operands}".rstrip(),
                 )
-            )
+                if recovered:
+                    new_tables += 1
+                    continue
+                if any(
+                    row.address == address
+                    and row.kind == "computed-flow-blocker"
+                    for row in self.diagnostics
+                ):
+                    continue
+                self.diagnostics.add(
+                    OwnershipDiagnostic(
+                        kind=("unsupported-far-flow" if is_far else "indirect-flow"),
+                        address=address,
+                        detail=(
+                            f"unsupported far {flow_kind}: "
+                            if is_far
+                            else f"unresolved indirect {flow_kind}: "
+                        )
+                        + f"{instruction.mnemonic} {instruction.operands}".rstrip(),
+                    )
+                )
+            if new_tables == 0:
+                break
 
 
 

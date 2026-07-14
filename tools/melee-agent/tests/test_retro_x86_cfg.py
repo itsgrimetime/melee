@@ -579,10 +579,16 @@ def movzx_dispatch_image():
     text[0x03:0x0A] = bytes.fromhex("ff 14 9d 00 20 40 00")  # call [ebx*4+0x402000]
     text[0x0A] = 0xC3  # ret
 
-    # Fill all 256 dispatch table entries with 0x401020 (a ret sled)
+    # Fill all 256 dispatch table entries with RVA 0x1020 (type-3 relocation
+    # adds image_base to make 0x401020 at load time).
     for i in range(256):
-        struct.pack_into("<I", data, 0x100 + i * 4, TEXT_VA + 0x20)
+        struct.pack_into("<I", data, 0x100 + i * 4, 0x1020)
     text[0x20] = 0xC3  # target function
+
+    # Add type-3 relocations for each table entry
+    relocations = tuple(
+        pe_mod.Relocation(RDATA_VA + i * 4, 3) for i in range(256)
+    )
 
     return pe_mod.Image(
         data=bytes(data),
@@ -599,7 +605,7 @@ def movzx_dispatch_image():
         ),
         imports=(),
         exports=(),
-        relocations=(),
+        relocations=relocations,
         executable_ranges=((TEXT_VA, TEXT_VA + 0x100),),
     )
 
