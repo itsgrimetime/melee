@@ -32,16 +32,23 @@ from src.mwcc_debug.causal_diff.inference import (
 )
 from src.mwcc_debug.causal_diff.legacy_ownership import legacy_simple_paths
 from src.mwcc_debug.causal_diff.models import (
+    AdapterResult,
     ComparisonRecord,
     Confidence,
     EvidenceEdge,
     EvidenceNode,
     Provenance,
 )
-from src.mwcc_debug.causal_diff.owner_certificate import OwnerCertificateResult
+from src.mwcc_debug.causal_diff.owner_certificate import (
+    OwnerCertificateResult,
+    OwnerResolutionStatus,
+    build_owner_certificates,
+)
 from src.mwcc_debug.causal_diff.render import render_json, render_text
 from src.mwcc_debug.causal_diff.store import EvidenceQuery, InMemoryEvidenceStore
 from tests.owner_certificate_fixtures import (
+    ROLE,
+    evidence_with_partial_owner_branch,
     future_complete_pipeline_inputs,
     future_complete_tied_pipeline_inputs,
     future_owner_abstention_pipeline_inputs,
@@ -649,6 +656,66 @@ def test_unique_changed_certificate_pair_stops_only_at_source_binding_gate() -> 
         owner.left_record_id,
         owner.right_record_id,
     }
+
+
+@pytest.mark.parametrize("ambiguous_side", ("left", "right"))
+def test_certificate_inference_rechecks_current_unique_resolution_for_stale_replay(
+    ambiguous_side: str,
+) -> None:
+    graph_pair, owner_alignment, sealed_records = future_complete_pipeline_inputs()
+    stale_effects = derive_effects(owner_alignment, graph_pair, sealed_records)
+    left, right = tuple(sorted(graph_pair, key=lambda graph: str(graph.bundle.label)))
+    ambiguous_graph = left if ambiguous_side == "left" else right
+    original_resolution = ambiguous_graph.backend.owner_certificates.resolution_for(ROLE)
+    certificate_id = only(original_resolution.certificate_record_ids)
+
+    assert original_resolution.status is OwnerResolutionStatus.UNIQUE
+    assert ambiguous_graph.backend.object_bindings is not None
+    augmented_evidence = evidence_with_partial_owner_branch(
+        "virtual",
+        base_evidence=ambiguous_graph.backend.object_bindings,
+    )
+    augmented_result = build_owner_certificates(augmented_evidence)
+    augmented_resolution = augmented_result.resolution_for(ROLE)
+    assert augmented_resolution.status is OwnerResolutionStatus.AMBIGUOUS
+    assert augmented_resolution.certificate_record_ids == (certificate_id,)
+    assert {item.reason for item in augmented_resolution.rejections} == {
+        "plausible-owner-alternative"
+    }
+
+    store = InMemoryEvidenceStore()
+    store.add_nodes(augmented_evidence.nodes)
+    store.add_edges(augmented_evidence.edges)
+    store.add_nodes(augmented_result.certificate_nodes)
+    augmented_graph = replace(
+        ambiguous_graph,
+        store=store,
+        backend=replace(
+            ambiguous_graph.backend,
+            result=AdapterResult(
+                nodes=(*augmented_evidence.nodes, *augmented_result.certificate_nodes),
+                edges=augmented_evidence.edges,
+            ),
+            object_bindings=augmented_evidence,
+            owner_certificates=augmented_result,
+        ),
+    )
+    current_graphs = (
+        (augmented_graph, right)
+        if ambiguous_side == "left"
+        else (left, augmented_graph)
+    )
+
+    report = build_report(current_graphs, stale_effects, sealed_records)
+    verdict = only(report.verdicts)
+    persisted_verdict = only(json.loads(render_json(report))["verdicts"])
+
+    assert verdict.status is VerdictStatus.ABSTAIN
+    assert verdict.failed_gates == ("gate-7-proof-capable-path",)
+    assert verdict.proof_paths == ()
+    assert "source-object-binding-missing" not in report.missing_evidence
+    assert persisted_verdict["failed_gates"] == ["gate-7-proof-capable-path"]
+    assert persisted_verdict["proof_paths"] == []
 
 
 def test_tied_allocator_certificate_pair_stops_only_at_source_binding_gate() -> None:

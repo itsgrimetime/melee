@@ -14,7 +14,12 @@ from .effects import DerivedEffects, EffectPair
 from .graph import FrontierGraph
 from .legacy_ownership import legacy_simple_paths_with_truncation
 from .models import AdapterResult, ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode
-from .owner_certificate import OwnerCertificateResult, OwnerRoleKey, OwnerSemanticState
+from .owner_certificate import (
+    OwnerCertificateResult,
+    OwnerResolutionStatus,
+    OwnerRoleKey,
+    OwnerSemanticState,
+)
 from .store import EvidenceQuery, canonical_record_bytes
 
 _OWNER_KINDS = frozenset({"compiler-object", "source-expression", "objobject", "inline-scope"})
@@ -761,6 +766,27 @@ def _matching_owner_abstention_records(
     )
 
 
+def _currently_authorized_certificate(
+    result: OwnerCertificateResult | None,
+    role: OwnerRoleKey | None,
+    record_id: str,
+) -> EvidenceNode | None:
+    if result is None or role is None:
+        return None
+    resolution = result.resolution_for(role)
+    certificate = result.certificate(record_id)
+    if (
+        certificate is None
+        or result.global_rejections
+        or resolution.rejections
+        or resolution.status is not OwnerResolutionStatus.UNIQUE
+        or resolution.certificate_record_ids != (record_id,)
+        or _owner_role(certificate.attributes.get("role")) != role
+    ):
+        return None
+    return certificate
+
+
 def _infer_certificate_pair(
     pair: EffectPair,
     query: EvidenceQuery,
@@ -866,7 +892,11 @@ def _infer_certificate_pair(
     proof_certificates: list[EvidenceNode] = []
     for stored in stored_certificates:
         result = owner_certificate_results_by_compile.get(stored.compile_id)
-        trusted = None if result is None else result.certificate(stored.record_id)
+        trusted = _currently_authorized_certificate(
+            result,
+            role,
+            stored.record_id,
+        )
         if trusted is not None:
             trusted_certificates.append(trusted)
             if canonical_record_bytes(stored) == canonical_record_bytes(trusted):
