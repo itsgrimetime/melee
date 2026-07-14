@@ -1943,14 +1943,13 @@ class _DirectCfgRecovery:
                 return None
             decoded = self._owned_decoded(candidate.address)
 
-            # Reject if any instruction between the movzx and the transfer
-            # writes the index register or EFLAGS.  Calls do not clobber
-            # callee-saved registers (EBX is callee-saved in cdecl).
+            # Reject jumps, returns, and IRETs.  Calls and arithmetic
+            # (including EFLAGS writes) are allowed between movzx and
+            # the transfer since they don't clobber the index register.
             if (
                 decoded.group(CS_GRP_JUMP)
                 or decoded.group(CS_GRP_RET)
                 or decoded.group(CS_GRP_IRET)
-                or x86_const.X86_REG_EFLAGS in decoded.regs_write
             ):
                 return None
 
