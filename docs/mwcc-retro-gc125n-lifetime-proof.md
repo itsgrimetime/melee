@@ -88,6 +88,32 @@
 17. CLI replay verification
 18. Resolve issue #1240
 
+## Live Probe Results
+
+Four live compiler probes completed using the installed CLI:
+
+| # | Function | Source | Status | Stages |
+|---|----------|--------|--------|--------|
+| 1 | `lb_8000CE30` | `src/melee/lb/lb_00B0.c` | matched, 10 events | codegen_start..codegen_end |
+| 2 | `lb_8000CDC0` | `src/melee/lb/lb_00B0.c` | matched | all stages |
+| 3 | `lbArq_80014ABC` | `src/melee/lb/lbarq.c` | matched | all stages |
+| 4 | `gm_801BCC9C` | `src/melee/gm/gm_1BA8.c` | matched | all stages |
+
+Note: `mnDiagram_DrawFighterHeaders` is not yet a matched function in the
+Melee decompilation and cannot be probed.  The four above functions exercise
+multiple compiler modules (lb, lbarq, gm) with full backend stage coverage.
+
+Each probe captured:
+- codegen_start/codegen_end boundaries
+- build_interference_graph_wrapper, dataflow_marker
+- build_interference_matrix, build_adjacency_vectors
+- real_coalesce, simplifygraph, colorgraph
+- final_scheduler
+- IG samples, block samples, register class counters
+- Frame state snapshots
+
+All probes had zero errors and produced valid backend-map-evidence.json.
+
 ## Test Coverage
 
 - 428 focused tests pass (opcode, proof, values, CFG, lifetime, CLI, PE, live-probe)
@@ -99,5 +125,5 @@
 
 ## Branch
 
-- `codex/issue-1240-retail-pcode-proof` at `f1c9f832b`
-- 8 commits above recovery point `7f4e08490`
+- `codex/issue-1240-retail-pcode-proof` at `f2aa15569`
+- 12 commits above recovery point `7f4e08490`
