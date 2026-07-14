@@ -816,6 +816,44 @@ def test_exact_duplicate_rejection_summaries_collapse_with_multiplicity() -> Non
     assert fixtures.canonical_result(alternatives[0]) == fixtures.canonical_result(alternatives[1])
 
 
+def test_exact_duplicate_partial_rejection_retains_multiplicity_in_abstention() -> None:
+    fixtures = _owner_fixtures()
+    outputs = []
+    for permuted in (False, True):
+        graph_pair = fixtures.graphs_with_partial_owner_branch(
+            "virtual",
+            duplicate=True,
+            permuted=permuted,
+        )
+        left, _right = tuple(sorted(graph_pair, key=lambda graph: str(graph.bundle.label)))
+        result = left.backend.owner_certificates
+        resolution = result.resolution_for(OWNER_ROLE)
+        rejection = _only(resolution.rejections)
+        rejection_groups = tuple(
+            group
+            for group in result._canonical_groups
+            if group.role == OWNER_ROLE and group.semantic_state is None and group.rejection_reason == rejection.reason
+        )
+
+        assert resolution.status is OwnerResolutionStatus.AMBIGUOUS
+        assert rejection.reason == "plausible-owner-alternative"
+        assert _only(rejection_groups).multiplicity == 2
+        outputs.extend(_one_owner_abstention(ordered) for ordered in (graph_pair, tuple(reversed(graph_pair))))
+
+    baseline = outputs[0]
+    assert all(item == baseline for item in outputs)
+    assert {item.record_id for item in outputs} == {baseline.record_id}
+    assert {fixtures.canonical_result(item.attributes["alternatives"]) for item in outputs} == {
+        fixtures.canonical_result(baseline.attributes["alternatives"])
+    }
+    alternative = _only(
+        item
+        for item in baseline.attributes["alternatives"]
+        if item["side"] == "left" and item["kind"] == "rejection" and item["reason"] == "plausible-owner-alternative"
+    )
+    assert alternative["multiplicity"] == 2
+
+
 class _ExplodingGlobalRejections:
     def __bool__(self) -> bool:
         raise AssertionError("untrusted global rejections tested for truth")

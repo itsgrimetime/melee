@@ -959,6 +959,27 @@ def _certificate_multiplicity(
     )
 
 
+def _rejection_multiplicity(
+    result: OwnerCertificateResult,
+    role: OwnerRoleKey,
+    rejection: OwnerCertificateRejection,
+) -> int:
+    if rejection.role != role:
+        return 1
+    provenance_ids = tuple(sorted((*rejection.candidate_record_ids, *rejection.raw_support_record_ids)))
+    return next(
+        (
+            group.multiplicity
+            for group in result._canonical_groups
+            if group.role == role
+            and group.semantic_state is None
+            and group.rejection_reason == rejection.reason
+            and group.provenance_record_ids == (provenance_ids,) * group.multiplicity
+        ),
+        1,
+    )
+
+
 def _canonical_owner_alternatives(
     raw: Iterable[Mapping[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
@@ -1003,7 +1024,9 @@ def _owner_alternatives(
             "support_record_ids": (),
         }
         raw.extend((summary,) * _certificate_multiplicity(result, role, certificate))
-    raw.extend(_rejection_summary(side, rejection) for rejection in (*resolution.rejections, *view.global_rejections))
+    for rejection in (*resolution.rejections, *view.global_rejections):
+        summary = _rejection_summary(side, rejection)
+        raw.extend((summary,) * _rejection_multiplicity(result, role, rejection))
     return _canonical_owner_alternatives(raw)
 
 

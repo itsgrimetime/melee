@@ -1962,6 +1962,8 @@ def _certified_frontier(
     status: str,
     *,
     partial_stage: str | None = None,
+    partial_duplicate: bool = False,
+    partial_permuted: bool = False,
 ) -> FrontierGraph:
     compile_id = f"certificate-{label}"
     capture_run_id = hashlib.sha256(label.encode()).hexdigest()
@@ -1973,6 +1975,8 @@ def _certified_frontier(
     if partial_stage is not None:
         evidence = evidence_with_partial_owner_branch(
             partial_stage,
+            duplicate=partial_duplicate,
+            permuted=partial_permuted,
             base_evidence=evidence,
             registered_malformed=partial_stage == "frame",
         )
@@ -2017,9 +2021,18 @@ def future_complete_graph_pair() -> tuple[FrontierGraph, FrontierGraph]:
 
 def graphs_with_partial_owner_branch(
     stage: str,
+    *,
+    duplicate: bool = False,
+    permuted: bool = False,
 ) -> tuple[FrontierGraph, FrontierGraph]:
     return (
-        _certified_frontier("left", "unique", partial_stage=stage),
+        _certified_frontier(
+            "left",
+            "unique",
+            partial_stage=stage,
+            partial_duplicate=duplicate,
+            partial_permuted=permuted,
+        ),
         _certified_frontier("right", "unique"),
     )
 
