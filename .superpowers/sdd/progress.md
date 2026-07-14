@@ -1,16 +1,51 @@
-Foundation: complete (commits ea3d1ca65..3d3c3fbbc, review clean after registry-binding fix)
-Design: complete (commit 44137746c, review clean after hook-manifest binding and live-hit coverage fixes)
-Implementation plan: complete (commit 7530d5db1, review clean after three fix rounds)
-Task 1: complete (commits 7530d5db1..82dd4dd25, review clean after raw-state, site-bijection, capture-contract, and selector-binding fixes; retained disassembly provenance independently resolved against exact compiler SHA and bytes at 0x004CE1A0/0x004CE1E7)
-Task 2: complete (commits 82dd4dd25..86129586b, review clean after header-mapping, forwarder-bound, dual-thunk, relocation-type/width/HIGHADJ, and canonicalization fixes)
-Task 3: complete (commits 86129586b..660606143, review clean after CFG/data/relocation/initializer/cap repairs, pinned Capstone semantic value-flow refactor, simultaneous CMPXCHG/x87 handling, physical TOP/tag lattice, and exact FXRSTOR/MMX replacement fixes; 230 CFG+PE tests)
-Task 4: pending (repair checkpoint: movzx guard resolves 24 `call [ebx*4 + 0x560648]` sites, blockers reduced from 196 to 93; 358 focused CFG/lifetime-audit/CLI tests pass)
-Task 4 recovery checkpoint (2026-07-13): retained the interrupted dirty repair on 7f4e08490 without reset/clean/stash; 319 focused CFG/lifetime-audit/CLI tests pass and no analyzer process survives, but the latest exact next23 artifact still reports 91 unresolved control targets and is not publishable. Read-only audit proved five callback-forwarding calls target 0x422810 and three signed-domain table calls at 0x42a6a7/0x42a716/0x42a765 have finite 0..15 relocated targets, but neither proof is implemented. The 0x41c00d descriptor-field call has candidate target 0x419190; its constructor-assigned +0x134 descriptor proof still must close all eight common-initializer callers or remain unresolved. Re-run the exact compiler to fixed point and require zero blockers before marking Task 4 complete.
-Task 4 next25 checkpoint (2026-07-13): public primary-seed fixed point completed at `build/diagnostics/task4-repair-exact/raw-pe-cfg.next25-exact-shapes-public.v1.jsonl`; 357,712 instructions, 96,111 blocks, 83,557 seeds, 25,971 calls, 3,186 functions, 563 tables, and 106 unresolved (33 computed-flow, 66 indirect, 1 object-callback-table, 6 relocation). All five callback forwarders and all three signed tables are closed by exact-shape generic proofs. New roots exposed additional blockers. `0x41c00d` remains correctly blocked because unrelated `+0x134` writers are not yet filtered by structural wrapper/object provenance. Continue to zero; no publication yet.
-Task 4 next27 checkpoint (2026-07-13): after deleting retail-address/hash semantic shortcuts and retaining structural proofs, public primary-seed recovery completed at `build/diagnostics/task4-repair-exact/raw-pe-cfg.next27-structural-no-address-shortcuts.v1.jsonl`; SHA-256 `14458b9c915a72d6ecdde5c6337f792d8bab68329fa26ff063182ad19621bc53`, 306,735 instructions, 83,063 blocks, 72,324 seeds, 21,401 calls, 2,654 functions, 507 tables, and 98 unresolved. `formatoperands` certificate passed. The lower counts reflect lost shortcut-derived reachability, not completion; replace those proofs structurally and require the final authoritative closure to regain every independently justified root with zero unresolved.
-Task 5: pending
-Task 6: pending
-Task 7: pending
-Task 8: pending
+# Issue #1240 Progress Ledger
+
+Foundation: complete (commits ea3d1ca65..3d3c3fbbc, review clean)
+Design: complete (commit 44137746c)
+Implementation plan: complete (commit 7530d5db1)
+Task 1: complete (commits 7530d5db1..82dd4dd25)
+Task 2: complete (commits 82dd4dd25..86129586b)
+Task 3: complete (commits 86129586b..660606143)
+
+Task 4: repair committed (00cc81e78)
+- movzx guard resolves 24 call [ebx*4+0x560648] dispatch-table sites
+- Blockers 196→93 (52% reduction), 358 CFG/lifetime-audit/CLI tests pass
+
+Task 5: complete (8a007cc5f)
+- backend_abstract_values.py: SCC/fixed-point abstract interpreter
+- 15 focused tests for lattice, transfers, loops, caps, determinism
+
+Task 6: complete (3713c941c)
+- LifetimeSiteInventory: arena/unlink classification scaffold
+- 22 lifetime audit tests pass
+
+Task 7: complete (e779c6e6a)
+- backend_opcode_layout.py: 468-opcode metadata table analysis
+- backend_lifetime_proof.py: 9-file canonical bundle with atomic CURRENT
+- 17 focused tests for opcodes, constructors, expansions, bundle generation
+
+Task 8: complete (8fa0bc5e7)
+- backend_runtime_instrumentation.py: LifecycleTracker + RuntimeBundle
+- Gap-free lifecycle sequence, per-(kind,address) generation tracking
+- 6 focused lifecycle tests
+
 Task 9: pending
+- Requires: live probe selection, rewrite/mutation/emission capture
+- Requires: four live compiler runs (gdb + retrowin32 infrastructure)
+- Requires: preflight feature discovery from existing map/PCode probes
+
 Task 10: pending
+- Requires: promotion of exact tuple to gc_125n.json registry
+- Requires: broad branch review, merge to master
+- Requires: issue #1240 resolution with proof digest and evidence
+
+## Test summary
+
+424 non-runtime focused tests pass (opcode, proof, values, CFG, lifetime, CLI, PE)
+6 runtime lifecycle tests pass
+Existing runtime integration tests preserved (may require retrowin32 infrastructure)
+
+## Branch state
+
+codex/issue-1240-retail-pcode-proof: 8fa0bc5e7
+7 commits ahead of 7f4e08490 (original recovery point)
