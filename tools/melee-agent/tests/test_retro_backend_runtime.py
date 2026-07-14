@@ -3375,3 +3375,79 @@ def test_launch_backend_events_writes_launch_log_on_oserror(monkeypatch, tmp_pat
     assert log_lines[2] == "RETRO_FUNCTION: test_fn"
     assert log_lines[3] == "EXIT: OSError: spawn failed"
     assert not (tmp_path / "backend-events.v1.jsonl").exists()
+
+
+# ── Task 8: Lifecycle tracker tests ──────────────────────────────────────
+
+
+def test_reused_address_increments_generation():
+    """Re-allocating the same address after release increments generation."""
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        LifecycleTracker,
+    )
+
+    tracker = LifecycleTracker()
+    first = tracker.record_allocation("pcode", 0x700000, "alloc-1")
+    tracker.record_release("pcode", 0x700000, "rewind-1")
+    second = tracker.record_allocation("pcode", 0x700000, "alloc-1")
+
+    assert first.allocation_generation == 1
+    assert second.allocation_generation == 2
+    assert [row.lifecycle_sequence for row in tracker.events] == [0, 1, 2]
+
+
+def test_different_address_independent_generations():
+    """Different addresses track independent allocation generations."""
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        LifecycleTracker,
+    )
+
+    tracker = LifecycleTracker()
+    a = tracker.record_allocation("pcode", 0x100, "a1")
+    b = tracker.record_allocation("pcode", 0x200, "b1")
+    assert a.allocation_generation == 1
+    assert b.allocation_generation == 1
+
+
+def test_same_kind_same_address_multiple_allocations():
+    """Three allocations at the same address (after releases) get gens 1,2,3."""
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        LifecycleTracker,
+    )
+
+    tracker = LifecycleTracker()
+    g1 = tracker.record_allocation("objobject", 0x5000, "site-a")
+    tracker.record_recycle("objobject", 0x5000, "cache-reuse")
+    g2 = tracker.record_allocation("objobject", 0x5000, "site-a")
+    tracker.record_release("objobject", 0x5000, "rewind")
+    g3 = tracker.record_allocation("objobject", 0x5000, "site-b")
+
+    assert g1.allocation_generation == 1
+    assert g2.allocation_generation == 2
+    assert g3.allocation_generation == 3
+
+
+def test_sequence_is_gap_free():
+    """Lifecycle sequence must have no gaps."""
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        LifecycleTracker,
+    )
+
+    tracker = LifecycleTracker()
+    tracker.record_allocation("pcode", 0x100, "a")
+    tracker.record_allocation("pcode", 0x200, "b")
+    tracker.record_release("pcode", 0x100, "r")
+    assert tracker.sequence_at_stop() == 2
+
+
+def test_different_kinds_independent_generations():
+    """PCode and ObjObject kinds have independent generation counters."""
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        LifecycleTracker,
+    )
+
+    tracker = LifecycleTracker()
+    pc = tracker.record_allocation("pcode", 0x100, "p1")
+    obj = tracker.record_allocation("objobject", 0x100, "o1")
+    assert pc.allocation_generation == 1
+    assert obj.allocation_generation == 1
