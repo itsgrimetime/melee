@@ -1333,6 +1333,7 @@ def _run_backend_map_probe(
     out_dir: Path,
     static_only: bool,
     melee_root: Path,
+    instrumentation_table: Path | None = None,
 ) -> DumpOutcome:
     """Write static candidate evidence and optionally run a live map probe."""
     from tools.mwcc_retro import backend_discovery
@@ -1358,6 +1359,23 @@ def _run_backend_map_probe(
         raise RuntimeError(_format_parity_mismatch(parity))
 
     table = _retro_tables_dir(melee_root) / "gc_125n.json"
+    if instrumentation_table is not None:
+        table = instrumentation_table
+    # Load instrumentation bundle if available
+    instrumentation = {}
+    if table.exists():
+        from tools.mwcc_retro.backend_runtime_instrumentation import (
+            load_runtime_bundle,
+        )
+        try:
+            bundle = load_runtime_bundle(str(table), str(exe))
+            instrumentation = {
+                "compiler_sha256": bundle.compiler_sha256,
+                "proof": bundle.proof,
+                "manifest": bundle.manifest,
+            }
+        except Exception:
+            pass
     hook = _retro_script("backend_map_probe_hook.py")
     outcome = _launch_dump(
         src=src,
@@ -1368,6 +1386,7 @@ def _run_backend_map_probe(
         table=table,
         melee_root=melee_root,
         gdb_py=str(hook),
+        instrumentation=instrumentation,
     )
     if outcome.exit_code != 0:
         missing = f"\nmissing: {', '.join(outcome.missing)}" if outcome.missing else ""
@@ -2102,6 +2121,7 @@ def _backend_source_metadata(*, src: str, fn: str, melee_root: Path) -> dict:
 def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
                  out_dir: Path, table: Path, melee_root: Path,
                  gdb_py: str = "",
+                 instrumentation: dict | None = None,
                  timeout: int = RETRO_DUMP_TIMEOUT_SECONDS) -> DumpOutcome:
     """Invoke the gdb-side launcher, then post-process the IRO trace.
 
@@ -2148,6 +2168,10 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         RETRO_FUNCTION=fn,
         RETRO_FUNCTION_ALIASES=_backend_function_aliases_json(fn, melee_root=melee_root),
     )
+    if instrumentation:
+        instr_path = out_dir / "instrumentation.json"
+        instr_path.write_text(json.dumps(instrumentation))
+        env["RETRO_INSTRUMENTATION"] = str(instr_path)
     log = out_dir / "launch.log"
     command_text = shlex.join([str(part) for part in cmd])
 
@@ -2674,6 +2698,15 @@ def probe_backend_map_cmd(
             "backend-map-candidates.json; skip parity and live gdb probe."
         ),
     ),
+    instrumentation_table: Path = typer.Option(
+        None,
+        "--instrumentation-table",
+        help=(
+            "Path to gc_125n.json or gc_125n.candidate.json table. "
+            "Defaults to installed gc_125n.json in the configured tables dir. "
+            "Resolves sibling _lifetime_proof.json and _lifetime_hooks.json."
+        ),
+    ),
 ):
     """Probe retail GC/1.2.5n backend map candidates without emitting traces."""
     active_root = _resolve_melee_root(melee_root)
@@ -2685,6 +2718,7 @@ def probe_backend_map_cmd(
             out_dir=out_dir,
             static_only=static_only,
             melee_root=active_root,
+            instrumentation_table=instrumentation_table,
         )
     except RuntimeError as exc:
         typer.secho(str(exc), fg="red", err=True)

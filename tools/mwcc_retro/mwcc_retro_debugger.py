@@ -179,8 +179,16 @@ def run_in_gdb():
     # breakpoint, replay forward, observe). This is the generalized "intervene at
     # stage k" beyond the DLL's force-phys/coalesce.
     hook_path = os.environ.get("RETRO_GDB_PY", "").strip()
+    instrumentation = {}
+    instr_path = os.environ.get("RETRO_INSTRUMENTATION", "").strip()
+    if instr_path:
+        try:
+            import json as _json
+            instrumentation = _json.loads(Path(instr_path).read_text())
+        except Exception:
+            pass
     if hook_path:
-        _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path)
+        _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path, instrumentation=instrumentation)
         return
 
     if phases == "backend" and compiler == "1.2.5n":
@@ -226,13 +234,14 @@ class RetroContext:
     `addr(key)` looks up a named VA from it. All writes hit the emulated
     inferior only (the exe on disk is never modified)."""
 
-    def __init__(self, gdb, cad, table, out_dir, fn):
+    def __init__(self, gdb, cad, table, out_dir, fn, instrumentation=None):
         import struct as _struct
         self.gdb = gdb
         self.cad = cad
         self.table = table
         self.out_dir = out_dir
         self.fn = fn
+        self.instrumentation = instrumentation or {}
         self._struct = _struct
         self._inf = gdb.selected_inferior()
 
@@ -342,12 +351,12 @@ def _enable_backend_tracing(gdb, cad, table, out_dir, fn):
     _continue_to_exit(gdb)
 
 
-def _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path):
+def _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path, instrumentation=None):
     """Load a user hook file and call its `intervene(ctx)` with a RetroContext.
     The hook owns the session from here (it may set breakpoints, mutate memory,
     and continue)."""
     import importlib.util
-    ctx = RetroContext(gdb, cad, table, out_dir, fn)
+    ctx = RetroContext(gdb, cad, table, out_dir, fn, instrumentation=instrumentation)
     spec = importlib.util.spec_from_file_location("retro_hook", hook_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["retro_hook"] = mod
@@ -469,6 +478,8 @@ def main():
     ap.add_argument("--compiler", default="1.2.5n")
     ap.add_argument("--gdb-py", dest="gdb_py", default="",
                     help="Path to an intervention hook with intervene(ctx).")
+    ap.add_argument("--instrumentation", default=None,
+                    help="Path to instrumentation JSON with proof/manifest data.")
     ap.add_argument("fn")
     a = ap.parse_args()
 
