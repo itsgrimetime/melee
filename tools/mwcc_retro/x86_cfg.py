@@ -1937,7 +1937,6 @@ class _DirectCfgRecovery:
         index_family = self._register_family(index_register)
 
         cursor = transfer_address
-        first_step = True
         for _ in range(16):
             candidate = self._previous_instruction(cursor)
             if candidate is None:
@@ -1945,20 +1944,15 @@ class _DirectCfgRecovery:
             decoded = self._owned_decoded(candidate.address)
 
             # Reject if any instruction between the movzx and the transfer
-            # writes the index register or EFLAGS.  A block start is only
-            # rejected after the first backward step (crossing a block
-            # boundary), since the first backward step stays in the same
-            # block as the transfer.
+            # writes the index register or EFLAGS.  Calls do not clobber
+            # callee-saved registers (EBX is callee-saved in cdecl).
             if (
-                decoded.group(CS_GRP_CALL)
-                or decoded.group(CS_GRP_JUMP)
+                decoded.group(CS_GRP_JUMP)
                 or decoded.group(CS_GRP_RET)
                 or decoded.group(CS_GRP_IRET)
                 or x86_const.X86_REG_EFLAGS in decoded.regs_write
-                or (not first_step and candidate.address in self.block_starts)
             ):
                 return None
-            first_step = False
 
             # Check if this instruction writes the index register.
             # movzx is special: Capstone does not populate regs_write for
@@ -7882,8 +7876,14 @@ class _DirectCfgRecovery:
         contain additional indirect candidates.  Iterate until no new
         tables are created and no candidates remain.
         """
-        for iteration in range(64):  # safety bound
-            candidate_addresses = set(self.indirect_candidates)
+        processed: set[int] = set()
+        for iteration in range(8):  # safety bound
+            candidate_addresses = (
+                set(self.indirect_candidates) - processed
+            )
+            if not candidate_addresses:
+                break
+            processed |= candidate_addresses
             self.diagnostics = {
                 row
                 for row in self.diagnostics
