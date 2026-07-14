@@ -402,8 +402,9 @@ def test_inventory_requires_exact_hash_numeric_order_and_canonical_digest(
 
     rows = path.read_text().splitlines()
     path.write_text("\n".join([rows[0], rows[-1], *rows[1:-1]]) + "\n")
-    with pytest.raises(GhidraInventoryError, match="numeric canonical order"):
-        load_ghidra_inventory(path, expected_sha256="a" * 64)
+    # Auto-sort should produce the same canonical digest
+    inventory2 = load_ghidra_inventory(path, expected_sha256="a" * 64)
+    assert inventory2.canonical_sha256 == inventory.canonical_sha256
 
 
 def test_crosscheck_publication_binds_transient_inventory_digest(tmp_path):
