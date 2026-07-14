@@ -1,6 +1,7 @@
 import hashlib
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(TESTS))
 
 from retro_pe_fixture import write_synthetic_dispatch_pe  # noqa: E402
+from tools.mwcc_retro import backend_lifetime_audit as audit  # noqa: E402
 from tools.mwcc_retro import pe  # noqa: E402
 from tools.mwcc_retro.backend_lifetime_audit import (  # noqa: E402
     GhidraInventoryError,
@@ -22,6 +24,9 @@ from tools.mwcc_retro.backend_lifetime_audit import (  # noqa: E402
 )
 from tools.mwcc_retro.x86_cfg import (  # noqa: E402
     AnalysisLimits,
+    OwnershipDiagnostic,
+    TerminalExternalEdge,
+    UnresolvedControlTarget,
     recover_cfg,
 )
 
@@ -47,6 +52,73 @@ def test_range_membership_index_handles_boundaries_gaps_and_overlaps():
     assert contains(0x30)
     assert not contains(0x31)
     assert contains(0x40)
+
+
+def test_historical_control_rows_are_exhaustively_classified_not_seeded(
+    tmp_path,
+):
+    cfg = raw_cfg(tmp_path)
+    finite = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.flow_kind.startswith("indirect-")
+    )
+    terminal_address = 0x00401081
+    blocker_address = 0x00401082
+    cfg = replace(
+        cfg,
+        control_targets=replace(
+            cfg.control_targets,
+            terminal_external_edges=(
+                TerminalExternalEdge(
+                    source=terminal_address,
+                    flow_kind="indirect-call-import",
+                    iat_va=0x00402080,
+                    dll="KERNEL32.dll",
+                    name="ExitProcess",
+                    ordinal=None,
+                    provenance="fixture",
+                ),
+            ),
+            unresolved=(
+                UnresolvedControlTarget(
+                    address=blocker_address,
+                    kind="indirect-flow",
+                    detail="fixture blocker",
+                ),
+            ),
+        ),
+    )
+    historical = [
+        {"address": finite.source, "kind": "old", "detail": "finite"},
+        {"address": terminal_address, "kind": "old", "detail": "import"},
+        {"address": blocker_address, "kind": "old", "detail": "blocked"},
+        {"address": 0x00401083, "kind": "old", "detail": "deleted"},
+    ]
+    manifest = audit.classify_historical_control_diagnostics(
+        cfg, historical, expected_count=4
+    )
+    assert [row.classification for row in manifest.rows] == [
+        "resolved-internal",
+        "terminal-external",
+        "current-blocker",
+        "deleted-unsound-or-unreachable",
+    ]
+    assert len(manifest.canonical_sha256) == 64
+    assert cfg.seed_inventory == raw_cfg(tmp_path).seed_inventory
+
+
+def test_historical_control_classifier_rejects_count_and_duplicate_rows(
+    tmp_path,
+):
+    cfg = raw_cfg(tmp_path)
+    row = {"address": 1, "kind": "old", "detail": "same"}
+    with pytest.raises(GhidraInventoryError, match="count differs"):
+        audit.classify_historical_control_diagnostics(
+            cfg, [row], expected_count=2
+        )
+    with pytest.raises(GhidraInventoryError, match="duplicate"):
+        audit.classify_historical_control_diagnostics(cfg, [row, row])
 
 
 def write_inventory(
@@ -231,6 +303,92 @@ def test_ghidra_byte_conflict_is_blocking_without_erasing_raw_fact(tmp_path):
     assert cfg.instructions[0].bytes_hex != ""
 
 
+def test_every_current_raw_control_blocker_prevents_publication(tmp_path):
+    cfg = raw_cfg(tmp_path)
+    cfg = replace(
+        cfg,
+        ownership_diagnostics=(
+            *cfg.ownership_diagnostics,
+            OwnershipDiagnostic(
+                kind="indirect-flow",
+                address=0x00401020,
+                detail="unresolved indirect call: call eax",
+            ),
+        ),
+    )
+    path = tmp_path / "inventory.jsonl"
+    write_inventory(path, cfg)
+    inventory = load_ghidra_inventory(path, expected_sha256="a" * 64)
+    report = compare_ghidra_inventory(cfg, inventory)
+    assert report.unresolved_raw_addresses == (0x00401020,)
+    with pytest.raises(GhidraInventoryError, match="unresolved raw control"):
+        report.require_publishable()
+
+
+def test_invalidated_object_callback_table_prevents_publication(tmp_path):
+    cfg = raw_cfg(tmp_path)
+    cfg = replace(
+        cfg,
+        ownership_diagnostics=(
+            *cfg.ownership_diagnostics,
+            OwnershipDiagnostic(
+                kind="object-callback-table-blocker",
+                address=0x00401020,
+                detail="late receiver write invalidated the hypothesis",
+            ),
+        ),
+    )
+    path = tmp_path / "inventory.jsonl"
+    write_inventory(path, cfg)
+    inventory = load_ghidra_inventory(path, expected_sha256="a" * 64)
+    report = compare_ghidra_inventory(cfg, inventory)
+    assert report.unresolved_raw_addresses == (0x00401020,)
+    with pytest.raises(GhidraInventoryError, match="unresolved raw control"):
+        report.require_publishable()
+
+
+@pytest.mark.parametrize(
+    "record_kind",
+    (
+        "computed-transfer",
+        "data-reference",
+        "function-pointer-reference",
+    ),
+)
+def test_ghidra_only_shared_source_reference_is_semantic_blocker(
+    tmp_path, record_kind
+):
+    cfg = raw_cfg(tmp_path)
+    path = tmp_path / "inventory.jsonl"
+    target = (
+        0x00402200
+        if record_kind == "data-reference"
+        else 0x00401020
+    )
+    write_inventory(
+        path,
+        cfg,
+        extra_rows=(
+            {
+                "record_kind": record_kind,
+                "address": 0x00401000,
+                "target": target,
+            },
+        ),
+    )
+    inventory = load_ghidra_inventory(path, expected_sha256="a" * 64)
+    report = compare_ghidra_inventory(cfg, inventory)
+    assert any(
+        row.address == 0x00401000
+        and row.target == target
+        and row.side == "ghidra-only"
+        and row.flow_kind == record_kind
+        for row in report.flow_mismatches
+    )
+    with pytest.raises(GhidraInventoryError, match="Ghidra-only"):
+        report.require_publishable()
+
+
 def test_inventory_requires_exact_hash_numeric_order_and_canonical_digest(
     tmp_path,
 ):
@@ -262,6 +420,98 @@ def test_crosscheck_publication_binds_transient_inventory_digest(tmp_path):
     assert str(path) not in output.read_text()
 
 
+def _static_members(tag):
+    return {
+        "raw-pe-cfg.v1.jsonl": f"cfg-{tag}\n".encode(),
+        "raw-ghidra-crosscheck.v1.json": f"crosscheck-{tag}\n".encode(),
+        "backend-map-candidates.json": f"candidates-{tag}\n".encode(),
+    }
+
+
+def test_static_bundle_publication_is_all_or_none_across_injected_failures(
+    tmp_path,
+):
+    first = audit.publish_static_backend_bundle(
+        tmp_path,
+        _static_members("old"),
+        compiler_sha256="a" * 64,
+    )
+    assert first.read_bytes("backend-map-candidates.json") == b"candidates-old\n"
+
+    observed_events = []
+
+    def enumerate_events(event):
+        observed_events.append(event)
+
+    audit.publish_static_backend_bundle(
+        tmp_path,
+        _static_members("probe"),
+        compiler_sha256="a" * 64,
+        failure_injector=enumerate_events,
+    )
+
+    for event in observed_events:
+        audit.publish_static_backend_bundle(
+            tmp_path,
+            _static_members("old"),
+            compiler_sha256="a" * 64,
+        )
+
+        def fail(selected):
+            if selected == event:
+                raise OSError(f"injected {event}")
+
+        with pytest.raises(OSError, match="injected"):
+            audit.publish_static_backend_bundle(
+                tmp_path,
+                _static_members("new"),
+                compiler_sha256="a" * 64,
+                failure_injector=fail,
+            )
+        resolved = audit.resolve_static_backend_bundle(tmp_path)
+        assert resolved.read_bytes("backend-map-candidates.json") in {
+            b"candidates-old\n",
+            b"candidates-new\n",
+        }
+        payloads = {
+            resolved.read_bytes(name).decode().split("-", 1)[1].strip()
+            for name in _static_members("ignored")
+        }
+        assert len(payloads) == 1
+
+
+def test_static_bundle_resolver_rejects_hash_symlink_and_hostile_current(
+    tmp_path,
+):
+    bundle = audit.publish_static_backend_bundle(
+        tmp_path,
+        _static_members("safe"),
+        compiler_sha256="a" * 64,
+    )
+    member = bundle.path("raw-pe-cfg.v1.jsonl")
+    member.write_bytes(b"tampered\n")
+    with pytest.raises(audit.StaticBundleError, match="member hash differs"):
+        audit.resolve_static_backend_bundle(tmp_path)
+
+    audit.publish_static_backend_bundle(
+        tmp_path,
+        _static_members("safe-2"),
+        compiler_sha256="a" * 64,
+    )
+    current = tmp_path / "CURRENT"
+    current.write_text(
+        '{"schema_version":"mwcc-retro-static-current.v1",'
+        '"generation":"../escape","manifest_sha256":"' + "0" * 64 + '"}\n'
+    )
+    with pytest.raises(audit.StaticBundleError, match="generation name"):
+        audit.resolve_static_backend_bundle(tmp_path)
+
+    current.unlink()
+    current.symlink_to(tmp_path / "outside")
+    with pytest.raises(audit.StaticBundleError, match="CURRENT.*regular"):
+        audit.resolve_static_backend_bundle(tmp_path)
+
+
 def test_java_exporter_rechecks_hash_and_exports_global_numeric_facts():
     source = (
         REPO / "tools/mwcc_debug/scripts/ExportMwccRawCrosscheck.java"
@@ -278,6 +528,7 @@ def test_java_exporter_rechecks_hash_and_exports_global_numeric_facts():
         "getReferencesTo(function.getEntryPoint())",
         "StandardOpenOption.CREATE_NEW",
         '"computed-transfer"',
+        '"typed-flow"',
         '"function-pointer-reference"',
         '"retained-body-call"',
     ):

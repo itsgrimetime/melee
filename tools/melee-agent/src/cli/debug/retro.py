@@ -1340,10 +1340,14 @@ def _run_backend_map_probe(
     out_dir.mkdir(parents=True, exist_ok=True)
     _remove_backend_probe_stale_artifacts(out_dir)
     exe = melee_root / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
-    _run_static_backend_map_audit(melee_root=melee_root, out_dir=out_dir)
     report = backend_discovery.build_gc125n_backend_candidate_report(exe)
-    (out_dir / "backend-map-candidates.json").write_text(
+    candidate_payload = (
         json.dumps(report, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    _run_static_backend_map_audit(
+        melee_root=melee_root,
+        out_dir=out_dir,
+        candidate_payload=candidate_payload,
     )
 
     if static_only:
@@ -1465,7 +1469,9 @@ def _load_transient_ghidra_inventory(*, melee_root: Path):
         )
 
 
-def _run_static_backend_map_audit(*, melee_root: Path, out_dir: Path) -> None:
+def _run_static_backend_map_audit(
+    *, melee_root: Path, out_dir: Path, candidate_payload: bytes
+) -> None:
     """Recover raw exact-hash CFG, cross-check Ghidra, then publish."""
     from tools.mwcc_retro import backend_lifetime_audit, pe, x86_cfg
 
@@ -1491,16 +1497,25 @@ def _run_static_backend_map_audit(*, melee_root: Path, out_dir: Path) -> None:
         seeds,
         x86_cfg.AnalysisLimits.for_image(image),
     )
-    format_dispatch = backend_lifetime_audit.validate_gc125n_formatoperands(cfg)
+    format_dispatch = backend_lifetime_audit.validate_gc125n_formatoperands(
+        image, cfg
+    )
     inventory = _load_transient_ghidra_inventory(melee_root=melee_root)
     report = backend_lifetime_audit.compare_ghidra_inventory(cfg, inventory)
-    report.require_no_raw_decode_conflicts()
+    report.require_publishable()
     report.require_retained_regressions()
     report = replace(report, formatoperands_dispatch=format_dispatch)
-
-    x86_cfg.write_jsonl_atomic(out_dir / "raw-pe-cfg.v1.jsonl", cfg)
-    backend_lifetime_audit.write_crosscheck_atomic(
-        out_dir / "raw-ghidra-crosscheck.v1.json", report
+    cfg = backend_lifetime_audit.accept_reconciled_residue(cfg, report)
+    backend_lifetime_audit.publish_static_backend_bundle(
+        out_dir,
+        {
+            "raw-pe-cfg.v1.jsonl": x86_cfg.canonical_jsonl_bytes(cfg),
+            "raw-ghidra-crosscheck.v1.json": (
+                backend_lifetime_audit.crosscheck_json_bytes(report)
+            ),
+            "backend-map-candidates.json": candidate_payload,
+        },
+        compiler_sha256=EXPECTED_COMPILER_SHA256,
     )
 
 
@@ -2675,13 +2690,20 @@ def probe_backend_map_cmd(
             err=True,
         )
         raise typer.Exit(2)
-    typer.echo(f"backend map candidates: {out_dir / 'backend-map-candidates.json'}")
-    if (out_dir / "raw-pe-cfg.v1.jsonl").exists():
-        typer.echo(f"raw PE CFG: {out_dir / 'raw-pe-cfg.v1.jsonl'}")
-    if (out_dir / "raw-ghidra-crosscheck.v1.json").exists():
+    current = out_dir / "CURRENT"
+    if current.exists():
+        from tools.mwcc_retro.backend_lifetime_audit import (
+            resolve_static_backend_bundle,
+        )
+
+        bundle = resolve_static_backend_bundle(out_dir)
+        typer.echo(
+            f"backend map candidates: {bundle.path('backend-map-candidates.json')}"
+        )
+        typer.echo(f"raw PE CFG: {bundle.path('raw-pe-cfg.v1.jsonl')}")
         typer.echo(
             "raw/Ghidra cross-check: "
-            f"{out_dir / 'raw-ghidra-crosscheck.v1.json'}"
+            f"{bundle.path('raw-ghidra-crosscheck.v1.json')}"
         )
     if (out_dir / "backend-map-probe.json").exists():
         typer.echo(f"backend map probe: {out_dir / 'backend-map-probe.json'}")

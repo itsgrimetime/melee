@@ -363,16 +363,27 @@ def test_probe_backend_pcode_command_writes_partial_events_without_trace(
 
 
 def test_probe_backend_map_static_only_skips_live_launcher(monkeypatch, tmp_path):
+    from tools.mwcc_retro.backend_lifetime_audit import (
+        publish_static_backend_bundle,
+    )
+
     import src.cli.debug.retro as retro
+    from src.mwcc_debug.ghidra_mwcc_setup import EXPECTED_COMPILER_SHA256
 
     calls = []
 
     def fake_probe(**kwargs):
         calls.append(kwargs)
         kwargs["out_dir"].mkdir(parents=True, exist_ok=True)
-        (kwargs["out_dir"] / "raw-pe-cfg.v1.jsonl").write_text("{}\n")
-        (kwargs["out_dir"] / "raw-ghidra-crosscheck.v1.json").write_text("{}\n")
-        (kwargs["out_dir"] / "backend-map-candidates.json").write_text("{}\n")
+        publish_static_backend_bundle(
+            kwargs["out_dir"],
+            {
+                "raw-pe-cfg.v1.jsonl": b"{}\n",
+                "raw-ghidra-crosscheck.v1.json": b"{}\n",
+                "backend-map-candidates.json": b"{}\n",
+            },
+            compiler_sha256=EXPECTED_COMPILER_SHA256,
+        )
         return retro.DumpOutcome(exit_code=0, produced=["static"], missing=[])
 
     monkeypatch.setattr(retro, "_run_backend_map_probe", fake_probe)
@@ -397,7 +408,7 @@ def test_probe_backend_map_static_only_skips_live_launcher(monkeypatch, tmp_path
     assert "raw/Ghidra cross-check:" in r.output
 
 
-def test_static_backend_map_runs_raw_crosscheck_before_candidates(
+def test_static_backend_map_builds_candidates_inside_publication_transaction(
     monkeypatch, tmp_path
 ):
     from tools.mwcc_retro import backend_discovery
@@ -406,10 +417,11 @@ def test_static_backend_map_runs_raw_crosscheck_before_candidates(
 
     order = []
 
-    def fake_static(*, melee_root, out_dir):
+    observed = {}
+
+    def fake_static(*, melee_root, out_dir, candidate_payload):
         order.append("raw-crosscheck")
-        (out_dir / "raw-pe-cfg.v1.jsonl").write_text("{}\n")
-        (out_dir / "raw-ghidra-crosscheck.v1.json").write_text("{}\n")
+        observed["candidate_payload"] = json.loads(candidate_payload)
 
     def fake_candidates(_exe):
         order.append("candidates")
@@ -435,8 +447,9 @@ def test_static_backend_map_runs_raw_crosscheck_before_candidates(
     )
 
     assert outcome.exit_code == 0
-    assert order == ["raw-crosscheck", "candidates"]
-    assert (out / "backend-map-candidates.json").is_file()
+    assert order == ["candidates", "raw-crosscheck"]
+    assert observed["candidate_payload"] == {"compiler": "1.2.5n"}
+    assert not (out / "backend-map-candidates.json").exists()
 
 
 def test_transient_ghidra_inventory_is_exact_hash_and_deleted(

@@ -157,6 +157,31 @@ public class ExportMwccRawCrosscheck extends GhidraScript {
 
             Address[] flows = instruction.getFlows();
             boolean computed = instruction.getFlowType().isComputed();
+            String typedKind;
+            if (instruction.getFlowType().isCall()) {
+                typedKind = computed ? "computed-call" : "call";
+            } else if (instruction.getFlowType().isJump()) {
+                typedKind = computed ? "computed-jump" :
+                    (instruction.getFlowType().isConditional() ?
+                        "conditional-branch" : "unconditional-branch");
+            } else {
+                typedKind = "flow";
+            }
+            for (Address targetAddress : flows) {
+                long target = numeric(targetAddress);
+                add(rows, address, "typed-flow",
+                    "{\"record_kind\":\"typed-flow\",\"address\":" + address +
+                    ",\"target\":" + target + ",\"flow_kind\":\"" +
+                    typedKind + "\"}");
+            }
+            Address fallThrough = instruction.getFallThrough();
+            if (fallThrough != null) {
+                long target = numeric(fallThrough);
+                add(rows, address, "typed-flow",
+                    "{\"record_kind\":\"typed-flow\",\"address\":" + address +
+                    ",\"target\":" + target +
+                    ",\"flow_kind\":\"fallthrough\"}");
+            }
             if (instruction.getFlowType().isCall()) {
                 for (Address targetAddress : flows) {
                     long target = numeric(targetAddress);
