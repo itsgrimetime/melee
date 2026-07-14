@@ -42,6 +42,7 @@ _OWNER_CORRESPONDENCE_PARSER = "causal-backend-owner-alignment.v2"
 _OWNER_DELTA_PARSER = "causal-frontier-differ.v1"
 _IDEMPOTENT_OWNER_RELATIONS = frozenset(
     {
+        "backend-owner-abstained",
         "backend-owner-corresponds-to",
         "backend-owner-state-changed",
     }
@@ -777,6 +778,40 @@ def _matching_owner_abstention_records(
     )
 
 
+def _owner_comparison_is_authoritative(record: ComparisonRecord) -> bool:
+    if record.relation_kind in {
+        "backend-owner-abstained",
+        "backend-owner-corresponds-to",
+    }:
+        return owner_alignment_record_is_authoritative(record)
+    if record.relation_kind == "backend-owner-state-changed":
+        return owner_delta_record_is_authoritative(record)
+    return False
+
+
+def _canonical_owner_comparisons(
+    comparisons: Iterable[ComparisonRecord],
+) -> tuple[ComparisonRecord, ...]:
+    by_content: dict[bytes, ComparisonRecord] = {}
+    retained: list[ComparisonRecord] = []
+    for comparison in comparisons:
+        if comparison.relation_kind not in _IDEMPOTENT_OWNER_RELATIONS:
+            retained.append(comparison)
+            continue
+        key = canonical_record_bytes(comparison)
+        current = by_content.get(key)
+        if current is None or (
+            not _owner_comparison_is_authoritative(current) and _owner_comparison_is_authoritative(comparison)
+        ):
+            by_content[key] = comparison
+    return tuple(
+        sorted(
+            (*retained, *by_content.values()),
+            key=lambda record: (record.record_id, canonical_record_bytes(record)),
+        )
+    )
+
+
 def _currently_authorized_certificate(
     result: OwnerCertificateResult | None,
     role: OwnerRoleKey | None,
@@ -803,7 +838,7 @@ def _infer_certificate_pair(
     query: EvidenceQuery,
     records: tuple[ComparisonRecord, ...],
     owner_certificate_results_by_compile: Mapping[str, OwnerCertificateResult],
-    current_owner_abstention_record_ids: frozenset[str] | None,
+    current_owner_abstention_record_ids: frozenset[str],
 ) -> CausalVerdict:
     """Evaluate a certificate-mediated pair without traversing raw owner edges."""
 
@@ -981,9 +1016,7 @@ def _infer_certificate_pair(
         if item.provenance.parser == _OWNER_CORRESPONDENCE_PARSER and owner_alignment_record_is_authoritative(item)
     )
     certified_abstentions = tuple(
-        item
-        for item in authentic_abstentions
-        if current_owner_abstention_record_ids is None or item.record_id in current_owner_abstention_record_ids
+        item for item in authentic_abstentions if item.record_id in current_owner_abstention_record_ids
     )
     forged_abstentions = tuple(item for item in matching_abstentions if item not in authentic_abstentions)
     if certified_abstentions or forged_abstentions:
@@ -1019,7 +1052,7 @@ def infer_pair(
     *,
     evidence_depth: int = 4,
     owner_certificate_results_by_compile: Mapping[str, OwnerCertificateResult] | None = None,
-    current_owner_abstention_record_ids: frozenset[str] | None = None,
+    current_owner_abstention_record_ids: frozenset[str] = frozenset(),
 ) -> CausalVerdict:
     """Apply the normative strict-inference table to one eligible effect pair."""
 
@@ -1030,15 +1063,10 @@ def infer_pair(
     role_comparison = role.comparison
     compile_ids = frozenset({role.left.compile_id, role.right.compile_id})
     query = _ScopedEvidenceQuery((query,), compile_ids)
-    records = tuple(
-        sorted(
-            (
-                comparison
-                for comparison in comparisons
-                if comparison.left_compile_id in compile_ids and comparison.right_compile_id in compile_ids
-            ),
-            key=lambda record: record.record_id,
-        )
+    records = _canonical_owner_comparisons(
+        comparison
+        for comparison in comparisons
+        if comparison.left_compile_id in compile_ids and comparison.right_compile_id in compile_ids
     )
     if pair.stack.owner_operand_key is not None:
         return _infer_certificate_pair(
@@ -1416,19 +1444,7 @@ def build_report(
         (graph.store for graph in graph_pair),
         frozenset(str(graph.bundle.compile_id) for graph in graph_pair),
     )
-    comparisons_by_content: dict[bytes, ComparisonRecord] = {}
-    retained_comparisons: list[ComparisonRecord] = []
-    for comparison in comparisons:
-        if comparison.relation_kind in _IDEMPOTENT_OWNER_RELATIONS:
-            comparisons_by_content.setdefault(canonical_record_bytes(comparison), comparison)
-        else:
-            retained_comparisons.append(comparison)
-    comparison_records = tuple(
-        sorted(
-            (*retained_comparisons, *comparisons_by_content.values()),
-            key=lambda record: (record.record_id, canonical_record_bytes(record)),
-        )
-    )
+    comparison_records = _canonical_owner_comparisons(comparisons)
     fallback_analysis_id = stable_id(
         "causal-analysis",
         "inference-report-fallback",

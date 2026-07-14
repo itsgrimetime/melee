@@ -8,6 +8,7 @@ from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
+from src.mwcc_debug.causal_diff import inference as inference_module
 from src.mwcc_debug.causal_diff.alignment import (
     AbstentionReason,
     EffectAbstention,
@@ -591,14 +592,21 @@ def test_exact_duplicate_owner_relations_do_not_change_report(
 ) -> None:
     graph_pair, owner_alignment, records = future_complete_pipeline_inputs()
     duplicate = only(item for item in records if item.relation_kind == relation_kind)
+    unsealed_duplicate = replace(duplicate)
+    other_records = tuple(item for item in records if item is not duplicate)
     baseline_effects = derive_effects(owner_alignment, graph_pair, records)
     baseline = build_report(graph_pair, baseline_effects, records)
-    duplicated_records = (*records, duplicate)
-    duplicated_effects = derive_effects(owner_alignment, graph_pair, duplicated_records)
-    duplicated = build_report(graph_pair, duplicated_effects, duplicated_records)
 
-    assert duplicated_effects == baseline_effects
-    assert render_json(duplicated) == render_json(baseline)
+    for duplicated_records in (
+        (*records, duplicate),
+        (*other_records, unsealed_duplicate, duplicate),
+        (*other_records, duplicate, unsealed_duplicate),
+    ):
+        duplicated_effects = derive_effects(owner_alignment, graph_pair, duplicated_records)
+        duplicated = build_report(graph_pair, duplicated_effects, duplicated_records)
+
+        assert duplicated_effects == baseline_effects
+        assert render_json(duplicated) == render_json(baseline)
 
 
 @pytest.mark.parametrize(
@@ -1108,6 +1116,34 @@ def test_completed_certificate_store_invalidates_stale_incomplete_abstention() -
     assert "backend-owner-path-incomplete" not in replayed.missing_evidence
 
 
+def test_direct_infer_pair_does_not_authorize_stale_abstention_without_current_context() -> None:
+    current_graphs, owner_alignment, current_records = future_complete_pipeline_inputs()
+    stale_graphs = (
+        _frontier_without_stored_owner_certificates(current_graphs[0]),
+        current_graphs[1],
+    )
+    stale_records = build_role_comparisons(owner_alignment, stale_graphs)
+    stale = only(item for item in stale_records if item.relation_kind == "backend-owner-abstained")
+    current_effects = derive_effects(owner_alignment, current_graphs, current_records)
+    pair = only(current_effects.pairs)
+    query = inference_module._ScopedEvidenceQuery(
+        (graph.store for graph in current_graphs),
+        frozenset(str(graph.bundle.compile_id) for graph in current_graphs),
+    )
+    owner_results = {str(graph.bundle.compile_id): graph.backend.owner_certificates for graph in current_graphs}
+
+    verdict = infer_pair(
+        pair,
+        query,
+        (*current_records, stale),
+        owner_certificate_results_by_compile=owner_results,
+    )
+
+    assert owner_alignment_record_is_authoritative(stale)
+    assert verdict.failed_gates == ("gate-9-source-object-binding",)
+    assert f"backend-owner-abstained:{stale.record_id}" not in verdict.rejected_alternatives
+
+
 def test_changed_owner_alternative_multiplicity_invalidates_stale_abstention() -> None:
     base_graphs, owner_alignment, _base_records = future_complete_pipeline_inputs()
     changed_graph = base_graphs[0]
@@ -1149,6 +1185,29 @@ def test_owner_abstention_only_duplicate_collapses_by_canonical_content() -> Non
     verdict = only(report.verdicts)
 
     assert verdict.rejected_alternatives == (f"backend-owner-abstained:{owner_abstention.record_id}",)
+
+
+def test_exact_duplicate_owner_abstention_does_not_change_paired_report() -> None:
+    graph_pair, owner_alignment, comparisons = future_complete_pipeline_inputs()
+    effects = derive_effects(owner_alignment, graph_pair, comparisons)
+    sealed = only(
+        item
+        for item in build_role_comparisons(
+            replace(owner_alignment, retail_offset=owner_alignment.retail_offset + 4),
+            graph_pair,
+        )
+        if item.relation_kind == "backend-owner-abstained"
+    )
+
+    unsealed = replace(sealed)
+    baseline = build_report(graph_pair, effects, (*comparisons, sealed))
+
+    for duplicate_records in (
+        (*comparisons, sealed, sealed),
+        (*comparisons, unsealed, sealed),
+        (*comparisons, sealed, unsealed),
+    ):
+        assert render_json(build_report(graph_pair, effects, duplicate_records)) == render_json(baseline)
 
 
 def test_owner_abstention_only_order_is_canonical_for_distinct_records() -> None:

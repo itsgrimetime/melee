@@ -40,8 +40,24 @@ def _canonical_comparison_records(
 ) -> tuple[ComparisonRecord, ...]:
     by_content: dict[bytes, ComparisonRecord] = {}
     for comparison in comparisons:
-        by_content.setdefault(canonical_record_bytes(comparison), comparison)
+        key = canonical_record_bytes(comparison)
+        retained = by_content.get(key)
+        if retained is None or (
+            not _owner_record_is_authoritative(retained) and _owner_record_is_authoritative(comparison)
+        ):
+            by_content[key] = comparison
     return tuple(by_content[key] for key in sorted(by_content))
+
+
+def _owner_record_is_authoritative(record: ComparisonRecord) -> bool:
+    if record.relation_kind in {
+        "backend-owner-corresponds-to",
+        "backend-owner-abstained",
+    }:
+        return owner_alignment_record_is_authoritative(record)
+    if record.relation_kind == "backend-owner-state-changed":
+        return owner_delta_record_is_authoritative(record)
+    return False
 
 
 @dataclass(frozen=True, slots=True)
