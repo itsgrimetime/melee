@@ -1015,6 +1015,37 @@ def evidence_with_coordinated_intermediate_generation_forgery(
     )
 
 
+def evidence_with_invalid_sibling_mutation_generation() -> ObjectBindingEvidence:
+    evidence = evidence_with_mutation_identity_history("clone-extra-branch")
+    nodes = tuple(
+        node.with_attributes(
+            {
+                **node.attributes,
+                "mutation_kind": "replace",
+                **(
+                    {"allocation_generation": 0}
+                    if node.attributes.get("pcode_id") == "pc-extra"
+                    else {}
+                ),
+            }
+        )
+        if (
+            node.kind == "backend-support-record"
+            and node.attributes.get("support_kind") == "pcode-lineage-event"
+            and node.attributes.get("event_index") == 1
+        )
+        else node
+        for node in evidence.nodes
+    )
+    return ObjectBindingEvidence(
+        nodes,
+        evidence.edges,
+        evidence.capabilities,
+        evidence.capture_run_id,
+        evidence.instrumentation_identity,
+    )
+
+
 def evidence_with_event_generation_conflict() -> ObjectBindingEvidence:
     evidence = evidence_with_two_mutation_outputs(
         first_parents=("ol-a",),

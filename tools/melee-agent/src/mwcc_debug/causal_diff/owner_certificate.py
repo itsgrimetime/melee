@@ -1635,13 +1635,48 @@ def _validate_lineage_output(
         )
         if any(not _valid_lineage_mutation_support(evidence, candidate, item) for item in event_support):
             return _rejection("malformed-support", role, candidate.path_records, event_support)
+        identity_pairs: list[tuple[EvidenceNode, tuple[str, int]]] = []
+        invalid_identity_support: list[EvidenceNode] = []
+        for item in event_support:
+            identity = _pcode_identity(item)
+            if identity is None:
+                invalid_identity_support.append(item)
+            else:
+                identity_pairs.append((item, identity))
+        if invalid_identity_support:
+            invalid_pcode_ids = tuple(
+                sorted(
+                    {
+                        str(item.attributes["pcode_id"])
+                        for item in invalid_identity_support
+                    }
+                )
+            )
+            pcode_matches = tuple(
+                match
+                for pcode_id in invalid_pcode_ids
+                for match in index.pcode_nodes_by_id.get(pcode_id, ())
+            )
+            generation_matches = tuple(
+                match
+                for pcode_id in invalid_pcode_ids
+                for match in index.pcode_generation_support_by_id.get(
+                    pcode_id,
+                    (),
+                )
+            )
+            return _rejection(
+                "lineage-parent-mismatch",
+                role,
+                (*candidate.path_records, *pcode_matches),
+                (*event_support, *generation_matches),
+            )
         input_identities = tuple(
             sorted(
                 {
                     identity
-                    for item in event_support
+                    for item, identity in identity_pairs
                     if item.attributes.get("side") == "inputs"
-                    if (identity := _pcode_identity(item)) is not None
                 }
             )
         )
@@ -1649,9 +1684,8 @@ def _validate_lineage_output(
             sorted(
                 {
                     identity
-                    for item in event_support
+                    for item, identity in identity_pairs
                     if item.attributes.get("side") == "outputs"
-                    if (identity := _pcode_identity(item)) is not None
                 }
             )
         )

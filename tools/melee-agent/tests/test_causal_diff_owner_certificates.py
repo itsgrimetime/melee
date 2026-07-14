@@ -48,6 +48,7 @@ from tests.owner_certificate_fixtures import (
     evidence_with_independent_paths,
     evidence_with_intermediate_generation_forgery,
     evidence_with_invalid_lineage_history,
+    evidence_with_invalid_sibling_mutation_generation,
     evidence_with_lineage_variant,
     evidence_with_mutation_identity_history,
     evidence_with_mutation_identity_override,
@@ -1360,6 +1361,44 @@ def test_mutation_pcode_generation_must_be_positive(generation: int) -> None:
     rejection = only(resolution.rejections)
     assert rejection.reason == "lineage-parent-mismatch"
     assert rejection.candidate_record_ids
+
+
+def test_invalid_sibling_mutation_identity_cannot_disappear() -> None:
+    evidence = evidence_with_invalid_sibling_mutation_generation()
+
+    result = owner_certificate.validate_owner_evidence(evidence)
+    resolution = next(
+        item for item in result.role_resolutions if item.role == ROLE
+    )
+
+    assert result.certificate_nodes == ()
+    assert resolution.status is OwnerResolutionStatus.CONTRADICTORY
+    assert resolution.certificate_record_ids == ()
+    rejection = only(resolution.rejections)
+    assert rejection.reason == "lineage-parent-mismatch"
+    event_support_ids = {
+        node.record_id
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-lineage-event"
+        and node.attributes.get("event_index") == 1
+    }
+    sibling_pcodes = {
+        node.record_id
+        for node in evidence.nodes
+        if node.kind == "retail-pcode"
+        and node.attributes.get("pcode_id") == "pc-extra"
+    }
+    sibling_generation_support = {
+        node.record_id
+        for node in evidence.nodes
+        if node.kind == "backend-support-record"
+        and node.attributes.get("support_kind") == "pcode-generation"
+        and node.attributes.get("pcode_id") == "pc-extra"
+    }
+    assert event_support_ids <= set(rejection.raw_support_record_ids)
+    assert sibling_pcodes <= set(rejection.candidate_record_ids)
+    assert sibling_generation_support <= set(rejection.raw_support_record_ids)
 
 
 def test_one_allocation_generation_is_required_per_pcode_within_event() -> None:
