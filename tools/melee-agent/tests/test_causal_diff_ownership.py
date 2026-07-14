@@ -1520,17 +1520,21 @@ def test_sealed_owner_relation_control_drives_certificate_stack_effect() -> None
     assert len(tuple(pair for pair in effects.pairs if pair.stack.owner_operand_key is not None)) == 1
 
 
-def test_certificate_stack_effect_rechecks_current_unique_resolution_for_sealed_replay() -> None:
+@pytest.mark.parametrize("ambiguous_side", ("left", "right"))
+def test_certificate_stack_effect_rechecks_current_unique_resolution_for_sealed_replay(
+    ambiguous_side: str,
+) -> None:
     graph_pair, owner_alignment, sealed_records = future_complete_pipeline_inputs()
     left, right = tuple(sorted(graph_pair, key=lambda graph: str(graph.bundle.label)))
-    original_resolution = left.backend.owner_certificates.resolution_for(ROLE)
+    ambiguous_graph = left if ambiguous_side == "left" else right
+    original_resolution = ambiguous_graph.backend.owner_certificates.resolution_for(ROLE)
     certificate_id = only(original_resolution.certificate_record_ids)
 
     assert original_resolution.status is OwnerResolutionStatus.UNIQUE
-    assert left.backend.object_bindings is not None
+    assert ambiguous_graph.backend.object_bindings is not None
     augmented_evidence = evidence_with_partial_owner_branch(
         "virtual",
-        base_evidence=left.backend.object_bindings,
+        base_evidence=ambiguous_graph.backend.object_bindings,
     )
     augmented_result = build_owner_certificates(augmented_evidence)
     augmented_resolution = augmented_result.resolution_for(ROLE)
@@ -1545,11 +1549,11 @@ def test_certificate_stack_effect_rechecks_current_unique_resolution_for_sealed_
     store.add_nodes(augmented_evidence.nodes)
     store.add_edges(augmented_evidence.edges)
     store.add_nodes(augmented_result.certificate_nodes)
-    augmented_left = replace(
-        left,
+    augmented_graph = replace(
+        ambiguous_graph,
         store=store,
         backend=replace(
-            left.backend,
+            ambiguous_graph.backend,
             result=AdapterResult(
                 nodes=(*augmented_evidence.nodes, *augmented_result.certificate_nodes),
                 edges=augmented_evidence.edges,
@@ -1558,7 +1562,11 @@ def test_certificate_stack_effect_rechecks_current_unique_resolution_for_sealed_
             owner_certificates=augmented_result,
         ),
     )
-    augmented_graphs = (augmented_left, right)
+    augmented_graphs = (
+        (augmented_graph, right)
+        if ambiguous_side == "left"
+        else (left, augmented_graph)
+    )
 
     stale_correspondence = only(
         item
