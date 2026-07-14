@@ -580,6 +580,28 @@ def test_certificate_inference_rejects_forged_relation_parser(relation_kind: str
 
 
 @pytest.mark.parametrize(
+    "relation_kind",
+    (
+        "backend-owner-corresponds-to",
+        "backend-owner-state-changed",
+    ),
+)
+def test_exact_duplicate_owner_relations_do_not_change_report(
+    relation_kind: str,
+) -> None:
+    graph_pair, owner_alignment, records = future_complete_pipeline_inputs()
+    duplicate = only(item for item in records if item.relation_kind == relation_kind)
+    baseline_effects = derive_effects(owner_alignment, graph_pair, records)
+    baseline = build_report(graph_pair, baseline_effects, records)
+    duplicated_records = (*records, duplicate)
+    duplicated_effects = derive_effects(owner_alignment, graph_pair, duplicated_records)
+    duplicated = build_report(graph_pair, duplicated_effects, duplicated_records)
+
+    assert duplicated_effects == baseline_effects
+    assert render_json(duplicated) == render_json(baseline)
+
+
+@pytest.mark.parametrize(
     "unsealed_relations",
     (
         frozenset({"backend-owner-corresponds-to"}),
@@ -988,12 +1010,7 @@ def test_sealed_owner_abstention_without_effect_pair_abstains(
     assert exit_code_for_report(report) == 3
 
 
-def _frontier_with_owner_status(graph, status: str):
-    evidence = _status_evidence(
-        status,
-        compile_id=str(graph.bundle.compile_id),
-        capture_run_id=hashlib.sha256(str(graph.bundle.label).encode()).hexdigest(),
-    )
+def _frontier_with_owner_evidence(graph, evidence):
     result = build_owner_certificates(evidence)
     store = InMemoryEvidenceStore()
     store.add_nodes(evidence.nodes)
@@ -1015,6 +1032,15 @@ def _frontier_with_owner_status(graph, status: str):
             owner_certificates=result,
         ),
     )
+
+
+def _frontier_with_owner_status(graph, status: str):
+    evidence = _status_evidence(
+        status,
+        compile_id=str(graph.bundle.compile_id),
+        capture_run_id=hashlib.sha256(str(graph.bundle.label).encode()).hexdigest(),
+    )
+    return _frontier_with_owner_evidence(graph, evidence)
 
 
 def _frontier_without_stored_owner_certificates(graph):
@@ -1058,6 +1084,63 @@ def test_stale_sealed_owner_abstention_is_not_replayed_against_current_unique_re
     assert render_json(forward) == render_json(reverse)
 
 
+def test_completed_certificate_store_invalidates_stale_incomplete_abstention() -> None:
+    current_graphs, owner_alignment, current_records = future_complete_pipeline_inputs()
+    stale_graphs = (
+        _frontier_without_stored_owner_certificates(current_graphs[0]),
+        current_graphs[1],
+    )
+    stale_records = build_role_comparisons(owner_alignment, stale_graphs)
+    stale = only(item for item in stale_records if item.relation_kind == "backend-owner-abstained")
+    current_effects = derive_effects(owner_alignment, current_graphs, current_records)
+
+    assert owner_alignment_record_is_authoritative(stale)
+    assert stale.attributes["left_status"] == OwnerResolutionStatus.INCOMPLETE.value
+    assert current_graphs[0].backend.owner_certificates.resolution_for(ROLE).status is OwnerResolutionStatus.UNIQUE
+
+    baseline = only(build_report(current_graphs, current_effects, current_records).verdicts)
+    replayed = build_report(current_graphs, current_effects, (*current_records, stale))
+    verdict = only(replayed.verdicts)
+
+    assert baseline.failed_gates == ("gate-9-source-object-binding",)
+    assert verdict.failed_gates == baseline.failed_gates
+    assert f"backend-owner-abstained:{stale.record_id}" not in verdict.rejected_alternatives
+    assert "backend-owner-path-incomplete" not in replayed.missing_evidence
+
+
+def test_changed_owner_alternative_multiplicity_invalidates_stale_abstention() -> None:
+    base_graphs, owner_alignment, _base_records = future_complete_pipeline_inputs()
+    changed_graph = base_graphs[0]
+    assert changed_graph.backend.object_bindings is not None
+    stale_evidence = evidence_with_partial_owner_branch(
+        "virtual",
+        base_evidence=changed_graph.backend.object_bindings,
+    )
+    current_evidence = evidence_with_partial_owner_branch(
+        "virtual",
+        duplicate=True,
+        base_evidence=changed_graph.backend.object_bindings,
+    )
+    stale_graphs = (_frontier_with_owner_evidence(changed_graph, stale_evidence), base_graphs[1])
+    current_graphs = (_frontier_with_owner_evidence(changed_graph, current_evidence), base_graphs[1])
+    stale_records = build_role_comparisons(owner_alignment, stale_graphs)
+    current_records = build_role_comparisons(owner_alignment, current_graphs)
+    stale = only(item for item in stale_records if item.relation_kind == "backend-owner-abstained")
+    current = only(item for item in current_records if item.relation_kind == "backend-owner-abstained")
+    empty_effects = DerivedEffects(allocator_effects=(), stack_effects=(), pairs=(), abstentions=())
+
+    stale_alternative = only(item for item in stale.attributes["alternatives"] if item["kind"] == "rejection")
+    current_alternative = only(item for item in current.attributes["alternatives"] if item["kind"] == "rejection")
+    assert stale_alternative["multiplicity"] == 1
+    assert current_alternative["multiplicity"] == 2
+    assert stale.record_id != current.record_id
+
+    report = build_report(current_graphs, empty_effects, (*current_records, stale))
+    verdict = only(report.verdicts)
+
+    assert verdict.rejected_alternatives == (f"backend-owner-abstained:{current.record_id}",)
+
+
 def test_owner_abstention_only_duplicate_collapses_by_canonical_content() -> None:
     graphs, _alignment, comparisons, effects = future_owner_abstention_pipeline_inputs("unique-with-role-rejection")
     owner_abstention = only(item for item in comparisons if item.relation_kind == "backend-owner-abstained")
@@ -1075,11 +1158,10 @@ def test_owner_abstention_only_order_is_canonical_for_distinct_records() -> None
         replace(owner_alignment, retail_offset=owner_alignment.retail_offset + 4),
         graphs,
     )
-    missing_certificate_graphs = (
-        _frontier_without_stored_owner_certificates(graphs[0]),
-        graphs[1],
+    second_records = build_role_comparisons(
+        replace(owner_alignment, retail_offset=owner_alignment.retail_offset + 8),
+        graphs,
     )
-    second_records = build_role_comparisons(owner_alignment, missing_certificate_graphs)
     first = only(item for item in first_records if item.relation_kind == "backend-owner-abstained")
     second = only(item for item in second_records if item.relation_kind == "backend-owner-abstained")
     assert owner_alignment_record_is_authoritative(first)

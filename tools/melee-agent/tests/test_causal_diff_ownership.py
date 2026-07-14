@@ -1520,6 +1520,28 @@ def test_sealed_owner_relation_control_drives_certificate_stack_effect() -> None
     assert len(tuple(pair for pair in effects.pairs if pair.stack.owner_operand_key is not None)) == 1
 
 
+@pytest.mark.parametrize(
+    "relation_kind",
+    (
+        "backend-owner-corresponds-to",
+        "backend-owner-state-changed",
+    ),
+)
+def test_certificate_effects_collapse_exact_duplicate_owner_relations(
+    relation_kind: str,
+) -> None:
+    graph_pair, owner_alignment, records = future_complete_pipeline_inputs()
+    duplicate = only(item for item in records if item.relation_kind == relation_kind)
+    baseline = derive_effects(owner_alignment, graph_pair, records)
+
+    outputs = (
+        derive_effects(owner_alignment, graph_pair, (*records, duplicate)),
+        derive_effects(owner_alignment, graph_pair, (duplicate, *records)),
+    )
+
+    assert all(output == baseline for output in outputs)
+
+
 @pytest.mark.parametrize("ambiguous_side", ("left", "right"))
 def test_certificate_stack_effect_rechecks_current_unique_resolution_for_sealed_replay(
     ambiguous_side: str,

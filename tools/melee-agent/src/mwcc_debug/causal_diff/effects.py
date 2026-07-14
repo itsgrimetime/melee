@@ -35,6 +35,15 @@ _OWNER_CORRESPONDENCE_PARSER = "causal-backend-owner-alignment.v2"
 _OWNER_DELTA_PARSER = "causal-frontier-differ.v1"
 
 
+def _canonical_comparison_records(
+    comparisons: Iterable[ComparisonRecord],
+) -> tuple[ComparisonRecord, ...]:
+    by_content: dict[bytes, ComparisonRecord] = {}
+    for comparison in comparisons:
+        by_content.setdefault(canonical_record_bytes(comparison), comparison)
+    return tuple(by_content[key] for key in sorted(by_content))
+
+
 @dataclass(frozen=True, slots=True)
 class AllocatorEffect:
     effect_id: str
@@ -645,7 +654,7 @@ def derive_effects(
     if len(graph_pair) != 2:
         raise ValueError("effect derivation requires exactly two frontiers")
     ordered = tuple(sorted(graph_pair, key=_label))
-    comparison_records = tuple(comparisons)
+    comparison_records = _canonical_comparison_records(comparisons)
     allocator_effects = _allocator_effects(alignment)
     certificate_covered_roles = _certificate_covered_stack_roles(
         ordered,

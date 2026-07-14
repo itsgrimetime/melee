@@ -7,7 +7,10 @@ from enum import Enum, StrEnum
 from types import MappingProxyType
 from typing import Iterable, Literal, Mapping
 
-from .alignment import owner_alignment_record_is_authoritative
+from .alignment import (
+    owner_abstention_record_is_current,
+    owner_alignment_record_is_authoritative,
+)
 from .canonical import canonical_bytes, stable_id
 from .differ import owner_delta_record_is_authoritative
 from .effects import DerivedEffects, EffectPair
@@ -15,7 +18,6 @@ from .graph import FrontierGraph
 from .legacy_ownership import legacy_simple_paths_with_truncation
 from .models import AdapterResult, ComparisonRecord, Confidence, EvidenceEdge, EvidenceNode
 from .owner_certificate import (
-    OwnerCertificateRejection,
     OwnerCertificateResult,
     OwnerResolutionStatus,
     OwnerRoleKey,
@@ -38,6 +40,12 @@ _PROOF_CONFIDENCES = frozenset({Confidence.OBSERVED, Confidence.DERIVED_UNIQUE})
 _DIAGNOSTIC_ONLY_PARSERS = frozenset({"mwcc-debug-pcdump.v1"})
 _OWNER_CORRESPONDENCE_PARSER = "causal-backend-owner-alignment.v2"
 _OWNER_DELTA_PARSER = "causal-frontier-differ.v1"
+_IDEMPOTENT_OWNER_RELATIONS = frozenset(
+    {
+        "backend-owner-corresponds-to",
+        "backend-owner-state-changed",
+    }
+)
 _BACKEND_OWNER_AMBIGUOUS = "backend-owner-ambiguous"
 _OWNER_ABSTENTION_REASONS = frozenset(
     {
@@ -717,188 +725,9 @@ def _certificate_proof_path(certificate: EvidenceNode) -> tuple[str, ...] | None
     return (certificate.record_id, *path_ids, *support_ids)
 
 
-_OWNER_REJECTION_SUMMARY_KEYS = frozenset(
-    {
-        "kind",
-        "side",
-        "certificate_record_id",
-        "role",
-        "state",
-        "confidence",
-        "provenance_record_ids",
-        "rejection_id",
-        "reason",
-        "candidate_record_ids",
-        "support_record_ids",
-    }
-)
-
-
-def _owner_resolution_status(value: object) -> OwnerResolutionStatus | None:
-    if type(value) is not str:
-        return None
-    try:
-        return OwnerResolutionStatus(value)
-    except ValueError:
-        return None
-
-
-def _stored_owner_rejection_summaries(
-    value: object,
-    side: str,
-) -> tuple[Mapping[str, object], ...] | None:
-    if not isinstance(value, tuple):
-        return None
-    summaries: list[Mapping[str, object]] = []
-    for summary in value:
-        if (
-            not isinstance(summary, Mapping)
-            or frozenset(summary) != _OWNER_REJECTION_SUMMARY_KEYS
-            or summary.get("kind") != "rejection"
-            or summary.get("side") != side
-            or summary.get("certificate_record_id") is not None
-            or summary.get("state") is not None
-            or summary.get("confidence") != Confidence.HEURISTIC.value
-            or summary.get("provenance_record_ids") != ()
-            or not isinstance(summary.get("rejection_id"), str)
-            or not summary.get("rejection_id")
-            or not isinstance(summary.get("reason"), str)
-            or not summary.get("reason")
-            or _record_id_tuple(summary.get("candidate_record_ids")) is None
-            or _record_id_tuple(summary.get("support_record_ids")) is None
-        ):
-            return None
-        rejection_role = summary.get("role")
-        if rejection_role is not None and _owner_role(rejection_role) is None:
-            return None
-        summaries.append(summary)
-    return tuple(summaries)
-
-
-def _current_owner_rejection_summaries(
-    side: str,
-    rejections: tuple[OwnerCertificateRejection, ...],
-) -> tuple[Mapping[str, object], ...] | None:
-    try:
-        if any(
-            type(rejection) is not OwnerCertificateRejection
-            or not isinstance(rejection.rejection_id, str)
-            or not rejection.rejection_id
-            or not isinstance(rejection.reason, str)
-            or not rejection.reason
-            or _record_id_tuple(rejection.candidate_record_ids) is None
-            or _record_id_tuple(rejection.raw_support_record_ids) is None
-            or (
-                rejection.role is not None
-                and (
-                    type(rejection.role) is not OwnerRoleKey or _owner_role(rejection.role.as_json()) != rejection.role
-                )
-            )
-            for rejection in rejections
-        ):
-            return None
-        return tuple(
-            {
-                "kind": "rejection",
-                "side": side,
-                "certificate_record_id": None,
-                "role": None if rejection.role is None else rejection.role.as_json(),
-                "state": None,
-                "confidence": Confidence.HEURISTIC.value,
-                "provenance_record_ids": (),
-                "rejection_id": rejection.rejection_id,
-                "reason": rejection.reason,
-                "candidate_record_ids": tuple(sorted(rejection.candidate_record_ids)),
-                "support_record_ids": tuple(sorted(rejection.raw_support_record_ids)),
-            }
-            for rejection in sorted(rejections, key=lambda item: item.rejection_id)
-        )
-    except (AttributeError, TypeError, ValueError):
-        return None
-
-
-def _owner_abstention_side_is_current(
-    record: ComparisonRecord,
-    result: OwnerCertificateResult | None,
-    role: OwnerRoleKey,
-    side: str,
-) -> bool:
-    certificate_ids_by_side = record.attributes.get("certificate_record_ids")
-    rejections_by_side = record.attributes.get("rejections")
-    if (
-        result is None
-        or type(result) is not OwnerCertificateResult
-        or not result.is_trusted
-        or not isinstance(certificate_ids_by_side, Mapping)
-        or frozenset(certificate_ids_by_side) != {"left", "right"}
-        or not isinstance(rejections_by_side, Mapping)
-        or frozenset(rejections_by_side) != {"left", "right"}
-    ):
-        return False
-    stored_certificate_ids = _record_id_tuple(certificate_ids_by_side.get(side))
-    stored_rejections = _stored_owner_rejection_summaries(rejections_by_side.get(side), side)
-    stored_status = _owner_resolution_status(record.attributes.get(f"{side}_status"))
-    if stored_certificate_ids is None or stored_rejections is None or stored_status is None:
-        return False
-    try:
-        resolution = result.resolution_for(role)
-    except (AttributeError, TypeError, ValueError):
-        return False
-    if (
-        type(resolution.role) is not OwnerRoleKey
-        or type(resolution.status) is not OwnerResolutionStatus
-        or _record_id_tuple(resolution.certificate_record_ids) is None
-        or not isinstance(resolution.rejections, tuple)
-        or not isinstance(result.global_rejections, tuple)
-    ):
-        return False
-    current_rejections = _current_owner_rejection_summaries(
-        side,
-        (*resolution.rejections, *result.global_rejections),
-    )
-    status_is_compatible = (
-        stored_status is resolution.status
-        if resolution.status is not OwnerResolutionStatus.UNIQUE
-        else stored_status
-        in {
-            OwnerResolutionStatus.UNIQUE,
-            OwnerResolutionStatus.MISSING,
-            OwnerResolutionStatus.INCOMPLETE,
-        }
-    )
-    return (
-        resolution.role == role
-        and resolution.certificate_record_ids == stored_certificate_ids
-        and current_rejections is not None
-        and current_rejections == stored_rejections
-        and status_is_compatible
-    )
-
-
-def _owner_abstention_is_current(
-    record: ComparisonRecord,
-    results_by_compile: Mapping[str, OwnerCertificateResult],
-) -> bool:
-    role = _owner_role(record.attributes.get("role"))
-    if role is None:
-        return False
-    return all(
-        _owner_abstention_side_is_current(
-            record,
-            results_by_compile.get(compile_id),
-            role,
-            side,
-        )
-        for side, compile_id in (
-            ("left", record.left_compile_id),
-            ("right", record.right_compile_id),
-        )
-    )
-
-
 def _certified_owner_abstentions(
     records: Iterable[ComparisonRecord],
-    results_by_compile: Mapping[str, OwnerCertificateResult],
+    graphs: tuple[FrontierGraph, FrontierGraph],
 ) -> tuple[ComparisonRecord, ...]:
     by_content: dict[bytes, ComparisonRecord] = {}
     for record in records:
@@ -907,7 +736,7 @@ def _certified_owner_abstentions(
             or record.provenance.parser != _OWNER_CORRESPONDENCE_PARSER
             or not owner_alignment_record_is_authoritative(record)
             or record.attributes.get("reason") not in _OWNER_ABSTENTION_REASONS
-            or not _owner_abstention_is_current(record, results_by_compile)
+            or not owner_abstention_record_is_current(record, graphs)
         ):
             continue
         by_content.setdefault(canonical_record_bytes(record), record)
@@ -974,6 +803,7 @@ def _infer_certificate_pair(
     query: EvidenceQuery,
     records: tuple[ComparisonRecord, ...],
     owner_certificate_results_by_compile: Mapping[str, OwnerCertificateResult],
+    current_owner_abstention_record_ids: frozenset[str] | None,
 ) -> CausalVerdict:
     """Evaluate a certificate-mediated pair without traversing raw owner edges."""
 
@@ -1145,14 +975,19 @@ def _infer_certificate_pair(
             or not _record_is_proof_capable(delta)
         )
     matching_abstentions = _matching_owner_abstention_records(records, role, owner_ids)
-    certified_abstentions = tuple(
+    authentic_abstentions = tuple(
         item
         for item in matching_abstentions
         if item.provenance.parser == _OWNER_CORRESPONDENCE_PARSER and owner_alignment_record_is_authoritative(item)
     )
-    forged_abstentions = tuple(item for item in matching_abstentions if item not in certified_abstentions)
-    if matching_abstentions:
-        cited_records.extend(matching_abstentions)
+    certified_abstentions = tuple(
+        item
+        for item in authentic_abstentions
+        if current_owner_abstention_record_ids is None or item.record_id in current_owner_abstention_record_ids
+    )
+    forged_abstentions = tuple(item for item in matching_abstentions if item not in authentic_abstentions)
+    if certified_abstentions or forged_abstentions:
+        cited_records.extend((*certified_abstentions, *forged_abstentions))
     if integrity_failure or certified_abstentions or forged_abstentions or _evidence_integrity_failure(cited_records):
         failed.append(_GATE_8)
 
@@ -1184,6 +1019,7 @@ def infer_pair(
     *,
     evidence_depth: int = 4,
     owner_certificate_results_by_compile: Mapping[str, OwnerCertificateResult] | None = None,
+    current_owner_abstention_record_ids: frozenset[str] | None = None,
 ) -> CausalVerdict:
     """Apply the normative strict-inference table to one eligible effect pair."""
 
@@ -1210,6 +1046,7 @@ def infer_pair(
             query,
             records,
             owner_certificate_results_by_compile or {},
+            current_owner_abstention_record_ids,
         )
     owner_ambiguities = tuple(
         comparison
@@ -1579,7 +1416,19 @@ def build_report(
         (graph.store for graph in graph_pair),
         frozenset(str(graph.bundle.compile_id) for graph in graph_pair),
     )
-    comparison_records = tuple(sorted(comparisons, key=lambda record: record.record_id))
+    comparisons_by_content: dict[bytes, ComparisonRecord] = {}
+    retained_comparisons: list[ComparisonRecord] = []
+    for comparison in comparisons:
+        if comparison.relation_kind in _IDEMPOTENT_OWNER_RELATIONS:
+            comparisons_by_content.setdefault(canonical_record_bytes(comparison), comparison)
+        else:
+            retained_comparisons.append(comparison)
+    comparison_records = tuple(
+        sorted(
+            (*retained_comparisons, *comparisons_by_content.values()),
+            key=lambda record: (record.record_id, canonical_record_bytes(record)),
+        )
+    )
     fallback_analysis_id = stable_id(
         "causal-analysis",
         "inference-report-fallback",
@@ -1609,6 +1458,11 @@ def build_report(
         )
         is not None
     }
+    certified_owner_abstentions = _certified_owner_abstentions(
+        comparison_records,
+        graph_pair,
+    )
+    current_owner_abstention_record_ids = frozenset(record.record_id for record in certified_owner_abstentions)
     inferred_verdicts = tuple(
         sorted(
             (
@@ -1618,15 +1472,12 @@ def build_report(
                     comparison_records,
                     evidence_depth=evidence_depth,
                     owner_certificate_results_by_compile=owner_certificate_results_by_compile,
+                    current_owner_abstention_record_ids=current_owner_abstention_record_ids,
                 )
                 for pair in sorted(effects.pairs, key=lambda item: item.pair_id)
             ),
             key=lambda verdict: (verdict.pair_id, verdict.verdict_id),
         )
-    )
-    certified_owner_abstentions = _certified_owner_abstentions(
-        comparison_records,
-        owner_certificate_results_by_compile,
     )
     if inferred_verdicts:
         verdicts = inferred_verdicts

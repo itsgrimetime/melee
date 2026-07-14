@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Iterable, Literal, Mapping
@@ -1076,6 +1076,7 @@ def _owner_abstention(
     right_status: OwnerResolutionStatus,
     left_certificates: tuple[EvidenceNode, ...],
     right_certificates: tuple[EvidenceNode, ...],
+    retail_offset: int,
     ordinal: int,
 ) -> ComparisonRecord:
     status = next(item for item in _OWNER_STATUS_PRIORITY if item in {left_status, right_status})
@@ -1089,7 +1090,13 @@ def _owner_abstention(
         )
     )
     alternatives_digest = hashlib.sha256(
-        canonical_bytes({"role": role.as_json(), "alternatives": alternatives})
+        canonical_bytes(
+            {
+                "role": role.as_json(),
+                "retail_offset": retail_offset,
+                "alternatives": alternatives,
+            }
+        )
     ).hexdigest()
     inputs_by_id = {certificate.record_id: certificate for certificate in (*left_certificates, *right_certificates)}
     inputs = tuple(inputs_by_id[record_id] for record_id in sorted(inputs_by_id))
@@ -1117,6 +1124,7 @@ def _owner_abstention(
         attributes={
             "reason": _OWNER_ABSTENTION_REASONS[status],
             "role": role.as_json(),
+            "retail_offset": retail_offset,
             "left_status": left_status.value,
             "right_status": right_status.value,
             "certificate_record_ids": {
@@ -1244,11 +1252,87 @@ def build_role_comparisons(alignment: AnchorAlignment, graphs: Iterable[Frontier
                         right_status,
                         left_certificates,
                         right_certificates,
+                        alignment.retail_offset,
                         ordinal,
                     )
                 )
             )
     return tuple(comparisons)
+
+
+def owner_abstention_record_is_current(
+    record: ComparisonRecord,
+    graphs: Iterable[FrontierGraph],
+) -> bool:
+    """Return whether current graphs reproduce an authoritative abstention."""
+
+    graph_pair = tuple(graphs)
+    role_value = record.attributes.get("role")
+    retail_offset = record.attributes.get("retail_offset")
+    if (
+        not owner_alignment_record_is_authoritative(record)
+        or record.relation_kind != "backend-owner-abstained"
+        or len(graph_pair) != 2
+        or not isinstance(role_value, Mapping)
+        or frozenset(role_value)
+        != {
+            "operand_key",
+            "register_class",
+            "semantic_stack_role",
+            "type_size",
+            "frame_area",
+        }
+        or not isinstance(retail_offset, int)
+        or isinstance(retail_offset, bool)
+        or retail_offset < 0
+    ):
+        return False
+    try:
+        role = OwnerRoleKey(**role_value)
+        role.validate()
+    except (TypeError, ValueError):
+        return False
+
+    left_graph, right_graph = tuple(sorted(graph_pair, key=_label))
+    if record.left_compile_id != _compile_id(left_graph) or record.right_compile_id != _compile_id(right_graph):
+        return False
+    left_view = _certified_owner_view(left_graph.backend.owner_certificates)
+    right_view = _certified_owner_view(right_graph.backend.owner_certificates)
+    left_resolution = _owner_resolution(left_view, role)
+    right_resolution = _owner_resolution(right_view, role)
+    left_status, left_certificates = _effective_owner_resolution(
+        left_graph,
+        left_view,
+        role,
+        left_resolution,
+        retail_offset,
+    )
+    right_status, right_certificates = _effective_owner_resolution(
+        right_graph,
+        right_view,
+        role,
+        right_resolution,
+        retail_offset,
+    )
+    if left_status is right_status is OwnerResolutionStatus.UNIQUE:
+        return False
+    expected = _owner_abstention(
+        record.analysis_id,
+        role,
+        left_graph,
+        right_graph,
+        left_view,
+        right_view,
+        left_resolution,
+        right_resolution,
+        left_status,
+        right_status,
+        left_certificates,
+        right_certificates,
+        retail_offset,
+        0,
+    )
+    return replace(expected, record_id=record.record_id) == record
 
 
 __all__ = [
@@ -1259,4 +1343,5 @@ __all__ = [
     "RolePair",
     "align_anchor",
     "build_role_comparisons",
+    "owner_abstention_record_is_current",
 ]
