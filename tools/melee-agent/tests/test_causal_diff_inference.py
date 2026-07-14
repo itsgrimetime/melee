@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from dataclasses import dataclass, replace
 from types import MappingProxyType, SimpleNamespace
@@ -14,6 +15,7 @@ from src.mwcc_debug.causal_diff.alignment import (
     build_role_comparisons,
     owner_alignment_record_is_authoritative,
 )
+from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.canonical import stable_id
 from src.mwcc_debug.causal_diff.effects import (
     AllocatorEffect,
@@ -48,6 +50,7 @@ from src.mwcc_debug.causal_diff.render import render_json, render_text
 from src.mwcc_debug.causal_diff.store import EvidenceQuery, InMemoryEvidenceStore
 from tests.owner_certificate_fixtures import (
     ROLE,
+    _status_evidence,
     evidence_with_partial_owner_branch,
     future_complete_pipeline_inputs,
     future_complete_tied_pipeline_inputs,
@@ -679,9 +682,7 @@ def test_certificate_inference_rechecks_current_unique_resolution_for_stale_repl
     augmented_resolution = augmented_result.resolution_for(ROLE)
     assert augmented_resolution.status is OwnerResolutionStatus.AMBIGUOUS
     assert augmented_resolution.certificate_record_ids == (certificate_id,)
-    assert {item.reason for item in augmented_resolution.rejections} == {
-        "plausible-owner-alternative"
-    }
+    assert {item.reason for item in augmented_resolution.rejections} == {"plausible-owner-alternative"}
 
     store = InMemoryEvidenceStore()
     store.add_nodes(augmented_evidence.nodes)
@@ -700,11 +701,7 @@ def test_certificate_inference_rechecks_current_unique_resolution_for_stale_repl
             owner_certificates=augmented_result,
         ),
     )
-    current_graphs = (
-        (augmented_graph, right)
-        if ambiguous_side == "left"
-        else (left, augmented_graph)
-    )
+    current_graphs = (augmented_graph, right) if ambiguous_side == "left" else (left, augmented_graph)
 
     report = build_report(current_graphs, stale_effects, sealed_records)
     verdict = only(report.verdicts)
@@ -991,6 +988,76 @@ def test_sealed_owner_abstention_without_effect_pair_abstains(
     assert exit_code_for_report(report) == 3
 
 
+def _frontier_with_owner_status(graph, status: str):
+    evidence = _status_evidence(
+        status,
+        compile_id=str(graph.bundle.compile_id),
+        capture_run_id=hashlib.sha256(str(graph.bundle.label).encode()).hexdigest(),
+    )
+    result = build_owner_certificates(evidence)
+    store = InMemoryEvidenceStore()
+    store.add_nodes(evidence.nodes)
+    store.add_edges(evidence.edges)
+    store.add_nodes(result.certificate_nodes)
+    return replace(
+        graph,
+        store=store,
+        backend=BackendEvidence(
+            result=AdapterResult(
+                nodes=(*evidence.nodes, *result.certificate_nodes),
+                edges=evidence.edges,
+            ),
+            pcdump_text="",
+            role_compile=None,
+            nodes_by_class_ig=MappingProxyType({}),
+            nodes_by_virtual=MappingProxyType({}),
+            object_bindings=evidence,
+            owner_certificates=result,
+        ),
+    )
+
+
+def _frontier_without_stored_owner_certificates(graph):
+    certificate_ids = {item.record_id for item in graph.backend.owner_certificates.certificate_nodes}
+    store = InMemoryEvidenceStore()
+    store.add_nodes(item for item in graph.backend.result.nodes if item.record_id not in certificate_ids)
+    store.add_edges(graph.backend.result.edges)
+    return replace(graph, store=store)
+
+
+@pytest.mark.parametrize("ambiguous_index", (0, 1), ids=("left", "right"))
+def test_stale_sealed_owner_abstention_is_not_replayed_against_current_unique_results(
+    ambiguous_index: int,
+) -> None:
+    current_graphs, owner_alignment, _current_comparisons = future_complete_pipeline_inputs()
+    stale_graphs = list(current_graphs)
+    stale_graphs[ambiguous_index] = _frontier_with_owner_status(
+        stale_graphs[ambiguous_index],
+        "ambiguous",
+    )
+    stale_comparisons = build_role_comparisons(owner_alignment, stale_graphs)
+    stale = only(item for item in stale_comparisons if item.relation_kind == "backend-owner-abstained")
+    stale_side = "left" if stale.left_compile_id == str(stale_graphs[ambiguous_index].bundle.compile_id) else "right"
+    current_resolution = current_graphs[ambiguous_index].backend.owner_certificates.resolution_for(ROLE)
+    empty_effects = DerivedEffects(allocator_effects=(), stack_effects=(), pairs=(), abstentions=())
+
+    assert owner_alignment_record_is_authoritative(stale)
+    assert current_resolution.status is OwnerResolutionStatus.UNIQUE
+    assert stale.attributes[f"{stale_side}_status"] == OwnerResolutionStatus.AMBIGUOUS.value
+    assert tuple(stale.attributes["certificate_record_ids"][stale_side]) != current_resolution.certificate_record_ids
+
+    forward = build_report(current_graphs, empty_effects, stale_comparisons)
+    reverse = build_report(tuple(reversed(current_graphs)), empty_effects, tuple(reversed(stale_comparisons)))
+    verdict = only(forward.verdicts)
+
+    assert forward.analysis_status is AnalysisStatus.COMPLETE
+    assert verdict.status is VerdictStatus.NO_CAUSAL_DIFFERENCE
+    assert verdict.failed_gates == ()
+    assert f"backend-owner-abstained:{stale.record_id}" not in verdict.rejected_alternatives
+    assert "backend-owner-ambiguous" not in forward.missing_evidence
+    assert render_json(forward) == render_json(reverse)
+
+
 def test_owner_abstention_only_duplicate_collapses_by_canonical_content() -> None:
     graphs, _alignment, comparisons, effects = future_owner_abstention_pipeline_inputs("unique-with-role-rejection")
     owner_abstention = only(item for item in comparisons if item.relation_kind == "backend-owner-abstained")
@@ -1002,12 +1069,22 @@ def test_owner_abstention_only_duplicate_collapses_by_canonical_content() -> Non
 
 
 def test_owner_abstention_only_order_is_canonical_for_distinct_records() -> None:
-    graphs, _alignment, first_records, effects = future_owner_abstention_pipeline_inputs("unique-with-role-rejection")
-    _other_graphs, _other_alignment, second_records, _other_effects = future_owner_abstention_pipeline_inputs(
-        "contradictory"
+    graphs, owner_alignment, _comparisons = future_complete_pipeline_inputs()
+    effects = DerivedEffects(allocator_effects=(), stack_effects=(), pairs=(), abstentions=())
+    first_records = build_role_comparisons(
+        replace(owner_alignment, retail_offset=owner_alignment.retail_offset + 4),
+        graphs,
     )
+    missing_certificate_graphs = (
+        _frontier_without_stored_owner_certificates(graphs[0]),
+        graphs[1],
+    )
+    second_records = build_role_comparisons(owner_alignment, missing_certificate_graphs)
     first = only(item for item in first_records if item.relation_kind == "backend-owner-abstained")
     second = only(item for item in second_records if item.relation_kind == "backend-owner-abstained")
+    assert owner_alignment_record_is_authoritative(first)
+    assert owner_alignment_record_is_authoritative(second)
+    assert first.record_id != second.record_id
     generic = tuple(item for item in first_records if item.relation_kind != "backend-owner-abstained")
     forward_records = (*generic, first, second)
     reverse_records = tuple(reversed(forward_records))
