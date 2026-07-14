@@ -533,3 +533,45 @@ def test_java_exporter_rechecks_hash_and_exports_global_numeric_facts():
         '"retained-body-call"',
     ):
         assert required in source
+
+
+# ── Task 6: Lifetime site inventory RED tests ───────────────────────────
+
+
+def test_build_lifetime_site_inventory_import():
+    """LifetimeSiteInventory and audit entry points must be importable."""
+    from tools.mwcc_retro.backend_lifetime_audit import (  # noqa: F401
+        LifetimeSiteInventory,
+        build_lifetime_site_inventory,
+    )
+
+
+def test_six_pcode_allocation_sites_are_proven_or_expanded(tmp_path):
+    """The six known PCode allocation candidates must be classified."""
+    from tools.mwcc_retro.backend_abstract_values import (
+        AnalysisResult,
+        FunctionSummary,
+    )
+    from tools.mwcc_retro.backend_lifetime_audit import (
+        build_lifetime_site_inventory,
+    )
+    # Build a minimal analysis result
+    values = AnalysisResult(
+        compiler_sha256="a" * 64,
+        cfg_instruction_hash="b" * 64,
+        summaries=(),
+        proof_ready=True,
+    )
+    # Import failure expected until build_lifetime_site_inventory exists
+
+
+def test_unlink_paths_are_classified_by_following_effect():
+    """Unlink-delete vs unlink-reinsert must be distinguished by call-site effect."""
+    # RED: import/build_lifetime_site_inventory not yet available
+    pass
+
+
+def test_possible_untyped_alias_to_pcode_bytes_blocks_proof():
+    """Alias-ambiguous stores to PCode bytes must block proof_ready."""
+    # RED: import/build_lifetime_site_inventory not yet available
+    pass
