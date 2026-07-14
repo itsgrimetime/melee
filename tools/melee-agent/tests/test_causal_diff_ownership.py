@@ -10,7 +10,11 @@ from types import MappingProxyType
 import pytest
 
 from src.mwcc_debug.causal_diff import alignment as alignment_module
-from src.mwcc_debug.causal_diff.alignment import _owner_correspondence, build_role_comparisons
+from src.mwcc_debug.causal_diff.alignment import (
+    _owner_correspondence,
+    build_role_comparisons,
+    owner_alignment_record_is_authoritative,
+)
 from src.mwcc_debug.causal_diff.asm_adapter import CheckdiffEvidence
 from src.mwcc_debug.causal_diff.backend_adapter import BackendEvidence
 from src.mwcc_debug.causal_diff.bundles import BundleInputError, ValidatedBundle
@@ -35,6 +39,7 @@ from src.mwcc_debug.causal_diff.owner_certificate import (
     OwnerCertificateResult,
     OwnerResolutionStatus,
     OwnerSemanticState,
+    build_owner_certificates,
 )
 from src.mwcc_debug.causal_diff.source_adapter import adapt_source
 from src.mwcc_debug.causal_diff.store import InMemoryEvidenceStore
@@ -44,6 +49,7 @@ from tests.owner_certificate_fixtures import (
     STATE,
     _certified_frontier,
     _semantic_frontier,
+    evidence_with_partial_owner_branch,
     future_complete_pipeline_inputs,
     future_complete_tied_pipeline_inputs,
     graphs,
@@ -1512,6 +1518,72 @@ def test_sealed_owner_relation_control_drives_certificate_stack_effect() -> None
 
     assert len(tuple(effect for effect in effects.stack_effects if effect.owner_operand_key is not None)) == 1
     assert len(tuple(pair for pair in effects.pairs if pair.stack.owner_operand_key is not None)) == 1
+
+
+def test_certificate_stack_effect_rechecks_current_unique_resolution_for_sealed_replay() -> None:
+    graph_pair, owner_alignment, sealed_records = future_complete_pipeline_inputs()
+    left, right = tuple(sorted(graph_pair, key=lambda graph: str(graph.bundle.label)))
+    original_resolution = left.backend.owner_certificates.resolution_for(ROLE)
+    certificate_id = only(original_resolution.certificate_record_ids)
+
+    assert original_resolution.status is OwnerResolutionStatus.UNIQUE
+    assert left.backend.object_bindings is not None
+    augmented_evidence = evidence_with_partial_owner_branch(
+        "virtual",
+        base_evidence=left.backend.object_bindings,
+    )
+    augmented_result = build_owner_certificates(augmented_evidence)
+    augmented_resolution = augmented_result.resolution_for(ROLE)
+
+    assert augmented_resolution.status is OwnerResolutionStatus.AMBIGUOUS
+    assert augmented_resolution.certificate_record_ids == (certificate_id,)
+    assert {item.reason for item in augmented_resolution.rejections} == {
+        "plausible-owner-alternative"
+    }
+
+    store = InMemoryEvidenceStore()
+    store.add_nodes(augmented_evidence.nodes)
+    store.add_edges(augmented_evidence.edges)
+    store.add_nodes(augmented_result.certificate_nodes)
+    augmented_left = replace(
+        left,
+        store=store,
+        backend=replace(
+            left.backend,
+            result=AdapterResult(
+                nodes=(*augmented_evidence.nodes, *augmented_result.certificate_nodes),
+                edges=augmented_evidence.edges,
+            ),
+            object_bindings=augmented_evidence,
+            owner_certificates=augmented_result,
+        ),
+    )
+    augmented_graphs = (augmented_left, right)
+
+    stale_correspondence = only(
+        item
+        for item in sealed_records
+        if item.relation_kind == "backend-owner-corresponds-to"
+    )
+    stale_delta = only(
+        item
+        for item in sealed_records
+        if item.relation_kind == "backend-owner-state-changed"
+    )
+    assert owner_alignment_record_is_authoritative(stale_correspondence)
+    assert owner_delta_record_is_authoritative(stale_delta)
+
+    fresh_abstention = only(
+        item
+        for item in build_role_comparisons(owner_alignment, augmented_graphs)
+        if item.relation_kind == "backend-owner-abstained"
+    )
+    assert fresh_abstention.attributes["reason"] == "backend-owner-ambiguous"
+
+    effects = derive_effects(owner_alignment, augmented_graphs, sealed_records)
+
+    assert effects.stack_effects == ()
+    assert effects.pairs == ()
 
 
 def test_certificate_delta_drives_owner_mediated_stack_effect() -> None:

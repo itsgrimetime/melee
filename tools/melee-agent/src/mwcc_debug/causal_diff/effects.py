@@ -338,8 +338,19 @@ def _certificate_stack_effects(
         right_graph = graphs_by_compile.get(delta.right_compile_id)
         if left_graph is None or right_graph is None:
             continue
-        left = _trusted_stored_certificate(left_graph, delta.left_record_id)
-        right = _trusted_stored_certificate(right_graph, delta.right_record_id)
+        authorization_role = _owner_role(delta.attributes.get("role"))
+        if authorization_role is None:
+            continue
+        left = _sole_untainted_unique_certificate(
+            left_graph,
+            authorization_role,
+            delta.left_record_id,
+        )
+        right = _sole_untainted_unique_certificate(
+            right_graph,
+            authorization_role,
+            delta.right_record_id,
+        )
         if left is None or right is None:
             continue
         roles = tuple(
