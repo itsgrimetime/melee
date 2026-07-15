@@ -15,11 +15,13 @@ TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(TESTS))
 from retro_pe_fixture import (  # noqa: E402
+    SECTION_TABLE_OFFSET,
     write_synthetic_cfg_pe,
     write_synthetic_dispatch_pe,
 )
 from tools.mwcc_retro import pe  # noqa: E402
 from tools.mwcc_retro.x86_cfg import (  # noqa: E402
+    _DECODED_INSTRUCTION_CACHE_LIMIT,
     AnalysisLimitError,
     AnalysisLimits,
     AuditAnchor,
@@ -27,6 +29,7 @@ from tools.mwcc_retro.x86_cfg import (  # noqa: E402
     DirectCall,
     JumpTable,
     SeedRecord,
+    _DirectCfgRecovery,
     _materialize_function_entries,
     build_seed_inventory,
     canonical_jsonl_bytes,
@@ -61,6 +64,46 @@ def load_cfg_program(tmp_path, program_hex):
     path.write_bytes(data)
     digest = hashlib.sha256(data).hexdigest()
     return pe.load(path, expected_sha256=digest, require_pe32_i386=True)
+
+
+def load_large_cfg_program(tmp_path, program):
+    path = write_synthetic_cfg_pe(tmp_path)
+    data = bytearray(path.read_bytes())
+    program = bytearray(program)
+    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x180)
+    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x180)
+    data[0x240:0x251] = b"\xc3" + b"\x90" * 0x10
+    data[0x280:0x380] = b"\x90" * 0x100
+    data[0x280 : 0x280 + len(program)] = program
+    struct.pack_into("<I", data, 0x430, 0x1080)
+    path.write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    return pe.load(path, expected_sha256=digest, require_pe32_i386=True)
+
+
+def load_memmove_program(tmp_path, *, corrupt_backward_step=False):
+    program = bytearray.fromhex(
+        "8b54240456578b4424148b74241089d731c939f7772b3d100000007c1e"
+        "29f981e103000000740429c8f3a489c12503000000c1e902f3a585c074"
+        "4689c1f3a4eb40fd8d7406ff8d7c07ff3d100000007c2b8d4ffd81e103"
+        "000000740429c8f3a483ee0383ef0389c12503000000c1e902f3a585c0"
+        "740a83c60383c70389c1f3a4fc89d05f5ec3"
+    )
+    if corrupt_backward_step:
+        step = program.index(bytes.fromhex("83ef03"))
+        program[step + 2] = 4
+    return load_large_cfg_program(tmp_path, program)
+
+
+def load_memcpy_program(tmp_path):
+    return load_large_cfg_program(
+        tmp_path,
+        bytes.fromhex(
+            "8b54240456578b4424148b74241089d731c93d100000007c1e29f981e1"
+            "03000000740429c8f3a489c12503000000c1e902f3a585c0740489c1f3"
+            "a489d05f5ec3"
+        ),
+    )
 
 
 def decode_one(encoded):
@@ -123,6 +166,44 @@ def test_function_entry_provenance_materialization_is_single_pass():
     assert tuple(row.address for row in entries) == (0x20, 0x30)
     assert entries[0].provenance == ("alpha", "zeta")
     assert entries[1].provenance == ("derived-function-target",)
+
+
+def test_cfg_seed_initialization_groups_records_in_one_pass(
+    synthetic_cfg_image,
+):
+    class SinglePassRecords:
+        def __init__(self, records):
+            self.records = records
+            self.iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            if self.iterations != 1:
+                raise AssertionError("seed records were rescanned by address")
+            yield from self.records
+
+    class Inventory:
+        def __init__(self, records):
+            self.records = records
+
+        @property
+        def addresses(self):
+            return tuple(sorted({row.address for row in self.records.records}))
+
+    records = SinglePassRecords(
+        (
+            SeedRecord(0x00401000, "entrypoint", 0, "90", "entry", True),
+            SeedRecord(0x00401070, "audit-anchor", 0, "c3", "anchor", True),
+        )
+    )
+
+    _DirectCfgRecovery(
+        synthetic_cfg_image,
+        Inventory(records),
+        generous_limits(synthetic_cfg_image),
+    )
+
+    assert records.iterations == 1
 
 
 def cw_exception_image(*, mutation=None):
@@ -563,9 +644,16 @@ def test_guard_search_skips_non_flag_non_index_register_moves(tmp_path):
     assert (table.index_min, table.index_max) == (0, 1)
 
 
-def movzx_dispatch_image():
+def movzx_dispatch_image(
+    *,
+    unrelocated_indices=(),
+    non_executable_indices=(),
+    caller_saved_index=False,
+    intervening_call=False,
+):
     """Synthetic PE with ``movzx ebx, byte ptr [eax]; call [ebx*4+TABLE]``."""
     import struct
+
     from tools.mwcc_retro import pe as pe_mod
 
     TEXT_VA = 0x00401000
@@ -573,21 +661,42 @@ def movzx_dispatch_image():
     # Reserve space for 256 table entries (1024 bytes) + text
     data = bytearray(0x600)
 
-    # Entry: movzx ebx, byte ptr [eax] ; call [ebx*4 + TABLE] ; ret
+    # Entry: movzx index, byte ptr [eax] ; optional call ;
+    # call [index*4 + TABLE] ; ret
     text = memoryview(data)[:0x100]
-    text[0x00:0x03] = bytes.fromhex("0f b6 18")  # movzx ebx, byte ptr [eax]
-    text[0x03:0x0A] = bytes.fromhex("ff 14 9d 00 20 40 00")  # call [ebx*4+0x402000]
-    text[0x0A] = 0xC3  # ret
+    text[0x00:0x03] = bytes.fromhex(
+        "0f b6 10" if caller_saved_index else "0f b6 18"
+    )
+    transfer_offset = 3
+    if intervening_call:
+        text[0x03:0x08] = bytes.fromhex("e8 28 00 00 00")
+        text[0x30] = 0xC3
+        transfer_offset = 8
+    sib = "95" if caller_saved_index else "9d"
+    text[transfer_offset : transfer_offset + 7] = bytes.fromhex(
+        f"ff 14 {sib} 00 20 40 00"
+    )
+    text[transfer_offset + 7] = 0xC3
 
     # Fill all 256 dispatch table entries with RVA 0x1020 (type-3 relocation
     # adds image_base to make 0x401020 at load time).
+    unrelocated_indices = frozenset(unrelocated_indices)
+    non_executable_indices = frozenset(non_executable_indices)
     for i in range(256):
-        struct.pack_into("<I", data, 0x100 + i * 4, 0x1020)
+        if i in unrelocated_indices:
+            value = 0x41414141
+        elif i in non_executable_indices:
+            value = RDATA_VA
+        else:
+            value = 0x1020
+        struct.pack_into("<I", data, 0x100 + i * 4, value)
     text[0x20] = 0xC3  # target function
 
     # Add type-3 relocations for each table entry
     relocations = tuple(
-        pe_mod.Relocation(RDATA_VA + i * 4, 3) for i in range(256)
+        pe_mod.Relocation(RDATA_VA + i * 4, 3)
+        for i in range(256)
+        if i not in unrelocated_indices
     )
 
     return pe_mod.Image(
@@ -610,6 +719,219 @@ def movzx_dispatch_image():
     )
 
 
+def indexed_global_callback_image(*, unknown_registrar_caller=False):
+    """Synthetic indexed callback registry with one reachable slot."""
+    text_va = 0x00401000
+    rdata_va = 0x00402000
+    data = bytearray(0x300)
+    text = memoryview(data)[:0x200]
+
+    def emit_call(offset, target):
+        next_address = text_va + offset + 5
+        text[offset] = 0xE8
+        text[offset + 1 : offset + 5] = (
+            target - next_address
+        ).to_bytes(4, "little", signed=True)
+
+    # The entrypoint registers callback 0x401090 in slot 1, then invokes
+    # the consumer for slot 1.  The optional second registrar call forwards
+    # the entrypoint's unknown first argument and must poison the proof.
+    cursor = 0
+    text[cursor : cursor + 5] = bytes.fromhex("68 90 10 40 00")
+    cursor += 5
+    text[cursor : cursor + 2] = bytes.fromhex("6a 01")
+    cursor += 2
+    emit_call(cursor, text_va + 0x30)
+    cursor += 5
+    text[cursor : cursor + 3] = bytes.fromhex("83 c4 08")
+    cursor += 3
+    if unknown_registrar_caller:
+        text[cursor : cursor + 4] = bytes.fromhex("ff 74 24 04")
+        cursor += 4
+        text[cursor : cursor + 2] = bytes.fromhex("6a 01")
+        cursor += 2
+        emit_call(cursor, text_va + 0x30)
+        cursor += 5
+        text[cursor : cursor + 3] = bytes.fromhex("83 c4 08")
+        cursor += 3
+    text[cursor : cursor + 2] = bytes.fromhex("6a 01")
+    cursor += 2
+    emit_call(cursor, text_va + 0x60)
+    cursor += 5
+    text[cursor : cursor + 3] = bytes.fromhex("83 c4 04")
+    cursor += 3
+    text[cursor] = 0xC3
+
+    # registrar(index, callback): slots[index] = callback
+    text[0x30:0x40] = bytes.fromhex(
+        "8b 4c 24 04 "
+        "8b 44 24 08 "
+        "89 04 8d 00 20 40 00 "
+        "c3"
+    )
+    # consumer(index): callback = slots[index]; if (callback) callback()
+    text[0x60:0x72] = bytes.fromhex(
+        "8b 4c 24 04 "
+        "8b 04 8d 00 20 40 00 "
+        "85 c0 "
+        "74 02 "
+        "ff d0 "
+        "c3"
+    )
+    text[0x90] = 0xC3
+
+    relocations = (
+        pe.Relocation(text_va + 1, 3),
+        pe.Relocation(text_va + 0x3B, 3),
+        pe.Relocation(text_va + 0x67, 3),
+    )
+    return pe.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(".text", text_va, 0, 0x200, 0x200, 0x60000020),
+            pe.Section(".rdata", rdata_va, 0x200, 0x100, 0x100, 0x40000040),
+        ),
+        imports=(),
+        exports=(),
+        relocations=relocations,
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+
+
+def test_finite_indexed_global_callback_registry_is_recovered():
+    image = indexed_global_callback_image()
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == 0x0040106F
+        and row.flow_kind == "indirect-call-indexed-global-slot"
+    )
+    assert edge.target == 0x00401090
+    assert "base=0x402000" in edge.provenance
+    assert "indices=0x1" in edge.provenance
+    assert not any(
+        row.address == 0x0040106F for row in cfg.control_targets.unresolved
+    )
+
+
+def test_indexed_global_callback_registry_rejects_unknown_writer():
+    image = indexed_global_callback_image(unknown_registrar_caller=True)
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert any(
+        row.address == 0x0040106F and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+    assert not any(
+        row.source == 0x0040106F
+        and row.flow_kind == "indirect-call-indexed-global-slot"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def zero_origin_callback_list_image(*, unknown_writer=False):
+    """Synthetic zero-initialized, self-draining callback list."""
+    text_va = 0x00401000
+    bss_va = 0x00402000
+    data = bytearray(0x300)
+    text = memoryview(data)[:0x200]
+    text[0x00:0x26] = bytes.fromhex(
+        "8b 0d 00 20 40 00 "
+        "85 c9 "
+        "89 d2 "
+        "74 19 "
+        "8b 01 "
+        "a3 00 20 40 00 "
+        "89 c8 "
+        "8b 48 08 "
+        "ff 50 04 "
+        "8b 0d 00 20 40 00 "
+        "85 c9 "
+        "75 e7 "
+        "c3"
+    )
+    relocations = [
+        pe.Relocation(text_va + 0x02, 3),
+        pe.Relocation(text_va + 0x0F, 3),
+        pe.Relocation(text_va + 0x1D, 3),
+    ]
+    if unknown_writer:
+        text[0x40:0x4A] = bytes.fromhex(
+            "8b 44 24 04 "
+            "a3 00 20 40 00 "
+            "c3"
+        )
+        relocations.append(pe.Relocation(text_va + 0x45, 3))
+    return pe.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(".text", text_va, 0, 0x200, 0x200, 0x60000020),
+            pe.Section(".bss", bss_va, 0x200, 0, 0x100, 0xC0000080),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(relocations),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+
+
+def test_zero_origin_guarded_callback_list_is_unreachable():
+    image = zero_origin_callback_list_image()
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert not any(
+        row.address == 0x00401018 for row in cfg.control_targets.unresolved
+    )
+    assert any(
+        row.address == 0x00401018
+        and row.kind == "proven-unreachable-control"
+        and "zero-origin-guarded-global" in row.detail
+        for row in cfg.ownership_diagnostics
+    )
+
+
+def test_zero_origin_callback_list_rejects_unguarded_unknown_writer():
+    image = zero_origin_callback_list_image(unknown_writer=True)
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, 0x00401040),
+        generous_limits(image),
+    )
+
+    assert any(
+        row.address == 0x00401018 and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
 def test_movzx_guard_resolves_indexed_call_table():
     image = movzx_dispatch_image()
     cfg = recover_cfg(
@@ -622,7 +944,7 @@ def test_movzx_guard_resolves_indexed_call_table():
         d for d in cfg.ownership_diagnostics if d.address == 0x00401003
     ]
     assert not diagnostics_at_call, (
-        f"unexpected diagnostics at 0x401003: "
+        "unexpected diagnostics at 0x401003: "
         + "; ".join(f"{d.kind}:{d.detail}" for d in diagnostics_at_call)
     )
     table = cfg.jump_table_at(0x00401003)
@@ -636,6 +958,74 @@ def test_movzx_guard_resolves_indexed_call_table():
         if row.address == 0x00401003
         and row.kind in {"computed-flow-blocker", "indirect-flow"}
     ]
+
+
+def test_movzx_bound_table_with_in_domain_data_entry_remains_blocking():
+    image = movzx_dispatch_image(unrelocated_indices={17})
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(0x00401003)
+    assert any(
+        row.address == 0x00401003
+        and row.kind == "computed-flow-blocker"
+        and "type-3 relocation" in row.detail
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_movzx_bound_table_with_relocated_noncode_entry_remains_blocking():
+    image = movzx_dispatch_image(non_executable_indices={29})
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(0x00401003)
+    assert any(
+        row.address == 0x00401003
+        and row.kind == "computed-flow-blocker"
+        and "target is not executable" in row.detail
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_movzx_bound_survives_call_for_callee_saved_index():
+    image = movzx_dispatch_image(intervening_call=True)
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(0x00401008).targets == (0x00401020,) * 256
+
+
+def test_movzx_bound_does_not_cross_call_for_caller_saved_index():
+    image = movzx_dispatch_image(
+        caller_saved_index=True,
+        intervening_call=True,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(0x00401008)
+    assert any(
+        row.address == 0x00401008
+        and row.kind == "computed-flow-blocker"
+        and "no finite dominating guard" in row.detail
+        for row in cfg.control_targets.unresolved
+    )
 
 
 def test_bounded_registrar_callers_prove_runtime_callback_table(tmp_path):
@@ -708,6 +1098,7 @@ def test_cdecl_argument_spill_reload_closes_callback_target(tmp_path):
     )
     assert edge.target == 0x00401090
     assert "argument=0" in edge.provenance
+    assert "stack-argument=0" in edge.provenance
     assert not [
         row
         for row in cfg.control_targets.unresolved
@@ -724,7 +1115,45 @@ def test_cdecl_argument_is_recovered_from_entry_relative_esp(tmp_path):
         and row.flow_kind == "indirect-call-finite-value"
     )
     assert edge.target == 0x00401090
-    assert "logical-stack=+0x4" in edge.provenance
+    assert "stack-argument=0" in edge.provenance
+
+
+def test_dominating_equal_guard_closes_callback_argument(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="guarded-equal-callback")
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == 0x00401030
+        and row.flow_kind == "indirect-call-finite-value"
+    )
+    assert edge.target == 0x00401090
+
+
+def test_equal_guard_rejects_register_clobber_before_callback(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="guarded-equal-clobber")
+    assert any(
+        row.address == 0x00401030 and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_fixed_outparam_store_closes_stack_callback_value(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="outparam-callback")
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == 0x00401014
+        and row.flow_kind == "indirect-call-finite-value"
+    )
+    assert edge.target == 0x00401090
+
+
+def test_conditional_outparam_store_remains_open(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="outparam-conditional-callback")
+    assert any(
+        row.address == 0x00401014 and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
 
 
 def test_dominating_cdecl_register_definition_crosses_basic_blocks(tmp_path):
@@ -1043,12 +1472,46 @@ def test_distant_zero_callback_without_guard_remains_blocking(tmp_path):
     )
 
 
+def test_stack_argument_uses_bounded_linear_prologue_when_tail_conflicts(
+    tmp_path,
+):
+    image = load_dispatch_image(
+        tmp_path, mode="linear-prologue-conflicting-tail"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    decoded = recovery._owned_decoded(0x00401006)
+    assert recovery._function_stack_states(0x00401000) is None
+    assert (
+        recovery._stack_argument_index_at(
+            decoded.address, decoded.operands[1], 0x00401000
+        )
+        == 0
+    )
+
+
 def test_closed_constructor_field_domain_proves_vtable_callback(tmp_path):
     cfg = dispatch_cfg(tmp_path, mode="constructor-field-callback")
     edge = next(
         row
         for row in cfg.control_targets.finite_internal_edges
         if row.source == 0x0040100B
+        and row.flow_kind == "indirect-call-finite-value"
+    )
+    assert edge.target == 0x00401090
+    assert "dynamic-field=+0x104" in edge.provenance
+
+
+def test_unknown_ebp_object_uses_closed_dynamic_field_domain(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="constructor-field-ebp-callback")
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == 0x0040100D
         and row.flow_kind == "indirect-call-finite-value"
     )
     assert edge.target == 0x00401090
@@ -1146,6 +1609,47 @@ def test_constructor_descriptor_follows_wrapper_and_global_object_origin(
     ]
 
 
+def test_constructor_descriptor_follows_relocated_double_global_handle(
+    tmp_path,
+):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="validated-constructor-descriptor-wrapper-global-double",
+    )
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == 0x00401067
+        and row.flow_kind == "indirect-call-constructor-descriptor"
+    )
+    assert edge.target == 0x004010F0
+    assert "constructor=0x4010a0" in edge.provenance
+    assert "global-slot=0x402710" in edge.provenance
+    assert "global-slot=0x402700" in edge.provenance
+
+
+def test_constructor_descriptor_rejects_unrelocated_double_global_handle(
+    tmp_path,
+):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode=(
+            "validated-constructor-descriptor-wrapper-global-"
+            "double-unrelocated"
+        ),
+    )
+    assert any(
+        row.address == 0x00401067
+        and row.kind in {"indirect-flow", "computed-flow-blocker"}
+        for row in cfg.control_targets.unresolved
+    )
+    assert not any(
+        row.source == 0x00401067
+        and row.flow_kind == "indirect-call-constructor-descriptor"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
 def test_constructor_descriptor_filters_closed_tag_disjoint_producer(
     tmp_path,
 ):
@@ -1160,6 +1664,27 @@ def test_constructor_descriptor_filters_closed_tag_disjoint_producer(
     )
     assert edge.target == 0x004010F0
     assert "rejected-tag=0x436f6d70" in edge.provenance
+
+
+def test_constructor_descriptor_marks_closed_rejected_domain_unreachable(
+    tmp_path,
+):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="validated-constructor-descriptor-multi-tag-rejected-only",
+    )
+    assert not any(
+        row.address == 0x00401074
+        for row in cfg.control_targets.unresolved
+    )
+    diagnostic = next(
+        row
+        for row in cfg.ownership_diagnostics
+        if row.address == 0x00401074
+        and row.kind == "proven-unreachable-control"
+    )
+    assert "identity validator rejects closed object domain" in diagnostic.detail
+    assert "rejected-tag=0x436f6d70" in diagnostic.detail
 
 
 @pytest.mark.parametrize(
@@ -1272,6 +1797,1303 @@ def test_fresh_copied_descriptor_origin_survives_argument_forwarding(tmp_path):
     )
 
 
+def test_source_copied_descriptor_origin_survives_argument_forwarding(
+    tmp_path,
+):
+    cfg = dispatch_cfg(
+        tmp_path, mode="copied-descriptor-source-forwarded-object"
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_forwarded_unknown_descriptor_source_remains_blocking(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-source-forwarded-object-unknown",
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_fresh_copied_descriptor_origin_survives_return_wrapper(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path, mode="copied-descriptor-wrapper-returned-object"
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_copy_return_wrapper_rejects_unknown_return_path(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-wrapper-returned-object-unknown-return",
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_fresh_copied_descriptor_origin_survives_closed_field_forwarding(
+    tmp_path,
+):
+    cfg = dispatch_cfg(
+        tmp_path, mode="copied-descriptor-field-forwarded-object"
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_field_origin_accepts_collectively_dominating_safe_writes(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-field-forwarded-object-null-branch",
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_field_origin_rejects_collective_unknown_write(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-field-forwarded-object-unknown-branch",
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_copied_descriptor_field_forwarding_rejects_unknown_write(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-field-forwarded-object-unknown-write",
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_field_origin_survives_closed_intrusive_list_lookup(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path, mode="copied-descriptor-field-list-returned-object"
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_recursive_list_query_does_not_poison_later_field_proof(tmp_path):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-field-list-returned-object"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, _domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+    recovery.global_list_field_cache.clear()
+    key = (
+        0x00402900,
+        0x20,
+        0x34,
+        copy_function,
+        recovery._summary_fact_signature(),
+        recovery.control_flow_revision,
+    )
+    recovery.global_list_field_active.add(key)
+
+    assert not recovery._closed_global_intrusive_list_field_origin(
+        0x00402900,
+        0x20,
+        0x34,
+        copy_function,
+        frozenset(),
+    )
+
+    recovery.global_list_field_active.remove(key)
+    assert recovery._closed_global_intrusive_list_field_origin(
+        0x00402900,
+        0x20,
+        0x34,
+        copy_function,
+        frozenset(),
+    )
+
+
+def test_field_origin_rejects_unknown_intrusive_list_insertion(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-field-list-returned-object-unknown-insert",
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_field_origin_accepts_runtime_zeroed_list_container(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-field-list-returned-object-runtime-zeroed",
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_field_origin_rejects_runtime_nonzero_list_container(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-field-list-returned-object-runtime-nonzero",
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_copied_descriptor_origin_survives_closed_registry_lookup(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="copied-descriptor-registered-object")
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "copied-descriptor-registered-object-back-reference",
+        "copied-descriptor-registered-object-stack-forwarded-back-reference",
+    ),
+)
+def test_copied_descriptor_origin_survives_initialized_back_reference(
+    tmp_path, mode
+):
+    image = load_dispatch_image(
+        tmp_path,
+        mode=mode,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+
+    assert recovery._argument_has_copied_descriptor_origin(
+        0x00401030,
+        0,
+        copy_function,
+        frozenset(value for value in domains[0] if value),
+        frozenset(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    (
+        (
+            "copied-descriptor-registered-object-"
+            "global-pointer-back-reference",
+            True,
+        ),
+        (
+            "copied-descriptor-registered-object-"
+            "global-pointer-hostile-back-reference",
+            False,
+        ),
+    ),
+)
+def test_initialized_back_reference_survives_finite_global_pointer_field(
+    tmp_path, mode, expected
+):
+    image = load_dispatch_image(tmp_path, mode=mode)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+
+    assert (
+        recovery._argument_has_copied_descriptor_origin(
+            0x00401030,
+            0,
+            copy_function,
+            frozenset(value for value in domains[0] if value),
+            frozenset(),
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation", ("unrelocated-publication", "field-write")
+)
+def test_finite_global_pointer_back_reference_is_fail_closed(
+    tmp_path, mutation
+):
+    image = load_dispatch_image(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-"
+            "global-pointer-back-reference"
+        ),
+    )
+    if mutation == "unrelocated-publication":
+        image = replace(
+            image,
+            relocations=tuple(
+                row for row in image.relocations if row.va != 0x00401122
+            ),
+        )
+    else:
+        data = bytearray(image.data)
+        offset = image.va_to_offset(0x00401195)
+        assert offset is not None
+        data[offset : offset + 2] = bytes.fromhex("89 08")
+        image = replace(image, data=bytes(data))
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+
+    assert not recovery._argument_has_copied_descriptor_origin(
+        0x00401030,
+        0,
+        copy_function,
+        frozenset(value for value in domains[0] if value),
+        frozenset(),
+    )
+
+
+def _static_global_reference_recovery(
+    tmp_path, code: bytes, relocation_offsets: tuple[int, ...]
+):
+    image = load_dispatch_image(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-"
+            "global-pointer-back-reference"
+        ),
+    )
+    function = 0x004011D0
+    data = bytearray(image.data)
+    offset = image.va_to_offset(function)
+    assert offset is not None
+    data[offset : offset + 0x30] = b"\xCC" * 0x30
+    data[offset : offset + len(code)] = code
+    image = replace(
+        image,
+        data=bytes(data),
+        relocations=tuple(
+            sorted(
+                (
+                    row
+                    for row in image.relocations
+                    if not function <= row.va < function + 0x30
+                ),
+                key=lambda row: (row.va, row.type),
+            )
+        )
+        + tuple(
+            pe.Relocation(function + relative, 3)
+            for relative in relocation_offsets
+        ),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, (audit_anchor(image, function),)),
+        generous_limits(image),
+    )
+    recovery.recover()
+    return recovery
+
+
+def _has_global_pointer_back_reference_origin(recovery):
+    copy_function, domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+    return recovery._argument_has_copied_descriptor_origin(
+        0x00401030,
+        0,
+        copy_function,
+        frozenset(value for value in domains[0] if value),
+        frozenset(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("callee", "extra_relocations", "expected"),
+    (
+        (bytes.fromhex("8b 44 24 04 8b 48 04 31 c0 c3"), (), True),
+        (
+            bytes.fromhex("8b 44 24 04 a3 00 2a 40 00 31 c0 c3"),
+            (0x15,),
+            True,
+        ),
+        (bytes.fromhex("8b 44 24 04 c7 00 01 00 00 00 31 c0 c3"), (), False),
+    ),
+)
+def test_relocated_static_global_argument_requires_closed_field_use(
+    tmp_path, callee, extra_relocations, expected
+):
+    caller = bytes.fromhex(
+        "68 00 2b 40 00 e8 06 00 00 00 59 c3 cc cc cc cc"
+    )
+    recovery = _static_global_reference_recovery(
+        tmp_path,
+        caller + callee,
+        (1, *extra_relocations),
+    )
+
+    assert _has_global_pointer_back_reference_origin(recovery) is expected
+
+
+@pytest.mark.parametrize(
+    ("count_setup", "fill_setup", "direction_setup", "expected"),
+    (
+        (bytes.fromhex("b9 02 00 00 00"), bytes.fromhex("31 c0"), b"", True),
+        (
+            bytes.fromhex("b9 02 00 00 00"),
+            bytes.fromhex("b8 01 00 00 00"),
+            b"",
+            False,
+        ),
+        (bytes.fromhex("8b 4c 24 04"), bytes.fromhex("31 c0"), b"", False),
+        (
+            bytes.fromhex("b9 02 00 00 00"),
+            bytes.fromhex("31 c0"),
+            bytes.fromhex("fd"),
+            False,
+        ),
+    ),
+)
+def test_relocated_static_global_zeroer_proves_exact_forward_zero_fill(
+    tmp_path, count_setup, fill_setup, direction_setup, expected
+):
+    prefix = (
+        count_setup
+        + bytes.fromhex("57")
+        + fill_setup
+        + bytes.fromhex("55 bf 00 2b 40 00")
+        + direction_setup
+    )
+    code = prefix + bytes.fromhex(
+        "83 ec 08 f3 ab 66 ab 83 c4 08 5d 5f c3"
+    )
+    relocation = code.index(bytes.fromhex("00 2b 40 00"))
+    recovery = _static_global_reference_recovery(
+        tmp_path, code, (relocation,)
+    )
+
+    assert _has_global_pointer_back_reference_origin(recovery) is expected
+
+
+def _global_pointer_consumer_recovery(
+    tmp_path, code: bytes, *, keep_slot_relocation: bool = True
+):
+    image = load_dispatch_image(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-"
+            "global-pointer-back-reference"
+        ),
+    )
+    data = bytearray(image.data)
+    offset = image.va_to_offset(0x00401190)
+    assert offset is not None
+    data[offset : offset + 0x40] = b"\xCC" * 0x40
+    data[offset : offset + len(code)] = code
+    image = replace(
+        image,
+        data=bytes(data),
+        relocations=tuple(
+            row
+            for row in image.relocations
+            if keep_slot_relocation or row.va != 0x00401191
+        ),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    return recovery
+
+
+@pytest.mark.parametrize(
+    ("store_opcode", "expected"),
+    ((bytes.fromhex("a2 00 2c 40 00"), True),
+     (bytes.fromhex("a3 00 2c 40 00"), False)),
+)
+def test_global_pointer_field_distinguishes_partial_and_full_pointer_stores(
+    tmp_path, store_opcode, expected
+):
+    recovery = _global_pointer_consumer_recovery(
+        tmp_path,
+        bytes.fromhex("a1 00 2a 40 00 b0 01")
+        + store_opcode
+        + bytes.fromhex("31 c0 c3"),
+    )
+
+    assert (
+        recovery._pointer_definition_preserves_field_without_escape(
+            0x00401190, 0x00401190, 0
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize("hostile", (False, True))
+def test_global_pointer_field_tracks_exact_call_return_across_loop(
+    tmp_path, hostile
+):
+    after_call = (
+        bytes.fromhex("a3 00 2c 40 00 31 c0 43 83 fb 02 7c ee c3")
+        if hostile
+        else bytes.fromhex("31 c0 43 83 fb 02 7c f3 c3")
+    )
+    code = bytes.fromhex("31 db e8 29 00 00 00") + after_call
+    code += b"\xCC" * (0x30 - len(code)) + b"\xC3"
+    recovery = _global_pointer_consumer_recovery(
+        tmp_path, code, keep_slot_relocation=False
+    )
+
+    assert (
+        recovery._pointer_definition_preserves_field_without_escape(
+            None,
+            0x00401190,
+            0,
+            root_call=0x00401192,
+        )
+        is not hostile
+    )
+
+
+@pytest.mark.parametrize("hostile", (False, True))
+def test_global_pointer_field_tracks_static_forward_repeated_copy(
+    tmp_path, hostile
+):
+    code = bytearray.fromhex(
+        "a1 00 2a 40 00 83 ec 10 89 c6 b9 02 00 00 00 "
+        "8d 3c 24 83 c6 08"
+    )
+    if hostile:
+        code.append(0xFD)
+    code.extend(bytes.fromhex("f3 a5 66 a5 83 c4 10 31 c0 c3"))
+    recovery = _global_pointer_consumer_recovery(tmp_path, bytes(code))
+
+    assert (
+        recovery._pointer_definition_preserves_field_without_escape(
+            0x00401190, 0x00401190, 0
+        )
+        is not hostile
+    )
+
+
+@pytest.mark.parametrize("canonical_setcc", (True, False))
+def test_global_pointer_field_requires_exact_boolean_canonicalization(
+    tmp_path, canonical_setcc
+):
+    prefix = bytes.fromhex("80 78 04 01 0f 95 c0") if canonical_setcc else b""
+    recovery = _global_pointer_consumer_recovery(
+        tmp_path,
+        bytes.fromhex("a1 00 2a 40 00")
+        + prefix
+        + bytes.fromhex(
+            "25 ff 00 00 00 a3 00 2c 40 00 31 c0 c3"
+        ),
+    )
+
+    assert (
+        recovery._pointer_definition_preserves_field_without_escape(
+            0x00401190, 0x00401190, 0
+        )
+        is canonical_setcc
+    )
+
+
+@pytest.mark.parametrize("hostile", (False, True))
+def test_global_pointer_return_audits_unowned_raw_caller_fallthrough(
+    tmp_path, hostile
+):
+    image = load_dispatch_image(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-"
+            "global-pointer-back-reference"
+        ),
+    )
+    probe = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    owned_call = next(
+        address
+        for address in probe._raw_direct_call_sites(0x00401190)
+        if address < 0x00401100
+    )
+    data = bytearray(image.data)
+    consumer_offset = image.va_to_offset(0x00401190)
+    caller_fallthrough = image.va_to_offset(owned_call + 5)
+    hidden_offset = image.va_to_offset(0x004011D0)
+    assert consumer_offset is not None
+    assert caller_fallthrough is not None
+    assert hidden_offset is not None
+    data[consumer_offset : consumer_offset + 0x20] = b"\xCC" * 0x20
+    data[consumer_offset : consumer_offset + 6] = bytes.fromhex(
+        "a1 00 2a 40 00 c3"
+    )
+    data[caller_fallthrough : caller_fallthrough + 4] = bytes.fromhex(
+        "31 c0 5b c3"
+    )
+    hidden = bytearray.fromhex("e8 bb ff ff ff")
+    if hostile:
+        hidden.extend(bytes.fromhex("a3 00 2c 40 00"))
+    hidden.extend(bytes.fromhex("31 c0 c3"))
+    data[hidden_offset : hidden_offset + 0x20] = b"\xCC" * 0x20
+    data[hidden_offset : hidden_offset + len(hidden)] = hidden
+    image = replace(
+        image,
+        data=bytes(data),
+        relocations=tuple(
+            row
+            for row in image.relocations
+            if not 0x004011D0 <= row.va < 0x004011F0
+        ),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert (
+        recovery._pointer_definition_preserves_field_without_escape(
+            0x00401190, 0x00401190, 0
+        )
+        is not hostile
+    )
+
+
+def test_stack_forwarded_back_reference_requires_local_initializer(tmp_path):
+    image = load_dispatch_image(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-"
+            "stack-forwarded-back-reference"
+        ),
+    )
+    data = bytearray(image.data)
+    offset = image.va_to_offset(0x004011B5)
+    assert offset is not None
+    struct.pack_into("<i", data, offset, 0x004010F0 - 0x004011B9)
+    image = replace(image, data=bytes(data))
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+
+    assert not recovery._argument_has_copied_descriptor_origin(
+        0x00401030,
+        0,
+        copy_function,
+        frozenset(value for value in domains[0] if value),
+        frozenset(),
+    )
+
+
+def test_stack_forwarded_back_reference_rejects_intervening_clobber(tmp_path):
+    image = load_dispatch_image(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-"
+            "stack-forwarded-back-reference"
+        ),
+    )
+    data = bytearray(image.data)
+    offset = image.va_to_offset(0x004011D4)
+    assert offset is not None
+    data[offset : offset + 12] = bytes.fromhex(
+        "8b 44 24 04 8b 00 31 c9 89 48 04 c3"
+    )
+    image = replace(image, data=bytes(data))
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+
+    assert not recovery._argument_has_copied_descriptor_origin(
+        0x00401030,
+        0,
+        copy_function,
+        frozenset(value for value in domains[0] if value),
+        frozenset(),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("wrong-source", "missing-initializer", "wrong-global-writer"),
+)
+def test_copied_descriptor_back_reference_requires_exact_initializer(
+    tmp_path, mutation
+):
+    image = load_dispatch_image(
+        tmp_path,
+        mode="copied-descriptor-registered-object-back-reference",
+    )
+    data = bytearray(image.data)
+    if mutation == "wrong-source":
+        offset = image.va_to_offset(0x00401119)
+        assert offset is not None
+        data[offset : offset + 3] = bytes.fromhex("89 59 04")
+    elif mutation == "missing-initializer":
+        offset = image.va_to_offset(0x00401016)
+        assert offset is not None
+        struct.pack_into("<i", data, offset, 0x004010F0 - 0x0040101A)
+    else:
+        offset = image.va_to_offset(0x0040101B)
+        assert offset is not None
+        data[offset : offset + 3] = bytes.fromhex("89 d8 90")
+    image = replace(image, data=bytes(data))
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+
+    assert not recovery._argument_has_copied_descriptor_origin(
+        0x00401030,
+        0,
+        copy_function,
+        frozenset(value for value in domains[0] if value),
+        frozenset(),
+    )
+
+
+def test_registered_copy_origin_survives_closed_link_cursor(tmp_path):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-registered-object-link-cursor"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, _domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+
+    assert recovery._register_has_registered_copy_origin(
+        0x0040117E, "eax", 0x00401170, copy_function
+    )
+
+
+def test_closed_link_cursor_ignores_post_observation_clobber(tmp_path):
+    image = load_dispatch_image(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-"
+            "link-cursor-post-clobber"
+        ),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, _domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+
+    assert recovery._register_has_registered_copy_origin(
+        0x0040117E, "eax", 0x00401170, copy_function
+    )
+
+
+def test_registered_copy_origin_rejects_unknown_link_cursor(tmp_path):
+    image = load_dispatch_image(
+        tmp_path,
+        mode="copied-descriptor-registered-object-link-cursor-unknown",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, _domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+
+    assert not recovery._register_has_registered_copy_origin(
+        0x0040117E, "eax", 0x00401170, copy_function
+    )
+
+
+def test_registered_copy_origin_survives_runtime_global_field(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-registered-object-runtime-global-field",
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_runtime_global_copy_field_survives_guard_block(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-"
+            "guarded-runtime-global-field"
+        ),
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_runtime_global_copy_field_rejects_guarded_clobber(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-"
+            "guarded-runtime-global-field-clobber"
+        ),
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_runtime_global_copy_field_rejects_unknown_writer(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode=(
+            "copied-descriptor-registered-object-runtime-global-field-unknown"
+        ),
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_forward_bounded_string_writer_reports_size_argument(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "8b 54 24 04 8b 4c 24 0c 89 d7 01 f9 "
+        "aa 39 cf 72 fb 29 f9 f3 aa c3",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.function_addresses.add(0x00401020)
+
+    assert (
+        recovery._forward_bounded_string_writer_size_argument(
+            0x0040100A, 0
+        )
+        == 2
+    )
+
+
+def test_field_preservation_tracks_scalar_movsd_pointer_steps(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "8b 7c 24 04 8b 74 24 08 a5 a5 c3",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.function_addresses.add(0x0040100A)
+
+    assert recovery._function_argument_preserves_field(0x0040100A, 0, 8)
+    assert not recovery._function_argument_preserves_field(
+        0x0040100A, 0, 4
+    )
+
+
+def test_field_preservation_tracks_incremented_pointer(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "8b 44 24 04 40 c6 00 00 c3",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.function_addresses.add(0x0040100A)
+
+    assert recovery._function_argument_preserves_field(0x0040100A, 0, 4)
+    assert not recovery._function_argument_preserves_field(
+        0x0040100A, 0, 0
+    )
+
+
+def test_return_offsets_accept_pointer_independent_constants(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "8b 4c 24 04 8d 0c 09 85 c9 74 06 "
+        "b8 08 00 00 00 c3 31 c0 c3",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.function_addresses.add(0x0040100A)
+
+    assert recovery._function_argument_return_offsets(
+        0x0040100A, 0
+    ) == frozenset()
+
+
+def test_return_offsets_reject_mixed_pointer_return(tmp_path):
+    image = load_cfg_program(
+        tmp_path,
+        "8b 4c 24 04 8d 0c 09 85 c9 74 03 89 c8 c3 31 c0 c3",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.function_addresses.add(0x0040100A)
+
+    assert recovery._function_argument_return_offsets(0x0040100A, 0) is None
+
+
+def test_field_summary_accepts_overlap_safe_copy_before_destination(tmp_path):
+    image = load_memmove_program(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_preserves_field(0x00401080, 0, -4)
+    assert recovery._function_argument_does_not_read_field(
+        0x00401080, 0, -4
+    )
+    assert recovery._function_argument_preserves_field(0x00401080, 1, -4)
+    assert recovery._function_argument_does_not_read_field(
+        0x00401080, 1, -4
+    )
+
+
+def test_field_summary_rejects_corrupt_overlap_safe_copy(tmp_path):
+    image = load_memmove_program(tmp_path, corrupt_backward_step=True)
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert not recovery._function_argument_preserves_field(
+        0x00401080, 0, -4
+    )
+    assert not recovery._function_argument_does_not_read_field(
+        0x00401080, 0, -4
+    )
+    assert not recovery._function_argument_preserves_field(
+        0x00401080, 1, -4
+    )
+    assert not recovery._function_argument_does_not_read_field(
+        0x00401080, 1, -4
+    )
+
+
+def test_field_summary_accepts_forward_copy_before_destination(tmp_path):
+    image = load_memcpy_program(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_preserves_field(0x00401080, 0, -4)
+    assert recovery._function_argument_does_not_read_field(
+        0x00401080, 0, -4
+    )
+    assert recovery._function_argument_preserves_field(0x00401080, 1, -4)
+    assert recovery._function_argument_does_not_read_field(
+        0x00401080, 1, -4
+    )
+
+
+def test_registered_copy_origin_survives_stack_return(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-registered-object-stack-return",
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_registered_copy_origin_rejects_clobbered_stack_return(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-registered-object-stack-return-unknown",
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_registry_lookup_accepts_proven_null_start_cursor(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path, mode="copied-descriptor-registered-object-cursor-lookup"
+    )
+    assert any(
+        row.source == 0x0040103E
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_registry_lookup_rejects_unknown_start_cursor(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-registered-object-unknown-cursor-lookup",
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_registered_copy_state_is_cached_per_function(tmp_path, monkeypatch):
+    class NoIterationSet(set):
+        def __iter__(self):
+            raise AssertionError("registered-copy state scanned all calls")
+
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-registered-object"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, _domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+    recovery.registered_copy_register_cache.clear()
+    recovery.direct_calls = NoIterationSet(recovery.direct_calls)
+
+    assert recovery._register_has_registered_copy_origin(
+        0x0040101D, "eax", 0x00401000, copy_function
+    )
+
+    def reject_cfg_walk(*_args, **_kwargs):
+        raise AssertionError("registered-copy state rebuilt for one function")
+
+    monkeypatch.setattr(recovery, "_summary_successors", reject_cfg_walk)
+    assert recovery._register_has_registered_copy_origin(
+        0x0040101E, "eax", 0x00401000, copy_function
+    )
+
+
+def test_registered_copy_cache_tracks_registry_fact_changes(tmp_path):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-registered-object"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_function, _domains = recovery._copied_descriptor_source_domains(
+        frozenset()
+    )
+    registry_key = (copy_function, recovery._summary_fact_signature())
+    registries = recovery.copy_registry_cache[registry_key]
+    assert registries
+    recovery.registered_copy_register_cache.clear()
+    recovery.registered_copy_state_cache.clear()
+    recovery.copy_registry_cache[registry_key] = ()
+
+    assert not recovery._register_has_registered_copy_origin(
+        0x0040101D, "eax", 0x00401000, copy_function
+    )
+
+    recovery.copy_registry_cache[registry_key] = registries
+    assert recovery._register_has_registered_copy_origin(
+        0x0040101D, "eax", 0x00401000, copy_function
+    )
+
+
+def test_raw_direct_call_scan_is_cached_per_target(tmp_path, monkeypatch):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-registered-object"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    original_read = pe.Image.read
+    executable_reads = 0
+
+    def counted_read(current, va, size):
+        nonlocal executable_reads
+        if current is image and any(
+            section.is_executable
+            and section.va == va
+            and section.raw_size == size
+            for section in image.sections
+        ):
+            executable_reads += 1
+        return original_read(current, va, size)
+
+    monkeypatch.setattr(pe.Image, "read", counted_read)
+
+    first = recovery._raw_direct_call_sites(0x004010F0)
+    second = recovery._raw_direct_call_sites(0x004010F0)
+
+    assert second == first
+    assert executable_reads == sum(
+        section.is_executable and section.raw_size >= 5
+        for section in image.sections
+    )
+
+
+def test_direct_call_domain_is_cached_for_unchanged_facts(tmp_path):
+    class NoIterationSet(set):
+        def __iter__(self):
+            raise AssertionError("direct-call domain rescanned unchanged calls")
+
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-registered-object"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    first = recovery._direct_call_domain_is_closed(0x00401000)
+    recovery.direct_calls = NoIterationSet(recovery.direct_calls)
+
+    assert recovery._direct_call_domain_is_closed(0x00401000) is first
+
+
+def test_incoming_call_sites_use_target_index(tmp_path):
+    class NoIterationSet(set):
+        def __iter__(self):
+            raise AssertionError("incoming call query rescanned every edge")
+
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    recovery = _DirectCfgRecovery(
+        image, cfg.seed_inventory, generous_limits(image)
+    )
+    recovery.recover()
+    expected = recovery._incoming_call_sites(0x004010A0)
+    recovery.edges = NoIterationSet(recovery.edges)
+
+    assert recovery._incoming_call_sites(0x004010A0) == expected
+
+
+def test_owned_instruction_reuses_audited_decode(tmp_path, monkeypatch):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-registered-object"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    expected = recovery.instructions[0x00401000]
+    recovery._owned_decoded(0x00401000)
+    assert (
+        len(recovery.decoded_instruction_cache)
+        <= _DECODED_INSTRUCTION_CACHE_LIMIT
+    )
+
+    def reject_decode(_address):
+        raise AssertionError("owned instruction was decoded more than once")
+
+    monkeypatch.setattr(recovery, "_decode_one", reject_decode)
+    decoded = recovery._owned_decoded(0x00401000)
+
+    assert decoded.address == expected.address
+    assert decoded.size == expected.size
+    assert bytes(decoded.bytes).hex() == expected.bytes_hex
+
+
+def test_registrar_lookup_reuses_sorted_function_entries(tmp_path):
+    class NoIterationSet(set):
+        def __iter__(self):
+            raise AssertionError("registrar lookup resorted unchanged entries")
+
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-registered-object"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    expected = recovery._registrar_function_entry(0x0040101D)
+    recovery.function_addresses = NoIterationSet(recovery.function_addresses)
+
+    assert recovery._registrar_function_entry(0x0040101E) == expected
+
+
+def test_direct_call_target_index_avoids_global_call_scan(tmp_path):
+    class NoIterationSet(set):
+        def __iter__(self):
+            raise AssertionError("targeted caller lookup scanned every call")
+
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-registered-object"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    target = next(iter(recovery.direct_call_sources_by_target))
+    expected = tuple(sorted(recovery.direct_call_sources_by_target[target]))
+    recovery.direct_calls = NoIterationSet(recovery.direct_calls)
+
+    assert tuple(
+        row.address for row in recovery._direct_calls_to(target)
+    ) == expected
+
+
+def test_guarded_slot_zero_consumers_are_cached(tmp_path, monkeypatch):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-slot-zero-hypothesis"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.guarded_slot_zero_consumer_cache.clear()
+    expected = recovery._guarded_slot_zero_descriptor_consumers()
+
+    def reject_decode(_address):
+        raise AssertionError("guarded consumers were rescanned")
+
+    monkeypatch.setattr(recovery, "_owned_decoded", reject_decode)
+    assert recovery._guarded_slot_zero_descriptor_consumers() == expected
+
+
+def test_copied_descriptor_registry_rejects_unknown_writer(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path, mode="copied-descriptor-registered-object-unknown-writer"
+    )
+    assert any(
+        row.address == 0x0040103E and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
 def test_copied_descriptor_slot_zero_hypothesis_closes_after_replay(tmp_path):
     cfg = dispatch_cfg(
         tmp_path, mode="copied-descriptor-slot-zero-hypothesis"
@@ -1285,6 +3107,132 @@ def test_copied_descriptor_slot_zero_hypothesis_closes_after_replay(tmp_path):
     )
     assert edge.target == 0x004010F0
     assert "fixed-nine-dword-copy" in edge.provenance
+
+
+def test_copied_descriptor_slot_zero_preserves_target_source_correlation(
+    tmp_path,
+):
+    cfg = dispatch_cfg(
+        tmp_path, mode="copied-descriptor-slot-zero-correlated-sources"
+    )
+    edges = {
+        row.target: row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == 0x0040103D
+        and row.flow_kind
+        == "indirect-call-copied-descriptor-slot-zero"
+    }
+    assert set(edges) == {0x004010D8, 0x004010F0}
+    assert "slots=0x402300" in edges[0x004010F0].provenance
+    assert "0x402400" not in edges[0x004010F0].provenance
+    assert "slots=0x402400" in edges[0x004010D8].provenance
+    assert "0x402300" not in edges[0x004010D8].provenance
+
+
+def test_copied_descriptor_tag_provenance_closes_rejected_callback(
+    tmp_path,
+):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="copied-descriptor-slot-zero-tagged-rejected-callback",
+    )
+    assert not any(
+        row.address == 0x004011A5
+        for row in cfg.control_targets.unresolved
+    )
+    diagnostic = next(
+        row
+        for row in cfg.ownership_diagnostics
+        if row.address == 0x004011A5
+        and row.kind == "proven-unreachable-control"
+    )
+    assert "required-tag=0x50617273" in diagnostic.detail
+    assert "rejected-tag=0x436f6d70" in diagnostic.detail
+    assert "source-table=0x402300" in diagnostic.detail
+
+
+def test_stack_state_applies_closed_indirect_callee_cleanup(tmp_path):
+    image = load_dispatch_image(
+        tmp_path,
+        mode="copied-descriptor-slot-zero-tagged-rejected-callback",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    states = recovery._function_stack_states(0x00401138)
+
+    assert states is not None
+    assert states[0x00401153][0] == -8
+    assert states[0x00401158][0] == -8
+
+
+def test_stack_state_uses_indexed_call_targets(tmp_path):
+    class NoIterationSet(set):
+        def __iter__(self):
+            raise AssertionError("stack analysis scanned the global CFG set")
+
+    image = load_dispatch_image(
+        tmp_path,
+        mode="copied-descriptor-slot-zero-tagged-rejected-callback",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.stack_state_cache.clear()
+    recovery.callee_cleanup_cache.clear()
+    recovery.direct_calls = NoIterationSet(recovery.direct_calls)
+    recovery.edges = NoIterationSet(recovery.edges)
+
+    assert recovery._closed_call_stack_cleanup(0x00401151) == 8
+
+
+def test_stack_state_rejects_incorrect_indirect_callee_cleanup(tmp_path):
+    image = load_dispatch_image(
+        tmp_path,
+        mode="copied-descriptor-slot-zero-tagged-rejected-callback",
+    )
+    data = bytearray(image.data)
+    ret_offset = image.va_to_offset(0x0040112E)
+    assert ret_offset is not None
+    data[ret_offset : ret_offset + 3] = bytes.fromhex("c3 cc cc")
+    image = replace(image, data=bytes(data))
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_stack_states(0x00401138) is None
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "copied-descriptor-slot-zero-tagged-rejected-callback-missing-stamper",
+        "copied-descriptor-slot-zero-tagged-rejected-callback-same-tag",
+        "copied-descriptor-slot-zero-tagged-rejected-callback-unrelocated-provider",
+    ),
+)
+def test_copied_descriptor_tag_provenance_is_fail_closed(tmp_path, mode):
+    cfg = dispatch_cfg(tmp_path, mode=mode)
+    assert any(
+        row.address == 0x004011A5
+        and row.kind in {"indirect-flow", "computed-flow-blocker"}
+        for row in cfg.control_targets.unresolved
+    )
+    assert not any(
+        row.address == 0x004011A5
+        and row.kind == "proven-unreachable-control"
+        for row in cfg.ownership_diagnostics
+    )
 
 
 @pytest.mark.parametrize(
@@ -1328,6 +3276,23 @@ def test_hypothesis_replay_discovers_second_order_object_table(tmp_path):
         row.address == 0x00401058
         for row in cfg.control_targets.unresolved
     )
+
+
+def test_certified_copied_descriptor_callback_closes_incoming_domain(
+    tmp_path,
+):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-object-hypothesis-chain"
+    )
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    recovery = _DirectCfgRecovery(
+        image, cfg.seed_inventory, generous_limits(image)
+    )
+    recovery.recover()
+
+    assert recovery._incoming_call_domain_is_closed(0x00401048)
 
 
 def test_six_movsd_decoy_without_constructor_contract_remains_blocking(tmp_path):
@@ -1811,6 +3776,31 @@ def test_ebp_can_hold_a_finite_descriptor_instead_of_a_frame(tmp_path):
     assert "global-slot=0x402300" in edge.provenance
 
 
+def test_loop_local_descriptor_reload_precedes_affine_reasoning(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path, mode="global-descriptor-loop-reload-callback"
+    )
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == 0x0040103B
+        and row.flow_kind == "indirect-call-finite-value"
+    )
+    assert edge.target == 0x00401090
+    assert "definition=0x401034" in edge.provenance
+    assert "global-slot=0x402300" in edge.provenance
+
+
+def test_loop_local_descriptor_reload_rejects_later_clobber(tmp_path):
+    cfg = dispatch_cfg(
+        tmp_path, mode="global-descriptor-loop-reload-clobber"
+    )
+    assert any(
+        row.address == 0x0040103D and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
 def test_guarded_global_descriptor_survives_volatile_alias_block(tmp_path):
     cfg = dispatch_cfg(
         tmp_path, mode="global-descriptor-guarded-alias-callback"
@@ -1860,6 +3850,157 @@ def test_reachable_object_callback_table_seeds_every_relocated_entry(tmp_path):
     assert any(
         row.start <= 0x00402300 and 0x0040230C <= row.end
         for row in cfg.data_regions
+    )
+
+
+def test_certified_object_callback_closes_copied_argument_domain(tmp_path):
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    recovery = _DirectCfgRecovery(
+        image, cfg.seed_inventory, generous_limits(image)
+    )
+    recovery.recover()
+
+    assert recovery._argument_has_copied_descriptor_origin(
+        0x004010A0,
+        0,
+        0x00401090,
+        frozenset({0x00402400}),
+        frozenset(),
+    )
+
+
+def test_certified_callback_copy_origin_survives_global_slot(tmp_path):
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    recovery = _DirectCfgRecovery(
+        image, cfg.seed_inventory, generous_limits(image)
+    )
+    recovery.recover()
+
+    assert recovery._argument_has_copy_constructor_origin(
+        0x004010A0,
+        0,
+        0x00401090,
+        frozenset(),
+    )
+    assert recovery._argument_has_copy_constructor_origin(
+        0x004010C0,
+        0,
+        0x00401090,
+        frozenset(),
+    )
+
+
+def test_global_copy_origin_rejects_noncopy_writer(tmp_path):
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    data = bytearray(image.data)
+    offset = image.va_to_offset(0x004010C0)
+    assert offset is not None
+    data[offset : offset + 11] = bytes.fromhex(
+        "c7 05 00 25 40 00 00 24 40 00 c3"
+    )
+    image = replace(
+        image,
+        data=bytes(data),
+        relocations=(*image.relocations, pe.Relocation(0x004010C2, 3)),
+    )
+    recovery = _DirectCfgRecovery(
+        image, cfg.seed_inventory, generous_limits(image)
+    )
+    recovery.recover()
+
+    assert not recovery._global_slot_has_copy_constructor_origin(
+        0x00402500, 0x00401090, frozenset()
+    )
+
+
+def test_global_copy_origin_rejects_unowned_reference(tmp_path):
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    reference = 0x00402510
+    data = bytearray(image.data)
+    offset = image.va_to_offset(reference)
+    assert offset is not None
+    struct.pack_into("<I", data, offset, 0x00402500)
+    image = replace(
+        image,
+        data=bytes(data),
+        relocations=(*image.relocations, pe.Relocation(reference, 3)),
+    )
+    recovery = _DirectCfgRecovery(
+        image, cfg.seed_inventory, generous_limits(image)
+    )
+    recovery.recover()
+
+    assert not recovery._global_slot_has_copy_constructor_origin(
+        0x00402500, 0x00401090, frozenset()
+    )
+
+
+def test_proven_copied_argument_domain_is_reused(tmp_path, monkeypatch):
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    recovery = _DirectCfgRecovery(
+        image, cfg.seed_inventory, generous_limits(image)
+    )
+    recovery.recover()
+    arguments = (
+        0x004010A0,
+        0,
+        0x00401090,
+        frozenset({0x00402400}),
+        frozenset(),
+    )
+    assert recovery._argument_has_copied_descriptor_origin(*arguments)
+
+    def reject_rescan(_function_entry):
+        raise AssertionError("proven copied argument domain was rescanned")
+
+    monkeypatch.setattr(recovery, "_incoming_call_sites", reject_rescan)
+    assert recovery._argument_has_copied_descriptor_origin(*arguments)
+
+
+def test_unaccepted_callback_reference_keeps_argument_domain_open(tmp_path):
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    data = bytearray(image.data)
+    extra_reference = 0x00402310
+    offset = image.va_to_offset(extra_reference)
+    assert offset is not None
+    struct.pack_into("<I", data, offset, 0x004010A0)
+    image = replace(
+        image,
+        data=bytes(data),
+        relocations=(
+            *image.relocations,
+            pe.Relocation(extra_reference, 3),
+        ),
+    )
+    recovery = _DirectCfgRecovery(
+        image, cfg.seed_inventory, generous_limits(image)
+    )
+    recovery.recover()
+
+    assert not recovery._argument_has_copied_descriptor_origin(
+        0x004010A0,
+        0,
+        0x00401090,
+        frozenset({0x00402400}),
+        frozenset(),
     )
 
 

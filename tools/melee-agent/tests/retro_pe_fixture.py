@@ -449,7 +449,7 @@ def synthetic_dispatch_pe_bytes(
     struct.pack_into("<II", data, SECTION_TABLE_OFFSET + 40 + 16, 0x1000, 0x400)
     struct.pack_into("<II", data, SECTION_TABLE_OFFSET + 80 + 16, 0x200, 0x1400)
 
-    text = bytearray(b"\xCC" * 0x100)
+    text = bytearray(b"\xCC" * 0x200)
     table_va = 0x00402200
     bound = entry_count - 1
     if mode == "base-index-jump":
@@ -592,6 +592,38 @@ def synthetic_dispatch_pe_bytes(
         text[0x30:0x35] = bytes.fromhex("ff 54 24 04 c3")
         text[0x90] = 0xC3
         text[0xA0] = 0xC3
+    elif mode in {"guarded-equal-callback", "guarded-equal-clobber"}:
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x100)
+        text[:] = b"\xCC" * len(text)
+        if mode == "guarded-equal-clobber":
+            program = bytes.fromhex(
+                "8b 5c 24 04 81 fb 90 10 40 00 75 0e 89 cb "
+                "53 e8 1c 00 00 00 59 c3 cc cc cc cc 31 c0 c3"
+            )
+        else:
+            program = bytes.fromhex(
+                "8b 5c 24 04 81 fb 90 10 40 00 75 0c "
+                "53 e8 1e 00 00 00 59 c3 cc cc cc cc 31 c0 c3"
+            )
+        text[: len(program)] = program
+        text[0x30:0x35] = bytes.fromhex("ff 54 24 04 c3")
+        text[0x90] = 0xC3
+    elif mode in {"outparam-callback", "outparam-conditional-callback"}:
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x100)
+        text[:] = b"\xCC" * len(text)
+        text[0x00:0x17] = bytes.fromhex(
+            "83 ec 08 8d 04 24 50 e8 24 00 00 00 59 "
+            "8b 44 24 04 83 c4 08 ff d0 c3"
+        )
+        if mode == "outparam-conditional-callback":
+            text[0x30:0x40] = bytes.fromhex(
+                "8b 44 24 04 85 c9 74 07 c7 40 04 90 10 40 00 c3"
+            )
+        else:
+            text[0x30:0x3C] = bytes.fromhex(
+                "8b 44 24 04 c7 40 04 90 10 40 00 c3"
+            )
+        text[0x90] = 0xC3
     elif mode in {
         "cdecl-cross-block-callback",
         "cdecl-cross-block-clobber",
@@ -786,8 +818,18 @@ def synthetic_dispatch_pe_bytes(
             }
             else 0x90
         ] = 0xC3
+    elif mode == "linear-prologue-conflicting-tail":
+        struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x100)
+        text[:] = b"\xCC" * len(text)
+        text[0x00:0x12] = bytes.fromhex(
+            "53 56 55 83 ec 10 8b 6c 24 20 "
+            "85 c0 74 01 50 31 c0 c3"
+        )
+        text[0x20] = 0xC3
+        text[0x60] = 0xC3
     elif mode in {
         "constructor-field-callback",
+        "constructor-field-ebp-callback",
         "constructor-field-stack-decoy",
         "constructor-field-late-finite-write",
         "constructor-field-unknown-write",
@@ -798,6 +840,10 @@ def synthetic_dispatch_pe_bytes(
             text[0x00:0x1A] = bytes.fromhex(
                 "c7 84 24 04 01 00 00 20 23 40 00 "
                 "e8 20 00 00 00 8b 98 04 01 00 00 ff 53 04 c3"
+            )
+        elif mode == "constructor-field-ebp-callback":
+            text[0x00:0x11] = bytes.fromhex(
+                "e8 2b 00 00 00 89 c5 8b ad 04 01 00 00 ff 55 04 c3"
             )
         else:
             text[0x00:0x0F] = bytes.fromhex(
@@ -829,9 +875,12 @@ def synthetic_dispatch_pe_bytes(
         "validated-constructor-descriptor-incomplete-initializer-domain",
         "validated-constructor-descriptor-retail-guard-arms",
         "validated-constructor-descriptor-wrapper-global",
+        "validated-constructor-descriptor-wrapper-global-double",
+        "validated-constructor-descriptor-wrapper-global-double-unrelocated",
         "validated-constructor-descriptor-wrapper-global-alternate-writer",
         "validated-constructor-descriptor-wrapper-global-incomplete-domain",
         "validated-constructor-descriptor-multi-tag",
+        "validated-constructor-descriptor-multi-tag-rejected-only",
         "validated-constructor-descriptor-multi-tag-same-tag",
         "validated-constructor-descriptor-multi-tag-unknown-tag",
     }:
@@ -862,6 +911,12 @@ def synthetic_dispatch_pe_bytes(
                 "ff 74 24 04 e8 17 00 00 00 59 85 c0 74 0b "
                 "8b 98 34 00 00 00 ff 53 04 c3 cc c3"
             )
+            if mode == (
+                "validated-constructor-descriptor-multi-tag-rejected-only"
+            ):
+                text[0x15:0x1D] = bytes.fromhex(
+                    "c3 cc cc cc cc cc cc cc"
+                )
         elif mode == "validated-constructor-descriptor-tag-only":
             text[0x00:0x0C] = bytes.fromhex(
                 "68 00 25 40 00 e8 46 00 00 00 59 c3"
@@ -900,6 +955,16 @@ def synthetic_dispatch_pe_bytes(
         # Consumer accepts only the validator's non-null identity return.
         if multi_tag:
             pass
+        elif mode.startswith(
+            "validated-constructor-descriptor-wrapper-global-double"
+        ):
+            text[0x50:0x6D] = bytes.fromhex(
+                "a1 10 27 40 00 ff 30 e8 24 00 00 00 59 85 c0 74 0b "
+                "8b 98 34 00 00 00 ff 53 04 c3 cc c3"
+            )
+            text[0x70:0x7A] = bytes.fromhex(
+                "8b 44 24 04 a3 00 27 40 00 c3"
+            )
         elif wrapper_global:
             text[0x50:0x6C] = bytes.fromhex(
                 "ff 35 00 27 40 00 e8 25 00 00 00 59 85 c0 74 0b "
@@ -986,6 +1051,10 @@ def synthetic_dispatch_pe_bytes(
         struct.pack_into("<I", data, 0x804, 0x004010F0)
         if wrapper_global:
             struct.pack_into("<I", data, 0xA40, 0x00401070)
+        if mode.startswith(
+            "validated-constructor-descriptor-wrapper-global-double"
+        ):
+            struct.pack_into("<I", data, 0xB10, 0x00402700)
     elif mode in {
         "copied-descriptor-callback",
         "copied-descriptor-unknown-source",
@@ -993,7 +1062,41 @@ def synthetic_dispatch_pe_bytes(
         "copied-descriptor-cross-block-clobber",
         "copied-descriptor-unproven-object",
         "copied-descriptor-forwarded-object",
+        "copied-descriptor-source-forwarded-object",
+        "copied-descriptor-source-forwarded-object-unknown",
+        "copied-descriptor-wrapper-returned-object",
+        "copied-descriptor-wrapper-returned-object-unknown-return",
+        "copied-descriptor-field-forwarded-object",
+        "copied-descriptor-field-forwarded-object-unknown-write",
+        "copied-descriptor-field-forwarded-object-null-branch",
+        "copied-descriptor-field-forwarded-object-unknown-branch",
+        "copied-descriptor-field-list-returned-object",
+        "copied-descriptor-field-list-returned-object-unknown-insert",
+        "copied-descriptor-field-list-returned-object-runtime-zeroed",
+        "copied-descriptor-field-list-returned-object-runtime-nonzero",
+        "copied-descriptor-registered-object",
+        "copied-descriptor-registered-object-back-reference",
+        "copied-descriptor-registered-object-global-pointer-back-reference",
+        "copied-descriptor-registered-object-global-pointer-hostile-back-reference",
+        "copied-descriptor-registered-object-stack-forwarded-back-reference",
+        "copied-descriptor-registered-object-link-cursor",
+        "copied-descriptor-registered-object-link-cursor-post-clobber",
+        "copied-descriptor-registered-object-link-cursor-unknown",
+        "copied-descriptor-registered-object-runtime-global-field",
+        "copied-descriptor-registered-object-guarded-runtime-global-field",
+        "copied-descriptor-registered-object-guarded-runtime-global-field-clobber",
+        "copied-descriptor-registered-object-runtime-global-field-unknown",
+        "copied-descriptor-registered-object-stack-return",
+        "copied-descriptor-registered-object-stack-return-unknown",
+        "copied-descriptor-registered-object-unknown-writer",
+        "copied-descriptor-registered-object-cursor-lookup",
+        "copied-descriptor-registered-object-unknown-cursor-lookup",
         "copied-descriptor-slot-zero-hypothesis",
+        "copied-descriptor-slot-zero-correlated-sources",
+        "copied-descriptor-slot-zero-tagged-rejected-callback",
+        "copied-descriptor-slot-zero-tagged-rejected-callback-missing-stamper",
+        "copied-descriptor-slot-zero-tagged-rejected-callback-same-tag",
+        "copied-descriptor-slot-zero-tagged-rejected-callback-unrelocated-provider",
         "copied-descriptor-slot-zero-hidden-caller",
         "copied-descriptor-slot-zero-unrelocated-record",
         "copied-descriptor-object-hypothesis-chain",
@@ -1029,10 +1132,393 @@ def synthetic_dispatch_pe_bytes(
             text[0x48:0x58] = bytes.fromhex(
                 "53 8b 5c 24 08 53 e8 dd ff ff ff 59 5b c2 04 00"
             )
+        elif mode.startswith("copied-descriptor-source-forwarded-object"):
+            forwarded_source = (
+                "00 24 40 00" if mode.endswith("unknown") else "00 23 40 00"
+            )
+            text[0x11:0x28] = bytes.fromhex(
+                "50 e8 31 00 00 00 83 c4 04 68 "
+                + forwarded_source
+                + " e8 24 00 00 00 83 c4 04 c3"
+            )
+            text[0x48:0x58] = bytes.fromhex(
+                "53 8b 5c 24 08 53 e8 dd ff ff ff 59 5b c2 04 00"
+            )
+        elif mode.startswith("copied-descriptor-wrapper-returned-object"):
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x200)
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x200)
+            text[0xA:0xE] = bytes.fromhex("42 01 00 00")
+            if mode.endswith("unknown-return"):
+                text[0x151:0x170] = bytes.fromhex(
+                    "85 c9 74 06 e8 47 00 00 00 c3 "
+                    "ff 74 24 0c ff 74 24 0c ff 74 24 0c "
+                    "e8 f5 fe ff ff 83 c4 0c c3"
+                )
+                text[0x1A1] = 0xC3
+            else:
+                text[0x151:0x166] = bytes.fromhex(
+                    "ff 74 24 0c ff 74 24 0c ff 74 24 0c "
+                    "e8 ff fe ff ff 83 c4 0c c3"
+                )
+        elif mode.startswith("copied-descriptor-field-forwarded-object"):
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x200)
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x200)
+            entry = bytearray.fromhex(
+                "6a 00 6a 00 68 00 23 40 00 e8 52 00 00 00 "
+                "83 c4 0c bb 00 26 40 00"
+            )
+            if mode.endswith("null-branch"):
+                entry.extend(
+                    bytes.fromhex(
+                        "85 c9 74 05 89 43 34 eb 07 "
+                        "c7 43 34 00 00 00 00"
+                    )
+                )
+            elif mode.endswith("unknown-branch"):
+                entry.extend(
+                    bytes.fromhex(
+                        "85 c9 74 05 89 43 34 eb 03 89 4b 34"
+                    )
+                )
+            else:
+                entry.extend(bytes.fromhex("89 43 34"))
+            if mode.endswith("unknown-write"):
+                entry.extend(bytes.fromhex("ff 74 24 04 53"))
+                call_offset = len(entry)
+                entry.append(0xE8)
+                entry.extend(struct.pack("<i", 0x150 - (call_offset + 5)))
+                entry.extend(bytes.fromhex("83 c4 08"))
+            entry.extend(bytes.fromhex("53"))
+            call_offset = len(entry)
+            entry.append(0xE8)
+            entry.extend(struct.pack("<i", 0x48 - (call_offset + 5)))
+            entry.extend(bytes.fromhex("83 c4 04 c3"))
+            text[: len(entry)] = entry
+            text[0x48:0x59] = bytes.fromhex(
+                "53 8b 5c 24 08 8b 4b 34 51 e8 da ff ff ff "
+                "59 5b c3"
+            )
+            if mode.endswith("unknown-write"):
+                # The common legacy fixed-copy template below contracts its
+                # slice by one byte, so later synthetic functions are staged
+                # one byte high here and land at their advertised VAs.
+                text[0x151:0x15D] = bytes.fromhex(
+                    "8b 44 24 04 8b 4c 24 08 89 48 34 c3"
+                )
+        elif mode.startswith("copied-descriptor-field-list-returned-object"):
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x200)
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x200)
+            text[0x12:0x17] = bytes.fromhex("e8 f9 00 00 00")
+
+            runtime_container = "runtime-" in mode
+            builder = bytearray.fromhex("53")
+
+            def emit_builder(hex_bytes):
+                builder.extend(bytes.fromhex(hex_bytes))
+
+            def emit_builder_call(target):
+                # The common legacy fixed-copy template below contracts its
+                # slice by one byte.  Stage this synthetic function one byte
+                # high so its prologue and internal call targets land at the
+                # advertised addresses after that contraction.
+                call_offset = 0x111 + len(builder)
+                builder.append(0xE8)
+                builder.extend(
+                    struct.pack("<i", target - (call_offset + 5))
+                )
+
+            if runtime_container:
+                emit_builder_call(0x1D1)
+                emit_builder("a3 00 29 40 00")
+            emit_builder("bb 00 26 40 00 8b 4c 24 08 89 4b 34")
+            emit_builder("a1 00 29 40 00 83 c0 20 53 50")
+            emit_builder_call(0x181)
+            emit_builder("59 59")
+            if mode.endswith("unknown-insert"):
+                emit_builder(
+                    "a1 00 29 40 00 83 c0 20 "
+                    "68 00 27 40 00 50"
+                )
+                emit_builder_call(0x181)
+                emit_builder("59 59")
+            emit_builder("6a 00 a1 00 29 40 00 83 c0 20 50")
+            emit_builder_call(0x161)
+            emit_builder("59 59 50")
+            emit_builder_call(0x48)
+            emit_builder("59 5b c3")
+            text[0x111 : 0x111 + len(builder)] = builder
+            text[0x48:0x59] = bytes.fromhex(
+                "53 8b 5c 24 08 8b 4b 34 51 e8 da ff ff ff "
+                "59 5b c3"
+            )
+            text[0x161:0x168] = bytes.fromhex(
+                "8b 4c 24 04 8b 01 c3"
+            )
+            text[0x181:0x192] = bytes.fromhex(
+                "8b 54 24 04 8d 12 8b 44 24 08 "
+                "8b 0a 89 08 89 02 c3"
+            )
+            if runtime_container:
+                zeroer = bytearray.fromhex(
+                    "8b 54 24 04 57 55 8b 6c 24 10 55 52"
+                )
+                call_offset = 0x1A1 + len(zeroer)
+                zeroer.append(0xE8)
+                zeroer.extend(
+                    struct.pack("<i", 0xE1 - (call_offset + 5))
+                )
+                zeroer.extend(
+                    bytes.fromhex(
+                        "89 c2 59 31 c0 59 89 e9 89 d7 f3 aa "
+                        "89 d0 5d 5f c3"
+                    )
+                )
+                if mode.endswith("runtime-nonzero"):
+                    zeroer[20:22] = bytes.fromhex("b0 01")
+                text[0x1A1 : 0x1A1 + len(zeroer)] = zeroer
+
+                constructor = bytearray.fromhex(
+                    "68 00 01 00 00 6a 00 e8"
+                )
+                constructor.extend(
+                    struct.pack("<i", 0x1A1 - (0x1D1 + 12))
+                )
+                constructor.extend(bytes.fromhex("83 c4 08 c3"))
+                text[0x1D1 : 0x1D1 + len(constructor)] = constructor
+                struct.pack_into("<I", data, 0xD00, 0)
+            else:
+                struct.pack_into("<I", data, 0xD00, 0x00402A00)
+        elif mode.startswith("copied-descriptor-registered-object"):
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x200)
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x200)
+            entry = bytearray.fromhex(
+                "6a 00 6a 00 68 00 23 40 00 e8 52 00 00 00 "
+                "83 c4 0c 50"
+            )
+
+            def emit_entry_call(target):
+                call_offset = len(entry)
+                entry.append(0xE8)
+                entry.extend(struct.pack("<i", target - (call_offset + 5)))
+
+            emit_entry_call(0x150)
+            entry.extend(bytes.fromhex("59"))
+            if mode.endswith("unknown-writer"):
+                entry.extend(bytes.fromhex("ff 74 24 04"))
+                emit_entry_call(0x150)
+                entry.extend(bytes.fromhex("59"))
+            if "runtime-global-field" in mode:
+                emit_entry_call(0x110)
+                entry.extend(bytes.fromhex("c3"))
+            else:
+                if "cursor-lookup" in mode:
+                    if "unknown-cursor" not in mode:
+                        entry.extend(bytes.fromhex("ff 74 24 04"))
+                        emit_entry_call(0x170)
+                        entry.extend(bytes.fromhex("59"))
+                    entry.extend(
+                        bytes.fromhex(
+                            "ff 74 24 04"
+                            if "unknown-cursor" in mode
+                            else "6a 00"
+                        )
+                    )
+                    emit_entry_call(0x170)
+                    entry.extend(bytes.fromhex("59"))
+                else:
+                    emit_entry_call(0x170)
+                entry.extend(bytes.fromhex("50"))
+                emit_entry_call(0x30)
+                entry.extend(bytes.fromhex("59 c3"))
+            text[: len(entry)] = entry
+            text[0x151:0x16A] = bytes.fromhex(
+                "8b 44 24 04 be 00 29 40 00 8b 0e 85 c9 74 07 "
+                "8b 36 83 c6 10 eb f3 89 06 c3"
+            )
+            if "stack-return" in mode:
+                if mode.endswith("unknown"):
+                    text[0x171:0x18A] = bytes.fromhex(
+                        "a1 00 29 40 00 83 ec 04 89 04 24 "
+                        "c7 04 24 00 24 40 00 8b 04 24 83 c4 04 c3"
+                    )
+                else:
+                    text[0x171:0x183] = bytes.fromhex(
+                        "a1 00 29 40 00 83 ec 04 89 04 24 "
+                        "8b 04 24 83 c4 04 c3"
+                    )
+            elif "link-cursor" in mode:
+                cursor_head = (
+                    "00 2a 40 00"
+                    if mode.endswith("unknown")
+                    else "00 29 40 00"
+                )
+                if mode.endswith("post-clobber"):
+                    text[0x171:0x192] = bytes.fromhex(
+                        "be "
+                        + cursor_head
+                        + " eb 05 "
+                        "8b 36 83 c6 10 8b 06 85 c0 74 09 "
+                        "83 7c 24 04 00 75 02 eb ec "
+                        "be 00 2a 40 00 c3"
+                    )
+                else:
+                    text[0x171:0x18D] = bytes.fromhex(
+                        "be "
+                        + cursor_head
+                        + " eb 05 "
+                        "8b 36 83 c6 10 8b 06 85 c0 74 09 "
+                        "83 7c 24 04 00 75 02 eb ec c3"
+                    )
+            elif "cursor-lookup" in mode:
+                text[0x171:0x17F] = bytes.fromhex(
+                    "8b 44 24 04 85 c0 75 05 a1 00 29 40 00 c3"
+                )
+            else:
+                text[0x171:0x177] = bytes.fromhex(
+                    "a1 00 29 40 00 c3"
+                )
+            if mode.endswith("back-reference"):
+                entry = bytearray.fromhex(
+                    "53 6a 00 6a 00 68 00 23 40 00"
+                )
+
+                def emit_back_reference_call(target):
+                    call_offset = len(entry)
+                    entry.append(0xE8)
+                    entry.extend(
+                        struct.pack("<i", target - (call_offset + 5))
+                    )
+
+                emit_back_reference_call(0x60)
+                entry.extend(bytes.fromhex("83 c4 0c 89 c3 53"))
+                emit_back_reference_call(
+                    0x1A8 if "stack-forwarded" in mode else 0x110
+                )
+                if "stack-forwarded" in mode:
+                    entry.extend(bytes.fromhex("59 53"))
+                    emit_back_reference_call(0x1B0)
+                    entry.extend(bytes.fromhex("59 90"))
+                else:
+                    entry.extend(
+                        bytes.fromhex("59 8b 43 08 a3 00 2b 40 00")
+                    )
+                emit_back_reference_call(0x190)
+                entry.extend(bytes.fromhex("5b c3"))
+                text[: len(entry)] = entry
+                text[0x30] = 0xC3
+                # The fixed-copy template below contracts the text by one
+                # byte, so these land at 0x401110 and 0x401190.
+                text[0x111:0x11E] = bytes.fromhex(
+                    "8b 44 24 04 8b 50 08 8b 0a 89 41 04 c3"
+                )
+                text[0x191:0x1A3] = bytes.fromhex(
+                    "a1 00 2b 40 00 8b 10 8b 4a 04 51 "
+                    "e8 90 fe ff ff 59 c3"
+                )
+                if "global-pointer" in mode:
+                    initializer = bytearray.fromhex(
+                        "8b 44 24 04 8b 50 08 8b 0a 89 41 04 "
+                        "c7 05 00 2a 40 00 00 2b 40 00"
+                    )
+                    if "hostile" in mode:
+                        initializer.extend(
+                            bytes.fromhex(
+                                "c7 05 00 2a 40 00 10 2b 40 00"
+                            )
+                        )
+                    initializer.append(0xC3)
+                    text[0x111 : 0x111 + len(initializer)] = initializer
+                    text[0x191:0x1A5] = bytes.fromhex(
+                        "a1 00 2a 40 00 8b 00 8b 10 8b 4a 04 51 "
+                        "e8 8e fe ff ff 59 c3"
+                    )
+                if "stack-forwarded" in mode:
+                    text[0x1A9] = 0xC3
+                    text[0x1B1:0x1D4] = bytes.fromhex(
+                        "ff 74 24 04 e8 57 ff ff ff 59 "
+                        "8b 44 24 04 8b 40 08 50 "
+                        "e8 0d 00 00 00 59 "
+                        "ff 74 24 04 e8 0f 00 00 00 59 c3"
+                    )
+                    text[0x1D5] = 0xC3
+                    text[0x1E1:0x1EE] = bytes.fromhex(
+                        "8b 44 24 04 8b 40 08 a3 00 2b 40 00 c3"
+                    )
+                # A relocated read in unowned executable residue must not
+                # poison the closed domain of the reachable global slot.
+                residue_offset = (
+                    0x1F1 if "stack-forwarded" in mode else 0x1D1
+                )
+                text[residue_offset : residue_offset + 7] = bytes.fromhex(
+                    "ff 35 00 2b 40 00 c3"
+                )
+            if "runtime-global-field" in mode:
+                helper = bytearray()
+
+                def emit_helper_call(target):
+                    call_offset = 0x110 + len(helper)
+                    helper.append(0xE8)
+                    helper.extend(
+                        struct.pack("<i", target - (call_offset + 5))
+                    )
+
+                emit_helper_call(0x1D0)
+                helper.extend(bytes.fromhex("a3 00 2a 40 00"))
+                if mode.endswith("unknown"):
+                    helper.extend(bytes.fromhex("b8 00 24 40 00"))
+                else:
+                    emit_helper_call(0x170)
+                helper.extend(
+                    bytes.fromhex(
+                        "8b 15 00 2a 40 00 89 42 34 "
+                        "8b 0d 00 2a 40 00 8b 41 34"
+                    )
+                )
+                if "guarded-runtime-global-field-clobber" in mode:
+                    helper.extend(
+                        bytes.fromhex(
+                            "85 d2 74 05 b8 00 24 40 00"
+                        )
+                    )
+                elif "guarded-runtime-global-field" in mode:
+                    helper.extend(bytes.fromhex("85 c0 74 01 90"))
+                helper.extend(bytes.fromhex("50"))
+                emit_helper_call(0x30)
+                helper.extend(bytes.fromhex("59 c3"))
+                text[0x111 : 0x111 + len(helper)] = helper
+
+                zeroer = bytearray.fromhex(
+                    "8b 54 24 04 57 55 8b 6c 24 10 55 52"
+                )
+                zeroer_call = 0x1A0 + len(zeroer)
+                zeroer.append(0xE8)
+                zeroer.extend(struct.pack("<i", 0xE0 - (zeroer_call + 5)))
+                zeroer.extend(
+                    bytes.fromhex(
+                        "89 c2 59 31 c0 59 89 e9 89 d7 f3 aa "
+                        "89 d0 5d 5f c3"
+                    )
+                )
+                text[0x1A1 : 0x1A1 + len(zeroer)] = zeroer
+
+                constructor = bytearray.fromhex("6a 40 6a 00 e8")
+                constructor.extend(
+                    struct.pack("<i", 0x1A0 - (0x1D0 + 9))
+                )
+                constructor.extend(bytes.fromhex("83 c4 08 c3"))
+                text[0x1D1 : 0x1D1 + len(constructor)] = constructor
         text[0x30:0x42] = bytes.fromhex(
             "53 8b 5c 24 08 8b 03 8b 58 0c 85 db 74 02 "
             "ff d3 5b c3"
         )
+        if mode.endswith("field-forwarded-object-null-branch"):
+            # The consumer is also an exact caller of the field-forwarder
+            # with a null object.  That dereference faults before the later
+            # indirect transfer, so null contributes no callback target.
+            text[0x30:0x48] = bytes.fromhex(
+                "8b 44 24 04 8b 00 8b 40 0c 85 c0 74 03 90 ff d0 "
+                "6a 00 e8 01 00 00 00 c3"
+            )
         if slot_zero_hypothesis:
             text[0x30:0x41] = bytes.fromhex(
                 "53 8b 44 24 08 8b 08 8b 19 85 db 74 02 "
@@ -1041,6 +1527,14 @@ def synthetic_dispatch_pe_bytes(
             if mode == "copied-descriptor-slot-zero-hidden-caller":
                 text[0x48:0x50] = bytes.fromhex(
                     "51 e8 12 00 00 00 59 c3"
+                )
+            elif mode == "copied-descriptor-slot-zero-correlated-sources":
+                text[0x1B:0x21] = bytes.fromhex(
+                    "e8 28 00 00 00 c3"
+                )
+                text[0x48:0x5A] = bytes.fromhex(
+                    "6a 00 6a 00 68 00 24 40 00 e8 0a 00 00 00 "
+                    "83 c4 0c c3"
                 )
             elif mode == "copied-descriptor-object-hypothesis-chain":
                 text[0x48:0x5B] = bytes.fromhex(
@@ -1101,6 +1595,9 @@ def synthetic_dispatch_pe_bytes(
             )
         if slot_zero_hypothesis:
             struct.pack_into("<I", data, 0x700, callback_target)
+            if mode == "copied-descriptor-slot-zero-correlated-sources":
+                struct.pack_into("<I", data, 0x800, 0x004010D8)
+                text[0xD8] = 0xC3
             if mode == (
                 "copied-descriptor-slot-zero-unrelocated-record"
             ):
@@ -1118,6 +1615,67 @@ def synthetic_dispatch_pe_bytes(
                 text[0xF0] = 0xC3
         else:
             struct.pack_into("<I", data, 0x70C, callback_target)
+        if mode.startswith(
+            "copied-descriptor-slot-zero-tagged-rejected-callback"
+        ):
+            # Mirror the retail chain that copies a descriptor table, stamps
+            # the copied record's object from slot-one metadata, publishes the
+            # object through slot zero, then rejects it at a strict validator.
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x200)
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x200)
+            text[0x00:0x2C] = bytes.fromhex(
+                "53 6a 00 6a 00 68 00 23 40 00 e8 51 00 00 00 "
+                "83 c4 0c 89 c3 53 e8 56 01 00 00 53 e8 e0 00 "
+                "00 00 e8 bb 01 00 00 e8 66 01 00 00 5b c3"
+            )
+            text[0x30:0x4D] = bytes.fromhex(
+                "8b 44 24 04 53 8b 08 8b 19 85 db 74 09 "
+                "8b 44 24 0c 50 ff d3 5b c3 b8 02 00 00 00 5b c3"
+            )
+            text[0xF0:0xFC] = bytes.fromhex(
+                "8b 44 24 04 a3 00 29 40 00 c2 04 00"
+            )
+            text[0x100:0x114] = bytes.fromhex(
+                "8b 44 24 04 8b 48 08 51 50 e8 22 ff ff ff "
+                "83 c4 08 c2 04 00"
+            )
+            text[0x118:0x131] = bytes.fromhex(
+                "8b 54 24 04 8b 4c 24 08 c7 02 00 28 40 00 "
+                "c7 01 12 00 00 00 31 c0 c2 08 00"
+            )
+            text[0x138:0x169] = bytes.fromhex(
+                "83 ec 08 8b 44 24 0c 8b 00 8b 40 04 85 c0 74 19 "
+                "8d 0c 24 8d 54 24 04 52 51 ff d0 66 85 c0 75 09 "
+                "8b 04 24 83 c4 08 c2 04 00 31 c0 83 c4 08 c2 04 00"
+            )
+            text[0x170:0x188] = bytes.fromhex(
+                "53 8b 5c 24 08 53 e8 bd ff ff ff 8b 40 02 "
+                "8b 4b 08 89 41 20 5b c2 04 00"
+            )
+            text[0x190:0x1A9] = bytes.fromhex(
+                "ff 35 00 29 40 00 e8 15 00 00 00 83 c4 04 "
+                "85 c0 74 06 8b 58 34 ff 53 04 c3"
+            )
+            text[0x1B0:0x1C7] = bytes.fromhex(
+                "8b 44 24 04 85 c0 74 0c 81 78 20 73 72 61 50 "
+                "75 03 c3 cc cc 31 c0 c3"
+            )
+            text[0x1D0:0x1D8] = bytes.fromhex(
+                "c7 41 34 00 27 40 00 c3"
+            )
+            text[0x1E0:0x1FB] = bytes.fromhex(
+                "6a 38 e8 f9 fe ff ff 59 89 c3 85 db 74 0a "
+                "89 d9 e8 db ff ff ff 89 d8 c3 31 c0 c3"
+            )
+            text[0x1FC] = 0xC3
+            struct.pack_into("<II", data, 0x700, 0x004010F0, 0x00401118)
+            struct.pack_into("<I", data, 0xB04, 0x004011FC)
+            metadata_tag = (
+                0x50617273 if mode.endswith("same-tag") else 0x436F6D70
+            )
+            struct.pack_into("<I", data, 0xC02, metadata_tag)
+            if mode.endswith("missing-stamper"):
+                text[0x16:0x1A] = struct.pack("<i", 0xC6)
     elif mode in {
         "bounded-descriptor-array",
         "unbounded-descriptor-array",
@@ -1295,6 +1853,8 @@ def synthetic_dispatch_pe_bytes(
     elif mode in {
         "global-descriptor-callback",
         "global-descriptor-ebp-callback",
+        "global-descriptor-loop-reload-callback",
+        "global-descriptor-loop-reload-clobber",
         "global-descriptor-guarded-alias-callback",
         "global-descriptor-guarded-alias-clobber",
         "global-descriptor-unknown-write",
@@ -1337,6 +1897,16 @@ def synthetic_dispatch_pe_bytes(
             text[0x30:0x3A] = bytes.fromhex(
                 "8b 2d 00 23 40 00 ff 55 10 c3"
             )
+        elif mode.startswith("global-descriptor-loop-reload-"):
+            text[0x30:0x4A] = bytes.fromhex(
+                "57 56 31 f6 8b 3d 00 23 40 00 53 ff 57 04 "
+                "83 c4 04 46 83 fe 03 7c ed 5e 5f c3"
+            )
+            if mode == "global-descriptor-loop-reload-clobber":
+                text[0x3A:0x4C] = bytes.fromhex(
+                    "01 f7 53 ff 57 04 83 c4 04 46 83 fe 03 "
+                    "7c eb 5e 5f c3"
+                )
         else:
             text[0x30:0x39] = bytes.fromhex(
                 "a1 00 23 40 00 ff 50 04 c3"
@@ -1407,8 +1977,27 @@ def synthetic_dispatch_pe_bytes(
             text[0x60:0x6E] = bytes.fromhex(
                 "8b 44 24 04 8b 88 04 01 00 00 ff 51 04 c3"
             )
+        if mode == "object-callback-table":
+            # Forward a fresh-copy return to the slot-one callback.  That
+            # callback publishes it through a relocated global slot and a
+            # direct wrapper forwards the slot to a final consumer.
+            text[0x00:0x0B] = bytes.fromhex(
+                "e8 2b 00 00 00 e8 a6 00 00 00 c3"
+            )
+            text[0x60:0x79] = bytes.fromhex(
+                "53 8b 5c 24 08 e8 26 00 00 00 "
+                "8b 8b 04 01 00 00 50 ff 51 04 83 c4 04 5b c3"
+            )
         text[0x90] = 0xC3
         text[0xA0] = 0xC3
+        if mode == "object-callback-table":
+            text[0xA0:0xAA] = bytes.fromhex(
+                "8b 44 24 04 a3 00 25 40 00 c3"
+            )
+            text[0xB0:0xBD] = bytes.fromhex(
+                "ff 35 00 25 40 00 e8 05 00 00 00 59 c3"
+            )
+            text[0xC0] = 0xC3
         if mode == "object-callback-table-interior-target":
             text[0x05:0x0B] = bytes.fromhex("e8 86 00 00 00 c3")
             text[0x90:0x93] = bytes.fromhex("89 c0 c3")
@@ -1427,7 +2016,7 @@ def synthetic_dispatch_pe_bytes(
             else 0
         )
         struct.pack_into("<III", data, 0x700, first_target, 0x004010A0, terminator)
-    data[0x200:0x300] = text
+    data[0x200:0x400] = text
 
     # Export a real target and retain the relocation-proven second target.
     export_rva = {
@@ -1437,6 +2026,10 @@ def synthetic_dispatch_pe_bytes(
         "registrar-empty": 0x1090,
         "cdecl-spill-callback": 0x1090,
         "cdecl-esp-callback": 0x1090,
+        "guarded-equal-callback": 0x1090,
+        "guarded-equal-clobber": 0x1090,
+        "outparam-callback": 0x1090,
+        "outparam-conditional-callback": 0x1090,
         "cdecl-cross-block-callback": 0x1090,
         "cdecl-cross-block-clobber": 0x1090,
         "cdecl-recursive-callback": 0x1090,
@@ -1462,7 +2055,9 @@ def synthetic_dispatch_pe_bytes(
         "returning-guarded-callback": 0x1090,
         "zero-distant-guarded-callback": 0x10F0,
         "zero-distant-unguarded-callback": 0x10F0,
+        "linear-prologue-conflicting-tail": 0x1000,
         "constructor-field-callback": 0x1090,
+        "constructor-field-ebp-callback": 0x1090,
         "constructor-field-stack-decoy": 0x1090,
         "constructor-field-late-finite-write": 0x1000,
         "constructor-field-unknown-write": 0x1090,
@@ -1474,9 +2069,12 @@ def synthetic_dispatch_pe_bytes(
         "validated-constructor-descriptor-incomplete-initializer-domain": 0x10C0,
         "validated-constructor-descriptor-retail-guard-arms": 0x10F0,
         "validated-constructor-descriptor-wrapper-global": 0x10F0,
+        "validated-constructor-descriptor-wrapper-global-double": 0x10F0,
+        "validated-constructor-descriptor-wrapper-global-double-unrelocated": 0x10F0,
         "validated-constructor-descriptor-wrapper-global-alternate-writer": 0x10C0,
         "validated-constructor-descriptor-wrapper-global-incomplete-domain": 0x10C0,
         "validated-constructor-descriptor-multi-tag": 0x1030,
+        "validated-constructor-descriptor-multi-tag-rejected-only": 0x1030,
         "validated-constructor-descriptor-multi-tag-same-tag": 0x1030,
         "validated-constructor-descriptor-multi-tag-unknown-tag": 0x1030,
         "copied-descriptor-callback": 0x10F0,
@@ -1485,7 +2083,41 @@ def synthetic_dispatch_pe_bytes(
         "copied-descriptor-cross-block-clobber": 0x10F0,
         "copied-descriptor-unproven-object": 0x10F0,
         "copied-descriptor-forwarded-object": 0x10F0,
+        "copied-descriptor-source-forwarded-object": 0x10F0,
+        "copied-descriptor-source-forwarded-object-unknown": 0x10F0,
+        "copied-descriptor-wrapper-returned-object": 0x10F0,
+        "copied-descriptor-wrapper-returned-object-unknown-return": 0x10F0,
+        "copied-descriptor-field-forwarded-object": 0x10F0,
+        "copied-descriptor-field-forwarded-object-unknown-write": 0x10F0,
+        "copied-descriptor-field-forwarded-object-null-branch": 0x10F0,
+        "copied-descriptor-field-forwarded-object-unknown-branch": 0x10F0,
+        "copied-descriptor-field-list-returned-object": 0x10F0,
+        "copied-descriptor-field-list-returned-object-unknown-insert": 0x10F0,
+        "copied-descriptor-field-list-returned-object-runtime-zeroed": 0x10F0,
+        "copied-descriptor-field-list-returned-object-runtime-nonzero": 0x10F0,
+        "copied-descriptor-registered-object": 0x10F0,
+        "copied-descriptor-registered-object-back-reference": 0x10F0,
+        "copied-descriptor-registered-object-global-pointer-back-reference": 0x10F0,
+        "copied-descriptor-registered-object-global-pointer-hostile-back-reference": 0x10F0,
+        "copied-descriptor-registered-object-stack-forwarded-back-reference": 0x10F0,
+        "copied-descriptor-registered-object-link-cursor": 0x10F0,
+        "copied-descriptor-registered-object-link-cursor-post-clobber": 0x10F0,
+        "copied-descriptor-registered-object-link-cursor-unknown": 0x10F0,
+        "copied-descriptor-registered-object-runtime-global-field": 0x10F0,
+        "copied-descriptor-registered-object-guarded-runtime-global-field": 0x10F0,
+        "copied-descriptor-registered-object-guarded-runtime-global-field-clobber": 0x10F0,
+        "copied-descriptor-registered-object-runtime-global-field-unknown": 0x10F0,
+        "copied-descriptor-registered-object-stack-return": 0x10F0,
+        "copied-descriptor-registered-object-stack-return-unknown": 0x10F0,
+        "copied-descriptor-registered-object-unknown-writer": 0x10F0,
+        "copied-descriptor-registered-object-cursor-lookup": 0x10F0,
+        "copied-descriptor-registered-object-unknown-cursor-lookup": 0x10F0,
         "copied-descriptor-slot-zero-hypothesis": 0x10F0,
+        "copied-descriptor-slot-zero-correlated-sources": 0x10F0,
+        "copied-descriptor-slot-zero-tagged-rejected-callback": 0x1000,
+        "copied-descriptor-slot-zero-tagged-rejected-callback-missing-stamper": 0x1000,
+        "copied-descriptor-slot-zero-tagged-rejected-callback-same-tag": 0x1000,
+        "copied-descriptor-slot-zero-tagged-rejected-callback-unrelocated-provider": 0x1000,
         "copied-descriptor-slot-zero-hidden-caller": 0x10F0,
         "copied-descriptor-slot-zero-unrelocated-record": 0x10F0,
         "copied-descriptor-object-hypothesis-chain": 0x1000,
@@ -1500,6 +2132,8 @@ def synthetic_dispatch_pe_bytes(
         "finite-object-runtime-field-unknown-write": 0x1090,
         "global-descriptor-callback": 0x1090,
         "global-descriptor-ebp-callback": 0x1090,
+        "global-descriptor-loop-reload-callback": 0x1090,
+        "global-descriptor-loop-reload-clobber": 0x1090,
         "global-descriptor-guarded-alias-callback": 0x1090,
         "global-descriptor-guarded-alias-clobber": 0x1090,
         "global-descriptor-unknown-write": 0x1090,
@@ -1545,6 +2179,13 @@ def synthetic_dispatch_pe_bytes(
         struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x3044, 0)
     elif mode == "owned-relocation-interior":
         struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, 0x3036, 0)
+    elif mode in {"outparam-callback", "outparam-conditional-callback"}:
+        relocation = (
+            0x303B
+            if mode == "outparam-conditional-callback"
+            else 0x3037
+        )
+        struct.pack_into("<IIHH", data, 0x1400, 0x1000, 12, relocation, 0)
     elif mode in {
         "registrar-table",
         "cdecl-spill-callback",
@@ -1597,6 +2238,8 @@ def synthetic_dispatch_pe_bytes(
     elif mode in {
         "global-descriptor-callback",
         "global-descriptor-ebp-callback",
+        "global-descriptor-loop-reload-callback",
+        "global-descriptor-loop-reload-clobber",
         "global-descriptor-guarded-alias-callback",
         "global-descriptor-guarded-alias-clobber",
         "global-descriptor-unknown-write",
@@ -1624,7 +2267,11 @@ def synthetic_dispatch_pe_bytes(
         )
         relocation_size = (
             28
-            if mode == "object-callback-table-relocated-terminator"
+            if mode
+            in {
+                "object-callback-table",
+                "object-callback-table-relocated-terminator",
+            }
             else 24
         )
         struct.pack_into(
@@ -1633,7 +2280,22 @@ def synthetic_dispatch_pe_bytes(
         struct.pack_into(
             "<IIHH", data, 0x1400, 0x1000, 12, store_relocation, 0
         )
-        if mode == "object-callback-table-relocated-terminator":
+        if mode == "object-callback-table":
+            struct.pack_into(
+                "<IIHHHH",
+                data,
+                0x1400,
+                0x1000,
+                16,
+                store_relocation,
+                0x30A5,
+                0x30B2,
+                0,
+            )
+            struct.pack_into(
+                "<IIHH", data, 0x1410, 0x2000, 12, 0x3300, 0x3304
+            )
+        elif mode == "object-callback-table-relocated-terminator":
             struct.pack_into(
                 "<IIHHHH",
                 data,
@@ -1658,6 +2320,7 @@ def synthetic_dispatch_pe_bytes(
         )
     elif mode in {
         "constructor-field-callback",
+        "constructor-field-ebp-callback",
         "constructor-field-stack-decoy",
         "constructor-field-late-finite-write",
         "constructor-field-unknown-write",
@@ -1692,6 +2355,11 @@ def synthetic_dispatch_pe_bytes(
         ):
             code_entries = [0x3016, 0x3022, 0x3052, 0x3075, 0x30B0]
             data_entries.append(0x3640)
+            if mode.endswith("double"):
+                code_entries[2] = 0x3051
+                data_entries.append(0x3710)
+            elif mode.endswith("double-unrelocated"):
+                code_entries[2] = 0x3051
             if mode.endswith("alternate-writer"):
                 code_entries.append(0x30C5)
             elif mode.endswith("incomplete-domain"):
@@ -1729,12 +2397,82 @@ def synthetic_dispatch_pe_bytes(
         "copied-descriptor-cross-block-clobber",
         "copied-descriptor-unproven-object",
         "copied-descriptor-forwarded-object",
+        "copied-descriptor-source-forwarded-object",
+        "copied-descriptor-source-forwarded-object-unknown",
+        "copied-descriptor-wrapper-returned-object",
+        "copied-descriptor-wrapper-returned-object-unknown-return",
+        "copied-descriptor-field-forwarded-object",
+        "copied-descriptor-field-forwarded-object-unknown-write",
+        "copied-descriptor-field-forwarded-object-null-branch",
+        "copied-descriptor-field-forwarded-object-unknown-branch",
+        "copied-descriptor-field-list-returned-object",
+        "copied-descriptor-field-list-returned-object-unknown-insert",
+        "copied-descriptor-field-list-returned-object-runtime-zeroed",
+        "copied-descriptor-field-list-returned-object-runtime-nonzero",
+        "copied-descriptor-registered-object",
+        "copied-descriptor-registered-object-back-reference",
+        "copied-descriptor-registered-object-global-pointer-back-reference",
+        "copied-descriptor-registered-object-global-pointer-hostile-back-reference",
+        "copied-descriptor-registered-object-stack-forwarded-back-reference",
+        "copied-descriptor-registered-object-link-cursor",
+        "copied-descriptor-registered-object-link-cursor-post-clobber",
+        "copied-descriptor-registered-object-link-cursor-unknown",
+        "copied-descriptor-registered-object-runtime-global-field",
+        "copied-descriptor-registered-object-guarded-runtime-global-field",
+        "copied-descriptor-registered-object-guarded-runtime-global-field-clobber",
+        "copied-descriptor-registered-object-runtime-global-field-unknown",
+        "copied-descriptor-registered-object-stack-return",
+        "copied-descriptor-registered-object-stack-return-unknown",
+        "copied-descriptor-registered-object-unknown-writer",
+        "copied-descriptor-registered-object-cursor-lookup",
+        "copied-descriptor-registered-object-unknown-cursor-lookup",
         "copied-descriptor-slot-zero-hypothesis",
+        "copied-descriptor-slot-zero-correlated-sources",
+        "copied-descriptor-slot-zero-tagged-rejected-callback",
+        "copied-descriptor-slot-zero-tagged-rejected-callback-missing-stamper",
+        "copied-descriptor-slot-zero-tagged-rejected-callback-same-tag",
+        "copied-descriptor-slot-zero-tagged-rejected-callback-unrelocated-provider",
         "copied-descriptor-slot-zero-hidden-caller",
         "copied-descriptor-slot-zero-unrelocated-record",
         "copied-descriptor-object-hypothesis-chain",
     }:
-        if mode == "copied-descriptor-object-hypothesis-chain":
+        if mode.startswith(
+            "copied-descriptor-slot-zero-tagged-rejected-callback"
+        ):
+            struct.pack_into(
+                "<I", data, OPTIONAL_OFFSET + 96 + 5 * 8 + 4, 40
+            )
+            struct.pack_into(
+                "<II" + "H" * 6,
+                data,
+                0x1400,
+                0x1000,
+                20,
+                0x3006,
+                0x30F5,
+                0x3122,
+                0x3192,
+                0x31D3,
+                0,
+            )
+            struct.pack_into(
+                "<II" + "H" * 6,
+                data,
+                0x1414,
+                0x2000,
+                20,
+                0x3300,
+                (
+                    0
+                    if mode.endswith("unrelocated-provider")
+                    else 0x3304
+                ),
+                0x3704,
+                0,
+                0,
+                0,
+            )
+        elif mode == "copied-descriptor-object-hypothesis-chain":
             struct.pack_into(
                 "<I", data, OPTIONAL_OFFSET + 96 + 5 * 8 + 4, 28
             )
@@ -1752,15 +2490,145 @@ def synthetic_dispatch_pe_bytes(
                 0x3504,
                 0,
             )
-        else:
-            relocation = (
-                0x3300
-                if mode.startswith("copied-descriptor-slot-zero-")
-                else 0x330C
+        elif mode == "copied-descriptor-slot-zero-correlated-sources":
+            struct.pack_into(
+                "<I", data, OPTIONAL_OFFSET + 96 + 5 * 8 + 4, 16
             )
             struct.pack_into(
-                "<IIHH", data, 0x1400, 0x2000, 12, relocation, 0
+                "<IIHHHH",
+                data,
+                0x1400,
+                0x2000,
+                16,
+                0x3300,
+                0x3400,
+                0,
+                0,
             )
+        else:
+            if mode.startswith("copied-descriptor-registered-object"):
+                if mode.endswith("back-reference"):
+                    if "global-pointer" in mode:
+                        code_entries = [
+                            0x301F,
+                            0x311E,
+                            0x3122,
+                            0x3155,
+                            0x3171,
+                            0x3191,
+                            0x31D2,
+                        ]
+                        if "hostile" in mode:
+                            code_entries[3:3] = [0x3128, 0x312C]
+                        if len(code_entries) % 2:
+                            code_entries.append(0)
+                        code_block_size = 8 + 2 * len(code_entries)
+                        struct.pack_into(
+                            "<I",
+                            data,
+                            OPTIONAL_OFFSET + 96 + 5 * 8 + 4,
+                            code_block_size + 12,
+                        )
+                        struct.pack_into(
+                            "<II" + "H" * len(code_entries),
+                            data,
+                            0x1400,
+                            0x1000,
+                            code_block_size,
+                            *code_entries,
+                        )
+                        struct.pack_into(
+                            "<IIHH",
+                            data,
+                            0x1400 + code_block_size,
+                            0x2000,
+                            12,
+                            0x330C,
+                            0,
+                        )
+                        return bytes(data)
+                    struct.pack_into(
+                        "<I", data, OPTIONAL_OFFSET + 96 + 5 * 8 + 4, 32
+                    )
+                    struct.pack_into(
+                        "<II" + "H" * 6,
+                        data,
+                        0x1400,
+                        0x1000,
+                        20,
+                        (
+                            0x31E8
+                            if "stack-forwarded" in mode
+                            else 0x301F
+                        ),
+                        0x3155,
+                        0x3171,
+                        0x3191,
+                        (
+                            0x31F2
+                            if "stack-forwarded" in mode
+                            else 0x31D2
+                        ),
+                        0,
+                    )
+                    struct.pack_into(
+                        "<IIHH", data, 0x1414, 0x2000, 12, 0x330C, 0
+                    )
+                    return bytes(data)
+                struct.pack_into(
+                    "<I", data, OPTIONAL_OFFSET + 96 + 5 * 8 + 4, 28
+                )
+                struct.pack_into(
+                    "<IIHHHH",
+                    data,
+                    0x1400,
+                    0x1000,
+                    16,
+                    0x3155,
+                    (
+                        0x3179
+                        if "cursor-lookup" in mode
+                        else 0x3171
+                    ),
+                    0,
+                    0,
+                )
+                struct.pack_into(
+                    "<IIHH", data, 0x1410, 0x2000, 12, 0x330C, 0
+                )
+                return bytes(data)
+            if mode.startswith("copied-descriptor-field-list-returned-object"):
+                if "runtime-" in mode:
+                    struct.pack_into(
+                        "<I", data, OPTIONAL_OFFSET + 96 + 5 * 8 + 4, 12
+                    )
+                    struct.pack_into(
+                        "<IIHH", data, 0x1400, 0x2000, 12, 0x330C, 0
+                    )
+                else:
+                    struct.pack_into(
+                        "<I", data, OPTIONAL_OFFSET + 96 + 5 * 8 + 4, 16
+                    )
+                    struct.pack_into(
+                        "<IIHHHH",
+                        data,
+                        0x1400,
+                        0x2000,
+                        16,
+                        0x330C,
+                        0x3900,
+                        0,
+                        0,
+                    )
+            else:
+                relocation = (
+                    0x3300
+                    if mode.startswith("copied-descriptor-slot-zero-")
+                    else 0x330C
+                )
+                struct.pack_into(
+                    "<IIHH", data, 0x1400, 0x2000, 12, relocation, 0
+                )
     elif mode in {
         "bounded-descriptor-array",
         "unbounded-descriptor-array",
