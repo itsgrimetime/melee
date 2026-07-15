@@ -10,6 +10,39 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
 
+@pytest.fixture(autouse=True)
+def _stub_static_map_audit_for_runtime_unit_tests(monkeypatch):
+    """Keep mocked live-probe tests off the exact whole-PE/Ghidra path."""
+    from tools.mwcc_retro.backend_lifetime_audit import (
+        publish_static_backend_bundle,
+    )
+
+    import src.cli.debug.retro as retro
+    from src.mwcc_debug.ghidra_mwcc_setup import EXPECTED_COMPILER_SHA256
+
+    def publish_fixture(*, melee_root, out_dir, candidate_payload):
+        del melee_root
+        publish_static_backend_bundle(
+            out_dir,
+            {
+                "raw-pe-cfg.v1.jsonl": b"{}\n",
+                "raw-ghidra-crosscheck.v1.json": b"{}\n",
+                "backend-map-candidates.json": candidate_payload,
+            },
+            compiler_sha256=EXPECTED_COMPILER_SHA256,
+        )
+
+    monkeypatch.setattr(retro, "_run_static_backend_map_audit", publish_fixture)
+
+
+def _static_map_member(output_root: Path, name: str) -> Path:
+    from tools.mwcc_retro.backend_lifetime_audit import (
+        resolve_static_backend_bundle,
+    )
+
+    return resolve_static_backend_bundle(output_root).path(name)
+
+
 def test_legacy_onepass_event_stream_does_not_accept_task7_event_families() -> None:
     from tools.mwcc_retro import backend_onepass_trace_hook
 
@@ -513,9 +546,9 @@ def _valid_alias_mapping_ig_snapshot_events(function: str = "test_fn") -> str:
 
 
 def _run_ig_snapshot_with_events(monkeypatch, tmp_path, events: str) -> None:
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -797,7 +830,7 @@ def test_run_backend_map_probe_writes_static_report_and_runs_hook(monkeypatch, t
     )
 
     assert outcome.exit_code == 0
-    assert (tmp_path / "backend-map-candidates.json").exists()
+    assert _static_map_member(tmp_path, "backend-map-candidates.json").exists()
     assert (tmp_path / "backend-map-probe.json").exists()
     assert (tmp_path / "backend-map-evidence.json").exists()
     assert [name for name, _ in calls] == ["parity", "launch"]
@@ -912,7 +945,7 @@ def test_run_backend_map_probe_removes_stale_trace_artifacts(monkeypatch, tmp_pa
         assert not (tmp_path / name).exists()
     for name in preserved_frontend_files:
         assert (tmp_path / name).read_text() == "frontend\n"
-    assert (tmp_path / "backend-map-candidates.json").exists()
+    assert _static_map_member(tmp_path, "backend-map-candidates.json").exists()
     assert (tmp_path / "backend-map-probe.json").exists()
     assert (tmp_path / "backend-map-evidence.json").exists()
     assert (tmp_path / "backend-map-evidence.json").read_text() != "stale\n"
@@ -921,8 +954,9 @@ def test_run_backend_map_probe_removes_stale_trace_artifacts(monkeypatch, tmp_pa
 def test_run_backend_map_probe_removes_stale_candidates_before_static_failure(
     monkeypatch, tmp_path
 ):
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import backend_discovery
+
+    import src.cli.debug.retro as retro
 
     stale = tmp_path / "backend-map-candidates.json"
     stale.write_text("stale\n")
@@ -998,7 +1032,7 @@ def test_run_backend_map_probe_static_only_skips_parity_and_hook(monkeypatch, tm
 
     assert outcome.exit_code == 0
     assert outcome.produced == ["static"]
-    assert (tmp_path / "backend-map-candidates.json").exists()
+    assert _static_map_member(tmp_path, "backend-map-candidates.json").exists()
     assert not (tmp_path / "backend-map-probe.json").exists()
 
 
@@ -1440,9 +1474,9 @@ def test_run_backend_candidate_trace_one_pass_rejects_event_function_mismatch(
 
 
 def test_launch_backend_ig_snapshot_uses_partial_gate_and_hook(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -1492,9 +1526,9 @@ def test_launch_backend_ig_snapshot_uses_partial_gate_and_hook(monkeypatch, tmp_
 
 
 def test_launch_backend_ig_snapshot_rejects_colorgraph_trace_errors(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -1536,9 +1570,9 @@ def test_launch_backend_ig_snapshot_rejects_colorgraph_trace_errors(monkeypatch,
 
 
 def test_launch_backend_ig_snapshot_requires_internal_colorgraph_pcs(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -1570,9 +1604,9 @@ def test_launch_backend_ig_snapshot_requires_internal_colorgraph_pcs(monkeypatch
 
 
 def test_launch_backend_ig_snapshot_rejects_malformed_events(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -1607,9 +1641,9 @@ def test_launch_backend_ig_snapshot_rejects_malformed_events(monkeypatch, tmp_pa
 
 
 def test_launch_backend_ig_snapshot_rejects_wrong_function_events(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -1644,9 +1678,9 @@ def test_launch_backend_ig_snapshot_rejects_wrong_function_events(monkeypatch, t
 
 
 def test_launch_backend_ig_snapshot_rejects_duplicate_regclass_events(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -1688,9 +1722,9 @@ def test_launch_backend_ig_snapshot_rejects_duplicate_regclass_events(monkeypatc
 
 
 def test_launch_backend_ig_snapshot_requires_order_events(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -1727,9 +1761,9 @@ def test_launch_backend_ig_snapshot_requires_order_events(monkeypatch, tmp_path)
 
 
 def test_launch_backend_ig_snapshot_rejects_order_before_regclass(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -1809,9 +1843,9 @@ def test_launch_backend_ig_snapshot_rejects_class_name_mismatch_for_allocator_ev
 
 
 def test_launch_backend_ig_snapshot_accepts_partial_color_decisions(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -1990,9 +2024,9 @@ def test_launch_backend_ig_snapshot_rejects_invalid_partial_color_decision(
 
 
 def test_launch_backend_ig_snapshot_accepts_alias_mapping_events(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2037,9 +2071,9 @@ def test_launch_backend_ig_snapshot_rejects_self_alias_mapping(monkeypatch, tmp_
 def test_launch_backend_ig_snapshot_rejects_mapping_and_empty_marker(
     monkeypatch, tmp_path
 ):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2087,9 +2121,9 @@ def test_launch_backend_ig_snapshot_rejects_mapping_and_empty_marker(
 
 
 def test_launch_backend_ig_snapshot_rejects_mapping_before_regclass(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2148,9 +2182,9 @@ def test_launch_backend_ig_snapshot_rejects_mapping_before_regclass(monkeypatch,
 def test_launch_backend_ig_snapshot_rejects_mapping_for_missing_node(
     monkeypatch, tmp_path, replacement: str, expected: str
 ):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2189,9 +2223,9 @@ def test_launch_backend_ig_snapshot_rejects_mapping_for_missing_node(
 def test_launch_backend_ig_snapshot_rejects_duplicate_alias_mapping(
     monkeypatch, tmp_path
 ):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2241,9 +2275,9 @@ def test_launch_backend_ig_snapshot_rejects_duplicate_alias_mapping(
 
 
 def test_launch_backend_ig_snapshot_rejects_order_for_missing_node(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2277,9 +2311,9 @@ def test_launch_backend_ig_snapshot_rejects_order_for_missing_node(monkeypatch, 
 
 
 def test_launch_backend_ig_snapshot_rejects_duplicate_order_event(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2326,9 +2360,9 @@ def test_launch_backend_ig_snapshot_rejects_duplicate_order_event(monkeypatch, t
 
 
 def test_launch_backend_ig_snapshot_accepts_edge_free_graph(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2362,9 +2396,9 @@ def test_launch_backend_ig_snapshot_accepts_edge_free_graph(monkeypatch, tmp_pat
 
 
 def test_launch_backend_ig_snapshot_accepts_empty_order_events(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2398,9 +2432,9 @@ def test_launch_backend_ig_snapshot_accepts_empty_order_events(monkeypatch, tmp_
 
 
 def test_launch_backend_ig_snapshot_rejects_edge_to_missing_node(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2446,9 +2480,9 @@ def test_launch_backend_ig_snapshot_rejects_edge_to_missing_node(monkeypatch, tm
 def test_launch_backend_ig_snapshot_rejects_missing_required_event_families(
     monkeypatch, tmp_path
 ):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2485,9 +2519,10 @@ def test_launch_backend_ig_snapshot_rejects_missing_required_event_families(
 
 
 def test_launch_backend_ig_snapshot_rejects_full_trace_gate_only_table(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+    from tools.mwcc_retro import struct_map
 
-    from tools.mwcc_retro import setup as retro_setup, struct_map
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2538,9 +2573,9 @@ def test_launch_backend_ig_snapshot_rejects_full_trace_gate_only_table(monkeypat
 
 
 def test_launch_backend_pcode_snapshot_uses_partial_gate_and_hook(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2586,9 +2621,9 @@ def test_launch_backend_pcode_snapshot_uses_partial_gate_and_hook(monkeypatch, t
 def test_launch_backend_pcode_snapshot_rejects_wrong_function_events(
     monkeypatch, tmp_path
 ):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2624,9 +2659,9 @@ def test_launch_backend_pcode_snapshot_rejects_wrong_function_events(
 def test_launch_backend_pcode_snapshot_rejects_pcode_before_block(
     monkeypatch, tmp_path
 ):
-    import src.cli.debug.retro as retro
-
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2665,9 +2700,10 @@ def test_launch_backend_pcode_snapshot_rejects_pcode_before_block(
 def test_launch_backend_pcode_snapshot_rejects_full_trace_gate_only_table(
     monkeypatch, tmp_path
 ):
-    import src.cli.debug.retro as retro
+    from tools.mwcc_retro import setup as retro_setup
+    from tools.mwcc_retro import struct_map
 
-    from tools.mwcc_retro import setup as retro_setup, struct_map
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2790,8 +2826,9 @@ def test_run_backend_trace_wraps_partial_event_stream(monkeypatch, tmp_path):
 
 
 def test_run_object_parity_wraps_reference_compile_failure(monkeypatch, tmp_path):
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     monkeypatch.setattr(
         retro_setup,
@@ -2832,8 +2869,9 @@ def test_launch_backend_events_writes_launch_log_on_nonzero(monkeypatch, tmp_pat
     import subprocess
 
     import pytest
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2885,8 +2923,9 @@ def test_launch_backend_events_writes_launch_log_on_nonzero(monkeypatch, tmp_pat
 def test_launch_backend_events_uses_onepass_hook_and_validates_summary(monkeypatch, tmp_path):
     import subprocess
 
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -2983,8 +3022,9 @@ def test_launch_backend_events_accepts_objobject_alias_function_start(
 ):
     import subprocess
 
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -3068,8 +3108,9 @@ def test_launch_backend_events_uses_package_scripts_with_explicit_melee_root(
     import os
     import subprocess
 
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -3142,8 +3183,10 @@ def test_launch_backend_events_requires_complete_reader_gate(monkeypatch, tmp_pa
     import subprocess
 
     import pytest
+    from tools.mwcc_retro import setup as retro_setup
+    from tools.mwcc_retro import struct_map
+
     import src.cli.debug.retro as retro
-    from tools.mwcc_retro import setup as retro_setup, struct_map
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -3197,8 +3240,9 @@ def test_launch_backend_events_requires_complete_reader_gate(monkeypatch, tmp_pa
 def test_launch_dump_treats_abort_as_failure_even_with_stale_backend_text(
     monkeypatch, tmp_path
 ):
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -3247,8 +3291,9 @@ def test_launch_backend_events_deletes_partial_events_on_abort(monkeypatch, tmp_
     import subprocess
 
     import pytest
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -3290,8 +3335,9 @@ def test_launch_backend_events_writes_launch_log_on_timeout(monkeypatch, tmp_pat
     import subprocess
 
     import pytest
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
@@ -3339,8 +3385,9 @@ def test_launch_backend_events_writes_launch_log_on_oserror(monkeypatch, tmp_pat
     import subprocess
 
     import pytest
-    import src.cli.debug.retro as retro
     from tools.mwcc_retro import setup as retro_setup
+
+    import src.cli.debug.retro as retro
 
     class SetupResult:
         retrowin32_bin = tmp_path / "retrowin32"
