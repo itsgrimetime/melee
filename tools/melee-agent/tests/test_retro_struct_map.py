@@ -1,6 +1,9 @@
+import copy
 import json
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
@@ -12,12 +15,115 @@ def _load_gc125n_table():
     return json.loads((REPO / "tools/mwcc_retro/tables/gc_125n.json").read_text())
 
 
+def test_json_materialization_converts_deep_recursion_to_controlled_error():
+    nested: object = 0
+    for _ in range(1500):
+        nested = [nested]
+
+    with pytest.raises(ValueError, match="nesting limit"):
+        struct_map.materialize_json_safe(nested)
+
+
 def test_live_gc125n_table_satisfies_required_backend_map_gate():
     table = _load_gc125n_table()
 
     assert struct_map.validate_required_backend_map(table) == []
     assert struct_map.validate_backend_ig_snapshot_capability(table) == []
     assert struct_map.validate_backend_pcode_snapshot_capability(table) == []
+    assert struct_map.validate_instrumentation_proof_registry(table) == []
+    assert table["instrumentation_proof_schema"] == "mwcc-retro-lifetime-proof.v1"
+    assert table["instrumentation_proofs"] == []
+
+
+def test_gc125n_struct_map_loader_reads_installed_registry():
+    table = struct_map.load_gc125n_struct_map()
+
+    assert table == _load_gc125n_table()
+
+
+def test_live_gc125n_table_satisfies_object_capture_gate_and_exact_layout():
+    table = _load_gc125n_table()
+
+    assert struct_map.validate_object_capture_capability(table) == []
+    layout = struct_map.load_object_capture_layout(table)
+
+    assert layout.ignode_obj_addr == 0x04
+    assert layout.objobject_name_record == 0x0A
+    assert layout.objobject_type_pointer == 0x0E
+    assert layout.objobject_stack_offset == 0x2A
+    assert layout.object_list_next == 0x00
+    assert layout.object_list_object == 0x04
+    assert layout.type_size == 0x02
+    assert layout.name_record_text == 0x0A
+    assert dict(layout.frame_list_vas) == {
+        "arguments": 0x58806C,
+        "locals": 0x587FB8,
+        "temps": 0x57FEC0,
+    }
+    assert layout.frame_base_size_va == 0x5880CC
+    assert layout.frame_call_args_size_va == 0x58712C
+
+
+def test_object_capture_gate_rejects_missing_offset_entry_and_confidence():
+    table = _load_gc125n_table()
+    missing = copy.deepcopy(table)
+    del missing["structs"]["IGNode"]["fields"]["obj_addr"]
+    bad_entry = copy.deepcopy(table)
+    bad_entry["entries"]["arguments"]["confidence"] = "guess"
+    boolean_offset = copy.deepcopy(table)
+    boolean_offset["structs"]["ObjectListNode"]["fields"]["next"] = False
+
+    assert any(
+        "IGNode.obj_addr expected offset 0x4" in error
+        for error in struct_map.validate_object_capture_capability(missing)
+    )
+    assert any(
+        "arguments confidence guess below required gate" in error
+        for error in struct_map.validate_object_capture_capability(bad_entry)
+    )
+    assert any(
+        "ObjectListNode.next expected offset 0x0" in error
+        for error in struct_map.validate_object_capture_capability(boolean_offset)
+    )
+    for malformed in (missing, bad_entry, boolean_offset):
+        try:
+            struct_map.load_object_capture_layout(malformed)
+        except ValueError as exc:
+            assert "object capture map failed validation" in str(exc)
+        else:
+            raise AssertionError("malformed object capture layout was accepted")
+
+
+def test_instrumentation_registry_gate_rejects_malformed_or_promoted_guesses():
+    assert struct_map.validate_instrumentation_proof_registry([]) == [
+        "instrumentation proof registry must be object"
+    ]
+    assert struct_map.validate_instrumentation_proof_registry({}) == [
+        "instrumentation_proof_schema must be mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs must be list",
+    ]
+    table = {
+        "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs": [
+            {
+                "compiler_executable_sha256": "a" * 64,
+                "proof_id": "proof.v1",
+                "proof_sha256": "b" * 64,
+                "promoted": False,
+            }
+        ],
+    }
+
+    assert struct_map.validate_instrumentation_proof_registry(table) == []
+
+    table["instrumentation_proofs"][0]["extra"] = True
+    assert "instrumentation proof registry row 0 has unexpected fields" in (
+        struct_map.validate_instrumentation_proof_registry(table)
+    )
+
+    table["instrumentation_proofs"][0]["compiler_executable_sha256"] = []
+    errors = struct_map.validate_instrumentation_proof_registry(table)
+    assert any("compiler_executable_sha256" in error for error in errors)
 
 
 def test_live_gc125n_table_satisfies_backend_reader_gate():

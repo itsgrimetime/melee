@@ -1,10 +1,1397 @@
 """One-pass GC/1.2.5n backend trace hook.
 
-This hook writes a single ``backend-events.v1.jsonl`` stream for the requested
-function. The full ``debug retro backend`` command uses it behind the
-``backend_reader.complete`` gate; ``backend-candidate --one-pass`` reuses it for
-candidate-only diagnostics.
+This hook writes the legacy ``backend-events.v1.jsonl`` stream plus a raw
+``backend-object-events.v1.jsonl`` identity sidecar for the requested function.
+The full ``debug retro backend`` command uses it behind the
+``backend_reader.complete`` gate; ``backend-candidate --one-pass`` reuses it
+for candidate-only diagnostics.
 """
+
+import json
+import os
+import secrets
+import tempfile
+from pathlib import Path
+
+from tools.mwcc_retro import backend_object_snapshot, struct_map
+
+_OBJECT_EVENT_KINDS = frozenset(
+    {"objobject_snapshot", "object_virtual_binding", "object_frame_binding"}
+)
+
+_LEGACY_BACKEND_EVENT_KINDS = frozenset(
+    {
+        "function_start",
+        "backend_marker",
+        "block",
+        "pcode_instruction",
+        "regclass",
+        "node",
+        "edge",
+        "coalesce_mapping",
+        "coalesce_mapping_empty",
+        "simplify_order",
+        "select_order",
+        "color_decision",
+        "frame_state",
+    }
+)
+
+
+def _legacy_backend_events(events):
+    """Keep Task 7 raw instrumentation out of the stable v1 stream."""
+
+    return [
+        dict(event)
+        for event in events
+        if isinstance(event, dict)
+        and event.get("event") in _LEGACY_BACKEND_EVENT_KINDS
+    ]
+
+
+def _emit_pcode_event(state, event, *, site_id, pcode_ptr, lifecycle):
+    """Atomically append one site-tagged same-run PCode event."""
+
+    if not isinstance(event, dict):
+        raise ValueError("PCode event must be an object")
+    sequence = state.get("next_pcode_event_sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+        raise ValueError("next PCode event sequence must be nonnegative integer")
+    if not isinstance(site_id, str) or not site_id:
+        raise ValueError("PCode event site ID must be non-empty string")
+    if (
+        not isinstance(pcode_ptr, int)
+        or isinstance(pcode_ptr, bool)
+        or pcode_ptr <= 0
+    ):
+        raise ValueError("PCode runtime address must be positive integer")
+    lifecycle_position = lifecycle.sequence_at_stop()
+    generation = lifecycle.generation("pcode", pcode_ptr)
+    if (
+        not isinstance(lifecycle_position, int)
+        or isinstance(lifecycle_position, bool)
+        or lifecycle_position < -1
+    ):
+        raise ValueError("PCode lifecycle position must be integer at least -1")
+    if (
+        not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation <= 0
+    ):
+        raise ValueError("PCode allocation generation must be positive integer")
+    row = {
+        **event,
+        "pcode_event_sequence": sequence,
+        "instrumented_site_id": site_id,
+        "runtime_address": pcode_ptr,
+        "allocation_generation": generation,
+        "lifecycle_sequence_at_capture": lifecycle_position,
+    }
+    state.setdefault("pcode_events", []).append(row)
+    state["next_pcode_event_sequence"] = sequence + 1
+    return row
+
+
+def _emit_pcode_mutation_event(
+    state,
+    *,
+    site_id,
+    mutation_kind,
+    capture_inputs,
+    capture_outputs,
+):
+    """Capture complete mutation sides before publishing either side."""
+
+    inputs = capture_inputs()
+    outputs = capture_outputs()
+    if not isinstance(inputs, list) or not isinstance(outputs, list):
+        raise ValueError("PCode mutation inputs and outputs must be lists")
+    sequence = state.get("next_pcode_event_sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+        raise ValueError("next PCode event sequence must be nonnegative integer")
+    row = {
+        "event": "pcode_mutation",
+        "pcode_event_sequence": sequence,
+        "instrumented_site_id": site_id,
+        "mutation_kind": mutation_kind,
+        "inputs": inputs,
+        "outputs": outputs,
+    }
+    state.setdefault("pcode_events", []).append(row)
+    state["next_pcode_event_sequence"] = sequence + 1
+    return row
+
+
+_PCODE_EVENT_FIELDS = {
+    "operand_rewrite": frozenset(
+        {
+            "event",
+            "pcode_event_sequence",
+            "instrumented_site_id",
+            "pcode_id",
+            "operand_index",
+            "operand_lineage_id",
+            "role",
+            "class_id",
+            "class_name",
+            "virtual_kind",
+            "virtual",
+            "ig_id",
+            "allocated_physical",
+            "runtime_address",
+            "allocation_generation",
+            "lifecycle_sequence_at_capture",
+            "source_stage",
+            "confidence",
+        }
+    ),
+    "pcode_mutation": frozenset(
+        {
+            "event",
+            "pcode_event_sequence",
+            "instrumented_site_id",
+            "mutation_kind",
+            "inputs",
+            "outputs",
+        }
+    ),
+    "code_emission": frozenset(
+        {
+            "event",
+            "pcode_event_sequence",
+            "instrumented_site_id",
+            "pcode_id",
+            "runtime_address",
+            "allocation_generation",
+            "lifecycle_sequence_at_capture",
+            "emission_snapshot",
+            "code_ranges",
+        }
+    ),
+}
+
+_PCODE_EVENT_SITE_COLLECTION = {
+    "operand_rewrite": "operand_rewrite_sites",
+    "pcode_mutation": "operand_mutation_sites",
+    "code_emission": "code_emission_sites",
+}
+
+_PCODE_SITE_LABEL = {
+    "operand_rewrite_sites": "operand rewrite",
+    "operand_mutation_sites": "operand mutation",
+    "code_emission_sites": "code emission",
+}
+
+_PCODE_ROLES = frozenset({"use", "def", "use-def"})
+_PCODE_CLASS_SHAPES = {0: ("gpr", "r"), 1: ("fpr", "f")}
+_PCODE_REQUIREMENTS = frozenset(
+    {"allocator-rewrite-required", "fixed-physical"}
+)
+_PCODE_MUTATION_KINDS = frozenset(
+    {"update", "clone", "replace", "delete", "create"}
+)
+_PCODE_STATE_FIELDS = frozenset(
+    {
+        "pcode_id",
+        "runtime_address",
+        "allocation_generation",
+        "lifecycle_sequence_at_capture",
+        "opcode_id",
+        "arg_count",
+        "operands",
+    }
+)
+_PCODE_OPERAND_FIELDS = frozenset(
+    {
+        "operand_index",
+        "operand_lineage_id",
+        "raw_arg_kind_id",
+        "raw_payload_sha256",
+    }
+)
+_PCODE_OPERAND_FIELDS_WITH_PARENTS = _PCODE_OPERAND_FIELDS | frozenset(
+    {"parent_lineage_ids"}
+)
+_PCODE_SNAPSHOT_FIELDS = frozenset(
+    {
+        "stage",
+        "lifecycle_sequence_at_capture",
+        "runtime_address",
+        "allocation_generation",
+        "opcode_id",
+        "opcode",
+        "arg_count",
+        "parsed_register_operands",
+        "operand_lineage_inventory",
+    }
+)
+_PCODE_PARSED_FIELDS = frozenset(
+    {
+        "operand_index",
+        "role",
+        "class_id",
+        "raw_arg_kind_id",
+        "raw_register_flags",
+        "allocation_requirement",
+        "operand_lineage_id",
+        "virtual_kind",
+        "virtual",
+        "physical_register",
+    }
+)
+_PCODE_RANGE_FIELDS = frozenset(
+    {
+        "start",
+        "end_exclusive",
+        "bytes",
+        "relocations",
+        "machine_operand_mappings",
+    }
+)
+_PCODE_RELOCATION_FIELDS = frozenset(
+    {
+        "offset_within_range",
+        "relocation_type_id",
+        "target_symbol_table_index",
+        "target_symbol",
+        "addend",
+    }
+)
+_PCODE_MAPPING_FIELDS = frozenset(
+    {
+        "instruction_offset_within_range",
+        "machine_operand_position",
+        "machine_operand_key",
+        "emission_pcode_operand_index",
+        "operand_lineage_id",
+        "physical_register",
+    }
+)
+
+
+def _pcode_nonnegative(value):
+    return type(value) is int and value >= 0
+
+
+def _pcode_positive(value):
+    return type(value) is int and value > 0
+
+
+def _pcode_lifecycle_position(value):
+    return type(value) is int and value >= -1
+
+
+def _pcode_physical(value):
+    return type(value) is int and 0 <= value <= 31
+
+
+def _pcode_nonempty_string(value):
+    return type(value) is str and bool(value)
+
+
+def _pcode_sha256(value):
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _pcode_exact_fields(row, fields, label, diagnostics):
+    if type(row) is not dict:
+        diagnostics.append(f"{label} must be object")
+        return False
+    actual = set(row)
+    if actual == fields:
+        return True
+    missing = sorted(fields - actual)
+    unexpected = sorted(actual - fields)
+    details = []
+    if missing:
+        details.append(f"missing {missing!r}")
+    if unexpected:
+        details.append(f"unexpected {unexpected!r}")
+    diagnostics.append(
+        f"{label} fields differ from exact schema ({', '.join(details)})"
+    )
+    return False
+
+
+def _validate_pcode_identity(row, label, diagnostics):
+    if not _pcode_nonempty_string(row.get("pcode_id")):
+        diagnostics.append(f"{label} pcode_id must be nonempty string")
+    if not _pcode_positive(row.get("runtime_address")):
+        diagnostics.append(f"{label} runtime_address must be positive integer")
+    if not _pcode_positive(row.get("allocation_generation")):
+        diagnostics.append(
+            f"{label} allocation_generation must be positive integer"
+        )
+    if not _pcode_lifecycle_position(
+        row.get("lifecycle_sequence_at_capture")
+    ):
+        diagnostics.append(
+            f"{label} lifecycle_sequence_at_capture must be integer at least -1"
+        )
+
+
+def _validate_pcode_operands(
+    value,
+    arg_count,
+    label,
+    diagnostics,
+    *,
+    allow_parents,
+):
+    if type(value) is not list:
+        diagnostics.append(f"{label} operands must be list")
+        return []
+    indexes = []
+    rows = []
+    for index, row in enumerate(value):
+        row_label = f"{label} operand {index}"
+        expected = (
+            _PCODE_OPERAND_FIELDS_WITH_PARENTS
+            if type(row) is dict and "parent_lineage_ids" in row
+            else _PCODE_OPERAND_FIELDS
+        )
+        _pcode_exact_fields(row, expected, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        operand_index = row.get("operand_index")
+        if not _pcode_nonnegative(operand_index):
+            diagnostics.append(
+                f"{row_label} operand_index must be nonnegative integer"
+            )
+        else:
+            indexes.append(operand_index)
+        if not _pcode_nonempty_string(row.get("operand_lineage_id")):
+            diagnostics.append(
+                f"{row_label} operand_lineage_id must be nonempty string"
+            )
+        if not _pcode_nonnegative(row.get("raw_arg_kind_id")):
+            diagnostics.append(
+                f"{row_label} raw_arg_kind_id must be nonnegative integer"
+            )
+        if not _pcode_sha256(row.get("raw_payload_sha256")):
+            diagnostics.append(f"{row_label} raw payload digest is invalid")
+        if "parent_lineage_ids" in row:
+            parents = row.get("parent_lineage_ids")
+            if not allow_parents:
+                diagnostics.append(f"{row_label} must omit parent_lineage_ids")
+            if type(parents) is not list:
+                diagnostics.append(f"{row_label} parent_lineage_ids must be list")
+            elif any(
+                not _pcode_nonempty_string(parent) for parent in parents
+            ):
+                diagnostics.append(
+                    f"{row_label} parent_lineage_ids must contain nonempty strings"
+                )
+            elif parents != sorted(set(parents)):
+                diagnostics.append(
+                    f"{row_label} parent_lineage_ids must be sorted and unique"
+                )
+        rows.append(row)
+    if _pcode_nonnegative(arg_count) and len(value) != arg_count:
+        diagnostics.append(f"{label} operand count must equal arg_count")
+    if indexes != list(range(len(value))):
+        diagnostics.append(f"{label} operand indexes must be contiguous from zero")
+    return rows
+
+
+def _validate_pcode_state(row, label, diagnostics, *, allow_parents):
+    _pcode_exact_fields(row, _PCODE_STATE_FIELDS, label, diagnostics)
+    if type(row) is not dict:
+        return
+    _validate_pcode_identity(row, label, diagnostics)
+    if not _pcode_nonnegative(row.get("opcode_id")):
+        diagnostics.append(f"{label} opcode_id must be nonnegative integer")
+    arg_count = row.get("arg_count")
+    if not _pcode_nonnegative(arg_count):
+        diagnostics.append(f"{label} arg_count must be nonnegative integer")
+    _validate_pcode_operands(
+        row.get("operands"),
+        arg_count,
+        label,
+        diagnostics,
+        allow_parents=allow_parents,
+    )
+
+
+def _validate_pcode_parsed_operands(value, inventory, label, diagnostics):
+    if type(value) is not list:
+        diagnostics.append(f"{label} parsed_register_operands must be list")
+        return
+    keys = []
+    for index, row in enumerate(value):
+        row_label = f"{label} parsed operand {index}"
+        _pcode_exact_fields(row, _PCODE_PARSED_FIELDS, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        operand_index = row.get("operand_index")
+        if not _pcode_nonnegative(operand_index):
+            diagnostics.append(
+                f"{row_label} operand_index must be nonnegative integer"
+            )
+        elif operand_index >= len(inventory):
+            diagnostics.append(f"{row_label} operand_index is outside inventory")
+        else:
+            inventory_row = inventory[operand_index]
+            if (
+                inventory_row.get("operand_lineage_id")
+                != row.get("operand_lineage_id")
+                or inventory_row.get("raw_arg_kind_id")
+                != row.get("raw_arg_kind_id")
+            ):
+                diagnostics.append(
+                    f"{row_label} identity differs from operand inventory"
+                )
+        role = row.get("role")
+        if type(role) is not str or role not in _PCODE_ROLES:
+            diagnostics.append(f"{row_label} role is invalid")
+        class_id = row.get("class_id")
+        shape = (
+            _PCODE_CLASS_SHAPES.get(class_id)
+            if _pcode_nonnegative(class_id)
+            else None
+        )
+        if shape is None:
+            diagnostics.append(f"{row_label} class_id must be 0 or 1")
+        if not _pcode_nonnegative(row.get("raw_arg_kind_id")):
+            diagnostics.append(
+                f"{row_label} raw_arg_kind_id must be nonnegative integer"
+            )
+        if not _pcode_nonnegative(row.get("raw_register_flags")):
+            diagnostics.append(
+                f"{row_label} raw_register_flags must be nonnegative integer"
+            )
+        if not _pcode_nonempty_string(row.get("operand_lineage_id")):
+            diagnostics.append(
+                f"{row_label} operand_lineage_id must be nonempty string"
+            )
+        requirement = row.get("allocation_requirement")
+        if type(requirement) is not str or requirement not in _PCODE_REQUIREMENTS:
+            diagnostics.append(f"{row_label} allocation_requirement is invalid")
+        elif requirement == "allocator-rewrite-required":
+            if (
+                shape is None
+                or row.get("virtual_kind") != shape[1]
+                or not _pcode_nonnegative(row.get("virtual"))
+                or row.get("physical_register") is not None
+            ):
+                diagnostics.append(f"{row_label} virtual register shape is invalid")
+        elif (
+            row.get("virtual_kind") is not None
+            or row.get("virtual") is not None
+            or not _pcode_physical(row.get("physical_register"))
+        ):
+            diagnostics.append(f"{row_label} physical register shape is invalid")
+        keys.append(
+            (
+                operand_index,
+                row.get("role"),
+                class_id,
+                row.get("raw_arg_kind_id"),
+                row.get("raw_register_flags"),
+            )
+        )
+    try:
+        if keys != sorted(keys):
+            diagnostics.append(
+                f"{label} parsed register operands must be canonically ordered"
+            )
+    except TypeError:
+        diagnostics.append(f"{label} parsed register operands are not sortable")
+    try:
+        if len(keys) != len(set(keys)):
+            diagnostics.append(f"{label} parsed register operands must be unique")
+    except TypeError:
+        diagnostics.append(f"{label} parsed register operand keys are invalid")
+
+
+def _validate_pcode_emission_snapshot(row, event, label, diagnostics):
+    _pcode_exact_fields(row, _PCODE_SNAPSHOT_FIELDS, label, diagnostics)
+    if type(row) is not dict:
+        return
+    if row.get("stage") != "code_emission":
+        diagnostics.append(f"{label} stage must be code_emission")
+    if not _pcode_lifecycle_position(
+        row.get("lifecycle_sequence_at_capture")
+    ):
+        diagnostics.append(
+            f"{label} lifecycle_sequence_at_capture must be integer at least -1"
+        )
+    if not _pcode_positive(row.get("runtime_address")):
+        diagnostics.append(f"{label} runtime_address must be positive integer")
+    if not _pcode_positive(row.get("allocation_generation")):
+        diagnostics.append(
+            f"{label} allocation_generation must be positive integer"
+        )
+    for field in (
+        "runtime_address",
+        "allocation_generation",
+        "lifecycle_sequence_at_capture",
+    ):
+        if row.get(field) != event.get(field):
+            diagnostics.append(f"{label} {field} differs from emission identity")
+    if not _pcode_nonnegative(row.get("opcode_id")):
+        diagnostics.append(f"{label} opcode_id must be nonnegative integer")
+    if not _pcode_nonempty_string(row.get("opcode")):
+        diagnostics.append(f"{label} opcode must be nonempty string")
+    arg_count = row.get("arg_count")
+    if not _pcode_nonnegative(arg_count):
+        diagnostics.append(f"{label} arg_count must be nonnegative integer")
+    inventory = _validate_pcode_operands(
+        row.get("operand_lineage_inventory"),
+        arg_count,
+        label,
+        diagnostics,
+        allow_parents=False,
+    )
+    _validate_pcode_parsed_operands(
+        row.get("parsed_register_operands"),
+        inventory,
+        label,
+        diagnostics,
+    )
+
+
+def _validate_pcode_rewrite(row, label, diagnostics):
+    _validate_pcode_identity(row, label, diagnostics)
+    if not _pcode_nonnegative(row.get("operand_index")):
+        diagnostics.append(
+            f"{label} operand_index must be nonnegative integer"
+        )
+    if not _pcode_nonempty_string(row.get("operand_lineage_id")):
+        diagnostics.append(
+            f"{label} operand_lineage_id must be nonempty string"
+        )
+    role = row.get("role")
+    if type(role) is not str or role not in _PCODE_ROLES:
+        diagnostics.append(f"{label} role is invalid")
+    class_id = row.get("class_id")
+    shape = (
+        _PCODE_CLASS_SHAPES.get(class_id)
+        if _pcode_nonnegative(class_id)
+        else None
+    )
+    if shape is None:
+        diagnostics.append(f"{label} class_id must be 0 or 1")
+    elif (
+        row.get("class_name") != shape[0]
+        or row.get("virtual_kind") != shape[1]
+    ):
+        diagnostics.append(f"{label} class/name/virtual-kind shape is invalid")
+    if not _pcode_nonnegative(row.get("virtual")):
+        diagnostics.append(f"{label} virtual must be nonnegative integer")
+    if not _pcode_nonnegative(row.get("ig_id")):
+        diagnostics.append(f"{label} ig_id must be nonnegative integer")
+    elif row.get("ig_id") != row.get("virtual"):
+        diagnostics.append(f"{label} ig_id must equal virtual")
+    if not _pcode_physical(row.get("allocated_physical")):
+        diagnostics.append(f"{label} allocated_physical must be in 0..31")
+    if row.get("source_stage") != "allocator_operand_rewrite":
+        diagnostics.append(f"{label} source_stage is invalid")
+    if row.get("confidence") != "observed":
+        diagnostics.append(f"{label} confidence is invalid")
+
+
+def _validate_pcode_mutation(row, label, diagnostics):
+    kind = row.get("mutation_kind")
+    if type(kind) is not str or kind not in _PCODE_MUTATION_KINDS:
+        diagnostics.append(f"{label} mutation_kind is invalid")
+    inputs = row.get("inputs")
+    outputs = row.get("outputs")
+    if type(inputs) is not list:
+        diagnostics.append(f"{label} inputs must be list")
+        inputs = []
+    if type(outputs) is not list:
+        diagnostics.append(f"{label} outputs must be list")
+        outputs = []
+    for index, state in enumerate(inputs):
+        _validate_pcode_state(
+            state,
+            f"{label} input {index}",
+            diagnostics,
+            allow_parents=False,
+        )
+    for index, state in enumerate(outputs):
+        _validate_pcode_state(
+            state,
+            f"{label} output {index}",
+            diagnostics,
+            allow_parents=True,
+        )
+    if kind == "update" and (len(inputs), len(outputs)) != (1, 1):
+        diagnostics.append(f"{label} update requires exactly one input and output")
+    elif kind == "clone" and (len(inputs) != 1 or len(outputs) < 2):
+        diagnostics.append(
+            f"{label} clone requires one input and two or more outputs"
+        )
+    elif kind == "replace" and (not inputs or not outputs):
+        diagnostics.append(f"{label} replace requires nonempty inputs and outputs")
+    elif kind == "delete" and (not inputs or outputs):
+        diagnostics.append(f"{label} delete requires inputs and no outputs")
+    elif kind == "create" and (inputs or not outputs):
+        diagnostics.append(f"{label} create requires no inputs and outputs")
+
+
+def _validate_pcode_relocations(value, range_size, label, diagnostics):
+    if type(value) is not list:
+        diagnostics.append(f"{label} relocations must be list")
+        return
+    keys = []
+    for index, row in enumerate(value):
+        row_label = f"{label} relocation {index}"
+        _pcode_exact_fields(row, _PCODE_RELOCATION_FIELDS, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        offset = row.get("offset_within_range")
+        for field in (
+            "offset_within_range",
+            "relocation_type_id",
+            "target_symbol_table_index",
+        ):
+            if not _pcode_nonnegative(row.get(field)):
+                diagnostics.append(
+                    f"{row_label} {field} must be nonnegative integer"
+                )
+        if _pcode_nonnegative(offset) and offset >= range_size:
+            diagnostics.append(f"{row_label} offset lies outside code range")
+        if type(row.get("target_symbol")) is not str:
+            diagnostics.append(f"{row_label} target_symbol must be string")
+        if type(row.get("addend")) is not int:
+            diagnostics.append(f"{row_label} addend must be integer")
+        keys.append(
+            (
+                offset,
+                row.get("relocation_type_id"),
+                row.get("target_symbol_table_index"),
+                row.get("target_symbol"),
+                row.get("addend"),
+            )
+        )
+    try:
+        if keys != sorted(keys):
+            diagnostics.append(f"{label} relocations must be canonically ordered")
+        if len(keys) != len(set(keys)):
+            diagnostics.append(f"{label} relocations must be unique")
+    except TypeError:
+        diagnostics.append(f"{label} relocation keys are invalid")
+
+
+def _validate_pcode_mappings(
+    value,
+    range_size,
+    arg_count,
+    label,
+    diagnostics,
+):
+    if type(value) is not list:
+        diagnostics.append(f"{label} machine_operand_mappings must be list")
+        return
+    keys = []
+    for index, row in enumerate(value):
+        row_label = f"{label} mapping {index}"
+        _pcode_exact_fields(row, _PCODE_MAPPING_FIELDS, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        instruction_offset = row.get("instruction_offset_within_range")
+        operand_position = row.get("machine_operand_position")
+        emission_index = row.get("emission_pcode_operand_index")
+        for field in (
+            "instruction_offset_within_range",
+            "machine_operand_position",
+            "emission_pcode_operand_index",
+        ):
+            if not _pcode_nonnegative(row.get(field)):
+                diagnostics.append(
+                    f"{row_label} {field} must be nonnegative integer"
+                )
+        if (
+            _pcode_nonnegative(instruction_offset)
+            and instruction_offset >= range_size
+        ):
+            diagnostics.append(
+                f"{row_label} instruction offset lies outside code range"
+            )
+        if (
+            _pcode_nonnegative(emission_index)
+            and _pcode_nonnegative(arg_count)
+            and emission_index >= arg_count
+        ):
+            diagnostics.append(
+                f"{row_label} emission operand index lies outside snapshot"
+            )
+        if not _pcode_nonempty_string(row.get("machine_operand_key")):
+            diagnostics.append(
+                f"{row_label} machine_operand_key must be nonempty string"
+            )
+        if not _pcode_nonempty_string(row.get("operand_lineage_id")):
+            diagnostics.append(
+                f"{row_label} operand_lineage_id must be nonempty string"
+            )
+        if not _pcode_physical(row.get("physical_register")):
+            diagnostics.append(f"{row_label} physical_register must be in 0..31")
+        keys.append(
+            (
+                instruction_offset,
+                operand_position,
+                emission_index,
+                row.get("operand_lineage_id"),
+            )
+        )
+    try:
+        if keys != sorted(keys):
+            diagnostics.append(
+                f"{label} machine operand mappings must be canonically ordered"
+            )
+        if len(keys) != len(set(keys)):
+            diagnostics.append(f"{label} machine operand mappings must be unique")
+    except TypeError:
+        diagnostics.append(f"{label} machine operand mapping keys are invalid")
+
+
+def _validate_pcode_code_ranges(value, snapshot, label, diagnostics):
+    if type(value) is not list:
+        diagnostics.append(f"{label} code_ranges must be list")
+        return
+    if not value:
+        return
+    keys = []
+    prior_end = None
+    arg_count = snapshot.get("arg_count") if type(snapshot) is dict else None
+    for index, row in enumerate(value):
+        row_label = f"{label} range {index}"
+        _pcode_exact_fields(row, _PCODE_RANGE_FIELDS, row_label, diagnostics)
+        if type(row) is not dict:
+            continue
+        start = row.get("start")
+        end = row.get("end_exclusive")
+        valid_bounds = (
+            _pcode_nonnegative(start)
+            and _pcode_nonnegative(end)
+            and start < end
+        )
+        if not valid_bounds:
+            diagnostics.append(
+                f"{row_label} must be ordered nonempty half-open range"
+            )
+            range_size = 0
+        else:
+            range_size = end - start
+            if prior_end is not None and start < prior_end:
+                diagnostics.append(f"{row_label} overlaps prior code range")
+            prior_end = end
+            keys.append((start, end, row.get("bytes")))
+        bytes_hex = row.get("bytes")
+        if (
+            type(bytes_hex) is not str
+            or bytes_hex.lower() != bytes_hex
+            or len(bytes_hex) != 2 * range_size
+        ):
+            diagnostics.append(f"{row_label} bytes must be exact lowercase hex")
+        else:
+            try:
+                bytes.fromhex(bytes_hex)
+            except ValueError:
+                diagnostics.append(f"{row_label} bytes must be exact lowercase hex")
+        _validate_pcode_relocations(
+            row.get("relocations"), range_size, row_label, diagnostics
+        )
+        _validate_pcode_mappings(
+            row.get("machine_operand_mappings"),
+            range_size,
+            arg_count,
+            row_label,
+            diagnostics,
+        )
+    try:
+        if keys != sorted(keys):
+            diagnostics.append(f"{label} code_ranges must be canonically ordered")
+    except TypeError:
+        diagnostics.append(f"{label} code range keys are invalid")
+
+
+def _validate_pcode_emission(row, label, diagnostics):
+    _validate_pcode_identity(row, label, diagnostics)
+    snapshot = row.get("emission_snapshot")
+    _validate_pcode_emission_snapshot(
+        snapshot,
+        row,
+        f"{label} emission snapshot",
+        diagnostics,
+    )
+    _validate_pcode_code_ranges(
+        row.get("code_ranges"), snapshot, label, diagnostics
+    )
+
+
+def _coverage_site_ids(proof, collection, diagnostics):
+    label = _PCODE_SITE_LABEL[collection]
+    rows = proof.get(collection) if type(proof) is dict else None
+    if type(rows) is not list or not rows:
+        diagnostics.append(f"{label} proof site inventory must be nonempty")
+        return set()
+    result = []
+    for index, row in enumerate(rows):
+        if type(row) is not dict:
+            diagnostics.append(f"{label} proof site {index} must be object")
+            continue
+        site_id = row.get("site_id")
+        if not _pcode_nonempty_string(site_id):
+            diagnostics.append(
+                f"{label} proof site {index} ID must be nonempty string"
+            )
+            continue
+        result.append(site_id)
+    if len(result) != len(set(result)):
+        diagnostics.append(f"{label} proof site IDs must be unique")
+    return set(result)
+
+
+def _pcode_instrumentation_status(
+    proof,
+    *,
+    hooked_site_ids,
+    events,
+    event_cap,
+    dropped_events,
+    truncated,
+    errors,
+):
+    """Report raw producer coverage without trusting a declared status."""
+
+    diagnostics = []
+    try:
+        proof = struct_map.materialize_json_safe(proof)
+    except Exception as exc:  # noqa: BLE001 - raw coverage must fail closed
+        diagnostics.append(
+            f"PCode coverage proof could not be materialized: {exc}"
+        )
+        proof = {}
+    if type(proof) is not dict:
+        diagnostics.append("PCode coverage proof must be object")
+        proof = {}
+    try:
+        events = struct_map.materialize_json_safe(events)
+    except Exception as exc:  # noqa: BLE001 - raw coverage must fail closed
+        diagnostics.append(f"PCode events could not be materialized: {exc}")
+        events = []
+    if type(events) is not list:
+        diagnostics.append("PCode events must be list")
+        events = []
+
+    if type(errors) is list:
+        for index, error in enumerate(errors):
+            if type(error) is str:
+                diagnostics.append(error)
+            else:
+                diagnostics.append(
+                    f"PCode instrumentation error {index} must be string"
+                )
+    else:
+        diagnostics.append("PCode instrumentation errors must be list")
+
+    rewrite_sites = _coverage_site_ids(
+        proof, "operand_rewrite_sites", diagnostics
+    )
+    mutation_sites = _coverage_site_ids(
+        proof, "operand_mutation_sites", diagnostics
+    )
+    emission_sites = _coverage_site_ids(
+        proof, "code_emission_sites", diagnostics
+    )
+    site_families = {
+        "operand_rewrite_sites": rewrite_sites,
+        "operand_mutation_sites": mutation_sites,
+        "code_emission_sites": emission_sites,
+    }
+    expected_sites = rewrite_sites | mutation_sites | emission_sites
+
+    if type(hooked_site_ids) is not set:
+        diagnostics.append("hooked site IDs must be set")
+        hooked = set()
+    elif any(
+        not _pcode_nonempty_string(site_id)
+        for site_id in hooked_site_ids
+    ):
+        diagnostics.append("hooked site IDs must contain nonempty strings")
+        hooked = set()
+    else:
+        hooked = hooked_site_ids
+    if hooked != expected_sites:
+        diagnostics.append("hooked site IDs differ from exact proof inventory")
+
+    event_rows = events
+    sequences = []
+    for index, row in enumerate(event_rows):
+        if type(row) is not dict:
+            diagnostics.append(f"PCode event {index} must be object")
+            continue
+        kind = row.get("event")
+        if type(kind) is not str or kind not in _PCODE_EVENT_FIELDS:
+            diagnostics.append(f"unknown PCode event kind {kind!r}")
+            continue
+        expected_fields = _PCODE_EVENT_FIELDS[kind]
+        exact_fields = _pcode_exact_fields(
+            row,
+            expected_fields,
+            f"{kind} event {index}",
+            diagnostics,
+        )
+        unexpected = sorted(set(row) - expected_fields, key=repr)
+        if not exact_fields and unexpected:
+            diagnostics.append(f"{kind} event {index} has unexpected fields")
+        sequence = row.get("pcode_event_sequence")
+        if (
+            not isinstance(sequence, int)
+            or isinstance(sequence, bool)
+            or sequence < 0
+        ):
+            diagnostics.append(
+                f"PCode event {index} sequence must be nonnegative integer"
+            )
+        else:
+            sequences.append(sequence)
+        site_id = row.get("instrumented_site_id")
+        collection = _PCODE_EVENT_SITE_COLLECTION[kind]
+        if (
+            type(site_id) is not str
+            or site_id not in site_families[collection]
+        ):
+            diagnostics.append(
+                f"{kind} event site {site_id!r} not in matching proof family"
+            )
+        if kind == "operand_rewrite":
+            _validate_pcode_rewrite(
+                row, f"operand_rewrite event {index}", diagnostics
+            )
+        elif kind == "pcode_mutation":
+            _validate_pcode_mutation(
+                row, f"pcode_mutation event {index}", diagnostics
+            )
+        else:
+            _validate_pcode_emission(
+                row, f"code_emission event {index}", diagnostics
+            )
+    if sequences != list(range(len(event_rows))):
+        diagnostics.append("PCode event sequences must be contiguous from zero")
+
+    valid_cap = (
+        type(event_cap) is int
+        and event_cap > 0
+    )
+    if not valid_cap:
+        diagnostics.append("PCode event cap must be positive integer")
+    valid_dropped = (
+        type(dropped_events) is int
+        and dropped_events >= 0
+    )
+    if not valid_dropped:
+        diagnostics.append("PCode dropped events must be nonnegative integer")
+    if type(truncated) is not bool:
+        diagnostics.append("PCode truncated must be boolean")
+
+    complete = (
+        not diagnostics
+        and bool(event_rows)
+        and dropped_events == 0
+        and truncated is False
+        and len(event_rows) < event_cap
+    )
+    return {
+        "status": "complete" if complete else "partial",
+        "operand_rewrite_sites_expected": len(rewrite_sites),
+        "operand_rewrite_sites_hooked": len(rewrite_sites & hooked),
+        "operand_mutation_sites_expected": len(mutation_sites),
+        "operand_mutation_sites_hooked": len(mutation_sites & hooked),
+        "code_emission_sites_expected": len(emission_sites),
+        "code_emission_sites_hooked": len(emission_sites & hooked),
+        "first_event_sequence": sequences[0] if sequences else None,
+        "last_event_sequence": sequences[-1] if sequences else None,
+        "event_cap": event_cap,
+        "dropped_events": dropped_events,
+        "truncated": truncated,
+        "errors": diagnostics,
+        # Task 6 performs the final independent replay before this can be set.
+        "capabilities": [],
+    }
+
+
+def _capture_pcode_events(
+    snapshot_reader,
+    read_u32,
+    read_s16,
+    read_bytes,
+    block_head,
+    **kwargs,
+):
+    """Wire the stopped-process raw reader into the pure PCode snapshotter."""
+
+    return snapshot_reader(
+        read_u32,
+        read_s16,
+        block_head,
+        read_bytes=read_bytes,
+        **kwargs,
+    )
+
+
+def _validated_pcode_raw_reader(table, read_bytes):
+    """Return the raw reader only after the installed layout passes its gate."""
+
+    if struct_map.validate_pcode_arg_capture_capability(table):
+        return None
+    return read_bytes
+_OBJECT_STAGE_ORDER = {"colorgraph_return": 0, "final_scheduler": 1}
+_FRAME_AREA_ORDER = {"arguments": 0, "locals": 1, "temps": 2}
+
+
+def _stopped_lifecycle_inputs(lifecycle):
+    """Sample one lifecycle position while the compiler process is stopped."""
+
+    if lifecycle is None:
+        return {}
+    sequence_reader = getattr(lifecycle, "sequence_at_stop", None)
+    generation_for = getattr(lifecycle, "generation", None)
+    if not callable(sequence_reader) or not callable(generation_for):
+        raise ValueError("lifecycle capture lacks stopped sequence/generation readers")
+    sequence = sequence_reader()
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < -1:
+        raise ValueError(
+            "lifecycle sequence at stopped capture must be an integer at least -1"
+        )
+    return {"lifecycle_sequence": sequence, "generation_for": generation_for}
+
+
+def _capture_ig_class_events(
+    snapshot_reader,
+    read_u32,
+    read_s16,
+    *,
+    read_s32,
+    lifecycle,
+    ignode_obj_addr_offset,
+    object_offsets,
+    **kwargs,
+):
+    """Capture an IG while preserving the pre-lifecycle reader call shape."""
+
+    object_inputs = {"ignode_obj_addr_offset": ignode_obj_addr_offset}
+    lifecycle_inputs = _stopped_lifecycle_inputs(lifecycle)
+    if lifecycle_inputs:
+        object_inputs.update(
+            {
+                "read_s32": read_s32,
+                "object_offsets": object_offsets,
+                **lifecycle_inputs,
+            }
+        )
+    return snapshot_reader(read_u32, read_s16, **kwargs, **object_inputs)
+
+
+def _new_capture_attempt_id():
+    """Return a fresh 128-bit identity for one object-capture attempt."""
+
+    return secrets.token_hex(16)
+
+
+def _canonical_object_events(events):
+    """Return deterministic raw Task 5 events, deduplicating snapshots only."""
+
+    snapshots = {}
+    other = []
+    for raw in events:
+        if not isinstance(raw, dict) or raw.get("event") not in _OBJECT_EVENT_KINDS:
+            raise ValueError(f"malformed object capture event: {raw!r}")
+        row = dict(raw)
+        if row["event"] == "objobject_snapshot":
+            key = (
+                row.get("runtime_address"),
+                row.get("allocation_generation"),
+                row.get("stage"),
+            )
+            previous = snapshots.get(key)
+            if previous is not None:
+                sequence = row.get("lifecycle_sequence_at_capture")
+                previous_sequence = previous.get("lifecycle_sequence_at_capture")
+                row_content = {
+                    field: value
+                    for field, value in row.items()
+                    if field != "lifecycle_sequence_at_capture"
+                }
+                previous_content = {
+                    field: value
+                    for field, value in previous.items()
+                    if field != "lifecycle_sequence_at_capture"
+                }
+                if row_content != previous_content:
+                    raise ValueError(f"conflicting ObjObject snapshots for {key!r}")
+                if not isinstance(sequence, int) or not isinstance(
+                    previous_sequence, int
+                ):
+                    raise ValueError(f"malformed ObjObject snapshot sequence for {key!r}")
+                if sequence > previous_sequence:
+                    snapshots[key] = row
+            else:
+                snapshots[key] = row
+        else:
+            if row in other:
+                raise ValueError(f"duplicate object capture event: {row!r}")
+            other.append(row)
+
+    ordered_snapshots = sorted(
+        snapshots.values(),
+        key=lambda row: (
+            row.get("runtime_address"),
+            row.get("allocation_generation"),
+            _OBJECT_STAGE_ORDER.get(row.get("stage"), -1),
+        ),
+    )
+
+    def binding_key(row):
+        if row["event"] == "object_virtual_binding":
+            return (
+                0,
+                row.get("objobject_ptr"),
+                row.get("allocation_generation"),
+                row.get("class_id"),
+                row.get("virtual_kind"),
+                row.get("virtual"),
+                row.get("ig_id"),
+                row.get("ignode_runtime_address"),
+            )
+        return (
+            1,
+            row.get("objobject_ptr"),
+            row.get("allocation_generation"),
+            _FRAME_AREA_ORDER.get(row.get("area"), -1),
+            row.get("list_node_runtime_address"),
+            row.get("final_r1_offset"),
+        )
+
+    return [*ordered_snapshots, *sorted(other, key=binding_key)]
+
+
+def _object_capture_status(events, *, errors, cap_reached):
+    canonical_errors = sorted(str(error) for error in errors)
+    return {
+        "status": "partial",
+        "events_seen": len(events),
+        "cap_reached": bool(cap_reached),
+        "errors": canonical_errors,
+        # Task 4 intentionally withholds virtual/frame capabilities here.
+        "capabilities": [],
+    }
+
+
+def _retain_partial_object_facts(state, error, *, stage):
+    facts = [dict(fact) for fact in error.partial_facts]
+    state["object_events"].extend(facts)
+    state["object_capture_errors"].append(str(error))
+    state["errors"].append(
+        {
+            "stage": stage,
+            "error": str(error),
+            "object_capture_partial": True,
+        }
+    )
+
+
+def _reset_object_capture_state(
+    state, *, function_identity, capture_attempt_id=None
+):
+    attempt_id = capture_attempt_id or _new_capture_attempt_id()
+    if not (
+        isinstance(attempt_id, str)
+        and len(attempt_id) == 32
+        and all(char in "0123456789abcdef" for char in attempt_id)
+    ):
+        raise ValueError("capture attempt ID must be 32 lowercase hex characters")
+    if not isinstance(function_identity, dict):
+        raise ValueError("object capture function identity must be an object")
+    state["object_events"] = []
+    state["object_capture_errors"] = []
+    state["object_capture_warnings"] = []
+    state["object_capture_attempt"] = {
+        "capture_attempt_id": attempt_id,
+        "function_identity": dict(function_identity),
+    }
+
+
+def _publish_atomic_sidecar(
+    path, *, schema_version, events, status, capture_attempt
+):
+    target = Path(path)
+    payload = {
+        "schema_version": schema_version,
+        "capture_attempt": capture_attempt,
+        "capture_status": status,
+        "events": events,
+        "publication_complete": True,
+    }
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _publish_object_sidecar(path, events, status, capture_attempt):
+    _publish_atomic_sidecar(
+        path,
+        schema_version="mwcc-retro-object-events.v1",
+        events=events,
+        status=status,
+        capture_attempt=capture_attempt,
+    )
+
+
+def _publish_pcode_sidecar(path, events, status, capture_attempt):
+    _publish_atomic_sidecar(
+        path,
+        schema_version="mwcc-retro-pcode-events.v1",
+        events=events,
+        status=status,
+        capture_attempt=capture_attempt,
+    )
+
+
+def _finalize_pcode_capture(
+    state,
+    path,
+    *,
+    proof,
+    hooked_site_ids,
+    gate_errors,
+    event_cap=8192,
+):
+    """Publish partial raw PCode evidence with the object-attempt identity."""
+
+    pcode_events = [dict(event) for event in state.get("pcode_events", [])]
+    errors = list(gate_errors)
+
+    def status():
+        return _pcode_instrumentation_status(
+            proof,
+            hooked_site_ids=hooked_site_ids,
+            events=pcode_events,
+            event_cap=event_cap,
+            dropped_events=0,
+            truncated=len(pcode_events) >= event_cap,
+            errors=errors,
+        )
+
+    capture_status = status()
+    attempt = state["object_capture_attempt"]
+    try:
+        _publish_pcode_sidecar(path, pcode_events, capture_status, attempt)
+    except Exception as exc:  # noqa: BLE001 - preserve prior atomic publication
+        message = str(exc)
+        errors.append(message)
+        state.setdefault("errors", []).append(
+            {"stage": "pcode_capture_publish", "error": message}
+        )
+        capture_status = status()
+    return {
+        "capture_attempt": attempt,
+        "capture_status": capture_status,
+        "events": pcode_events,
+    }
+
+
+def _finalize_object_capture(state, path):
+    """Publish one attempt and return exactly correlated summary metadata."""
+
+    try:
+        object_events = _canonical_object_events(state["object_events"])
+    except Exception as exc:  # noqa: BLE001 - malformed facts withhold publication
+        object_events = []
+        message = str(exc)
+        state["object_capture_errors"].append(message)
+        state["errors"].append(
+            {"stage": "object_capture_finalize", "error": message}
+        )
+
+    def status():
+        errors = state["object_capture_errors"]
+        cap_reached = any(
+            token in error
+            for error in errors
+            for token in ("max_nodes", "max_objects", "exceeds", "exceeded")
+        )
+        return _object_capture_status(
+            object_events,
+            errors=errors,
+            cap_reached=cap_reached,
+        )
+
+    object_status = status()
+    attempt = state["object_capture_attempt"]
+    try:
+        _publish_object_sidecar(path, object_events, object_status, attempt)
+    except Exception as exc:  # noqa: BLE001 - retain the prior valid sidecar
+        message = str(exc)
+        state["object_capture_errors"].append(message)
+        state["errors"].append(
+            {"stage": "object_capture_publish", "error": message}
+        )
+        object_status = status()
+    return {
+        "capture_attempt": attempt,
+        "capture_status": object_status,
+        "events": object_events,
+        "warnings": list(state["object_capture_warnings"]),
+    }
+
+
+def _frame_object_events(frame_event):
+    events = []
+    for row in frame_event.get("objects", []):
+        snapshot = row.get("object_snapshot")
+        if not isinstance(snapshot, dict):
+            continue
+        events.append({"event": "objobject_snapshot", **snapshot})
+        events.append(
+            {
+                "event": "object_frame_binding",
+                "source_stage": frame_event.get("source_stage"),
+                "objobject_ptr": row.get("objobject_ptr"),
+                "allocation_generation": row.get("allocation_generation"),
+                "lifecycle_sequence_at_capture": snapshot.get(
+                    "lifecycle_sequence_at_capture"
+                ),
+                "area": row.get("area"),
+                "list_node_runtime_address": row.get("list_node_runtime_address"),
+                "raw_object_stack_offset": row.get("raw_object_stack_offset"),
+                "frame_base_size": row.get("frame_base_size"),
+                "frame_call_args_size": row.get("frame_call_args_size"),
+                "final_r1_offset": row.get("final_r1_offset"),
+                "size": row.get("size"),
+                "confidence": row.get("frame_binding_confidence"),
+                "provenance": row.get("frame_binding_provenance"),
+            }
+        )
+    return events
 
 
 def _try_capture_pcode_stage(state, stage, capture_pcode, *, fallback_stage):
@@ -30,19 +1417,37 @@ def intervene(ctx):
     import json
     import os
 
-    from tools.mwcc_retro import backend_colorgraph_trace
-    from tools.mwcc_retro import backend_frame_state
-    from tools.mwcc_retro import backend_ig_snapshot
-    from tools.mwcc_retro import backend_pcode_snapshot
-    from tools.mwcc_retro import backend_trace_assembler
+    from tools.mwcc_retro import (
+        backend_colorgraph_trace,
+        backend_frame_state,
+        backend_ig_snapshot,
+        backend_pcode_snapshot,
+        backend_trace_assembler,
+        struct_map,
+    )
 
     gdb = ctx.gdb
     cad = ctx.cad
     entries = ctx.table.get("entries", {})
     out_events = ctx.out_dir + "/backend-events.v1.jsonl"
+    out_object_events = ctx.out_dir + "/backend-object-events.v1.json"
+    out_pcode_events = ctx.out_dir + "/backend-pcode-events.v1.json"
     out_summary = ctx.out_dir + "/backend-onepass-candidate.json"
     source_file = os.environ.get("RETRO_SOURCE", "")
     requested = os.environ.get("RETRO_FUNCTION", ctx.fn)
+    lifecycle_capture = getattr(ctx, "lifecycle_capture", None)
+    pcode_raw_reader = _validated_pcode_raw_reader(ctx.table, ctx.read)
+    object_layout = struct_map.load_object_capture_layout(ctx.table)
+    object_offsets = backend_object_snapshot.ObjObjectOffsets(
+        name_record=object_layout.objobject_name_record,
+        type_pointer=object_layout.objobject_type_pointer,
+        type_size=object_layout.type_size,
+        stack_offset=object_layout.objobject_stack_offset,
+    )
+    list_offsets = backend_object_snapshot.FrameListOffsets(
+        next=object_layout.object_list_next,
+        object=object_layout.object_list_object,
+    )
 
     def parse_aliases():
         try:
@@ -154,13 +1559,9 @@ def intervene(ctx):
         "assign_nonvolatile": entry_va("colorgraph_assign_nonvolatile"),
         "spill": entry_va("colorgraph_spill"),
     }
-    frame_vas = {
-        "arguments": entry_va("arguments", 0x58806C),
-        "locals": entry_va("locals", 0x587FB8),
-        "temps": entry_va("temps", 0x57FEC0),
-    }
-    frame_base_size_va = entry_va("frame_base_size", 0x5880CC)
-    frame_call_args_size_va = entry_va("frame_call_args_size", 0x58712C)
+    frame_vas = dict(object_layout.frame_list_vas)
+    frame_base_size_va = object_layout.frame_base_size_va
+    frame_call_args_size_va = object_layout.frame_call_args_size_va
     required = [
         "codegen_start",
         "codegen_end",
@@ -205,7 +1606,16 @@ def intervene(ctx):
         "decisions_seen": [],
         "errors": [],
         "warnings": [],
+        "object_events": [],
+        "object_capture_errors": [],
+        "object_capture_warnings": [],
+        "pcode_events": [],
+        "next_pcode_event_sequence": 0,
     }
+    _reset_object_capture_state(
+        state,
+        function_identity=identity_payload(ctx.fn),
+    )
 
     def emit_function_start():
         if state["function_start_emitted"]:
@@ -224,9 +1634,11 @@ def intervene(ctx):
         if state["pcode_captured"]:
             return
         block_head = read_u32(entry_va("pcbasicblocks"))
-        events = backend_pcode_snapshot.snapshot_pcode_blocks(
+        events = _capture_pcode_events(
+            backend_pcode_snapshot.snapshot_pcode_blocks,
             read_u32,
             read_s16,
+            pcode_raw_reader,
             block_head,
             pass_id="pcode_snapshot",
             pass_name="PCode Snapshot",
@@ -252,6 +1664,7 @@ def intervene(ctx):
         if state["frame_captured"]:
             return
         try:
+            lifecycle_inputs = _stopped_lifecycle_inputs(lifecycle_capture)
             event = backend_frame_state.snapshot_frame_state(
                 read_u32,
                 read_s32,
@@ -260,8 +1673,17 @@ def intervene(ctx):
                 frame_base_size_va=frame_base_size_va,
                 frame_call_args_size_va=frame_call_args_size_va,
                 source_stage=stage,
+                object_offsets=object_offsets,
+                list_offsets=list_offsets,
+                name_record_text_offset=object_layout.name_record_text,
+                **lifecycle_inputs,
             )
         except Exception as exc:  # noqa: BLE001 - fall back to probe-shaped names
+            if isinstance(exc, backend_object_snapshot.PartialObjectCaptureError):
+                _retain_partial_object_facts(state, exc, stage=stage)
+            state["object_capture_warnings"].append(
+                f"frame_state fallback: {exc}"
+            )
             state["warnings"].append(
                 {"stage": stage, "warning": f"frame_state fallback: {exc}"}
             )
@@ -272,14 +1694,18 @@ def intervene(ctx):
                 list_vas=frame_vas,
                 frame_base_size_va=frame_base_size_va,
                 frame_call_args_size_va=frame_call_args_size_va,
+                object_offsets=object_offsets,
+                list_offsets=list_offsets,
+                name_record_text_offset=object_layout.name_record_text,
             )
             event = backend_trace_assembler.frame_events_from_map_probe_payload(
                 {"events": [{"stage": stage, "frame_state": probe_frame}]}
             )[0]
+        state["object_events"].extend(_frame_object_events(event))
         append_event(event)
         state["frame_captured"] = True
 
-    def reset_for_function():
+    def reset_for_function(matched_name):
         state["active"] = True
         state["matched"] = True
         state["function_start_emitted"] = False
@@ -293,15 +1719,20 @@ def intervene(ctx):
         state["current_decision"] = None
         state["class_iters"] = {}
         state["exact_decisions_by_class"] = {}
-        state["matched_function_name"] = None
+        state["matched_function_name"] = matched_name
+        _reset_object_capture_state(
+            state,
+            function_identity=identity_payload(matched_name),
+        )
+        state["pcode_events"] = []
+        state["next_pcode_event_sequence"] = 0
 
     class CodegenStart(gdb.Breakpoint):
         def stop(self):
             info = current_function_name()
             state["functions_seen"].append(info)
             if function_matches(info):
-                reset_for_function()
-                state["matched_function_name"] = info.get("name")
+                reset_for_function(info.get("name"))
                 emit_function_start()
                 append_event(
                     {
@@ -342,6 +1773,9 @@ def intervene(ctx):
                 class_id = read_u32(sp + 4)
                 class_name = class_names.get(class_id)
                 if class_name is None:
+                    state["object_capture_errors"].append(
+                        f"unknown rclass {class_id}"
+                    )
                     state["errors"].append(
                         {"stage": "colorgraph", "error": f"unknown rclass {class_id}"}
                     )
@@ -381,9 +1815,14 @@ def intervene(ctx):
                             return False
                         fired["done"] = True
                         try:
-                            events = backend_ig_snapshot.post_colorgraph_class_events(
+                            events = _capture_ig_class_events(
+                                backend_ig_snapshot.post_colorgraph_class_events,
                                 read_u32,
                                 read_s16,
+                                read_s32=read_s32,
+                                lifecycle=lifecycle_capture,
+                                ignode_obj_addr_offset=object_layout.ignode_obj_addr,
+                                object_offsets=object_offsets,
                                 graph_va=graph,
                                 head_ptr=colorgraph_head,
                                 n_ignodes=n_virtuals,
@@ -391,10 +1830,16 @@ def intervene(ctx):
                                 class_name=class_name,
                                 function_name=ctx.fn,
                             )
+                            state["object_events"].extend(
+                                event
+                                for event in events
+                                if event.get("event") in _OBJECT_EVENT_KINDS
+                            )
                             filtered = [
                                 event
                                 for event in events
                                 if event.get("event") != "color_decision"
+                                and event.get("event") not in _OBJECT_EVENT_KINDS
                             ]
                             for event in filtered:
                                 append_event(event)
@@ -420,13 +1865,22 @@ def intervene(ctx):
                                 }
                             )
                         except Exception as exc:  # noqa: BLE001 - summarize in payload
-                            state["errors"].append(
-                                {
-                                    "stage": "colorgraph_return",
-                                    "class_id": class_id,
-                                    "error": str(exc),
-                                }
-                            )
+                            if isinstance(
+                                exc,
+                                backend_object_snapshot.PartialObjectCaptureError,
+                            ):
+                                _retain_partial_object_facts(
+                                    state, exc, stage="colorgraph_return"
+                                )
+                            else:
+                                state["object_capture_errors"].append(str(exc))
+                                state["errors"].append(
+                                    {
+                                        "stage": "colorgraph_return",
+                                        "class_id": class_id,
+                                        "error": str(exc),
+                                    }
+                                )
                         finally:
                             state["pending_classes"].discard(class_id)
                             if state.get("active_colorgraph", {}).get("return_pc") == return_pc:
@@ -438,6 +1892,7 @@ def intervene(ctx):
             except Exception as exc:  # noqa: BLE001 - summarize in payload
                 if "class_id" in locals():
                     state["pending_classes"].discard(class_id)
+                state["object_capture_errors"].append(str(exc))
                 state["errors"].append({"stage": "colorgraph", "error": str(exc)})
             return False
 
@@ -693,6 +2148,7 @@ def intervene(ctx):
                 try:
                     capture_frame("final_scheduler")
                 except Exception as exc:  # noqa: BLE001 - codegen_end can still fallback
+                    state["object_capture_errors"].append(str(exc))
                     state["errors"].append({"stage": "final_scheduler", "error": str(exc)})
             return False
 
@@ -708,6 +2164,7 @@ def intervene(ctx):
                     try:
                         capture_frame("codegen_end")
                     except Exception as exc:  # noqa: BLE001 - summarize in payload
+                        state["object_capture_errors"].append(str(exc))
                         state["errors"].append({"stage": "codegen_end_frame", "error": str(exc)})
                 append_event(
                     {
@@ -739,6 +2196,22 @@ def intervene(ctx):
     try:
         ctx.cont()
     finally:
+        object_capture = _finalize_object_capture(state, out_object_events)
+        pcode_gate_errors = [
+            *struct_map.validate_pcode_arg_capture_capability(ctx.table),
+            *struct_map.validate_pcode_instrumentation_capability(ctx.table),
+        ]
+        pcode_capture = _finalize_pcode_capture(
+            state,
+            out_pcode_events,
+            proof={
+                "operand_rewrite_sites": [],
+                "operand_mutation_sites": [],
+                "code_emission_sites": [],
+            },
+            hooked_site_ids=set(),
+            gate_errors=pcode_gate_errors,
+        )
         payload = {
             "schema_version": "mwcc-retro-backend-onepass-candidate.v1",
             "compiler": {"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
@@ -751,6 +2224,11 @@ def intervene(ctx):
             "internal_breakpoints": internal_pcs,
             "errors": state["errors"],
             "warnings": state["warnings"],
+            "object_capture_attempt": object_capture["capture_attempt"],
+            "object_capture": object_capture["capture_status"],
+            "object_capture_warnings": object_capture["warnings"],
+            "pcode_capture_attempt": pcode_capture["capture_attempt"],
+            "pcode_capture": pcode_capture["capture_status"],
             "notes": [
                 "One-pass retail backend event stream.",
                 "Diagnostic sidecar for trace assembly and completeness checks.",

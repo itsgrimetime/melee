@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -72,6 +74,13 @@ class BackendCandidateOutcome:
     map_dir: Path | None = None
     pcode_dir: Path | None = None
     ig_dir: Path | None = None
+
+
+@dataclass
+class BackendCandidateV2Outcome:
+    exit_code: int
+    trace: dict | None = None
+    candidate_object: Path | None = None
 
 
 def _looks_like_melee_root(path: Path) -> bool:
@@ -199,6 +208,187 @@ def _write_backend_candidate_outputs(out_dir: Path, trace: dict) -> None:
     (out_dir / "backend-summary.candidate.txt").write_text(
         backend_summary.render_backend_summary(trace)
     )
+
+
+def _stage_bytes(path: Path, data: bytes) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        result = temporary
+        temporary = None
+        return result
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _load_backend_v2_struct_map(melee_root: Path) -> dict:
+    table_path = _retro_tables_dir(melee_root) / "gc_125n.json"
+    return json.loads(table_path.read_text(encoding="utf-8"))
+
+
+def _write_backend_v2_outputs(
+    out_dir: Path,
+    trace: dict,
+    candidate_object: Path,
+    *,
+    function: str,
+    melee_root: Path,
+) -> backend_trace_assembler.BackendTraceV2Verification:
+    """Independently verify, then durably publish one immutable artifact pair."""
+
+    candidate_bytes = Path(candidate_object).read_bytes()
+    try:
+        verification = backend_trace_assembler.verify_backend_trace_v2(
+            trace,
+            candidate_bytes=candidate_bytes,
+            function=function,
+            struct_map=_load_backend_v2_struct_map(melee_root),
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    encoded_trace = (
+        json.dumps(verification.payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    candidate_path = out_dir / "candidate-object.o"
+    trace_path = out_dir / "backend-trace.v2.json"
+
+    # The candidate is content-addressed by the embedded identity and never
+    # replaced with different bytes. A retry may reuse an identical artifact.
+    if candidate_path.exists() and candidate_path.read_bytes() != candidate_bytes:
+        raise RuntimeError("candidate-object.o is immutable and already contains different bytes")
+    created_out_dir = not out_dir.exists()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if created_out_dir:
+        # Persist the new directory entry before any artifact publication, then
+        # persist the empty directory itself as the transaction container.
+        _fsync_directory(out_dir.parent)
+        _fsync_directory(out_dir)
+    created_candidate = not candidate_path.exists()
+    prior_trace_bytes = trace_path.read_bytes() if trace_path.exists() else None
+    candidate_stage: Path | None = None
+    trace_stage: Path | None = None
+    trace_backup: Path | None = None
+    candidate_published = False
+    trace_published = False
+    try:
+        # Both complete files reach durable staging before either final name is
+        # replaced, so no trace can refer to a partially written candidate.
+        candidate_stage = _stage_bytes(candidate_path, candidate_bytes)
+        trace_stage = _stage_bytes(trace_path, encoded_trace)
+        if prior_trace_bytes is not None:
+            trace_backup = _stage_bytes(
+                out_dir / "backend-trace.v2.rollback",
+                prior_trace_bytes,
+            )
+            _fsync_directory(out_dir)
+        if created_candidate:
+            os.replace(candidate_stage, candidate_path)
+            candidate_stage = None
+            candidate_published = True
+            _fsync_directory(out_dir)
+        os.replace(trace_stage, trace_path)
+        trace_stage = None
+        trace_published = True
+        _fsync_directory(out_dir)
+    except Exception as original:
+        rollback_errors: list[str] = []
+        preserve_backup = False
+        if trace_published:
+            if trace_backup is not None:
+                try:
+                    os.replace(trace_backup, trace_path)
+                    trace_backup = None
+                except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                    preserve_backup = True
+                    rollback_errors.append(f"restore trace replace failed: {exc}")
+            else:
+                try:
+                    trace_path.unlink(missing_ok=True)
+                except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                    rollback_errors.append(f"remove new trace failed: {exc}")
+            try:
+                _fsync_directory(out_dir)
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"restore trace directory fsync failed: {exc}")
+
+        if candidate_published:
+            try:
+                candidate_path.unlink(missing_ok=True)
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"remove new candidate failed: {exc}")
+            try:
+                _fsync_directory(out_dir)
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"candidate rollback directory fsync failed: {exc}")
+
+        cleanup_attempted = False
+        for label, temporary in (
+            ("candidate stage", candidate_stage),
+            ("trace stage", trace_stage),
+            ("trace backup", None if preserve_backup else trace_backup),
+        ):
+            if temporary is None:
+                continue
+            cleanup_attempted = True
+            try:
+                temporary.unlink(missing_ok=True)
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"remove {label} failed: {exc}")
+        if cleanup_attempted:
+            try:
+                _fsync_directory(out_dir)
+            except Exception as exc:  # noqa: BLE001 - aggregate rollback errors
+                rollback_errors.append(f"rollback cleanup directory fsync failed: {exc}")
+
+        if rollback_errors:
+            raise RuntimeError(
+                f"v2 publication failed: {original}; rollback failed: "
+                + "; ".join(rollback_errors)
+            ) from original
+        raise
+
+    cleanup_errors: list[str] = []
+    for label, temporary in (
+        ("candidate stage", candidate_stage),
+        ("trace backup", trace_backup),
+    ):
+        if temporary is None:
+            continue
+        try:
+            temporary.unlink(missing_ok=True)
+        except Exception as exc:  # noqa: BLE001 - published pair remains valid
+            cleanup_errors.append(f"remove {label} failed: {exc}")
+    try:
+        _fsync_directory(out_dir)
+    except Exception as exc:  # noqa: BLE001 - published pair remains valid
+        cleanup_errors.append(f"publication cleanup directory fsync failed: {exc}")
+    if cleanup_errors:
+        raise RuntimeError(
+            "v2 publication committed but cleanup failed: "
+            + "; ".join(cleanup_errors)
+        )
+    return verification
 
 
 def _tail_text(value, *, limit: int = 2000) -> str:
@@ -1635,6 +1825,38 @@ def _run_backend_candidate_trace(
     )
 
 
+def _run_backend_candidate_v2_trace(
+    *,
+    src: str,
+    fn: str,
+    out_dir: Path,
+    melee_root: Path,
+) -> BackendCandidateV2Outcome:
+    """Fail closed until the installed retail proof-capable producer is promoted.
+
+    The generic v2 assembler is intentionally separate from this installed
+    capture path. Task 7 currently provides diagnostic sidecars only and its
+    status strings are not a lifetime proof.
+    """
+
+    from tools.mwcc_retro import struct_map
+
+    del src, fn, out_dir
+    table_path = _retro_tables_dir(melee_root) / "gc_125n.json"
+    table = json.loads(table_path.read_text(encoding="utf-8"))
+    gate_errors = struct_map.validate_pcode_instrumentation_capability(
+        table,
+        proof=None,
+    )
+    if not gate_errors:
+        gate_errors = ["installed one-pass sidecars do not provide the complete trusted lifetime_proof contract"]
+    raise RuntimeError(
+        "backend trace v2 unavailable: "
+        + "; ".join(gate_errors)
+        + "; production capture remains strict-abstention pending #1239/#1240"
+    )
+
+
 def _run_backend_onepass_candidate_trace(
     *,
     src: str,
@@ -2461,9 +2683,14 @@ def backend_candidate_cmd(
     one_pass: bool = typer.Option(
         False,
         "--one-pass",
+        help=("Use the one-pass candidate hook instead of separate map/PCode/IG probe compiles."),
+    ),
+    trace_version: str = typer.Option(
+        "v1",
+        "--trace-version",
         help=(
-            "Use the one-pass candidate hook instead of separate "
-            "map/PCode/IG probe compiles."
+            "Candidate artifact contract: v1 preserves the existing diagnostic "
+            "outputs; v2 requires --one-pass and an independently promoted proof."
         ),
     ),
 ):
@@ -2472,18 +2699,52 @@ def backend_candidate_cmd(
     Diagnostic candidate output. Use `debug retro backend` for full traces.
     """
     active_root = _resolve_melee_root(melee_root)
-    _ensure_setup(active_root)
     out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
-    try:
-        outcome = _run_backend_candidate_trace(
-            src=src,
-            fn=fn,
-            out_dir=out_dir,
-            melee_root=active_root,
-            one_pass=one_pass,
+    if trace_version not in {"v1", "v2"}:
+        typer.secho("--trace-version must be v1 or v2", fg="red", err=True)
+        raise typer.Exit(2)
+    if trace_version == "v2" and not one_pass:
+        typer.secho(
+            "backend trace v2 requires --one-pass so runtime pointers and virtuals "
+            "come from one serialized compiler process",
+            fg="red",
+            err=True,
         )
-        if outcome.trace is not None:
-            _write_backend_candidate_outputs(out_dir, outcome.trace)
+        raise typer.Exit(2)
+    if trace_version == "v1":
+        _ensure_setup(active_root)
+    try:
+        if trace_version == "v2":
+            v2_outcome = _run_backend_candidate_v2_trace(
+                src=src,
+                fn=fn,
+                out_dir=out_dir,
+                melee_root=active_root,
+            )
+            if v2_outcome.exit_code != 0:
+                raise RuntimeError(
+                    "backend trace v2 runner returned nonzero exit "
+                    f"{v2_outcome.exit_code}"
+                )
+            if v2_outcome.trace is None or v2_outcome.candidate_object is None:
+                raise RuntimeError("backend trace v2 runner returned success without trace and candidate object")
+            v2_verification = _write_backend_v2_outputs(
+                out_dir,
+                v2_outcome.trace,
+                v2_outcome.candidate_object,
+                function=fn,
+                melee_root=active_root,
+            )
+        else:
+            outcome = _run_backend_candidate_trace(
+                src=src,
+                fn=fn,
+                out_dir=out_dir,
+                melee_root=active_root,
+                one_pass=one_pass,
+            )
+            if outcome.trace is not None:
+                _write_backend_candidate_outputs(out_dir, outcome.trace)
     except RuntimeError as exc:
         typer.secho(str(exc), fg="red", err=True)
         raise typer.Exit(2)
@@ -2494,6 +2755,15 @@ def backend_candidate_cmd(
             err=True,
         )
         raise typer.Exit(2)
+
+    if trace_version == "v2":
+        typer.echo(f"backend trace v2: {out_dir / 'backend-trace.v2.json'}")
+        typer.echo(f"candidate object: {out_dir / 'candidate-object.o'}")
+        typer.echo(
+            "verified capabilities: "
+            + (", ".join(sorted(v2_verification.capabilities)) or "none")
+        )
+        raise typer.Exit(v2_outcome.exit_code)
 
     typer.echo(f"backend candidate trace: {out_dir / 'backend-trace.candidate.v1.json'}")
     typer.echo(f"regalloc candidate summary: {out_dir / 'regalloc-summary.candidate.txt'}")

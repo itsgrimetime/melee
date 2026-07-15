@@ -7,6 +7,8 @@
 │ --help          Show this message and exit.                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ causal-diff         Compare two immutable compiler-artifact frontiers        │
+│                     without generating artifacts.                            │
 │ analyze             Summarize a pcdump.txt: per-virtual register live        │
 │                     ranges, use counts,                                      │
 │                     interferences, and 'could have been' candidate sets.     │

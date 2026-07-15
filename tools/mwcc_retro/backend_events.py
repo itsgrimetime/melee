@@ -1,4 +1,5 @@
-"""Normalize mwcc-retro backend JSONL events into backend trace v1."""
+"""Normalize mwcc-retro backend events into canonical trace collections."""
+
 from __future__ import annotations
 
 import copy
@@ -17,6 +18,11 @@ ALLOCATOR_EVENTS = {
     "select_order",
     "color_decision",
 }
+
+_AREA_ORDER = {name: index for index, name in enumerate(("arguments", "locals", "temps", "spill-owned"))}
+_OBJECT_STAGE_ORDER = {"colorgraph_return": 0, "final_scheduler": 1}
+_PCODE_STAGE_ORDER = {"allocator_input": 0, "mutation_output": 1, "code_emission": 2}
+_CLASS_ORDER = {"gpr": 0, "fpr": 1}
 
 
 def load_events(path: str | Path) -> list[dict[str, Any]]:
@@ -40,9 +46,214 @@ def normalize_events(
     compiler: dict[str, Any],
     source: dict[str, Any],
     tool_version: str,
+    schema_version: str = backend_schema.SCHEMA_VERSION_V1,
 ) -> dict[str, Any]:
+    if schema_version == backend_schema.SCHEMA_VERSION_V2:
+        raise ValueError("backend trace v2 events require the proof-bearing v2 assembler")
+    if schema_version != backend_schema.SCHEMA_VERSION_V1:
+        raise ValueError(f"unsupported backend trace schema {schema_version!r}")
     normalizer = _Normalizer(compiler=compiler, source=source, tool_version=tool_version)
     return normalizer.normalize(events)
+
+
+def _sort_rows(value: object, key) -> None:
+    if not isinstance(value, list):
+        return
+    try:
+        value.sort(key=key)
+    except (KeyError, TypeError, ValueError):
+        # Structural validators own malformed rows. Normalization must not turn
+        # an attacker-controlled comparison failure into a producer crash.
+        return
+
+
+def _sort_strings(value: object, *, order: dict[str, int] | None = None) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        return
+    if order is None:
+        value.sort()
+    else:
+        value.sort(key=lambda item: (order.get(item, len(order)), item))
+
+
+def _canonicalize_proof(proof: object) -> None:
+    if not isinstance(proof, dict):
+        return
+    for field in ("allocation_sites", "free_sites"):
+        _sort_rows(
+            proof.get(field),
+            lambda row: (row["entity_kind"], row["address"], row["site_id"]),
+        )
+    for field in (
+        "operand_rewrite_sites",
+        "operand_mutation_sites",
+        "code_emission_sites",
+    ):
+        _sort_rows(proof.get(field), lambda row: (row["address"], row["site_id"]))
+    _sort_rows(
+        proof.get("operand_rules"),
+        lambda row: (
+            row["opcode_id"],
+            row["operand_index"],
+            row["raw_arg_kind_id"],
+            row["register_flags_mask"],
+            row["register_flags_value"],
+        ),
+    )
+    _sort_rows(proof.get("opcode_table"), lambda row: row["opcode_id"])
+
+
+def _canonicalize_pcode_instruction(row: object) -> None:
+    if not isinstance(row, dict):
+        return
+    snapshots = row.get("stage_snapshots")
+    _sort_rows(snapshots, lambda item: _PCODE_STAGE_ORDER[item["stage"]])
+    if isinstance(snapshots, list):
+        for snapshot in snapshots:
+            if not isinstance(snapshot, dict):
+                continue
+            _sort_rows(
+                snapshot.get("operand_lineage_inventory"),
+                lambda item: item["operand_index"],
+            )
+            _sort_rows(
+                snapshot.get("parsed_register_operands"),
+                lambda item: (
+                    item["operand_index"],
+                    item["role"],
+                    item["class_id"],
+                    item["raw_arg_kind_id"],
+                    item["raw_register_flags"],
+                ),
+            )
+    ranges = row.get("code_ranges")
+    _sort_rows(ranges, lambda item: (item["start"], item["end_exclusive"], item["bytes"]))
+    if isinstance(ranges, list):
+        for code_range in ranges:
+            if not isinstance(code_range, dict):
+                continue
+            _sort_rows(
+                code_range.get("relocations"),
+                lambda item: (
+                    item["offset_within_range"],
+                    item["relocation_type_id"],
+                    item["target_symbol_table_index"],
+                    item["addend"],
+                ),
+            )
+            _sort_rows(
+                code_range.get("machine_operand_mappings"),
+                lambda item: (
+                    item["instruction_offset_within_range"],
+                    item["machine_operand_position"],
+                    item["emission_pcode_operand_index"],
+                    item["operand_lineage_id"],
+                ),
+            )
+
+
+def _canonicalize_lineage_event(row: object) -> None:
+    if not isinstance(row, dict):
+        return
+    for side in ("inputs", "outputs"):
+        states = row.get(side)
+        _sort_rows(
+            states,
+            lambda item: (
+                item["pcode_id"],
+                item["runtime_address"],
+                item["allocation_generation"],
+            ),
+        )
+        if not isinstance(states, list):
+            continue
+        for state in states:
+            if not isinstance(state, dict):
+                continue
+            operands = state.get("operands")
+            _sort_rows(operands, lambda item: item["operand_index"])
+            if isinstance(operands, list):
+                for operand in operands:
+                    if isinstance(operand, dict):
+                        _sort_strings(operand.get("parent_lineage_ids"))
+
+
+def canonicalize_v2_object_bindings(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a detached Phase-1 object-binding payload in normative array order."""
+
+    normalized = copy.deepcopy(payload)
+    _canonicalize_proof(normalized.get("lifetime_proof"))
+    _sort_rows(normalized.get("lifecycle_events"), lambda row: row["sequence"])
+
+    objects = normalized.get("objects")
+    _sort_rows(objects, lambda row: (row["runtime_address"], row["allocation_generation"]))
+    if isinstance(objects, list):
+        for row in objects:
+            if not isinstance(row, dict):
+                continue
+            _sort_strings(row.get("areas"), order=_AREA_ORDER)
+            _sort_rows(
+                row.get("stage_snapshots"),
+                lambda item: _OBJECT_STAGE_ORDER[item["stage"]],
+            )
+
+    _sort_rows(
+        normalized.get("virtual_bindings"),
+        lambda row: (
+            row["object_id"],
+            row["class_id"],
+            row["virtual_kind"],
+            row["virtual"],
+            row["ig_id"],
+            row["ignode_runtime_address"],
+        ),
+    )
+    frame_bindings = normalized.get("frame_bindings")
+    _sort_rows(
+        frame_bindings,
+        lambda row: (
+            row["object_id"],
+            _AREA_ORDER[row["area"]],
+            row["list_node_runtime_address"],
+            row["final_r1_offset"],
+        ),
+    )
+    if isinstance(frame_bindings, list):
+        for row in frame_bindings:
+            if isinstance(row, dict):
+                _sort_strings(row.get("provenance"))
+
+    instructions = normalized.get("pcode_instructions")
+    _sort_rows(
+        instructions,
+        lambda row: (row["runtime_address"], row["allocation_generation"]),
+    )
+    if isinstance(instructions, list):
+        for row in instructions:
+            _canonicalize_pcode_instruction(row)
+
+    _sort_rows(
+        normalized.get("pcode_occurrences"),
+        lambda row: (row["pcode_event_sequence"], row["pcode_id"], row["operand_index"]),
+    )
+    lineage = normalized.get("pcode_operand_lineage_events")
+    _sort_rows(lineage, lambda row: row["pcode_event_sequence"])
+    if isinstance(lineage, list):
+        for row in lineage:
+            _canonicalize_lineage_event(row)
+
+    coverage = normalized.get("coverage")
+    if isinstance(coverage, dict):
+        _sort_strings(coverage.get("frame_areas"), order=_AREA_ORDER)
+        _sort_strings(coverage.get("ig_classes"), order=_CLASS_ORDER)
+        _sort_strings(coverage.get("errors"))
+        lifetime = coverage.get("lifetime_identity")
+        if isinstance(lifetime, dict):
+            _sort_strings(lifetime.get("errors"))
+        pcode = coverage.get("pcode_instrumentation")
+        if isinstance(pcode, dict):
+            _sort_strings(pcode.get("errors"))
+    return normalized
 
 
 class _Normalizer:
