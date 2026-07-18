@@ -28,6 +28,10 @@ def classify_operand(*args, **kwargs):
     return proof_module.classify_operand(*args, **kwargs)
 
 
+def resolve_operand_role(*args, **kwargs):
+    return proof_module.resolve_operand_role(*args, **kwargs)
+
+
 def _manifest_module():
     return importlib.import_module("tools.mwcc_retro.backend_runtime_hook_manifest")
 
@@ -53,6 +57,7 @@ def _opcode_rows() -> list[dict[str, object]]:
                 "mnemonic": "ADDI" if opcode_id == 63 else f"OP_{opcode_id:03d}",
                 "format_string": "=r,b,m,p" if opcode_id == 63 else "",
                 "constructor_kind": "custom" if custom else "generic-fixed",
+                "variadic_layout": None,
                 "custom_constructor_addresses": (
                     [0x410000 + opcode_id * 0x10] if custom else []
                 ),
@@ -87,10 +92,12 @@ def _operand_descriptors() -> list[dict[str, object]]:
         {
             "opcode_id": 63,
             "descriptor_index": 0,
+            "descriptor_source": "format",
             "format_code": "r",
             "expansion": {"kind": "one", "count": 1},
             "raw_arg_kind_id": 0,
             "role": "def",
+            "role_rules": [],
             "register_form": "gpr",
             "class_id": 0,
             "virtual_kind": "r",
@@ -99,10 +106,12 @@ def _operand_descriptors() -> list[dict[str, object]]:
         {
             "opcode_id": 63,
             "descriptor_index": 1,
+            "descriptor_source": "format",
             "format_code": "b",
             "expansion": {"kind": "one", "count": 1},
             "raw_arg_kind_id": 0,
             "role": "use",
+            "role_rules": [],
             "register_form": "gpr",
             "class_id": 0,
             "virtual_kind": "r",
@@ -111,10 +120,12 @@ def _operand_descriptors() -> list[dict[str, object]]:
         {
             "opcode_id": 63,
             "descriptor_index": 2,
+            "descriptor_source": "format",
             "format_code": "m",
             "expansion": {"kind": "one", "count": 1},
             "raw_arg_kind_id": 4,
             "role": "use",
+            "role_rules": [],
             "register_form": "none",
             "class_id": None,
             "virtual_kind": None,
@@ -123,10 +134,12 @@ def _operand_descriptors() -> list[dict[str, object]]:
         {
             "opcode_id": 63,
             "descriptor_index": 3,
+            "descriptor_source": "format",
             "format_code": "p",
             "expansion": {"kind": "one", "count": 1},
             "raw_arg_kind_id": 5,
             "role": "use",
+            "role_rules": [],
             "register_form": "none",
             "class_id": None,
             "virtual_kind": None,
@@ -409,7 +422,7 @@ def test_complete_proof_has_valid_shape_and_stable_canonical_digest():
             lambda p: p["opcode_table"][63].update(
                 {"constructor_kind": "generic-variadic"}
             ),
-            "generic-variadic opcode must use final V descriptor",
+            "generic-variadic opcode must bind exact variadic_layout",
         ),
     ],
 )
@@ -421,10 +434,190 @@ def test_opcode_table_is_complete_unique_and_constructor_bound(mutate, message):
 
 def test_hash_marker_does_not_consume_an_operand():
     proof, _manifest = valid_proof_and_manifest()
-    proof["opcode_table"][63]["format_string"] = "#=r,b,m,p"
+    proof["opcode_table"][63].update(
+        {
+            "format_string": "#,=r,b,m,=V",
+            "constructor_kind": "generic-variadic",
+            "variadic_layout": {
+                "count_source": "first-vararg-u32-at-generic-constructor",
+                "count_width": 4,
+                "constructor_count_min": 0,
+                "constructor_count_max": 0xFFFFFFFF,
+                "base_operand_count": 3,
+                "count_arithmetic": "u32-add-metadata-low-byte-store-low-u16",
+                "tail_expansion": "format-V",
+                "reachability": "reachable",
+                "reachable_count_min": 1,
+                "reachable_count_max": 32,
+                "call_addresses": [0x410000],
+                "evidence_addresses": [0x410000, 0x4A268C, 0x4A2AB5],
+            },
+        }
+    )
+    proof["operand_rules"][3].update(
+        {
+            "format_code": "V",
+            "expansion": {"kind": "remaining", "count": None},
+            "raw_arg_kind_id": 0,
+            "role": "def",
+            "register_form": "gpr",
+            "class_id": 0,
+            "virtual_kind": "r",
+            "state_rules": _gpr_rules(),
+        }
+    )
 
     assert validate_proof_shape(proof) == ()
     assert len(expand_operand_descriptors(proof, 63, 4)) == 4
+
+
+def test_real_non_v_variadic_uses_explicit_post_constructor_tail():
+    proof, _manifest = valid_proof_and_manifest()
+    proof["opcode_table"][1].update(
+        {
+            "format_string": "#,m",
+            "constructor_kind": "generic-variadic",
+            "variadic_layout": {
+                "count_source": "first-vararg-u32-at-generic-constructor",
+                "count_width": 4,
+                "constructor_count_min": 0,
+                "constructor_count_max": 0xFFFFFFFF,
+                "base_operand_count": 1,
+                "count_arithmetic": "u32-add-metadata-low-byte-store-low-u16",
+                "tail_expansion": "post-constructor",
+                "reachability": "reachable",
+                "reachable_count_min": 0,
+                "reachable_count_max": 0xFFFFFFFF,
+                "call_addresses": [0x410000],
+                "evidence_addresses": [0x410000, 0x4A268C, 0x4A2691, 0x4A26A1, 0x4A26E2],
+            },
+        }
+    )
+    proof["operand_rules"] = [
+        {
+            "opcode_id": 1,
+            "descriptor_index": 0,
+            "descriptor_source": "format",
+            "format_code": "m",
+            "expansion": {"kind": "one", "count": 1},
+            "raw_arg_kind_id": 4,
+            "role": "use",
+            "role_rules": [],
+            "register_form": "none",
+            "class_id": None,
+            "virtual_kind": None,
+            "state_rules": [],
+        },
+        {
+            "opcode_id": 1,
+            "descriptor_index": 1,
+            "descriptor_source": "variadic-tail",
+            "format_code": None,
+            "expansion": {"kind": "remaining", "count": None},
+            "raw_arg_kind_id": 0,
+            "role": "use",
+            "role_rules": [],
+            "register_form": "gpr",
+            "class_id": 0,
+            "virtual_kind": "r",
+            "state_rules": _gpr_rules(),
+        },
+    ]
+    proof["opcode_table"][63]["format_string"] = ""
+
+    assert validate_proof_shape(proof) == ()
+    expanded = expand_operand_descriptors(proof, 1, 4)
+    assert [row.descriptor_index for row in expanded] == [0, 1, 1, 1]
+
+
+def test_variadic_layout_and_tail_expansion_fail_closed():
+    proof, _manifest = valid_proof_and_manifest()
+    proof["opcode_table"][1].update(
+        {
+            "format_string": "#,m",
+            "constructor_kind": "generic-variadic",
+            "variadic_layout": None,
+        }
+    )
+    errors = "\n".join(validate_proof_shape(proof))
+    assert "generic-variadic opcode must bind exact variadic_layout" in errors
+
+    proof, _manifest = valid_proof_and_manifest()
+    proof["opcode_table"][1].update(
+        {
+            "format_string": "#,m",
+            "constructor_kind": "generic-variadic",
+            "variadic_layout": {
+                "count_source": "first-vararg-u32-at-generic-constructor",
+                "count_width": 4,
+                "constructor_count_min": 0,
+                "constructor_count_max": 32,
+                "base_operand_count": 1,
+                "count_arithmetic": "u32-add-metadata-low-byte-store-low-u16",
+                "tail_expansion": "post-constructor",
+                "reachability": "reachable",
+                "reachable_count_min": 0,
+                "reachable_count_max": 32,
+                "call_addresses": [0x410000],
+                "evidence_addresses": [0x410000, 0x4A268C],
+            },
+        }
+    )
+    errors = "\n".join(validate_proof_shape(proof))
+    assert "constructor count bounds must be exact u32 domain" in errors
+    assert "post-constructor variadic opcode must have tail descriptors" in errors
+
+
+def test_variadic_tail_role_rules_resolve_exactly_one_flags_domain():
+    descriptor = proof_module.ExpandedOperandDescriptor(
+        operand_index=0,
+        descriptor_index=0,
+        descriptor_source="variadic-tail",
+        raw_arg_kind_id=0,
+        role=None,
+        role_rules=(
+            {
+                "register_flags_mask": 0xFF,
+                "register_flags_value": 2,
+                "role": "def",
+            },
+            {
+                "register_flags_mask": 0xFF,
+                "register_flags_value": 3,
+                "role": "use-def",
+            },
+        ),
+        register_form="gpr",
+        class_id=0,
+        virtual_kind="r",
+        state_rules=(),
+    )
+    assert resolve_operand_role(descriptor, 2) == "def"
+    assert resolve_operand_role(descriptor, 3) == "use-def"
+    with pytest.raises(ValueError, match="exactly one operand role rule"):
+        resolve_operand_role(descriptor, 1)
+    with pytest.raises(ValueError, match="exactly one operand role rule"):
+        resolve_operand_role(descriptor, 0x82)
+
+
+def test_overlapping_role_rules_fail_closed():
+    proof, _manifest = valid_proof_and_manifest()
+    descriptor = proof["operand_rules"][0]
+    descriptor["role"] = None
+    descriptor["role_rules"] = [
+        {
+            "register_flags_mask": 1,
+            "register_flags_value": 0,
+            "role": "def",
+        },
+        {
+            "register_flags_mask": 2,
+            "register_flags_value": 0,
+            "role": "use",
+        },
+    ]
+
+    assert "has overlapping role rules" in "\n".join(validate_proof_shape(proof))
 
 
 def test_expansion_rejects_wrong_y_nonfinal_v_negative_and_leftover_counts():
@@ -457,6 +650,8 @@ def test_expansion_rejects_wrong_y_nonfinal_v_negative_and_leftover_counts():
         expand_operand_descriptors(proof, 63, 3)
     with pytest.raises(ValueError, match="leftover operands"):
         expand_operand_descriptors(proof, 63, 5)
+    with pytest.raises(ValueError, match="unsigned 16-bit"):
+        expand_operand_descriptors(proof, 63, 0x10000)
 
 
 @pytest.mark.parametrize(
@@ -880,6 +1075,26 @@ def test_malformed_enum_values_report_errors_without_crashing():
         lambda proof: proof["operand_rules"][0]["expansion"].update({"kind": []}),
         lambda proof: proof["operand_rules"][0]["state_rules"][0].update(
             {"register_flags_mask": []}
+        ),
+        lambda proof: proof["opcode_table"][0].update(
+            {
+                "constructor_kind": "generic-variadic",
+                "format_string": "#,m",
+                "variadic_layout": {
+                    "count_source": "first-vararg-u32-at-generic-constructor",
+                    "count_width": 4,
+                    "constructor_count_min": 0,
+                    "constructor_count_max": 0xFFFFFFFF,
+                    "base_operand_count": 1,
+                    "count_arithmetic": "u32-add-metadata-low-byte-store-low-u16",
+                    "tail_expansion": [],
+                    "reachability": "reachable",
+                    "reachable_count_min": 49,
+                    "reachable_count_max": 49,
+                    "call_addresses": [0x410000],
+                    "evidence_addresses": [0x410000, 0x4A268C],
+                },
+            }
         ),
     ],
 )

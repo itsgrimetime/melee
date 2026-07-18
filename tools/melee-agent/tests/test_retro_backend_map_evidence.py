@@ -1,6 +1,7 @@
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,8 @@ from tools.mwcc_retro.backend_instrumentation_proof import (  # noqa: E402
     proof_sha256,
 )
 from tools.mwcc_retro.backend_map_evidence import classify_probe_evidence  # noqa: E402
+
+from tests.retro_proof_test_helpers import bind_fixed_layout_schema  # noqa: E402
 
 PROMOTABLE_FROM_LIVE_PROBE = {
     "codegen_start",
@@ -56,6 +59,38 @@ def _valid_instrumentation_proof():
         }
         for opcode_id in range(468)
     ]
+    operand_rules = [
+        {
+            "opcode_id": 42,
+            "descriptor_index": 0,
+            "format_code": "r",
+            "expansion": {"kind": "one", "count": 1},
+            "raw_arg_kind_id": 0,
+            "role": "use",
+            "register_form": "gpr",
+            "class_id": 0,
+            "virtual_kind": "r",
+            "state_rules": [
+                {
+                    "capture_stage": "allocator_input",
+                    "register_flags_mask": 255,
+                    "register_flags_value": 0,
+                    "register_value_min": 32,
+                    "register_value_max": 65535,
+                    "allocation_state": "virtual",
+                },
+                {
+                    "capture_stage": "code_emission",
+                    "register_flags_mask": 255,
+                    "register_flags_value": 1,
+                    "register_value_min": 0,
+                    "register_value_max": 31,
+                    "allocation_state": "physical",
+                },
+            ],
+        }
+    ]
+    bind_fixed_layout_schema(opcodes, operand_rules)
     return {
         "schema_version": "mwcc-retro-lifetime-proof.v1",
         "proof_id": "proof",
@@ -104,37 +139,7 @@ def _valid_instrumentation_proof():
                 "compiler_stage": "backend-finalize",
             }
         ],
-        "operand_rules": [
-            {
-                "opcode_id": 42,
-                "descriptor_index": 0,
-                "format_code": "r",
-                "expansion": {"kind": "one", "count": 1},
-                "raw_arg_kind_id": 0,
-                "role": "use",
-                "register_form": "gpr",
-                "class_id": 0,
-                "virtual_kind": "r",
-                "state_rules": [
-                    {
-                        "capture_stage": "allocator_input",
-                        "register_flags_mask": 255,
-                        "register_flags_value": 0,
-                        "register_value_min": 32,
-                        "register_value_max": 65535,
-                        "allocation_state": "virtual",
-                    },
-                    {
-                        "capture_stage": "code_emission",
-                        "register_flags_mask": 255,
-                        "register_flags_value": 1,
-                        "register_value_min": 0,
-                        "register_value_max": 31,
-                        "allocation_state": "physical",
-                    },
-                ],
-            }
-        ],
+        "operand_rules": operand_rules,
         "opcode_table": opcodes,
         "initialization_address": 0x401000,
         "proof_basis": "exhaustive-static-callgraph-and-disassembly",
@@ -401,6 +406,51 @@ def test_map_probe_reports_exact_unpromoted_pcode_gates_without_capability():
         "pcode instrumentation gate is not validated",
         "PCode instrumentation proof must be object",
     ]
+
+
+def test_map_probe_reports_validated_candidate_bundle_without_promoting_capability():
+    proof = _valid_instrumentation_proof()
+    table = _validated_instrumentation_table(proof)
+    table["structs"] = {
+        name: {
+            "confidence": "manual-disassembly-confirmed",
+            "fields": dict(fields),
+            **({"size": struct_map.PCODE_ARG_SIZE} if name == "PCodeArg" else {}),
+        }
+        for name, fields in struct_map.REQUIRED_PCODE_ARG_CAPTURE_STRUCT_FIELDS.items()
+    }
+    bundle = SimpleNamespace(
+        validated=True,
+        proof=proof,
+        expected_site_ids=frozenset(
+            {
+                "pcode-alloc-1",
+                "pcode-free-1",
+                "rewrite-1",
+                "rewrite-2",
+                "mutation-1",
+                "emit-1",
+            }
+        ),
+        installed_site_ids={
+            "pcode-alloc-1",
+            "pcode-free-1",
+            "rewrite-1",
+            "rewrite-2",
+            "mutation-1",
+            "emit-1",
+        },
+        hit_site_ids=set(),
+        errors=[],
+    )
+
+    status = backend_map_probe_hook.pcode_probe_status(table, bundle)
+
+    assert status["status"] == "validated"
+    assert status["proof_errors"] == []
+    assert status["expected_site_ids"] == sorted(bundle.expected_site_ids)
+    assert status["installed_site_ids"] == sorted(bundle.installed_site_ids)
+    assert status["capabilities"] == []
 
 
 def test_installed_table_records_explicit_unpromoted_pcode_gate():

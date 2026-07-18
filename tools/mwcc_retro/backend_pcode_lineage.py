@@ -18,6 +18,7 @@ from .backend_instrumentation_proof import (
     classify_operand,
     expand_operand_descriptors,
     proof_sha256,
+    resolve_operand_role,
     validate_embedded_proof,
 )
 from .struct_map import load_gc125n_struct_map
@@ -89,6 +90,8 @@ class _Context:
     parents: dict[str, tuple[str, ...]]
     origins: dict[str, list[Mapping[str, object]]]
     allocatable_lineages: set[str]
+    anchor_unavailable: bool
+    anchor_diagnostics: list[str]
 
 
 @dataclass(frozen=True)
@@ -312,6 +315,8 @@ def _context(
         {},
         {},
         set(),
+        False,
+        [],
     )
 
 
@@ -733,14 +738,21 @@ def _validate_parsed(
         else:
             if row.get("raw_arg_kind_id") != descriptor.raw_arg_kind_id:
                 ctx.errors.append(f"{label} parsed operand {index} raw kind disagrees with descriptor")
-            for field, expected in (
-                ("role", descriptor.role),
-                ("register_form", descriptor.register_form),
-            ):
-                if row.get(field) != expected:
-                    ctx.errors.append(
-                        f"{label} parsed operand {index} {field} disagrees with descriptor"
-                    )
+            try:
+                expected_role = resolve_operand_role(descriptor, inventory_flags)
+            except Exception as exc:  # noqa: BLE001 - malformed proof/runtime flags
+                ctx.errors.append(
+                    f"{label} parsed operand {index} role resolution failed: {exc}"
+                )
+                expected_role = None
+            if row.get("role") != expected_role:
+                ctx.errors.append(
+                    f"{label} parsed operand {index} role disagrees with descriptor"
+                )
+            if row.get("register_form") != descriptor.register_form:
+                ctx.errors.append(
+                    f"{label} parsed operand {index} register_form disagrees with descriptor"
+                )
             try:
                 state = classify_operand(
                     descriptor,
@@ -1269,6 +1281,9 @@ def _validate_mutation(
         "replace": (None, None),
         "delete": (None, 0),
         "create": (0, None),
+        "reorder": (None, None),
+        "spill": (None, None),
+        "coalesce": (None, None),
     }
     if kind not in expected:
         ctx.errors.append(f"{label} has unknown mutation kind")
@@ -1282,6 +1297,12 @@ def _validate_mutation(
         ctx.errors.append(f"{label} delete requires inputs and no outputs")
     if kind == "create" and (input_raw or not output_raw):
         ctx.errors.append(f"{label} create requires no inputs and non-empty outputs")
+    if kind in {"reorder", "spill", "coalesce"} and (
+        not input_raw or not output_raw
+    ):
+        ctx.errors.append(
+            f"{label} {kind} requires non-empty inputs and outputs"
+        )
     inputs = [
         state
         for i, item in enumerate(input_raw)
@@ -2021,7 +2042,18 @@ def _validate_ranges(
         try:
             decoded = _decode_registers(raw_bytes, start)
         except (OverflowError, TypeError, ValueError) as exc:
-            ctx.errors.append(f"{label} PowerPC decode failed: {exc}")
+            has_vector = any(
+                item.get("class_id") == 9
+                for item in parsed_by_index.values()
+                if isinstance(item, Mapping)
+            )
+            if has_vector:
+                ctx.anchor_unavailable = True
+                ctx.anchor_diagnostics.append(
+                    f"{label} vector anchor decode abstained: {exc}"
+                )
+            else:
+                ctx.errors.append(f"{label} PowerPC decode failed: {exc}")
             decoded = []
         mapping_rows = _rows(
             code_range.get("machine_operand_mappings"),
@@ -2509,7 +2541,11 @@ def validate_pcode_lineage(
     return PCodeLineageValidation(
         normalized,
         MappingProxyType(dict(sorted(bindings.items()))),
-        frozenset({CAPABILITY}),
+        (
+            frozenset()
+            if ctx.anchor_unavailable
+            else frozenset({CAPABILITY})
+        ),
         (),
     )
 

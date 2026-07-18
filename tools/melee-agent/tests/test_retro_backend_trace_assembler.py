@@ -437,3 +437,99 @@ def test_frame_events_from_map_probe_payload_names_unnamed_slots_by_area_and_off
 
     assert event["objects"][0]["name"] == "arguments_slot_4"
     assert event["objects"][0]["confidence"] == "observed-unnamed"
+
+
+def test_pcode_lineage_assembler_serializes_runtime_events_without_placeholders():
+    from tools.mwcc_retro.backend_trace_assembler import (
+        assemble_pcode_lineage_payload,
+    )
+
+    from tests.test_retro_backend_pcode_lineage import (
+        minimal_payload,
+        proof_payload,
+    )
+
+    expected = minimal_payload()
+    proof = proof_payload()
+    instruction = expected["pcode_instructions"][0]
+    initial = instruction["stage_snapshots"][0]
+    emission = instruction["stage_snapshots"][1]
+    snapshot_events = [
+        {"event": "block", "id": "B0", "order": 0},
+        {
+            "event": "pcode_instruction",
+            "pcode_id": instruction["pcode_id"],
+            "block_id": "B0",
+            "order": 0,
+            "runtime_address": instruction["runtime_address"],
+            "allocation_generation": instruction["allocation_generation"],
+            "lifecycle_sequence_at_capture": initial[
+                "lifecycle_sequence_at_capture"
+            ],
+            "opcode_id": initial["opcode_id"],
+            "arg_count": initial["arg_count"],
+            "operand_lineage_inventory": initial[
+                "operand_lineage_inventory"
+            ],
+        },
+    ]
+    runtime_events = [
+        {"event": "operand_rewrite", **row}
+        for row in expected["pcode_occurrences"]
+    ]
+    runtime_events.append(
+        {
+            "event": "pcode_mutation",
+            **expected["pcode_operand_lineage_events"][0],
+        }
+    )
+    runtime_events.append(
+        {
+            "event": "code_emission",
+            "pcode_event_sequence": instruction["emission_event_sequence"],
+            "instrumented_site_id": instruction["emission_site_id"],
+            "pcode_id": instruction["pcode_id"],
+            "runtime_address": instruction["emission_runtime_address"],
+            "allocation_generation": instruction[
+                "emission_allocation_generation"
+            ],
+            "lifecycle_sequence_at_capture": instruction[
+                "emission_lifecycle_sequence_at_capture"
+            ],
+            "emission_snapshot": emission,
+            "code_ranges": instruction["code_ranges"],
+        }
+    )
+    all_site_ids = {
+        row["site_id"]
+        for family in (
+            "allocation_sites",
+            "free_sites",
+            "operand_rewrite_sites",
+            "operand_mutation_sites",
+            "code_emission_sites",
+        )
+        for row in proof[family]
+    }
+    runtime = {
+        "status": "validated",
+        "errors": [],
+        "truncated": False,
+        "dropped_events": 0,
+        "event_cap": 64,
+        "expected_site_ids": sorted(all_site_ids),
+        "installed_site_ids": sorted(all_site_ids),
+        "lifecycle_events": expected["lifecycle_events"],
+        "pcode_events": runtime_events,
+    }
+
+    actual = assemble_pcode_lineage_payload(
+        snapshot_events=snapshot_events,
+        runtime_status=runtime,
+        proof=proof,
+        function="fn",
+        max_pcode_instructions=4,
+        max_pcode_operands_per_instruction=4,
+    )
+
+    assert actual == expected

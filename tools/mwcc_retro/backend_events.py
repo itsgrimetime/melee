@@ -170,7 +170,10 @@ class _Normalizer:
         for field in (
             "opcode_id",
             "arg_count",
+            "pcode_id",
             "runtime_address",
+            "allocation_generation",
+            "lifecycle_sequence_at_capture",
             "source_stage",
             "operand_lineage_inventory",
             "retail_pcode",

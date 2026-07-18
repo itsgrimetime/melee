@@ -141,6 +141,29 @@ def run_in_gdb():
     fn = os.environ["RETRO_FN"]
     port = os.environ.get("RETRO_PORT", "9001")
     compiler = os.environ.get("RETRO_COMPILER", "1.2.5n")
+    hook_path = os.environ.get("RETRO_GDB_PY", "").strip()
+    runtime_bundle = None
+    if hook_path and compiler == "1.2.5n":
+        capstone_site = os.environ.get(
+            "RETRO_CAPSTONE_SITE_PACKAGES", ""
+        ).strip()
+        if not capstone_site:
+            raise ValueError(
+                "RETRO_CAPSTONE_SITE_PACKAGES is required for runtime hooks"
+            )
+        if capstone_site not in sys.path:
+            sys.path.insert(0, capstone_site)
+        from tools.mwcc_retro.backend_runtime_instrumentation import (
+            load_runtime_bundle,
+        )
+
+        compiler_path = os.environ.get("RETRO_COMPILER_PATH", "").strip()
+        if not compiler_path:
+            raise ValueError("RETRO_COMPILER_PATH is required for runtime hooks")
+        runtime_bundle = load_runtime_bundle(
+            os.environ["RETRO_TABLE"], compiler_path
+        )
+        table = runtime_bundle.table
 
     gdb.execute("set python print-stack full")
     cad.FUNCTION_NAME = fn
@@ -178,7 +201,6 @@ def run_in_gdb():
     # connected, descriptor-injected session and let it drive (mutate state at a
     # breakpoint, replay forward, observe). This is the generalized "intervene at
     # stage k" beyond the DLL's force-phys/coalesce.
-    hook_path = os.environ.get("RETRO_GDB_PY", "").strip()
     instrumentation = {}
     instr_path = os.environ.get("RETRO_INSTRUMENTATION", "").strip()
     if instr_path:
@@ -188,7 +210,16 @@ def run_in_gdb():
         except Exception:
             pass
     if hook_path:
-        _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path, instrumentation=instrumentation)
+        _run_gdb_hook(
+            gdb,
+            cad,
+            table,
+            out_dir,
+            fn,
+            hook_path,
+            instrumentation=instrumentation,
+            runtime_bundle=runtime_bundle,
+        )
         return
 
     if phases == "backend" and compiler == "1.2.5n":
@@ -234,7 +265,16 @@ class RetroContext:
     `addr(key)` looks up a named VA from it. All writes hit the emulated
     inferior only (the exe on disk is never modified)."""
 
-    def __init__(self, gdb, cad, table, out_dir, fn, instrumentation=None):
+    def __init__(
+        self,
+        gdb,
+        cad,
+        table,
+        out_dir,
+        fn,
+        instrumentation=None,
+        runtime_bundle=None,
+    ):
         import struct as _struct
         self.gdb = gdb
         self.cad = cad
@@ -242,6 +282,8 @@ class RetroContext:
         self.out_dir = out_dir
         self.fn = fn
         self.instrumentation = instrumentation or {}
+        self.runtime_bundle = runtime_bundle
+        self.lifecycle_capture = None
         self._struct = _struct
         self._inf = gdb.selected_inferior()
 
@@ -351,12 +393,29 @@ def _enable_backend_tracing(gdb, cad, table, out_dir, fn):
     _continue_to_exit(gdb)
 
 
-def _run_gdb_hook(gdb, cad, table, out_dir, fn, hook_path, instrumentation=None):
+def _run_gdb_hook(
+    gdb,
+    cad,
+    table,
+    out_dir,
+    fn,
+    hook_path,
+    instrumentation=None,
+    runtime_bundle=None,
+):
     """Load a user hook file and call its `intervene(ctx)` with a RetroContext.
     The hook owns the session from here (it may set breakpoints, mutate memory,
     and continue)."""
     import importlib.util
-    ctx = RetroContext(gdb, cad, table, out_dir, fn, instrumentation=instrumentation)
+    ctx = RetroContext(
+        gdb,
+        cad,
+        table,
+        out_dir,
+        fn,
+        instrumentation=instrumentation,
+        runtime_bundle=runtime_bundle,
+    )
     spec = importlib.util.spec_from_file_location("retro_hook", hook_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["retro_hook"] = mod
@@ -415,8 +474,12 @@ def _enable_frontend_tracing(gdb, cad, table, out_dir, fn):
     sf_push = e["iro_starting_function_push"]["va"]
 
     inf = gdb.selected_inferior()
-    rd = lambda a, n: bytes(inf.read_memory(a, n))
-    wr = lambda a, b: inf.write_memory(a, b)
+
+    def rd(address, size):
+        return bytes(inf.read_memory(address, size))
+
+    def wr(address, data):
+        return inf.write_memory(address, data)
     # Open a SHORT temp path inside the inferior (long out_dir paths overflow the
     # scratch gap and collide with the staged mode string); host copies it out.
     out_path = _TRACE_TMP
@@ -488,9 +551,17 @@ def main():
     # retrowin32 takes the mwcc command as a positional greedy cmdline after
     # --gdb-stub; the gdb port is hardcoded to 9001 (no --gdb-port flag).
     emu = [a.emulator, "--gdb-stub", *shlex.split(a.args)]
+    compiler_parts = shlex.split(a.args)
+    if not compiler_parts:
+        raise ValueError("compiler command line is empty")
+    import capstone as _capstone
+
+    capstone_site = str(Path(_capstone.__file__).resolve().parent.parent)
     env = dict(os.environ, RETRO_TABLE=a.table, RETRO_OUT=a.out,
                RETRO_FN=a.fn, RETRO_PHASES=a.phases, RETRO_PORT=str(GDB_PORT),
-               RETRO_COMPILER=a.compiler, RETRO_GDB_PY=a.gdb_py or "")
+               RETRO_COMPILER=a.compiler, RETRO_GDB_PY=a.gdb_py or "",
+               RETRO_COMPILER_PATH=compiler_parts[0],
+               RETRO_CAPSTONE_SITE_PACKAGES=capstone_site)
     # gdb runs a .py passed to -x as embedded Python with __name__ == "__main__"
     # (and the `gdb` module importable), so the __main__/IN_GDB branch below
     # fires run_in_gdb(). This is cadmic's mechanism; runpy.run_path misbehaves

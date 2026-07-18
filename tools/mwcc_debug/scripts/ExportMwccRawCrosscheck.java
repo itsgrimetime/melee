@@ -208,6 +208,12 @@ public class ExportMwccRawCrosscheck extends GhidraScript {
                 if (reference.getReferenceType().isFlow()) {
                     continue;
                 }
+                if (!currentProgram.getMemory().contains(reference.getToAddress())) {
+                    continue;
+                }
+                if (currentProgram.getMemory().getBlock(reference.getToAddress()).isExecute()) {
+                    continue;
+                }
                 long target = numeric(reference.getToAddress());
                 add(rows, address, "data-reference",
                     "{\"record_kind\":\"data-reference\",\"address\":" + address +

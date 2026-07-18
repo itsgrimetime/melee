@@ -879,6 +879,10 @@ def synthetic_dispatch_pe_bytes(
         "validated-constructor-descriptor-wrapper-global-double-unrelocated",
         "validated-constructor-descriptor-wrapper-global-alternate-writer",
         "validated-constructor-descriptor-wrapper-global-incomplete-domain",
+        "validated-constructor-descriptor-forwarded-global-switch",
+        "validated-constructor-descriptor-forwarded-global-switch-unknown-tag",
+        "validated-constructor-descriptor-forwarded-global-switch-hidden-caller",
+        "validated-constructor-descriptor-forwarded-global-switch-alternate-writer",
         "validated-constructor-descriptor-multi-tag",
         "validated-constructor-descriptor-multi-tag-rejected-only",
         "validated-constructor-descriptor-multi-tag-same-tag",
@@ -889,10 +893,20 @@ def synthetic_dispatch_pe_bytes(
         wrapper_global = mode.startswith(
             "validated-constructor-descriptor-wrapper-global"
         )
+        forwarded_global_switch = mode.startswith(
+            "validated-constructor-descriptor-forwarded-global-switch"
+        )
         multi_tag = mode.startswith(
             "validated-constructor-descriptor-multi-tag"
         )
-        if multi_tag:
+        if forwarded_global_switch:
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x200)
+            struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x200)
+            # Two fresh-object factories feed one forwarded switch.  Both
+            # switch arms call the sole loader-zero global writer, matching
+            # the retail Pars path without making either call site special.
+            pass
+        elif multi_tag:
             # Two closed fresh-object producers reach the same validated
             # consumer.  The exported alternate factory calls the primary
             # factory after its own consumer call, making both caller domains
@@ -953,7 +967,12 @@ def synthetic_dispatch_pe_bytes(
             failure = 0x28 if len(factory) > 0x20 else 0x20
             text[failure : failure + 3] = bytes.fromhex("31 c0 c3")
         # Consumer accepts only the validator's non-null identity return.
-        if multi_tag:
+        if forwarded_global_switch:
+            text[0x50:0x6C] = bytes.fromhex(
+                "ff 35 00 27 40 00 e8 25 00 00 00 59 85 c0 74 0b "
+                "8b 98 34 00 00 00 ff 53 04 c3 cc c3"
+            )
+        elif multi_tag:
             pass
         elif mode.startswith(
             "validated-constructor-descriptor-wrapper-global-double"
@@ -1049,6 +1068,40 @@ def synthetic_dispatch_pe_bytes(
         text[0xE0] = 0xC3
         text[0xF0] = 0xC3
         struct.pack_into("<I", data, 0x804, 0x004010F0)
+        if forwarded_global_switch:
+            # Forwarder/switch: every arm forwards arg0 to the same writer.
+            text[0x100:0x11E] = bytes.fromhex(
+                "8b 44 24 04 83 3d 20 27 40 00 00 74 09 50 "
+                "e8 1d 00 00 00 59 c3 cc 50 e8 14 00 00 00 59 c3"
+            )
+            text[0x130:0x13A] = bytes.fromhex(
+                "8b 44 24 04 a3 00 27 40 00 c3"
+            )
+            # Generic tag initializer.  The hostile variant accepts an open
+            # tag argument instead of the caller's guarded immediate.
+            text[0x140:0x14F] = bytes.fromhex(
+                "8b 44 24 04 89 41 20 c2 04 00 cc cc cc cc cc"
+            )
+            text[0x160:0x1AA] = bytes.fromhex(
+                "56 6a 38 e8 78 ff ff ff 59 89 c3 85 db 74 13 89 d9 "
+                "e8 2a ff ff ff 53 e8 84 ff ff ff 59 e8 ce fe ff ff "
+                "6a 38 e8 57 ff ff ff 59 89 c6 85 f6 74 18 89 f1 68 "
+                "70 6d 6f 43 e8 a4 ff ff ff 56 e8 5e ff ff ff 59 e8 "
+                "a8 fe ff ff 5e c3"
+            )
+            if mode.endswith("unknown-tag"):
+                text[0x192:0x197] = bytes.fromhex("ff 74 24 08 90")
+            elif mode.endswith("hidden-caller"):
+                # Raw but unreachable E8 into the switch must make its caller
+                # domain open even though ordinary decoding never owns it.
+                text[0x1B0:0x1B5] = bytes.fromhex("e8 4b ff ff ff")
+            elif mode.endswith("alternate-writer"):
+                text[0x1A8:0x1AF] = bytes.fromhex(
+                    "e8 13 00 00 00 5e c3"
+                )
+                text[0x1C0:0x1C8] = bytes.fromhex(
+                    "89 0d 00 27 40 00 c3 cc"
+                )
         if wrapper_global:
             struct.pack_into("<I", data, 0xA40, 0x00401070)
         if mode.startswith(
@@ -2147,6 +2200,10 @@ def synthetic_dispatch_pe_bytes(
         "object-callback-table-interior-target": 0x1060,
         "object-callback-table-unknown-overlap": 0x1060,
         "object-callback-table-late-rmw": 0x1060,
+        "validated-constructor-descriptor-forwarded-global-switch": 0x1160,
+        "validated-constructor-descriptor-forwarded-global-switch-unknown-tag": 0x1160,
+        "validated-constructor-descriptor-forwarded-global-switch-hidden-caller": 0x1160,
+        "validated-constructor-descriptor-forwarded-global-switch-alternate-writer": 0x1160,
     }.get(mode, 0x1020)
     struct.pack_into("<I", data, 0x430, export_rva)
     struct.pack_into("<I", data, 0x480, 0x00401060)
@@ -2364,6 +2421,12 @@ def synthetic_dispatch_pe_bytes(
                 code_entries.append(0x30C5)
             elif mode.endswith("incomplete-domain"):
                 code_entries.append(0x30C3)
+        elif mode.startswith(
+            "validated-constructor-descriptor-forwarded-global-switch"
+        ):
+            code_entries = [0x3052, 0x30B0, 0x3106, 0x3135]
+            if mode.endswith("alternate-writer"):
+                code_entries.append(0x31C2)
         code_entries += [0] * ((-len(code_entries)) % 2)
         data_entries += [0] * ((-len(data_entries)) % 2)
         code_block_size = 8 + len(code_entries) * 2

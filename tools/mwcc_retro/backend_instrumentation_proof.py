@@ -63,10 +63,12 @@ _DESCRIPTOR_FIELDS = frozenset(
     {
         "opcode_id",
         "descriptor_index",
+        "descriptor_source",
         "format_code",
         "expansion",
         "raw_arg_kind_id",
         "role",
+        "role_rules",
         "register_form",
         "class_id",
         "virtual_kind",
@@ -74,6 +76,9 @@ _DESCRIPTOR_FIELDS = frozenset(
     }
 )
 _EXPANSION_FIELDS = frozenset({"kind", "count"})
+_ROLE_RULE_FIELDS = frozenset(
+    {"register_flags_mask", "register_flags_value", "role"}
+)
 _STATE_RULE_FIELDS = frozenset(
     {
         "capture_stage",
@@ -91,6 +96,23 @@ _OPCODE_FIELDS = frozenset(
         "format_string",
         "constructor_kind",
         "custom_constructor_addresses",
+        "variadic_layout",
+    }
+)
+_VARIADIC_LAYOUT_FIELDS = frozenset(
+    {
+        "count_source",
+        "count_width",
+        "constructor_count_min",
+        "constructor_count_max",
+        "base_operand_count",
+        "count_arithmetic",
+        "tail_expansion",
+        "reachability",
+        "reachable_count_min",
+        "reachable_count_max",
+        "call_addresses",
+        "evidence_addresses",
     }
 )
 _HEX_DIGITS = frozenset("0123456789abcdef")
@@ -117,8 +139,10 @@ class InstrumentationProof:
 class ExpandedOperandDescriptor:
     operand_index: int
     descriptor_index: int
+    descriptor_source: str
     raw_arg_kind_id: int
-    role: str
+    role: str | None
+    role_rules: tuple[Mapping[str, object], ...]
     register_form: str
     class_id: int | None
     virtual_kind: str | None
@@ -152,6 +176,10 @@ def _is_u8(value: object) -> bool:
 
 def _is_u16(value: object) -> bool:
     return type(value) is int and 0 <= value <= 0xFFFF
+
+
+def _is_u32(value: object) -> bool:
+    return type(value) is int and 0 <= value <= 0xFFFFFFFF
 
 
 def _is_lower_sha256(value: object) -> bool:
@@ -242,6 +270,71 @@ def _validate_site_inventory(
     return errors, valid
 
 
+def _validate_variadic_layout(
+    value: object, label: str, errors: list[str]
+) -> Mapping[str, object] | None:
+    if type(value) is not dict:
+        errors.append("generic-variadic opcode must bind exact variadic_layout")
+        return None
+    field_error = _unexpected_fields(value, _VARIADIC_LAYOUT_FIELDS, label)
+    if field_error:
+        errors.append(field_error)
+    if value.get("count_source") != "first-vararg-u32-at-generic-constructor":
+        errors.append(f"{label} count_source differs")
+    if value.get("count_width") != 4:
+        errors.append(f"{label} count_width must be 4")
+    if (
+        value.get("constructor_count_min") != 0
+        or value.get("constructor_count_max") != 0xFFFFFFFF
+    ):
+        errors.append("constructor count bounds must be exact u32 domain")
+    if not _is_u8(value.get("base_operand_count")):
+        errors.append(f"{label} base_operand_count must be unsigned byte")
+    if (
+        value.get("count_arithmetic")
+        != "u32-add-metadata-low-byte-store-low-u16"
+    ):
+        errors.append(f"{label} count_arithmetic differs")
+    tail = value.get("tail_expansion")
+    if type(tail) is not str or tail not in {
+        "format-V",
+        "post-constructor",
+        "unreachable",
+    }:
+        errors.append(f"{label} tail_expansion is invalid")
+    reachability = value.get("reachability")
+    count_min = value.get("reachable_count_min")
+    count_max = value.get("reachable_count_max")
+    calls = value.get("call_addresses")
+    if type(calls) is not list or not all(_is_positive_int(row) for row in calls):
+        errors.append(f"{label} call_addresses must be positive integers")
+        calls = []
+    elif calls != sorted(set(calls)):
+        errors.append(f"{label} call_addresses must be ascending and unique")
+    if reachability == "reachable":
+        if not calls:
+            errors.append(f"{label} reachable layout must bind call_addresses")
+        if not _is_u32(count_min) or not _is_u32(count_max):
+            errors.append(f"{label} reachable count bounds must be unsigned u32")
+        elif count_min > count_max:
+            errors.append(f"{label} reachable count range is reversed")
+    elif reachability == "unreachable":
+        if calls or count_min is not None or count_max is not None:
+            errors.append(f"{label} unreachable layout must have empty count domain")
+        if tail != "unreachable":
+            errors.append(f"{label} unreachable layout tail_expansion differs")
+    else:
+        errors.append(f"{label} reachability is invalid")
+    evidence = value.get("evidence_addresses")
+    if type(evidence) is not list or not evidence or not all(
+        _is_positive_int(row) for row in evidence
+    ):
+        errors.append(f"{label} evidence_addresses must be nonempty positive integers")
+    elif evidence != sorted(set(evidence)):
+        errors.append(f"{label} evidence_addresses must be ascending and unique")
+    return value
+
+
 def _validate_opcode_table(
     payload: Mapping[str, object],
 ) -> tuple[list[str], dict[int, Mapping[str, object]]]:
@@ -264,6 +357,7 @@ def _validate_opcode_table(
         format_string = row.get("format_string")
         constructor = row.get("constructor_kind")
         addresses = row.get("custom_constructor_addresses")
+        variadic_layout = row.get("variadic_layout")
         if not _is_nonnegative_int(opcode_id):
             errors.append(f"opcode table row {index} opcode_id must be nonnegative integer")
         else:
@@ -298,8 +392,25 @@ def _validate_opcode_table(
         ):
             errors.append("generic opcode must not have constructor addresses")
         format_codes = _format_codes(format_string) if type(format_string) is str else []
-        if constructor == "generic-variadic" and format_codes[-1:] != ["V"]:
-            errors.append("generic-variadic opcode must use final V descriptor")
+        has_count_marker = _has_count_marker(format_string)
+        if constructor == "generic-variadic":
+            layout = _validate_variadic_layout(
+                variadic_layout,
+                f"opcode table row {index} variadic_layout",
+                errors,
+            )
+            if not has_count_marker:
+                errors.append("generic-variadic opcode must start with # marker")
+            if layout is not None:
+                tail = layout.get("tail_expansion")
+                if format_codes[-1:] == ["V"] and tail != "format-V":
+                    errors.append("final V variadic opcode must use format-V expansion")
+                if "V" not in format_codes and tail == "format-V":
+                    errors.append("format-V expansion requires final V descriptor")
+        elif variadic_layout is not None:
+            errors.append("non-variadic opcode must have null variadic_layout")
+        if constructor == "generic-fixed" and has_count_marker:
+            errors.append("generic-fixed opcode must not use # marker")
         if constructor == "generic-fixed" and "V" in format_codes:
             errors.append("generic-fixed opcode must not use V descriptor")
         if (
@@ -323,8 +434,29 @@ def _validate_opcode_table(
     return errors, result
 
 
+def _has_count_marker(value: object) -> bool:
+    return type(value) is str and value.split(",", 1)[0].strip() == "#"
+
+
 def _format_codes(value: str) -> list[str]:
-    return [char for char in value if char not in {"=", ",", "#"} and not char.isspace()]
+    return [code for code, _role in _format_layout(value)]
+
+
+def _format_layout(value: str) -> list[tuple[str, str]]:
+    result: list[tuple[str, str]] = []
+    for raw_token in value.split(","):
+        token = raw_token.strip()
+        if not token or token == "#":
+            continue
+        role = "use"
+        if token[0] in "=+":
+            role = "def" if token[0] == "=" else "use-def"
+            token = token[1:]
+        if len(token) == 1:
+            result.append((token, role))
+        else:
+            result.extend((code, role) for code in token)
+    return result
 
 
 def _state_rule_key(rule: Mapping[str, object]) -> tuple[object, ...]:
@@ -417,6 +549,47 @@ def _validate_state_rules(
                 errors.append(f"{label} has overlapping state rules")
 
 
+def _validate_role_rules(
+    value: object, fixed_role: object, label: str, errors: list[str]
+) -> None:
+    if type(value) is not list:
+        errors.append(f"{label} role_rules must be list")
+        return
+    if fixed_role is None and not value:
+        errors.append(f"{label} must have fixed role or role_rules")
+    if fixed_role is not None and value:
+        errors.append(f"{label} fixed role must not have role_rules")
+    keys: list[tuple[int, int, str]] = []
+    valid: list[Mapping[str, object]] = []
+    for index, rule in enumerate(value):
+        if type(rule) is not dict:
+            errors.append(f"{label} role rule {index} must be object")
+            continue
+        field_error = _unexpected_fields(
+            rule, _ROLE_RULE_FIELDS, f"{label} role rule {index}"
+        )
+        if field_error:
+            errors.append(field_error)
+        mask = rule.get("register_flags_mask")
+        flags_value = rule.get("register_flags_value")
+        role = rule.get("role")
+        if not _is_u8(mask) or not _is_u8(flags_value):
+            errors.append(f"{label} role rule {index} predicate must be unsigned byte")
+        elif flags_value & ~mask:
+            errors.append(f"{label} role rule {index} value exceeds mask")
+        if type(role) is not str or role not in OPERAND_ROLES:
+            errors.append(f"{label} role rule {index} role is invalid")
+        if _is_u8(mask) and _is_u8(flags_value) and type(role) is str:
+            keys.append((mask, flags_value, role))
+            valid.append(rule)
+    if keys != sorted(keys):
+        errors.append(f"{label} role rules must be canonically ordered")
+    for index, left in enumerate(valid):
+        for right in valid[index + 1 :]:
+            if _flag_predicates_overlap(left, right):
+                errors.append(f"{label} has overlapping role rules")
+
+
 def _validate_descriptors(
     payload: Mapping[str, object], opcodes: Mapping[int, Mapping[str, object]]
 ) -> list[str]:
@@ -436,6 +609,7 @@ def _validate_descriptors(
             errors.append(field_error)
         opcode_id = row.get("opcode_id")
         descriptor_index = row.get("descriptor_index")
+        descriptor_source = row.get("descriptor_source")
         if not _is_nonnegative_int(opcode_id):
             errors.append(f"{label} opcode_id must be nonnegative integer")
         elif opcode_id not in opcodes:
@@ -445,9 +619,20 @@ def _validate_descriptors(
         if _is_nonnegative_int(opcode_id) and _is_nonnegative_int(descriptor_index):
             keys.append((opcode_id, descriptor_index))
             by_opcode.setdefault(opcode_id, []).append(row)
+        if type(descriptor_source) is not str or descriptor_source not in {
+            "format",
+            "variadic-tail",
+        }:
+            errors.append(f"{label} descriptor_source is invalid")
         format_code = row.get("format_code")
-        if type(format_code) is not str or len(format_code) != 1 or format_code == "#":
-            errors.append(f"{label} format_code must be one non-# character")
+        if descriptor_source == "format" and (
+            type(format_code) is not str
+            or len(format_code) != 1
+            or format_code == "#"
+        ):
+            errors.append(f"{label} format descriptor needs one non-# format_code")
+        if descriptor_source == "variadic-tail" and format_code is not None:
+            errors.append(f"{label} variadic tail format_code must be null")
         expansion = row.get("expansion")
         if type(expansion) is not dict:
             errors.append(f"{label} expansion must be object")
@@ -461,20 +646,41 @@ def _validate_descriptors(
                 errors.append(f"{label} one expansion count must be 1")
             elif kind == "fixed" and (not _is_positive_int(count) or count < 2):
                 errors.append(f"{label} fixed expansion count must be at least 2")
+            elif kind == "optional" and count != 1:
+                errors.append(f"{label} optional expansion count must be 1")
             elif kind == "remaining" and count is not None:
                 errors.append(f"{label} remaining expansion count must be null")
-            elif type(kind) is not str or kind not in {"one", "fixed", "remaining"}:
+            elif type(kind) is not str or kind not in {
+                "one",
+                "fixed",
+                "optional",
+                "remaining",
+            }:
                 errors.append(f"{label} expansion kind is invalid")
             if format_code == "Y" and (kind != "fixed" or count != 8):
                 errors.append("Y expansion count must be 8")
             if format_code == "V" and kind != "remaining":
                 errors.append("V must use remaining expansion")
-            if format_code != "V" and kind == "remaining":
-                errors.append("remaining expansion must use V")
+            if (
+                descriptor_source == "format"
+                and format_code != "V"
+                and kind == "remaining"
+            ):
+                errors.append("format remaining expansion must use V")
+            if descriptor_source == "variadic-tail" and kind == "optional":
+                pass
+            elif kind == "optional":
+                errors.append("optional expansion is only valid for variadic tail")
         if not _is_u8(row.get("raw_arg_kind_id")):
             errors.append(f"{label} raw_arg_kind_id must be unsigned byte")
-        if type(row.get("role")) is not str or row.get("role") not in OPERAND_ROLES:
+        role = row.get("role")
+        if role is not None and (
+            type(role) is not str or role not in OPERAND_ROLES
+        ):
             errors.append(f"{label} operand role is invalid")
+        _validate_role_rules(row.get("role_rules"), role, label, errors)
+        if descriptor_source == "format" and role is None:
+            errors.append(f"{label} format descriptor role must be fixed")
         form = row.get("register_form")
         raw_kind = row.get("raw_arg_kind_id")
         class_id = row.get("class_id")
@@ -501,10 +707,51 @@ def _validate_descriptors(
         indexes = [row.get("descriptor_index") for row in descriptors]
         if indexes != list(range(len(descriptors))):
             errors.append(f"opcode {opcode_id} descriptor indices must be contiguous")
-        codes = [row.get("format_code") for row in descriptors]
+        format_descriptors = [
+            row for row in descriptors if row.get("descriptor_source") == "format"
+        ]
+        tail_descriptors = [
+            row
+            for row in descriptors
+            if row.get("descriptor_source") == "variadic-tail"
+        ]
+        codes = [row.get("format_code") for row in format_descriptors]
         format_string = opcode.get("format_string")
-        if type(format_string) is str and codes != _format_codes(format_string):
+        if (
+            opcode.get("constructor_kind") != "custom"
+            and type(format_string) is str
+            and codes != _format_codes(format_string)
+        ):
             errors.append(f"opcode {opcode_id} descriptors do not reproduce format string")
+        if (
+            opcode.get("constructor_kind") != "custom"
+            and type(format_string) is str
+            and [
+                (row.get("format_code"), row.get("role"))
+                for row in format_descriptors
+            ]
+            != _format_layout(format_string)
+        ):
+            errors.append(f"opcode {opcode_id} descriptor roles do not reproduce format string")
+        if descriptors != format_descriptors + tail_descriptors:
+            errors.append(f"opcode {opcode_id} variadic tail must follow format descriptors")
+        constructor = opcode.get("constructor_kind")
+        layout = opcode.get("variadic_layout")
+        tail_expansion = (
+            layout.get("tail_expansion") if isinstance(layout, Mapping) else None
+        )
+        if tail_descriptors and constructor != "generic-variadic":
+            errors.append("variadic tail descriptor requires generic-variadic opcode")
+        if tail_expansion == "post-constructor" and not tail_descriptors:
+            errors.append("post-constructor variadic opcode must have tail descriptors")
+        if (
+            type(tail_expansion) is str
+            and tail_expansion in {"format-V", "unreachable"}
+            and tail_descriptors
+        ):
+            errors.append(f"{tail_expansion} variadic opcode must not have tail descriptors")
+        if tail_expansion == "format-V" and codes[-1:] != ["V"]:
+            errors.append("format-V variadic opcode must end in V")
         for descriptor_index, descriptor in enumerate(descriptors):
             expansion = descriptor.get("expansion")
             if (
@@ -513,6 +760,22 @@ def _validate_descriptors(
                 and descriptor_index != len(descriptors) - 1
             ):
                 errors.append("remaining expansion must be final")
+            if (
+                type(expansion) is dict
+                and expansion.get("kind") == "optional"
+                and descriptor_index != len(descriptors) - 2
+            ):
+                errors.append("optional variadic tail must precede final remaining")
+            if (
+                type(expansion) is dict
+                and expansion.get("kind") == "optional"
+                and (
+                    not descriptors
+                    or not isinstance(descriptors[-1].get("expansion"), Mapping)
+                    or descriptors[-1]["expansion"].get("kind") != "remaining"
+                )
+            ):
+                errors.append("optional variadic tail requires final remaining")
     return errors
 
 
@@ -587,8 +850,10 @@ def expand_operand_descriptors(
 ) -> tuple[ExpandedOperandDescriptor, ...]:
     """Expand layout descriptors into exact runtime operand indices."""
 
-    if not _is_nonnegative_int(opcode_id) or not _is_nonnegative_int(arg_count):
-        raise ValueError("opcode_id and arg_count must be nonnegative integers")
+    if not _is_nonnegative_int(opcode_id):
+        raise ValueError("opcode_id must be a nonnegative integer")
+    if not _is_u16(arg_count):
+        raise ValueError("arg_count must be an unsigned 16-bit integer")
     result: list[ExpandedOperandDescriptor] = []
     consumed = 0
     rows = _descriptor_rows(proof, opcode_id)
@@ -607,6 +872,10 @@ def expand_operand_descriptors(
             count = arg_count - consumed
             if count < 0:
                 raise ValueError("negative operand remainder")
+        elif kind == "optional":
+            if position != len(rows) - 2:
+                raise ValueError("optional variadic tail must precede final remaining")
+            count = 1 if consumed < arg_count else 0
         else:
             raise ValueError("unknown operand expansion kind")
         if consumed + count > arg_count:
@@ -615,13 +884,21 @@ def expand_operand_descriptors(
         if not isinstance(state_rules, list):
             raise ValueError("operand descriptor state_rules must be list")
         frozen_rules = tuple(MappingProxyType(dict(rule)) for rule in state_rules)
+        role_rules = row.get("role_rules")
+        if not isinstance(role_rules, list):
+            raise ValueError("operand descriptor role_rules must be list")
+        frozen_role_rules = tuple(
+            MappingProxyType(dict(rule)) for rule in role_rules
+        )
         for _ in range(count):
             result.append(
                 ExpandedOperandDescriptor(
                     consumed,
                     int(row["descriptor_index"]),
+                    str(row["descriptor_source"]),
                     int(row["raw_arg_kind_id"]),
-                    str(row["role"]),
+                    row.get("role") if isinstance(row.get("role"), str) else None,
+                    frozen_role_rules,
                     str(row["register_form"]),
                     row.get("class_id"),
                     row.get("virtual_kind"),
@@ -632,6 +909,28 @@ def expand_operand_descriptors(
     if consumed != arg_count:
         raise ValueError("leftover operands after descriptor expansion")
     return tuple(result)
+
+
+def resolve_operand_role(
+    descriptor: ExpandedOperandDescriptor, raw_flags: int
+) -> str:
+    """Resolve a fixed or exact flags-driven operand role."""
+
+    if not _is_u8(raw_flags):
+        raise ValueError("raw register flags are outside unsigned byte bounds")
+    if descriptor.role is not None:
+        if descriptor.role_rules:
+            raise ValueError("fixed operand role must not have role rules")
+        return descriptor.role
+    matches = [
+        rule
+        for rule in descriptor.role_rules
+        if raw_flags & rule["register_flags_mask"]
+        == rule["register_flags_value"]
+    ]
+    if len(matches) != 1:
+        raise ValueError("operand must match exactly one operand role rule")
+    return str(matches[0]["role"])
 
 
 def classify_operand(
@@ -770,6 +1069,7 @@ __all__ = [
     "classify_operand",
     "expand_operand_descriptors",
     "proof_sha256",
+    "resolve_operand_role",
     "trusted_proof_from_trace",
     "validate_embedded_proof",
     "validate_proof_shape",

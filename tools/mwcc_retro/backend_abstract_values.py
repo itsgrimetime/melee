@@ -11,11 +11,19 @@ from __future__ import annotations
 
 import hashlib
 import heapq
-from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from bisect import bisect_right
+from collections import Counter, defaultdict, deque
+from dataclasses import dataclass, field, fields, replace
+from typing import Any, Iterable, Mapping, Sequence
 
-from capstone import CS_ARCH_X86, CS_GRP_CALL, CS_GRP_RET, CS_MODE_32, Cs
+from capstone import (
+    CS_AC_WRITE,
+    CS_ARCH_X86,
+    CS_GRP_CALL,
+    CS_GRP_RET,
+    CS_MODE_32,
+    Cs,
+)
 from capstone.x86 import (
     X86_INS_ADD,
     X86_INS_AND,
@@ -27,13 +35,21 @@ from capstone.x86 import (
     X86_INS_JNE,
     X86_INS_LEA,
     X86_INS_MOV,
+    X86_INS_MOVSB,
+    X86_INS_MOVSD,
+    X86_INS_MOVSW,
     X86_INS_MOVSX,
     X86_INS_MOVZX,
     X86_INS_OR,
     X86_INS_POP,
     X86_INS_PUSH,
     X86_INS_SAL,
+    X86_INS_SAR,
     X86_INS_SHL,
+    X86_INS_SHR,
+    X86_INS_STOSB,
+    X86_INS_STOSD,
+    X86_INS_STOSW,
     X86_INS_SUB,
     X86_INS_TEST,
     X86_INS_XOR,
@@ -82,6 +98,135 @@ _IDENTITY_POINTER_HELPERS = frozenset({0x004C1720})
 _SYMBOLIC_RETURN_HELPERS = {
     0x004BC7B0: "objobject-pcode-extra-operand-count",
 }
+_STACK_OUTPUT_ARGUMENTS = {
+    0x00443390: frozenset({3}),
+    0x004C7730: frozenset({2, 3}),
+}
+_TRACKED_GENERAL_REGISTERS = frozenset(
+    {
+        X86_REG_EAX,
+        X86_REG_EBX,
+        X86_REG_ECX,
+        X86_REG_EDX,
+        X86_REG_ESI,
+        X86_REG_EDI,
+    }
+)
+_X87_MEMORY_STORE_MNEMONICS = frozenset(
+    {
+        "fbstp",
+        "fist",
+        "fistp",
+        "fnstcw",
+        "fnstenv",
+        "fnstsw",
+        "fnsave",
+        "fst",
+        "fstcw",
+        "fstenv",
+        "fstp",
+        "fstsw",
+        "fsave",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ValueDependency:
+    """One exact memory/helper dependency carried by an abstract value.
+
+    Dependencies are deliberately structural rather than inferred from rendered
+    expression strings.  A formal-argument memory read can be rebound at each
+    call boundary; a helper-output dependency binds a caller value to the exact
+    callee store that produced it.
+    """
+
+    kind: str
+    address: int
+    width: int
+    source_address: int = 0
+    pointer_type: str = ""
+    pointer_base: int = 0
+    pointer_offset: int = 0
+    allocation_site: int | None = None
+    formal_argument_index: int | None = None
+    origin: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"memory-read", "helper-output"}:
+            raise ValueError(f"unknown value dependency kind: {self.kind}")
+        if self.address < 0 or self.source_address < 0:
+            raise ValueError("value dependency addresses must be nonnegative")
+        if self.width <= 0:
+            raise ValueError("value dependency width must be positive")
+        if self.formal_argument_index is not None and self.formal_argument_index < 0:
+            raise ValueError("formal argument index must be nonnegative")
+        if self.kind == "helper-output" and self.source_address == 0:
+            raise ValueError("helper-output dependency requires a source address")
+
+    def bind(
+        self,
+        arguments: tuple[AbstractValue, ...],
+        origin: str,
+    ) -> ValueDependency:
+        index = self.formal_argument_index
+        if index is None:
+            return self
+        if index >= len(arguments):
+            return replace(
+                self,
+                formal_argument_index=None,
+                origin=f"{origin}:missing-argument-{index}",
+            )
+        actual = arguments[index]
+        formal = _single_formal_argument(actual)
+        if formal is not None:
+            next_index, next_offset = formal
+            return replace(
+                self,
+                pointer_offset=self.pointer_offset + next_offset,
+                formal_argument_index=next_index,
+                origin=f"{origin}:formal-argument-{index}",
+            )
+        if actual.kind == "pointer":
+            return replace(
+                self,
+                pointer_type=actual.pointer_type,
+                pointer_base=actual.pointer_base,
+                pointer_offset=self.pointer_offset + actual.pointer_offset,
+                allocation_site=actual.allocation_site,
+                formal_argument_index=None,
+                origin=f"{origin}:bound-argument-{index}",
+            )
+        return replace(
+            self,
+            formal_argument_index=None,
+            origin=(
+                f"{origin}:unresolved-argument-{index}:"
+                f"{actual.kind}:{actual.origin}"
+            ),
+        )
+
+
+def _dependency_key(row: ValueDependency) -> tuple[Any, ...]:
+    return (
+        row.kind,
+        row.address,
+        row.source_address,
+        row.width,
+        row.pointer_type,
+        row.pointer_base,
+        row.pointer_offset,
+        row.allocation_site if row.allocation_site is not None else -1,
+        row.formal_argument_index if row.formal_argument_index is not None else -1,
+        row.origin,
+    )
+
+
+def _merge_dependencies(
+    *groups: Iterable[ValueDependency],
+) -> tuple[ValueDependency, ...]:
+    return tuple(sorted({row for group in groups for row in group}, key=_dependency_key))
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +244,24 @@ class AbstractValue:
     pointer_type: str = ""
     allocation_site: int | None = None
     origin: str = ""
+    dependencies: tuple[ValueDependency, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dependencies, tuple) or not all(
+            isinstance(row, ValueDependency) for row in self.dependencies
+        ):
+            raise TypeError("dependencies must be tuple[ValueDependency, ...]")
+        canonical = tuple(sorted(self.dependencies, key=_dependency_key))
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("value dependencies must be unique")
+        if self.dependencies != canonical:
+            raise ValueError("value dependencies must be canonically ordered")
+
+    def with_dependencies(
+        self, dependencies: Iterable[ValueDependency]
+    ) -> AbstractValue:
+        merged = _merge_dependencies(self.dependencies, dependencies)
+        return self if merged == self.dependencies else replace(self, dependencies=merged)
 
     @property
     def is_bottom(self) -> bool:
@@ -140,49 +303,81 @@ class AbstractValue:
                 pointer_type=self.pointer_type,
                 allocation_site=self.allocation_site,
                 origin=origin,
+                dependencies=self.dependencies,
             )
         if self.kind in {"argument", "affine"}:
             return _linear(
                 self.affine_base + delta,
                 _terms(self),
                 origin,
+                self.dependencies,
             )
         if self.is_finite:
             return _finite(
-                ((value + delta) & _MASK32 for value in self.values), origin
+                ((value + delta) & _MASK32 for value in self.values),
+                origin,
+                self.dependencies,
             )
-        return _unknown(f"{origin}:add-to-{self.kind}")
+        if self.kind == "symbolic":
+            return _symbolic(
+                f"add({_value_expression(self)},{delta})",
+                origin,
+                self.dependencies,
+            )
+        return _unknown(f"{origin}:add-to-{self.kind}", self.dependencies)
 
     def scaled(self, scale: int, origin: str) -> AbstractValue:
+        if scale == 1:
+            return replace(self, origin=origin)
+        if scale == 0:
+            return _exact(0, origin, self.dependencies)
         if self.kind in {"argument", "affine"}:
             return _linear(
                 self.affine_base * scale,
                 ((symbol, coefficient * scale) for symbol, coefficient in _terms(self)),
                 origin,
+                self.dependencies,
             )
         if self.is_finite:
             return _finite(
-                ((value * scale) & _MASK32 for value in self.values), origin
+                ((value * scale) & _MASK32 for value in self.values),
+                origin,
+                self.dependencies,
             )
-        return _unknown(f"{origin}:scale-{self.kind}")
+        if self.kind in {"pointer", "symbolic"}:
+            return _symbolic(
+                f"scale({_value_expression(self)},{scale})",
+                origin,
+                self.dependencies,
+            )
+        return _unknown(f"{origin}:scale-{self.kind}", self.dependencies)
 
     def substitute(
         self, arguments: tuple[AbstractValue, ...], origin: str
     ) -> AbstractValue:
+        bound_dependencies = tuple(
+            row.bind(arguments, origin) for row in self.dependencies
+        )
         if self.kind not in {"argument", "affine"}:
-            return self
+            canonical = _merge_dependencies(bound_dependencies)
+            return self if canonical == self.dependencies else replace(
+                self, dependencies=canonical
+            )
         result = _exact(self.affine_base, origin)
         for symbol, coefficient in _terms(self):
             value: AbstractValue
             if symbol.startswith("arg") and symbol[3:].isdigit():
                 index = int(symbol[3:])
                 if index >= len(arguments):
-                    return _unknown(f"{origin}:missing-argument-{index}")
+                    return _unknown(
+                        f"{origin}:missing-argument-{index}",
+                        bound_dependencies,
+                    )
                 value = arguments[index]
             else:
                 value = _linear(0, ((symbol, 1),), origin)
             result = _add_values(result, value.scaled(coefficient, origin), origin)
-        return result
+        return result.with_dependencies(bound_dependencies)
 
     def join(self, other: AbstractValue) -> AbstractValue:
         if self.is_bottom:
@@ -191,15 +386,17 @@ class AbstractValue:
             return self
         if self == other:
             return self
+        dependencies = _merge_dependencies(self.dependencies, other.dependencies)
         if self.is_unknown:
-            return self
+            return self.with_dependencies(dependencies)
         if other.is_unknown:
-            return other
+            return other.with_dependencies(dependencies)
         if self.is_finite and other.is_finite:
             merged = self.values | other.values
             return _finite(
                 merged,
                 "join:finite:" + ",".join(f"{row:#x}" for row in sorted(merged)),
+                dependencies,
             )
         if (
             self.kind in {"argument", "affine"}
@@ -208,7 +405,7 @@ class AbstractValue:
             other.kind in {"argument", "affine"}
             and self.is_finite
         ):
-            return _affine_choice(self, other)
+            return _affine_choice(self, other).with_dependencies(dependencies)
         if (
             self.kind in {"argument", "affine"}
             and other.kind in {"argument", "affine"}
@@ -219,12 +416,13 @@ class AbstractValue:
                 self.affine_base,
                 _terms(self),
                 f"join:affine:{self.affine_base}:{_terms(self)!r}",
+                dependencies,
             )
         if self.kind in {"argument", "affine"} and other.kind in {
             "argument",
             "affine",
         }:
-            return _affine_choice(self, other)
+            return _affine_choice(self, other).with_dependencies(dependencies)
         if (
             self.kind == other.kind == "pointer"
             and self.pointer_base == other.pointer_base
@@ -242,25 +440,46 @@ class AbstractValue:
                     f"join:pointer:{self.pointer_type}:{self.pointer_base:#x}:"
                     f"{self.pointer_offset:#x}:{self.allocation_site}"
                 ),
+                dependencies=dependencies,
             )
         if {self.kind, other.kind} == {"null", "pointer"}:
-            return _unknown(_join_origin(self, other, "nullable-pointer"))
-        return _unknown(_join_origin(self, other))
+            pointer = self if self.kind == "pointer" else other
+            return _symbolic(
+                f"nullable({_value_expression(pointer)})",
+                _join_origin(self, other, "nullable-pointer"),
+                dependencies,
+            )
+        if "symbolic" in {self.kind, other.kind}:
+            return _symbolic_choice(self, other).with_dependencies(dependencies)
+        # Both paths carry concrete provenance even when their numeric/type
+        # shapes differ.  The executed program selects one runtime value; this
+        # is not missing analyzer knowledge and must not become the absorbing
+        # epistemic ``unknown`` element.
+        return _symbolic_choice(self, other).with_dependencies(dependencies)
 
 
 _BOTTOM = AbstractValue()
 
 
-def _exact(value: int, origin: str) -> AbstractValue:
+def _exact(
+    value: int,
+    origin: str,
+    dependencies: Iterable[ValueDependency] = (),
+) -> AbstractValue:
     value &= _MASK32
     return AbstractValue(
         kind="null" if value == 0 else "exact",
         values=frozenset({value}),
         origin=origin,
+        dependencies=_merge_dependencies(dependencies),
     )
 
 
-def _finite(values: Iterable[int], origin: str) -> AbstractValue:
+def _finite(
+    values: Iterable[int],
+    origin: str,
+    dependencies: Iterable[ValueDependency] = (),
+) -> AbstractValue:
     frozen = frozenset(value & _MASK32 for value in values)
     if not frozen:
         return _BOTTOM
@@ -268,11 +487,57 @@ def _finite(values: Iterable[int], origin: str) -> AbstractValue:
         kind="exact" if len(frozen) == 1 else "finite",
         values=frozen,
         origin=origin,
+        dependencies=_merge_dependencies(dependencies),
     )
 
 
-def _unknown(origin: str) -> AbstractValue:
-    return AbstractValue(kind="unknown", origin=origin)
+def _unknown(
+    origin: str,
+    dependencies: Iterable[ValueDependency] = (),
+) -> AbstractValue:
+    return AbstractValue(
+        kind="unknown",
+        origin=origin,
+        dependencies=_merge_dependencies(dependencies),
+    )
+
+
+def _symbolic(
+    expression: str,
+    origin: str,
+    dependencies: Iterable[ValueDependency] = (),
+) -> AbstractValue:
+    """An origin-bound runtime value whose numeric domain is unconstrained."""
+
+    return AbstractValue(
+        kind="symbolic",
+        affine_symbol=expression,
+        origin=origin,
+        dependencies=_merge_dependencies(dependencies),
+    )
+
+
+def _symbolic_alternatives(value: AbstractValue) -> set[str]:
+    expression = _value_expression(value)
+    if expression.startswith("choice{") and expression.endswith("}"):
+        return set(expression[7:-1].split("|"))
+    return {expression}
+
+
+def _symbolic_choice(
+    left: AbstractValue, right: AbstractValue
+) -> AbstractValue:
+    alternatives = sorted(
+        _symbolic_alternatives(left) | _symbolic_alternatives(right)
+    )
+    rendered = "|".join(alternatives)
+    if len(alternatives) > 64 or len(rendered) > 1_024:
+        rendered = "sha256:" + hashlib.sha256(rendered.encode()).hexdigest()
+    return _symbolic(
+        f"choice{{{rendered}}}",
+        _join_origin(left, right, "symbolic-choice"),
+        _merge_dependencies(left.dependencies, right.dependencies),
+    )
 
 
 def _argument(index: int) -> AbstractValue:
@@ -297,6 +562,7 @@ def _linear(
     base: int,
     terms: Iterable[tuple[str, int]],
     origin: str,
+    dependencies: Iterable[ValueDependency] = (),
 ) -> AbstractValue:
     combined: dict[str, int] = defaultdict(int)
     for symbol, coefficient in terms:
@@ -307,7 +573,7 @@ def _linear(
         if coefficient
     )
     if not canonical:
-        return _exact(base, origin)
+        return _exact(base, origin, dependencies)
     symbol = canonical[0][0] if len(canonical) == 1 else ""
     stride = canonical[0][1] if len(canonical) == 1 else 0
     return AbstractValue(
@@ -317,6 +583,7 @@ def _linear(
         affine_symbol=symbol,
         affine_terms=canonical,
         origin=origin,
+        dependencies=_merge_dependencies(dependencies),
     )
 
 
@@ -326,6 +593,7 @@ def _pointer(
     offset: int,
     origin: str,
     allocation_site: int | None = None,
+    dependencies: Iterable[ValueDependency] = (),
 ) -> AbstractValue:
     return AbstractValue(
         kind="pointer",
@@ -334,6 +602,56 @@ def _pointer(
         pointer_type=pointer_type,
         allocation_site=allocation_site,
         origin=origin,
+        dependencies=_merge_dependencies(dependencies),
+    )
+
+
+def _single_formal_argument(value: AbstractValue) -> tuple[int, int] | None:
+    """Return ``(argument index, byte offset)`` for one exact formal base."""
+
+    if value.kind not in {"argument", "affine"}:
+        return None
+    terms = _terms(value)
+    if len(terms) != 1 or terms[0][1] != 1:
+        return None
+    symbol = terms[0][0]
+    if not symbol.startswith("arg") or not symbol[3:].isdigit():
+        return None
+    return int(symbol[3:]), value.affine_base
+
+
+def _memory_dependency(
+    pointer: AbstractValue,
+    address: int,
+    width: int,
+) -> ValueDependency:
+    formal = _single_formal_argument(pointer)
+    if formal is not None:
+        index, offset = formal
+        return ValueDependency(
+            kind="memory-read",
+            address=address,
+            width=width,
+            pointer_offset=offset,
+            formal_argument_index=index,
+            origin=f"formal-memory-read:{address:#x}:arg{index}{offset:+#x}",
+        )
+    if pointer.kind == "pointer":
+        return ValueDependency(
+            kind="memory-read",
+            address=address,
+            width=width,
+            pointer_type=pointer.pointer_type,
+            pointer_base=pointer.pointer_base,
+            pointer_offset=pointer.pointer_offset,
+            allocation_site=pointer.allocation_site,
+            origin=f"typed-memory-read:{address:#x}:{pointer.origin}",
+        )
+    return ValueDependency(
+        kind="memory-read",
+        address=address,
+        width=width,
+        origin=f"unresolved-memory-read:{address:#x}:{pointer.kind}:{pointer.origin}",
     )
 
 
@@ -390,6 +708,7 @@ class CallFact:
     function_entry: int
     arguments: tuple[AbstractValue, ...]
     return_value: AbstractValue
+    helper_effects: tuple[MemoryWriteFact, ...] = ()
 
     def argument(self, index: int) -> AbstractValue:
         return self.arguments[index] if index < len(self.arguments) else _BOTTOM
@@ -404,6 +723,8 @@ class MemoryWriteFact:
     offset: int
     value: AbstractValue
     operation: str
+    effect_call_address: int = 0
+    effect_is_must: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,11 +744,150 @@ class UnresolvedValue:
 
 
 @dataclass(frozen=True, slots=True)
+class ClosureGap:
+    """One bounded, provenance-bearing reason a closure is not complete."""
+
+    address: int
+    kind: str
+    detail: str
+    provenance: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AliasWriteSiteEvidence:
+    """One explicit memory-destination operand from the accepted Task 4 CFG."""
+
+    address: int
+    operand_index: int
+    width: int
+    instruction_bytes_hex: str
+    instruction_sha256: str
+    disposition: str
+    facts: tuple[MemoryWriteFact, ...]
+    provenance: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AliasWriteClosureCertificate:
+    compiler_sha256: str
+    cfg_instruction_hash: str
+    source_instruction_count: int
+    sites: tuple[AliasWriteSiteEvidence, ...]
+    gaps: tuple[ClosureGap, ...]
+    configured_limits: tuple[tuple[str, int], ...]
+    high_water_marks: tuple[tuple[str, int], ...]
+    cap_hits: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class HelperEffectSiteEvidence:
+    """One finite call target and its closed Task 5 summary consequences."""
+
+    address: int
+    target: int
+    function_entries: tuple[int, ...]
+    disposition: str
+    argument_pointer_types: tuple[str, ...]
+    summary_entries: tuple[int, ...]
+    allocation_sites: tuple[int, ...]
+    typed_write_sites: tuple[int, ...]
+    transitive_callees: tuple[int, ...]
+    provenance: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleSemanticEvidence:
+    kind: str
+    address: int
+    target: int
+    affected_pointer_types: tuple[str, ...]
+    affected_arenas: tuple[int, ...]
+    provenance: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleEffectClosureCertificate:
+    compiler_sha256: str
+    cfg_instruction_hash: str
+    source_call_instruction_count: int
+    sites: tuple[HelperEffectSiteEvidence, ...]
+    semantic_evidence: tuple[LifecycleSemanticEvidence, ...]
+    covered_write_sites: tuple[int, ...]
+    summary_entries: tuple[int, ...]
+    gaps: tuple[ClosureGap, ...]
+    configured_limits: tuple[tuple[str, int], ...]
+    high_water_marks: tuple[tuple[str, int], ...]
+    cap_hits: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CallReturnWriteEvidence:
+    call_address: int
+    target: int
+    function_entry: int
+    write_addresses: tuple[int, ...]
+    pcode_argument_indices: tuple[int, ...]
+    provenance: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class EmissionSemanticEvidence:
+    """A closed semantic relation needed after an encoder return flow."""
+
+    kind: str
+    address: int
+    related_addresses: tuple[int, ...]
+    provenance: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PseudoOpDispositionEvidence:
+    """An exhaustive disposition of the two zero-encoding metadata opcodes."""
+
+    opcode_ids: tuple[int, ...]
+    classification: str
+    walker_address: int
+    disposition_sites: tuple[int, ...]
+    provenance: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.opcode_ids != (466, 467):
+            raise ValueError("pseudo-op evidence must cover exactly IDs 466 and 467")
+        if self.classification not in {
+            "removed-before-final-walker",
+            "zero-width-skipped-by-final-walker",
+        }:
+            raise ValueError("unknown pseudo-op disposition classification")
+        if self.walker_address <= 0:
+            raise ValueError("pseudo-op evidence requires a walker address")
+        if (
+            not self.disposition_sites
+            or tuple(sorted(set(self.disposition_sites))) != self.disposition_sites
+        ):
+            raise ValueError("pseudo-op disposition sites must be nonempty and canonical")
+        if not self.provenance or any(not row for row in self.provenance):
+            raise ValueError("pseudo-op evidence requires nonempty provenance")
+
+
+@dataclass(frozen=True, slots=True)
+class FinalEmissionClosureCertificate:
+    compiler_sha256: str
+    cfg_instruction_hash: str
+    return_write_flows: tuple[CallReturnWriteEvidence, ...]
+    semantic_evidence: tuple[EmissionSemanticEvidence, ...]
+    gaps: tuple[ClosureGap, ...]
+    configured_limits: tuple[tuple[str, int], ...]
+    high_water_marks: tuple[tuple[str, int], ...]
+    cap_hits: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class FunctionSummary:
     entry: int
     argument_flows: tuple[tuple[int, AbstractValue], ...] = ()
     allocations: tuple[AllocationFact, ...] = ()
     typed_writes: tuple[MemoryWriteFact, ...] = ()
+    must_write_sites: tuple[int, ...] = ()
     return_value: AbstractValue = field(default_factory=lambda: _BOTTOM)
     callees: tuple[int, ...] = ()
 
@@ -441,11 +901,11 @@ class AnalysisResult:
     compiler_sha256: str
     cfg_instruction_hash: str
     summaries: tuple[FunctionSummary, ...]
-    calls: tuple[CallFact, ...]
-    memory_writes: tuple[MemoryWriteFact, ...]
-    finite_internal_edges: tuple[Any, ...]
-    terminal_external_edges: tuple[Any, ...]
-    external_escapes: tuple[Any, ...]
+    calls: tuple[CallFact, ...] = ()
+    memory_writes: tuple[MemoryWriteFact, ...] = ()
+    finite_internal_edges: tuple[Any, ...] = ()
+    terminal_external_edges: tuple[Any, ...] = ()
+    external_escapes: tuple[Any, ...] = ()
     unresolved: tuple[UnresolvedValue, ...] = ()
     proof_ready: bool = False
     limits: AnalysisLimits | None = None
@@ -453,6 +913,10 @@ class AnalysisResult:
     register_domains: tuple[Any, ...] = ()
     custom_opcode_layouts_proved: bool = False
     variadic_bounds_proved: bool = False
+    alias_write_closure: AliasWriteClosureCertificate | None = None
+    lifecycle_effect_closure: LifecycleEffectClosureCertificate | None = None
+    final_emission_closure: FinalEmissionClosureCertificate | None = None
+    pseudo_op_dispositions: tuple[PseudoOpDispositionEvidence, ...] = ()
 
     def summary_at(self, address: int) -> FunctionSummary | None:
         return next((row for row in self.summaries if row.entry == address), None)
@@ -632,6 +1096,112 @@ class _Interpreter:
                 graph[owner].add(target)
         return graph
 
+    def _control_site_dominates_returns(
+        self,
+        entry: int,
+        control_address: int,
+    ) -> bool:
+        """Prove one instruction executes before every reachable return."""
+
+        owned = set(self.function_blocks.get(entry, ()))
+        start = self.instruction_block.get(entry, entry)
+        control_block = self.instruction_block.get(control_address)
+        if start not in owned or control_block not in owned:
+            return False
+        predecessors: dict[int, set[int]] = {row: set() for row in owned}
+        for source in owned:
+            for target in self.successors.get(source, ()):
+                if target in owned:
+                    predecessors[target].add(source)
+        dominators: dict[int, set[int]] = {
+            row: ({row} if row == start else set(owned)) for row in owned
+        }
+        for _iteration in range(len(owned) + 1):
+            changed = False
+            for block in sorted(owned - {start}):
+                incoming = predecessors[block]
+                if not incoming:
+                    updated = {block}
+                else:
+                    shared = set(owned)
+                    for predecessor in incoming:
+                        shared &= dominators[predecessor]
+                    updated = {block, *shared}
+                if updated != dominators[block]:
+                    dominators[block] = updated
+                    changed = True
+            if not changed:
+                break
+        else:  # pragma: no cover - finite monotone dominators must converge
+            raise ValueError(f"dominator fixed point did not converge for {entry:#x}")
+        return_blocks = tuple(
+            block
+            for block in sorted(owned)
+            if self._decode(self.blocks[block].instruction_addresses[-1]).group(
+                CS_GRP_RET
+            )
+        )
+        if not return_blocks:
+            return False
+        for block in return_blocks:
+            if control_block not in dominators[block]:
+                return False
+            if control_block == block:
+                addresses = self.blocks[block].instruction_addresses
+                if addresses.index(control_address) >= len(addresses) - 1:
+                    return False
+        return True
+
+    def _instantiate_helper_effects(
+        self,
+        *,
+        caller_entry: int,
+        call_address: int,
+        summary: FunctionSummary,
+        arguments: tuple[AbstractValue, ...],
+    ) -> tuple[MemoryWriteFact, ...]:
+        effects: list[MemoryWriteFact] = []
+        for write in summary.typed_writes:
+            base = write.base.substitute(
+                arguments, f"helper-effect-base:{call_address:#x}"
+            )
+            value = write.value.substitute(
+                arguments, f"helper-effect-value:{call_address:#x}"
+            )
+            dependency = ValueDependency(
+                kind="helper-output",
+                address=call_address,
+                source_address=write.address,
+                width=write.width,
+                pointer_type=base.pointer_type,
+                pointer_base=base.pointer_base,
+                pointer_offset=base.pointer_offset,
+                allocation_site=base.allocation_site,
+                origin=(
+                    f"helper-output:{call_address:#x}->{summary.entry:#x}:"
+                    f"store={write.address:#x}"
+                ),
+            )
+            value = value.with_dependencies((dependency,))
+            effects.append(
+                MemoryWriteFact(
+                    address=write.address,
+                    function_entry=caller_entry,
+                    width=write.width,
+                    base=base,
+                    offset=(
+                        base.pointer_offset
+                        if base.kind == "pointer"
+                        else write.offset
+                    ),
+                    value=value,
+                    operation=f"helper-effect:{summary.entry:#x}:{write.operation}",
+                    effect_call_address=call_address,
+                    effect_is_must=write.address in summary.must_write_sites,
+                )
+            )
+        return tuple(sorted(effects, key=_write_key))
+
     def analyze_function(
         self, entry: int, summaries: dict[int, FunctionSummary]
     ) -> _FunctionAnalysis:
@@ -644,14 +1214,10 @@ class _Interpreter:
         incoming: dict[int, _State] = {start: _State.entry(entry)}
         pending = deque([start])
         pending_set = {start}
-        calls: set[CallFact] = set()
-        writes: set[MemoryWriteFact] = set()
-        unresolved: set[UnresolvedValue] = set()
-        returns: list[AbstractValue] = []
-        allocations: set[AllocationFact] = set()
         updates = 0
         finite_high = 0
         state_updates: dict[int, int] = defaultdict(int)
+        discarded_unresolved: set[UnresolvedValue] = set()
 
         while pending:
             block_start = pending.popleft()
@@ -661,18 +1227,11 @@ class _Interpreter:
             for address in block.instruction_addresses:
                 decoded = self._decode(address)
                 if decoded.group(CS_GRP_CALL):
-                    fact, allocation = self._eval_call(
-                        entry, state, address, summaries
-                    )
-                    calls.add(fact)
-                    if allocation is not None:
-                        allocations.add(allocation)
+                    self._eval_call(entry, state, address, summaries)
                     continue
-                write = self._eval_instruction(entry, state, address, unresolved)
-                if write is not None:
-                    writes.add(write)
-                if decoded.group(CS_GRP_RET):
-                    returns.append(state.registers.get(X86_REG_EAX, _BOTTOM))
+                self._eval_instruction(
+                    entry, state, address, discarded_unresolved
+                )
 
             last_decoded = self._decode(block.instruction_addresses[-1])
             for successor, edge_kind in self.successor_edges.get(block_start, ()):
@@ -689,7 +1248,7 @@ class _Interpreter:
                     changed = True
                 else:
                     joined, _finite_count_before_widen = _join_states(
-                        prior, successor_state
+                        prior, successor_state, successor
                     )
                     joined = _widen_finite_budget(
                         prior,
@@ -697,6 +1256,10 @@ class _Interpreter:
                         successor,
                         min(4_096, self.limits.max_finite_values - 1),
                     )
+                    if state_updates[successor] >= 2:
+                        joined = _widen_symbolic_state(
+                            prior, joined, successor
+                        )
                     if state_updates[successor] >= min(
                         32, self.limits.max_states_per_block - 1
                     ):
@@ -718,6 +1281,39 @@ class _Interpreter:
                         pending.append(successor)
                         pending_set.add(successor)
 
+        # The worklist above necessarily visits transient states.  Publishing
+        # facts from those visits makes an early imprecise value permanently
+        # poison an otherwise precise final call-site join.  Replay each block
+        # once from the accepted fixed-point input and publish only those facts.
+        calls: set[CallFact] = set()
+        writes: set[MemoryWriteFact] = set()
+        unresolved: set[UnresolvedValue] = set()
+        returns: list[AbstractValue] = []
+        allocations: set[AllocationFact] = set()
+        for block_start in sorted(owned):
+            if block_start not in incoming:
+                continue
+            state = incoming[block_start].copy()
+            block = self.blocks[block_start]
+            for address in block.instruction_addresses:
+                decoded = self._decode(address)
+                if decoded.group(CS_GRP_CALL):
+                    fact, allocation = self._eval_call(
+                        entry, state, address, summaries
+                    )
+                    calls.add(fact)
+                    writes.update(fact.helper_effects)
+                    if allocation is not None:
+                        allocations.add(allocation)
+                    continue
+                write = self._eval_instruction(
+                    entry, state, address, unresolved
+                )
+                if write is not None:
+                    writes.add(write)
+                if decoded.group(CS_GRP_RET):
+                    returns.append(state.registers.get(X86_REG_EAX, _BOTTOM))
+
         return_value = _BOTTOM
         for value in returns:
             return_value = return_value.join(value)
@@ -730,14 +1326,35 @@ class _Interpreter:
         )
         typed_writes = tuple(
             sorted(
-                (row for row in writes if row.base.pointer_type in {"pcode", "objobject"}),
+                (
+                    row
+                    for row in writes
+                    if row.base.pointer_type != "stack"
+                ),
                 key=_write_key,
+            )
+        )
+        must_write_sites = tuple(
+            sorted(
+                {
+                    row.address
+                    for row in typed_writes
+                    if (
+                        row.effect_call_address == 0
+                        or row.effect_is_must
+                    )
+                    and self._control_site_dominates_returns(
+                        entry,
+                        row.effect_call_address or row.address,
+                    )
+                }
             )
         )
         summary = FunctionSummary(
             entry=entry,
             allocations=tuple(sorted(allocations, key=lambda row: row.call_address)),
             typed_writes=typed_writes,
+            must_write_sites=must_write_sites,
             return_value=return_value,
             callees=callees,
         )
@@ -764,6 +1381,9 @@ class _Interpreter:
                 _BOTTOM,
             )
             for index in range(_CALL_ARGUMENT_SLOTS)
+        )
+        arguments = self._recover_direct_push_argument(
+            state, address, arguments
         )
         allocation: AllocationFact | None = None
         if target in _ARENA_ALLOCATORS:
@@ -799,17 +1419,136 @@ class _Interpreter:
                     f"symbolic-helper-return:{address:#x}:{target:#x}",
                 )
         elif target in summaries:
-            returned = summaries[target].return_value.substitute(
+            summary = summaries[target]
+            returned = summary.return_value.substitute(
                 arguments, f"call:{address:#x}"
             )
+            if returned.is_bottom or returned.is_unknown:
+                returned = _symbolic(
+                    f"call-return[{address:#x}->{target:#x}]",
+                    (
+                        f"callee-summary-dynamic-return:{address:#x}:"
+                        f"{target:#x}:{returned.origin}"
+                    ),
+                    returned.dependencies,
+                )
+            elif returned.kind == "symbolic":
+                # A recursive SCC can otherwise grow a fresh expression on
+                # every summary iteration (for example ``or(or(...), 1)``).
+                # The concrete call site is the stable origin of an
+                # unconstrained runtime return value; retain that provenance
+                # without embedding the callee's evolving expression tree.
+                returned = _symbolic(
+                    f"call-return[{address:#x}->{target:#x}]",
+                    f"callee-summary-symbolic-return:{address:#x}:{target:#x}",
+                    returned.dependencies,
+                )
         else:
-            returned = _unknown(f"unmodelled-call-return:{address:#x}:{target:#x}")
+            returned = _symbolic(
+                f"call-return[{address:#x}->{target:#x}]",
+                f"unmodelled-call-return:{address:#x}:{target:#x}",
+            )
+
+        helper_effects = (
+            self._instantiate_helper_effects(
+                caller_entry=entry,
+                call_address=address,
+                summary=summaries[target],
+                arguments=arguments,
+            )
+            if target in summaries
+            else ()
+        )
+        stack_effects: dict[int, list[MemoryWriteFact]] = defaultdict(list)
+        for effect in helper_effects:
+            if (
+                effect.base.kind == "pointer"
+                and effect.base.pointer_type == "stack"
+            ):
+                stack_effects[effect.base.pointer_offset].append(effect)
+        for offset, effects in stack_effects.items():
+            has_must_effect = any(row.effect_is_must for row in effects)
+            prior = _BOTTOM if has_must_effect else state.stack.get(offset, _BOTTOM)
+            if prior.is_bottom and not has_must_effect:
+                prior = _unknown(
+                    f"helper-may-preserve-unmaterialized-stack:{address:#x}:"
+                    f"offset={offset}"
+                )
+            for effect in effects:
+                prior = prior.join(effect.value)
+            state.stack[offset] = prior
+
+        for index in _STACK_OUTPUT_ARGUMENTS.get(target, ()):
+            if index >= len(arguments):
+                continue
+            pointer = arguments[index]
+            if pointer.kind != "pointer" or pointer.pointer_type != "stack":
+                continue
+            state.stack[pointer.pointer_offset] = _symbolic(
+                (
+                    f"call-output[{address:#x}:arg{index}:"
+                    f"stack={pointer.pointer_offset}]"
+                ),
+                f"reviewed-stack-output:{address:#x}:{target:#x}:arg{index}",
+            )
 
         for register in (X86_REG_EAX, X86_REG_ECX, X86_REG_EDX):
             state.registers.pop(register, None)
         state.registers[X86_REG_EAX] = returned
         state.zero_register = None
-        return CallFact(address, target, entry, arguments, returned), allocation
+        return (
+            CallFact(
+                address,
+                target,
+                entry,
+                arguments,
+                returned,
+                helper_effects,
+            ),
+            allocation,
+        )
+
+    def _recover_direct_push_argument(
+        self,
+        state: _State,
+        address: int,
+        arguments: tuple[AbstractValue, ...],
+    ) -> tuple[AbstractValue, ...]:
+        """Recover arg0 from its local PUSH when ESP provenance was joined away."""
+
+        if not arguments or not (
+            arguments[0].is_bottom or arguments[0].is_unknown
+        ):
+            return arguments
+        block_start = self.instruction_block.get(address)
+        block = self.blocks.get(block_start) if block_start is not None else None
+        if block is None:
+            return arguments
+        try:
+            index = block.instruction_addresses.index(address)
+        except ValueError:
+            return arguments
+        for prior_address in reversed(block.instruction_addresses[max(0, index - 32):index]):
+            prior = self._decode(prior_address)
+            if prior.group(CS_GRP_CALL) or prior.group(CS_GRP_RET):
+                break
+            if prior.id == X86_INS_PUSH and prior.operands:
+                recovered = self._read_operand(
+                    state, prior.operands[0], prior_address
+                )
+                if recovered.is_bottom or recovered.is_unknown:
+                    return arguments
+                mutable = list(arguments)
+                mutable[0] = recovered
+                return tuple(mutable)
+            if prior.id == X86_INS_POP or (
+                prior.operands
+                and prior.operands[0].type == X86_OP_REG
+                and _canonical_register(prior, prior.operands[0].reg)
+                == X86_REG_ESP
+            ):
+                break
+        return arguments
 
     def _eval_instruction(
         self,
@@ -821,6 +1560,21 @@ class _Interpreter:
         insn = self._decode(address)
         operands = insn.operands
         if not operands:
+            _read_registers, written_registers = insn.regs_access()
+            for register in written_registers:
+                canonical = _canonical_register(insn, register)
+                if canonical not in _TRACKED_GENERAL_REGISTERS:
+                    continue
+                origin = (
+                    f"implicit-register-result:{address:#x}:{insn.mnemonic}"
+                )
+                state.registers[canonical] = _symbolic(
+                    (
+                        f"instruction-result[{address:#x}:"
+                        f"{insn.mnemonic}:{canonical}]"
+                    ),
+                    origin,
+                )
             return None
 
         if insn.id == X86_INS_PUSH:
@@ -833,13 +1587,79 @@ class _Interpreter:
                 state.esp_offset -= 4
                 state.stack[state.esp_offset] = value
             return None
+
+        if insn.id in {X86_INS_STOSB, X86_INS_STOSW, X86_INS_STOSD} and len(
+            operands
+        ) == 2:
+            count = state.registers.get(X86_REG_ECX, _BOTTOM)
+            if not insn.mnemonic.startswith("rep "):
+                count = _exact(1, f"single-{insn.mnemonic}:{address:#x}")
+            value = self._read_operand(state, operands[1], address)
+            write = self._write_operand(
+                state,
+                operands[0],
+                value,
+                address,
+                entry=entry,
+                operation=f"{insn.mnemonic} count={_value_expression(count)}",
+            )
+            byte_count = count.scaled(
+                operands[0].size, f"stos-byte-count:{address:#x}"
+            )
+            state.registers[X86_REG_EDI] = _add_values(
+                state.registers.get(X86_REG_EDI, _BOTTOM),
+                byte_count,
+                f"stos-advance:{address:#x}",
+            )
+            if insn.mnemonic.startswith("rep "):
+                state.registers[X86_REG_ECX] = _exact(
+                    0, f"rep-stos-count-consumed:{address:#x}"
+                )
+            return write
+
+        if (
+            insn.id in {X86_INS_MOVSB, X86_INS_MOVSW, X86_INS_MOVSD}
+            and len(operands) == 2
+            and all(operand.type == X86_OP_MEM for operand in operands)
+        ):
+            repeated = insn.mnemonic.startswith("rep ")
+            count = (
+                state.registers.get(X86_REG_ECX, _BOTTOM)
+                if repeated
+                else _exact(1, f"single-movsd:{address:#x}")
+            )
+            value = self._read_operand(state, operands[1], address)
+            operation = f"{insn.mnemonic} count={_value_expression(count)}"
+            write = self._write_operand(
+                state,
+                operands[0],
+                value,
+                address,
+                entry=entry,
+                operation=operation,
+            )
+            byte_count = count.scaled(
+                operands[0].size, f"movs-byte-count:{address:#x}"
+            )
+            for register in (X86_REG_ESI, X86_REG_EDI):
+                state.registers[register] = _add_values(
+                    state.registers.get(register, _BOTTOM),
+                    byte_count,
+                    f"movsd-advance:{address:#x}:{register}",
+                )
+            if repeated:
+                state.registers[X86_REG_ECX] = _exact(
+                    0, f"rep-movsd-count-consumed:{address:#x}"
+                )
+            return write
         if insn.id == X86_INS_POP:
             value = _unknown(f"pop-unknown-stack:{address:#x}")
             if state.esp_offset is not None:
                 value = state.stack.get(state.esp_offset, _BOTTOM)
                 state.esp_offset += 4
-            self._write_operand(state, operands[0], value, address)
-            return None
+            return self._write_operand(
+                state, operands[0], value, address, entry=entry, operation="pop"
+            )
 
         if insn.id in {X86_INS_MOV, X86_INS_MOVZX, X86_INS_MOVSX} and len(operands) == 2:
             value = self._read_operand(state, operands[1], address)
@@ -892,6 +1712,95 @@ class _Interpreter:
                 state.zero_register = _canonical_register(insn, left.reg)
             return None
 
+        if (
+            insn.mnemonic.startswith("set")
+            and len(operands) == 1
+            and operands[0].type == X86_OP_MEM
+        ):
+            value = _symbolic(
+                f"condition-code[{address:#x}:{insn.mnemonic}]",
+                f"setcc-result:{address:#x}:{insn.mnemonic}",
+            )
+            return self._write_operand(
+                state,
+                operands[0],
+                value,
+                address,
+                entry=entry,
+                operation=insn.mnemonic,
+            )
+
+        if insn.mnemonic in {"neg", "not"} and len(operands) == 1:
+            old = self._read_operand(state, operands[0], address)
+            if old.is_finite:
+                mask = (1 << (operands[0].size * 8)) - 1
+                value = _finite(
+                    (
+                        (-row if insn.mnemonic == "neg" else ~row) & mask
+                        for row in old.values
+                    ),
+                    f"{insn.mnemonic}:{address:#x}",
+                    old.dependencies,
+                )
+            elif old.is_bottom or old.is_unknown:
+                value = _unknown(
+                    f"{insn.mnemonic}-unknown-input:{address:#x}:{old.origin}",
+                    old.dependencies,
+                )
+            else:
+                value = _symbolic(
+                    f"{insn.mnemonic}({_value_expression(old)})",
+                    f"{insn.mnemonic}:{address:#x}",
+                    old.dependencies,
+                )
+            return self._write_operand(
+                state,
+                operands[0],
+                value,
+                address,
+                entry=entry,
+                operation=insn.mnemonic,
+            )
+
+        if insn.mnemonic in {"adc", "sbb"} and len(operands) == 2:
+            left = self._read_operand(state, operands[0], address)
+            right = self._read_operand(state, operands[1], address)
+            value = _symbolic(
+                (
+                    f"{insn.mnemonic}({_value_expression(left)},"
+                    f"{_value_expression(right)},carry)"
+                ),
+                f"{insn.mnemonic}-with-carry:{address:#x}",
+                _merge_dependencies(left.dependencies, right.dependencies),
+            )
+            state.zero_register = None
+            return self._write_operand(
+                state,
+                operands[0],
+                value,
+                address,
+                entry=entry,
+                operation=insn.mnemonic,
+            )
+
+        if (
+            insn.mnemonic in _X87_MEMORY_STORE_MNEMONICS
+            and len(operands) == 1
+            and operands[0].type == X86_OP_MEM
+        ):
+            value = _symbolic(
+                f"x87-store[{address:#x}:{insn.mnemonic}]",
+                f"x87-store-result:{address:#x}:{insn.mnemonic}",
+            )
+            return self._write_operand(
+                state,
+                operands[0],
+                value,
+                address,
+                entry=entry,
+                operation=insn.mnemonic,
+            )
+
         if insn.id in {
             X86_INS_ADD,
             X86_INS_SUB,
@@ -901,6 +1810,8 @@ class _Interpreter:
             X86_INS_XOR,
             X86_INS_SHL,
             X86_INS_SAL,
+            X86_INS_SHR,
+            X86_INS_SAR,
         } and len(operands) >= 2:
             left_operand = (
                 operands[1]
@@ -959,6 +1870,16 @@ class _Interpreter:
                             base.origin,
                         )
                     )
+        _read_registers, written_registers = insn.regs_access()
+        for register in written_registers:
+            canonical = _canonical_register(insn, register)
+            if canonical not in _TRACKED_GENERAL_REGISTERS:
+                continue
+            origin = f"unsupported-register-result:{address:#x}:{insn.mnemonic}"
+            state.registers[canonical] = _symbolic(
+                f"instruction-result[{address:#x}:{insn.mnemonic}:{canonical}]",
+                origin,
+            )
         if insn.eflags & (
             X86_EFLAGS_MODIFY_ZF
             | X86_EFLAGS_RESET_ZF
@@ -985,9 +1906,22 @@ class _Interpreter:
         if operand.type == X86_OP_MEM:
             pointer = self._effective_address(state, operand, address)
             if pointer.pointer_type == "stack":
-                return state.stack.get(pointer.pointer_offset, _BOTTOM)
+                value = state.stack.get(pointer.pointer_offset, _BOTTOM)
+                if value.is_bottom:
+                    return _symbolic(
+                        (
+                            f"stack-memory[{pointer.pointer_offset}:"
+                            f"u{operand.size * 8}]"
+                        ),
+                        (
+                            f"unmaterialized-stack-read:{address:#x}:"
+                            f"{pointer.pointer_offset}"
+                        ),
+                    )
+                return value
             if pointer.pointer_type == "image":
                 absolute = pointer.pointer_base + pointer.pointer_offset
+                dependency = _memory_dependency(pointer, address, operand.size)
                 section = next(
                     (
                         row
@@ -1001,23 +1935,38 @@ class _Interpreter:
                         0,
                         ((f"global[{absolute:#x}]:u{operand.size * 8}", 1),),
                         f"mutable-global-read:{address:#x}",
+                        (dependency,),
                     )
                 try:
                     payload = self.image.read(absolute, operand.size)
                 except ValueError:
-                    return _unknown(f"unmapped-image-read:{address:#x}:{absolute:#x}")
+                    return _unknown(
+                        f"unmapped-image-read:{address:#x}:{absolute:#x}",
+                        (dependency,),
+                    )
                 return _exact(
                     int.from_bytes(payload, "little"),
                     f"image-read:{address:#x}:{absolute:#x}",
+                    (dependency,),
                 )
-            if pointer.kind in {"argument", "affine"}:
-                expression = _linear_expression(pointer)
+            if pointer.kind in {"argument", "affine", "symbolic"}:
+                expression = _value_expression(pointer)
+                read = f"memory[{expression}]:u{operand.size * 8}"
+                dependency = _memory_dependency(pointer, address, operand.size)
+                if pointer.kind == "symbolic":
+                    return _symbolic(
+                        read,
+                        f"symbolic-read:{address:#x}",
+                        (dependency,),
+                    )
                 return _linear(
                     0,
-                    ((f"memory[{expression}]:u{operand.size * 8}", 1),),
+                    ((read, 1),),
                     f"symbolic-read:{address:#x}",
+                    (dependency,),
                 )
             if pointer.kind == "pointer":
+                dependency = _memory_dependency(pointer, address, operand.size)
                 return _linear(
                     0,
                     ((
@@ -1026,6 +1975,17 @@ class _Interpreter:
                         1,
                     ),),
                     f"typed-read:{address:#x}",
+                    (dependency,),
+                )
+            if pointer.is_unknown:
+                dependency = _memory_dependency(pointer, address, operand.size)
+                return _symbolic(
+                    (
+                        f"unknown-address[{address:#x}:"
+                        f"{pointer.origin}]:u{operand.size * 8}"
+                    ),
+                    f"unknown-address-read:{address:#x}:{pointer.origin}",
+                    (dependency,),
                 )
         return _unknown(f"unsupported-operand-read:{address:#x}")
 
@@ -1055,20 +2015,41 @@ class _Interpreter:
                     if value.kind == "pointer" and value.pointer_type == "stack"
                     else None
                 )
-            state.registers[register] = _write_width(
-                state.registers.get(register, _BOTTOM),
-                value,
-                operand.size,
-                f"reg-write:{address:#x}",
-            )
+            old = state.registers.get(register, _BOTTOM)
+            register_name = insn.reg_name(operand.reg)
+            if register_name in {"ah", "bh", "ch", "dh"}:
+                state.registers[register] = _symbolic(
+                    (
+                        f"replace-high8({_value_expression(old)},"
+                        f"{_value_expression(value)})"
+                    ),
+                    f"reg-write:{address:#x}",
+                    _merge_dependencies(old.dependencies, value.dependencies),
+                )
+            else:
+                state.registers[register] = _write_width(
+                    old,
+                    value,
+                    operand.size,
+                    f"reg-write:{address:#x}",
+                )
             return None
         if operand.type == X86_OP_MEM:
             pointer = self._effective_address(state, operand, address)
             if pointer.pointer_type == "stack":
-                state.stack[pointer.pointer_offset] = _truncate_value(
+                stored = _truncate_value(
                     value, operand.size, f"stack-write:{address:#x}"
                 )
-                return None
+                state.stack[pointer.pointer_offset] = stored
+                return MemoryWriteFact(
+                    address=address,
+                    function_entry=entry or 0,
+                    width=operand.size,
+                    base=pointer,
+                    offset=pointer.pointer_offset,
+                    value=stored,
+                    operation=operation,
+                )
             return MemoryWriteFact(
                 address=address,
                 function_entry=entry or 0,
@@ -1139,16 +2120,33 @@ def _canonical_register(insn, register: int) -> int:
 
 
 def _truncate_value(value: AbstractValue, size: int, origin: str) -> AbstractValue:
-    if size >= 4 or value.kind in {"pointer", "argument", "affine"}:
+    if size >= 4:
         return value
     if value.is_finite:
-        return _finite((row & ((1 << (size * 8)) - 1) for row in value.values), origin)
+        return _finite(
+            (row & ((1 << (size * 8)) - 1) for row in value.values),
+            origin,
+            value.dependencies,
+        )
+    if value.kind in {"pointer", "argument", "affine", "symbolic"}:
+        return _symbolic(
+            f"truncate{size * 8}({_value_expression(value)})",
+            origin,
+            value.dependencies,
+        )
     return value
 
 
 def _extend_value(
     value: AbstractValue, size: int, *, signed: bool, origin: str
 ) -> AbstractValue:
+    if value.kind in {"pointer", "argument", "affine", "symbolic"}:
+        operation = "sign-extend" if signed else "zero-extend"
+        return _symbolic(
+            f"{operation}{size * 8}({_value_expression(value)})",
+            origin,
+            value.dependencies,
+        )
     if not value.is_finite:
         return value
     bits = size * 8
@@ -1160,7 +2158,7 @@ def _extend_value(
         if signed and row & sign:
             row |= _MASK32 ^ mask
         rows.append(row)
-    return _finite(rows, origin)
+    return _finite(rows, origin, value.dependencies)
 
 
 def _write_width(
@@ -1176,23 +2174,43 @@ def _write_width(
         return _exact(
             ((old.exact_value or 0) & ~mask) | ((new.exact_value or 0) & mask),
             origin,
+            _merge_dependencies(old.dependencies, new.dependencies),
         )
-    return _unknown(f"{origin}:partial-register-write")
+    if old.is_bottom and new.is_bottom:
+        return _BOTTOM
+    if old.is_unknown or new.is_unknown:
+        return _unknown(
+            f"{origin}:partial-register-write",
+            _merge_dependencies(old.dependencies, new.dependencies),
+        )
+    return _symbolic(
+        (
+            f"replace-low{size * 8}({_value_expression(old)},"
+            f"{_value_expression(new)})"
+        ),
+        origin,
+        _merge_dependencies(old.dependencies, new.dependencies),
+    )
 
 
 def _add_values(
     left: AbstractValue, right: AbstractValue, origin: str
 ) -> AbstractValue:
     if right.is_exact:
-        return left.with_offset(_signed32(right.exact_value or 0), origin)
+        return left.with_offset(
+            _signed32(right.exact_value or 0), origin
+        ).with_dependencies(right.dependencies)
     if left.is_exact:
-        return right.with_offset(_signed32(left.exact_value or 0), origin)
+        return right.with_offset(
+            _signed32(left.exact_value or 0), origin
+        ).with_dependencies(left.dependencies)
     if left.kind in {"argument", "affine"} and right.is_finite:
         domain = ",".join(f"{row:#x}" for row in sorted(right.values))
         return _linear(
             left.affine_base,
             (*_terms(left), (f"finite{{{domain}}}", 1)),
             origin,
+            _merge_dependencies(left.dependencies, right.dependencies),
         )
     if right.kind in {"argument", "affine"} and left.is_finite:
         domain = ",".join(f"{row:#x}" for row in sorted(left.values))
@@ -1200,6 +2218,7 @@ def _add_values(
             right.affine_base,
             (*_terms(right), (f"finite{{{domain}}}", 1)),
             origin,
+            _merge_dependencies(left.dependencies, right.dependencies),
         )
     if left.kind in {"argument", "affine"} and right.kind in {
         "argument",
@@ -1209,12 +2228,26 @@ def _add_values(
             left.affine_base + right.affine_base,
             (*_terms(left), *_terms(right)),
             origin,
+            _merge_dependencies(left.dependencies, right.dependencies),
         )
     if left.is_finite and right.is_finite:
         return _finite(
-            (a + b for a in left.values for b in right.values), origin
+            (a + b for a in left.values for b in right.values),
+            origin,
+            _merge_dependencies(left.dependencies, right.dependencies),
         )
-    return _unknown(f"{origin}:non-affine-add")
+    if not any(
+        value.is_bottom or value.is_unknown for value in (left, right)
+    ):
+        return _symbolic(
+            f"add({_value_expression(left)},{_value_expression(right)})",
+            origin,
+            _merge_dependencies(left.dependencies, right.dependencies),
+        )
+    return _unknown(
+        f"{origin}:non-affine-add",
+        _merge_dependencies(left.dependencies, right.dependencies),
+    )
 
 
 def _binary_value(
@@ -1228,26 +2261,40 @@ def _binary_value(
         return _add_values(left, right, origin)
     if instruction_id == X86_INS_SUB:
         if right.is_exact:
-            return left.with_offset(-_signed32(right.exact_value or 0), origin)
+            return left.with_offset(
+                -_signed32(right.exact_value or 0), origin
+            ).with_dependencies(right.dependencies)
         if right.kind in {"argument", "affine"}:
             return _add_values(left, right.scaled(-1, origin), origin)
     if instruction_id == X86_INS_IMUL and right.is_exact:
-        return left.scaled(_signed32(right.exact_value or 0), origin)
+        return left.scaled(
+            _signed32(right.exact_value or 0), origin
+        ).with_dependencies(right.dependencies)
     if (
         instruction_id in {X86_INS_SHL, X86_INS_SAL}
         and right.is_exact
         and left.kind in {"argument", "affine"}
     ):
-        return left.scaled(1 << ((right.exact_value or 0) & 0x1F), origin)
+        return left.scaled(
+            1 << ((right.exact_value or 0) & 0x1F), origin
+        ).with_dependencies(right.dependencies)
     if (
         instruction_id == X86_INS_AND
         and right.is_exact
         and left.kind in {"argument", "affine"}
         and (right.exact_value or 0).bit_count() == 1
     ):
-        return _finite((0, right.exact_value or 0), origin)
+        return _finite(
+            (0, right.exact_value or 0),
+            origin,
+            _merge_dependencies(left.dependencies, right.dependencies),
+        )
     if instruction_id == X86_INS_XOR and left == right:
-        return _exact(0, origin)
+        return _exact(
+            0,
+            origin,
+            _merge_dependencies(left.dependencies, right.dependencies),
+        )
     if left.is_finite and right.is_finite:
         operator = {
             X86_INS_AND: lambda a, b: a & b,
@@ -1255,12 +2302,38 @@ def _binary_value(
             X86_INS_XOR: lambda a, b: a ^ b,
             X86_INS_SHL: lambda a, b: a << b,
             X86_INS_SAL: lambda a, b: a << b,
+            X86_INS_SHR: lambda a, b: a >> b,
+            X86_INS_SAR: lambda a, b: _signed32(a) >> b,
         }.get(instruction_id)
         if operator is not None:
             return _finite(
-                (operator(a, b) for a in left.values for b in right.values), origin
+                (operator(a, b) for a in left.values for b in right.values),
+                origin,
+                _merge_dependencies(left.dependencies, right.dependencies),
             )
-    return _unknown(f"{origin}:unsupported-value-operation")
+    if not any(
+        value.is_bottom or value.is_unknown for value in (left, right)
+    ):
+        operation = {
+            X86_INS_SUB: "sub",
+            X86_INS_IMUL: "imul",
+            X86_INS_AND: "and",
+            X86_INS_OR: "or",
+            X86_INS_XOR: "xor",
+            X86_INS_SHL: "shl",
+            X86_INS_SAL: "sal",
+            X86_INS_SHR: "shr",
+            X86_INS_SAR: "sar",
+        }.get(instruction_id, f"instruction-{instruction_id}")
+        return _symbolic(
+            f"{operation}({_value_expression(left)},{_value_expression(right)})",
+            origin,
+            _merge_dependencies(left.dependencies, right.dependencies),
+        )
+    return _unknown(
+        f"{origin}:unsupported-value-operation",
+        _merge_dependencies(left.dependencies, right.dependencies),
+    )
 
 
 def _signed32(value: int) -> int:
@@ -1268,17 +2341,33 @@ def _signed32(value: int) -> int:
     return value - (1 << 32) if value & (1 << 31) else value
 
 
-def _join_states(left: _State, right: _State) -> tuple[_State, int]:
-    registers = {
-        register: left.registers.get(register, _BOTTOM).join(
-            right.registers.get(register, _BOTTOM)
-        )
-        for register in set(left.registers) | set(right.registers)
-    }
-    stack = {
-        offset: left.stack.get(offset, _BOTTOM).join(right.stack.get(offset, _BOTTOM))
-        for offset in set(left.stack) | set(right.stack)
-    }
+def _join_states(
+    left: _State, right: _State, join_site: int
+) -> tuple[_State, int]:
+    registers: dict[int, AbstractValue] = {}
+    for register in set(left.registers) | set(right.registers):
+        before = left.registers.get(register, _BOTTOM)
+        incoming = right.registers.get(register, _BOTTOM)
+        joined = before.join(incoming)
+        if joined.kind == "symbolic" and before != incoming:
+            joined = _symbolic(
+                f"phi[{join_site:#x}:register={register}]",
+                f"symbolic-join:{join_site:#x}:register={register}",
+                _merge_dependencies(before.dependencies, incoming.dependencies),
+            )
+        registers[register] = joined
+    stack: dict[int, AbstractValue] = {}
+    for offset in set(left.stack) | set(right.stack):
+        before = left.stack.get(offset, _BOTTOM)
+        incoming = right.stack.get(offset, _BOTTOM)
+        joined = before.join(incoming)
+        if joined.kind == "symbolic" and before != incoming:
+            joined = _symbolic(
+                f"phi[{join_site:#x}:stack={offset}]",
+                f"symbolic-join:{join_site:#x}:stack={offset}",
+                _merge_dependencies(before.dependencies, incoming.dependencies),
+            )
+        stack[offset] = joined
     finite_count = sum(
         len(value.values)
         for value in (*registers.values(), *stack.values())
@@ -1304,15 +2393,54 @@ def _widen_state(prior: _State, joined: _State, block: int) -> _State:
     result = joined.copy()
     for register, value in tuple(result.registers.items()):
         before = prior.registers.get(register, _BOTTOM)
-        if value != before and (value.is_finite or value.kind in {"affine", "argument"}):
-            result.registers[register] = _unknown(
-                f"loop-widen:block={block:#x}:register={register}"
+        if value != before and (
+            value.is_finite
+            or value.kind in {"affine", "argument", "symbolic"}
+        ):
+            origin = f"loop-widen:block={block:#x}:register={register}"
+            result.registers[register] = _symbolic(
+                f"loop-phi[{block:#x}:register={register}]",
+                origin,
+                _merge_dependencies(before.dependencies, value.dependencies),
             )
     for offset, value in tuple(result.stack.items()):
         before = prior.stack.get(offset, _BOTTOM)
-        if value != before and (value.is_finite or value.kind in {"affine", "argument"}):
-            result.stack[offset] = _unknown(
-                f"loop-widen:block={block:#x}:stack={offset}"
+        if value != before and (
+            value.is_finite
+            or value.kind in {"affine", "argument", "symbolic"}
+        ):
+            origin = f"loop-widen:block={block:#x}:stack={offset}"
+            result.stack[offset] = _symbolic(
+                f"loop-phi[{block:#x}:stack={offset}]",
+                origin,
+                _merge_dependencies(before.dependencies, value.dependencies),
+            )
+    return result
+
+
+def _widen_symbolic_state(
+    prior: _State, joined: _State, block: int
+) -> _State:
+    """Collapse a changing runtime expression to a stable loop-phi identity."""
+
+    result = joined.copy()
+    for register, value in tuple(result.registers.items()):
+        before = prior.registers.get(register, _BOTTOM)
+        if value.kind == "symbolic" and value != before:
+            origin = f"symbolic-widen:block={block:#x}:register={register}"
+            result.registers[register] = _symbolic(
+                f"loop-phi[{block:#x}:register={register}]",
+                origin,
+                _merge_dependencies(before.dependencies, value.dependencies),
+            )
+    for offset, value in tuple(result.stack.items()):
+        before = prior.stack.get(offset, _BOTTOM)
+        if value.kind == "symbolic" and value != before:
+            origin = f"symbolic-widen:block={block:#x}:stack={offset}"
+            result.stack[offset] = _symbolic(
+                f"loop-phi[{block:#x}:stack={offset}]",
+                origin,
+                _merge_dependencies(before.dependencies, value.dependencies),
             )
     return result
 
@@ -1346,8 +2474,17 @@ def _widen_finite_budget(
     for size, location, key in sorted(candidates, reverse=True):
         if size <= 64 and _state_finite_count(result) < budget:
             break
-        widened = _unknown(
+        origin = (
             f"finite-widen:block={block:#x}:{location}={key}:values={size}"
+        )
+        widened = _symbolic(
+            f"finite-domain[{block:#x}:{location}={key}]",
+            origin,
+            (
+                result.registers[key].dependencies
+                if location == "register"
+                else result.stack[key].dependencies
+            ),
         )
         if location == "register":
             result.registers[key] = widened
@@ -1390,6 +2527,7 @@ def _call_key(row: CallFact) -> tuple[Any, ...]:
         row.function_entry,
         tuple(_abstract_key(value) for value in row.arguments),
         _abstract_key(row.return_value),
+        tuple(_write_key(value) for value in row.helper_effects),
     )
 
 
@@ -1402,6 +2540,8 @@ def _write_key(row: MemoryWriteFact) -> tuple[Any, ...]:
         row.offset,
         _abstract_key(row.value),
         row.operation,
+        row.effect_call_address,
+        row.effect_is_must,
     )
 
 
@@ -1418,7 +2558,15 @@ def _abstract_key(value: AbstractValue) -> tuple[Any, ...]:
         value.pointer_type,
         value.allocation_site if value.allocation_site is not None else -1,
         value.origin,
+        tuple(_dependency_key(row) for row in value.dependencies),
     )
+
+
+def _abstract_semantic_key(value: AbstractValue) -> tuple[Any, ...]:
+    """Identity used to follow a value across stores that replace its origin."""
+
+    key = _abstract_key(value)
+    return (*key[:10], key[11])
 
 
 def _linear_expression(value: AbstractValue) -> str:
@@ -1430,6 +2578,8 @@ def _linear_expression(value: AbstractValue) -> str:
 def _value_expression(value: AbstractValue) -> str:
     if value.kind in {"argument", "affine"}:
         return _linear_expression(value)
+    if value.kind == "symbolic":
+        return value.affine_symbol or value.origin
     if value.is_finite:
         return "finite{" + ",".join(f"{row:#x}" for row in sorted(value.values)) + "}"
     if value.kind == "pointer":
@@ -1556,6 +2706,1079 @@ def _callee_first_sccs(
     return [sccs[index] for index in order]
 
 
+def _configured_limit_items(limits: AnalysisLimits) -> tuple[tuple[str, int], ...]:
+    return tuple(
+        (row.name, int(getattr(limits, row.name)))
+        for row in fields(limits)
+        if isinstance(getattr(limits, row.name), int)
+    )
+
+
+def _decode_cfg_instruction(row: Any, decoder: Cs | None = None) -> Any:
+    decoder = decoder or Cs(CS_ARCH_X86, CS_MODE_32)
+    decoder.detail = True
+    payload = bytes.fromhex(row.bytes_hex)
+    instruction = next(decoder.disasm(payload, row.address), None)
+    if instruction is None or instruction.size != row.size:
+        raise ValueError(
+            f"cannot re-decode accepted instruction at {row.address:#x}"
+        )
+    return instruction
+
+
+def _memory_write_obligations(
+    cfg: RawCfg,
+) -> tuple[tuple[int, int, int, str, str], ...]:
+    """Enumerate every explicit memory destination in accepted CFG bytes."""
+
+    decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+    decoder.detail = True
+    obligations: list[tuple[int, int, int, str, str]] = []
+    for row in sorted(cfg.instructions, key=lambda item: item.address):
+        instruction = _decode_cfg_instruction(row, decoder)
+        for index, operand in enumerate(instruction.operands):
+            if operand.type != X86_OP_MEM or not (
+                operand.access & CS_AC_WRITE
+                or (
+                    index == 0
+                    and instruction.mnemonic in _X87_MEMORY_STORE_MNEMONICS
+                )
+            ):
+                continue
+            obligations.append(
+                (
+                    row.address,
+                    index,
+                    operand.size,
+                    row.bytes_hex,
+                    hashlib.sha256(bytes.fromhex(row.bytes_hex)).hexdigest(),
+                )
+            )
+    return tuple(obligations)
+
+
+def _alias_write_disposition(
+    facts: tuple[MemoryWriteFact, ...],
+) -> tuple[str, str | None]:
+    if not facts:
+        return "unmodelled-store", "unmodelled-memory-write"
+    types = {row.base.pointer_type for row in facts}
+    kinds = {row.base.kind for row in facts}
+    if types == {"stack"}:
+        return "proved-stack-disjoint", None
+    if kinds <= {"pointer"} and types <= {
+        "pcode",
+        "objobject",
+        "arena-allocation",
+    }:
+        return "modelled-lifecycle-storage", None
+    if any(
+        row.base.is_bottom
+        or row.base.is_unknown
+        or row.base.kind in {"argument", "affine", "symbolic"}
+        or not row.base.pointer_type
+        for row in facts
+    ):
+        return "possibly-aliasing-unknown-base", "possibly-aliasing-memory-write"
+    if types == {"image"}:
+        return "proved-image-storage-disjoint", None
+    if kinds <= {"pointer"} and all(types):
+        if types & {"pcode", "objobject", "arena-allocation"}:
+            return "exhaustively-typed-lifecycle-or-disjoint-storage", None
+        return "proved-distinct-typed-storage", None
+    return "unclassified-pointer-store", "unclassified-pointer-memory-write"
+
+
+def _expected_incoming_calls(
+    cfg: RawCfg,
+    finite_internal_edges: Sequence[Any],
+) -> dict[int, set[int]]:
+    incoming: dict[int, set[int]] = defaultdict(set)
+    for row in cfg.direct_calls:
+        incoming[row.target].add(row.address)
+    for row in finite_internal_edges:
+        if str(getattr(row, "flow_kind", "")).startswith("indirect-call"):
+            incoming[int(getattr(row, "target"))].add(
+                int(getattr(row, "source"))
+            )
+    return incoming
+
+
+def _resolve_formal_write_fact(
+    fact: MemoryWriteFact,
+    *,
+    calls_by_target: Mapping[int, tuple[CallFact, ...]],
+    expected_incoming: Mapping[int, set[int]],
+    limits: AnalysisLimits,
+    trail: tuple[tuple[int, int], ...] = (),
+) -> tuple[MemoryWriteFact, ...]:
+    formal = _single_formal_argument(fact.base)
+    if formal is None:
+        return (fact,)
+    index, _offset = formal
+    identity = (fact.function_entry, index)
+    if identity in trail:
+        return (
+            replace(
+                fact,
+                base=_unknown(
+                    "formal-write-cycle:"
+                    + "->".join(
+                        f"{entry:#x}:arg{argument}"
+                        for entry, argument in (*trail, identity)
+                    )
+                ),
+                operation=f"{fact.operation}:formal-cycle",
+            ),
+        )
+    expected = expected_incoming.get(fact.function_entry, set())
+    paths = tuple(
+        row
+        for row in calls_by_target.get(fact.function_entry, ())
+        if row.address in expected
+    )
+    covered = {row.address for row in paths}
+    if not expected or covered != expected:
+        detail = (
+            "no-incoming-call"
+            if not expected
+            else "missing=" + ",".join(
+                f"{row:#x}" for row in sorted(expected - covered)
+            )
+        )
+        return (
+            replace(
+                fact,
+                base=_unknown(
+                    f"formal-write-incoming-open:{fact.function_entry:#x}:"
+                    f"arg{index}:{detail}"
+                ),
+                operation=f"{fact.operation}:formal-incoming-open",
+            ),
+        )
+    resolved: list[MemoryWriteFact] = []
+    for path in sorted(paths, key=_call_key):
+        base = fact.base.substitute(
+            path.arguments,
+            f"formal-write:{path.address:#x}->{fact.function_entry:#x}",
+        )
+        value = fact.value.substitute(
+            path.arguments,
+            f"formal-write-value:{path.address:#x}->{fact.function_entry:#x}",
+        )
+        rebound = replace(
+            fact,
+            function_entry=path.function_entry,
+            base=base,
+            offset=(base.pointer_offset if base.kind == "pointer" else fact.offset),
+            value=value,
+            operation=f"{fact.operation}:formal-path={path.address:#x}",
+        )
+        resolved.extend(
+            _resolve_formal_write_fact(
+                rebound,
+                calls_by_target=calls_by_target,
+                expected_incoming=expected_incoming,
+                limits=limits,
+                trail=(*trail, identity),
+            )
+        )
+        limits.check("max_finite_values", len(resolved))
+    return tuple(sorted(set(resolved), key=_write_key))
+
+
+def derive_alias_write_closure(
+    cfg: RawCfg,
+    *,
+    compiler_sha256: str,
+    cfg_instruction_hash: str,
+    memory_writes: Sequence[MemoryWriteFact],
+    calls: Sequence[CallFact] = (),
+    finite_internal_edges: Sequence[Any] = (),
+    limits: AnalysisLimits,
+) -> AliasWriteClosureCertificate:
+    """Derive a complete memory-destination partition from accepted CFG bytes."""
+
+    calls_by_target: dict[int, tuple[CallFact, ...]] = {
+        target: tuple(sorted(rows, key=_call_key))
+        for target, rows in (
+            (
+                target,
+                tuple(row for row in calls if row.target == target),
+            )
+            for target in sorted({row.target for row in calls if row.target})
+        )
+    }
+    expected_incoming = _expected_incoming_calls(cfg, finite_internal_edges)
+    resolved_writes = tuple(
+        row
+        for write in sorted(memory_writes, key=_write_key)
+        for row in _resolve_formal_write_fact(
+            write,
+            calls_by_target=calls_by_target,
+            expected_incoming=expected_incoming,
+            limits=limits,
+        )
+    )
+    facts_by_address: dict[int, list[MemoryWriteFact]] = defaultdict(list)
+    for fact in resolved_writes:
+        facts_by_address[fact.address].append(fact)
+    sites: list[AliasWriteSiteEvidence] = []
+    gaps: list[ClosureGap] = []
+    obligations = _memory_write_obligations(cfg)
+    obligation_counts: dict[int, int] = defaultdict(int)
+    for address, _operand_index, _width, _bytes_hex, _digest in obligations:
+        obligation_counts[address] += 1
+    for address, operand_index, width, bytes_hex, digest in obligations:
+        facts = tuple(sorted(facts_by_address.get(address, ()), key=_write_key))
+        disposition, gap_kind = _alias_write_disposition(facts)
+        if obligation_counts[address] != 1:
+            disposition = "multiple-memory-destinations-unbound"
+            gap_kind = "multiple-memory-destinations-unbound"
+        provenance = (
+            f"accepted-cfg-instruction:{address:#x}:{bytes_hex}",
+            f"memory-destination-operand:{operand_index}:width={width}",
+            *(f"write-fact:{row.function_entry:#x}:{row.operation}" for row in facts),
+        )
+        sites.append(
+            AliasWriteSiteEvidence(
+                address,
+                operand_index,
+                width,
+                bytes_hex,
+                digest,
+                disposition,
+                facts,
+                provenance,
+            )
+        )
+        if gap_kind is not None:
+            gaps.append(
+                ClosureGap(
+                    address,
+                    gap_kind,
+                    f"operand={operand_index};width={width};disposition={disposition}",
+                    provenance,
+                )
+            )
+    obligation_addresses = {row[0] for row in obligations}
+    for address in sorted(set(facts_by_address) - obligation_addresses):
+        facts = tuple(sorted(facts_by_address[address], key=_write_key))
+        gaps.append(
+            ClosureGap(
+                address,
+                "write-fact-without-cfg-memory-destination",
+                f"facts={len(facts)}",
+                tuple(
+                    f"write-fact:{row.function_entry:#x}:{row.operation}"
+                    for row in facts
+                ),
+            )
+        )
+    fact_key_counts = Counter(_write_key(row) for row in resolved_writes)
+    for key in sorted(row for row, count in fact_key_counts.items() if count != 1):
+        gaps.append(
+            ClosureGap(
+                int(key[0]),
+                "duplicate-memory-write-fact",
+                repr(key),
+            )
+        )
+    sites_tuple = tuple(sites)
+    unresolved_count = len(gaps)
+    return AliasWriteClosureCertificate(
+        compiler_sha256,
+        cfg_instruction_hash,
+        len(cfg.instructions),
+        sites_tuple,
+        tuple(sorted(gaps, key=lambda row: (row.address, row.kind, row.detail))),
+        _configured_limit_items(limits),
+        (
+            ("memory_write_facts", len(resolved_writes)),
+            ("memory_write_operands", len(sites_tuple)),
+            ("unresolved_write_operands", unresolved_count),
+        ),
+    )
+
+
+def _call_target_obligations(
+    cfg: RawCfg,
+    calls: Sequence[CallFact],
+    finite_internal_edges: Sequence[Any],
+    terminal_external_edges: Sequence[Any],
+) -> tuple[tuple[int, int], ...]:
+    decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+    decoder.detail = True
+    call_addresses = {
+        row.address
+        for row in cfg.instructions
+        if _decode_cfg_instruction(row, decoder).group(CS_GRP_CALL)
+    }
+    targets: dict[int, set[int]] = defaultdict(set)
+    targets.update(
+        {
+            row.address: {row.target}
+            for row in cfg.direct_calls
+            if row.address in call_addresses
+        }
+    )
+    for row in finite_internal_edges:
+        source = getattr(row, "source", -1)
+        flow_kind = getattr(row, "flow_kind", "")
+        if source in call_addresses and (
+            flow_kind == "direct-call" or flow_kind.startswith("indirect-call")
+        ):
+            targets[source].add(int(getattr(row, "target")))
+    for row in terminal_external_edges:
+        source = getattr(row, "source", -1)
+        if source not in call_addresses:
+            continue
+        target = getattr(row, "target", None)
+        if target is None:
+            target = getattr(row, "iat_va", 0)
+        targets[source].add(int(target))
+    for row in calls:
+        if row.address in call_addresses and row.target:
+            targets[row.address].add(row.target)
+    return tuple(
+        (address, target)
+        for address in sorted(call_addresses)
+        for target in sorted(targets.get(address, {0}))
+    )
+
+
+def _transitive_summary_effects(
+    entry: int, summaries: dict[int, FunctionSummary]
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    pending = [entry]
+    visited: set[int] = set()
+    allocations: set[int] = set()
+    writes: set[int] = set()
+    callees: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current in visited or current not in summaries:
+            continue
+        visited.add(current)
+        summary = summaries[current]
+        allocations.update(row.call_address for row in summary.allocations)
+        writes.update(row.address for row in summary.typed_writes)
+        for callee in summary.callees:
+            callees.add(callee)
+            if callee in summaries and callee not in visited:
+                pending.append(callee)
+    return (
+        tuple(sorted(visited)),
+        tuple(sorted(allocations)),
+        tuple(sorted(writes)),
+        tuple(sorted(callees)),
+    )
+
+
+def derive_lifecycle_effect_closure(
+    cfg: RawCfg,
+    *,
+    compiler_sha256: str,
+    cfg_instruction_hash: str,
+    summaries: Sequence[FunctionSummary],
+    calls: Sequence[CallFact],
+    memory_writes: Sequence[MemoryWriteFact],
+    finite_internal_edges: Sequence[Any],
+    terminal_external_edges: Sequence[Any],
+    limits: AnalysisLimits,
+) -> LifecycleEffectClosureCertificate:
+    """Bind every call target to its transitive modeled helper effects."""
+
+    summary_map = {row.entry: row for row in summaries}
+    calls_by_target: dict[int, tuple[CallFact, ...]] = {
+        target: tuple(sorted(rows, key=_call_key))
+        for target, rows in (
+            (target, tuple(row for row in calls if row.target == target))
+            for target in sorted({row.target for row in calls if row.target})
+        )
+    }
+    expected_incoming = _expected_incoming_calls(cfg, finite_internal_edges)
+    resolved_writes = tuple(
+        row
+        for write in sorted(memory_writes, key=_write_key)
+        for row in _resolve_formal_write_fact(
+            write,
+            calls_by_target=calls_by_target,
+            expected_incoming=expected_incoming,
+            limits=limits,
+        )
+    )
+    terminal_identities: set[tuple[int, int]] = set()
+    for row in terminal_external_edges:
+        target = getattr(row, "target", None)
+        if target is None:
+            target = getattr(row, "iat_va", 0)
+        terminal_identities.add((getattr(row, "source", -1), int(target)))
+    sites: list[HelperEffectSiteEvidence] = []
+    gaps: list[ClosureGap] = []
+    summary_entry_counts = Counter(row.entry for row in summaries)
+    for entry in sorted(
+        row for row, count in summary_entry_counts.items() if count != 1
+    ):
+        gaps.append(
+            ClosureGap(
+                entry,
+                "duplicate-function-summary",
+                f"entry={entry:#x}",
+            )
+        )
+    call_key_counts = Counter(_call_key(row) for row in calls)
+    for key in sorted(row for row, count in call_key_counts.items() if count != 1):
+        gaps.append(
+            ClosureGap(
+                int(key[0]),
+                "duplicate-call-path-fact",
+                repr(key),
+            )
+        )
+    semantic_evidence: list[LifecycleSemanticEvidence] = []
+    for write in sorted(resolved_writes, key=_write_key):
+        pointer_type = write.base.pointer_type
+        if pointer_type in {
+            "stack",
+            "pcode",
+            "objobject",
+            "arena-allocation",
+        }:
+            if pointer_type != "stack":
+                semantic_evidence.append(
+                    LifecycleSemanticEvidence(
+                        "typed-storage-write",
+                        write.address,
+                        0,
+                        (pointer_type,),
+                        (),
+                        (
+                            f"write-operation:{write.operation}",
+                            f"write-width:{write.width}",
+                            f"base-origin:{write.base.origin}",
+                        ),
+                    )
+                )
+            continue
+        if pointer_type == "image":
+            semantic_evidence.append(
+                LifecycleSemanticEvidence(
+                    "static-storage-write",
+                    write.address,
+                    0,
+                    tuple(
+                        sorted(
+                            {
+                                row
+                                for row in (
+                                    write.base.pointer_type,
+                                    write.value.pointer_type,
+                                )
+                                if row
+                            }
+                        )
+                    ),
+                    (),
+                    (
+                        f"write-operation:{write.operation}",
+                        f"write-width:{write.width}",
+                        f"mapped-base:{write.base.pointer_base:#x}",
+                    ),
+                )
+            )
+            continue
+        if write.base.kind == "pointer" and pointer_type:
+            semantic_evidence.append(
+                LifecycleSemanticEvidence(
+                    "proved-disjoint-typed-storage-write",
+                    write.address,
+                    0,
+                    (pointer_type,),
+                    (),
+                    (
+                        f"write-operation:{write.operation}",
+                        f"write-width:{write.width}",
+                        f"base-origin:{write.base.origin}",
+                    ),
+                )
+            )
+            continue
+        gaps.append(
+            ClosureGap(
+                write.address,
+                "helper-storage-effect-unclassified",
+                (
+                    f"pointer_type={pointer_type or '<unknown>'};"
+                    f"operation={write.operation};width={write.width}"
+                ),
+                (
+                    f"base-origin:{write.base.origin}",
+                    f"value-origin:{write.value.origin}",
+                ),
+            )
+        )
+    obligations = _call_target_obligations(
+        cfg, calls, finite_internal_edges, terminal_external_edges
+    )
+    for address, target in obligations:
+        call_paths = tuple(
+            sorted(
+                (
+                    row
+                    for row in calls
+                    if row.address == address and row.target in {0, target}
+                ),
+                key=_call_key,
+            )
+        )
+        pointer_types = tuple(
+            sorted(
+                {
+                    argument.pointer_type
+                    for row in call_paths
+                    for argument in row.arguments
+                    if argument.pointer_type
+                }
+            )
+        )
+        if target in _ARENA_ALLOCATORS:
+            disposition = "arena-allocation"
+            summary_entries = allocations = writes = callees = ()
+            semantic_evidence.append(
+                LifecycleSemanticEvidence(
+                    "arena-allocation",
+                    address,
+                    target,
+                    ("arena-allocation",),
+                    (target,),
+                    (f"accepted-arena-call:{address:#x}->{target:#x}",),
+                )
+            )
+        elif target in summary_map:
+            summary_entries, allocations, writes, callees = (
+                _transitive_summary_effects(target, summary_map)
+            )
+            disposition = (
+                "internal-summary-effects"
+                if allocations or writes
+                else "internal-summary-no-effects"
+            )
+            if allocations or writes or callees:
+                semantic_evidence.append(
+                    LifecycleSemanticEvidence(
+                        "helper-transitive-effects",
+                        address,
+                        target,
+                        pointer_types,
+                        (),
+                        (
+                            *(f"summary-entry:{row:#x}" for row in summary_entries),
+                            *(f"allocation-site:{row:#x}" for row in allocations),
+                            *(f"write-site:{row:#x}" for row in writes),
+                            *(f"transitive-callee:{row:#x}" for row in callees),
+                        ),
+                    )
+                )
+        elif (address, target) in terminal_identities:
+            disposition = "terminal-external"
+            summary_entries = allocations = writes = callees = ()
+        else:
+            disposition = "unmodelled-call-target"
+            summary_entries = allocations = writes = callees = ()
+        provenance = (
+            f"accepted-call-target:{address:#x}->{target:#x}",
+            *(f"call-path-owner:{row.function_entry:#x}" for row in call_paths),
+            *(f"summary-entry:{row:#x}" for row in summary_entries),
+        )
+        sites.append(
+            HelperEffectSiteEvidence(
+                address,
+                target,
+                tuple(sorted({row.function_entry for row in call_paths})),
+                disposition,
+                pointer_types,
+                summary_entries,
+                allocations,
+                writes,
+                callees,
+                provenance,
+            )
+        )
+        if not call_paths:
+            gaps.append(
+                ClosureGap(
+                    address,
+                    "missing-call-path-fact",
+                    f"target={target:#x}",
+                    provenance,
+                )
+            )
+        if disposition == "unmodelled-call-target":
+            gaps.append(
+                ClosureGap(
+                    address,
+                    "call-target-lacks-helper-summary",
+                    f"target={target:#x}",
+                    provenance,
+                )
+            )
+        if disposition == "terminal-external" and pointer_types:
+            gaps.append(
+                ClosureGap(
+                    address,
+                    "typed-pointer-escapes-terminal-helper",
+                    f"target={target:#x};types={','.join(pointer_types)}",
+                    provenance,
+                )
+            )
+    return LifecycleEffectClosureCertificate(
+        compiler_sha256,
+        cfg_instruction_hash,
+        len({address for address, _target in obligations}),
+        tuple(sites),
+        tuple(
+            sorted(
+                semantic_evidence,
+                key=lambda row: (row.address, row.kind, row.target, row.provenance),
+            )
+        ),
+        tuple(sorted({row.address for row in resolved_writes})),
+        tuple(sorted(summary_map)),
+        tuple(sorted(gaps, key=lambda row: (row.address, row.kind, row.detail))),
+        _configured_limit_items(limits),
+        (
+            ("call_target_obligations", len(obligations)),
+            ("function_summaries", len(summary_map)),
+            ("resolved_storage_effects", len(resolved_writes)),
+            ("lifecycle_semantic_facts", len(semantic_evidence)),
+            ("helper_effect_gaps", len(gaps)),
+        ),
+    )
+
+
+def derive_final_emission_closure(
+    *,
+    compiler_sha256: str,
+    cfg_instruction_hash: str,
+    calls: Sequence[CallFact],
+    memory_writes: Sequence[MemoryWriteFact],
+    limits: AnalysisLimits,
+    pseudo_op_dispositions: Sequence[PseudoOpDispositionEvidence] = (),
+) -> FinalEmissionClosureCertificate:
+    """Derive the singular typed encoder and its downstream output relations."""
+
+    grouped: dict[tuple[int, int, int], tuple[set[int], set[int]]] = {}
+    writes_by_owner_value: dict[
+        tuple[int, tuple[Any, ...]], set[int]
+    ] = defaultdict(set)
+    for write in memory_writes:
+        if write.value.is_bottom or write.value.is_unknown:
+            continue
+        writes_by_owner_value[
+            (write.function_entry, _abstract_semantic_key(write.value))
+        ].add(write.address)
+    ordered_write_addresses = {
+        key: tuple(sorted(addresses))
+        for key, addresses in writes_by_owner_value.items()
+    }
+    for call in calls:
+        key = (call.address, call.target, call.function_entry)
+        write_sites, pcode_arguments = grouped.setdefault(key, (set(), set()))
+        pcode_arguments.update(
+            index
+            for index, argument in enumerate(call.arguments)
+            if argument.pointer_type == "pcode"
+        )
+        if not call.return_value.is_bottom and not call.return_value.is_unknown:
+            addresses = ordered_write_addresses.get(
+                (
+                    call.function_entry,
+                    _abstract_semantic_key(call.return_value),
+                ),
+                (),
+            )
+            write_sites.update(addresses[bisect_right(addresses, call.address) :])
+    flows = tuple(
+        CallReturnWriteEvidence(
+            call_address,
+            target,
+            owner,
+            tuple(sorted(write_sites)),
+            tuple(sorted(pcode_arguments)),
+            (
+                f"call-return:{call_address:#x}->{target:#x}",
+                f"owner:{owner:#x}",
+                *(f"return-write:{row:#x}" for row in sorted(write_sites)),
+            ),
+        )
+        for (call_address, target, owner), (write_sites, pcode_arguments) in sorted(
+            grouped.items()
+        )
+        if write_sites
+    )
+    gaps: list[ClosureGap] = []
+    semantic: set[EmissionSemanticEvidence] = set()
+    def has_bound_pcode_result_dependency(flow: CallReturnWriteEvidence) -> bool:
+        paths = tuple(
+            row
+            for row in calls
+            if (row.address, row.target, row.function_entry)
+            == (flow.call_address, flow.target, flow.function_entry)
+        )
+        return bool(paths) and all(
+            any(
+                dependency.kind == "memory-read"
+                and dependency.pointer_type == "pcode"
+                and dependency.formal_argument_index is None
+                for dependency in row.return_value.dependencies
+            )
+            for row in paths
+        )
+
+    typed_flows = tuple(
+        row
+        for row in flows
+        if row.pcode_argument_indices and has_bound_pcode_result_dependency(row)
+    )
+    if not typed_flows:
+        gaps.append(
+            ClosureGap(
+                0,
+                "missing-typed-pcode-encoder-flow",
+                "no call consuming a typed PCode has its result bound to a write",
+            )
+        )
+    typed_targets = {row.target for row in typed_flows}
+    if len(typed_targets) > 1:
+        gaps.append(
+            ClosureGap(
+                0,
+                "multiple-typed-pcode-encoder-targets",
+                "targets=" + ",".join(f"{row:#x}" for row in sorted(typed_targets)),
+                tuple(
+                    f"typed-flow:{row.call_address:#x}->{row.target:#x}"
+                    for row in typed_flows
+                ),
+            )
+        )
+    range_evidence = False
+    relocation_evidence = False
+    machine_evidence = False
+    derived_walker = 0
+    if len(typed_targets) == 1:
+        encoder = next(iter(typed_targets))
+        encoder_flows = tuple(row for row in typed_flows if row.target == encoder)
+        owners = {row.function_entry for row in encoder_flows}
+        if len(owners) != 1:
+            gaps.append(
+                ClosureGap(
+                    0,
+                    "multiple-final-walker-owners",
+                    "owners=" + ",".join(f"{row:#x}" for row in sorted(owners)),
+                )
+            )
+        else:
+            owner = next(iter(owners))
+            derived_walker = owner
+            semantic.add(
+                EmissionSemanticEvidence(
+                    "final-pcode-walker",
+                    owner,
+                    tuple(sorted(row.call_address for row in encoder_flows)),
+                    tuple(
+                        f"owns-typed-encoder-call:{row.call_address:#x}"
+                        for row in encoder_flows
+                    ),
+                )
+            )
+        semantic.add(
+            EmissionSemanticEvidence(
+                "encode-one-final-pcode",
+                encoder,
+                tuple(sorted(row.call_address for row in encoder_flows)),
+                tuple(
+                    f"typed-call:{row.call_address:#x}:pcode-args="
+                    + ",".join(str(index) for index in row.pcode_argument_indices)
+                    for row in encoder_flows
+                ),
+            )
+        )
+        for flow in encoder_flows:
+            call_paths = tuple(
+                row
+                for row in calls
+                if (row.address, row.target, row.function_entry)
+                == (flow.call_address, flow.target, flow.function_entry)
+            )
+            semantic.add(
+                EmissionSemanticEvidence(
+                    "per-pcode-encoder-call",
+                    flow.call_address,
+                    (flow.target, *flow.write_addresses),
+                    flow.provenance,
+                )
+            )
+            returns = tuple(row.return_value for row in call_paths)
+            matching_writes = tuple(
+                write
+                for write in memory_writes
+                if write.function_entry == flow.function_entry
+                and write.address in flow.write_addresses
+                and write.base.pointer_type
+                not in {"pcode", "objobject", "stack"}
+                and not write.base.is_bottom
+                and not write.base.is_unknown
+                and any(
+                    _abstract_semantic_key(write.value)
+                    == _abstract_semantic_key(returned)
+                    for returned in returns
+                )
+            )
+            if len(matching_writes) != 1:
+                gaps.append(
+                    ClosureGap(
+                        flow.call_address,
+                        "non-unique-encoder-result-buffer-write",
+                        "writes="
+                        + ",".join(f"{row.address:#x}" for row in matching_writes),
+                        flow.provenance,
+                    )
+                )
+            else:
+                write = matching_writes[0]
+                semantic.update(
+                    {
+                        EmissionSemanticEvidence(
+                            "encoder-result-buffer-write",
+                            write.address,
+                            (flow.call_address,),
+                            (
+                                f"width:{write.width}",
+                                f"base:{write.base.kind}:{write.base.pointer_type}:"
+                                f"{write.base.origin}",
+                            ),
+                        ),
+                        EmissionSemanticEvidence(
+                            "emitted-code-range",
+                            write.address,
+                            (flow.call_address,),
+                            (
+                                f"range-base:{_value_expression(write.base)}",
+                                f"range-offset:{write.offset}",
+                                f"range-width:{write.width}",
+                            ),
+                        ),
+                    }
+                )
+                range_evidence = range_evidence or (
+                    write.width > 0
+                    and not write.base.is_bottom
+                    and not write.base.is_unknown
+                )
+
+            dependencies = tuple(
+                dependency
+                for returned in returns
+                for dependency in returned.dependencies
+            )
+            pcode_dependencies = tuple(
+                sorted(
+                    {
+                        row
+                        for row in dependencies
+                        if row.kind == "memory-read"
+                        and row.pointer_type == "pcode"
+                        and row.formal_argument_index is None
+                    },
+                    key=_dependency_key,
+                )
+            )
+            unresolved_dependencies = tuple(
+                row
+                for row in dependencies
+                if row.kind == "memory-read"
+                and (
+                    row.formal_argument_index is not None
+                    or not row.pointer_type
+                )
+            )
+            if pcode_dependencies and not unresolved_dependencies:
+                machine_evidence = True
+                semantic.add(
+                    EmissionSemanticEvidence(
+                        "operand-to-machine-field-derivation",
+                        flow.target,
+                        tuple(row.address for row in pcode_dependencies),
+                        tuple(
+                            f"pcode-read:{row.address:#x}:offset="
+                            f"{row.pointer_offset:#x}:width={row.width}"
+                            for row in pcode_dependencies
+                        ),
+                    )
+                )
+
+            later_calls = tuple(
+                row
+                for row in calls
+                if row.function_entry == flow.function_entry
+                and row.address > flow.call_address
+            )
+            consumers: dict[int, set[ValueDependency]] = defaultdict(set)
+            later_by_address = {row.address: row for row in later_calls}
+            for row in later_calls:
+                for argument in row.arguments:
+                    consumers[row.address].update(
+                        dependency
+                        for dependency in argument.dependencies
+                        if dependency.kind == "helper-output"
+                        and dependency.address == flow.call_address
+                    )
+            qualified_consumers = tuple(
+                address
+                for address, dependencies_at_call in sorted(consumers.items())
+                if len(
+                    {row.source_address for row in dependencies_at_call}
+                )
+                >= 2
+                and len(
+                    {row.pointer_offset for row in dependencies_at_call}
+                )
+                >= 2
+                and sum(
+                    not argument.is_bottom
+                    for argument in later_by_address[address].arguments
+                )
+                >= 3
+            )
+            for address in qualified_consumers:
+                relocation_evidence = True
+                semantic.add(
+                    EmissionSemanticEvidence(
+                        "relocation-record-consumer",
+                        address,
+                        (flow.call_address,),
+                        tuple(
+                            f"encoder-output:{row.source_address:#x}:"
+                            f"offset={row.pointer_offset:#x}:width={row.width}"
+                            for row in sorted(
+                                consumers[address], key=_dependency_key
+                            )
+                        ),
+                    )
+                )
+
+    pseudo_evidence = False
+    if len(pseudo_op_dispositions) > 1:
+        gaps.append(
+            ClosureGap(
+                derived_walker,
+                "duplicate-pseudo-op-disposition-evidence",
+                f"rows={len(pseudo_op_dispositions)}",
+            )
+        )
+    elif pseudo_op_dispositions:
+        row = pseudo_op_dispositions[0]
+        if not isinstance(row, PseudoOpDispositionEvidence):
+            gaps.append(
+                ClosureGap(
+                    derived_walker,
+                    "malformed-pseudo-op-disposition-evidence",
+                    f"type={type(row).__name__}",
+                )
+            )
+        elif not derived_walker or row.walker_address != derived_walker:
+            gaps.append(
+                ClosureGap(
+                    row.walker_address,
+                    "pseudo-op-walker-differs",
+                    f"derived={derived_walker:#x};evidence={row.walker_address:#x}",
+                    row.provenance,
+                )
+            )
+        else:
+            pseudo_evidence = True
+            semantic.add(
+                EmissionSemanticEvidence(
+                    "pseudo-op-disposition",
+                    row.walker_address,
+                    row.disposition_sites,
+                    (
+                        f"classification:{row.classification}",
+                        "opcode-ids:466,467",
+                        *row.provenance,
+                    ),
+                )
+            )
+    if not pseudo_evidence:
+        gaps.append(
+            ClosureGap(
+                derived_walker,
+                "missing-pseudo-op-disposition-evidence",
+                "no exhaustive pseudo-op survival/removal relation was derived",
+                tuple(
+                    f"typed-flow:{row.call_address:#x}->{row.target:#x}"
+                    for row in typed_flows
+                ),
+            )
+        )
+    if not range_evidence and not relocation_evidence:
+        gaps.append(
+            ClosureGap(
+                0,
+                "missing-emitted-range-relocation-evidence",
+                "no unique buffer range or encoder-output relocation consumer",
+            )
+        )
+    elif not range_evidence:
+        gaps.append(
+            ClosureGap(
+                0,
+                "missing-emitted-range-evidence",
+                "no unique bounded encoder-result buffer write",
+            )
+        )
+    elif not relocation_evidence:
+        gaps.append(
+            ClosureGap(
+                0,
+                "missing-relocation-evidence",
+                "no later call consumes an exact encoder helper output",
+            )
+        )
+    if not machine_evidence:
+        gaps.append(
+            ClosureGap(
+                0,
+                "missing-machine-field-derivation-evidence",
+                "encoder result lacks fully bound typed PCode read dependencies",
+            )
+        )
+    return FinalEmissionClosureCertificate(
+        compiler_sha256,
+        cfg_instruction_hash,
+        flows,
+        tuple(
+            sorted(
+                semantic,
+                key=lambda row: (
+                    row.address,
+                    row.kind,
+                    row.related_addresses,
+                    row.provenance,
+                ),
+            )
+        ),
+        tuple(gaps),
+        _configured_limit_items(limits),
+        (
+            ("call_return_write_flows", len(flows)),
+            ("emission_semantic_facts", len(semantic)),
+            ("final_emission_gaps", len(gaps)),
+        ),
+    )
+
+
 def analyze_values(
     image: Image,
     cfg: RawCfg,
@@ -1566,6 +3789,22 @@ def analyze_values(
     """Compute bounded function summaries and proof-relevant value facts."""
 
     limits = limits or AnalysisLimits.for_image(image)
+    limits.check("max_instructions", len(cfg.instructions))
+    limits.check("max_blocks", len(cfg.blocks))
+    limits.check("max_edges", len(cfg.edges))
+    jump_tables = tuple(getattr(cfg, "jump_tables", ()))
+    limits.check("max_jump_tables", len(jump_tables))
+    limits.check(
+        "max_jump_table_entries",
+        sum(len(getattr(row, "entries", ())) for row in jump_tables),
+    )
+    targets_by_source: dict[int, set[int]] = defaultdict(set)
+    for row in control_targets.finite_internal_edges:
+        targets_by_source[row.source].add(row.target)
+    limits.check(
+        "max_finite_targets",
+        max((len(rows) for rows in targets_by_source.values()), default=0),
+    )
     interpreter = _Interpreter(image, cfg, limits)
     functions = set(interpreter.function_entries) | set(roots)
     limits.check("max_functions", len(functions))
@@ -1608,7 +3847,14 @@ def analyze_values(
         for row in control_targets.unresolved
     }
     for analysis in analyses.values():
-        unresolved.update(analysis.unresolved)
+        # An unknown local ESP coordinate is bookkeeping, not by itself a
+        # proof-relevant value.  A later relevant call/store retains bottom or
+        # unknown provenance and is diagnosed at that consumer instead.
+        unresolved.update(
+            row
+            for row in analysis.unresolved
+            if row.reason != "push-with-unknown-esp"
+        )
         for allocation in analysis.summary.allocations:
             if allocation.size.is_bottom or allocation.size.is_unknown:
                 unresolved.add(
@@ -1628,23 +3874,60 @@ def analyze_values(
     instruction_hash = hashlib.sha256(
         b"".join(bytes.fromhex(row.bytes_hex) for row in cfg.instructions)
     ).hexdigest()
+    ordered_summaries = tuple(summaries[entry] for entry in sorted(summaries))
+    ordered_calls = tuple(sorted(calls, key=_call_key))
+    ordered_writes = tuple(sorted(writes, key=_write_key))
+    limits.check("max_fixpoint_updates", len(ordered_calls))
+    limits.check("max_fixpoint_updates", len(ordered_writes))
+    high_water_marks = (
+        ("functions", len(functions)),
+        ("scc_iterations", scc_iterations),
+        ("summary_updates", summary_updates),
+        ("block_updates", max_block_updates),
+        ("finite_values", max_finite_values),
+    )
+    alias_write_closure = derive_alias_write_closure(
+        cfg,
+        compiler_sha256=image.sha256,
+        cfg_instruction_hash=instruction_hash,
+        memory_writes=ordered_writes,
+        calls=ordered_calls,
+        finite_internal_edges=control_targets.finite_internal_edges,
+        limits=limits,
+    )
+    lifecycle_effect_closure = derive_lifecycle_effect_closure(
+        cfg,
+        compiler_sha256=image.sha256,
+        cfg_instruction_hash=instruction_hash,
+        summaries=ordered_summaries,
+        calls=ordered_calls,
+        memory_writes=ordered_writes,
+        finite_internal_edges=control_targets.finite_internal_edges,
+        terminal_external_edges=control_targets.terminal_external_edges,
+        limits=limits,
+    )
+    final_emission_closure = derive_final_emission_closure(
+        compiler_sha256=image.sha256,
+        cfg_instruction_hash=instruction_hash,
+        calls=ordered_calls,
+        memory_writes=ordered_writes,
+        limits=limits,
+        pseudo_op_dispositions=(),
+    )
     return AnalysisResult(
         compiler_sha256=image.sha256,
         cfg_instruction_hash=instruction_hash,
-        summaries=tuple(summaries[entry] for entry in sorted(summaries)),
-        calls=tuple(sorted(calls, key=_call_key)),
-        memory_writes=tuple(sorted(writes, key=_write_key)),
+        summaries=ordered_summaries,
+        calls=ordered_calls,
+        memory_writes=ordered_writes,
         finite_internal_edges=control_targets.finite_internal_edges,
         terminal_external_edges=control_targets.terminal_external_edges,
         external_escapes=control_targets.external_escapes,
         unresolved=tuple(sorted(unresolved, key=_unresolved_key)),
         proof_ready=not unresolved,
         limits=limits,
-        high_water_marks=(
-            ("functions", len(functions)),
-            ("scc_iterations", scc_iterations),
-            ("summary_updates", summary_updates),
-            ("block_updates", max_block_updates),
-            ("finite_values", max_finite_values),
-        ),
+        high_water_marks=high_water_marks,
+        alias_write_closure=alias_write_closure,
+        lifecycle_effect_closure=lifecycle_effect_closure,
+        final_emission_closure=final_emission_closure,
     )

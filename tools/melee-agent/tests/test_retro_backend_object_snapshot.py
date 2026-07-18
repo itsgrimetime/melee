@@ -174,6 +174,48 @@ def test_hook_samples_lifecycle_sequence_once_from_stopped_process() -> None:
     assert lifecycle.calls == 1
 
 
+def test_hook_stopped_lifecycle_uses_only_active_runtime_generation() -> None:
+    from tools.mwcc_retro.backend_runtime_instrumentation import LifecycleTracker
+
+    lifecycle = LifecycleTracker()
+    lifecycle.record_allocation("objobject", 0x1200, "alloc")
+    inputs = backend_onepass_trace_hook._stopped_lifecycle_inputs(lifecycle)
+    assert inputs["lifecycle_sequence"] == 0
+    assert inputs["generation_for"]("objobject", 0x1200) == 1
+
+    lifecycle.record_release("objobject", 0x1200, "release")
+    inputs = backend_onepass_trace_hook._stopped_lifecycle_inputs(lifecycle)
+    assert inputs["lifecycle_sequence"] == 1
+    assert inputs["generation_for"]("objobject", 0x1200) is None
+
+
+def test_runtime_binds_pcode_snapshot_rows_to_one_stopped_sequence_and_generation():
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        LifecycleTracker,
+        bind_pcode_snapshot_lifecycle,
+    )
+
+    lifecycle = LifecycleTracker()
+    lifecycle.record_allocation("pcode", 0x610000, "alloc")
+    rows = [
+        {"event": "block", "id": "B0"},
+        {
+            "event": "pcode_instruction",
+            "id": "p0",
+            "runtime_address": 0x610000,
+        },
+    ]
+
+    bound = bind_pcode_snapshot_lifecycle(rows, lifecycle)
+
+    assert bound[0] == rows[0]
+    assert bound[1]["lifecycle_sequence_at_capture"] == 0
+    assert bound[1]["allocation_generation"] == 1
+    lifecycle.record_release("pcode", 0x610000, "release")
+    with pytest.raises(ValueError, match="has no active allocation generation"):
+        bind_pcode_snapshot_lifecycle(rows, lifecycle)
+
+
 def test_hook_lifecycle_absent_calls_ig_reader_without_snapshot_trio() -> None:
     captured: dict[str, object] = {}
 

@@ -27,6 +27,8 @@ from tools.mwcc_retro.backend_pcode_lineage import (
     validate_pcode_lineage as _validate_pcode_lineage,
 )
 
+from tests.retro_proof_test_helpers import bind_fixed_layout_schema  # noqa: E402
+
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "retro" / "pcode_lineage"
 PC_ADDRESS = 0x2000
 
@@ -205,7 +207,7 @@ def proof_payload() -> dict[str, object]:
         {
             "opcode_id": opcode_id,
             "mnemonic": "ADDI" if opcode_id == 42 else f"OP_{opcode_id:03d}",
-            "format_string": "rrm" if opcode_id == 42 else "",
+            "format_string": "=r,r,m" if opcode_id == 42 else "",
             "constructor_kind": (
                 "custom" if opcode_id in custom_ids else "generic-fixed"
             ),
@@ -217,6 +219,7 @@ def proof_payload() -> dict[str, object]:
         }
         for opcode_id in range(468)
     ]
+    bind_fixed_layout_schema(opcodes, rules)
     return {
         "schema_version": "mwcc-retro-lifetime-proof.v1",
         "proof_id": "gc-1.2.5n-backend-entity-allocation-trace.v1",
@@ -254,8 +257,10 @@ def trusted_proof() -> InstrumentationProof:
     return InstrumentationProof(str(payload["proof_id"]), "a" * 64, payload, proof_sha256(payload))
 
 
-def promoted_registry() -> dict[str, object]:
-    proof = trusted_proof()
+def promoted_registry(
+    proof: InstrumentationProof | None = None,
+) -> dict[str, object]:
+    proof = trusted_proof() if proof is None else proof
     return {
         "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
         "instrumentation_proofs": [
@@ -550,6 +555,156 @@ def test_valid_reorder_preserves_lineage_not_operand_index(tmp_path: Path) -> No
     assert binding.virtual == 66
     assert binding.operand_lineage_id == "ol-1"
     assert binding.confidence == "derived-unique"
+    assert result.capabilities == frozenset({"pcode-to-code-range"})
+    assert result.errors == ()
+
+
+def test_variadic_tail_role_is_resolved_from_exact_raw_flags(tmp_path: Path) -> None:
+    proof_data = proof_payload()
+    gpr_states = copy.deepcopy(proof_data["operand_rules"][0]["state_rules"])
+    proof_data["opcode_table"][42].update(
+        {
+            "format_string": "#,m",
+            "constructor_kind": "generic-variadic",
+            "variadic_layout": {
+                "count_source": "first-vararg-u32-at-generic-constructor",
+                "count_width": 4,
+                "constructor_count_min": 0,
+                "constructor_count_max": 0xFFFFFFFF,
+                "base_operand_count": 1,
+                "count_arithmetic": "u32-add-metadata-low-byte-store-low-u16",
+                "tail_expansion": "post-constructor",
+                "reachability": "reachable",
+                "reachable_count_min": 1,
+                "reachable_count_max": 1,
+                "call_addresses": [0x410000],
+                "evidence_addresses": [0x410000, 0x4A2290, 0x4A268C],
+            },
+        }
+    )
+    proof_data["operand_rules"] = [
+        {
+            "opcode_id": 42,
+            "descriptor_index": 0,
+            "descriptor_source": "format",
+            "format_code": "m",
+            "expansion": {"kind": "one", "count": 1},
+            "raw_arg_kind_id": 4,
+            "role": "use",
+            "role_rules": [],
+            "register_form": "none",
+            "class_id": None,
+            "virtual_kind": None,
+            "state_rules": [],
+        },
+        {
+            "opcode_id": 42,
+            "descriptor_index": 1,
+            "descriptor_source": "variadic-tail",
+            "format_code": None,
+            "expansion": {"kind": "remaining", "count": None},
+            "raw_arg_kind_id": 0,
+            "role": None,
+            "role_rules": [
+                {
+                    "register_flags_mask": 0xFF,
+                    "register_flags_value": 2,
+                    "role": "def",
+                },
+                {
+                    "register_flags_mask": 0xFF,
+                    "register_flags_value": 3,
+                    "role": "use-def",
+                },
+            ],
+            "register_form": "gpr",
+            "class_id": 0,
+            "virtual_kind": "r",
+            "state_rules": gpr_states,
+        },
+    ]
+    proof = InstrumentationProof(
+        str(proof_data["proof_id"]),
+        "a" * 64,
+        proof_data,
+        proof_sha256(proof_data),
+    )
+
+    payload = minimal_payload()
+    initial = [
+        operand(0, "ol-0", 4, "a", value=0),
+        operand(1, "ol-1", 0, "b", flags=2, value=66),
+    ]
+    final = [
+        operand(0, "ol-0", 4, "c", value=0),
+        operand(1, "ol-1", 0, "d", flags=2, value=21),
+    ]
+    mutation = payload["pcode_operand_lineage_events"][0]
+    mutation["pcode_event_sequence"] = 1
+    mutation["inputs"] = [state(initial)]
+    mutation["outputs"] = [state(final)]
+    for item in (*mutation["inputs"], *mutation["outputs"]):
+        item["arg_count"] = 2
+    instruction = payload["pcode_instructions"][0]
+    instruction["emission_event_sequence"] = 2
+    instruction["code_ranges"] = [
+        {
+            "start": 0,
+            "end_exclusive": 4,
+            "bytes": "7ea802a6",
+            "relocations": [],
+            "machine_operand_mappings": [
+                {
+                    "instruction_offset_within_range": 0,
+                    "machine_operand_position": 0,
+                    "machine_operand_key": "def:0",
+                    "emission_pcode_operand_index": 1,
+                    "operand_lineage_id": "ol-1",
+                    "physical_register": 21,
+                }
+            ],
+        }
+    ]
+    for stage_snapshot, inventory, value, requirement in (
+        (instruction["stage_snapshots"][0], initial, 66, "virtual"),
+        (instruction["stage_snapshots"][1], final, 21, "physical"),
+    ):
+        stage_snapshot["arg_count"] = 2
+        stage_snapshot["operand_lineage_inventory"] = inventory
+        register = parsed(
+            1,
+            "ol-1",
+            "def",
+            kind=0,
+            requirement=requirement,
+            virtual=value if requirement == "virtual" else None,
+            physical=value if requirement == "physical" else None,
+        )
+        stage_snapshot["parsed_register_operands"] = [register]
+    payload["pcode_occurrences"] = [rewrite(1, "ol-1", "def", 66, 21, 0)]
+    payload["coverage"]["pcode_occurrences_seen"] = 1
+    coverage = payload["coverage"]["pcode_instrumentation"]
+    coverage.update(
+        {
+            "last_event_sequence": 2,
+            "parsed_register_operands": 1,
+            "virtual_register_operands": 1,
+            "rewrite_events": 1,
+        }
+    )
+
+    candidate = tmp_path / "dynamic-tail.o"
+    candidate.write_bytes(_candidate_elf(bytes.fromhex("7ea802a6")))
+    result = _validate_pcode_lineage(
+        payload,
+        proof,
+        candidate,
+        "fn",
+        promotion_registry=promoted_registry(proof),
+    )
+
+    assert result.errors == (), result.errors
+    assert result.anchor_bindings[(0, "def:0")].operand_lineage_id == "ol-1"
     assert result.capabilities == frozenset({"pcode-to-code-range"})
     assert result.errors == ()
 

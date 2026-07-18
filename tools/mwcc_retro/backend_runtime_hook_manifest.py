@@ -41,8 +41,10 @@ _CAPTURE_SOURCE_FIELDS = frozenset(
     }
 )
 _FAMILY_OPERATIONS = {
-    "allocation_sites": frozenset({"allocation"}),
-    "free_sites": frozenset({"recycle", "rewind", "release"}),
+    "allocation_sites": frozenset({"allocation", "cache-acquire"}),
+    "free_sites": frozenset(
+        {"recycle", "rewind", "release", "cache-release"}
+    ),
     "operand_rewrite_sites": frozenset({"operand-rewrite"}),
     "operand_mutation_sites": frozenset(
         {"create", "delete", "reorder", "clone", "replace", "spill", "coalesce"}
@@ -63,6 +65,21 @@ _OPERATION_CONTRACTS = {
             ("allocated_pointer", "return-register", "return", None, "eax", None, 0, 4),
         ),
     ),
+    ("allocation_sites", "cache-acquire"): (
+        "same-thread-instruction",
+        (
+            (
+                "entity_pointer",
+                "effective-address",
+                "before",
+                0,
+                None,
+                None,
+                -0x2A,
+                4,
+            ),
+        ),
+    ),
     **{
         ("free_sites", operation): (
             "same-thread-call-return",
@@ -70,6 +87,21 @@ _OPERATION_CONTRACTS = {
         )
         for operation in ("recycle", "rewind", "release")
     },
+    ("free_sites", "cache-release"): (
+        "same-thread-instruction",
+        (
+            (
+                "entity_pointer",
+                "effective-address",
+                "before",
+                0,
+                None,
+                None,
+                -0x2A,
+                4,
+            ),
+        ),
+    ),
     ("operand_rewrite_sites", "operand-rewrite"): (
         "same-thread-instruction",
         (("operand_address", "effective-address", "before", 0, None, None, -2, 12),),

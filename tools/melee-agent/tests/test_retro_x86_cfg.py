@@ -15,22 +15,33 @@ TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(TESTS))
 from retro_pe_fixture import (  # noqa: E402
+    OPTIONAL_OFFSET,
     SECTION_TABLE_OFFSET,
     write_synthetic_cfg_pe,
     write_synthetic_dispatch_pe,
 )
 from tools.mwcc_retro import pe  # noqa: E402
+from tools.mwcc_retro import x86_cfg as x86_cfg_module
 from tools.mwcc_retro.x86_cfg import (  # noqa: E402
     _DECODED_INSTRUCTION_CACHE_LIMIT,
+    _MOVZX_PRODUCER_ANALYSIS_SEMANTICS,
     AnalysisLimitError,
     AnalysisLimits,
     AuditAnchor,
     CfgRecoveryError,
     DirectCall,
     JumpTable,
+    ProducerCertificateError,
+    ProducerCheckpointIncomplete,
     SeedRecord,
+    _AbstractObjectIdentity,
     _DirectCfgRecovery,
+    _DynamicFieldWrite,
+    _GlobalSlotWrite,
     _materialize_function_entries,
+    _MovzxProducerQuery,
+    _producer_certificate_digest,
+    _ProducerCertificateSession,
     build_seed_inventory,
     canonical_jsonl_bytes,
     parse_cw_exception_metadata,
@@ -79,6 +90,330 @@ def load_large_cfg_program(tmp_path, program):
     path.write_bytes(data)
     digest = hashlib.sha256(data).hexdigest()
     return pe.load(path, expected_sha256=digest, require_pe32_i386=True)
+
+
+def global_stack_callback_image(
+    tmp_path,
+    *,
+    unknown_field_write=False,
+    alternate_global_writer=False,
+    unknown_caller=False,
+):
+    """Closed stack context published through a loader-zero global slot."""
+    base = 0x00401080
+    global_slot = 0x00402300
+    program = bytearray(b"\x90" * 0xE0)
+    callback_relocations = []
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        program[offset] = 0xE8
+        displacement = (base + target_offset) - (base + offset + 5)
+        program[offset + 1 : offset + 5] = displacement.to_bytes(
+            4, "little", signed=True
+        )
+        return offset + 5
+
+    # Authoritative export root.  One closed caller supplies the callback;
+    # hostile variants add either an unbounded global writer or caller.
+    cursor = 0
+    if alternate_global_writer:
+        cursor = emit(cursor, "89 15 00 23 40 00")
+    callback_relocations.append(base + cursor + 1)
+    cursor = emit(cursor, "68 50 11 40 00")
+    cursor = emit_call(cursor, 0x20)
+    cursor = emit(cursor, "59")
+    if unknown_caller:
+        cursor = emit(cursor, "52")
+        cursor = emit_call(cursor, 0x20)
+        cursor = emit(cursor, "59")
+    emit(cursor, "c3")
+
+    # producer(callback): zero a stack context, save the old nested context,
+    # initialize +0x10, publish it, invoke a consumer, then restore the old
+    # context.  The save/restore is part of the proof, not an ignored writer.
+    cursor = 0x20
+    cursor = emit(cursor, "83 ec 20")
+    cursor = emit(cursor, "a1 00 23 40 00")
+    cursor = emit(cursor, "89 44 24 1c")
+    cursor = emit(cursor, "8d 04 24")
+    cursor = emit(cursor, "6a 18")
+    cursor = emit(cursor, "50")
+    cursor = emit_call(cursor, 0xC0)
+    cursor = emit(cursor, "59 59")
+    cursor = emit(cursor, "8b 4c 24 24")
+    cursor = emit(
+        cursor,
+        "89 54 24 10" if unknown_field_write else "89 4c 24 10",
+    )
+    cursor = emit(cursor, "8d 04 24")
+    cursor = emit(cursor, "a3 00 23 40 00")
+    cursor = emit_call(cursor, 0x80)
+    cursor = emit(cursor, "8b 44 24 1c")
+    cursor = emit(cursor, "a3 00 23 40 00")
+    cursor = emit(cursor, "83 c4 20 c3")
+    assert cursor < 0x80
+
+    # consumer(): the nonzero guard removes the loader-zero/nested-zero
+    # context while retaining every proved callback producer.
+    cursor = 0x80
+    cursor = emit(cursor, "a1 00 23 40 00")
+    cursor = emit(cursor, "8b 48 10")
+    cursor = emit(cursor, "85 c9 74 02 ff d1 c3")
+    indirect_call = base + cursor - 3
+
+    # Strict two-argument byte zero-fill helper: (destination, size).
+    emit(0xC0, "31 c0 57 8b 4c 24 0c 8b 7c 24 08 f3 aa 5f c3")
+    emit(0xD0, "c3")
+
+    path = write_synthetic_cfg_pe(tmp_path)
+    data = bytearray(path.read_bytes())
+    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x180)
+    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x180)
+    data[0x240:0x251] = b"\xc3" + b"\x90" * 0x10
+    data[0x280:0x380] = b"\x90" * 0x100
+    data[0x280 : 0x280 + len(program)] = program
+    struct.pack_into("<I", data, 0x430, 0x1080)
+    relocation_words = [
+        0x3000 | (address - 0x00401000)
+        for address in callback_relocations
+    ]
+    block_size = 8 + len(relocation_words) * 2
+    if block_size % 4:
+        relocation_words.append(0)
+        block_size += 2
+    struct.pack_into("<I", data, OPTIONAL_OFFSET + 96 + 5 * 8 + 4, block_size)
+    struct.pack_into("<II", data, 0x800, 0x1000, block_size)
+    struct.pack_into(
+        f"<{len(relocation_words)}H", data, 0x808, *relocation_words
+    )
+    path.write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    image = pe.load(path, expected_sha256=digest, require_pe32_i386=True)
+    assert image.read(global_slot, 4) == b"\0" * 4
+    return image, indirect_call
+
+
+def nested_global_stack_callback_image(
+    *,
+    field_offset,
+    mutation=None,
+):
+    """Two LIFO stack contexts with distinct return-arm restorations."""
+    assert field_offset in {0x10, 0x18, 0x20, 0x24}
+    assert mutation in {
+        None,
+        "missing-restore-arm",
+        "out-of-order-restore",
+        "overwritten-save-slot",
+        "unknown-overlapping-write",
+        "post-restore-overlapping-write",
+        "alternate-global-writer",
+        "alternate-unknown-caller",
+    }
+    text_va = 0x00401000
+    publisher = 0x00401050
+    consumer = 0x00401180
+    zero_fill = 0x004011A0
+    callback = 0x004011C0
+    alternate_writer = 0x004011E0
+    global_slot = 0x00402300
+    text = bytearray(b"\x90" * 0x200)
+    relocations = []
+
+    def emit(address, encoded):
+        encoded = bytes.fromhex(encoded)
+        offset = address - text_va
+        text[offset : offset + len(encoded)] = encoded
+        return address + len(encoded)
+
+    def emit_call(address, target):
+        displacement = target - (address + 5)
+        return emit(
+            address,
+            "e8" + displacement.to_bytes(4, "little", signed=True).hex(),
+        )
+
+    def emit_absolute(address, prefix, target):
+        prefix_bytes = bytes.fromhex(prefix)
+        relocations.append(pe.Relocation(address + len(prefix_bytes), 3))
+        return emit(address, prefix + target.to_bytes(4, "little").hex())
+
+    # root(callback): the relocated callback is the complete caller domain.
+    cursor = text_va
+    cursor = emit_absolute(cursor, "68", callback)
+    if mutation == "alternate-global-writer":
+        cursor = emit_call(cursor, alternate_writer)
+    cursor = emit_call(cursor, publisher)
+    cursor = emit(cursor, "59")
+    if mutation == "alternate-unknown-caller":
+        cursor = emit(cursor, "52")
+        cursor = emit_call(cursor, publisher)
+        cursor = emit(cursor, "59")
+    emit(cursor, "c3")
+
+    cursor = publisher
+    cursor = emit(cursor, "83ec70")
+
+    def emit_zero_and_fields(cursor, base):
+        cursor = emit(cursor, "8d0424" if base == 0 else "8d442430")
+        cursor = emit(cursor, "6a2850")
+        cursor = emit_call(cursor, zero_fill)
+        cursor = emit(cursor, "83c408")
+        cursor = emit(cursor, "8b442474")
+        for displacement in (0x10, 0x18, 0x20, 0x24):
+            cursor = emit(
+                cursor,
+                f"894424{base + displacement:02x}",
+            )
+        if mutation == "unknown-overlapping-write" and base == 0:
+            cursor = emit(cursor, f"895424{field_offset:02x}")
+        return cursor
+
+    # Publish context 1 after saving the loader-zero/prior nested context.
+    cursor = emit_zero_and_fields(cursor, 0)
+    cursor = emit_absolute(cursor, "8b0d", global_slot)
+    cursor = emit(cursor, "894c2468")
+    cursor = emit(cursor, "8d0424")
+    publication_one = cursor
+    cursor = emit_absolute(cursor, "a3", global_slot)
+
+    # Publish context 2 after saving context 1, forming a true LIFO nest.
+    cursor = emit_zero_and_fields(cursor, 0x30)
+    cursor = emit_absolute(cursor, "8b15", global_slot)
+    nested_save_offset = (
+        0x68 if mutation == "overwritten-save-slot" else 0x6C
+    )
+    cursor = emit(cursor, f"895424{nested_save_offset:02x}")
+    cursor = emit(cursor, "8d442430")
+    publication_two = cursor
+    cursor = emit_absolute(cursor, "a3", global_slot)
+    cursor = emit_call(cursor, consumer)
+    cursor = emit(cursor, "837c247400")
+    branch = cursor
+    cursor = emit(cursor, "7400")
+
+    def emit_restore(cursor, saved_offset):
+        cursor = emit(cursor, f"8b4424{saved_offset:02x}")
+        return emit_absolute(cursor, "a3", global_slot)
+
+    # Normal return arm: context 2 -> context 1 -> loader-zero/prior.
+    cursor = emit_restore(cursor, nested_save_offset)
+    cursor = emit_call(cursor, consumer)
+    cursor = emit_restore(cursor, 0x68)
+    if mutation == "post-restore-overlapping-write":
+        cursor = emit(cursor, f"895424{field_offset:02x}")
+    cursor = emit(cursor, "83c470c3")
+
+    early = cursor
+    delta = early - (branch + 2)
+    assert -0x80 <= delta <= 0x7F
+    text[branch - text_va + 1] = delta & 0xFF
+    if mutation == "missing-restore-arm":
+        cursor = emit(cursor, "83c470c3")
+    elif mutation == "out-of-order-restore":
+        cursor = emit_restore(cursor, 0x68)
+        cursor = emit_restore(cursor, 0x6C)
+        cursor = emit(cursor, "83c470c3")
+    else:
+        cursor = emit_restore(cursor, nested_save_offset)
+        cursor = emit_restore(cursor, 0x68)
+        if mutation == "post-restore-overlapping-write":
+            cursor = emit(cursor, f"895424{field_offset:02x}")
+        cursor = emit(cursor, "83c470c3")
+    assert cursor <= consumer
+
+    cursor = consumer
+    cursor = emit_absolute(cursor, "a1", global_slot)
+    cursor = emit(cursor, f"8b48{field_offset:02x}")
+    cursor = emit(cursor, "85c97402")
+    indirect_call = cursor
+    cursor = emit(cursor, "ffd1c3")
+    assert cursor <= zero_fill
+
+    emit(zero_fill, "31c0578b4c240c8b7c2408f3aa5fc3")
+    emit(callback, "c3")
+    if mutation == "alternate-global-writer":
+        cursor = emit_absolute(alternate_writer, "8915", global_slot)
+        emit(cursor, "c3")
+
+    data = bytes(text) + b"\0" * 0x400
+    image = pe.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+            pe.Section(
+                ".data",
+                0x00402000,
+                len(text),
+                0x400,
+                0x400,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(relocations),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    assert image.read(global_slot, 4) == b"\0" * 4
+    return (
+        image,
+        indirect_call,
+        publisher,
+        zero_fill,
+        (publication_one, publication_two),
+    )
+
+
+def test_semantic_references_include_global_writes(tmp_path):
+    image = load_cfg_image(tmp_path)
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint,),
+        AnalysisLimits.for_image(image),
+    )
+    references = {
+        (row.record_kind, row.address, row.target)
+        for row in cfg.semantic_references
+    }
+    assert ("data-reference", 0x00401011, 0x00402090) in references
+    assert ("data-reference", 0x00401020, 0x00402094) in references
+
+
+def test_semantic_references_retain_jump_table_base_after_rescan(tmp_path):
+    path = write_synthetic_dispatch_pe(tmp_path)
+    image = pe.load(path)
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint,),
+        AnalysisLimits.for_image(image),
+    )
+    table = cfg.jump_tables[0]
+    assert any(
+        row.record_kind == "data-reference"
+        and row.address == table.address
+        and row.target == table.base
+        for row in cfg.semantic_references
+    )
 
 
 def load_memmove_program(tmp_path, *, corrupt_backward_step=False):
@@ -140,6 +475,658 @@ def generous_limits(image):
         max_finite_targets=512,
         max_finite_values=512,
     )
+
+
+def registered_static_command_image(*, mutation=None):
+    """Closed registered descriptor graph with type-13/15 callbacks."""
+    assert mutation in {None, "unrelocated-node-link", "hidden-setter-caller"}
+    text_va = 0x00401000
+    data_va = 0x00402000
+    root = text_va
+    dispatcher = text_va + 0x40
+    noop_handler = text_va + 0x80
+    type_13_handler = text_va + 0x90
+    recursive_handler = text_va + 0xA0
+    type_15_handler = text_va + 0xC0
+    walker = text_va + 0xD0
+    consumer = text_va + 0x100
+    lookup = text_va + 0x130
+    producer = text_va + 0x160
+    wrapper = text_va + 0x190
+    fixed_registry = text_va + 0x1B0
+    append = text_va + 0x1C0
+    group_registrar = text_va + 0x1E0
+    initializer = text_va + 0x220
+    setter = text_va + 0x250
+    callback_13 = text_va + 0x270
+    callback_15 = text_va + 0x280
+
+    dispatch_table = data_va
+    compiler_descriptor = data_va + 0x100
+    groups = data_va + 0x140
+    container = data_va + 0x160
+    descriptor_array = data_va + 0x180
+    descriptor = data_va + 0x1A0
+    node_13 = data_va + 0x1C0
+    node_15 = data_va + 0x1E0
+    compiler_slot = data_va + 0x300
+    registry_root = data_va + 0x400
+    registry_array_slot = registry_root + 8
+
+    text = bytearray(b"\xCC" * 0x300)
+    relocations = []
+
+    def emit(address, encoded):
+        encoded = bytes.fromhex(encoded)
+        offset = address - text_va
+        text[offset : offset + len(encoded)] = encoded
+        return address + len(encoded)
+
+    def emit_call(address, target):
+        displacement = target - (address + 5)
+        return emit(
+            address,
+            "e8" + displacement.to_bytes(4, "little", signed=True).hex(),
+        )
+
+    def emit_absolute(address, prefix, target):
+        prefix_bytes = bytes.fromhex(prefix)
+        relocations.append(pe.Relocation(address + len(prefix_bytes), 3))
+        return emit(address, prefix + target.to_bytes(4, "little").hex())
+
+    def patch_short_branch(address, target):
+        delta = target - (address + 2)
+        assert -0x80 <= delta <= 0x7F
+        text[address - text_va + 1] = delta & 0xFF
+
+    cursor = root
+    cursor = emit_absolute(cursor, "68", compiler_descriptor)
+    cursor = emit_call(cursor, setter)
+    cursor = emit(cursor, "83c404")
+    cursor = emit_call(cursor, initializer)
+    cursor = emit_call(cursor, fixed_registry)
+    cursor = emit(cursor, "50")
+    cursor = emit_call(cursor, wrapper)
+    cursor = emit(cursor, "83c404c3")
+    assert cursor <= dispatcher
+
+    cursor = dispatcher
+    cursor = emit(cursor, "538b5c2408803b00")
+    lower_branch = cursor
+    cursor = emit(cursor, "7c00")
+    cursor = emit(cursor, "803b10")
+    upper_branch = cursor
+    cursor = emit(cursor, "7d00")
+    cursor = emit(cursor, "530fbe0389c3")
+    indirect_dispatch = cursor
+    cursor = emit_absolute(cursor, "ff149d", dispatch_table)
+    cursor = emit(cursor, "83c4045bc3")
+    overflow = cursor
+    cursor = emit(cursor, "31c05bc3")
+    patch_short_branch(lower_branch, overflow)
+    patch_short_branch(upper_branch, overflow)
+    assert cursor <= noop_handler
+
+    emit(noop_handler, "c3")
+    cursor = emit(type_13_handler, "568b742408")
+    type_13_call = cursor
+    emit(cursor, "ff560a5ec3")
+
+    cursor = emit(recursive_handler, "568b742408ff760a")
+    cursor = emit_call(cursor, dispatcher)
+    cursor = emit(cursor, "83c404ff7612")
+    cursor = emit_call(cursor, dispatcher)
+    emit(cursor, "83c4045ec3")
+
+    cursor = emit(type_15_handler, "568b742408")
+    type_15_call = cursor
+    emit(cursor, "ff560a5ec3")
+
+    cursor = emit(walker, "538b5c240885db")
+    walker_done_branch = cursor
+    cursor = emit(cursor, "7400")
+    cursor = emit(cursor, "53")
+    cursor = emit_call(cursor, dispatcher)
+    cursor = emit(cursor, "83c4048b5b06")
+    loop_branch = cursor
+    cursor = emit(cursor, "eb00")
+    walker_done = cursor
+    emit(cursor, "5bc3")
+    patch_short_branch(walker_done_branch, walker_done)
+    patch_short_branch(loop_branch, walker + 5)
+
+    cursor = emit(consumer, "568b742408ff7608")
+    cursor = emit_call(cursor, walker)
+    cursor = emit(cursor, "83c404ff760c")
+    cursor = emit_call(cursor, wrapper)
+    emit(cursor, "83c4045ec3")
+
+    cursor = emit(lookup, "8b5424048b4a08833900")
+    lookup_zero_branch = cursor
+    cursor = emit(cursor, "7400")
+    cursor = emit(cursor, "8b0185c0")
+    lookup_done_branch = cursor
+    cursor = emit(cursor, "7500")
+    cursor = emit(cursor, "83c104")
+    loop_back = cursor
+    cursor = emit(cursor, "eb00")
+    lookup_done = cursor
+    cursor = emit(cursor, "c3")
+    lookup_zero = cursor
+    emit(cursor, "31c0c3")
+    patch_short_branch(lookup_zero_branch, lookup_zero)
+    patch_short_branch(lookup_done_branch, lookup_done)
+    patch_short_branch(loop_back, lookup + 7)
+
+    cursor = emit(producer, "568b74240856")
+    cursor = emit_call(cursor, lookup)
+    cursor = emit(cursor, "83c40485c0")
+    producer_done_branch = cursor
+    cursor = emit(cursor, "7400")
+    cursor = emit(cursor, "50")
+    cursor = emit_call(cursor, consumer)
+    cursor = emit(cursor, "83c404")
+    producer_done = cursor
+    emit(cursor, "5ec3")
+    patch_short_branch(producer_done_branch, producer_done)
+
+    cursor = emit(wrapper, "8b44240450")
+    cursor = emit_call(cursor, producer)
+    emit(cursor, "83c404c3")
+
+    cursor = emit_absolute(fixed_registry, "b8", registry_root)
+    emit(cursor, "c3")
+
+    cursor = emit(append, "8b542404")
+    cursor = emit_absolute(cursor, "a1", registry_array_slot)
+    emit(cursor, "31c9891488c3")
+
+    cursor = emit(group_registrar, "568b4424088b7008833e00")
+    group_done_branch = cursor
+    cursor = emit(cursor, "7400ff36")
+    cursor = emit_call(cursor, append)
+    cursor = emit(cursor, "83c40483c604")
+    group_loop_branch = cursor
+    cursor = emit(cursor, "eb00")
+    group_done = cursor
+    emit(cursor, "5ec3")
+    patch_short_branch(group_done_branch, group_done)
+    patch_short_branch(group_loop_branch, group_registrar + 8)
+
+    cursor = emit(initializer, "31d2")
+    cursor = emit_absolute(cursor, "a1", compiler_slot)
+    cursor = emit(cursor, "8b482085c9")
+    initializer_done_branch = cursor
+    cursor = emit(cursor, "7400")
+    cursor = emit(cursor, "8b4024ff3490")
+    cursor = emit_call(cursor, group_registrar)
+    cursor = emit(cursor, "83c404")
+    initializer_done = cursor
+    emit(cursor, "c3")
+    patch_short_branch(initializer_done_branch, initializer_done)
+
+    cursor = emit(setter, "8b442404")
+    cursor = emit_absolute(cursor, "a3", compiler_slot)
+    emit(cursor, "c3")
+    emit(callback_13, "c3")
+    emit(callback_15, "c3")
+    if mutation == "hidden-setter-caller":
+        emit(text_va + 0x2A0, "e8")
+        displacement = setter - (text_va + 0x2A0 + 5)
+        text[0x2A1:0x2A5] = displacement.to_bytes(4, "little", signed=True)
+
+    image_data = bytearray(text)
+    image_data.extend(b"\0" * 0x1000)
+
+    def data_offset(address):
+        return len(text) + address - data_va
+
+    def pack_pointer(address, target, *, relocated=True):
+        struct.pack_into("<I", image_data, data_offset(address), target)
+        if relocated:
+            relocations.append(pe.Relocation(address, 3))
+
+    for index in range(16):
+        target = noop_handler
+        if index == 13:
+            target = type_13_handler
+        elif index == 14:
+            target = recursive_handler
+        elif index == 15:
+            target = type_15_handler
+        pack_pointer(dispatch_table + 4 * index, target)
+
+    struct.pack_into(
+        "<I", image_data, data_offset(compiler_descriptor), 0x436F6D70
+    )
+    struct.pack_into("<I", image_data, data_offset(compiler_descriptor + 0x20), 1)
+    pack_pointer(compiler_descriptor + 0x24, groups)
+    pack_pointer(groups, container)
+    pack_pointer(container + 8, descriptor_array)
+    pack_pointer(descriptor_array, descriptor)
+    pack_pointer(descriptor + 8, node_13)
+    struct.pack_into("<B", image_data, data_offset(node_13), 13)
+    pack_pointer(
+        node_13 + 6,
+        node_15,
+        relocated=mutation != "unrelocated-node-link",
+    )
+    pack_pointer(node_13 + 0xA, callback_13)
+    struct.pack_into("<B", image_data, data_offset(node_15), 15)
+    pack_pointer(node_15 + 0xA, callback_15)
+
+    image_bytes = bytes(image_data)
+    image = pe.Image(
+        data=image_bytes,
+        sha256=hashlib.sha256(image_bytes).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=root,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+            pe.Section(
+                ".data",
+                data_va,
+                len(text),
+                0x1000,
+                0x1000,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(sorted(relocations, key=lambda row: row.va)),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    assert image.read(compiler_slot, 4) == b"\0" * 4
+    assert image.read(registry_array_slot, 4) == b"\0" * 4
+    return image, (type_13_call, type_15_call), (callback_13, callback_15)
+
+
+def test_registered_static_command_callbacks_are_closed():
+    image, call_sites, callbacks = registered_static_command_image()
+    cfg = recover_cfg(image, (image.entrypoint,), generous_limits(image))
+    edges = {(row.source, row.target, row.kind) for row in cfg.edges}
+    for call_site, callback in zip(call_sites, callbacks, strict=True):
+        assert (
+            call_site,
+            callback,
+            "indirect-call-registered-static-command",
+        ) in edges
+    seeds = {
+        row.address: row
+        for row in cfg.seed_inventory.records
+        if row.category == "registered-static-command-callback"
+    }
+    assert set(seeds) == set(callbacks)
+    assert all("compiler-descriptor=0x402100" in row.detail for row in seeds.values())
+    assert all("groups=1;containers=1;descriptors=1;nodes=2" in row.detail for row in seeds.values())
+
+
+def test_registered_static_command_rejects_unrelocated_graph_link():
+    image, call_sites, callbacks = registered_static_command_image(
+        mutation="unrelocated-node-link"
+    )
+    cfg = recover_cfg(image, (image.entrypoint,), generous_limits(image))
+    edges = {(row.source, row.target, row.kind) for row in cfg.edges}
+    assert not any(
+        (call_site, callback, "indirect-call-registered-static-command")
+        in edges
+        for call_site, callback in zip(call_sites, callbacks, strict=True)
+    )
+    assert any(
+        row.kind == "computed-flow-blocker"
+        and "unrelocated registered-command pointer" in row.detail
+        for row in cfg.ownership_diagnostics
+    )
+
+
+def test_registered_static_command_rejects_hidden_setter_caller():
+    image, call_sites, callbacks = registered_static_command_image(
+        mutation="hidden-setter-caller"
+    )
+    cfg = recover_cfg(image, (image.entrypoint,), generous_limits(image))
+    edges = {(row.source, row.target, row.kind) for row in cfg.edges}
+    assert not any(
+        (call_site, callback, "indirect-call-registered-static-command")
+        in edges
+        for call_site, callback in zip(call_sites, callbacks, strict=True)
+    )
+    assert any(
+        row.kind == "computed-flow-blocker"
+        and "compiler descriptor setter domain is incomplete" in row.detail
+        for row in cfg.ownership_diagnostics
+    )
+
+
+def registered_linked_callback_image(*, mutation=None):
+    """Loader-zero heads populated with one 8-byte callback node."""
+    assert mutation in {
+        None,
+        "negative-index",
+        "out-of-range-index",
+        "unknown-index-writer",
+        "hidden-index-caller",
+        "alternate-head-writer",
+        "cursor-callback-writer",
+        "cursor-next-writer",
+    }
+    text_va = 0x00401000
+    data_va = 0x00402000
+    root = text_va
+    initializer = text_va + 0x80
+    allocator = text_va + 0x120
+    consumer = text_va + 0x160
+    callback = text_va + 0x1D0
+    hidden_caller = text_va + 0x200
+    alternate_writer = text_va + 0x220
+    unrelated_field_writer = text_va + 0x240
+    cursor_mutator = text_va + 0x250
+    heads = data_va
+    node = data_va + 0x100
+    text = bytearray(b"\xCC" * 0x280)
+    relocations = []
+
+    def emit(address, encoded):
+        encoded = bytes.fromhex(encoded)
+        offset = address - text_va
+        text[offset : offset + len(encoded)] = encoded
+        return address + len(encoded)
+
+    def emit_call(address, target):
+        displacement = target - (address + 5)
+        return emit(
+            address,
+            "e8" + displacement.to_bytes(4, "little", signed=True).hex(),
+        )
+
+    def emit_absolute(address, prefix, target):
+        prefix_bytes = bytes.fromhex(prefix)
+        relocations.append(pe.Relocation(address + len(prefix_bytes), 3))
+        return emit(address, prefix + target.to_bytes(4, "little").hex())
+
+    def patch_short_branch(address, target):
+        delta = target - (address + 2)
+        assert -0x80 <= delta <= 0x7F
+        text[address - text_va + 1] = delta & 0xFF
+
+    cursor = emit(root, "83ec20")
+    if mutation == "unknown-index-writer":
+        cursor = emit(cursor, "6689542414")
+    else:
+        index = {
+            "negative-index": 0xFFFF,
+            "out-of-range-index": 16,
+        }.get(mutation, 1)
+        cursor = emit(cursor, "66c7442414" + index.to_bytes(2, "little").hex())
+    cursor = emit_call(cursor, initializer)
+    cursor = emit(cursor, "8d042450")
+    cursor = emit_call(cursor, consumer)
+    emit(cursor, "83c40483c420c3")
+
+    cursor = emit(initializer, "31c9")
+    zero_loop = cursor
+    cursor = emit_absolute(cursor, "c7048d", heads)
+    cursor = emit(cursor, "00000000")
+    cursor = emit(cursor, "4183f910")
+    loop_branch = cursor
+    cursor = emit(cursor, "7c00")
+    cursor = emit(cursor, "6a08")
+    cursor = emit_call(cursor, allocator)
+    cursor = emit_absolute(cursor, "c74004", callback)
+    cursor = emit_absolute(cursor, "8b15", heads + 4)
+    cursor = emit(cursor, "8910")
+    cursor = emit_absolute(cursor, "a3", heads + 4)
+    emit(cursor, "c3")
+    patch_short_branch(loop_branch, zero_loop)
+
+    cursor = emit_absolute(allocator, "b8", node)
+    emit(cursor, "c3")
+
+    cursor = emit(consumer, "56538b5c240c0fbf4314")
+    cursor = emit_absolute(cursor, "8b3485", heads)
+    cursor = emit(cursor, "85f6")
+    done_branch = cursor
+    cursor = emit(cursor, "7400")
+    callback_loop = cursor
+    if mutation in {"cursor-callback-writer", "cursor-next-writer"}:
+        cursor = emit(cursor, "56")
+        cursor = emit_call(cursor, cursor_mutator)
+        cursor = emit(cursor, "83c404")
+    cursor = emit(cursor, "53")
+    callback_call = cursor
+    cursor = emit(cursor, "ff5604")
+    cursor = emit(cursor, "83c4048b3685f6")
+    loop_again = cursor
+    cursor = emit(cursor, "7500")
+    done = cursor
+    emit(cursor, "5b5ec3")
+    patch_short_branch(done_branch, done)
+    patch_short_branch(loop_again, callback_loop)
+    emit(callback, "c3")
+
+    # Keep the generic finite-field resolver honest: an unrelated open +4
+    # writer means only the linked-registry escape proof can close this call.
+    emit(unrelated_field_writer, "894a04c3")
+    if mutation == "cursor-callback-writer":
+        emit(cursor_mutator, "8b442404895004c3")
+    elif mutation == "cursor-next-writer":
+        emit(cursor_mutator, "8b4424048910c3")
+    extra_seeds = [unrelated_field_writer]
+    if mutation == "hidden-index-caller":
+        cursor = emit(hidden_caller, "52")
+        cursor = emit_call(cursor, consumer)
+        emit(cursor, "59c3")
+        extra_seeds.append(hidden_caller)
+    if mutation == "alternate-head-writer":
+        cursor = emit_absolute(alternate_writer, "8915", heads + 4)
+        emit(cursor, "c3")
+        extra_seeds.append(alternate_writer)
+
+    image_data = bytearray(text)
+    image_data.extend(b"\0" * 0x300)
+    image_bytes = bytes(image_data)
+    image = pe.Image(
+        data=image_bytes,
+        sha256=hashlib.sha256(image_bytes).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=root,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+            pe.Section(
+                ".data",
+                data_va,
+                len(text),
+                0x300,
+                0x300,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(sorted(relocations, key=lambda row: row.va)),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    assert image.read(heads, 64) == b"\0" * 64
+    return image, callback_call, callback, tuple(extra_seeds)
+
+
+def test_registered_linked_callback_is_closed():
+    image, call_site, callback, extra_seeds = (
+        registered_linked_callback_image()
+    )
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, *extra_seeds),
+        generous_limits(image),
+    )
+
+    assert any(
+        row.source == call_site
+        and row.target == callback
+        and row.kind == "indirect-call-registered-linked-callback"
+        for row in cfg.edges
+    )
+    record = next(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "registered-linked-callback"
+    )
+    assert record.address == callback
+    assert "head-base=0x402000;heads=16" in record.detail
+    assert "signed-indices=1" in record.detail
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "negative-index",
+        "out-of-range-index",
+        "unknown-index-writer",
+        "hidden-index-caller",
+        "alternate-head-writer",
+        "cursor-callback-writer",
+        "cursor-next-writer",
+    ),
+)
+def test_registered_linked_callback_rejects_open_provenance(mutation):
+    image, call_site, callback, extra_seeds = (
+        registered_linked_callback_image(mutation=mutation)
+    )
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, *extra_seeds),
+        generous_limits(image),
+    )
+
+    assert not any(
+        row.source == call_site
+        and row.target == callback
+        and row.kind == "indirect-call-registered-linked-callback"
+        for row in cfg.edges
+    )
+    assert any(
+        row.address == call_site
+        and row.kind == "computed-flow-blocker"
+        and "registered linked callback provenance is open" in row.detail
+        for row in cfg.ownership_diagnostics
+    )
+
+
+def finite_incoming_edge_image():
+    """Finite calls where a later edge expands an earlier caller domain."""
+    text_va = 0x00401000
+    text = bytearray(b"\x90" * 0xE0)
+    consumer = text_va + 0x40
+    source = text_va + 0x80
+    first_target = text_va + 0xC0
+    second_target = text_va + 0xD0
+
+    # root(): consumer(first_target)
+    text[0:13] = bytes.fromhex("68 c0 10 40 00 e8 36 00 00 00 83 c4 04")
+    text[13] = 0xC3
+
+    # consumer(callback): callback()
+    text[0x40:0x47] = bytes.fromhex("8b 44 24 04 ff d0 c3")
+
+    # source(): consumer(second_target), initially through a finite call edge.
+    text[0x80:0x8F] = bytes.fromhex(
+        "68 d0 10 40 00 b8 40 10 40 00 ff d0 83 c4 04"
+    )
+    text[0x8F] = 0xC3
+    text[0xC0] = 0xC3
+    text[0xD0] = 0xC3
+
+    image = pe.Image(
+        data=bytes(text),
+        sha256=hashlib.sha256(text).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(
+            pe.Relocation(text_va + 1, 3),
+            pe.Relocation(source + 1, 3),
+        ),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    return image, consumer, source, first_target, second_target
+
+
+def finite_new_code_image():
+    """Two finite calls, with only the first target initially undecoded."""
+    text_va = 0x00401000
+    second_source = text_va + 0x40
+    new_target = text_va + 0x80
+    decoded_target = text_va + 0x90
+    text = bytearray(b"\x90" * 0xA0)
+    text[0:8] = bytes.fromhex("b8 80 10 40 00 ff d0 c3")
+    text[0x40:0x48] = bytes.fromhex("b8 90 10 40 00 ff d0 c3")
+    text[0x80] = 0xC3
+    text[0x90] = 0xC3
+    image = pe.Image(
+        data=bytes(text),
+        sha256=hashlib.sha256(text).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(
+            pe.Relocation(text_va + 1, 3),
+            pe.Relocation(second_source + 1, 3),
+        ),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    return image, second_source, new_target, decoded_target
 
 
 def test_function_entry_provenance_materialization_is_single_pass():
@@ -588,6 +1575,49 @@ def test_cw_registered_cleanup_rejects_clobbered_frame_base():
     assert len(unresolved) == 1
 
 
+def test_cw_k17_domain_cache_tracks_incoming_edge_revision(monkeypatch):
+    image, seeds = cw_k17_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        x86_cfg_module._explicit_seed_inventory(image, seeds),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.cw_k17_domain_cache.clear()
+    recovery.cw_k17_wrapper_cache.clear()
+    initial_revision = recovery.control_flow_revision
+    evaluations = 0
+
+    def changing_builder_domain(_recovery, builder):
+        nonlocal evaluations
+        assert builder == 0x00401100
+        evaluations += 1
+        callbacks = {0x004011A0}
+        if _recovery.control_flow_revision != initial_revision:
+            callbacks.add(0x00401030)
+        return 0x00401120, frozenset(callbacks), "test-k17-domain"
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_cw_k17_builder_domain",
+        changing_builder_domain,
+    )
+
+    first = recovery._cw_k17_destructor_domain()
+    recovery._add_edge(
+        0x00401000,
+        0x00401030,
+        "indirect-call-test-late-incoming",
+    )
+    second = recovery._cw_k17_destructor_domain()
+
+    assert first is not None and first[0] == frozenset({0x004011A0})
+    assert second is not None and second[0] == frozenset(
+        {0x00401030, 0x004011A0}
+    )
+    assert evaluations == 2
+
+
 def load_dispatch_image(tmp_path, *, entry_count=2, mode="absolute-jump"):
     path = write_synthetic_dispatch_pe(
         tmp_path, entry_count=entry_count, mode=mode
@@ -650,6 +1680,10 @@ def movzx_dispatch_image(
     non_executable_indices=(),
     caller_saved_index=False,
     intervening_call=False,
+    closed_producer_bound=None,
+    unknown_producer_write=False,
+    producer_proof_after_ordinary_round=False,
+    duplicate_consumer_transfer=False,
 ):
     """Synthetic PE with ``movzx ebx, byte ptr [eax]; call [ebx*4+TABLE]``."""
     import struct
@@ -664,38 +1698,111 @@ def movzx_dispatch_image(
     # Entry: movzx index, byte ptr [eax] ; optional call ;
     # call [index*4 + TABLE] ; ret
     text = memoryview(data)[:0x100]
-    text[0x00:0x03] = bytes.fromhex(
-        "0f b6 10" if caller_saved_index else "0f b6 18"
-    )
-    transfer_offset = 3
-    if intervening_call:
-        text[0x03:0x08] = bytes.fromhex("e8 28 00 00 00")
-        text[0x30] = 0xC3
-        transfer_offset = 8
-    sib = "95" if caller_saved_index else "9d"
-    text[transfer_offset : transfer_offset + 7] = bytes.fromhex(
-        f"ff 14 {sib} 00 20 40 00"
-    )
-    text[transfer_offset + 7] = 0xC3
+    if closed_producer_bound is None:
+        text[0x00:0x03] = bytes.fromhex(
+            "0f b6 10" if caller_saved_index else "0f b6 18"
+        )
+        transfer_offset = 3
+        if intervening_call:
+            text[0x03:0x08] = bytes.fromhex("e8 28 00 00 00")
+            text[0x30] = 0xC3
+            transfer_offset = 8
+        sib = "95" if caller_saved_index else "9d"
+        text[transfer_offset : transfer_offset + 7] = bytes.fromhex(
+            f"ff 14 {sib} 00 20 40 00"
+        )
+        text[transfer_offset + 7] = 0xC3
+        entry_count = 256
+        target_offset = 0x20
+    else:
+        # The entrypoint has two closed construction sites for the same stack
+        # object type.  Their immediate tags prove the producer domain's
+        # endpoints without deriving anything from the relocation run.
+        # The optional unbounded write must poison that closed producer domain.
+        assert 0 <= closed_producer_bound <= 0x7F
+        text[0x00:0x0B] = bytes.fromhex(
+            "83 ec 04 "
+            "c6 04 24 00 "
+            "8d 04 24 "
+            "50"
+        )
+        cursor = 0x0B
+        for producer_index in range(2):
+            next_address = TEXT_VA + cursor + 5
+            text[cursor] = 0xE8
+            text[cursor + 1 : cursor + 5] = (
+                TEXT_VA + 0x40 - next_address
+            ).to_bytes(4, "little", signed=True)
+            cursor += 5
+            text[cursor : cursor + 3] = bytes.fromhex("83 c4 04")
+            cursor += 3
+            if producer_index == 0:
+                text[cursor : cursor + 4] = bytes.fromhex(
+                    f"c6 04 24 {closed_producer_bound:02x}"
+                )
+                cursor += 4
+                if unknown_producer_write:
+                    text[cursor : cursor + 3] = bytes.fromhex("88 14 24")
+                    cursor += 3
+                text[cursor : cursor + 4] = bytes.fromhex("8d 04 24 50")
+                cursor += 4
+        if producer_proof_after_ordinary_round:
+            # An ordinary guarded table must expand and decode its target
+            # closure before the more expensive producer-domain pass runs.
+            text[cursor : cursor + 18] = bytes.fromhex(
+                "83 c4 04 "
+                "31 c0 "
+                "83 f8 00 "
+                "77 07 "
+                "ff 24 85 30 21 40 00 "
+                "c3"
+            )
+            struct.pack_into("<I", data, 0x230, TEXT_VA + 0x90)
+            text[0x90:0x96] = bytes.fromhex("e8 0b 00 00 00 c3")
+            text[0xA0] = 0xC3
+        else:
+            text[cursor : cursor + 4] = bytes.fromhex("83 c4 04 c3")
+
+        # consumer(object): movzx tag, byte ptr [object]; call table[tag]
+        # The optional second call has the identical producer slice so the
+        # memoization proof can distinguish query count from evaluation count.
+        consumer = bytes.fromhex(
+            "8b 44 24 04 "
+            "0f b6 18 "
+            "ff 14 9d 00 20 40 00 "
+        )
+        if duplicate_consumer_transfer:
+            consumer += bytes.fromhex("ff 14 9d 00 20 40 00")
+        consumer += b"\xc3"
+        text[0x40 : 0x40 + len(consumer)] = consumer
+        transfer_offset = 0x47
+        entry_count = 75
+        target_offset = 0x70
 
     # Fill all 256 dispatch table entries with RVA 0x1020 (type-3 relocation
     # adds image_base to make 0x401020 at load time).
     unrelocated_indices = frozenset(unrelocated_indices)
     non_executable_indices = frozenset(non_executable_indices)
-    for i in range(256):
+    for i in range(entry_count):
         if i in unrelocated_indices:
             value = 0x41414141
         elif i in non_executable_indices:
             value = RDATA_VA
         else:
-            value = 0x1020
+            value = 0x1000 + target_offset
         struct.pack_into("<I", data, 0x100 + i * 4, value)
-    text[0x20] = 0xC3  # target function
+    if producer_proof_after_ordinary_round:
+        text[target_offset : target_offset + 6] = bytes.fromhex(
+            "e8 0b 00 00 00 c3"
+        )
+        text[target_offset + 0x10] = 0xC3
+    else:
+        text[target_offset] = 0xC3  # target function
 
     # Add type-3 relocations for each table entry
     relocations = tuple(
         pe_mod.Relocation(RDATA_VA + i * 4, 3)
-        for i in range(256)
+        for i in range(entry_count)
         if i not in unrelocated_indices
     )
 
@@ -717,6 +1824,1326 @@ def movzx_dispatch_image(
         relocations=relocations,
         executable_ranges=((TEXT_VA, TEXT_VA + 0x100),),
     )
+
+
+def cyclic_relocated_movzx_dispatch_image(
+    *,
+    producer_high=2,
+    entry_count=75,
+    missing_relocation_index=None,
+    non_executable_index=None,
+    instruction_interior_index=None,
+    tentative_target_overlap=False,
+    executable_table=False,
+    raw_only_transfer=False,
+    bottom_producer=False,
+):
+    """Relocated callback run whose callers close the movzx producer.
+
+    Only the consumer is initially seeded.  Its raw direct callers live in
+    callbacks referenced by the otherwise unresolved dispatch table, so the
+    producer domain cannot close until a trial decodes those callbacks.
+    """
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert 1 <= producer_high < entry_count
+    text_va = 0x00401000
+    rdata_va = 0x00402000
+    consumer = text_va
+    callback_low = text_va + 0x40
+    callback_high = text_va + 0x60
+    in_domain_filler = text_va + 0x80
+    unused_callback = text_va + 0xA0
+    raw_entrypoint = text_va + 0xE0
+    table_base = text_va + 0x100 if executable_table else rdata_va
+    table_raw_offset = 0x100 if executable_table else 0x300
+    rdata_raw_size = max(0x400, (entry_count + 1) * 4)
+    data = bytearray(b"\0" * (0x300 + rdata_raw_size))
+    text = memoryview(data)[:0x300]
+
+    def emit(address, encoded):
+        encoded = bytes.fromhex(encoded)
+        offset = address - text_va
+        text[offset : offset + len(encoded)] = encoded
+        return address + len(encoded)
+
+    def emit_call(address, target):
+        displacement = target - (address + 5)
+        return emit(
+            address,
+            "e8" + displacement.to_bytes(4, "little", signed=True).hex(),
+        )
+
+    # consumer(object): the owned transfer identifies TABLE, but its byte
+    # producer is initially bottom because both raw callers are unreachable.
+    cursor = consumer
+    cursor = emit(cursor, "8b442404")
+    movzx_address = cursor
+    cursor = emit(cursor, "0fb618")
+    transfer_address = cursor
+    cursor = emit(
+        cursor,
+        "ff149d" + table_base.to_bytes(4, "little").hex(),
+    )
+    emit(cursor, "c3")
+
+    def emit_producer_callback(address, value):
+        cursor = emit(address, "83ec04")
+        cursor = emit(cursor, f"c60424{value:02x}")
+        cursor = emit(cursor, "8d042450")
+        if bottom_producer:
+            return emit(cursor, "83c408c3")
+        cursor = emit_call(cursor, consumer)
+        return emit(cursor, "83c408c3")
+
+    emit_producer_callback(callback_low, 0)
+    emit_producer_callback(callback_high, producer_high)
+    emit(in_domain_filler, "c3")
+    emit(unused_callback, "c3")
+    emit(raw_entrypoint, "c3")
+
+    relocations = []
+    for index in range(entry_count):
+        if index == 0:
+            target = callback_low
+        elif index == producer_high:
+            target = callback_high
+        elif index < producer_high:
+            target = in_domain_filler
+        else:
+            target = unused_callback
+        if index == non_executable_index:
+            target = rdata_va
+        if index == instruction_interior_index:
+            target = movzx_address + 1
+        if tentative_target_overlap and index == 0:
+            target = callback_low + 1
+        elif tentative_target_overlap and index == 1:
+            target = callback_low
+        struct.pack_into("<I", data, table_raw_offset + index * 4, target)
+        if index != missing_relocation_index:
+            relocations.append(pe_mod.Relocation(table_base + index * 4, 3))
+    struct.pack_into("<I", data, table_raw_offset + entry_count * 4, 0)
+
+    return (
+        pe_mod.Image(
+            data=bytes(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+            machine=0x14C,
+            optional_magic=0x10B,
+            image_base=0x00400000,
+            size_of_headers=0,
+            entrypoint=raw_entrypoint if raw_only_transfer else consumer,
+            directories=(),
+            sections=(
+                pe_mod.Section(
+                    ".text", text_va, 0, 0x300, 0x300, 0x60000020
+                ),
+                pe_mod.Section(
+                    ".rdata",
+                    rdata_va,
+                    0x300,
+                    rdata_raw_size,
+                    rdata_raw_size,
+                    0x40000040,
+                ),
+            ),
+            imports=(),
+            exports=(),
+            relocations=tuple(relocations),
+            executable_ranges=((text_va, text_va + 0x300),),
+        ),
+        transfer_address,
+        (
+            callback_low,
+            in_domain_filler,
+            callback_high,
+            unused_callback,
+        ),
+    )
+
+
+def unrooted_mutual_recursion_image():
+    """Two syntactic raw functions with no independent control root."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    entrypoint = text_va
+    left = text_va + 0x40
+    right = text_va + 0x60
+    data = bytearray(b"\x90" * 0x100)
+    data[0] = 0xC3
+    data[left - text_va] = 0xE8
+    data[left - text_va + 1 : left - text_va + 5] = (
+        right - (left + 5)
+    ).to_bytes(4, "little", signed=True)
+    data[left - text_va + 5] = 0xC3
+    data[right - text_va] = 0xE8
+    data[right - text_va + 1 : right - text_va + 5] = (
+        left - (right + 5)
+    ).to_bytes(4, "little", signed=True)
+    data[right - text_va + 5] = 0xC3
+    return pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=entrypoint,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text", text_va, 0, len(data), len(data), 0x60000020
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+
+
+def forwarded_movzx_dispatch_image(
+    *,
+    unknown_producer_write=False,
+    alternate_unknown_caller=False,
+    unowned_raw_caller=False,
+    helper_clobbers_byte=False,
+    duplicate_consumer_dispatch=False,
+    callback_clobbers_byte=False,
+    consumer_bypass_unknown_callback=False,
+    consumer_bypass_rejoins=False,
+    consumer_bypass_mutates_before_rejoin=False,
+    consumer_stack_spill=None,
+    conditional_helper_return=None,
+):
+    """Real-shape byte-tag dispatch through a returned/forwarded field.
+
+    The entrypoint constructs one stack-backed node and a container whose
+    ``+0xa`` field points at that node.  A wrapper obtains the container from
+    an identity return, forwards the node field through a preserving helper,
+    and calls a consumer.  The consumer pushes the node before loading byte
+    zero and dispatching through the 75-entry table, matching the retail
+    ordering that requires preservation only up to the MOVZX.
+    """
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    rdata_va = 0x00402000
+    data = bytearray(0x600)
+    text = memoryview(data)[:0x200]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (text_va + offset + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4, "little", signed=True
+        )
+        return offset + 5
+
+    # entry(): construct node byte zero values 0 and 74, and pass a
+    # container holding the node pointer through the complete caller domain.
+    cursor = 0
+    cursor = emit(cursor, "83 ec 20")
+    cursor = emit(cursor, "c6 04 24 00")
+    if conditional_helper_return:
+        cursor = emit(cursor, "c6 44 24 04 00")
+    cursor = emit(cursor, "8d 04 24")
+    cursor = emit(cursor, "89 44 24 12")
+    if conditional_helper_return:
+        cursor = emit(cursor, "8d 54 24 04")
+        cursor = emit(cursor, "89 54 24 16")
+    cursor = emit(cursor, "8d 4c 24 08 51")
+    cursor = emit_call(cursor, 0x50)
+    cursor = emit(cursor, "83 c4 04")
+    cursor = emit(cursor, "c6 04 24 4a")
+    if conditional_helper_return:
+        cursor = emit(cursor, "c6 44 24 04 4a")
+    if unknown_producer_write:
+        cursor = emit(cursor, "88 14 24")
+    cursor = emit(cursor, "8d 4c 24 08 51")
+    cursor = emit_call(cursor, 0x50)
+    cursor = emit(cursor, "83 c4 04")
+    if alternate_unknown_caller:
+        cursor = emit(cursor, "8b 54 24 24 52")
+        cursor = emit_call(cursor, 0x50)
+        cursor = emit(cursor, "83 c4 04")
+    emit(cursor, "83 c4 20 c3")
+    assert cursor < 0x50
+
+    # wrapper(container): the container itself comes from a direct call
+    # return; its +0xa node field is forwarded through a helper before use.
+    cursor = 0x50
+    cursor = emit(cursor, "56")
+    cursor = emit(cursor, "8b 44 24 08 50")
+    if conditional_helper_return:
+        cursor = emit(cursor, "8b 70 0a")
+        cursor = emit(cursor, "8b 78 0e")
+        cursor = emit(cursor, "57 56")
+        cursor = emit_call(cursor, 0xC0)
+        cursor = emit(cursor, "83 c4 0c 50")
+        cursor = emit_call(cursor, 0x80)
+        cursor = emit(cursor, "59 5e c3")
+    else:
+        cursor = emit_call(cursor, 0xC0)
+        cursor = emit(cursor, "59")
+        cursor = emit(cursor, "8b 70 0a")
+        cursor = emit(cursor, "56")
+        cursor = emit_call(cursor, 0xD0)
+        cursor = emit(cursor, "59 56")
+        cursor = emit_call(cursor, 0x80)
+        cursor = emit(cursor, "59 5e c3")
+    assert cursor < 0x80
+
+    # consumer(node): retail pushes the object before MOVZX and then passes
+    # it to the computed callback.  Writes after MOVZX cannot affect its
+    # already-loaded index and therefore must not poison the producer proof.
+    assert not (
+        consumer_bypass_unknown_callback
+        and consumer_bypass_mutates_before_rejoin
+    )
+    assert not (
+        consumer_bypass_mutates_before_rejoin
+        and not consumer_bypass_rejoins
+    )
+    assert consumer_stack_spill in {
+        None,
+        "clean",
+        "conflicting-store",
+        "unknown-stack-delta",
+        "overlap-write",
+        "missing-dominating-store",
+    }
+    assert not (
+        consumer_stack_spill
+        and (
+            consumer_bypass_unknown_callback
+            or consumer_bypass_mutates_before_rejoin
+        )
+    )
+    cursor = 0x80
+    if consumer_stack_spill:
+        cursor = emit(cursor, "83 ec 08")
+        cursor = emit(cursor, "8b 44 24 0c")
+        missing_store_branch = None
+        if consumer_stack_spill == "missing-dominating-store":
+            cursor = emit(cursor, "85 c9")
+            missing_store_branch = cursor
+            cursor = emit(cursor, "74 00")
+        cursor = emit(cursor, "89 04 24")
+        if missing_store_branch is not None:
+            text[missing_store_branch + 1] = cursor - (
+                missing_store_branch + 2
+            )
+        if consumer_stack_spill == "conflicting-store":
+            cursor = emit(cursor, "85 c9 74 03 89 14 24")
+        elif consumer_stack_spill == "overlap-write":
+            cursor = emit(cursor, "88 54 24 01")
+        cursor = emit_call(cursor, 0x110)
+        if consumer_stack_spill == "unknown-stack-delta":
+            cursor = emit(cursor, "01 cc")
+        cursor = emit(cursor, "8d 4c 24 04 51")
+        cursor = emit(cursor, "8b 44 24 04")
+    else:
+        cursor = emit(cursor, "8b 44 24 04")
+    if (
+        consumer_bypass_unknown_callback
+        or consumer_bypass_mutates_before_rejoin
+    ):
+        cursor = emit(cursor, "80 78 05 00")
+        observation_branch = cursor
+        cursor = emit(cursor, "75 00")
+        if consumer_bypass_unknown_callback:
+            cursor = emit(cursor, "50 ff d2 59")
+        else:
+            cursor = emit(cursor, "c6 00 4b")
+        bypass_jump = None
+        if consumer_bypass_rejoins:
+            bypass_jump = cursor
+            cursor = emit(cursor, "eb 00")
+        else:
+            cursor = emit(cursor, "c3")
+        observation_offset = cursor
+        text[observation_branch + 1] = (
+            observation_offset - (observation_branch + 2)
+        )
+        if bypass_jump is not None:
+            text[bypass_jump + 1] = observation_offset - (bypass_jump + 2)
+    cursor = emit(cursor, "50")
+    movzx_offset = cursor
+    cursor = emit(cursor, "0f b6 18")
+    transfer_offset = cursor
+    cursor = emit(cursor, "ff 14 9d 00 20 40 00")
+    cursor = emit(cursor, "83 c4 04")
+    if consumer_stack_spill:
+        cursor = emit(cursor, "83 c4 08")
+    if duplicate_consumer_dispatch:
+        cursor = emit(cursor, "8b 44 24 04 50")
+        cursor = emit(cursor, "0f b6 18")
+        cursor = emit(cursor, "ff 14 9d 00 20 40 00")
+        cursor = emit(cursor, "83 c4 04")
+    emit(cursor, "c3")
+
+    # identity(container) and preserving/clobbering helper(node).
+    assert conditional_helper_return in {
+        None,
+        "clean",
+        "corrupt-and-use",
+        "unknown-helper-return",
+    }
+    if conditional_helper_return:
+        cursor = 0xC0
+        cursor = emit(cursor, "53")
+        cursor = emit(cursor, "8b 5c 24 08")
+        cursor = emit(cursor, "85 c9")
+        direct_return_branch = cursor
+        cursor = emit(cursor, "74 00")
+        cursor = emit(cursor, "ff 74 24 0c 53")
+        cursor = emit_call(cursor, 0x120)
+        cursor = emit(cursor, "59 59 89 c3")
+        text[direct_return_branch + 1] = cursor - (direct_return_branch + 2)
+        cursor = emit(cursor, "89 d8 5b c3")
+    else:
+        emit(0xC0, "8b 44 24 04 c3")
+    if not conditional_helper_return:
+        if helper_clobbers_byte:
+            emit(0xD0, "8b 44 24 04 88 10 c3")
+        else:
+            emit(0xD0, "8b 44 24 04 8b 50 06 31 c0 c3")
+    if callback_clobbers_byte:
+        emit(0xF0, "8b 44 24 04 c6 00 ff c3")
+    else:
+        emit(0xF0, "c3")
+    emit(0x110, "c3")
+    if conditional_helper_return:
+        cursor = 0x120
+        cursor = emit(cursor, "53")
+        cursor = emit(cursor, "8b 5c 24 08")
+        cursor = emit(cursor, "30 db")
+        if conditional_helper_return == "corrupt-and-use":
+            cursor = emit(cursor, "8b 03 89 c3 89 d8 5b c3")
+        else:
+            cursor = emit(cursor, "ff 74 24 0c")
+            if conditional_helper_return == "unknown-helper-return":
+                cursor = emit(cursor, "ff d2")
+            else:
+                cursor = emit_call(cursor, 0x150)
+            cursor = emit(cursor, "59 89 c3 89 d8 5b c3")
+        emit(0x150, "8b 44 24 04 c3")
+
+    if unowned_raw_caller:
+        emit_call(0x1E0, 0x50)
+        text[0x1E5] = 0xC3
+
+    for index in range(75):
+        struct.pack_into("<I", data, 0x200 + index * 4, 0x1000 + 0xF0)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(".text", text_va, 0, 0x200, 0x200, 0x60000020),
+            pe_mod.Section(
+                ".rdata", rdata_va, 0x200, 0x400, 0x400, 0x40000040
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(
+            pe_mod.Relocation(rdata_va + index * 4, 3)
+            for index in range(75)
+        ),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, text_va + movzx_offset, text_va + transfer_offset
+
+
+def recursive_nested_movzx_dispatch_image():
+    """Self-recursive consumer whose argument field path grows per call."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    rdata_va = 0x00402000
+    consumer = 0x80
+    entry = 0xC0
+    callback = 0xF0
+    data = bytearray(0x600)
+    text = memoryview(data)[:0x200]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (text_va + offset + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4, "little", signed=True
+        )
+        return offset + 5
+
+    # entry(): container+0xa points at one stack node with byte tag zero.
+    cursor = emit(entry, "83 ec 20 c6 04 24 00 8d 04 24")
+    cursor = emit(cursor, "89 44 24 12 8d 44 24 08 50")
+    cursor = emit_call(cursor, consumer)
+    emit(cursor, "83 c4 04 83 c4 20 c3")
+
+    # consumer(arg0): dispatch on byte zero of arg0->+0xa, then recurse with
+    # that nested pointer.  A finite proof must conservatively stop at the
+    # recursive caller instead of growing (0xa, 0xa, ...) without bound.
+    cursor = emit(consumer, "56 8b 74 24 08 8b 46 0a")
+    movzx_offset = cursor
+    cursor = emit(cursor, "0f b6 18")
+    cursor = emit(cursor, "8b 46 0a 50")
+    cursor = emit_call(cursor, consumer)
+    cursor = emit(cursor, "83 c4 04")
+    transfer_offset = cursor
+    cursor = emit(cursor, "ff 14 9d 00 20 40 00")
+    emit(cursor, "5e c3")
+    emit(callback, "c3")
+
+    for index in range(75):
+        struct.pack_into("<I", data, 0x200 + index * 4, text_va + callback)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va + entry,
+        directories=(),
+        sections=(
+            pe_mod.Section(".text", text_va, 0, 0x200, 0x200, 0x60000020),
+            pe_mod.Section(
+                ".rdata", rdata_va, 0x200, 0x400, 0x400, 0x40000040
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(
+            pe_mod.Relocation(rdata_va + index * 4, 3)
+            for index in range(75)
+        ),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, text_va + transfer_offset
+
+
+def callee_stack_object_writer_image(
+    *, mutation=None, callee_published_outer=False
+):
+    """Nested stack byte initialized only through owned direct callees."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "unowned-callee",
+        "indirect-callee",
+        "ambiguous-alias",
+        "pointer-escape",
+        "conditional-missing-write",
+        "partial-overlap",
+        "conflicting-path-values",
+        "post-call-clobber",
+        "outer-unowned-callee",
+        "outer-indirect-callee",
+        "outer-ambiguous-alias",
+        "outer-pointer-escape",
+        "outer-pointee-use",
+        "outer-conditional-missing-write",
+        "outer-partial-overlap",
+        "outer-partial-pointee-register",
+        "outer-conflicting-pointees",
+        "outer-multiple-writers",
+        "outer-unknown-pointee",
+        "outer-clobber",
+        "outer-null-pointee",
+        "outer-recursive-callee",
+        "outer-recursive-pointee",
+    }
+    text_va = 0x00401000
+    rdata_va = 0x00402000
+    data = bytearray(0x800)
+    text = memoryview(data)[:0x300]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (text_va + offset + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4, "little", signed=True
+        )
+        return offset + 5
+
+    # entry(): node lives at [esp], root.node at [esp+8].  No instruction in
+    # entry writes node.byte directly: the zero helper and both mutators do.
+    cursor = emit(0, "83 ec 20")
+    cursor = emit(cursor, "8d 04 24")
+    cursor = emit(cursor, "6a 04 50")
+    cursor = emit_call(cursor, 0x140)
+    cursor = emit(cursor, "83 c4 08")
+    cursor = emit(cursor, "8d 04 24 50")
+    cursor = emit_call(cursor, 0x160)
+    cursor = emit(cursor, "83 c4 04")
+    if callee_published_outer:
+        cursor = emit(cursor, "8d 44 24 08")
+        if mutation == "outer-ambiguous-alias":
+            cursor = emit(cursor, "50 50")
+            cursor = emit_call(cursor, 0x260)
+            cursor = emit(cursor, "83 c4 08")
+        else:
+            cursor = emit(cursor, "50")
+            if mutation == "outer-indirect-callee":
+                cursor = emit(cursor, "ff d2")
+            elif mutation == "outer-unowned-callee":
+                cursor = emit(cursor, "ff 15 80 22 40 00")
+            else:
+                cursor = emit_call(cursor, 0x260)
+            cursor = emit(cursor, "83 c4 04")
+    else:
+        cursor = emit(cursor, "8d 04 24 89 44 24 08")
+    cursor = emit(cursor, "8d 4c 24 08 51")
+    cursor = emit_call(cursor, 0x100)
+    cursor = emit(cursor, "83 c4 04")
+
+    cursor = emit(cursor, "8d 04 24 50")
+    second_mutator_call = cursor
+    if mutation == "indirect-callee":
+        cursor = emit(cursor, "ff d2")
+    elif mutation == "unowned-callee":
+        # Imported callees are typed but deliberately outside the owned
+        # function domain.
+        cursor = emit(cursor, "ff 15 80 22 40 00")
+    else:
+        cursor = emit_call(cursor, 0x180)
+    cursor = emit(cursor, "83 c4 04")
+    if mutation == "post-call-clobber":
+        cursor = emit(cursor, "8d 04 24 50")
+        cursor = emit_call(cursor, 0x1C0)
+        cursor = emit(cursor, "83 c4 04")
+    cursor = emit(cursor, "8d 4c 24 08 51")
+    cursor = emit_call(cursor, 0x100)
+    cursor = emit(cursor, "83 c4 04 83 c4 20 c3")
+    assert cursor < 0x100
+
+    # consumer(root): root.node->byte selects a relocated 75-entry table.
+    cursor = emit(0x100, "8b 44 24 04 8b 00")
+    movzx_offset = cursor
+    cursor = emit(cursor, "0f b6 18")
+    transfer_offset = cursor
+    cursor = emit(cursor, "ff 14 9d 00 20 40 00 c3")
+
+    # zero_bytes(destination, size), in the exact strict helper shape already
+    # recognized by the CFG implementation.
+    emit(
+        0x140,
+        "31 c0 57 8b 4c 24 0c 8b 7c 24 08 f3 aa 5f c3",
+    )
+
+    # mutator_zero(node): an unrelated +4 write must not poison node.byte.
+    emit(0x160, "8b 4c 24 04 89 51 04 c6 01 00 c3")
+
+    # mutator_74(node) delegates to a second owned helper.  Mutations below
+    # exercise fail-closed alias/path behavior in this wrapper or its leaf.
+    if mutation == "ambiguous-alias":
+        cursor = emit(0x180, "8b 4c 24 04 85 d2 74 03 83 c1 01")
+        cursor = emit(cursor, "51")
+        cursor = emit_call(cursor, 0x200)
+        emit(cursor, "59 c3")
+    elif mutation == "pointer-escape":
+        cursor = emit(0x180, "8b 4c 24 04 89 0d 20 22 40 00 51")
+        cursor = emit_call(cursor, 0x200)
+        emit(cursor, "59 c3")
+    else:
+        cursor = emit(0x180, "8b 4c 24 04 51")
+        cursor = emit_call(cursor, 0x200)
+        emit(cursor, "59 c3")
+
+    # Unknown post-call byte clobber.
+    emit(0x1C0, "8b 4c 24 04 88 11 c3")
+
+    if mutation == "conditional-missing-write":
+        emit(0x200, "83 7c 24 08 00 74 07 8b 4c 24 04 c6 01 4a c3")
+    elif mutation == "partial-overlap":
+        emit(0x200, "8b 4c 24 04 66 89 11 c3")
+    elif mutation == "conflicting-path-values":
+        emit(
+            0x200,
+            "8b 4c 24 04 85 d2 74 04 c6 01 00 c3 c6 01 4a c3",
+        )
+    else:
+        emit(0x200, "8b 4c 24 04 c6 01 4a c3")
+    emit(0x240, "c3")
+
+    # publish_outer(root): establish root.node solely through an owned direct
+    # callee.  The exact node lives eight bytes before root in the caller's
+    # stack frame.  Hostile variants exercise fail-closed association proofs.
+    if mutation == "outer-pointer-escape":
+        emit(0x260, "8b 4c 24 04 89 0d 20 22 40 00 8d 41 f8 89 01 c3")
+    elif mutation == "outer-pointee-use":
+        emit(0x260, "8b 4c 24 04 8d 41 f8 89 01 8b 01 c6 00 4a c3")
+    elif mutation == "outer-conditional-missing-write":
+        emit(0x260, "8b 4c 24 04 85 d2 74 05 8d 41 f8 89 01 c3")
+    elif mutation == "outer-partial-overlap":
+        emit(0x260, "8b 4c 24 04 66 89 01 c3")
+    elif mutation == "outer-partial-pointee-register":
+        emit(0x260, "8b 4c 24 04 8d 41 f8 88 d0 89 01 c3")
+    elif mutation == "outer-conflicting-pointees":
+        emit(
+            0x260,
+            "8b 4c 24 04 85 d2 74 06 8d 41 f8 89 01 c3 "
+            "8d 41 f0 89 01 c3",
+        )
+    elif mutation == "outer-multiple-writers":
+        emit(0x260, "8b 4c 24 04 8d 41 f8 89 01 89 01 c3")
+    elif mutation == "outer-unknown-pointee":
+        emit(0x260, "8b 4c 24 04 c7 01 00 21 40 00 c3")
+    elif mutation == "outer-clobber":
+        emit(0x260, "8b 4c 24 04 8d 41 f8 89 01 89 11 c3")
+    elif mutation == "outer-null-pointee":
+        emit(0x260, "8b 4c 24 04 c7 01 00 00 00 00 c3")
+    elif mutation == "outer-recursive-callee":
+        cursor = emit(0x260, "8b 4c 24 04 83 e9 08 51")
+        cursor = emit_call(cursor, 0x260)
+        emit(cursor, "59 c3")
+    elif mutation == "outer-recursive-pointee":
+        emit(0x260, "8b 4c 24 04 89 09 c3")
+    else:
+        cursor = emit(0x260, "8b 4c 24 04 51")
+        cursor = emit_call(cursor, 0x2A0)
+        emit(cursor, "59 c3")
+        emit(0x2A0, "8b 4c 24 04 8d 41 f8 89 01 c3")
+
+    for index in range(75):
+        struct.pack_into("<I", data, 0x300 + index * 4, text_va + 0x240)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(".text", text_va, 0, 0x300, 0x300, 0x60000020),
+            pe_mod.Section(
+                ".rdata", rdata_va, 0x300, 0x500, 0x500, 0x40000040
+            ),
+        ),
+        imports=(
+            (
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name="CloseHandle",
+                    ordinal=None,
+                    hint=28,
+                    iat_va=0x00402280,
+                ),
+            )
+            if mutation in {"unowned-callee", "outer-unowned-callee"}
+            else ()
+        ),
+        exports=(),
+        relocations=tuple(
+            pe_mod.Relocation(rdata_va + index * 4, 3)
+            for index in range(75)
+        ),
+        executable_ranges=((text_va, text_va + 0x300),),
+    )
+    return (
+        image,
+        text_va + movzx_offset,
+        text_va + transfer_offset,
+        text_va + second_mutator_call,
+    )
+
+
+def allocation_backed_stack_pointee_image(*, mutation=None):
+    """Retail-shaped stack outer whose head is one fresh heap list node."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "unowned-allocator",
+        "allocator-result-escape",
+        "outer-pointer-escape",
+        "variable-size",
+        "zero-size",
+        "unchecked-null",
+        "conditional-missing-publish",
+        "second-allocation",
+        "partial-outer-store",
+        "alternate-outer-store",
+        "node-escape-before-init",
+        "unknown-node-overlap",
+        "interior-clobber",
+        "generation-reuse",
+    }
+    text_va = 0x00401000
+    rdata_va = 0x00402000
+    data_va = 0x00403000
+    data = bytearray(0xA00)
+    text = memoryview(data)[:0x600]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (text_va + offset + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4, "little", signed=True
+        )
+        return offset + 5
+
+    # Root closes the consumer's producer domain over tag values 0 and 74.
+    cursor = emit_call(0, 0x40)
+    cursor = emit_call(cursor, 0xC0)
+    emit(cursor, "c3")
+
+    def emit_producer(offset, tag):
+        cursor = emit(offset, "83 ec 30")
+        cursor = emit(cursor, "8d 44 24 08 6a 1a 50")
+        cursor = emit_call(cursor, 0x480)
+        cursor = emit(cursor, "83 c4 08")
+        cursor = emit(cursor, "8d 44 24 08")
+        cursor = emit(cursor, f"6a {tag:02x} 50")
+        cursor = emit_call(cursor, 0x1C0)
+        cursor = emit(cursor, "83 c4 08")
+        # One base consumer and one +4 interior consumer are read-only and
+        # must preserve the selected outer[0] association.
+        cursor = emit(cursor, "8d 44 24 08 50")
+        cursor = emit_call(cursor, 0x4A0)
+        cursor = emit(cursor, "83 c4 04")
+        cursor = emit(cursor, "8d 44 24 0c 50")
+        cursor = emit_call(cursor, 0x4B0)
+        cursor = emit(cursor, "83 c4 04")
+        cursor = emit(cursor, "8d 44 24 08 50")
+        cursor = emit_call(cursor, 0x140)
+        return emit(cursor, "83 c4 04 83 c4 30 c3")
+
+    assert emit_producer(0x40, 0) < 0xC0
+    assert emit_producer(0xC0, 74) < 0x140
+
+    # consumer(outer): outer->head->tag dispatches through 75 entries.
+    cursor = emit(0x140, "8b 44 24 04 8b 00")
+    movzx_offset = cursor
+    cursor = emit(cursor, "0f b6 58 04")
+    transfer_offset = cursor
+    emit(cursor, "ff 14 9d 00 20 40 00 c3")
+
+    # wrapper(outer, tag): keep one transitive layer above the list push.
+    cursor = emit(0x1C0, "8b 4c 24 04")
+    if mutation == "outer-pointer-escape":
+        cursor = emit(cursor, "89 0d 10 30 40 00")
+    cursor = emit(cursor, "8b 54 24 08 52 51")
+    cursor = emit_call(cursor, 0x200)
+    emit(cursor, "83 c4 08 c3")
+
+    # list_push(outer, tag): allocate one 0x1a-byte generation, link the old
+    # outer[0], publish the new head, then initialize its finite tag byte.
+    size_push = (
+        "52"
+        if mutation == "variable-size"
+        else "6a 00"
+        if mutation == "zero-size"
+        else "6a 1a"
+    )
+    cursor = emit(0x200, f"53 8b 5c 24 08 {size_push}")
+    cursor = emit_call(
+        cursor,
+        0x500 if mutation == "unowned-allocator" else 0x400,
+    )
+    cursor = emit(cursor, "59")
+    if mutation == "second-allocation":
+        cursor = emit(cursor, "6a 1a")
+        cursor = emit_call(cursor, 0x400)
+        cursor = emit(cursor, "59")
+    guard = None
+    if mutation != "unchecked-null":
+        guard = cursor
+        cursor = emit(cursor, "85 c0 74 00")
+    cursor = emit(cursor, "8b 0b 89 08")
+    if mutation == "conditional-missing-publish":
+        cursor = emit(cursor, "85 c9 74 02 89 03")
+    elif mutation == "partial-outer-store":
+        cursor = emit(cursor, "66 89 03")
+    else:
+        cursor = emit(cursor, "89 03")
+    if mutation == "alternate-outer-store":
+        cursor = emit(cursor, "89 13")
+    if mutation == "node-escape-before-init":
+        cursor = emit(cursor, "a3 0c 30 40 00")
+    cursor = emit(cursor, "8a 54 24 0c 88 50 04 c6 40 06 00")
+    if mutation == "unknown-node-overlap":
+        cursor = emit(cursor, "88 48 04")
+    cursor = emit(cursor, "5b c3")
+    failure = cursor
+    emit(cursor, "eb fe")
+    if guard is not None:
+        delta = failure - (guard + 4)
+        assert 0 <= delta <= 0x7F
+        text[guard + 3] = delta
+
+    # Exact owned bump allocator shape used by retail 0x441fa0: round the
+    # fixed positive size, grow the arena if needed, return the old cursor,
+    # and advance it by the same amount.  The caller's closed guard handles
+    # null while the monotonic cursor prevents generation reuse.
+    cursor = emit(0x400, "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08")
+    cursor = emit(cursor, "39 1d 00 30 40 00 7d 0d 53")
+    cursor = emit(cursor, "68 08 30 40 00")
+    cursor = emit_call(cursor, 0x460)
+    cursor = emit(cursor, "59 59 29 1d 00 30 40 00")
+    cursor = emit(cursor, "a1 04 30 40 00")
+    if mutation == "allocator-result-escape":
+        cursor = emit(cursor, "a3 0c 30 40 00")
+    cursor = emit(cursor, "01 1d 04 30 40 00")
+    if mutation == "generation-reuse":
+        cursor = emit(cursor, "29 1d 04 30 40 00")
+    cursor = emit(cursor, "5b c3")
+    assert cursor < 0x460
+
+    emit(0x460, "c3")
+    # Strict zero helper (destination, size).
+    emit(0x480, "31 c0 57 8b 4c 24 0c 8b 7c 24 08 f3 aa 5f c3")
+    # Read-only base and +4 interior consumers.
+    emit(
+        0x4B0,
+        "8b 44 24 04 89 50 fc c3"
+        if mutation == "interior-clobber"
+        else "8b 44 24 04 83 38 00 c3",
+    )
+    emit(0x4A0, "8b 44 24 04 83 78 08 00 c3")
+    emit(0x4C0, "c3")
+    if mutation == "unowned-allocator":
+        emit(0x500, "c3")
+
+    for index in range(75):
+        struct.pack_into("<I", data, 0x600 + index * 4, text_va + 0x4C0)
+    struct.pack_into("<I", data, 0x900, 0x1000)
+    struct.pack_into("<I", data, 0x904, data_va + 0x100)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(".text", text_va, 0, 0x600, 0x600, 0x60000020),
+            pe_mod.Section(".rdata", rdata_va, 0x600, 0x300, 0x300, 0x40000040),
+            pe_mod.Section(".data", data_va, 0x900, 0x100, 0x100, 0xC0000040),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(pe_mod.Relocation(rdata_va + index * 4, 3) for index in range(75)),
+        executable_ranges=((text_va, text_va + 0x600),),
+    )
+    return image, text_va + movzx_offset, text_va + transfer_offset
+
+
+def lifecycle_optional_allocation_pointee_image(*, mutation=None):
+    """Checked arena session with optional finite list pushes and empty tail."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    retail_grow_mutations = {
+        "retail-multi-attempt",
+        "retail-missing-recovery",
+        "retail-ambiguous-retry",
+        "retail-success-bypass-finalizer",
+        "retail-conditional-finalizer",
+        "retail-missing-finalizer",
+        "retail-extra-call-escape",
+        "retail-result-escape",
+        "retail-returning-callback",
+    }
+    assert mutation in {
+        None,
+        "unchecked-init",
+        "one-arena-null-path",
+        "returning-callback",
+        "callback-overwritten",
+        "reset-reachable",
+        "alternate-backend-entry",
+        "allocation-before-init",
+        "unknown-initial-head",
+        "deref-before-null",
+        "partial-outer-store",
+        "outer-pointer-escape",
+        "link-mutation",
+        "tag-mutation",
+        *retail_grow_mutations,
+    }
+    retail_grow = mutation in retail_grow_mutations
+    init_offset = 0x4C0 if retail_grow else 0x4A0
+    text_va = 0x00401000
+    rdata_va = 0x00402000
+    data_va = 0x00403000
+    data = bytearray(0xC00)
+    text = memoryview(data)[:0x700]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (text_va + offset + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    def patch_short_branch(branch_offset, target_offset):
+        displacement = target_offset - (branch_offset + 2)
+        assert -0x80 <= displacement <= 0x7F
+        text[branch_offset + 1] = displacement & 0xFF
+
+    # session(callback): checked init and setjmp establish the only backend
+    # entry.  Its failure path may reset arenas but cannot reach the backend.
+    cursor = 0
+    if mutation == "allocation-before-init":
+        cursor = emit_call(cursor, 0x400)
+    alternate_branch = None
+    if mutation == "alternate-backend-entry":
+        cursor = emit(cursor, "83 3d b0 30 40 00 00 75 00")
+        alternate_branch = cursor - 2
+    callback_push = cursor
+    cursor = emit(cursor, "68 60 15 40 00")
+    cursor = emit_call(cursor, init_offset)
+    cursor = emit(cursor, "59 85 c0")
+    init_failure_branch = None
+    if mutation != "unchecked-init":
+        init_failure_branch = cursor
+        cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "68 a0 30 40 00")
+    cursor = emit_call(cursor, 0x520)
+    cursor = emit(cursor, "59 85 c0")
+    setjmp_failure_branch = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit_call(cursor, 0x400)
+    cursor = emit(cursor, "c3")
+    failure_offset = cursor
+    cursor = emit_call(cursor, 0x580)
+    cursor = emit(cursor, "c3")
+    alternate_offset = cursor
+    if alternate_branch is not None:
+        cursor = emit_call(cursor, 0x400)
+        cursor = emit(cursor, "c3")
+        patch_short_branch(alternate_branch, alternate_offset)
+    if init_failure_branch is not None:
+        patch_short_branch(init_failure_branch, failure_offset)
+    patch_short_branch(setjmp_failure_branch, failure_offset)
+    assert cursor < 0x80
+
+    def emit_producer(offset, tag):
+        cursor = emit(offset, "83 ec 30")
+        cursor = emit(cursor, "8d 44 24 08 6a 1a 50")
+        cursor = emit_call(cursor, 0x5C0)
+        cursor = emit(cursor, "83 c4 08")
+        if mutation == "unknown-initial-head":
+            cursor = emit(cursor, "c7 44 24 08 34 12 00 00")
+        cursor = emit(cursor, "c6 44 24 0c 01")
+        cursor = emit(cursor, "8d 44 24 08")
+        cursor = emit(cursor, f"6a {tag:02x} 50")
+        cursor = emit_call(cursor, 0x240)
+        cursor = emit(cursor, "83 c4 08")
+        cursor = emit(cursor, "8d 44 24 08 50")
+        cursor = emit_call(cursor, 0x200)
+        return emit(cursor, "83 c4 04 83 c4 30 c3")
+
+    assert emit_producer(0x80, 0) < 0x140
+    assert emit_producer(0x140, 74) < 0x200
+
+    # consumer(node): observe the base sentinel tag, then traverse optional
+    # allocation-backed nodes.  A null next pointer contributes no byte.
+    cursor = emit(0x200, "53 56 8b 74 24 0c")
+    movzx_offset = cursor
+    cursor = emit(cursor, "0f b6 5e 04")
+    transfer_offset = cursor
+    cursor = emit(cursor, "ff 14 9d 00 20 40 00")
+    cursor = emit(cursor, "8b 36")
+    if mutation == "deref-before-null":
+        cursor = emit(cursor, "0f b6 46 04")
+    cursor = emit(cursor, "85 f6")
+    branch_offset = cursor
+    cursor = emit(cursor, "75 00 5e 5b c3")
+    patch_short_branch(branch_offset, movzx_offset)
+
+    # wrapper(outer, tag): either preserve the strict-zero empty association,
+    # or publish one and then optionally four more finite-tag nodes.
+    cursor = emit(0x240, "a1 b0 30 40 00 85 c0")
+    no_push_branch = cursor
+    cursor = emit(cursor, "74 00")
+    if mutation == "outer-pointer-escape":
+        cursor = emit(cursor, "8b 4c 24 04 89 0d c4 30 40 00")
+    cursor = emit(cursor, "8b 4c 24 04 8b 54 24 08 52 51")
+    cursor = emit_call(cursor, 0x300)
+    cursor = emit(cursor, "83 c4 08 a1 b4 30 40 00 85 c0")
+    one_push_branch = cursor
+    cursor = emit(cursor, "74 00")
+    for tag in (2, 3, 4, 8):
+        cursor = emit(cursor, "8b 4c 24 04")
+        cursor = emit(cursor, f"6a {tag:02x} 51")
+        cursor = emit_call(cursor, 0x300)
+        cursor = emit(cursor, "83 c4 08")
+    wrapper_return = cursor
+    emit(cursor, "c3")
+    patch_short_branch(no_push_branch, wrapper_return)
+    patch_short_branch(one_push_branch, wrapper_return)
+    assert wrapper_return < 0x300
+
+    # list_push(outer, tag): no local null guard.  Its allocation is total
+    # only under the checked session/OOM nonreturn certificate above.
+    cursor = emit(0x300, "53 8b 5c 24 08 6a 1a")
+    cursor = emit_call(cursor, 0x380)
+    cursor = emit(cursor, "59 8b 0b 89 08")
+    if mutation == "link-mutation":
+        cursor = emit(cursor, "c7 00 34 12 00 00")
+    cursor = emit(
+        cursor,
+        "66 89 03" if mutation == "partial-outer-store" else "89 03",
+    )
+    cursor = emit(cursor, "8a 54 24 0c 88 50 04")
+    if mutation == "tag-mutation":
+        cursor = emit(cursor, "c6 40 04 07")
+    cursor = emit(cursor, "c6 40 06 00 5b c3")
+    assert cursor < 0x380
+
+    # Fixed owned bump allocator for descriptor A.
+    cursor = emit(0x380, "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08")
+    cursor = emit(cursor, "39 1d 10 30 40 00 7d 0d 53")
+    cursor = emit(cursor, "68 00 30 40 00")
+    cursor = emit_call(cursor, 0x440)
+    cursor = emit(cursor, "59 59 29 1d 10 30 40 00")
+    cursor = emit(cursor, "a1 0c 30 40 00 01 1d 0c 30 40 00 5b c3")
+    assert cursor < 0x400
+
+    # The backend call closure contains all allocation and observations.
+    cursor = 0x400
+    if mutation == "reset-reachable":
+        cursor = emit_call(cursor, 0x580)
+    if mutation == "callback-overwritten":
+        cursor = emit_call(cursor, 0x620)
+    cursor = emit_call(cursor, 0x80)
+    cursor = emit_call(cursor, 0x140)
+    emit(cursor, "c3")
+
+    # grow(desc, size): system allocation failure invokes the installed OOM
+    # callback; success initializes the descriptor's current arena extent.
+    if not retail_grow:
+        cursor = emit(0x440, "53 8b 5c 24 08")
+        cursor = emit_call(cursor, 0x5A0)
+        cursor = emit(cursor, "85 c0")
+        success_branch = cursor
+        cursor = emit(cursor, "75 00 83 3d 80 30 40 00 00")
+        no_callback_branch = cursor
+        cursor = emit(cursor, "74 00 ff 15 80 30 40 00")
+        no_callback_offset = cursor
+        cursor = emit(cursor, "5b c3")
+        success_offset = cursor
+        cursor = emit(
+            cursor,
+            "89 43 08 83 c0 10 89 43 0c c7 43 10 00 10 00 00 5b c3",
+        )
+        patch_short_branch(success_branch, success_offset)
+        patch_short_branch(no_callback_branch, no_callback_offset)
+        assert cursor < init_offset
+    else:
+        # Retail-style grow: an enabled primary allocator gets one retry,
+        # then a distinct fallback. Every non-null result converges through
+        # one finalizer before the descriptor state is published.
+        cursor = emit(0x440, "53 56 57 8b 74 24 10 8b 5c 24 14")
+        if mutation == "retail-missing-recovery":
+            cursor = emit(cursor, "53")
+            cursor = emit_call(cursor, 0x5A0)
+            cursor = emit(cursor, "89 c7 59 85 ff")
+            returning_failure_branch = cursor
+            cursor = emit(cursor, "74 00")
+            success_branches = []
+            fallback_branch = None
+            final_failure_branch = None
+        else:
+            cursor = emit(cursor, "83 3d b8 30 40 00 00")
+            fallback_branch = cursor
+            cursor = emit(cursor, "74 00 53")
+            cursor = emit_call(cursor, 0x5A0)
+            cursor = emit(cursor, "89 c7 59 85 ff")
+            success_branches = [cursor]
+            cursor = emit(cursor, "75 00 53")
+            cursor = emit_call(
+                cursor,
+                0x680 if mutation == "retail-ambiguous-retry" else 0x5A0,
+            )
+            cursor = emit(cursor, "89 c7 59 85 ff")
+            success_branches.append(cursor)
+            cursor = emit(cursor, "75 00")
+            fallback_offset = cursor
+            cursor = emit(cursor, "53")
+            cursor = emit_call(cursor, 0x640)
+            cursor = emit(cursor, "89 c7 59 85 ff")
+            final_failure_branch = cursor
+            cursor = emit(cursor, "74 00")
+
+        success_offset = cursor
+        conditional_finalizer_branch = None
+        if mutation == "retail-conditional-finalizer":
+            cursor = emit(cursor, "83 3d bc 30 40 00 00")
+            conditional_finalizer_branch = cursor
+            cursor = emit(cursor, "74 00")
+        if mutation == "retail-extra-call-escape":
+            cursor = emit(cursor, "57")
+            cursor = emit_call(cursor, 0x680)
+            cursor = emit(cursor, "59")
+        if mutation == "retail-result-escape":
+            cursor = emit(cursor, "89 3d d0 30 40 00")
+        if mutation != "retail-missing-finalizer":
+            cursor = emit(cursor, "57")
+            cursor = emit_call(cursor, 0x660)
+            cursor = emit(cursor, "59")
+        descriptor_offset = cursor
+        cursor = emit(cursor, "89 7e 08 89 7e 0c 89 5e 10")
+        epilogue_offset = cursor
+        cursor = emit(cursor, "5f 5e 5b c3")
+
+        failure_offset = cursor
+        if mutation != "retail-missing-recovery":
+            cursor = emit(cursor, "83 3d 80 30 40 00 00")
+            no_callback_branch = cursor
+            cursor = emit(cursor, "74 00 ff 15 80 30 40 00")
+            cursor = emit(cursor, "eb 00")
+            patch_short_branch(no_callback_branch, epilogue_offset)
+            patch_short_branch(cursor - 2, epilogue_offset)
+        else:
+            patch_short_branch(returning_failure_branch, epilogue_offset)
+
+        if fallback_branch is not None:
+            patch_short_branch(fallback_branch, fallback_offset)
+            for branch in success_branches:
+                patch_short_branch(
+                    branch,
+                    descriptor_offset
+                    if mutation == "retail-success-bypass-finalizer" and branch == success_branches[0]
+                    else success_offset,
+                )
+            patch_short_branch(final_failure_branch, failure_offset)
+        if conditional_finalizer_branch is not None:
+            patch_short_branch(conditional_finalizer_branch, descriptor_offset)
+        assert cursor < init_offset
+
+    # init(callback): callback disabled during both initial grows; callback
+    # installed only after every descriptor is initialized and checked.
+    cursor = emit(init_offset, "c7 05 80 30 40 00 00 00 00 00")
+    for descriptor in (0x00403000, 0x00403020):
+        cursor = emit(cursor, "6a 00")
+        cursor = emit(cursor, f"68 {descriptor & 0xFF:02x} 30 40 00")
+        cursor = emit_call(cursor, 0x440)
+        cursor = emit(cursor, "83 c4 08")
+    cursor = emit(cursor, "8b 44 24 04 a3 80 30 40 00")
+    check_a = cursor
+    cursor = emit(cursor, "83 3d 08 30 40 00 00 74 00")
+    check_a_branch = cursor - 2
+    check_b_branch = None
+    if mutation != "one-arena-null-path":
+        cursor = emit(cursor, "83 3d 28 30 40 00 00 74 00")
+        check_b_branch = cursor - 2
+    cursor = emit(cursor, "31 c0 c3")
+    init_failure = cursor
+    emit(cursor, "b8 ff ff ff ff c3")
+    patch_short_branch(check_a_branch, init_failure)
+    if check_b_branch is not None:
+        patch_short_branch(check_b_branch, init_failure)
+    assert check_a < init_failure < 0x520
+
+    # setjmp-like save and longjmp-like restore of the same context.
+    emit(0x520, "8b 4c 24 04 89 21 8b 04 24 89 41 04 31 c0 c3")
+    emit(0x540, "8b 4c 24 04 8b 21 b8 01 00 00 00 c3")
+    if mutation in {"returning-callback", "retail-returning-callback"}:
+        emit(0x560, "c3")
+    else:
+        cursor = emit(0x560, "68 a0 30 40 00")
+        cursor = emit_call(cursor, 0x540)
+        emit(cursor, "59 c3")
+    # reset(desc A) and a deterministic system allocator stub.
+    emit(0x580, "c7 05 0c 30 40 00 00 00 00 00 c7 05 10 30 40 00 00 00 00 00 c3")
+    emit(0x5A0, "a1 c0 30 40 00 83 05 c0 30 40 00 40 c3")
+    emit(0x5C0, "31 c0 57 8b 4c 24 0c 8b 7c 24 08 f3 aa 5f c3")
+    emit(0x600, "c3")
+    if mutation == "callback-overwritten":
+        emit(0x620, "c7 05 80 30 40 00 00 00 00 00 c3")
+    emit(0x640, "a1 c8 30 40 00 83 05 c8 30 40 00 40 c3")
+    emit(0x660, "8b 44 24 04 c7 00 34 12 00 00 c3")
+    emit(0x680, "8b 44 24 04 a3 d0 30 40 00 c3")
+
+    for index in range(75):
+        struct.pack_into("<I", data, 0x700 + index * 4, text_va + 0x600)
+    struct.pack_into("<I", data, 0xAC0, data_va + 0x100)
+    # Both runtime choices are intentionally unknown to the static proof.
+    struct.pack_into("<I", data, 0xAB0, 1)
+    struct.pack_into("<I", data, 0xAB4, 1)
+    struct.pack_into("<I", data, 0xAB8, 1)
+    struct.pack_into("<I", data, 0xABC, 1)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(".text", text_va, 0, 0x700, 0x700, 0x60000020),
+            pe_mod.Section(".rdata", rdata_va, 0x700, 0x300, 0x300, 0x40000040),
+            pe_mod.Section(".data", data_va, 0xA00, 0x200, 0x200, 0xC0000040),
+        ),
+        imports=(),
+        exports=tuple(
+            [
+                pe_mod.Export("oom_callback", 1, text_va + 0x560, None),
+                pe_mod.Export("arena_reset", 2, text_va + 0x580, None),
+                *(
+                    [pe_mod.Export("callback_writer", 3, text_va + 0x620, None)]
+                    if mutation == "callback-overwritten"
+                    else []
+                ),
+            ]
+        ),
+        relocations=tuple(
+            [
+                pe_mod.Relocation(text_va + callback_push + 1, 3),
+                *(pe_mod.Relocation(rdata_va + index * 4, 3) for index in range(75)),
+            ]
+        ),
+        executable_ranges=((text_va, text_va + 0x700),),
+    )
+    return image, text_va + movzx_offset, text_va + transfer_offset
 
 
 def indexed_global_callback_image(*, unknown_registrar_caller=False):
@@ -1028,6 +3455,2348 @@ def test_movzx_bound_does_not_cross_call_for_caller_saved_index():
     )
 
 
+def test_closed_byte_producer_domain_bounds_movzx_table():
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    assert tuple(row.va for row in image.relocations) == tuple(
+        0x00402000 + index * 4 for index in range(75)
+    )
+    assert {row.type for row in image.relocations} == {3}
+    assert image.read(0x0040212C, 4) == b"\0" * 4
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(0x00401047)
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+    assert (table.index_min, table.index_max) == (0, 74)
+    assert table.targets == (0x00401070,) * 75
+
+
+def test_relocated_dispatch_bootstrap_refines_to_used_slot_subset(
+    monkeypatch,
+):
+    image, transfer_address, callbacks = (
+        cyclic_relocated_movzx_dispatch_image()
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def record_recovery(recovery):
+        cfg = original(recovery)
+        recoveries.append((recovery, cfg))
+        return cfg
+
+    monkeypatch.setattr(_DirectCfgRecovery, "recover", record_recovery)
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert len(recoveries) == 3
+    assert cfg is recoveries[-1][1]
+    table = cfg.jump_table_at(transfer_address)
+    assert table.guard_operator == "movzx-producer-domain"
+    assert (table.index_min, table.index_max) == (0, 2)
+    assert table.targets == callbacks[:3]
+    bootstrap = tuple(
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "relocated-dispatch-bootstrap-entry"
+    )
+    assert tuple(sorted(row.provenance_address for row in bootstrap)) == (
+        0x00402000,
+        0x00402004,
+        0x00402008,
+    )
+    assert callbacks[3] not in {row.address for row in cfg.instructions}
+    assert not any(
+        row.source == transfer_address and "bootstrap" in row.flow_kind
+        for row in cfg.control_targets.finite_internal_edges
+    )
+    assert not any(
+        row.address == transfer_address
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_relocated_dispatch_bootstrap_reuses_all_slots_union_trial(
+    monkeypatch,
+):
+    image, transfer_address, _callbacks = (
+        cyclic_relocated_movzx_dispatch_image(producer_high=74)
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def record_recovery(recovery):
+        cfg = original(recovery)
+        recoveries.append((recovery, cfg))
+        return cfg
+
+    monkeypatch.setattr(_DirectCfgRecovery, "recover", record_recovery)
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert len(recoveries) == 2
+    assert cfg is recoveries[-1][1]
+    assert cfg.jump_table_at(transfer_address).index_max == 74
+    assert len(
+        {
+            row.provenance_address
+            for row in cfg.seed_inventory.records
+            if row.category == "relocated-dispatch-bootstrap-entry"
+        }
+    ) == 75
+
+
+@pytest.mark.parametrize(
+    "fixture_kwargs",
+    (
+        {"missing_relocation_index": 0},
+        {"non_executable_index": 0},
+        {"instruction_interior_index": 0},
+        {"tentative_target_overlap": True},
+        {"executable_table": True},
+        {"raw_only_transfer": True},
+        {"bottom_producer": True},
+    ),
+)
+def test_relocated_dispatch_bootstrap_hostile_inputs_remain_unresolved(
+    fixture_kwargs,
+):
+    image, transfer_address, _callbacks = (
+        cyclic_relocated_movzx_dispatch_image(**fixture_kwargs)
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+    assert not any(
+        row.category == "relocated-dispatch-bootstrap-entry"
+        for row in cfg.seed_inventory.records
+    )
+    assert not any(
+        row.source == transfer_address and "bootstrap" in row.flow_kind
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_unrooted_mutual_recursion_does_not_bootstrap_code():
+    image = unrooted_mutual_recursion_image()
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert {row.address for row in cfg.instructions} == {image.entrypoint}
+    assert not any(
+        "bootstrap" in row.category for row in cfg.seed_inventory.records
+    )
+
+
+def test_relocated_dispatch_bootstrap_invalidation_rebuilds_clean(
+    monkeypatch,
+):
+    class FirstIterationOnly:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def __iter__(self):
+            rows = self.rows
+            self.rows = ()
+            return iter(rows)
+
+    image, transfer_address, _callbacks = (
+        cyclic_relocated_movzx_dispatch_image(producer_high=74)
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def invalidate_after_reproduction(recovery):
+        cfg = original(recovery)
+        recoveries.append((recovery, cfg))
+        if len(recoveries) == 2:
+            recovery.validated_relocated_dispatch_slot_hypotheses = (
+                FirstIterationOnly(
+                    tuple(
+                        recovery.validated_relocated_dispatch_slot_hypotheses
+                    )
+                )
+            )
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        invalidate_after_reproduction,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert len(recoveries) == 3
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+    assert not any(
+        row.category == "relocated-dispatch-bootstrap-entry"
+        for row in cfg.seed_inventory.records
+    )
+
+
+def test_relocated_dispatch_bootstrap_hypotheses_honor_global_entry_cap():
+    image, _transfer_address, _callbacks = (
+        cyclic_relocated_movzx_dispatch_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    existing = next(iter(recovery.relocated_dispatch_slot_hypotheses))
+    recovery.relocated_dispatch_slot_hypotheses = {
+        replace(existing, transfer_address=existing.transfer_address + 1)
+    }
+    recovery.limits = replace(
+        recovery.limits,
+        max_jump_table_entries=76,
+    )
+
+    with pytest.raises(AnalysisLimitError) as raised:
+        recovery._record_relocated_dispatch_bootstrap_slots()
+
+    assert raised.value.limit_name == "max_jump_table_entries"
+    assert raised.value.observed == 76
+
+
+def test_relocated_dispatch_bootstrap_probes_terminator_after_full_domain():
+    image, transfer_address, _callbacks = (
+        cyclic_relocated_movzx_dispatch_image(entry_count=256)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    assert recovery.jump_tables[transfer_address].index_max == 255
+
+    recovery.jump_tables.clear()
+    recovery.relocated_dispatch_slot_hypotheses.clear()
+    recovery._record_relocated_dispatch_bootstrap_slots()
+
+    assert len(recovery.relocated_dispatch_slot_hypotheses) == 256
+
+
+def test_closed_forwarded_byte_producer_domain_bounds_movzx_table():
+    image, movzx_address, transfer_address = forwarded_movzx_dispatch_image()
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(transfer_address)
+    assert movzx_address == 0x00401085
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+    assert (table.index_min, table.index_max) == (0, 74)
+    assert table.targets == (0x004010F0,) * 75
+
+
+def test_recursive_nested_argument_producer_stops_at_bottom():
+    image, transfer_address = recursive_nested_movzx_dispatch_image()
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+def test_callee_stack_object_writers_bound_nested_movzx_table():
+    image, movzx_address, transfer_address, _mutator_call = (
+        callee_stack_object_writer_image()
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(transfer_address)
+    assert movzx_address == 0x00401106
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+    assert (table.index_min, table.index_max) == (0, 74)
+    assert table.targets == (0x00401240,) * 75
+
+
+def test_callee_published_stack_pointee_bounds_nested_movzx_table():
+    image, movzx_address, transfer_address, _mutator_call = (
+        callee_stack_object_writer_image(callee_published_outer=True)
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(transfer_address)
+    assert movzx_address == 0x00401106
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+    assert (table.index_min, table.index_max) == (0, 74)
+    assert table.targets == (0x00401240,) * 75
+
+
+def test_allocation_backed_stack_pointee_bounds_nested_movzx_table():
+    image, movzx_address, transfer_address = (
+        allocation_backed_stack_pointee_image()
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(transfer_address)
+    assert movzx_address == 0x00401146
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+    assert (table.index_min, table.index_max) == (0, 74)
+    assert table.targets == (0x004014C0,) * 75
+
+
+def test_allocation_backed_stack_pointee_certificate_binds_owned_chain(
+    tmp_path,
+):
+    image, movzx_address, transfer_address = (
+        allocation_backed_stack_pointee_image()
+    )
+    checkpoint_dir = tmp_path / "allocation-producer-checkpoints"
+    cfg = _complete_resumable_producer_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        checkpoint_dir,
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+    certificates = [
+        json.loads(path.read_bytes())
+        for path in checkpoint_dir.glob("*.json")
+    ]
+    certificate = next(
+        row
+        for row in certificates
+        if row["query"]["movzx_address"] == movzx_address
+    )
+    dependencies = {
+        row["identifier"] for row in certificate["dependencies"]
+    }
+    assert {
+        0x00401040,  # caller producing tag 0
+        0x004010C0,  # caller producing tag 74
+        0x00401140,  # nested-byte consumer
+        0x004011C0,  # forwarding wrapper
+        0x00401200,  # initializer/list linker
+        0x00401400,  # owned bump allocator
+        0x00401460,  # allocator grow helper
+        0x00401480,  # strict outer zero helper
+        0x004014A0,  # read-only base consumer
+        0x004014B0,  # read-only +4 consumer
+    } <= dependencies
+
+
+def test_lifecycle_total_allocation_and_optional_empty_tail_bound_table():
+    image, movzx_address, transfer_address = (
+        lifecycle_optional_allocation_pointee_image()
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(transfer_address)
+    assert movzx_address == 0x00401206
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+    assert (table.index_min, table.index_max) == (0, 74)
+    assert table.targets == (0x00401600,) * 75
+
+
+def test_lifecycle_optional_certificate_binds_session_and_push_chain(tmp_path):
+    image, movzx_address, transfer_address = (
+        lifecycle_optional_allocation_pointee_image()
+    )
+    checkpoint_dir = tmp_path / "lifecycle-optional-checkpoints"
+    cfg = _complete_resumable_producer_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        checkpoint_dir,
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+    certificates = [
+        json.loads(path.read_bytes())
+        for path in checkpoint_dir.glob("*.json")
+    ]
+    certificate = next(
+        row
+        for row in certificates
+        if row["query"]["movzx_address"] == movzx_address
+    )
+    dependencies = {
+        row["identifier"] for row in certificate["dependencies"]
+    }
+    assert {
+        0x00401000,  # checked session root
+        0x00401080,  # sentinel/tag-0 producer
+        0x00401140,  # sentinel/tag-74 producer
+        0x00401200,  # null-checked traversal
+        0x00401240,  # optional/multiple-push wrapper
+        0x00401300,  # allocation-backed list push
+        0x00401380,  # fixed bump allocator
+        0x00401400,  # backend root
+        0x00401440,  # descriptor grow/OOM dispatch
+        0x004014A0,  # checked arena initialization
+        0x00401520,  # setjmp-like context save
+        0x00401540,  # nonreturning longjmp-like restore
+        0x00401560,  # installed OOM callback
+        0x00401580,  # generation-reset function
+        0x004015A0,  # system allocator
+        0x004015C0,  # strict sentinel zero helper
+    } <= dependencies
+
+
+def test_retail_multi_attempt_grow_preserves_optional_empty_tail_bound():
+    image, movzx_address, transfer_address = lifecycle_optional_allocation_pointee_image(
+        mutation="retail-multi-attempt"
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(transfer_address)
+    assert movzx_address == 0x00401206
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+    assert (table.index_min, table.index_max) == (0, 74)
+    assert table.targets == (0x00401600,) * 75
+
+
+def test_retail_multi_attempt_certificate_binds_complete_grow_chain(tmp_path):
+    image, movzx_address, transfer_address = lifecycle_optional_allocation_pointee_image(
+        mutation="retail-multi-attempt"
+    )
+    checkpoint_dir = tmp_path / "retail-multi-attempt-checkpoints"
+    cfg = _complete_resumable_producer_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        checkpoint_dir,
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+    certificates = [json.loads(path.read_bytes()) for path in checkpoint_dir.glob("*.json")]
+    certificate = next(row for row in certificates if row["query"]["movzx_address"] == movzx_address)
+    dependencies = {(row["kind"], row["identifier"]) for row in certificate["dependencies"]}
+    assert {
+        ("function", 0x00401000),  # checked session root
+        ("function", 0x00401300),  # allocation-backed list push
+        ("function", 0x00401380),  # fixed bump allocator
+        ("function", 0x00401400),  # backend root
+        ("function", 0x00401440),  # descriptor grow/OOM dispatch
+        ("function", 0x004014C0),  # checked arena initialization
+        ("function", 0x00401520),  # setjmp-like context save
+        ("function", 0x00401540),  # nonreturning longjmp-like restore
+        ("function", 0x00401560),  # installed OOM callback
+        ("function", 0x004015A0),  # primary allocator and retry
+        ("function", 0x00401640),  # fallback allocator
+        ("function", 0x00401660),  # successful-allocation finalizer
+        ("global-slot", 0x00403080),  # installed OOM callback slot
+    } <= dependencies
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "retail-missing-recovery",
+        "retail-ambiguous-retry",
+        "retail-success-bypass-finalizer",
+        "retail-conditional-finalizer",
+        "retail-missing-finalizer",
+        "retail-extra-call-escape",
+        "retail-result-escape",
+        "retail-returning-callback",
+    ],
+)
+def test_retail_multi_attempt_grow_rejects_open_totality(mutation):
+    image, _movzx_address, transfer_address = lifecycle_optional_allocation_pointee_image(mutation=mutation)
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unchecked-init",
+        "one-arena-null-path",
+        "returning-callback",
+        "callback-overwritten",
+        "reset-reachable",
+        "alternate-backend-entry",
+        "allocation-before-init",
+        "unknown-initial-head",
+        "deref-before-null",
+        "partial-outer-store",
+        "outer-pointer-escape",
+        "link-mutation",
+        "tag-mutation",
+    ],
+)
+def test_lifecycle_optional_allocation_rejects_open_session_or_tail(mutation):
+    image, _movzx_address, transfer_address = lifecycle_optional_allocation_pointee_image(mutation=mutation)
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unowned-allocator",
+        "allocator-result-escape",
+        "outer-pointer-escape",
+        "variable-size",
+        "zero-size",
+        "unchecked-null",
+        "conditional-missing-publish",
+        "second-allocation",
+        "partial-outer-store",
+        "alternate-outer-store",
+        "node-escape-before-init",
+        "unknown-node-overlap",
+        "interior-clobber",
+        "generation-reuse",
+    ],
+)
+def test_allocation_backed_stack_pointee_rejects_open_effects(mutation):
+    image, _movzx_address, transfer_address = allocation_backed_stack_pointee_image(mutation=mutation)
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "outer-unowned-callee",
+        "outer-indirect-callee",
+        "outer-ambiguous-alias",
+        "outer-pointer-escape",
+        "outer-pointee-use",
+        "outer-conditional-missing-write",
+        "outer-partial-overlap",
+        "outer-partial-pointee-register",
+        "outer-conflicting-pointees",
+        "outer-multiple-writers",
+        "outer-unknown-pointee",
+        "outer-clobber",
+        "outer-null-pointee",
+        "outer-recursive-callee",
+        "outer-recursive-pointee",
+    ],
+)
+def test_callee_published_stack_pointee_rejects_open_associations(mutation):
+    image, _movzx_address, transfer_address, _mutator_call = (
+        callee_stack_object_writer_image(
+            mutation=mutation,
+            callee_published_outer=True,
+        )
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unowned-callee",
+        "indirect-callee",
+        "ambiguous-alias",
+        "pointer-escape",
+        "conditional-missing-write",
+        "partial-overlap",
+        "conflicting-path-values",
+        "post-call-clobber",
+    ],
+)
+def test_callee_stack_object_writers_reject_open_effects(mutation):
+    image, _movzx_address, transfer_address, _mutator_call = (
+        callee_stack_object_writer_image(mutation=mutation)
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+def test_forwarded_byte_domain_survives_a_prior_finite_dispatch():
+    image, _movzx_address, transfer_address = forwarded_movzx_dispatch_image(
+        duplicate_consumer_dispatch=True
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+    assert cfg.jump_table_at(transfer_address + 0x12).guard_bound == 74
+
+
+def test_byte_producer_preservation_ignores_bypass_arm_that_cannot_reach_load():
+    image, _movzx_address, transfer_address = forwarded_movzx_dispatch_image(
+        consumer_bypass_unknown_callback=True,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(transfer_address)
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+
+
+@pytest.mark.parametrize(
+    "fixture_kwargs",
+    [
+        {
+            "consumer_bypass_unknown_callback": True,
+            "consumer_bypass_rejoins": True,
+        },
+        {
+            "consumer_bypass_mutates_before_rejoin": True,
+            "consumer_bypass_rejoins": True,
+        },
+    ],
+)
+def test_byte_producer_preservation_keeps_arms_that_reach_load_blocking(
+    fixture_kwargs,
+):
+    image, _movzx_address, transfer_address = forwarded_movzx_dispatch_image(
+        **fixture_kwargs
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+def test_byte_producer_follows_pointer_spilled_to_logical_stack_slot():
+    image, _movzx_address, transfer_address = forwarded_movzx_dispatch_image(
+        consumer_stack_spill="clean",
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(transfer_address)
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "conflicting-store",
+        "unknown-stack-delta",
+        "overlap-write",
+        "missing-dominating-store",
+    ],
+)
+def test_byte_producer_rejects_open_stack_slot_pointer_provenance(mutation):
+    image, _movzx_address, transfer_address = forwarded_movzx_dispatch_image(
+        consumer_stack_spill=mutation,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+def test_byte_producer_combines_conditional_alias_and_helper_return_objects():
+    image, _movzx_address, transfer_address = forwarded_movzx_dispatch_image(
+        conditional_helper_return="clean",
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    table = cfg.jump_table_at(transfer_address)
+    assert table.guard_operator == "movzx-producer-domain"
+    assert table.guard_bound == 74
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["corrupt-and-use", "unknown-helper-return"],
+)
+def test_byte_producer_rejects_unsafe_conditional_helper_return(mutation):
+    image, _movzx_address, transfer_address = forwarded_movzx_dispatch_image(
+        conditional_helper_return=mutation,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+def test_forwarded_byte_domain_rejects_prior_finite_dispatch_clobber():
+    image, _movzx_address, transfer_address = forwarded_movzx_dispatch_image(
+        duplicate_consumer_dispatch=True,
+        callback_clobbers_byte=True,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address + 0x12)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unknown_producer_write",
+        "alternate_unknown_caller",
+        "unowned_raw_caller",
+        "helper_clobbers_byte",
+    ],
+)
+def test_forwarded_byte_producer_domain_rejects_open_provenance(mutation):
+    image, _movzx_address, transfer_address = forwarded_movzx_dispatch_image(
+        **{mutation: True}
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+    assert any(
+        row.address == transfer_address
+        and row.kind == "computed-flow-blocker"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_identical_byte_producer_sites_share_bounded_analysis():
+    image = movzx_dispatch_image(
+        closed_producer_bound=74,
+        duplicate_consumer_transfer=True,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(0x00401047).guard_bound == 74
+    assert cfg.jump_table_at(0x0040104E).guard_bound == 74
+    high_water = {
+        row.limit_name: row.observed for row in cfg.high_water_marks
+    }
+    assert high_water["max_producer_domain_passes"] >= 1
+    assert high_water["max_producer_domain_queries"] >= 2
+    assert high_water["max_producer_domain_cache_hits"] >= 1
+    assert (
+        high_water["max_producer_domain_evaluations"]
+        < high_water["max_producer_domain_queries"]
+    )
+    assert high_water["max_producer_domain_cache_entries"] >= 1
+    assert high_water["max_producer_domain_dependency_rows"] >= 1
+
+
+def test_identical_open_byte_producer_sites_reuse_unchanged_blocker():
+    image = movzx_dispatch_image(
+        closed_producer_bound=74,
+        unknown_producer_write=True,
+        duplicate_consumer_transfer=True,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert {
+        row.address
+        for row in cfg.control_targets.unresolved
+        if row.kind == "computed-flow-blocker"
+    } >= {0x00401047, 0x0040104E}
+    high_water = {
+        row.limit_name: row.observed for row in cfg.high_water_marks
+    }
+    assert high_water["max_producer_domain_cache_hits"] >= 1
+    assert (
+        high_water["max_producer_domain_evaluations"]
+        < high_water["max_producer_domain_queries"]
+    )
+
+
+def test_byte_producer_memo_invalidates_finite_result_for_new_root_writer():
+    slot = 0x00402300
+    base_image = movzx_dispatch_image(closed_producer_bound=74)
+    data = bytearray(base_image.data)
+    data[0xB0:0xB6] = bytes.fromhex("a3 00 23 40 00 c3")
+    image = replace(
+        base_image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    memo = {}
+    base_inventory = build_seed_inventory(image, ())
+    finite_recovery = _DirectCfgRecovery(
+        image,
+        base_inventory,
+        generous_limits(image),
+        producer_domain_memo=memo,
+    )
+    finite_recovery.recover()
+
+    def slot_domain(recovery):
+        recovery._note_producer_global_slot_dependency(slot)
+        return recovery._finite_global_slot_values(slot, frozenset())
+
+    finite = finite_recovery._producer_domain_cached(
+        ("producer-global-slot-test", slot),
+        0x00401000,
+        lambda: slot_domain(finite_recovery),
+    )
+    assert finite is not None
+    assert finite[0] == frozenset({0})
+
+    hidden_writer = SeedRecord(
+        address=0x004010B0,
+        category="audit-anchor",
+        provenance_address=0x004010B0,
+        provenance_bytes="a300234000",
+        detail="newly reachable global writer",
+        is_function=True,
+    )
+    blocked_recovery = _DirectCfgRecovery(
+        image,
+        type(base_inventory)(
+            (*base_inventory.records, hidden_writer)
+        ),
+        generous_limits(image),
+        producer_domain_memo=memo,
+    )
+    blocked_recovery.recover()
+    blocked = blocked_recovery._producer_domain_cached(
+        ("producer-global-slot-test", slot),
+        0x00401000,
+        lambda: slot_domain(blocked_recovery),
+    )
+
+    assert blocked is None
+    assert (
+        blocked_recovery.high_water["max_producer_domain_invalidations"]
+        >= 1
+    )
+
+
+def test_byte_producer_memo_is_seed_order_independent():
+    image = movzx_dispatch_image(
+        closed_producer_bound=74,
+        duplicate_consumer_transfer=True,
+    )
+    inventory = build_seed_inventory(image, ())
+    records = inventory.records
+    forward = _DirectCfgRecovery(
+        image,
+        type(inventory)(records),
+        generous_limits(image),
+        producer_domain_memo={},
+    ).recover()
+    reverse = _DirectCfgRecovery(
+        image,
+        type(inventory)(tuple(reversed(records))),
+        generous_limits(image),
+        producer_domain_memo={},
+    ).recover()
+
+    assert canonical_jsonl_bytes(forward) == canonical_jsonl_bytes(reverse)
+
+
+def test_byte_producer_query_cap_fails_closed():
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    limits = replace(
+        generous_limits(image), max_producer_domain_queries=1
+    )
+
+    with pytest.raises(AnalysisLimitError) as raised:
+        recover_cfg(image, build_seed_inventory(image, ()), limits)
+    assert raised.value.limit_name == "max_producer_domain_queries"
+
+
+@pytest.mark.parametrize(
+    ("cap_name", "duplicate_consumer_transfer"),
+    [
+        ("max_producer_domain_passes", False),
+        ("max_producer_domain_queries", False),
+        ("max_producer_domain_evaluations", False),
+        ("max_producer_domain_cache_hits", True),
+        ("max_producer_domain_cache_entries", False),
+        ("max_producer_domain_dependency_rows", False),
+    ],
+)
+def test_byte_producer_analysis_caps_fail_closed(
+    cap_name, duplicate_consumer_transfer
+):
+    image = movzx_dispatch_image(
+        closed_producer_bound=74,
+        duplicate_consumer_transfer=duplicate_consumer_transfer,
+    )
+    limits = replace(generous_limits(image), **{cap_name: 1})
+
+    with pytest.raises(AnalysisLimitError) as raised:
+        recover_cfg(image, build_seed_inventory(image, ()), limits)
+    assert raised.value.limit_name == cap_name
+
+
+def test_byte_producer_proof_waits_for_quiescence_and_restarts_recovery(
+    monkeypatch,
+):
+    image = movzx_dispatch_image(
+        closed_producer_bound=74,
+        producer_proof_after_ordinary_round=True,
+    )
+    producer_attempts = []
+    original = _DirectCfgRecovery._movzx_guard_for_index
+
+    def counted_guard(
+        recovery,
+        transfer_address,
+        index_register,
+        *,
+        producer_domain=False,
+    ):
+        if producer_domain:
+            producer_attempts.append(
+                (
+                    transfer_address,
+                    0x00401090 in recovery.instructions,
+                    0x004010A0 in recovery.instructions,
+                )
+            )
+        return original(
+            recovery,
+            transfer_address,
+            index_register,
+            producer_domain=producer_domain,
+        )
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_movzx_guard_for_index",
+        counted_guard,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert producer_attempts == [(0x00401047, True, True)]
+    assert cfg.jump_table_at(0x0040102D).targets == (0x00401090,)
+    assert cfg.jump_table_at(0x00401047).guard_bound == 74
+    assert {row.address for row in cfg.instructions} >= {
+        0x00401070,
+        0x00401080,
+        0x00401090,
+        0x004010A0,
+    }
+    assert any(
+        row.source == 0x00401070
+        and row.target == 0x00401080
+        and row.kind == "direct-call"
+        for row in cfg.edges
+    )
+
+
+def test_validation_scans_run_once_after_target_discovery_restarts(
+    monkeypatch,
+):
+    image = movzx_dispatch_image(
+        closed_producer_bound=74,
+        producer_proof_after_ordinary_round=True,
+    )
+    taint_scans = []
+    relocation_scans = []
+    original_taint = _DirectCfgRecovery._reject_unsafe_initializer_taint
+    original_relocations = _DirectCfgRecovery._classify_relocations
+
+    def count_taint(recovery, blocks):
+        taint_scans.append(
+            frozenset(
+                address
+                for block in blocks
+                for address in block.instruction_addresses
+            )
+        )
+        return original_taint(recovery, blocks)
+
+    def count_relocations(recovery):
+        relocation_scans.append(frozenset(recovery.instructions))
+        return original_relocations(recovery)
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_reject_unsafe_initializer_taint",
+        count_taint,
+    )
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_classify_relocations",
+        count_relocations,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(0x00401047).guard_bound == 74
+    assert len(taint_scans) == 1
+    assert len(relocation_scans) == 1
+    assert taint_scans[0] == frozenset(
+        row.address for row in cfg.instructions
+    )
+    assert relocation_scans[0] == taint_scans[0]
+
+
+@pytest.mark.parametrize(
+    ("program_hex", "relocation_offset"),
+    [
+        ("68 20 10 40 00 c3", 1),
+        ("c7 40 04 20 10 40 00 c3", 3),
+    ],
+)
+def test_initializer_uses_preindexed_relocation_va(
+    program_hex, relocation_offset
+):
+    from tools.mwcc_retro import pe as pe_mod
+
+    class CountingRelocations(tuple):
+        iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
+
+    base = movzx_dispatch_image()
+    data = bytearray(base.data)
+    program = bytes.fromhex(program_hex)
+    data[: len(program)] = program
+    data[0x20] = 0xC3
+    relocations = CountingRelocations(
+        (
+            *base.relocations,
+            pe_mod.Relocation(
+                base.entrypoint + relocation_offset,
+                3,
+            ),
+        )
+    )
+    image = replace(
+        base,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        relocations=relocations,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery._decode_from(image.entrypoint)
+    decoded = recovery._owned_decoded(image.entrypoint)
+    relocations.iterations = 0
+
+    recovery._record_initializer(decoded, {})
+
+    assert relocations.iterations == 0
+
+
+def test_irrelevant_dynamic_store_defers_receiver_identity(monkeypatch):
+    base = movzx_dispatch_image()
+    data = bytearray(base.data)
+    data[:8] = bytes.fromhex("c7 40 04 00 00 00 00 c3")
+    image = replace(
+        base,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    receiver_queries = []
+    original = _DirectCfgRecovery._dynamic_field_receiver_identity
+
+    def count_receiver(recovery, address, memory, function_entry, **kwargs):
+        receiver_queries.append(address)
+        return original(
+            recovery,
+            address,
+            memory,
+            function_entry,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_dynamic_field_receiver_identity",
+        count_receiver,
+    )
+
+    recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert receiver_queries == []
+
+
+def test_finite_control_query_is_reused_across_target_discovery_restart(
+    monkeypatch,
+):
+    from tools.mwcc_retro import pe as pe_mod
+
+    base = movzx_dispatch_image()
+    data = bytearray(base.data)
+    data[:8] = bytes.fromhex("b8 20 10 40 00 ff d0 c3")
+    data[0x20] = 0xC3
+    image = replace(
+        base,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        relocations=(
+            *base.relocations,
+            pe_mod.Relocation(base.entrypoint + 1, 3),
+        ),
+    )
+    evaluations = Counter()
+    original = _DirectCfgRecovery._finite_operand_values_before
+
+    def count_finite(recovery, address, *args, **kwargs):
+        evaluations[address] += 1
+        return original(recovery, address, *args, **kwargs)
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_finite_operand_values_before",
+        count_finite,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    transfer = base.entrypoint + 5
+    assert any(
+        row.source == transfer
+        and row.target == base.entrypoint + 0x20
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+    assert evaluations[transfer] == 1
+
+
+def test_finite_edge_only_growth_batches_within_one_outer_pass(monkeypatch):
+    image, consumer, source, first_target, second_target = (
+        finite_incoming_edge_image()
+    )
+    messages = []
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_producer_progress_message",
+        lambda _recovery, message: messages.append(message),
+    )
+
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, source, first_target, second_target),
+        generous_limits(image),
+    )
+
+    finite_edges = {
+        (row.source, row.target)
+        for row in cfg.control_targets.finite_internal_edges
+    }
+    assert finite_edges >= {
+        (consumer + 4, first_target),
+        (consumer + 4, second_target),
+        (source + 10, consumer),
+    }
+    assert sum(
+        message.startswith("ordinary closure finite-flow-start:")
+        for message in messages
+    ) == 1
+
+
+def test_later_finite_edge_revalidates_earlier_incoming_domain_in_phase(
+    monkeypatch,
+):
+    image, consumer, source, first_target, second_target = (
+        finite_incoming_edge_image()
+    )
+    evaluations = Counter()
+    messages = []
+    original = _DirectCfgRecovery._finite_operand_values_before
+
+    def count_finite(recovery, address, *args, **kwargs):
+        evaluations[address] += 1
+        return original(recovery, address, *args, **kwargs)
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_finite_operand_values_before",
+        count_finite,
+    )
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_producer_progress_message",
+        lambda _recovery, message: messages.append(message),
+    )
+
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, source, first_target, second_target),
+        generous_limits(image),
+    )
+
+    assert evaluations[consumer + 4] == 2
+    assert any(
+        row.source == consumer + 4 and row.target == second_target
+        for row in cfg.control_targets.finite_internal_edges
+    )
+    assert any(
+        message.startswith(
+            "finite-control cache-invalidated: "
+            f"transfer={consumer + 4:#x};"
+        )
+        and f"changed=function:{consumer:#x}" in message
+        for message in messages
+    )
+    assert sum(
+        message.startswith("ordinary closure finite-flow-start:")
+        for message in messages
+    ) == 1
+
+
+def test_finite_new_code_growth_restarts_outer_closure_immediately(
+    monkeypatch,
+):
+    image, second_source, new_target, decoded_target = finite_new_code_image()
+    messages = []
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_producer_progress_message",
+        lambda _recovery, message: messages.append(message),
+    )
+
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, second_source, decoded_target),
+        generous_limits(image),
+    )
+
+    assert any(
+        row.address == new_target and row.mnemonic == "ret"
+        for row in cfg.instructions
+    )
+    finite_starts = [
+        message
+        for message in messages
+        if message.startswith("ordinary closure finite-flow-start:")
+    ]
+    assert len(finite_starts) == 2
+    first_restart = next(
+        message
+        for message in messages
+        if message.startswith("ordinary closure finite-flow-restart:")
+    )
+    assert "pass=1" in first_restart
+    assert "pending=1" in first_restart
+
+
+def test_nonmonotone_finite_domain_with_retained_edge_fails_closed(
+    monkeypatch,
+):
+    image, consumer, source, first_target, second_target = (
+        finite_incoming_edge_image()
+    )
+    original = _DirectCfgRecovery._finite_operand_values_before
+    evaluations = Counter()
+
+    def change_domain(recovery, address, *args, **kwargs):
+        if address != consumer + 4:
+            return original(recovery, address, *args, **kwargs)
+        evaluations[address] += 1
+        recovery._note_producer_dependency(first_target)
+        target = first_target if evaluations[address] == 1 else second_target
+        return frozenset({target}), f"test-domain={target:#x}"
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_finite_operand_values_before",
+        change_domain,
+    )
+
+    with pytest.raises(
+        CfgRecoveryError,
+        match="retained finite-control edge became unsound",
+    ):
+        recover_cfg(
+            image,
+            (image.entrypoint, source, first_target, second_target),
+            generous_limits(image),
+        )
+
+
+def test_callback_hypotheses_run_once_after_code_closure(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    base = movzx_dispatch_image()
+    data = bytearray(base.data)
+    data[:8] = bytes.fromhex("b8 20 10 40 00 ff d0 c3")
+    data[0x20] = 0xC3
+    image = replace(
+        base,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        relocations=(
+            *base.relocations,
+            pe_mod.Relocation(base.entrypoint + 1, 3),
+        ),
+    )
+    calls = []
+
+    for method_name in (
+        "_record_copied_descriptor_callback_tables",
+        "_record_object_callback_tables",
+    ):
+        original = getattr(_DirectCfgRecovery, method_name)
+
+        def record_phase(recovery, *, _name=method_name, _original=original):
+            before_pending = tuple(recovery.pending)
+            before_block_starts = frozenset(recovery.block_starts)
+            _original(recovery)
+            calls.append(
+                (
+                    _name,
+                    before_pending,
+                    before_block_starts,
+                    tuple(recovery.pending),
+                    frozenset(recovery.block_starts),
+                )
+            )
+
+        monkeypatch.setattr(_DirectCfgRecovery, method_name, record_phase)
+
+    recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    phase_names = [row[0] for row in calls]
+    assert phase_names.count(
+        "_record_copied_descriptor_callback_tables"
+    ) >= 1
+    assert phase_names.count("_record_object_callback_tables") == 1
+    assert phase_names[-1] == "_record_object_callback_tables"
+    assert all(not before_pending for _, before_pending, *_ in calls)
+    assert all(
+        before_pending == after_pending
+        and before_block_starts == after_block_starts
+        for (
+            _,
+            before_pending,
+            before_block_starts,
+            after_pending,
+            after_block_starts,
+        ) in calls
+    )
+
+
+def test_finite_control_waits_for_cheap_resolver_closure(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    base = movzx_dispatch_image()
+    data = bytearray(base.data)
+    data[:15] = bytes.fromhex(
+        "b8 30 10 40 00 ff d0 b9 40 10 40 00 ff d1 c3"
+    )
+    data[0x30] = 0xC3
+    data[0x40] = 0xC3
+    data[0x50] = 0xC3
+    image = replace(
+        base,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        relocations=(
+            *base.relocations,
+            pe_mod.Relocation(base.entrypoint + 1, 3),
+            pe_mod.Relocation(base.entrypoint + 8, 3),
+        ),
+    )
+    growth_complete = False
+    finite_calls = []
+    original_cheap = _DirectCfgRecovery._recover_global_slot_targets
+    original_finite = _DirectCfgRecovery._recover_finite_value_target
+
+    def grow_from_later_candidate(
+        recovery, decoded, instruction, *, flow_kind
+    ):
+        nonlocal growth_complete
+        if instruction.address == base.entrypoint + 12 and not growth_complete:
+            recovery._enqueue(base.entrypoint + 0x50, is_function=True)
+            growth_complete = True
+            return True
+        return original_cheap(
+            recovery, decoded, instruction, flow_kind=flow_kind
+        )
+
+    def record_finite(recovery, decoded, instruction, *, flow_kind):
+        finite_calls.append(
+            (instruction.address, growth_complete, tuple(recovery.pending))
+        )
+        return original_finite(
+            recovery, decoded, instruction, flow_kind=flow_kind
+        )
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_recover_global_slot_targets",
+        grow_from_later_candidate,
+    )
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_recover_finite_value_target",
+        record_finite,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert finite_calls
+    assert all(
+        grew and not pending for _address, grew, pending in finite_calls
+    )
+    assert {
+        (row.source, row.target)
+        for row in cfg.control_targets.finite_internal_edges
+        if row.flow_kind == "indirect-call-finite-value"
+    } >= {
+        (base.entrypoint + 5, base.entrypoint + 0x30),
+        (base.entrypoint + 12, base.entrypoint + 0x40),
+    }
+    assert base.entrypoint + 0x50 in {
+        row.address for row in cfg.instructions
+    }
+
+
+def test_post_finite_resolvers_batch_without_mutating_finite_phase(
+    monkeypatch,
+):
+    from tools.mwcc_retro import pe as pe_mod
+
+    base = movzx_dispatch_image()
+    data = bytearray(base.data)
+    data[:15] = bytes.fromhex(
+        "b8 30 10 40 00 ff d0 b9 40 10 40 00 ff d1 c3"
+    )
+    data[0x30] = 0xC3
+    data[0x40] = 0xC3
+    data[0x50] = 0xC3
+    data[0x60] = 0xC3
+    image = replace(
+        base,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        relocations=(
+            *base.relocations,
+            pe_mod.Relocation(base.entrypoint + 1, 3),
+            pe_mod.Relocation(base.entrypoint + 8, 3),
+        ),
+    )
+    lower_mutated_this_pass = False
+    finite_observed_late_mutation = False
+    batched_second_growth = False
+    grown_sources = set()
+    original_scan = _DirectCfgRecovery._scan_owned_blocks
+    original_lower = _DirectCfgRecovery._recover_sentinel_callback_table
+
+    def reset_phase(recovery, blocks):
+        nonlocal lower_mutated_this_pass
+        lower_mutated_this_pass = False
+        return original_scan(recovery, blocks)
+
+    def reject_finite(recovery, decoded, instruction, *, flow_kind):
+        nonlocal finite_observed_late_mutation
+        finite_observed_late_mutation |= lower_mutated_this_pass
+        return False
+
+    def grow_post_finite(recovery, decoded, instruction, *, flow_kind):
+        nonlocal lower_mutated_this_pass, batched_second_growth
+        targets = {
+            base.entrypoint + 5: base.entrypoint + 0x50,
+            base.entrypoint + 12: base.entrypoint + 0x60,
+        }
+        target = targets.get(instruction.address)
+        if target is not None and instruction.address not in grown_sources:
+            if instruction.address == base.entrypoint + 12:
+                batched_second_growth = bool(recovery.pending)
+            grown_sources.add(instruction.address)
+            recovery._enqueue(target, is_function=True)
+            lower_mutated_this_pass = True
+            return True
+        return original_lower(
+            recovery, decoded, instruction, flow_kind=flow_kind
+        )
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery, "_scan_owned_blocks", reset_phase
+    )
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_recover_finite_value_target",
+        reject_finite,
+    )
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_recover_sentinel_callback_table",
+        grow_post_finite,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert not finite_observed_late_mutation
+    assert batched_second_growth
+    assert {base.entrypoint + 0x50, base.entrypoint + 0x60} <= {
+        row.address for row in cfg.instructions
+    }
+
+
+def test_function_fingerprints_do_not_repeat_whole_image_sort_after_summary_revision(
+    monkeypatch,
+):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    entries = tuple(sorted(recovery.function_addresses))[:2]
+    for entry in entries:
+        recovery._producer_function_fingerprint(entry)
+
+    whole_image_sorts = 0
+    original_sorted = sorted
+
+    def observe_sorted(iterable, *args, **kwargs):
+        nonlocal whole_image_sorts
+        if iterable is recovery.instructions:
+            whole_image_sorts += 1
+        return original_sorted(iterable, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.sorted", observe_sorted)
+    recovery.dynamic_field_write_count += 1
+    for entry in entries:
+        recovery._producer_function_fingerprint(entry)
+
+    assert whole_image_sorts == 0
+
+
+def test_function_address_index_rebuilds_once_for_new_entry_and_instruction(
+    monkeypatch,
+):
+    base = movzx_dispatch_image(closed_producer_bound=74)
+    data = bytearray(base.data)
+    data[0x80] = 0xC3
+    image = replace(
+        base,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    whole_image_sorts = 0
+    original_sorted = sorted
+
+    def observe_sorted(iterable, *args, **kwargs):
+        nonlocal whole_image_sorts
+        if iterable is recovery.instructions:
+            whole_image_sorts += 1
+        return original_sorted(iterable, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.sorted", observe_sorted)
+    recovery._enqueue(base.entrypoint + 0x44, is_function=True)
+    assert recovery._function_instruction_addresses(base.entrypoint + 0x40) == (
+        base.entrypoint + 0x40,
+    )
+    assert recovery._function_instruction_addresses(base.entrypoint + 0x44) == (
+        base.entrypoint + 0x44,
+        base.entrypoint + 0x47,
+        base.entrypoint + 0x4E,
+    )
+    assert whole_image_sorts == 1
+
+    recovery._enqueue(base.entrypoint + 0x80, is_function=True)
+    recovery._decode_from(base.entrypoint + 0x80)
+    assert recovery._function_instruction_addresses(base.entrypoint + 0x70) == (
+        base.entrypoint + 0x70,
+    )
+    assert recovery._function_instruction_addresses(base.entrypoint + 0x80) == (
+        base.entrypoint + 0x80,
+    )
+    assert whole_image_sorts == 2
+
+
+def test_unknown_byte_producer_writer_keeps_movzx_table_blocked():
+    image = movzx_dispatch_image(
+        closed_producer_bound=74,
+        unknown_producer_write=True,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(0x00401047)
+    assert any(
+        row.address == 0x00401047
+        and row.kind == "computed-flow-blocker"
+        and "index=75" in row.detail
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_byte_producer_value_75_keeps_movzx_table_blocked():
+    image = movzx_dispatch_image(closed_producer_bound=75)
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(0x00401047)
+    assert any(
+        row.address == 0x00401047
+        and row.kind == "computed-flow-blocker"
+        and "index=75" in row.detail
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def _write_rehashed_producer_certificate(path, mutate):
+    payload = json.loads(path.read_bytes())
+    mutate(payload)
+    payload["certificate_sha256"] = _producer_certificate_digest(payload)
+    path.write_text(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+
+
+def _rewrite_as_old_semantics_blocked_certificate(path):
+    payload = json.loads(path.read_bytes())
+    payload["query"]["analysis_semantics"] = "movzx-producer-analysis-v7"
+    old_query_sha256 = hashlib.sha256(
+        json.dumps(
+            payload["query"], sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    payload["query_sha256"] = old_query_sha256
+    payload["result"] = {
+        "provenance": "producer-domain-analysis-returned-bottom",
+        "status": "blocked",
+        "values": [],
+    }
+    payload["certificate_sha256"] = _producer_certificate_digest(payload)
+    old_path = path.with_name(
+        f"{old_query_sha256}-{payload['dependency_sha256']}.json"
+    )
+    old_path.write_text(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+    if old_path != path:
+        path.unlink()
+    return old_path
+
+
+def _complete_resumable_producer_cfg(image, inventory, limits, checkpoint_dir):
+    while True:
+        try:
+            return recover_cfg(
+                image,
+                inventory,
+                limits,
+                producer_checkpoint_dir=checkpoint_dir,
+                producer_query_budget=1,
+            )
+        except ProducerCheckpointIncomplete as exc:
+            assert exc.completed_this_run == 1
+
+
+def test_byte_producer_checkpoint_requires_durable_resume(tmp_path):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    progress = []
+
+    with pytest.raises(ProducerCheckpointIncomplete) as raised:
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+            producer_progress_callback=progress.append,
+        )
+
+    assert raised.value.completed_this_run == 1
+    assert raised.value.discovered_queries == 1
+    query_progress = [row.split(":", 1)[0] for row in progress if row.startswith("producer query ")]
+    assert query_progress == [
+        "producer query evaluating",
+        "producer query checkpointed",
+    ]
+    assert {
+        "ordinary closure decode-start",
+        "ordinary closure decode-complete",
+        "ordinary closure block-scan-complete",
+        "ordinary closure producer-phase-start",
+    } <= {row.split(":", 1)[0] for row in progress}
+    certificates = tuple(checkpoint_dir.glob("*.json"))
+    assert len(certificates) == 1
+    certificate = json.loads(certificates[0].read_bytes())
+    assert certificate["compiler_sha256"] == image.sha256
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v11")
+    assert certificate["query"]["analysis_semantics"] == (_MOVZX_PRODUCER_ANALYSIS_SEMANTICS)
+    assert certificate["query"]["movzx_address"] == 0x00401044
+    assert certificate["result"] == {
+        "provenance": certificate["result"]["provenance"],
+        "status": "finite",
+        "values": [0, 74],
+    }
+
+    resumed = recover_cfg(
+        image,
+        inventory,
+        generous_limits(image),
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=1,
+    )
+    assert resumed.jump_table_at(0x00401047).guard_bound == 74
+
+
+def test_byte_producer_checkpoint_does_not_discover_old_analysis_semantics(
+    tmp_path,
+):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    limits = generous_limits(image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+    current_certificate = next(checkpoint_dir.glob("*.json"))
+    old_certificate = _rewrite_as_old_semantics_blocked_certificate(
+        current_certificate
+    )
+
+    with pytest.raises(ProducerCheckpointIncomplete) as raised:
+        recover_cfg(
+            image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+
+    assert raised.value.completed_this_run == 1
+    certificates = tuple(checkpoint_dir.glob("*.json"))
+    assert old_certificate in certificates
+    assert len(certificates) == 2
+    assert {
+        json.loads(path.read_bytes())["result"]["status"]
+        for path in certificates
+    } == {"blocked", "finite"}
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (lambda query: query.pop("analysis_semantics"), "query schema"),
+        (
+            lambda query: query.__setitem__(
+                "analysis_semantics", "movzx-producer-analysis-v7"
+            ),
+            "analysis semantics",
+        ),
+    ],
+)
+def test_byte_producer_checkpoint_rejects_missing_or_wrong_analysis_semantics(
+    tmp_path, mutate, error
+):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+    certificate = next(checkpoint_dir.glob("*.json"))
+    _write_rehashed_producer_certificate(
+        certificate, lambda payload: mutate(payload["query"])
+    )
+
+    with pytest.raises(ProducerCertificateError, match=error):
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+
+
+def test_byte_producer_checkpoint_atomic_failure_restarts_cleanly(
+    monkeypatch, tmp_path
+):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    real_replace = x86_cfg_module.os.replace
+
+    def fail_certificate_replace(source, destination):
+        if Path(destination).suffix == ".json":
+            raise OSError("injected certificate replace failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(
+        x86_cfg_module.os, "replace", fail_certificate_replace
+    )
+    with pytest.raises(OSError, match="injected certificate"):
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+    assert not tuple(checkpoint_dir.glob("*.json"))
+    assert not tuple(checkpoint_dir.glob("*.tmp"))
+
+    monkeypatch.setattr(x86_cfg_module.os, "replace", real_replace)
+    resumed = _complete_resumable_producer_cfg(
+        image,
+        inventory,
+        generous_limits(image),
+        checkpoint_dir,
+    )
+    assert resumed.jump_table_at(0x00401047).guard_bound == 74
+
+
+def test_byte_producer_checkpoint_rejects_tamper(tmp_path):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+    certificate = next(checkpoint_dir.glob("*.json"))
+    payload = json.loads(certificate.read_bytes())
+    payload["result"]["values"][-1] = 73
+    certificate.write_text(json.dumps(payload))
+
+    with pytest.raises(ProducerCertificateError, match="digest"):
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+
+
+def test_byte_producer_checkpoint_rejects_wrong_compiler_sha(tmp_path):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+    certificate = next(checkpoint_dir.glob("*.json"))
+    _write_rehashed_producer_certificate(
+        certificate,
+        lambda payload: payload.__setitem__("compiler_sha256", "0" * 64),
+    )
+
+    with pytest.raises(ProducerCertificateError, match="compiler SHA"):
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+
+
+def test_byte_producer_checkpoint_rejects_partial_dependencies(tmp_path):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+    certificate = next(checkpoint_dir.glob("*.json"))
+
+    def remove_dependencies(payload):
+        payload["dependencies"] = []
+        payload["dependency_count"] = 0
+        payload["dependency_sha256"] = hashlib.sha256(b"[]").hexdigest()
+
+    _write_rehashed_producer_certificate(certificate, remove_dependencies)
+
+    with pytest.raises(ProducerCertificateError, match="root dependency"):
+        recover_cfg(
+            image,
+            inventory,
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+
+
+def test_forwarded_byte_producer_certificate_binds_transitive_callees(
+    tmp_path,
+):
+    image, movzx_address, _transfer_address = (
+        forwarded_movzx_dispatch_image()
+    )
+    inventory = build_seed_inventory(image, ())
+    limits = generous_limits(image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    query = _MovzxProducerQuery(
+        function_entry=0x00401080,
+        movzx_address=movzx_address,
+        movzx_bytes_hex="0fb618",
+        destination_register="ebx",
+        source_base_register="eax",
+        field_path=(0,),
+        source_width=1,
+    )
+
+    recovery = _DirectCfgRecovery(image, inventory, limits)
+    recovery.recover()
+    session = _ProducerCertificateSession(
+        image_sha256=image.sha256,
+        limits=limits,
+        checkpoint_dir=checkpoint_dir,
+        query_budget=1,
+    )
+
+    def compute_domain(target_recovery):
+        return target_recovery._finite_object_byte_register_values_before(
+            movzx_address,
+            "eax",
+            0x00401080,
+            (0,),
+            frozenset(),
+        )
+
+    result = session.evaluate(
+        recovery=recovery,
+        query=query,
+        compute=lambda: compute_domain(recovery),
+    )
+    assert result is not None and result[0] == frozenset({0, 74})
+    certificate_path = next(checkpoint_dir.glob("*.json"))
+    certificate = json.loads(certificate_path.read_bytes())
+    assert {
+        row["identifier"]
+        for row in certificate["dependencies"]
+        if row["kind"] == "function"
+    } == {
+        0x00401000,
+        0x00401050,
+        0x00401080,
+        0x004010C0,
+        0x004010D0,
+    }
+
+    # A changed transitive helper fingerprint makes the durable certificate
+    # stale even though the semantic MOVZX query itself is unchanged.
+    stale_recovery = _DirectCfgRecovery(image, inventory, limits)
+    stale_recovery.recover()
+    helper_instruction = stale_recovery.instructions[0x004010D4]
+    stale_recovery.instructions[0x004010D4] = replace(
+        helper_instruction, bytes_hex="8b5007"
+    )
+    stale_recovery.producer_function_fingerprint_cache.clear()
+    stale_session = _ProducerCertificateSession(
+        image_sha256=image.sha256,
+        limits=limits,
+        checkpoint_dir=checkpoint_dir,
+        query_budget=0,
+    )
+    assert (
+        stale_session.evaluate(
+            recovery=stale_recovery,
+            query=query,
+            compute=lambda: compute_domain(stale_recovery),
+        )
+        is None
+    )
+    assert stale_session.query_states[query.sha256] == "pending"
+    assert not stale_session.validated_query_ids
+
+
+@pytest.mark.parametrize("callee_published_outer", [False, True])
+def test_callee_stack_writer_certificate_binds_every_effect_function(
+    tmp_path, callee_published_outer
+):
+    image, movzx_address, _transfer_address, _mutator_call = (
+        callee_stack_object_writer_image(
+            callee_published_outer=callee_published_outer
+        )
+    )
+    inventory = build_seed_inventory(image, ())
+    limits = generous_limits(image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    recovery = _DirectCfgRecovery(image, inventory, limits)
+    recovery.recover()
+    session = _ProducerCertificateSession(
+        image_sha256=image.sha256,
+        limits=limits,
+        checkpoint_dir=checkpoint_dir,
+        query_budget=1,
+    )
+    query = _MovzxProducerQuery(
+        function_entry=0x00401100,
+        movzx_address=movzx_address,
+        movzx_bytes_hex="0fb618",
+        destination_register="ebx",
+        source_base_register="eax",
+        field_path=(0,),
+        source_width=1,
+    )
+
+    result = session.evaluate(
+        recovery=recovery,
+        query=query,
+        compute=lambda: (
+            recovery._finite_object_byte_register_values_before(
+                movzx_address,
+                "eax",
+                0x00401100,
+                (0,),
+                frozenset(),
+            )
+        ),
+    )
+
+    assert result is not None and result[0] == frozenset({0, 74})
+    certificate = json.loads(
+        next(checkpoint_dir.glob("*.json")).read_bytes()
+    )
+    expected_dependencies = {
+        0x00401000,
+        0x00401100,
+        0x00401140,
+        0x00401160,
+        0x00401180,
+        0x00401200,
+    }
+    if callee_published_outer:
+        expected_dependencies.update({0x00401260, 0x004012A0})
+    assert {
+        row["identifier"]
+        for row in certificate["dependencies"]
+        if row["kind"] == "function"
+    } == expected_dependencies
+
+
+def test_byte_producer_checkpoint_is_seed_order_independent(tmp_path):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+
+    first = _complete_resumable_producer_cfg(
+        image,
+        type(inventory)(inventory.records),
+        generous_limits(image),
+        first_dir,
+    )
+    second = _complete_resumable_producer_cfg(
+        image,
+        type(inventory)(tuple(reversed(inventory.records))),
+        generous_limits(image),
+        second_dir,
+    )
+
+    assert tuple(path.read_bytes() for path in first_dir.glob("*.json")) == tuple(
+        path.read_bytes() for path in second_dir.glob("*.json")
+    )
+    assert first.instructions == second.instructions
+    assert first.edges == second.edges
+    assert first.jump_tables == second.jump_tables
+    assert first.control_targets == second.control_targets
+
+
+def test_byte_producer_checkpoint_cap_failure_publishes_nothing(tmp_path):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    limits = replace(
+        generous_limits(image), max_producer_domain_evaluations=1
+    )
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+
+    with pytest.raises(AnalysisLimitError) as raised:
+        recover_cfg(
+            image,
+            build_seed_inventory(image, ()),
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+    assert raised.value.limit_name == "max_producer_domain_evaluations"
+    assert not tuple(checkpoint_dir.glob("*.json"))
+
+
+def test_byte_producer_checkpoint_invalidates_changed_writer_to_blocked(
+    tmp_path,
+):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    limits = generous_limits(image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    query = _MovzxProducerQuery(
+        function_entry=0x00401000,
+        movzx_address=0x00401044,
+        movzx_bytes_hex="0fb618",
+        destination_register="ebx",
+        source_base_register="eax",
+        field_path=(0,),
+        source_width=1,
+    )
+    slot = 0x00402300
+
+    finite_recovery = _DirectCfgRecovery(image, inventory, limits)
+    finite_recovery.recover()
+    finite_session = _ProducerCertificateSession(
+        image_sha256=image.sha256,
+        limits=limits,
+        checkpoint_dir=checkpoint_dir,
+        query_budget=1,
+    )
+
+    def finite_domain():
+        finite_recovery._note_producer_global_slot_dependency(slot)
+        return frozenset({0, 74}), "closed-global-writer-domain"
+
+    assert finite_session.evaluate(
+        recovery=finite_recovery,
+        query=query,
+        compute=finite_domain,
+    ) == (frozenset({0, 74}), "closed-global-writer-domain")
+
+    blocked_recovery = _DirectCfgRecovery(image, inventory, limits)
+    blocked_recovery.recover()
+    blocked_recovery.global_slot_writes[slot] = {
+        _GlobalSlotWrite(
+            instruction_address=0x00401013,
+            value=None,
+            provenance="new-unknown-writer",
+        )
+    }
+    blocked_session = _ProducerCertificateSession(
+        image_sha256=image.sha256,
+        limits=limits,
+        checkpoint_dir=checkpoint_dir,
+        query_budget=1,
+    )
+
+    def blocked_domain():
+        blocked_recovery._note_producer_global_slot_dependency(slot)
+        return None
+
+    assert (
+        blocked_session.evaluate(
+            recovery=blocked_recovery,
+            query=query,
+            compute=blocked_domain,
+        )
+        is None
+    )
+    assert blocked_session.completed_this_run == 1
+    assert len(tuple(checkpoint_dir.glob("*.json"))) == 2
+    results = {
+        json.loads(path.read_bytes())["result"]["status"]
+        for path in checkpoint_dir.glob("*.json")
+    }
+    assert results == {"finite", "blocked"}
+
+
+def test_byte_producer_checkpoint_final_closure_matches_monolithic(tmp_path):
+    image = movzx_dispatch_image(
+        closed_producer_bound=74,
+        duplicate_consumer_transfer=True,
+        producer_proof_after_ordinary_round=True,
+    )
+    inventory = build_seed_inventory(image, ())
+    baseline = recover_cfg(image, inventory, generous_limits(image))
+    resumed = _complete_resumable_producer_cfg(
+        image,
+        inventory,
+        generous_limits(image),
+        tmp_path / "producer-checkpoints",
+    )
+
+    assert resumed.seed_inventory == baseline.seed_inventory
+    assert resumed.instructions == baseline.instructions
+    assert resumed.blocks == baseline.blocks
+    assert resumed.edges == baseline.edges
+    assert resumed.direct_calls == baseline.direct_calls
+    assert resumed.jump_tables == baseline.jump_tables
+    assert resumed.control_targets == baseline.control_targets
+    assert resumed.data_regions == baseline.data_regions
+    assert resumed.padding_regions == baseline.padding_regions
+    assert resumed.function_entries == baseline.function_entries
+
+
 def test_bounded_registrar_callers_prove_runtime_callback_table(tmp_path):
     cfg = dispatch_cfg(tmp_path, mode="registrar-table")
     table = cfg.jump_table_at(0x00401075)
@@ -1153,6 +5922,214 @@ def test_conditional_outparam_store_remains_open(tmp_path):
     assert any(
         row.address == 0x00401014 and row.kind == "indirect-flow"
         for row in cfg.control_targets.unresolved
+    )
+
+
+def test_loader_zero_global_stack_context_closes_callback_field(tmp_path):
+    image, call_address = global_stack_callback_image(tmp_path)
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == call_address
+        and row.flow_kind == "indirect-call-finite-value"
+    )
+    assert edge.target == 0x00401150
+    assert "global-stack-context=0x402300" in edge.provenance
+    assert "zero-fill=" in edge.provenance
+    assert "saved-nested-context=" in edge.provenance
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ["unknown-field", "alternate-global-writer", "unknown-caller"],
+)
+def test_global_stack_context_requires_closed_writers_and_callers(
+    tmp_path, variant
+):
+    image, call_address = global_stack_callback_image(
+        tmp_path,
+        unknown_field_write=variant == "unknown-field",
+        alternate_global_writer=variant == "alternate-global-writer",
+        unknown_caller=variant == "unknown-caller",
+    )
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+    assert any(
+        row.address == call_address and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+    assert not any(
+        row.source == call_address
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+@pytest.mark.parametrize("field_offset", (0x10, 0x18, 0x20, 0x24))
+def test_nested_global_stack_publications_restore_every_return_arm(
+    field_offset,
+):
+    image, call_address, _publisher, _zero_fill, _publications = (
+        nested_global_stack_callback_image(field_offset=field_offset)
+    )
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == call_address
+        and row.flow_kind == "indirect-call-finite-value"
+    )
+    assert edge.target == 0x004011C0
+    assert f"field={field_offset:+#x}" in edge.provenance
+
+
+def test_inactive_stack_context_writes_do_not_poison_prior_publications():
+    image, call_address, _publisher, _zero_fill, _publications = (
+        nested_global_stack_callback_image(
+            field_offset=0x18,
+            mutation="post-restore-overlapping-write",
+        )
+    )
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+    assert any(
+        row.source == call_address
+        and row.target == 0x004011C0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+
+
+def test_nested_global_stack_domain_binds_publishers_writers_and_callers():
+    image, call_address, publisher, zero_fill, _publications = (
+        nested_global_stack_callback_image(field_offset=0x20)
+    )
+    recovery = _DirectCfgRecovery(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    recovery.recover()
+
+    memo = next(
+        value
+        for key, value in recovery.finite_control_memo.items()
+        if key[1] == call_address
+    )
+    function_dependencies = {
+        identifier: fingerprint
+        for kind, identifier, fingerprint in memo.dependencies
+        if kind == "function"
+    }
+    assert set(function_dependencies) == {
+        0x00401000,
+        publisher,
+        0x00401180,
+        zero_fill,
+    }
+    assert all(len(fingerprint) == 64 for fingerprint in function_dependencies.values())
+    assert any(
+        kind == "global-slot" and identifier == 0x00402300
+        for kind, identifier, _fingerprint in memo.dependencies
+    )
+
+    hostile, hostile_call, *_rest = nested_global_stack_callback_image(
+        field_offset=0x20,
+        mutation="alternate-global-writer",
+    )
+    hostile_recovery = _DirectCfgRecovery(
+        hostile,
+        build_seed_inventory(hostile, ()),
+        generous_limits(hostile),
+    )
+    hostile_recovery.recover()
+    hostile_memo = next(
+        value
+        for key, value in hostile_recovery.finite_control_memo.items()
+        if key[1] == hostile_call
+    )
+    assert any(
+        kind == "function" and identifier == 0x004011E0
+        for kind, identifier, _fingerprint in hostile_memo.dependencies
+    )
+
+
+def test_cached_global_stack_domain_replays_transitive_dependencies():
+    image, _call_address, _publisher, _zero_fill, _publications = (
+        nested_global_stack_callback_image(field_offset=0x24)
+    )
+    recovery = _DirectCfgRecovery(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+    recovery.recover()
+    recovery.global_stack_field_cache.clear()
+
+    observed = []
+    for _ in range(2):
+        dependencies = set()
+        recovery.producer_dependency_collectors.append(dependencies)
+        try:
+            result = recovery._global_stack_field_values(
+                0x00402300,
+                0x24,
+                frozenset(),
+            )
+        finally:
+            assert recovery.producer_dependency_collectors.pop() is dependencies
+        assert result is not None
+        observed.append(dependencies)
+
+    assert observed[1] == observed[0]
+    assert observed[1] == {
+        ("function", 0x00401000),
+        ("function", 0x00401050),
+        ("function", 0x00401180),
+        ("function", 0x004011A0),
+        ("global-slot", 0x00402300),
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-restore-arm",
+        "out-of-order-restore",
+        "overwritten-save-slot",
+        "unknown-overlapping-write",
+        "alternate-global-writer",
+        "alternate-unknown-caller",
+    ),
+)
+def test_nested_global_stack_context_rejects_open_or_hostile_domains(
+    mutation,
+):
+    image, call_address, _publisher, _zero_fill, _publications = (
+        nested_global_stack_callback_image(
+            field_offset=0x20,
+            mutation=mutation,
+        )
+    )
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+    assert any(
+        row.address == call_address and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+    assert not any(
+        row.source == call_address
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
     )
 
 
@@ -1544,6 +6521,336 @@ def test_constructor_field_provenance_is_stable_as_finite_writers_grow(
     assert all("dynamic-field=+0x104" in row for row in edges.values())
 
 
+def test_finite_control_invalidation_reports_changed_dependency(tmp_path):
+    image = load_dispatch_image(
+        tmp_path, mode="constructor-field-late-finite-write"
+    )
+    progress = []
+
+    recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=tmp_path / "producer-checkpoints",
+        producer_query_budget=0,
+        producer_progress_callback=progress.append,
+    )
+
+    assert any(
+        row.startswith(
+            "finite-control cache-invalidated: transfer=0x40100b;"
+        )
+        and "changed=dynamic-field:+0x104" in row
+        for row in progress
+    )
+
+
+def test_dynamic_field_writer_subproofs_reuse_after_unrelated_summary_growth(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(
+        tmp_path, mode="constructor-field-unknown-write"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.dynamic_field_cache.clear()
+    recovery.dynamic_field_write_receiver_cache.clear()
+    receiver_calls = []
+    source_calls = []
+    original_receiver = recovery._dynamic_field_receiver_identity
+    original_source = recovery._finite_operand_values_before
+
+    def record_receiver(*args, **kwargs):
+        receiver_calls.append(args[0])
+        return original_receiver(*args, **kwargs)
+
+    def record_source(*args, **kwargs):
+        source_calls.append(args[0])
+        return original_source(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recovery,
+        "_dynamic_field_receiver_identity",
+        record_receiver,
+    )
+    monkeypatch.setattr(
+        recovery, "_finite_operand_values_before", record_source
+    )
+    identity = _AbstractObjectIdentity("argument", 0)
+    first = recovery._finite_dynamic_field_values(
+        0x104, frozenset(), identity
+    )
+    first_counts = (len(receiver_calls), len(source_calls))
+
+    recovery.direct_calls.add(DirectCall(0x00401080, 0x00401090))
+    recovery.dynamic_field_cache.clear()
+    dependencies = set()
+    recovery.producer_dependency_collectors.append(dependencies)
+    try:
+        second = recovery._finite_dynamic_field_values(
+            0x104, frozenset(), identity
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is dependencies
+
+    assert first is None and second is None
+    assert first_counts == (2, 1)
+    assert (len(receiver_calls), len(source_calls)) == first_counts
+    assert ("function", 0x00401030) in dependencies
+
+
+def test_dynamic_field_writer_subproof_reuses_old_writer_and_includes_new_writer(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(
+        tmp_path, mode="constructor-field-late-finite-write"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original_writes = tuple(
+        sorted(
+            recovery.dynamic_field_writes[0x104],
+            key=lambda row: row.instruction_address,
+        )
+    )
+    assert len(original_writes) == 2
+    expected_values = tuple(row.value for row in original_writes)
+    assert all(value is not None for value in expected_values)
+    first_write, second_write = (
+        replace(row, value=None) for row in original_writes
+    )
+    recovery.dynamic_field_writes = {0x104: {first_write}}
+    recovery.dynamic_field_write_count = 1
+    recovery.dynamic_field_cache.clear()
+    source_calls = Counter()
+    original_source = recovery._finite_operand_values_before
+
+    def record_source(*args, **kwargs):
+        source_calls[args[0]] += 1
+        return original_source(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recovery, "_finite_operand_values_before", record_source
+    )
+    first = recovery._finite_dynamic_field_values(0x104, frozenset())
+
+    recovery.dynamic_field_writes[0x104].add(second_write)
+    recovery.dynamic_field_write_count = 2
+    recovery.dynamic_field_cache.clear()
+    dependencies = set()
+    recovery.producer_dependency_collectors.append(dependencies)
+    try:
+        second = recovery._finite_dynamic_field_values(0x104, frozenset())
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is dependencies
+
+    assert first is not None and first[0] == frozenset({expected_values[0]})
+    assert second is not None and second[0] == frozenset(expected_values)
+    assert source_calls == Counter(
+        {
+            first_write.instruction_address: 1,
+            second_write.instruction_address: 1,
+        }
+    )
+    assert {
+        ("function", recovery._registrar_function_entry(row.instruction_address))
+        for row in (first_write, second_write)
+    } <= dependencies
+
+
+def test_dynamic_field_writer_subproof_invalidates_nested_field_dependency(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(tmp_path, mode="constructor-field-callback")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original_write = next(iter(recovery.dynamic_field_writes[0x104]))
+    expected_value = original_write.value
+    write = replace(original_write, value=None)
+    recovery.dynamic_field_writes = {0x104: {write}}
+    recovery.dynamic_field_write_count = 1
+    recovery.dynamic_field_cache.clear()
+    source_calls = 0
+
+    def finite_source(*_args, **_kwargs):
+        nonlocal source_calls
+        source_calls += 1
+        recovery._note_producer_dynamic_field_dependency(0x108)
+        return frozenset({expected_value}), "nested-field-source"
+
+    monkeypatch.setattr(
+        recovery, "_finite_operand_values_before", finite_source
+    )
+    assert recovery._finite_dynamic_field_values(0x104, frozenset())
+    assert source_calls == 1
+
+    recovery.direct_calls.add(DirectCall(0x00401080, 0x00401090))
+    recovery.dynamic_field_cache.clear()
+    dependencies = set()
+    recovery.producer_dependency_collectors.append(dependencies)
+    try:
+        assert recovery._finite_dynamic_field_values(0x104, frozenset())
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is dependencies
+    assert source_calls == 1
+    assert ("dynamic-field", 0x108) in dependencies
+
+    nested_write = _DynamicFieldWrite(
+        instruction_address=write.instruction_address,
+        displacement=0x108,
+        width=4,
+        value=0,
+        receiver_identity=None,
+        provenance="nested-field-growth",
+    )
+    recovery.dynamic_field_writes[0x108] = {nested_write}
+    recovery.dynamic_field_write_count = 2
+    recovery.dynamic_field_cache.clear()
+    assert recovery._finite_dynamic_field_values(0x104, frozenset())
+    assert source_calls == 2
+
+
+def test_dynamic_field_receiver_memo_invalidates_only_changed_receiver_function(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(tmp_path, mode="constructor-field-callback")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    write = next(iter(recovery.dynamic_field_writes[0x104]))
+    identity_calls = 0
+
+    def receiver_identity(*_args, **_kwargs):
+        nonlocal identity_calls
+        identity_calls += 1
+        return _AbstractObjectIdentity("argument", identity_calls)
+
+    monkeypatch.setattr(
+        recovery, "_dynamic_field_receiver_identity", receiver_identity
+    )
+    first = recovery._dynamic_field_write_receiver_identity(write)
+
+    recovery.direct_calls.add(DirectCall(0x00401080, 0x00401090))
+    dependencies = set()
+    recovery.producer_dependency_collectors.append(dependencies)
+    try:
+        second = recovery._dynamic_field_write_receiver_identity(write)
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is dependencies
+    assert first == second
+    assert identity_calls == 1
+    assert ("function", 0x00401030) in dependencies
+
+    function_entry = recovery._registrar_function_entry(
+        write.instruction_address
+    )
+    recovery.seed_records.add(
+        SeedRecord(
+            address=function_entry,
+            category="explicit-seed",
+            provenance_address=function_entry,
+            provenance_bytes=recovery.instructions[
+                function_entry
+            ].bytes_hex,
+            detail="changed receiver function",
+            is_function=True,
+        )
+    )
+    recovery.producer_seed_revision += 1
+    third = recovery._dynamic_field_write_receiver_identity(write)
+    assert third != second
+    assert identity_calls == 2
+
+
+def test_dynamic_field_writer_memo_separates_visited_cuts_and_cycles_fail_closed(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(tmp_path, mode="constructor-field-callback")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original_write = next(iter(recovery.dynamic_field_writes[0x104]))
+    write = replace(original_write, value=None)
+    recovery.dynamic_field_writes = {0x104: {write}}
+    recovery.dynamic_field_write_count = 1
+    recovery.dynamic_field_cache.clear()
+    source_calls = 0
+
+    def cycle_then_finite(*args, **_kwargs):
+        nonlocal source_calls
+        source_calls += 1
+        if source_calls == 1:
+            return recovery._finite_dynamic_field_values(0x104, args[3])
+        return frozenset({original_write.value}), "different visited cut"
+
+    monkeypatch.setattr(
+        recovery, "_finite_operand_values_before", cycle_then_finite
+    )
+    assert recovery._finite_dynamic_field_values(0x104, frozenset()) is None
+
+    recovery.direct_calls.add(DirectCall(0x00401080, 0x00401090))
+    recovery.dynamic_field_cache.clear()
+    result = recovery._finite_dynamic_field_values(
+        0x104, frozenset({(0xDEAD, "different-cut")})
+    )
+    assert result is not None
+    assert result[0] == frozenset({original_write.value})
+    assert source_calls == 2
+
+
+def test_dynamic_field_writer_subproof_cache_respects_entry_limit(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(tmp_path, mode="constructor-field-callback")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original_write = next(iter(recovery.dynamic_field_writes[0x104]))
+    write = replace(original_write, value=None)
+    recovery.dynamic_field_writer_source_cache.clear()
+    recovery.limits = replace(
+        recovery.limits, max_producer_domain_cache_entries=0
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_finite_operand_values_before",
+        lambda *_args, **_kwargs: (
+            frozenset({original_write.value}),
+            "finite source",
+        ),
+    )
+
+    with pytest.raises(
+        AnalysisLimitError, match="max_producer_domain_cache_entries"
+    ):
+        recovery._finite_dynamic_field_writer_source(
+            write,
+            0x104,
+            frozenset({(-1, "dynamic-field:260:unknown")}),
+        )
+
+
 def test_unknown_constructor_field_write_remains_blocking(tmp_path):
     cfg = dispatch_cfg(tmp_path, mode="constructor-field-unknown-write")
     assert any(
@@ -1607,6 +6914,50 @@ def test_constructor_descriptor_follows_wrapper_and_global_object_origin(
         for row in cfg.control_targets.unresolved
         if row.address == 0x00401066
     ]
+
+
+def test_constructor_descriptor_follows_forwarded_switch_global_origin(
+    tmp_path,
+):
+    cfg = dispatch_cfg(
+        tmp_path,
+        mode="validated-constructor-descriptor-forwarded-global-switch",
+    )
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == 0x00401066
+        and row.flow_kind == "indirect-call-constructor-descriptor"
+    )
+    assert edge.target == 0x004010F0
+    assert "global-slot=0x402700" in edge.provenance
+    assert "rejected-tag=0x436f6d70" in edge.provenance
+    assert "caller=0x40110e" in edge.provenance
+    assert "caller=0x401117" in edge.provenance
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "validated-constructor-descriptor-forwarded-global-switch-unknown-tag",
+        "validated-constructor-descriptor-forwarded-global-switch-hidden-caller",
+        "validated-constructor-descriptor-forwarded-global-switch-alternate-writer",
+    ),
+)
+def test_constructor_descriptor_rejects_open_forwarded_switch_global_origin(
+    tmp_path, mode
+):
+    cfg = dispatch_cfg(tmp_path, mode=mode)
+    assert any(
+        row.address == 0x00401066
+        and row.kind in {"indirect-flow", "computed-flow-blocker"}
+        for row in cfg.control_targets.unresolved
+    )
+    assert not any(
+        row.source == 0x00401066
+        and row.flow_kind == "indirect-call-constructor-descriptor"
+        for row in cfg.control_targets.finite_internal_edges
+    )
 
 
 def test_constructor_descriptor_follows_relocated_double_global_handle(
@@ -3278,6 +8629,325 @@ def test_hypothesis_replay_discovers_second_order_object_table(tmp_path):
     )
 
 
+def test_hypothesis_replay_reuses_all_reproduced_trial_cfg(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-slot-zero-hypothesis"
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def record_recovery(recovery):
+        cfg = original(recovery)
+        recoveries.append((recovery, cfg))
+        return cfg
+
+    monkeypatch.setattr(_DirectCfgRecovery, "recover", record_recovery)
+
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+    assert len(recoveries) == 2
+    assert cfg is recoveries[-1][1]
+    assert any(
+        row.category == "copied-descriptor-callback-entry"
+        for row in cfg.seed_inventory.records
+    )
+
+
+def test_reproduced_trial_revalidates_pre_finite_after_late_finite_edge(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-slot-zero-hypothesis"
+    )
+    late_function = 0x00401100
+    special_transfer = late_function
+    late_transfer = late_function + 2
+    data = bytearray(image.data)
+    text_section = next(row for row in image.sections if row.name == ".text")
+    late_offset = text_section.raw_offset + (late_function - text_section.va)
+    data[late_offset : late_offset + 5] = bytes.fromhex("ff d0 ff d1 c3")
+    data[late_offset + 0x20] = 0xC3
+    data[late_offset + 0x30] = 0xC3
+    image = replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        sections=tuple(
+            replace(row, raw_size=0x200, virt_size=0x200)
+            if row.name == ".text"
+            else row
+            for row in image.sections
+        ),
+        executable_ranges=((text_section.va, text_section.va + 0x200),),
+    )
+    recoveries = []
+    special_observations = {}
+    original_recover = _DirectCfgRecovery.recover
+    original_special = _DirectCfgRecovery._recover_global_slot_targets
+    original_finite = _DirectCfgRecovery._recover_finite_value_target
+    original_add_edge = _DirectCfgRecovery._add_edge
+
+    def omit_replayed_hypothesis_edge(
+        recovery, source, target, kind, *, provenance=None
+    ):
+        if kind == "indirect-call-copied-descriptor-slot-zero":
+            return None
+        return original_add_edge(
+            recovery,
+            source,
+            target,
+            kind,
+            provenance=provenance,
+        )
+
+    def synthetic_special(
+        recovery, decoded, instruction, *, flow_kind
+    ):
+        if instruction.address != special_transfer:
+            return original_special(
+                recovery, decoded, instruction, flow_kind=flow_kind
+            )
+        finite_edge_present = any(
+            row.source == late_transfer
+            and row.kind == "indirect-call-finite-value"
+            for row in recovery.edges
+        )
+        special_observations.setdefault(id(recovery), []).append(
+            finite_edge_present
+        )
+        targets = {0x00401120}
+        if finite_edge_present:
+            targets.add(0x00401130)
+        provenance = "test-special-domain=late-finite-edge"
+        for target in sorted(targets):
+            recovery._add_edge(
+                instruction.address,
+                target,
+                "indirect-call-global-slot",
+                provenance=provenance,
+            )
+            recovery._record_finite_target(target)
+            recovery._enqueue(target, is_function=True)
+        recovery._record_fixpoint_update()
+        return True
+
+    def synthetic_finite(
+        recovery, decoded, instruction, *, flow_kind
+    ):
+        if instruction.address != late_transfer:
+            return original_finite(
+                recovery, decoded, instruction, flow_kind=flow_kind
+            )
+        if not recovery._allow_movzx_producer_domains:
+            return False
+        recovery._add_edge(
+            instruction.address,
+            0x00401120,
+            "indirect-call-finite-value",
+            provenance="test-late-finite-domain",
+        )
+        recovery._record_finite_target(0x00401120)
+        recovery._enqueue(0x00401120, is_function=True)
+        return True
+
+    def record_recovery(recovery):
+        cfg = original_recover(recovery)
+        recoveries.append((recovery, cfg))
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_recover_global_slot_targets",
+        synthetic_special,
+    )
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_add_edge",
+        omit_replayed_hypothesis_edge,
+    )
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_recover_finite_value_target",
+        synthetic_finite,
+    )
+    monkeypatch.setattr(_DirectCfgRecovery, "recover", record_recovery)
+
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, late_function),
+        generous_limits(image),
+    )
+
+    assert len(recoveries) == 2
+    assert cfg is recoveries[-1][1]
+    assert all(
+        observations[0] is False and True in observations[1:]
+        for observations in special_observations.values()
+    )
+    assert {
+        row.target
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == special_transfer
+        and row.flow_kind == "indirect-call-global-slot"
+    } == {0x00401120, 0x00401130}
+
+
+def test_reused_trial_discovers_additional_callback_hypothesis(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-object-hypothesis-chain"
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def record_recovery(recovery):
+        cfg = original(recovery)
+        recoveries.append((recovery, cfg))
+        return cfg
+
+    monkeypatch.setattr(_DirectCfgRecovery, "recover", record_recovery)
+
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+    assert len(recoveries) == 3
+    assert recoveries[1][0].object_callback_table_hypotheses
+    assert cfg is recoveries[-1][1]
+    assert {
+        row.category
+        for row in cfg.seed_inventory.records
+        if "callback" in row.category
+    } == {
+        "copied-descriptor-callback-entry",
+        "object-callback-table-entry",
+    }
+
+
+def test_invalidated_reused_trial_rebuilds_clean_accepted_seeds(
+    tmp_path, monkeypatch
+):
+    class FirstIterationOnly:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def __iter__(self):
+            rows = self.rows
+            self.rows = ()
+            return iter(rows)
+
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-slot-zero-hypothesis"
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def invalidate_after_reproduction(recovery):
+        cfg = original(recovery)
+        recoveries.append((recovery, cfg))
+        if len(recoveries) == 2:
+            recovery.validated_copied_descriptor_callback_hypotheses = (
+                FirstIterationOnly(
+                    tuple(
+                        recovery.validated_copied_descriptor_callback_hypotheses
+                    )
+                )
+            )
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        invalidate_after_reproduction,
+    )
+
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+    assert len(recoveries) == 3
+    assert cfg is recoveries[-1][1]
+    assert not any(
+        "callback" in row.category
+        for row in cfg.seed_inventory.records
+    )
+
+
+def test_rejected_trial_rebuilds_clean_accepted_seeds(tmp_path, monkeypatch):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-slot-zero-hypothesis"
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def reject_trial_candidate(recovery):
+        cfg = original(recovery)
+        recoveries.append((recovery, cfg))
+        if len(recoveries) == 2:
+            recovery.validated_copied_descriptor_callback_hypotheses.clear()
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery, "recover", reject_trial_candidate
+    )
+
+    cfg = recover_cfg(
+        image, build_seed_inventory(image, ()), generous_limits(image)
+    )
+
+    assert len(recoveries) == 3
+    assert cfg is recoveries[-1][1]
+    assert not any(
+        "callback" in row.category
+        for row in cfg.seed_inventory.records
+    )
+
+
+def test_reused_trial_preserves_producer_checkpoint_incomplete(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-slot-zero-hypothesis"
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+    trial_query_id = "trial-only-producer-query"
+
+    def mark_trial_query_pending(recovery):
+        cfg = original(recovery)
+        recoveries.append((recovery, cfg))
+        if len(recoveries) == 2:
+            session = recovery.producer_certificate_session
+            assert session is not None
+            recovery.producer_query_ids.add(trial_query_id)
+            session.query_states[trial_query_id] = "pending"
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery, "recover", mark_trial_query_pending
+    )
+
+    with pytest.raises(ProducerCheckpointIncomplete) as raised:
+        recover_cfg(
+            image,
+            build_seed_inventory(image, ()),
+            generous_limits(image),
+            producer_checkpoint_dir=tmp_path / "producer-checkpoints",
+            producer_query_budget=0,
+        )
+
+    assert len(recoveries) == 2
+    assert raised.value.completed_this_run == 0
+    assert raised.value.discovered_queries == 1
+    assert raised.value.validated_queries == 0
+    assert raised.value.pending_queries == 1
+
+
 def test_certified_copied_descriptor_callback_closes_incoming_domain(
     tmp_path,
 ):
@@ -3725,6 +9395,42 @@ def test_cdecl_argument_write_proves_global_callback_target(tmp_path):
     assert "caller=" not in edge.provenance
 
 
+def test_pre_finite_revalidation_rejects_shrunk_global_slot_domain(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(tmp_path, mode="global-cdecl-callback")
+    evaluations = 0
+    original = _DirectCfgRecovery._finite_global_slot_values
+
+    def shrinking_domain(recovery, slot, visited):
+        nonlocal evaluations
+        if slot != 0x00402300:
+            return original(recovery, slot, visited)
+        evaluations += 1
+        values = {0, 0x00401090}
+        if evaluations == 1:
+            values.add(0x00401030)
+        return frozenset(values), "test-closed-global-domain"
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_finite_global_slot_values",
+        shrinking_domain,
+    )
+
+    with pytest.raises(
+        CfgRecoveryError,
+        match="retained pre-finite control target became unsound",
+    ):
+        recover_cfg(
+            image,
+            build_seed_inventory(image, ()),
+            generous_limits(image),
+        )
+
+    assert evaluations == 2
+
+
 def test_finite_object_field_uses_reachable_runtime_writes(tmp_path):
     cfg = dispatch_cfg(tmp_path, mode="finite-object-runtime-field-callback")
     edge = next(
@@ -3851,6 +9557,55 @@ def test_reachable_object_callback_table_seeds_every_relocated_entry(tmp_path):
         row.start <= 0x00402300 and 0x0040230C <= row.end
         for row in cfg.data_regions
     )
+
+
+def test_disjoint_fresh_receiver_write_does_not_open_object_field_domain(
+    tmp_path,
+):
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    text = image.sections[0]
+    unrelated_entry = text.va + text.raw_size
+    data = bytearray(image.data)
+    unrelated_offset = text.raw_offset + text.raw_size
+    unrelated_program = bytes.fromhex(
+        "53 68 18 01 00 00 6a 00 e8 b3 ff ff ff 89 c3 59 "
+        "85 db 59 74 0c 8b 44 24 08 89 83 04 01 00 00 "
+        "5b c3 31 c0 5b c3"
+    )
+    data[
+        unrelated_offset : unrelated_offset + len(unrelated_program)
+    ] = unrelated_program
+    expanded_text = replace(text, raw_size=0x180, virt_size=0x180)
+    image = replace(
+        image,
+        data=bytes(data),
+        sections=(expanded_text, *image.sections[1:]),
+        executable_ranges=((text.va, text.va + 0x180),),
+    )
+
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, image.exports[0].va, unrelated_entry),
+        generous_limits(image),
+    )
+
+    records = {
+        row
+        for row in cfg.seed_inventory.records
+        if row.category == "object-callback-table-entry"
+    }
+    assert {row.address for row in records} == {0x00401090, 0x004010A0}
+    assert all("receiver-disjoint=0x401119" in row.detail for row in records)
+
+
+def test_same_receiver_unknown_write_keeps_object_field_domain_open(tmp_path):
+    cfg = dispatch_cfg(tmp_path, mode="object-callback-table-unknown-overlap")
+
+    assert not {
+        row.address
+        for row in cfg.seed_inventory.records
+        if row.category == "object-callback-table-entry"
+    }
 
 
 def test_certified_object_callback_closes_copied_argument_domain(tmp_path):

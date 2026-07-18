@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import sys
@@ -8,6 +9,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 @pytest.fixture(autouse=True)
@@ -898,6 +900,7 @@ def test_run_backend_map_probe_removes_stale_trace_artifacts(monkeypatch, tmp_pa
         "provenance.json",
         "regalloc-gpr-pass-1-all.txt",
         "variables.txt",
+        "instrumentation.json",
     ]
     for name in stale_files:
         (tmp_path / name).write_text("stale\n")
@@ -3498,3 +3501,643 @@ def test_different_kinds_independent_generations():
     obj = tracker.record_allocation("objobject", 0x100, "o1")
     assert pc.allocation_generation == 1
     assert obj.allocation_generation == 1
+
+
+def test_objobject_cache_release_and_acquire_advance_generation(tmp_path):
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        RuntimeBundle,
+        _finish_site,
+    )
+
+    proof = {
+        "allocation_sites": [
+            {
+                "site_id": "objobject-cache-acquire",
+                "entity_kind": "objobject",
+            }
+        ],
+        "free_sites": [
+            {
+                "site_id": "objobject-cache-release",
+                "entity_kind": "objobject",
+            }
+        ],
+    }
+    bundle = RuntimeBundle(
+        tmp_path / "gc_125n.candidate.json",
+        tmp_path / "mwcceppc.exe",
+        "a" * 64,
+        {},
+        proof,
+        {},
+        "validated",
+    )
+    first = bundle.tracker.record_allocation(
+        "objobject", 0x5000, "objobject-arena-allocation"
+    )
+
+    _finish_site(
+        bundle,
+        {"site_id": "objobject-cache-release", "operation": "cache-release"},
+        {"entity_pointer": 0x5000},
+    )
+    _finish_site(
+        bundle,
+        {"site_id": "objobject-cache-acquire", "operation": "cache-acquire"},
+        {"entity_pointer": 0x5000},
+    )
+
+    assert first.allocation_generation == 1
+    assert bundle.tracker.generation("objobject", 0x5000) == 2
+    assert [row.kind for row in bundle.tracker.events] == [
+        "allocation",
+        "recycle",
+        "allocation",
+    ]
+    assert bundle.hit_site_ids == {
+        "objobject-cache-release",
+        "objobject-cache-acquire",
+    }
+
+
+def _task9_pcode_memory(tmp_path):
+    from test_retro_backend_instrumentation_proof import valid_proof_and_manifest
+    from tools.mwcc_retro.backend_runtime_instrumentation import RuntimeBundle
+
+    proof, manifest = valid_proof_and_manifest()
+    bundle = RuntimeBundle(
+        tmp_path / "gc_125n.candidate.json",
+        tmp_path / "mwcceppc.exe",
+        "a" * 64,
+        {},
+        proof,
+        manifest,
+        "validated",
+    )
+    base = 0x700000
+    memory = bytearray(0x100)
+    memory[0x14:0x16] = (63).to_bytes(2, "little")
+    memory[0x1A:0x1C] = (4).to_bytes(2, "little")
+
+    def operand(kind, flags, value):
+        return bytes((kind, flags)) + value.to_bytes(2, "little") + bytes(8)
+
+    memory[0x1C:0x28] = operand(0, 2, 32)
+    memory[0x28:0x34] = operand(0, 2, 33)
+    memory[0x34:0x40] = operand(4, 0, 0)
+    memory[0x40:0x4C] = operand(5, 0, 0)
+
+    def read(address, size):
+        offset = address - base
+        return bytes(memory[offset : offset + size])
+
+    bundle.tracker.record_allocation(
+        "pcode", base, "pcode-alloc", allocation_length=0x4C
+    )
+    return bundle, base, memory, read, operand
+
+
+def test_runtime_rewrite_captures_exact_atomic_before_after_and_cap(tmp_path):
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        capture_operand_rewrite,
+    )
+
+    bundle, base, memory, read, operand = _task9_pcode_memory(tmp_path)
+    before = read(base + 0x1C, 0x0C)
+    memory[0x1C:0x28] = operand(0, 2, 3)
+
+    row = capture_operand_rewrite(
+        bundle,
+        read,
+        site_id="rewrite-site",
+        operand_address=base + 0x1C,
+        before=before,
+    )
+
+    assert row["pcode_event_sequence"] == 0
+    assert row["pcode_id"] == "pc-1"
+    assert row["virtual"] == row["ig_id"] == 32
+    assert row["allocated_physical"] == 3
+    assert row["operand_lineage_id"] == "ol-1"
+
+    prior = list(bundle.pcode_events)
+    changed_flags = operand(0, 3, 40)
+    memory[0x1C:0x28] = operand(0, 2, 4)
+    with pytest.raises(ValueError, match="kind or flags"):
+        capture_operand_rewrite(
+            bundle,
+            read,
+            site_id="rewrite-site",
+            operand_address=base + 0x1C,
+            before=changed_flags,
+        )
+    assert bundle.pcode_events == prior
+
+    bundle.event_cap = 1
+    memory[0x1C:0x28] = operand(0, 2, 5)
+    with pytest.raises(ValueError, match="event cap"):
+        capture_operand_rewrite(
+            bundle,
+            read,
+            site_id="rewrite-site",
+            operand_address=base + 0x1C,
+            before=operand(0, 2, 40),
+        )
+    assert bundle.dropped_events == 1
+    assert bundle.truncated is True
+    assert bundle.pcode_events == prior
+
+
+def test_runtime_mutation_pairs_complete_states_and_rejects_duplicate_output(
+    tmp_path,
+):
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        _pcode_raw_state,
+        capture_pcode_mutation,
+    )
+
+    bundle, base, memory, read, operand = _task9_pcode_memory(tmp_path)
+    before = _pcode_raw_state(bundle, read, base)
+    memory[0x1C:0x28] = operand(0, 2, 40)
+    after = _pcode_raw_state(bundle, read, base)
+
+    row = capture_pcode_mutation(
+        bundle,
+        site_id="spill-site",
+        mutation_kind="spill",
+        input_raw_states=[before],
+        output_raw_states=[after],
+    )
+
+    assert row["pcode_event_sequence"] == 0
+    assert row["mutation_kind"] == "spill"
+    changed = row["outputs"][0]["operands"][0]
+    assert changed["operand_lineage_id"] != row["inputs"][0]["operands"][0][
+        "operand_lineage_id"
+    ]
+    assert changed["parent_lineage_ids"] == [
+        row["inputs"][0]["operands"][0]["operand_lineage_id"]
+    ]
+
+    prior = list(bundle.pcode_events)
+    with pytest.raises(ValueError, match="duplicate output"):
+        capture_pcode_mutation(
+            bundle,
+            site_id="spill-site",
+            mutation_kind="spill",
+            input_raw_states=[after],
+            output_raw_states=[after, dict(after)],
+        )
+    assert bundle.pcode_events == prior
+
+
+def test_runtime_emission_binds_word_range_and_decoded_machine_operands(tmp_path):
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        capture_code_emission,
+    )
+
+    bundle, base, memory, read, operand = _task9_pcode_memory(tmp_path)
+    memory[0x1C:0x28] = operand(0, 2, 3)
+    memory[0x28:0x34] = operand(0, 2, 4)
+
+    row = capture_code_emission(
+        bundle,
+        read,
+        site_id="encode-site",
+        pcode_pointer=base,
+        encoded_word=0x38640001,  # addi r3,r4,1
+    )
+
+    code_range = row["code_ranges"][0]
+    assert code_range["start"] == 0
+    assert code_range["end_exclusive"] == 4
+    assert code_range["bytes"] == "38640001"
+    assert code_range["relocations"] == []
+    assert [
+        mapping["machine_operand_key"]
+        for mapping in code_range["machine_operand_mappings"]
+    ] == ["def:0", "use:0"]
+    assert bundle.emitted_bytes == bytes.fromhex("38640001")
+
+
+def _write_task8_runtime_bundle(tmp_path, monkeypatch, *, candidate=True):
+    """Write one exact synthetic PE/proof/manifest/table runtime bundle."""
+    from retro_pe_fixture import synthetic_pe_bytes
+    from test_retro_backend_instrumentation_proof import (
+        runtime_hook_manifest_sha256,
+        valid_proof_and_manifest,
+    )
+    from tools.mwcc_retro import backend_runtime_instrumentation as runtime
+    from tools.mwcc_retro.backend_instrumentation_proof import proof_sha256
+
+    data = bytearray(synthetic_pe_bytes())
+    instructions = {
+        0x401000: bytes.fromhex("e800000000"),
+        0x401005: bytes.fromhex("90"),
+        0x401010: bytes.fromhex("e800000000"),
+        0x401015: bytes.fromhex("90"),
+        0x401020: bytes.fromhex("66894102"),
+        0x401024: bytes.fromhex("90"),
+        0x401030: bytes.fromhex("55"),
+        0x401031: bytes.fromhex("90"),
+        0x401040: bytes.fromhex("8908"),
+        0x401042: bytes.fromhex("90"),
+    }
+    for va, raw in instructions.items():
+        offset = 0x200 + va - 0x401000
+        data[offset : offset + len(raw)] = raw
+    compiler = tmp_path / "mwcceppc.exe"
+    compiler.write_bytes(data)
+    compiler_digest = hashlib.sha256(data).hexdigest()
+    monkeypatch.setattr(runtime, "EXPECTED_COMPILER_SHA256", compiler_digest)
+
+    proof, manifest = valid_proof_and_manifest()
+    proof["compiler_executable_sha256"] = compiler_digest
+    manifest["compiler_executable_sha256"] = compiler_digest
+    addresses = [0x401000, 0x401010, 0x401020, 0x401030, 0x401040]
+    for proof_rows, address in zip(
+        (
+            proof["allocation_sites"],
+            proof["free_sites"],
+            proof["operand_rewrite_sites"],
+            proof["operand_mutation_sites"],
+            proof["code_emission_sites"],
+        ),
+        addresses,
+        strict=True,
+    ):
+        proof_rows[0]["address"] = address
+    breakpoint_pairs = [
+        ((0x401000, "before"), (0x401005, "return")),
+        ((0x401010, "before"), (0x401015, "return")),
+        ((0x401020, "before"), (0x401024, "after")),
+        ((0x401030, "before"), (0x401031, "after")),
+        ((0x401040, "before"), (0x401042, "after")),
+    ]
+    for site, proof_address, pair in zip(
+        manifest["sites"], addresses, breakpoint_pairs, strict=True
+    ):
+        site["proof_address"] = proof_address
+        site["breakpoints"] = []
+        for address, phase in pair:
+            raw = instructions[address]
+            site["breakpoints"].append(
+                {
+                    "phase": phase,
+                    "address": address,
+                    "instruction_bytes": raw.hex(),
+                    "instruction_sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            )
+    proof["runtime_hook_manifest_sha256"] = runtime_hook_manifest_sha256(manifest)
+
+    proof_digest = proof_sha256(proof)
+    site_ids = {
+        family: [row["site_id"] for row in proof[family]]
+        for family in (
+            "operand_rewrite_sites",
+            "operand_mutation_sites",
+            "code_emission_sites",
+        )
+    }
+    table = {
+        "instrumentation_proof_schema": "mwcc-retro-lifetime-proof.v1",
+        "instrumentation_proofs": [
+            {
+                "compiler_executable_sha256": compiler_digest,
+                "proof_id": proof["proof_id"],
+                "proof_sha256": proof_digest,
+                "promoted": True,
+            }
+        ],
+        "backend_reader": {
+            "pcode_instrumentation": {
+                "validated": True,
+                "compiler_executable_sha256": compiler_digest,
+                "proof_id": proof["proof_id"],
+                "proof_sha256": proof_digest,
+                "operand_rewrite_site_ids": site_ids["operand_rewrite_sites"],
+                "operand_mutation_site_ids": site_ids["operand_mutation_sites"],
+                "code_emission_site_ids": site_ids["code_emission_sites"],
+            }
+        },
+    }
+    table_name = "gc_125n.candidate.json" if candidate else "gc_125n.json"
+    proof_name = (
+        "gc_125n_lifetime_proof.candidate.json"
+        if candidate
+        else "gc_125n_lifetime_proof.json"
+    )
+    manifest_name = (
+        "gc_125n_lifetime_hooks.candidate.json"
+        if candidate
+        else "gc_125n_lifetime_hooks.json"
+    )
+    table_path = tmp_path / table_name
+    table_path.write_text(json.dumps(table) + "\n")
+    (tmp_path / proof_name).write_text(json.dumps(proof) + "\n")
+    (tmp_path / manifest_name).write_text(json.dumps(manifest) + "\n")
+    return {
+        "compiler": compiler,
+        "table_path": table_path,
+        "proof_path": tmp_path / proof_name,
+        "manifest_path": tmp_path / manifest_name,
+        "proof": proof,
+        "manifest": manifest,
+        "table": table,
+        "instructions": instructions,
+    }
+
+
+def _rewrite_task8_binding(paths):
+    from test_retro_backend_instrumentation_proof import (
+        runtime_hook_manifest_sha256,
+    )
+    from tools.mwcc_retro.backend_instrumentation_proof import proof_sha256
+
+    paths["proof"]["runtime_hook_manifest_sha256"] = (
+        runtime_hook_manifest_sha256(paths["manifest"])
+    )
+    digest = proof_sha256(paths["proof"])
+    paths["table"]["instrumentation_proofs"][0]["proof_sha256"] = digest
+    paths["table"]["backend_reader"]["pcode_instrumentation"][
+        "proof_sha256"
+    ] = digest
+    paths["table_path"].write_text(json.dumps(paths["table"]) + "\n")
+    paths["proof_path"].write_text(json.dumps(paths["proof"]) + "\n")
+    paths["manifest_path"].write_text(json.dumps(paths["manifest"]) + "\n")
+
+
+def test_runtime_bundle_loads_exact_candidate_and_semantic_plan(monkeypatch, tmp_path):
+    from tools.mwcc_retro.backend_runtime_instrumentation import load_runtime_bundle
+
+    paths = _write_task8_runtime_bundle(tmp_path, monkeypatch)
+    bundle = load_runtime_bundle(paths["table_path"], paths["compiler"])
+
+    assert bundle.status == "validated"
+    assert bundle.compiler_sha256 == hashlib.sha256(
+        paths["compiler"].read_bytes()
+    ).hexdigest()
+    assert bundle.expected_site_ids == frozenset(
+        row["site_id"] for row in paths["manifest"]["sites"]
+    )
+    assert bundle.installed_site_ids == set()
+    assert bundle.hit_site_ids == set()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("proof_digest", "proof digest"),
+        ("proof_id", "proof ID"),
+        ("manifest_digest", "manifest digest"),
+        ("breakpoint_bytes", "breakpoint bytes"),
+        ("capture_source", "capture_sources do not match operation contract"),
+        ("missing_plan", "site inventory differs"),
+        ("extra_plan", "site inventory differs"),
+        ("duplicate_address", "breakpoint address"),
+    ],
+)
+def test_runtime_bundle_rejects_altered_binding_and_plan(
+    monkeypatch, tmp_path, mutation, message
+):
+    from tools.mwcc_retro.backend_runtime_instrumentation import load_runtime_bundle
+
+    paths = _write_task8_runtime_bundle(tmp_path, monkeypatch)
+    if mutation == "proof_digest":
+        paths["table"]["instrumentation_proofs"][0]["proof_sha256"] = "b" * 64
+        paths["table_path"].write_text(json.dumps(paths["table"]) + "\n")
+    elif mutation == "proof_id":
+        paths["table"]["instrumentation_proofs"][0]["proof_id"] = "wrong"
+        paths["table_path"].write_text(json.dumps(paths["table"]) + "\n")
+    elif mutation == "manifest_digest":
+        paths["manifest"]["sites"][0]["hit_policy"] = "per-run"
+        paths["manifest_path"].write_text(json.dumps(paths["manifest"]) + "\n")
+    elif mutation == "breakpoint_bytes":
+        bp = paths["manifest"]["sites"][0]["breakpoints"][0]
+        bp["instruction_bytes"] = "90"
+        bp["instruction_sha256"] = hashlib.sha256(b"\x90").hexdigest()
+        _rewrite_task8_binding(paths)
+    elif mutation == "capture_source":
+        paths["manifest"]["sites"][2]["capture_sources"][0][
+            "operand_index"
+        ] = 1
+        _rewrite_task8_binding(paths)
+    elif mutation == "missing_plan":
+        paths["manifest"]["sites"].pop()
+        _rewrite_task8_binding(paths)
+    elif mutation == "extra_plan":
+        paths["manifest"]["sites"].append(dict(paths["manifest"]["sites"][-1]))
+        _rewrite_task8_binding(paths)
+    elif mutation == "duplicate_address":
+        bp = paths["manifest"]["sites"][1]["breakpoints"][1]
+        bp.update(paths["manifest"]["sites"][0]["breakpoints"][1])
+        _rewrite_task8_binding(paths)
+
+    with pytest.raises(ValueError, match=message):
+        load_runtime_bundle(paths["table_path"], paths["compiler"])
+
+
+def test_runtime_bundle_rejects_wrong_executable_and_fixed_sibling_contract(
+    monkeypatch, tmp_path
+):
+    from tools.mwcc_retro.backend_runtime_instrumentation import load_runtime_bundle
+
+    paths = _write_task8_runtime_bundle(tmp_path, monkeypatch)
+    wrong = tmp_path / "wrong.exe"
+    wrong.write_bytes(paths["compiler"].read_bytes() + b"x")
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        load_runtime_bundle(paths["table_path"], wrong)
+
+    unsupported = tmp_path / "renamed.json"
+    unsupported.write_bytes(paths["table_path"].read_bytes())
+    with pytest.raises(ValueError, match="table basename"):
+        load_runtime_bundle(unsupported, paths["compiler"])
+
+    paths["manifest_path"].unlink()
+    with pytest.raises(ValueError, match="missing runtime hook manifest sibling"):
+        load_runtime_bundle(paths["table_path"], paths["compiler"])
+
+
+def test_installed_default_empty_registry_is_controlled_unpromoted(
+    monkeypatch, tmp_path
+):
+    from tools.mwcc_retro.backend_runtime_instrumentation import load_runtime_bundle
+
+    paths = _write_task8_runtime_bundle(tmp_path, monkeypatch, candidate=False)
+    table = paths["table"]
+    table["instrumentation_proofs"] = []
+    table["backend_reader"]["pcode_instrumentation"] = {
+        "validated": False,
+        "compiler_executable_sha256": hashlib.sha256(
+            paths["compiler"].read_bytes()
+        ).hexdigest(),
+        "proof_id": None,
+        "proof_sha256": None,
+        "operand_rewrite_site_ids": [],
+        "operand_mutation_site_ids": [],
+        "code_emission_site_ids": [],
+        "note": "Unpromoted",
+    }
+    paths["table_path"].write_text(json.dumps(table) + "\n")
+    paths["proof_path"].unlink()
+    paths["manifest_path"].unlink()
+
+    bundle = load_runtime_bundle(paths["table_path"], paths["compiler"])
+    assert bundle.status == "unpromoted"
+    assert bundle.proof is None
+    assert bundle.manifest is None
+    assert bundle.installed_site_ids == set()
+
+
+def test_runtime_bundle_rejects_duplicate_ijson_keys(monkeypatch, tmp_path):
+    from tools.mwcc_retro.backend_runtime_instrumentation import load_runtime_bundle
+
+    paths = _write_task8_runtime_bundle(tmp_path, monkeypatch)
+    paths["table_path"].write_text('{"instrumentation_proofs":[],"instrumentation_proofs":[]}')
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        load_runtime_bundle(paths["table_path"], paths["compiler"])
+
+
+def test_invocation_stack_pairs_nested_calls_and_rejects_mismatch():
+    from tools.mwcc_retro.backend_runtime_instrumentation import InvocationStack
+
+    stack = InvocationStack()
+    first = stack.push("alloc", thread_id=1, stack_identity=0x9000, return_address=0x10)
+    second = stack.push("alloc", thread_id=1, stack_identity=0x8000, return_address=0x10)
+    assert stack.complete("alloc", 1, 0x8000, 0x10) is second
+    assert stack.complete("alloc", 1, 0x9000, 0x10) is first
+    stack.push("alloc", thread_id=1, stack_identity=0x9000, return_address=0x10)
+    with pytest.raises(ValueError, match="return/stack identity mismatch"):
+        stack.complete("alloc", 1, 0x9004, 0x10)
+
+
+def test_lifecycle_tracker_rewind_and_stale_generation_fail_closed():
+    from tools.mwcc_retro.backend_runtime_instrumentation import LifecycleTracker
+
+    tracker = LifecycleTracker()
+    tracker.record_allocation("pcode", 0x7000, "alloc")
+    assert tracker.generation("pcode", 0x7000) == 1
+    rewind = tracker.record_rewind("pcode", 0x7000, "rewind")
+    assert rewind.kind == "rewind"
+    assert tracker.generation("pcode", 0x7000) is None
+    with pytest.raises(ValueError, match="not active"):
+        tracker.record_release("pcode", 0x7000, "stale-release")
+
+
+class _Task8FakeBreakpoint:
+    created = []
+    fail_at = None
+
+    def __init__(self, spec):
+        if self.fail_at is not None and len(self.created) == self.fail_at:
+            raise RuntimeError("breakpoint install failed")
+        self.spec = spec
+        self.deleted = False
+        self.created.append(self)
+
+    def delete(self):
+        self.deleted = True
+
+
+class _Task8FakeGdb:
+    Breakpoint = _Task8FakeBreakpoint
+
+    @staticmethod
+    def selected_thread():
+        return SimpleNamespace(global_num=7)
+
+
+def _task8_fake_context(bundle):
+    from tools.mwcc_retro import pe
+
+    image = pe.load(bundle.compiler_path, require_pe32_i386=True)
+    registers = {"esp": 0x8000, "pc": 0, "eax": 0, "ecx": 0}
+    memory = {}
+
+    def read(address, size):
+        try:
+            return image.read(address, size)
+        except ValueError:
+            return bytes(memory.get(address + index, 0) for index in range(size))
+
+    return SimpleNamespace(
+        runtime_bundle=bundle,
+        gdb=_Task8FakeGdb(),
+        read=read,
+        reg=lambda name: registers[name],
+        registers=registers,
+        memory=memory,
+        lifecycle_capture=None,
+    )
+
+
+def test_runtime_installer_installs_exact_plan_and_tracks_lifecycle_hits(
+    monkeypatch, tmp_path
+):
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        install_runtime_instrumentation,
+        load_runtime_bundle,
+    )
+
+    paths = _write_task8_runtime_bundle(tmp_path, monkeypatch)
+    bundle = load_runtime_bundle(paths["table_path"], paths["compiler"])
+    ctx = _task8_fake_context(bundle)
+    _Task8FakeBreakpoint.created = []
+    _Task8FakeBreakpoint.fail_at = None
+
+    install_runtime_instrumentation(ctx)
+
+    assert bundle.installed_site_ids == set(bundle.expected_site_ids)
+    assert len(bundle.breakpoints) == 2 * len(bundle.expected_site_ids)
+    assert ctx.lifecycle_capture is bundle.tracker
+
+    handlers = {handler.spec: handler for handler in bundle.breakpoints}
+    ctx.memory.update(
+        {
+            0x8004 + index: byte
+            for index, byte in enumerate((0x36).to_bytes(4, "little"))
+        }
+    )
+    ctx.registers.update({"pc": 0x401000, "eax": 0})
+    handlers["*0x401000"].stop()
+    ctx.registers.update({"pc": 0x401005, "eax": 0x7000})
+    handlers["*0x401005"].stop()
+    assert bundle.tracker.generation("pcode", 0x7000) == 1
+
+    ctx.memory.update(
+        {
+            0x8004 + index: byte
+            for index, byte in enumerate((0x7000).to_bytes(4, "little"))
+        }
+    )
+    ctx.registers.update({"pc": 0x401010})
+    handlers["*0x401010"].stop()
+    ctx.registers.update({"pc": 0x401015})
+    handlers["*0x401015"].stop()
+    assert bundle.tracker.generation("pcode", 0x7000) is None
+    assert [event.lifecycle_sequence for event in bundle.tracker.events] == [0, 1]
+
+
+def test_runtime_installer_rolls_back_partial_breakpoint_installation(
+    monkeypatch, tmp_path
+):
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        install_runtime_instrumentation,
+        load_runtime_bundle,
+    )
+
+    paths = _write_task8_runtime_bundle(tmp_path, monkeypatch)
+    bundle = load_runtime_bundle(paths["table_path"], paths["compiler"])
+    ctx = _task8_fake_context(bundle)
+    _Task8FakeBreakpoint.created = []
+    _Task8FakeBreakpoint.fail_at = 3
+
+    with pytest.raises(RuntimeError, match="breakpoint install failed"):
+        install_runtime_instrumentation(ctx)
+
+    assert bundle.installed_site_ids == set()
+    assert bundle.breakpoints == []
+    assert _Task8FakeBreakpoint.created
+    assert all(handler.deleted for handler in _Task8FakeBreakpoint.created)
+    _Task8FakeBreakpoint.fail_at = None

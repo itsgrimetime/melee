@@ -187,7 +187,16 @@ _PCODE_ROLES = frozenset({"use", "def", "use-def"})
 _PCODE_CLASS_SHAPES = {0: ("gpr", "r"), 1: ("fpr", "f"), 9: ("vector", "v")}
 _PCODE_ALLOCATION_STATES = frozenset({"virtual", "physical", "non-allocator"})
 _PCODE_MUTATION_KINDS = frozenset(
-    {"update", "clone", "replace", "delete", "create"}
+    {
+        "update",
+        "clone",
+        "replace",
+        "delete",
+        "create",
+        "reorder",
+        "spill",
+        "coalesce",
+    }
 )
 _PCODE_STATE_FIELDS = frozenset(
     {
@@ -692,6 +701,12 @@ def _validate_pcode_mutation(row, label, diagnostics):
         diagnostics.append(f"{label} delete requires inputs and no outputs")
     elif kind == "create" and (inputs or not outputs):
         diagnostics.append(f"{label} create requires no inputs and outputs")
+    elif kind in {"reorder", "spill", "coalesce"} and (
+        not inputs or not outputs
+    ):
+        diagnostics.append(
+            f"{label} {kind} requires nonempty inputs and outputs"
+        )
 
 
 def _validate_pcode_relocations(value, range_size, label, diagnostics):
@@ -1343,6 +1358,8 @@ def _finalize_pcode_capture(
     hooked_site_ids,
     gate_errors,
     event_cap=8192,
+    dropped_events=0,
+    truncated=False,
 ):
     """Publish partial raw PCode evidence with the object-attempt identity."""
 
@@ -1355,8 +1372,8 @@ def _finalize_pcode_capture(
             hooked_site_ids=hooked_site_ids,
             events=pcode_events,
             event_cap=event_cap,
-            dropped_events=0,
-            truncated=len(pcode_events) >= event_cap,
+            dropped_events=dropped_events,
+            truncated=truncated,
             errors=errors,
         )
 
@@ -1481,6 +1498,7 @@ def intervene(ctx):
         backend_frame_state,
         backend_ig_snapshot,
         backend_pcode_snapshot,
+        backend_runtime_instrumentation,
         backend_trace_assembler,
         struct_map,
     )
@@ -1494,6 +1512,9 @@ def intervene(ctx):
     out_summary = ctx.out_dir + "/backend-onepass-candidate.json"
     source_file = os.environ.get("RETRO_SOURCE", "")
     requested = os.environ.get("RETRO_FUNCTION", ctx.fn)
+    runtime_bundle = backend_runtime_instrumentation.install_runtime_instrumentation(
+        ctx
+    )
     lifecycle_capture = getattr(ctx, "lifecycle_capture", None)
     pcode_raw_reader = _validated_pcode_raw_reader(ctx.table, ctx.read)
     object_layout = struct_map.load_object_capture_layout(ctx.table)
@@ -1704,6 +1725,12 @@ def intervene(ctx):
             opcode_names=opcode_names,
             source_stage=stage,
         )
+        if runtime_bundle.validated:
+            events = (
+                backend_runtime_instrumentation.bind_pcode_snapshot_lifecycle(
+                    events, runtime_bundle
+                )
+            )
         for event in events:
             append_event(event)
         state["passes_seen"].append(
@@ -2256,20 +2283,40 @@ def intervene(ctx):
         ctx.cont()
     finally:
         object_capture = _finalize_object_capture(state, out_object_events)
+        state["pcode_events"] = [
+            dict(event) for event in runtime_bundle.pcode_events
+        ]
+        runtime_status = (
+            backend_runtime_instrumentation.runtime_bundle_status(
+                runtime_bundle
+            )
+        )
+        proof = (
+            runtime_bundle.proof
+            if runtime_bundle.validated and runtime_bundle.proof is not None
+            else {
+                "operand_rewrite_sites": [],
+                "operand_mutation_sites": [],
+                "code_emission_sites": [],
+            }
+        )
         pcode_gate_errors = [
             *struct_map.validate_pcode_arg_capture_capability(ctx.table),
-            *struct_map.validate_pcode_instrumentation_capability(ctx.table),
+            *struct_map.validate_pcode_instrumentation_capability(
+                ctx.table,
+                proof=(runtime_bundle.proof if runtime_bundle.validated else None),
+            ),
+            *runtime_bundle.errors,
         ]
         pcode_capture = _finalize_pcode_capture(
             state,
             out_pcode_events,
-            proof={
-                "operand_rewrite_sites": [],
-                "operand_mutation_sites": [],
-                "code_emission_sites": [],
-            },
-            hooked_site_ids=set(),
+            proof=proof,
+            hooked_site_ids=set(runtime_bundle.installed_site_ids),
             gate_errors=pcode_gate_errors,
+            event_cap=runtime_bundle.event_cap,
+            dropped_events=runtime_bundle.dropped_events,
+            truncated=runtime_bundle.truncated,
         )
         payload = {
             "schema_version": "mwcc-retro-backend-onepass-candidate.v1",
@@ -2288,6 +2335,7 @@ def intervene(ctx):
             "object_capture_warnings": object_capture["warnings"],
             "pcode_capture_attempt": pcode_capture["capture_attempt"],
             "pcode_capture": pcode_capture["capture_status"],
+            "runtime_instrumentation": runtime_status,
             "notes": [
                 "One-pass retail backend event stream.",
                 "Diagnostic sidecar for trace assembly and completeness checks.",
