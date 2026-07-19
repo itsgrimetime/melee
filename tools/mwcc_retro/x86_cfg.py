@@ -10309,9 +10309,9 @@ class _DirectCfgRecovery:
                 and address < edge.source
             ):
                 continue
-            for row in self.instructions:
-                if not edge.target <= row <= edge.source:
-                    continue
+            for row in self._function_instruction_addresses_between(
+                function_entry, edge.target, edge.source + 1
+            ):
                 decoded = self._owned_decoded(row)
                 if any(
                     self._register_family(register) == register_family
@@ -10342,9 +10342,9 @@ class _DirectCfgRecovery:
                 return cycle_cache[edge]
             adjacency: dict[int, tuple[int, ...]] = {}
             reverse: dict[int, set[int]] = {}
-            for row in sorted(self.instructions):
-                if not edge.target <= row <= edge.source:
-                    continue
+            for row in self._function_instruction_addresses_between(
+                function_entry, edge.target, edge.source + 1
+            ):
                 successors = tuple(
                     successor
                     for successor in self._summary_successors(
@@ -10524,9 +10524,9 @@ class _DirectCfgRecovery:
 
         base = None
         counter_zero = False
-        for row in sorted(self.instructions):
-            if not function_entry <= row < backedge.target:
-                continue
+        for row in self._function_instruction_addresses_between(
+            function_entry, function_entry, backedge.target
+        ):
             decoded = self._owned_decoded(row)
             if decoded.mnemonic == "mov" and len(decoded.operands) == 2:
                 destination, source = decoded.operands
@@ -13319,6 +13319,17 @@ class _DirectCfgRecovery:
         result = self.sorted_instruction_addresses[slice_start:slice_end]
         self.function_instruction_cache[function_entry] = result
         return result
+
+    def _function_instruction_addresses_between(
+        self,
+        function_entry: int,
+        start: int,
+        stop: int,
+    ) -> tuple[int, ...]:
+        addresses = self._function_instruction_addresses(function_entry)
+        slice_start = bisect_left(addresses, start)
+        slice_end = bisect_left(addresses, stop, lo=slice_start)
+        return addresses[slice_start:slice_end]
 
     def _partial_register_alias_is_dead_before_pointer_use(
         self,
@@ -19077,11 +19088,9 @@ class _DirectCfgRecovery:
             (row for row in self.function_addresses if row > function_entry),
             default=0x1_0000_0000,
         )
-        candidates = [
-            row
-            for row in sorted(self.instructions)
-            if function_entry <= row < transfer_address
-        ][-2048:]
+        candidates = self._function_instruction_addresses_between(
+            function_entry, function_entry, transfer_address
+        )[-2048:]
         for branch_address in reversed(candidates):
             branch = self._owned_decoded(branch_address)
             if branch.mnemonic not in {"je", "jne", "jz", "jnz"}:
@@ -19180,11 +19189,9 @@ class _DirectCfgRecovery:
             (row for row in self.function_addresses if row > function_entry),
             default=0x1_0000_0000,
         )
-        candidates = [
-            row
-            for row in sorted(self.instructions)
-            if function_entry <= row < transfer_address
-        ][-2048:]
+        candidates = self._function_instruction_addresses_between(
+            function_entry, function_entry, transfer_address
+        )[-2048:]
         for branch_address in reversed(candidates):
             branch = self._owned_decoded(branch_address)
             if branch.mnemonic not in {"je", "jne", "jz", "jnz"}:
