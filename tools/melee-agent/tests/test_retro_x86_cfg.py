@@ -5146,6 +5146,34 @@ def test_function_address_index_rebuilds_once_for_new_entry_and_instruction(
     )
     assert whole_image_sorts == 1
 
+    function_entry = base.entrypoint + 0x44
+    following_entry = min(
+        address
+        for address in recovery.function_addresses
+        if address > function_entry
+    )
+    ranges = (
+        (function_entry, function_entry),
+        (function_entry, function_entry + 1),
+        (function_entry + 1, function_entry + 0xA),
+        (function_entry + 3, function_entry + 0xA),
+        (function_entry, following_entry),
+        (function_entry - 0x100, following_entry + 0x100),
+        (following_entry, following_entry + 0x100),
+    )
+    for start, stop in ranges:
+        expected = tuple(
+            address
+            for address in recovery._function_instruction_addresses(
+                function_entry
+            )
+            if start <= address < stop
+        )
+        assert recovery._function_instruction_addresses_between(
+            function_entry, start, stop
+        ) == expected
+    assert whole_image_sorts == 1
+
     recovery._enqueue(base.entrypoint + 0x80, is_function=True)
     recovery._decode_from(base.entrypoint + 0x80)
     assert recovery._function_instruction_addresses(base.entrypoint + 0x70) == (
